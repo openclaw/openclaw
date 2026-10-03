@@ -7,8 +7,8 @@ import {
 import {
   matchesAcpSessionRuntimeLocator,
   resolveAcpSessionControlOwner,
-  type AcpSessionRuntimeLocator,
 } from "../runtime/session-control-owner.js";
+import type { AcpSessionRuntimeLocator } from "../runtime/session-meta-control.types.js";
 import type { AcceptedTurnState, AcceptedTurns } from "./manager.accepted-turns.js";
 import type { ManagerRuntimeHandleCache } from "./manager.runtime-handle-cache.js";
 import type {

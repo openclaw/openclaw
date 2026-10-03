@@ -18,7 +18,10 @@ import {
   type RpcResponse,
   type CodexServerNotification,
 } from "./protocol.js";
-import { testCodexAppServerBindingStore } from "./session-binding.test-helpers.js";
+import {
+  registerCodexTestSessionIdentity,
+  testCodexAppServerBindingStore,
+} from "./session-binding.test-helpers.js";
 import {
   getLeasedSharedCodexAppServerClient,
   releaseLeasedSharedCodexAppServerClient,
@@ -367,6 +370,36 @@ function createTrackedThreadLifecycleHostCapability(): ThreadLifecycleTestHostCa
       active = false;
     },
   };
+}
+
+export function twoStartsThenResumeMethods(preflightMethods: readonly string[]): string[] {
+  return [
+    ...preflightMethods,
+    "thread/start",
+    "thread/unsubscribe",
+    ...preflightMethods,
+    "thread/start",
+    "thread/unsubscribe",
+    ...preflightMethods,
+    "thread/read",
+    "thread/resume",
+    "thread/inject_items",
+  ];
+}
+
+export type CodexAttemptThreadInput = Omit<
+  Parameters<typeof startOrResumeThreadImpl>[0],
+  "bindingStore" | "params"
+> & { params: EmbeddedRunAttemptParams };
+
+/** Full-attempt fixtures register their transcript identity; cold session preparation has no transcript. */
+export function startOrResumeAttemptThread(params: CodexAttemptThreadInput) {
+  registerCodexTestSessionIdentity(
+    params.params.sessionFile,
+    params.params.sessionId,
+    params.params.sessionKey,
+  );
+  return startOrResumeThreadImpl({ ...params, bindingStore: testCodexAppServerBindingStore });
 }
 
 export function startOrResumeThread(

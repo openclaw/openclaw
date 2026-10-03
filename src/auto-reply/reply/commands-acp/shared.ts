@@ -5,7 +5,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { type AcpRuntimeError, toAcpRuntimeErrorText } from "../../../acp/runtime/errors.js";
+import { toAcpRuntimeErrorText } from "../../../acp/runtime/errors.js";
 import { supportsAutomaticThreadBindingSpawn } from "../../../channels/thread-bindings-policy.js";
 import type { AcpSessionRuntimeOptions } from "../../../config/sessions/types.js";
 import { normalizeAgentId } from "../../../routing/session-key.js";
@@ -416,20 +416,17 @@ export function resolveCommandRequestId(params: HandleCommandsParams): string {
   return randomUUID();
 }
 
-export async function withAcpCommandErrorBoundary<T>(params: {
-  run: () => Promise<T>;
-  fallbackCode: AcpRuntimeError["code"];
+export async function withAcpCommandErrorBoundary(params: {
+  run: () => Promise<CommandHandlerResult>;
   fallbackMessage: string;
-  onSuccess: (value: T) => CommandHandlerResult;
 }): Promise<CommandHandlerResult> {
   try {
-    const result = await params.run();
-    return params.onSuccess(result);
+    return await params.run();
   } catch (error) {
     return commandReply(
       toAcpRuntimeErrorText({
         error,
-        fallbackCode: params.fallbackCode,
+        fallbackCode: "ACP_TURN_FAILED",
         fallbackMessage: params.fallbackMessage,
       }),
     );

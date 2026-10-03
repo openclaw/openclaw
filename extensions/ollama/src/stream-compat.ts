@@ -68,21 +68,20 @@ export function isOllamaCompatProvider(model: {
   if (!model.baseUrl) {
     return false;
   }
-  try {
-    const parsed = new URL(model.baseUrl);
-    if (isLoopbackHost(parsed.hostname) && parsed.port === "11434") {
-      return true;
-    }
-
-    // Allow remote/LAN Ollama OpenAI-compatible endpoints when the provider id
-    // itself indicates Ollama usage (for example "my-ollama").
-    const providerHintsOllama = providerId.includes("ollama");
-    const isOllamaPort = parsed.port === "11434";
-    const isOllamaCompatPath = parsed.pathname === "/" || /^\/v1\/?$/i.test(parsed.pathname);
-    return providerHintsOllama && isOllamaPort && isOllamaCompatPath;
-  } catch {
+  const parsed = URL.parse(model.baseUrl);
+  if (!parsed) {
     return false;
   }
+  if (isLoopbackHost(parsed.hostname) && parsed.port === "11434") {
+    return true;
+  }
+
+  // Allow remote/LAN Ollama OpenAI-compatible endpoints when the provider id
+  // itself indicates Ollama usage (for example "my-ollama").
+  const providerHintsOllama = providerId.includes("ollama");
+  const isOllamaPort = parsed.port === "11434";
+  const isOllamaCompatPath = parsed.pathname === "/" || /^\/v1\/?$/i.test(parsed.pathname);
+  return providerHintsOllama && isOllamaPort && isOllamaCompatPath;
 }
 
 export function resolveOllamaCompatNumCtxEnabled(params: {

@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, readFileSync } from "node:fs";
 import { delimiter, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -12,42 +12,14 @@ import {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe.skipIf(process.platform === "win32")("architecture CI Go memory environment", () => {
-  it.each([
-    {
-      name: "defaults",
-      gogc: undefined,
-      limit: undefined,
-      expectedGc: "30",
-      expectedLimit: "3GiB",
-      exit: 0,
-    },
-    {
-      name: "caller overrides",
-      gogc: "70",
-      limit: "8GiB",
-      expectedGc: "70",
-      expectedLimit: "8GiB",
-      exit: 0,
-    },
-    {
-      name: "partial override",
-      gogc: "off",
-      limit: undefined,
-      expectedGc: "off",
-      expectedLimit: "3GiB",
-      exit: 0,
-    },
-    {
-      name: "blocking command failure",
-      gogc: undefined,
-      limit: undefined,
-      expectedGc: "30",
-      expectedLimit: "3GiB",
-      exit: 17,
-    },
+  it.each<[string, string | undefined, string | undefined, string, string, number]>([
+    ["defaults", undefined, undefined, "30", "3GiB", 0],
+    ["caller overrides", "70", "8GiB", "70", "8GiB", 0],
+    ["partial override", "off", undefined, "off", "3GiB", 0],
+    ["blocking command failure", undefined, undefined, "30", "3GiB", 17],
   ])(
-    "passes $name to the architecture command",
-    ({ gogc, limit, expectedGc, expectedLimit, exit }) => {
+    "passes %s to the architecture command",
+    (_name, gogc, limit, expectedGc, expectedLimit, exit) => {
       const script = readCiWorkflow().jobs["check-additional-shard"].steps.find(
         (step: WorkflowStep) => step.name === "Run additional check shard",
       )?.run;
@@ -58,6 +30,12 @@ describe.skipIf(process.platform === "win32")("architecture CI Go memory environ
       const bin = join(root, "bin");
       const capture = join(root, "command.json");
       mkdirSync(bin);
+      const harness = join(root, ".ci-harness/scripts");
+      mkdirSync(harness, { recursive: true });
+      copyFileSync(
+        new URL("../../scripts/ci-additional-checks.sh", import.meta.url),
+        join(harness, "ci-additional-checks.sh"),
+      );
       writeExecutable(join(bin, "pnpm"), [
         "#!/usr/bin/env node",
         'const fs = require("node:fs");',

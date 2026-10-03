@@ -47,6 +47,13 @@ Options:
 
 Pass exactly one of `--all`, `--session`, or `--agent`.
 
+Recreation requires exclusive offline ownership of the selected state directory.
+If its Gateway is running, the command refuses before inspecting or removing
+runtimes. Stop the Gateway through its service owner, wait for ownership to
+release, then rerun the command. Offline ownership stays held through confirmation
+and accepted teardown; a starting Gateway waits until cleanup settles. `--force`
+does not bypass this ownership check.
+
 Scoped recreation selects registry entries before inspecting their backends. An
 unrelated runtime on another Podman connection or an unavailable backend does not
 block `--session` or `--agent`. The selected runtime still requires its recorded

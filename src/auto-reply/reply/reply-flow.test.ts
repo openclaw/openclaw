@@ -1,7 +1,6 @@
 // Tests high-level reply flow decisions across commands and agent dispatch.
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { HEARTBEAT_TOKEN, SILENT_REPLY_TOKEN } from "../tokens.js";
 import {
   composeReplyDispatchBeforeDeliver,
@@ -36,22 +35,11 @@ describe("createReplyDispatcher", () => {
     expect(deliveredText(deliver, 1)).toBe(`interject.${SILENT_REPLY_TOKEN}`);
   });
 
-  it("drops exact NO_REPLY final payloads for direct sessions", async () => {
+  it("keeps exact NO_REPLY off direct channel transport without recording delivery", async () => {
     const deliver = vi.fn().mockResolvedValue(undefined);
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: {
-          silentReply: {
-            group: "allow",
-            internal: "allow",
-          },
-        },
-      },
-    };
     const dispatcher = createReplyDispatcher({
       deliver,
       silentReplyContext: {
-        cfg,
         sessionKey: "agent:main:telegram:direct:123",
         surface: "telegram",
       },

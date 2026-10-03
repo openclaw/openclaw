@@ -1,5 +1,5 @@
 // Daemon lifecycle output contracts exercise real response owners with shared service fixtures.
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { mockSystemAccountHome } from "../../daemon/service.test-helpers.js";
 import {
@@ -70,15 +70,9 @@ vi.mock("./lifecycle-audit.js", () => ({
   },
 }));
 
-let runServiceRestart: typeof import("./lifecycle-core.js").runServiceRestart;
-let runServiceStart: typeof import("./lifecycle-core.js").runServiceStart;
-let runServiceStop: typeof import("./lifecycle-core.js").runServiceStop;
+import { runServiceRestart, runServiceStart, runServiceStop } from "./lifecycle-core.js";
 
 describe("runServiceRestart token drift", () => {
-  beforeAll(async () => {
-    ({ runServiceRestart, runServiceStart, runServiceStop } = await import("./lifecycle-core.js"));
-  });
-
   afterEach(() => {
     vi.restoreAllMocks();
   });

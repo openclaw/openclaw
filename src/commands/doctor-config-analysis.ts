@@ -134,8 +134,7 @@ export function noteMissingDefaultAgentOwner(cfg: OpenClawConfig): void {
   }
 }
 
-/** Formats a parsed config issue path into a user-facing dotted path. */
-export function formatConfigKeyPath(parts: Array<string | number>): string {
+function formatConfigKeyPath(parts: Array<string | number>): string {
   let out = "";
   for (const part of parts) {
     if (typeof part === "number") {
@@ -148,7 +147,7 @@ export function formatConfigKeyPath(parts: Array<string | number>): string {
 }
 
 /** Resolves a config path against a loose config tree, returning null for invalid traversal. */
-export function resolveConfigPathTarget(root: unknown, pathLocal: Array<string | number>): unknown {
+function resolveConfigPathTarget(root: unknown, pathLocal: Array<string | number>): unknown {
   let current: unknown = root;
   for (const part of pathLocal) {
     if (typeof part === "number") {
@@ -169,12 +168,8 @@ export function resolveConfigPathTarget(root: unknown, pathLocal: Array<string |
   return current;
 }
 
-const STRIP_PROTECTED_KEYS: Record<string, Set<string>> = {
-  plugins: new Set(["installs"]),
-};
-
 /**
- * Removes unknown config keys reported by schema validation, except protected migration keys.
+ * Removes unknown config keys reported by schema validation.
  *
  * Doctor skips this while an update is in progress so partially written upgrade state is not
  * stripped before its migration can finish.
@@ -204,9 +199,6 @@ export function stripUnknownConfigKeys(config: OpenClawConfig): {
     if (!isRecord(target)) {
       continue;
     }
-    const parentKey =
-      issuePath.length === 1 && typeof issuePath[0] === "string" ? issuePath[0] : undefined;
-    const protectedSet = parentKey ? STRIP_PROTECTED_KEYS[parentKey] : undefined;
     for (const key of issue.keys) {
       if (!(key in target)) {
         continue;
@@ -214,9 +206,6 @@ export function stripUnknownConfigKeys(config: OpenClawConfig): {
       // $include is authored parser syntax at every object depth, not a schema field.
       // Doctor validates raw source, so stripping it would destroy include-owned config.
       if (key === INCLUDE_KEY) {
-        continue;
-      }
-      if (protectedSet?.has(key)) {
         continue;
       }
       delete target[key];

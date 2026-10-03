@@ -1,4 +1,4 @@
-import { clearSessionQueues } from "../auto-reply/reply/queue/cleanup.js";
+import { clearSessionLifecycleQueues } from "../auto-reply/reply/queue/cleanup.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { runExclusiveSessionStoreWrite } from "../config/sessions/store-writer.js";
 import {
@@ -45,12 +45,13 @@ export function createGatewayWorkerPlacementLocalDispatchBarrier(params: {
       cfg: getRuntimeConfig(),
       key: sessionKey,
       agentId,
+      preserveQualifiedAddress: true,
       clone: false,
       exactRead: true,
     });
     const lifecycleIdentities = [sessionKey, target.canonicalKey, ...target.storeKeys, sessionId];
     let placement: Awaited<ReturnType<typeof startDispatch>> | undefined;
-    await runExclusiveSessionLifecycleMutation({
+    return await runExclusiveSessionLifecycleMutation({
       scope: target.storePath,
       identities: lifecycleIdentities,
       signal,
@@ -94,7 +95,14 @@ export function createGatewayWorkerPlacementLocalDispatchBarrier(params: {
         assertCurrent(getRuntimeConfig());
         authorize?.();
         placement = await startDispatch();
-        clearSessionQueues(lifecycleIdentities);
+        clearSessionLifecycleQueues({
+          keys: lifecycleIdentities,
+          agentId: currentTarget.agentId,
+          sessionKey: currentTarget.canonicalKey,
+          sessionId,
+          // Dispatch committed; settling its old local queues must survive authority changes.
+          assertCurrent: () => {},
+        });
         params.revokeSessionAuthority({
           sessionId,
           sessionKeys: lifecycleIdentities,
@@ -121,11 +129,8 @@ export function createGatewayWorkerPlacementLocalDispatchBarrier(params: {
         if (!placement) {
           throw new Error(`Session ${sessionKey} dispatch barrier did not start`);
         }
+        return placement;
       },
     });
-    if (!placement) {
-      throw new Error(`Session ${sessionKey} dispatch barrier did not complete`);
-    }
-    return placement;
   };
 }

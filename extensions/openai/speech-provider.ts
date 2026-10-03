@@ -1,8 +1,8 @@
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import type {
   SpeechDirectiveTokenParseContext,
+  SpeechDirectiveTokenParseResult,
   SpeechProviderConfig,
-  SpeechProviderOverrides,
   SpeechProviderPlugin,
   SpeechSynthesisRequest,
 } from "openclaw/plugin-sdk/speech-core";
@@ -62,12 +62,8 @@ function normalizeOpenAISpeechResponseFormat(
 }
 
 function isGroqSpeechBaseUrl(baseUrl: string): boolean {
-  try {
-    const hostname = normalizeLowercaseStringOrEmpty(new URL(baseUrl).hostname);
-    return hostname === "groq.com" || hostname.endsWith(".groq.com");
-  } catch {
-    return false;
-  }
+  const hostname = normalizeLowercaseStringOrEmpty(URL.parse(baseUrl)?.hostname);
+  return hostname === "groq.com" || hostname.endsWith(".groq.com");
 }
 
 function resolveSpeechResponseFormat(
@@ -147,11 +143,9 @@ function readOpenAIProviderConfig(config: SpeechProviderConfig): OpenAITtsProvid
   };
 }
 
-function parseDirectiveToken(ctx: SpeechDirectiveTokenParseContext): {
-  handled: boolean;
-  overrides?: SpeechProviderOverrides;
-  warnings?: string[];
-} {
+function parseDirectiveToken(
+  ctx: SpeechDirectiveTokenParseContext,
+): SpeechDirectiveTokenParseResult {
   const baseUrl = normalizeOptionalString(asOptionalRecord(ctx.providerConfig)?.baseUrl);
   switch (ctx.key) {
     case "voice":

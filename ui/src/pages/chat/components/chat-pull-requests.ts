@@ -1,6 +1,6 @@
 import type WaPopup from "@awesome.me/webawesome/dist/components/popup/popup.js";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { html, nothing } from "lit";
+import { html, noChange, nothing } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
 import type {
@@ -15,6 +15,7 @@ import { syncAnchoredOverlay } from "../../../components/anchored-overlay.ts";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
 import type { GitHubPublicationView } from "../../../lib/sessions/github-publication-controller.ts";
+import { livePresentation, type PresentationValue } from "../../../lit/presentation-binding.ts";
 import "../../../components/tooltip.ts";
 import { getSafeLocalStorage } from "../../../local-storage.ts";
 import {
@@ -115,18 +116,22 @@ function renderChecks(
     sessionKey?: string;
     sessionId?: string;
     basePath?: string;
-    presented?: boolean;
+    presented?: PresentationValue;
   },
 ) {
   const checks = pullRequest.checks;
   const label = checks ? t(CHECK_LABEL_KEYS[checks.state]) : t("chat.pullRequests.ciMonitoring");
+  let details: HTMLDetailsElement | undefined;
+  const presented = props.presented ?? true;
+  const isPresented = () => (typeof presented === "boolean" ? presented : presented.isPresented());
   const syncChecksOverlay = (element: EventTarget | null | undefined) => {
     if (!(element instanceof HTMLDetailsElement)) {
       return;
     }
+    details = element;
     syncAnchoredOverlay(element, "top", { alignment: "end" });
     const popup = element.querySelector<WaPopup>(":scope > wa-popup[data-anchored-overlay]");
-    if (popup && props.presented === false) {
+    if (popup && !isPresented()) {
       popup.active = false;
     }
   };
@@ -142,7 +147,10 @@ function renderChecks(
         ${t("chat.pullRequests.checks")}
         <span class="chat-pr__checks-chevron" aria-hidden="true">${icons.chevronDown}</span>
       </summary>
-      <wa-popup data-anchored-overlay>
+      <wa-popup
+        data-anchored-overlay
+        .active=${typeof presented === "boolean" ? noChange : livePresentation({ owner: presented.owner, isPresented: () => isPresented() && Boolean(details?.open) })}
+      >
         <div
           class="chat-pr__checks-menu"
           role="group"
@@ -172,7 +180,7 @@ function renderChecks(
             .sessionKey=${props.sessionKey ?? ""}
             .sessionId=${props.sessionId ?? ""}
             .basePath=${props.basePath ?? ""}
-            .presented=${props.presented ?? true}
+            .presented=${livePresentation(presented)}
           ></openclaw-chat-ci-automation>
           ${
             checks
@@ -180,7 +188,7 @@ function renderChecks(
                   .pullRequest=${pullRequest}
                   .gateway=${props.gateway}
                   .sessionKey=${props.sessionKey ?? ""}
-                  .presented=${props.presented ?? true}
+                  .presented=${livePresentation(presented)}
                 ></openclaw-chat-ci-details>`
               : nothing
           }
@@ -299,7 +307,7 @@ export function renderChatPullRequests(props: {
   sessionKey?: string;
   sessionId?: string;
   basePath?: string;
-  presented?: boolean;
+  presented?: PresentationValue;
   branch?: ControlUiSessionBranch;
   status: ControlUiSessionPullRequestSnapshot["status"];
   onDismiss: (pullRequest: ControlUiSessionPullRequest) => void;
@@ -309,9 +317,12 @@ export function renderChatPullRequests(props: {
   const { publication } = props;
   const published = publication?.result?.status === "published" ? publication.result : undefined;
   const retainedPublication = publication?.result || publication?.locked || publication?.error;
+  // Session-only publishers cannot read the broader PR subscription's branch facts.
+  const sharedAction =
+    publication?.canPublishShared && !publication.canPublishPersonal && publication.options?.shared;
   // Gateway branch facts describe unpublished work, including changes after a merge.
   // PR metadata takes precedence over retained publication history.
-  if (props.branch || (props.pullRequests.length === 0 && retainedPublication)) {
+  if (props.branch || (props.pullRequests.length === 0 && (retainedPublication || sharedAction))) {
     return html`<div class="chat-prs" aria-live="polite">
       ${renderWorkRow(props.branch, props.status, props.onOpenSessionDiff, publication)}
     </div>`;
@@ -329,7 +340,6 @@ export function renderChatPullRequests(props: {
     <div class="chat-prs" aria-live="polite">
       ${repeat(visible, chatPullRequestId, (pullRequest) => {
         const merged = pullRequest.state === "merged";
-        const rowPublication = pullRequest === visible[0] ? recovery : undefined;
         return html`
           <article class="chat-pr" data-state=${pullRequest.state}>
             <a
@@ -361,7 +371,6 @@ export function renderChatPullRequests(props: {
                     >`
               }
               ${!merged || props.status === "unavailable" ? renderStatusWarning(props.status) : nothing}
-              ${rowPublication && !published ? renderGitHubPublicationAction(rowPublication) : nothing}
               <button
                 class="chat-pr__dismiss"
                 type="button"
@@ -379,10 +388,29 @@ export function renderChatPullRequests(props: {
                 ${icons.x}
               </button>
             </span>
-            ${rowPublication ? renderGitHubPublicationDetails(rowPublication) : nothing}
           </article>
         `;
       })}
+      ${recovery ? renderPublicationRecovery(recovery) : nothing}
     </div>
   `;
+}
+
+function renderPublicationRecovery(publication: GitHubPublicationView) {
+  const content = html`<div class="chat-pr__publication-recovery">
+    ${renderGitHubPublicationDetails(publication)}
+    ${
+      publication.result?.status !== "published"
+        ? html`<div>${renderGitHubPublicationAction(publication)}</div>`
+        : nothing
+    }
+  </div>`;
+  // A session attempt has no proven relationship to any listed PR. Keep its
+  // failed receipt inspectable without presenting it as that PR’s current state.
+  return publication.result?.status === "failed"
+    ? html`<details class="chat-pr__publication-history">
+        <summary>${t("githubPublication.failedAttempt")}</summary>
+        ${content}
+      </details>`
+    : content;
 }

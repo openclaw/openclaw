@@ -161,11 +161,13 @@ export async function verifyActiveCallDrainLease(
   const instance = getPluginInstance(record);
   assert(instance);
   const drainStarted = createDeferredCore();
-  const drain = instance.drain.bind(instance);
-  const drainObservation = vi.spyOn(instance, "drain").mockImplementation((options) => {
-    drainStarted.resolve();
-    return drain(options);
-  });
+  const drain = instance.waitForRetainedWork.bind(instance);
+  const drainObservation = vi
+    .spyOn(instance, "waitForRetainedWork")
+    .mockImplementation((...options) => {
+      drainStarted.resolve();
+      return drain(...options);
+    });
   const handler = fixture.previousRegistry.gatewayHandlers["first.call"];
   assert(handler);
   const invoke = (hold: boolean, respond: GatewayRequestHandlerOptions["respond"]) =>
@@ -224,7 +226,7 @@ export async function verifyActiveCallDrainLease(
     expect(fixture.owner.getReloadStatus()).toMatchObject({
       phase: "reloading",
       deadlineAtMs: expect.any(Number),
-      reason: expect.stringMatching(/admitted work.*first/),
+      reason: expect.stringContaining("plugin first"),
     });
     const deadlineAtMs = fixture.owner.getReloadStatus()?.deadlineAtMs;
     assert(deadlineAtMs);
@@ -242,7 +244,7 @@ export async function verifyActiveCallDrainLease(
       pluginReload: {
         phase: "reloading",
         deadlineAtMs,
-        reason: expect.stringMatching(/admitted work.*first/),
+        reason: expect.stringContaining("plugin first"),
       },
     });
     expect(fixture.candidates).toHaveLength(0);

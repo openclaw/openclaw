@@ -7,6 +7,8 @@ import {
   type SessionsCreateParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { loadSessionEntry, patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import type { InternalSessionEntry } from "../../config/sessions/types.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
 import { emitAgentRunStatusEvent } from "../../infra/agent-run-status-events.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
@@ -198,7 +200,7 @@ export async function prepareSessionWorkspace(params: {
   session: PreparedChatSendSession;
 }): Promise<() => void> {
   const { admission, client, context, session } = params;
-  const { entry, cfg, agentId, clientRunId, sessionKey, storePath } = session;
+  const { entry, clientRunId, sessionKey } = session;
   if (!entry) {
     throw new Error(SESSION_PROJECT_OWNERSHIP_ERROR);
   }
@@ -224,6 +226,46 @@ export async function prepareSessionWorkspace(params: {
     }
     assertAgentRunLifecycleGenerationCurrent(admission.lifecycleGeneration);
   };
+  await prepareSessionWorkspaceForRun({
+    ...session,
+    entry,
+    runId: clientRunId,
+    context,
+    signal,
+    assertCurrent: assertRunOwnership,
+    runSetupScript: client?.connect?.scopes?.includes(ADMIN_SCOPE) === true,
+  });
+  return assertRunOwnership;
+}
+
+/** The admitted turn supplies authority; this owner prepares and binds its saved workspace. */
+export async function prepareSessionWorkspaceForRun(params: {
+  entry: InternalSessionEntry;
+  cfg: OpenClawConfig;
+  agentId: string;
+  runId: string;
+  sessionKey: string;
+  storePath: string;
+  context: Parameters<typeof emitSessionsChanged>[0] &
+    Pick<GatewayRequestHandlerOptions["context"], "logGateway">;
+  signal: AbortSignal;
+  assertCurrent: () => void;
+  runSetupScript: boolean;
+}): Promise<void> {
+  const {
+    entry,
+    cfg,
+    agentId,
+    runId: clientRunId,
+    sessionKey,
+    storePath,
+    context,
+    signal,
+  } = params;
+  const assertRunOwnership = () => {
+    signal.throwIfAborted();
+    params.assertCurrent();
+  };
   assertRunOwnership();
   emitAgentRunStatusEvent({
     runId: clientRunId,
@@ -237,7 +279,11 @@ export async function prepareSessionWorkspace(params: {
     assertRunOwnership();
     const target = { agentId, sessionKey, storePath };
     const saved = loadSessionEntry(target);
-    if (!saved || saved.sessionId !== entry.sessionId) {
+    if (
+      !saved ||
+      saved.sessionId !== entry.sessionId ||
+      saved.lifecycleRevision !== entry.lifecycleRevision
+    ) {
       throw new Error(SESSION_PROJECT_OWNERSHIP_ERROR);
     }
     let pending = saved.pendingWorktree;
@@ -245,6 +291,7 @@ export async function prepareSessionWorkspace(params: {
       assertRunOwnership();
       if (
         current.sessionId !== entry.sessionId ||
+        current.lifecycleRevision !== entry.lifecycleRevision ||
         current.projectId !== saved.projectId ||
         current.pendingProjectGitUrl !== saved.pendingProjectGitUrl ||
         !isDeepStrictEqual(current.pendingWorktree, pending)
@@ -374,7 +421,7 @@ export async function prepareSessionWorkspace(params: {
         baseRef: pending.baseRef,
         checkoutCommit: pending.baseCommit,
         label: title ?? resolveExplicitSessionName(saved),
-        runSetupScript: client?.connect?.scopes?.includes(ADMIN_SCOPE) === true,
+        runSetupScript: params.runSetupScript,
         signal,
         commitGuard: assertRunOwnership,
         onProgress: (stage) => status(stage === "setup" ? "running_setup" : "creating_worktree"),
@@ -428,5 +475,4 @@ export async function prepareSessionWorkspace(params: {
     emitSessionsChanged(context, { sessionKey, agentId, reason: "project" });
   });
   assertRunOwnership();
-  return assertRunOwnership;
 }

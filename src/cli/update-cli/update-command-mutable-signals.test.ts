@@ -16,6 +16,7 @@ import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { triageTestRuntimeEntrypoints } from "../../infra/triage-runtime.test-support.js";
 import { getUpdateRun, type createUpdateRun } from "../../infra/update-run-ledger.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { resolveTestNodeExecPath } from "../../test-utils/node-process.js";
 import { updateExecutorNativeEntrypoints } from "./update-command-executor-native-runtime.test-support.js";
 import { mutableCompensationFixtureSource } from "./update-command-mutable-signals-compensation.test-support.js";
 
@@ -49,11 +50,8 @@ it.skipIf(process.platform === "win32").for([
 ] as const)(
   "settles only the local pre-activation diagnostic under its real executor: $signal/$mode",
   { timeout: 60000 },
-  ({ signal, mode }, { signal: testSignal, skip }) =>
+  ({ signal, mode }, { signal: testSignal }) =>
     lifetime.run(async () => {
-      if (mode.endsWith("-compensation") && process.versions.bun) {
-        skip("Native compensation module mocks require Node.js.");
-      }
       try {
         const root = dirs.make("update-owned-signal-");
         const stateDir = mode.endsWith("-compensation") ? path.join(root, ".openclaw") : root;
@@ -127,7 +125,9 @@ it.skipIf(process.platform === "win32").for([
         }
         const expected = getUpdateRun(run.runId);
         if (mode === 'migrated') {
-          createUpdateRunProgress(run, {}).deferLedgerWrites();
+          createUpdateRunProgress(run, {}, async () => {
+            throw new Error("Deferred signal fixture must not write progress");
+          }).deferLedgerWrites();
           closeOpenClawStateDatabaseForTest();
           const { DatabaseSync } = await import('node:sqlite');
           const db = new DatabaseSync(root + '/state/openclaw.sqlite');
@@ -225,9 +225,9 @@ it.skipIf(process.platform === "win32").for([
   `,
         );
         const child = spawn(
-          process.execPath,
+          resolveTestNodeExecPath(),
           [
-            ...(process.versions.bun ? [] : resolveVitestNodeArgs()),
+            ...resolveVitestNodeArgs(),
             ...(mode.endsWith("-compensation") ? ["--experimental-test-module-mocks"] : []),
             ...sourceImportArgs,
             binding.nodeOption,

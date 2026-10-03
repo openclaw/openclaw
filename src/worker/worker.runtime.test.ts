@@ -9,7 +9,7 @@ import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { Type } from "typebox";
 import { Value } from "typebox/value";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
 import { validateWorkerComputerParams } from "../../packages/gateway-protocol/src/index.js";
 import { PresenceQueryParamsSchema } from "../../packages/gateway-protocol/src/schema/presence.js";
@@ -44,8 +44,18 @@ import {
   type WorkerInferenceTerminalFrame,
   type WorkerInferenceTerminalOutcome,
 } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+} from "../../test/helpers/fixture-receipts.js";
 import { createNoisyPngBuffer, createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
-import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+  withTestTimeout,
+} from "../../test/helpers/promise.js";
 import { createOperationalRunInstanceRef } from "../agents/admitted-run-context.js";
 import { listRunningSessions, waitForExecScope } from "../agents/bash-process-registry.js";
 import { runExecProcess } from "../agents/bash-tools.exec-runtime.js";
@@ -69,7 +79,7 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as boundaryFileRead from "../infra/boundary-file-read.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { saveExecApprovals, type ExecApprovalsFile } from "../infra/exec-approvals.js";
+import { saveExecApprovals } from "../infra/exec-approvals-store.test-support.js";
 import { runExec } from "../process/exec.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
 import { prepareSkillBundle } from "../skills/library/bundle.js";
@@ -171,7 +181,7 @@ type FakeGatewayOptions = {
   admissionFailure?: "gateway-unavailable" | "invalid-credential" | "owner-epoch-mismatch";
   backgroundCommand?: string;
   execCommand?: string;
-  execApprovals?: ExecApprovalsFile;
+  execApprovals?: Parameters<typeof saveExecApprovals>[0];
   inferencePlans?: InferencePlan[];
   outageOnInferenceCancel?: boolean;
   ignoreFirstAdmission?: boolean;
@@ -922,6 +932,14 @@ function descriptor(socketPath: string, workspaceDir: string): WorkerLaunchDescr
 
 const gateways: FakeWorkerGateway[] = [];
 const tempDirs: string[] = [];
+let receipts: FixtureReceiptChannel;
+
+beforeAll(async () => {
+  receipts = await openFixtureReceiptChannel();
+});
+afterAll(async () => {
+  await receipts.close();
+});
 
 async function setup(options?: FakeGatewayOptions): Promise<{
   gateway: FakeWorkerGateway;
@@ -2208,17 +2226,32 @@ describe("worker runtime", () => {
 
   it.skipIf(process.platform === "win32")(
     "prevents retained processes from reading a later turn's GitHub profile",
-    async () => {
+    async ({ signal }) => {
       const { gateway, launch, workspaceDir } = await setup({
         inferencePlans: ["background-tool", "text", "tool", "text"],
-        backgroundCommand: [
-          'printf "%s" "$GH_CONFIG_DIR" > retained-profile.txt',
-          "while [ ! -e retained-marker ]; do sleep 0.01; done",
-          '{ cat "$GH_CONFIG_DIR/hosts.yml"; printf "exit=%s\\n" "$?"; } > retained-read.tmp 2>&1',
-          "mv retained-read.tmp retained-read.txt",
-        ].join("; "),
+        backgroundCommand: `exec '${process.execPath.replaceAll("'", "'\\''")}' retained-profile.mjs`,
         execCommand: "printf turn-b-completed",
       });
+      const profilePath = path.join(workspaceDir, "retained-profile.txt");
+      await writeFile(
+        path.join(workspaceDir, "retained-profile.mjs"),
+        [
+          'import { execFile } from "node:child_process";',
+          'import { writeFileSync } from "node:fs";',
+          fixtureReceiptClientSource(receipts.endpoint),
+          `writeFileSync(${JSON.stringify(profilePath)}, process.env.GH_CONFIG_DIR);`,
+          `sendReceipt(${JSON.stringify(profilePath)}, "ready");`,
+          "await new Promise((resolve, reject) => {",
+          `  execFile("sh", ["-c", ${JSON.stringify(
+            [
+              "while [ ! -e retained-marker ]; do sleep 0.01; done",
+              '{ cat "$GH_CONFIG_DIR/hosts.yml"; printf "exit=%s\\n" "$?"; } > retained-read.tmp 2>&1',
+              "mv retained-read.tmp retained-read.txt",
+            ].join("; "),
+          )}], (error) => error ? reject(error) : resolve());`,
+          "});",
+        ].join("\n"),
+      );
       launch.assignment.github = {
         login: "worker-a",
         token: "worker-turn-a-token",
@@ -2249,14 +2282,13 @@ describe("worker runtime", () => {
           result: { status: "completed" },
           retainWorker: true,
         });
-        const previousProfileDir = await waitForFast(async () => {
-          const profileDir = await readFile(
-            path.join(workspaceDir, "retained-profile.txt"),
-            "utf8",
-          );
-          expect(profileDir).not.toBe("");
-          return profileDir;
-        });
+        // A receipt can arrive after the exec settles; its durable file is written first.
+        await withinTest(
+          Promise.race([receipts.waitFor(profilePath, "ready"), waitForExecScope(scopeKey)]),
+          signal,
+        );
+        const previousProfileDir = await readFile(profilePath, "utf8");
+        expect(previousProfileDir).not.toBe("");
         const stateDir = process.env.OPENCLAW_STATE_DIR!;
         const next = structuredClone(launch);
         next.assignment.runId = "worker-next-run-2";
@@ -2300,13 +2332,21 @@ describe("worker runtime", () => {
         expect(hosts).not.toContain("worker-a");
         expect(hosts).not.toContain(launch.assignment.github.token);
         await writeFile(path.join(workspaceDir, "retained-marker"), "read");
-        const retainedRead = await waitForFast(() =>
-          readFile(path.join(workspaceDir, "retained-read.txt"), "utf8"),
-        );
+        // idle-ready follows exec settlement and both profile disposals, including the shell's mv.
+        expect(
+          await withinTest(
+            awaitGateBeforeSettlement(
+              idleReady.promise,
+              command,
+              "worker command ended before the retained process became idle",
+            ),
+            signal,
+          ),
+        ).toBe(next.assignment.turnId);
+        const retainedRead = await readFile(path.join(workspaceDir, "retained-read.txt"), "utf8");
         expect(retainedRead).toContain(launch.assignment.github.token);
         expect(retainedRead).not.toContain(next.assignment.github.token);
         expect(retainedRead).toMatch(/exit=0/u);
-        expect(await idleReady.promise).toBe(next.assignment.turnId);
         await expect(stat(previousProfileDir)).rejects.toMatchObject({ code: "ENOENT" });
         await expect(stat(nextProfileDir)).rejects.toMatchObject({ code: "ENOENT" });
       } finally {

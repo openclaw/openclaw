@@ -1,5 +1,4 @@
 // Imessage tests cover monitor.last route plugin behavior.
-import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -11,6 +10,8 @@ import {
   recordInboundSession,
   type ensureConfiguredBindingRouteReady,
 } from "openclaw/plugin-sdk/conversation-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import {
   createTestRegistry,
   resetPluginRuntimeStateForTest,
@@ -18,9 +19,11 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { dispatchReplyWithBufferedBlockDispatcher } from "openclaw/plugin-sdk/reply-runtime";
 import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import { closeOpenClawAgentDatabasesAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import type { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-runtime";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { createIMessageRpcClient } from "./client.js";
 import {
   matchIMessageAcpConversation,
@@ -270,7 +273,13 @@ async function runChannelInboundEventForLastRouteTest(params: RunChannelInboundE
 }
 
 describe("iMessage monitor last-route updates", () => {
-  const tempDirs: string[] = [];
+  const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
+    afterAll(async () => {
+      await closeOpenClawAgentDatabasesAsync(sessionRoot);
+      cleanup();
+    });
+  });
+  const sessionRoot = tempDirs.make("openclaw-imessage-last-route-");
   const openClawStates: OpenClawTestState[] = [];
 
   beforeEach(() => {
@@ -303,9 +312,6 @@ describe("iMessage monitor last-route updates", () => {
     vi.useRealTimers();
     await Promise.all(openClawStates.splice(0).map((state) => state.cleanup()));
     vi.unstubAllEnvs();
-    for (const dir of tempDirs.splice(0)) {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
   });
 
   function setAvailablePrivateApiMethods(rpcMethods: string[]): void {
@@ -587,6 +593,7 @@ describe("iMessage monitor last-route updates", () => {
 
   async function runIMessageMonitor(params: MonitorRunParams = {}): Promise<void> {
     await monitorIMessageProvider({
+      scheduler: createTestPluginServiceScheduler(),
       ...(params.accountId ? { accountId: params.accountId } : {}),
       config: {
         channels: {
@@ -607,8 +614,7 @@ describe("iMessage monitor last-route updates", () => {
   }
 
   function createTestStateDir(prefix: string): string {
-    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
-    tempDirs.push(stateDir);
+    const stateDir = tempDirs.make(prefix, sessionRoot);
     return stateDir;
   }
 
@@ -723,13 +729,8 @@ describe("iMessage monitor last-route updates", () => {
   });
 
   it("waits for configured ACP target readiness before dispatching an authorized message", async () => {
-    let releaseReadiness: ((value: { ok: true }) => void) | undefined;
-    ensureConfiguredBindingRouteReadyMock.mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          releaseReadiness = resolve;
-        }),
-    );
+    const readiness = createDeferred<{ ok: true }>();
+    ensureConfiguredBindingRouteReadyMock.mockReturnValueOnce(readiness.promise);
     createIMessageWatchClient({
       onClose: async (notify) => {
         notify(createInboundMessage({ id: 81, guid: "acp-ready-81", text: "start the agent" }));
@@ -737,7 +738,7 @@ describe("iMessage monitor last-route updates", () => {
           expect(ensureConfiguredBindingRouteReadyMock).toHaveBeenCalledTimes(1);
         });
         expect(dispatchReplyWithBufferedBlockDispatcherMock).not.toHaveBeenCalled();
-        releaseReadiness?.({ ok: true });
+        readiness.resolve({ ok: true });
         await vi.waitFor(() => {
           expect(dispatchReplyWithBufferedBlockDispatcherMock).toHaveBeenCalledTimes(1);
         });

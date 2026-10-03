@@ -9,6 +9,7 @@ import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text
 import { formatCliCommand } from "../cli/command-format.js";
 import { runDoctorSessionSqlite } from "../commands/doctor-session-sqlite.js";
 import { loadExactSessionEntry } from "../config/sessions/session-accessor.js";
+import * as runtimePaths from "../daemon/runtime-paths.js";
 import type { GatewayServiceRuntime } from "../daemon/service-runtime.js";
 import { createGatewayCloseTransportError } from "../gateway/transport-error.js";
 import * as legacyGatewayLock from "../infra/gateway-lock-legacy.js";
@@ -382,6 +383,14 @@ describe("Doctor invoked by the published 2026.6.33 updater", () => {
   );
 
   it("records restoration verification failure after offline repair without publishing success", async () => {
+    // This case refuses Gateway readiness after repair, not runtime capability admission.
+    vi.spyOn(runtimePaths, "resolveNodeRuntimeInfo").mockResolvedValue({
+      status: "supported",
+      version: "26.8.1",
+      sqliteVersion: "3.53.4",
+      sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
+      nodeSharedSqlite: false,
+    });
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       await state.writeConfig({});
       const resultPath = state.path("doctor-result.json");
@@ -419,6 +428,7 @@ describe("Doctor invoked by the published 2026.6.33 updater", () => {
           expect.objectContaining({ code: "stale-gateway-recovery-command" }),
         ]),
       });
+      expect(mocks.waitForGatewayHealthyRestart).toHaveBeenCalledOnce();
       expect(service.restart).toHaveBeenCalledOnce();
       expect(mocks.writeUpdatePostInstallDoctorResult).toHaveBeenCalledWith({
         resultPath,

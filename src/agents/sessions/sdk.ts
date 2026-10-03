@@ -112,7 +112,7 @@ export interface CreateAgentSessionOptions {
 
 type CreateAgentSessionInternalOptions = Pick<
   AgentSessionConfig,
-  "cleanupProviderSessionResourcesOnDispose" | "contextOverflowRecoveryOwner"
+  "contextOverflowRecoveryOwner" | "resolveCompactionThinkingLevel"
 > & { beforeToolBatch?: InternalBeforeToolBatchHook };
 
 /** Result from createAgentSession */
@@ -124,8 +124,6 @@ interface CreateAgentSessionResult {
   /** Warning if session was restored with a different model than saved */
   modelFallbackMessage?: string;
 }
-
-// Helper Functions
 
 function createSessionPrepareNextTurnWithContext(
   getAgent: () => Agent,
@@ -273,7 +271,6 @@ async function createAgentSessionImpl(
   }
   let resourceLoader = options.resourceLoader;
 
-  // Use provided or create AuthStorage and ModelRegistry
   const config = options.authStorage && options.modelRegistry ? undefined : install.config;
   const authStorage = options.authStorage ?? AuthStorage.forAgent(agentDir, config);
   const modelRegistry =
@@ -303,7 +300,6 @@ async function createAgentSessionImpl(
     modelRegistry.refresh();
   }
 
-  // Check if session has existing data to restore
   const existingSession = await sessionManager[sessionManagerReadInitialContext]();
   assertInitialSessionCurrent();
   const hasExistingSession = existingSession.messages.length > 0;
@@ -314,7 +310,6 @@ async function createAgentSessionImpl(
   let model = options.model;
   let modelFallbackMessage: string | undefined;
 
-  // If session has data, try to restore model from it
   if (!model && hasExistingSession && existingSession.model) {
     const restoredModel = modelRegistry.find(
       existingSession.model.provider,
@@ -379,7 +374,6 @@ async function createAgentSessionImpl(
     settingsManager.getDefaultThinkingLevel() ??
     modelThinkingDefault;
 
-  // Clamp to model capabilities
   if (!model) {
     thinkingLevel = "off";
   } else {
@@ -405,7 +399,6 @@ async function createAgentSessionImpl(
     if (!settingsManager.getBlockImages()) {
       return converted;
     }
-    // Filter out ImageContent from all messages, replacing with text placeholder
     return converted.map((msg) => {
       if (msg.role === "user" || msg.role === "toolResult") {
         const content = msg.content;
@@ -420,7 +413,6 @@ async function createAgentSessionImpl(
               )
               .filter((c, i, arr) => {
                 const previous = arr.at(i - 1);
-                // Dedupe consecutive "Image reading is disabled." texts
                 return !(
                   c.type === "text" &&
                   c.text === "Image reading is disabled." &&
@@ -540,19 +532,16 @@ async function createAgentSessionImpl(
     }
     return withSessionManagerWrite(sessionManager, async () => {
       assertInitialSessionCurrent();
-      if (hasExistingSession) {
-        await appendInitialThinking();
+      if (!hasExistingSession && model) {
+        await appendInitialMetadata(
+          { type: "model_change", provider: model.provider, modelId: model.id },
+          () => sessionManager.appendModelChange(model.provider, model.id),
+        );
         assertInitialSessionCurrent();
-      } else {
-        // Persist initial settings before exposing the new session to callers.
-        if (model) {
-          await appendInitialMetadata(
-            { type: "model_change", provider: model.provider, modelId: model.id },
-            () => sessionManager.appendModelChange(model.provider, model.id),
-          );
-          assertInitialSessionCurrent();
-        }
-        await appendInitialThinking();
+      }
+      await appendInitialThinking();
+      if (hasExistingSession) {
+        assertInitialSessionCurrent();
       }
     });
   };
@@ -596,6 +585,7 @@ async function createAgentSessionImpl(
     sessionStartEvent: options.sessionStartEvent,
     withSessionWriteSettlement: options.withSessionWriteSettlement,
     contextOverflowRecoveryOwner: internalOptions.contextOverflowRecoveryOwner,
+    resolveCompactionThinkingLevel: internalOptions.resolveCompactionThinkingLevel,
     cleanupProviderSessionResourcesOnDispose,
   });
   const extensionsResult = resourceLoader.getExtensions();
@@ -637,5 +627,5 @@ async function createDefaultSdkSessionManager(
   if (!created.ok) {
     throw new Error(`Failed to initialize SDK session transcript: ${created.error}`);
   }
-  return SessionManager.open(target, cwd);
+  return await SessionManager.openAsync(target, cwd);
 }

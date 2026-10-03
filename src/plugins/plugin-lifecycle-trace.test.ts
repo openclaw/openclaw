@@ -1,12 +1,13 @@
 // Covers plugin lifecycle trace formatting and sanitization.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { captureEnv } from "../test-utils/env.js";
 import {
   tracePluginLifecyclePhase,
   tracePluginLifecyclePhaseAsync,
 } from "./plugin-lifecycle-trace.js";
 
 describe("plugin lifecycle trace", () => {
-  const originalTraceEnv = process.env.OPENCLAW_PLUGIN_LIFECYCLE_TRACE;
+  const originalEnv = captureEnv(["OPENCLAW_PLUGIN_LIFECYCLE_TRACE"]);
   let errorSpy: ReturnType<typeof vi.spyOn>;
 
   function requireErrorMessage(index = 0): unknown {
@@ -22,11 +23,7 @@ describe("plugin lifecycle trace", () => {
   });
 
   afterEach(() => {
-    if (originalTraceEnv === undefined) {
-      delete process.env.OPENCLAW_PLUGIN_LIFECYCLE_TRACE;
-    } else {
-      process.env.OPENCLAW_PLUGIN_LIFECYCLE_TRACE = originalTraceEnv;
-    }
+    originalEnv.restore();
     errorSpy.mockRestore();
   });
 

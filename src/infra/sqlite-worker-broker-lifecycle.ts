@@ -19,7 +19,7 @@ import type {
   StoreClient,
   PreparedSqliteWorkerOpen,
 } from "./sqlite-worker-broker.types.js";
-import type { SqliteWorkerReply } from "./sqlite-worker-contract.js";
+import { SqliteWorkerError, type SqliteWorkerReply } from "./sqlite-worker-contract.js";
 import { createCpuTrackedWorker } from "./worker-cpu.js";
 
 const runOutsideCaller = AsyncLocalStorage.snapshot();
@@ -43,6 +43,54 @@ export function createSqliteWorkerLifecycle({
   ) => Promise<unknown>;
   fail: (slot: Slot, error: unknown) => void;
 }) {
+  async function acquireSlot(
+    options: PreparedSqliteWorkerOpen,
+    limits: { maxWorkers: number; maxStores: number },
+    createReplyOwner: (slot: Slot) => SqliteWorkerReplyOwner,
+  ): Promise<Slot> {
+    options.assertCurrent?.();
+    const shareWorkers = explicitSqliteCloseReleasesNativeResources;
+    const hasEphemeral = Boolean(options.target) || [...slots].some((slot) => slot.ephemeral);
+    const available = [...slots].filter(
+      (slot) =>
+        !slot.ephemeral &&
+        !slot.failed &&
+        !slot.retiring &&
+        slot.runtimeGeneration === options.runtimeGeneration,
+    );
+    // A retained updater cannot borrow another generation's carrier or evict its actors.
+    // One extra slot belongs to the broker, not to each generation requesting one.
+    const borrowedGenerationSlot =
+      shareWorkers &&
+      !hasEphemeral &&
+      options.runtimeGeneration !== undefined &&
+      available.length === 0 &&
+      slots.size >= limits.maxWorkers &&
+      ![...slots].some((slot) => slot.borrowedGenerationSlot);
+    if (
+      !borrowedGenerationSlot &&
+      slots.size >= (shareWorkers || hasEphemeral ? limits.maxWorkers : limits.maxStores)
+    ) {
+      if (options.target || !available.length || !shareWorkers) {
+        const retiring = [...slots].filter((slot) => Boolean(slot.failed || slot.retiring));
+        if (retiring.length > 0) {
+          await Promise.race(retiring.map(({ exit }) => exit));
+          return acquireSlot(options, limits, createReplyOwner);
+        }
+        throw new SqliteWorkerError(
+          `SQLite worker ${shareWorkers ? "runtime" : "store"} capacity reached`,
+          "overloaded",
+        );
+      }
+      const selected = available.reduce((left, right) =>
+        left.actors.size <= right.actors.size ? left : right,
+      );
+      selected.pendingOpens += 1;
+      return selected;
+    }
+    return createSlot(options, borrowedGenerationSlot, createReplyOwner);
+  }
+
   function createSlot(
     options: PreparedSqliteWorkerOpen,
     borrowedGenerationSlot: boolean,
@@ -59,6 +107,7 @@ export function createSqliteWorkerLifecycle({
     );
     const exited = createDeferredCore();
     const slot: Slot = {
+      ...(options.target ? { ephemeral: true as const } : {}),
       runtimeGeneration: options.runtimeGeneration,
       ...(borrowedGenerationSlot ? { borrowedGenerationSlot: true as const } : {}),
       worker,
@@ -76,11 +125,11 @@ export function createSqliteWorkerLifecycle({
     worker.on("messageerror", (error) => fail(slot, error));
     worker.once("exit", (code) => {
       slot.exited = true;
+      fail(slot, new Error(`SQLite worker exited with code ${code}`));
       for (const actor of slot.actors) {
         actor.backendClosed = true;
         actor.markNativeStopped();
       }
-      fail(slot, new Error(`SQLite worker exited with code ${code}`));
       slots.delete(slot);
       exited.resolve();
     });
@@ -252,6 +301,7 @@ export function createSqliteWorkerLifecycle({
   }
 
   return {
+    acquireSlot,
     createSlot,
     settleGeneration,
     releaseActorReference,

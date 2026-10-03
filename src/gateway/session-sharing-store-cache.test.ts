@@ -226,7 +226,16 @@ describe("session mutation authorization store caches", () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const cfg: OpenClawConfig = {
         session: { scope: "global" },
-        agents: { entries: { ops: { default: true }, research: {} } },
+        agents: {
+          ownership: "explicit",
+          defaults: {
+            heartbeat: { agentId: "ops" },
+            systemAgent: { agentId: "ops" },
+            authInheritance: { agentId: "ops" },
+          },
+          entries: { ops: { workspace: state.statePath("workspace") }, research: {} },
+        },
+        talk: { agentId: "ops" },
       };
       await state.writeConfig(cfg);
       for (const agentId of ["ops", "research"]) {
@@ -265,7 +274,16 @@ describe("session mutation authorization store caches", () => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         const cfg: OpenClawConfig = {
           session: { scope: "global" },
-          agents: { entries: { ops: { default: true }, research: {} } },
+          agents: {
+            ownership: "explicit",
+            defaults: {
+              heartbeat: { agentId: "ops" },
+              systemAgent: { agentId: "ops" },
+              authInheritance: { agentId: "ops" },
+            },
+            entries: { ops: { workspace: state.statePath("workspace") }, research: {} },
+          },
+          talk: { agentId: "ops" },
         };
         await state.writeConfig(cfg);
         for (const agentId of ["ops", "research"]) {

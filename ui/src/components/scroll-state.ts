@@ -13,7 +13,7 @@ export function revealInScrollRegion(region: HTMLElement, option: HTMLElement): 
   }
 }
 
-export function syncScrollState(element: HTMLElement, horizontal = false) {
+function syncScrollState(element: HTMLElement, horizontal = false) {
   const size = horizontal ? element.scrollWidth : element.scrollHeight;
   const viewport = horizontal ? element.clientWidth : element.clientHeight;
   const position = horizontal ? element.scrollLeft : element.scrollTop;

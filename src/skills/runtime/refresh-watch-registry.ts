@@ -1,5 +1,9 @@
 import type { Root } from "@openclaw/fs-safe/root";
 import {
+  normalizeWorkspaceSkillRoots,
+  type ExecutionSkillWorkspace,
+} from "../loading/workspace-skill-roots.js";
+import {
   bumpSkillsSnapshotVersion,
   markSkillsSupportingFilesChanged,
   notifySkillsWatchAvailable,
@@ -104,7 +108,9 @@ export function evictWorkspaceWatchStates(
       owner.sourceScope.executionWorkspaceDir &&
       !remainingOwners.some(
         (other) =>
-          other.sourceScope.executionWorkspaceDir === owner.sourceScope.executionWorkspaceDir,
+          other.sourceScope.executionWorkspaceDir === owner.sourceScope.executionWorkspaceDir &&
+          other.sourceScope.executionWorkspaceFileHost ===
+            owner.sourceScope.executionWorkspaceFileHost,
       )
     ) {
       suspendSkillsSnapshotSources(owner.workspaceDir, owner.sourceScope);
@@ -212,7 +218,9 @@ export function publishSkillsWatchChanges(changes: PendingSkillsWatchChange[]): 
         const selected = scopes.get(kind) ?? [];
         if (
           !selected.some(
-            (scope) => scope.executionWorkspaceDir === owner.sourceScope.executionWorkspaceDir,
+            (scope) =>
+              scope.executionWorkspaceDir === owner.sourceScope.executionWorkspaceDir &&
+              scope.executionWorkspaceFileHost === owner.sourceScope.executionWorkspaceFileHost,
           )
         ) {
           selected.push(owner.sourceScope);
@@ -264,4 +272,27 @@ export function flushSkillsWatchChanges(trigger: SkillsPathWatchState): void {
   }
   // Keep each target's debounce deadline; a busy target cannot delay another workspace.
   publishSkillsWatchChanges(changes);
+}
+
+/** Discovery host is part of watcher identity, including identical path strings. */
+export function resolveSkillsWatchScope(
+  params: ExecutionSkillWorkspace & { workspaceDir: string; agentId?: string },
+) {
+  const workspaceDir = params.workspaceDir.trim();
+  const { executionWorkspaceDir, executionWorkspaceFileHost } = normalizeWorkspaceSkillRoots({
+    agentWorkspaceDir: workspaceDir,
+    executionWorkspaceDir: params.executionWorkspaceDir,
+    executionWorkspaceFileHost: params.executionWorkspaceFileHost,
+  });
+  return {
+    workspaceDir,
+    executionWorkspaceDir,
+    watcherKey: JSON.stringify([
+      workspaceDir,
+      executionWorkspaceDir,
+      params.agentId,
+      executionWorkspaceFileHost,
+    ]),
+    sourceScope: { executionWorkspaceDir, executionWorkspaceFileHost },
+  };
 }

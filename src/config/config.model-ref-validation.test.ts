@@ -165,7 +165,7 @@ describe("config model reference validation", () => {
     const agents =
       scope === "defaults"
         ? { defaults: { modelPolicy } }
-        : { list: [{ id: "worker", modelPolicy }] };
+        : { entries: { worker: { modelPolicy } } };
     const res = validateConfigObjectWithPlugins({ agents }, { pluginValidation: "skip" });
 
     expect(res.ok).toBe(true);

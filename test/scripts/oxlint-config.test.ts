@@ -741,6 +741,8 @@ describe("oxlint config", () => {
         {
           cwd: root,
           encoding: "utf8",
+          // Capture the complete JSON and owner trace when temporary paths are long.
+          maxBuffer: 8 * 1024 * 1024,
           timeout: 30_000,
           env: {
             ...process.env,
@@ -1380,6 +1382,8 @@ describe("oxlint config", () => {
 
   it("keeps native cap scopes and correctness while warning on untouched local line debt", () => {
     const root = fs.realpathSync(createTempDir("openclaw-oxlint-ci-limits-"));
+    // Keep transient-config ownership inside this synthetic checkout.
+    fs.mkdirSync(path.join(root, ".git"));
     const config = readJson(".oxlintrc.json") as OxlintConfig;
     fs.writeFileSync(
       path.join(root, ".oxlintrc.json"),
@@ -1545,6 +1549,7 @@ describe("oxlint config", () => {
 
   it("matches changed paths literally and keeps inherited config limits strict", () => {
     const root = fs.realpathSync(createTempDir("openclaw-oxlint-changed-paths-"));
+    fs.mkdirSync(path.join(root, ".git"));
     const config = { categories: { correctness: "off" }, rules: { "max-lines": ["error", 2] } };
     fs.writeFileSync(path.join(root, ".oxlintrc.json"), JSON.stringify(config));
     fs.symlinkSync(path.resolve("node_modules"), path.join(root, "node_modules"), "junction");
@@ -1616,6 +1621,7 @@ describe("oxlint config", () => {
 
   it("preserves native config validation locally and in Actions", () => {
     const root = fs.realpathSync(createTempDir("openclaw-oxlint-invalid-limit-"));
+    fs.mkdirSync(path.join(root, ".git"));
     fs.symlinkSync(path.resolve("node_modules"), path.join(root, "node_modules"), "junction");
     fs.writeFileSync(path.join(root, "fixture.ts"), "console.log(1);\n");
     const invalidConfigs = [

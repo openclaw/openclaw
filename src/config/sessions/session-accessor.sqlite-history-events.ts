@@ -1,6 +1,5 @@
 import type { TranscriptRecentReadLimits } from "../../sessions/transcript-anchor-page.js";
 import type { TranscriptReadWindowOptions } from "../../sessions/transcript-read-window.js";
-import type { SessionTranscriptMessageEventPage } from "./session-accessor.sqlite-active-events.js";
 import { withCurrentProjectionSnapshot } from "./session-accessor.sqlite-active-projection.js";
 import type {
   SessionTranscriptRawDeltaLimits,
@@ -12,6 +11,7 @@ import {
   readSessionTranscriptHistoryEventPageFromProjection,
   type SessionTranscriptDisplayDeltaResult,
 } from "./session-accessor.sqlite-history-query.js";
+import type { SessionTranscriptMessageEventPage } from "./session-accessor.sqlite-projection-read.js";
 
 export function readTranscriptDisplayDelta(
   scope: SessionTranscriptReadScope,

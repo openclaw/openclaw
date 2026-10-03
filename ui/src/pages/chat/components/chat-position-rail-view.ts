@@ -15,6 +15,38 @@ import type { ChatTranscriptSession } from "./chat-transcript-session.ts";
 
 const PREVIEW_LENGTH = 140;
 
+export function syncPositionRailTabStop(
+  scroller: HTMLElement | undefined,
+  tabStop: HTMLElement | undefined,
+): void {
+  const previousTabStop = scroller?.querySelector<HTMLElement>('[tabindex="0"]');
+  if (tabStop && tabStop !== previousTabStop) {
+    if (previousTabStop) {
+      previousTabStop.tabIndex = -1;
+    }
+    tabStop.tabIndex = 0;
+  }
+}
+
+export function syncPositionRailPreview(
+  preview: HTMLElement | undefined,
+  marker: HTMLElement | undefined,
+  center: number,
+  viewportHeight: number,
+): void {
+  if (!preview || !marker) {
+    return;
+  }
+  const label = preview.querySelector(".chat-position-rail__preview-label")?.textContent?.trim();
+  const copy = preview.querySelector(".chat-position-rail__preview-copy")?.textContent?.trim();
+  const description = `${label ?? ""} ${copy ?? ""}. ${t("chat.thread.positionMarkerHint")}`;
+  if (marker.getAttribute("aria-description") !== description) {
+    marker.setAttribute("aria-description", description);
+  }
+  preview.style.setProperty("--chat-position-preview", `${center}px`);
+  preview.style.visibility = center < 0 || center > viewportHeight ? "hidden" : "";
+}
+
 export type PositionRailAssistant = {
   id: string;
   name: string;

@@ -145,30 +145,27 @@ function safeAvatarUrl(raw: string | undefined): URL | null {
   if (!raw) {
     return null;
   }
-  try {
-    const url = new URL(raw);
-    const rawPathEnd = raw.search(/[?#]/u);
-    const rawPath = rawPathEnd === -1 ? raw : raw.slice(0, rawPathEnd);
-    if (
-      url.protocol !== "https:" ||
-      url.hostname !== GITHUB_AVATAR_HOST ||
-      url.hash ||
-      url.username ||
-      url.password ||
-      url.port ||
-      rawPath.includes("..") ||
-      rawPath.includes("\\") ||
-      url.pathname.includes("..") ||
-      url.pathname.includes("\\")
-    ) {
-      return null;
-    }
-    url.search = "";
-    url.searchParams.set("s", "64");
-    return url;
-  } catch {
+  const url = URL.parse(raw);
+  const rawPathEnd = raw.search(/[?#]/u);
+  const rawPath = rawPathEnd === -1 ? raw : raw.slice(0, rawPathEnd);
+  if (
+    !url ||
+    url.protocol !== "https:" ||
+    url.hostname !== GITHUB_AVATAR_HOST ||
+    url.hash ||
+    url.username ||
+    url.password ||
+    url.port ||
+    rawPath.includes("..") ||
+    rawPath.includes("\\") ||
+    url.pathname.includes("..") ||
+    url.pathname.includes("\\")
+  ) {
     return null;
   }
+  url.search = "";
+  url.searchParams.set("s", "64");
+  return url;
 }
 
 async function fetchCoAuthors(

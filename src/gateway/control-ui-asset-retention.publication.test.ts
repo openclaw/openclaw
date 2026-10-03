@@ -71,7 +71,7 @@ describe("Control UI retained publication", () => {
           expect(refreshOpens).toEqual([]);
         } else {
           await owner.prepare();
-          expect(owner.resolveAsset(current.assetPath)?.filePath).toBe(targetAsset);
+          expect((await owner.resolveAsset(current.assetPath))?.filePath).toBe(targetAsset);
           expect(refreshOpens).toEqual([2]);
           expect(opens.get(targetAsset)).toBe(2);
         }
@@ -124,7 +124,7 @@ describe("Control UI retained publication", () => {
           outcome: "deferred",
           error: String(failure),
         });
-        expect(await fs.readFile(owner.resolveAsset(build.assetPath)!.filePath)).toEqual(
+        expect(await fs.readFile((await owner.resolveAsset(build.assetPath))!.filePath)).toEqual(
           await fs.readFile(path.join(build.root, build.assetPath)),
         );
         const retainedVictim = claimed ? path.join(claimed, path.basename(victim)) : victim;
@@ -228,7 +228,7 @@ describe("Control UI retained publication", () => {
           expect(pruneLogs.warn).not.toHaveBeenCalled();
           for (const [index, build] of builds.entries()) {
             expect(
-              await fs.readFile(owners[index]!.resolveAsset(build.assetPath)!.filePath),
+              await fs.readFile((await owners[index]!.resolveAsset(build.assetPath))!.filePath),
             ).toEqual(await fs.readFile(path.join(build.root, build.assetPath)));
           }
           expect(await fs.readdir(cache)).toHaveLength(3);
@@ -287,7 +287,7 @@ describe("Control UI retained publication", () => {
         for (const [index, owner] of owners.entries()) {
           const build = index === 0 ? a : b;
           expect(
-            await fs.readFile(owner.resolveAsset(build.assetPath)!.filePath, "utf8"),
+            await fs.readFile((await owner.resolveAsset(build.assetPath))!.filePath, "utf8"),
           ).toContain(index === 0 || kind === "same" ? '"a"' : '"b"');
         }
         const entries = await fs.readdir(cache);
@@ -342,11 +342,11 @@ describe("Control UI retained publication", () => {
         const owner = createControlUiAssetRetention(build.root);
         if (behavior === "zero-progress") {
           await expect(owner.prepare()).rejects.toThrow("write made no progress");
-          expect(owner.resolveAsset(build.assetPath)).toBeNull();
+          expect(await owner.resolveAsset(build.assetPath)).toBeNull();
           expect(await fs.readdir(cache)).toEqual([]);
         } else {
           await owner.prepare();
-          expect(await fs.readFile(owner.resolveAsset(build.assetPath)!.filePath)).toEqual(
+          expect(await fs.readFile((await owner.resolveAsset(build.assetPath))!.filePath)).toEqual(
             await fs.readFile(source),
           );
         }
@@ -401,12 +401,12 @@ describe("Control UI retained publication", () => {
         (code !== "EPERM" || process.platform === "win32")
       ) {
         await owner.prepare();
-        expect(owner.resolveAsset(build.assetPath)?.filePath).toBe(
+        expect((await owner.resolveAsset(build.assetPath))?.filePath).toBe(
           path.join(target, build.assetPath),
         );
       } else {
         await expect(owner.prepare()).rejects.toBe(collision);
-        expect(owner.resolveAsset(build.assetPath)).toBeNull();
+        expect(await owner.resolveAsset(build.assetPath)).toBeNull();
       }
       // A failed loser owns its staging only, including when the winner is invalid.
       expect(await fs.readdir(cache)).toEqual([build.manifest.generation]);
@@ -426,7 +426,7 @@ describe("Control UI retained publication", () => {
       });
       const owner = createControlUiAssetRetention(build.root);
       await expect(owner.prepare()).rejects.toThrow("Invalid retained Control UI generation");
-      expect(owner.resolveAsset(build.assetPath)).toBeNull();
+      expect(await owner.resolveAsset(build.assetPath)).toBeNull();
       expect(await fs.readdir(cache)).toEqual([build.manifest.generation]);
     });
   });
@@ -450,8 +450,8 @@ describe("Control UI retained publication", () => {
       });
       const owner = createControlUiAssetRetention(build.root);
       await owner.prepare();
-      expect(owner.resolveAsset(old.assetPath)).toBeNull();
-      expect(owner.resolveAsset(build.assetPath)).not.toBeNull();
+      expect(await owner.resolveAsset(old.assetPath)).toBeNull();
+      expect(await owner.resolveAsset(build.assetPath)).not.toBeNull();
       await expect(fs.access(old.target)).rejects.toMatchObject({ code: "ENOENT" });
     });
   });
@@ -483,8 +483,8 @@ describe("Control UI retained publication", () => {
         const owner = createControlUiAssetRetention(current.root);
         await owner.prepare();
         expect(raced).toBe(true);
-        expect(owner.resolveAsset(victim.assetPath)).toBeNull();
-        expect(owner.resolveAsset(current.assetPath)).not.toBeNull();
+        expect(await owner.resolveAsset(victim.assetPath)).toBeNull();
+        expect(await owner.resolveAsset(current.assetPath)).not.toBeNull();
         expect(
           await fs.access(victim.target).then(
             () => true,

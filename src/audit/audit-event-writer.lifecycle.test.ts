@@ -11,7 +11,8 @@ import {
 import type { AuditEventInput } from "./audit-event-types.js";
 import { createAuditEventWriter } from "./audit-event-writer.js";
 import { input } from "./audit-event-writer.test-support.js";
-import type { AuditWriterOperations, AuditWriterResult } from "./audit-event-writer.types.js";
+import type { AuditWriterResult } from "./audit-event-writer.types.js";
+import type { AuditWriterOperations } from "./audit-event-writer.worker.js";
 
 const { execute } = vi.hoisted(() => ({
   execute:

@@ -5,6 +5,7 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import type { SandboxContext } from "../sandbox/types.js";
 import {
   buildEmbeddedSystemPromptMock,
+  createOpenClawCodingToolsMock,
   loadCompactHooksHarness,
   resetCompactHooksHarnessMocks,
   resolveSandboxContextMock,
@@ -109,6 +110,39 @@ function compactionParams() {
     },
   } satisfies Parameters<typeof compactEmbeddedAgentSessionDirect>[0];
 }
+
+it("keeps rooted compaction tools confined while selecting the canonical prepared workspace", async () => {
+  const executionRoot = join(TEST_WORKSPACE_DIR, "workshop-skills");
+  const { resolveAgentConfig } = await import("../agent-scope.js");
+  vi.mocked(resolveAgentConfig).mockReturnValue({ workspace: TEST_WORKSPACE_DIR });
+  const params = compactionParams();
+  const result = await compactEmbeddedAgentSessionDirect({
+    ...params,
+    config: {
+      ...params.config,
+      agents: {
+        ...params.config.agents,
+        entries: { main: { workspace: TEST_WORKSPACE_DIR } },
+      },
+    },
+    workspaceDir: executionRoot,
+    bootstrapWorkspaceDir: TEST_WORKSPACE_DIR,
+    cwd: executionRoot,
+    sessionRoot: executionRoot,
+    permissionMode: "workspace",
+    requireWorkspaceOnly: true,
+    requireWritableSandbox: true,
+  });
+
+  expect(result.ok).toBe(true);
+  expect(createOpenClawCodingToolsMock.mock.calls[0]?.[0]).toMatchObject({
+    workspaceDir: executionRoot,
+    cwd: executionRoot,
+    requireWorkspaceOnly: true,
+    sessionPermissionPolicy: { mode: "workspace", root: executionRoot },
+    preparedModelRuntime: { workspaceDir: TEST_WORKSPACE_DIR },
+  });
+});
 
 it.each([
   { name: "disabled", enabled: false, allowed: false, required: false },

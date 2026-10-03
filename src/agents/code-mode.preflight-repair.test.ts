@@ -17,6 +17,7 @@ import {
 } from "./code-mode.test-support.js";
 import { clearToolSearchCatalog } from "./tool-search.js";
 import { jsonResult, ToolInputError, type AnyAgentTool } from "./tools/common.js";
+import { createInstalledSkillTools } from "./tools/installed-skill-tools.js";
 
 async function runCode(code: string, targets: AnyAgentTool[]) {
   const { ctx, tools } = createCodeModeHarness();
@@ -167,7 +168,10 @@ afterEach(resetCodeModeTestState);
 describe("Code Mode program data", () => {
   async function run(tools: AnyAgentTool[], code: string, skills: CodeModeSkill[] = []) {
     const h = createCodeModeHarness({ codeModeSkills: skills, codeMode: { maxOutputBytes: 1024 } });
-    applyCodeModeCatalog({ ...h.ctx, tools: [...h.tools, ...tools] });
+    applyCodeModeCatalog({
+      ...h.ctx,
+      tools: [...h.tools, ...createInstalledSkillTools(skills), ...tools],
+    });
     return runUntilCompleted({ execTool: h.tools[0]!, waitTool: h.tools[1]!, code });
   }
 
@@ -211,7 +215,7 @@ describe("Code Mode program data", () => {
         value:
           bytes < 10 * 1024 * 1024
             ? { length: bytes, tail: "END!" }
-            : { error: expect.stringMatching(/program-data budget exceeded/) },
+            : { error: expect.stringMatching(/instruction limit/) },
       });
     },
   );

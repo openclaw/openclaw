@@ -53,6 +53,7 @@ const cancellableUpdateAction = z.strictObject({
 });
 const updateAction = cancellableUpdateAction.extend({
   mutationProtocol: cancellationProtocol.optional(),
+  custody: z.enum(["reserved", "bound"]).optional(),
 });
 const actionSchema = z.discriminatedUnion("kind", [
   updateAction,
@@ -118,18 +119,15 @@ const cancellingPayloadSchema = z
     cancellation: originalGenerationSchema,
   })
   .refine((value) => {
-    try {
-      const original = originalUpdateSchema.parse(JSON.parse(value.cancellation.payload));
-      return (
-        JSON.stringify(original.helper) === JSON.stringify(value.helper) &&
-        JSON.stringify(original.executor) === JSON.stringify(value.executor) &&
-        JSON.stringify(original.action) === JSON.stringify(value.action) &&
-        (JSON.stringify(value.helper) === JSON.stringify(value.executor) ||
-          original.action.mutationProtocol === "original-cancellation-v1")
-      );
-    } catch {
-      return false;
-    }
+    const original = safeParseJsonWithSchema(originalUpdateSchema, value.cancellation.payload);
+    return (
+      original !== null &&
+      JSON.stringify(original.helper) === JSON.stringify(value.helper) &&
+      JSON.stringify(original.executor) === JSON.stringify(value.executor) &&
+      JSON.stringify(original.action) === JSON.stringify(value.action) &&
+      (JSON.stringify(value.helper) === JSON.stringify(value.executor) ||
+        original.action.mutationProtocol === "original-cancellation-v1")
+    );
   });
 
 // Candidate package roots retain a non-recursive reference to the original
@@ -145,15 +143,12 @@ const currentPayloadSchema = z
     if (!value.mutationOriginal) {
       return true;
     }
-    try {
-      const original = originalUpdateSchema.parse(JSON.parse(value.mutationOriginal.payload));
-      return (
-        !value.mutationOriginal.key.includes("/.openclaw-update-child-") &&
-        original.action.mutationProtocol === "original-cancellation-v1"
-      );
-    } catch {
-      return false;
-    }
+    const original = safeParseJsonWithSchema(originalUpdateSchema, value.mutationOriginal.payload);
+    return (
+      original !== null &&
+      !value.mutationOriginal.key.includes("/.openclaw-update-child-") &&
+      original.action.mutationProtocol === "original-cancellation-v1"
+    );
   });
 
 // Preserve v3 decoding solely to refuse retained custody. No current producer

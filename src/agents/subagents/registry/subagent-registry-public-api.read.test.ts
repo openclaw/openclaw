@@ -6,12 +6,15 @@ import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.j
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { createSubagentRegistryPublicApi } from "./subagent-registry-public-api.js";
 import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
+import {
+  persistRegistryFixture,
+  saveSubagentRegistryToSqlite,
+} from "./subagent-registry-state.fixture.test-support.js";
 import * as registryState from "./subagent-registry-state.js";
 import {
   clearSubagentRunsReadCacheForTest,
   prepareSubagentSessionListReadCache,
 } from "./subagent-registry-state.js";
-import { saveSubagentRegistryToSqlite } from "./subagent-registry.store.sqlite.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 function createRun(runId: string, overrides: Partial<SubagentRunRecord> = {}): SubagentRunRecord {
@@ -39,9 +42,6 @@ function createReadApi(runs = new Map<string, SubagentRunRecord>()) {
   };
   return createSubagentRegistryPublicApi({
     runs,
-    persist: unexpectedMutation,
-    persistOrThrow: unexpectedMutation,
-    persistAsyncOrThrow: unexpectedMutation,
     restoreOnce: unexpectedMutation,
     startAnnounceCleanup: unexpectedMutation,
     settleRequesterTurn: unexpectedMutation,
@@ -76,7 +76,7 @@ describe("subagent registry known-run reads", () => {
       for (const entry of [target, ...unrelated]) {
         subagentRuns.set(entry.runId, entry);
       }
-      registryState.persistSubagentRunsToDiskOrThrow(subagentRuns);
+      persistRegistryFixture(subagentRuns);
       const api = createReadApi(subagentRuns);
       const warm = await api.prepareSubagentRunsByRunIds(["collector"]);
       expect(warm.consume((runs) => runs.get("collector"))).toEqual({ ready: true, value: target });
@@ -113,7 +113,7 @@ describe("subagent registry known-run reads", () => {
         ]);
         const replacement = { ...target, completion: { required: false, resultText: "updated" } };
         subagentRuns.set(replacement.runId, replacement);
-        registryState.persistSubagentRunsToDiskOrThrow(subagentRuns, [replacement.runId]);
+        persistRegistryFixture(subagentRuns, [replacement.runId]);
         expect(prepared.consume((runs) => [...runs])).toEqual({
           ready: true,
           value: [
@@ -162,10 +162,10 @@ describe("subagent registry known-run reads", () => {
           swarmRunId: "collector",
           requesterSessionKey: "agent:other:current-owner",
         });
-        registryState.persistSubagentRunsToDiskOrThrow(
-          new Map([[replacement.runId, replacement]]),
-          [original.runId, replacement.runId],
-        );
+        persistRegistryFixture(new Map([[replacement.runId, replacement]]), [
+          original.runId,
+          replacement.runId,
+        ]);
         release.resolve();
         const prepared = await pending;
         expect(prepared.consume((runs) => [...runs])).toEqual({

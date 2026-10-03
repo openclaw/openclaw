@@ -9,17 +9,24 @@ import type { OpenClawConfig } from "../api.js";
 import { compileMemoryWikiVault } from "./compile.js";
 import type { MemoryWikiPluginConfig } from "./config.js";
 import { renderWikiMarkdown } from "./markdown.js";
+import { registerConversationRecallQueryTests } from "./query.conversation-recall.test-support.js";
 import { getMemoryWikiPage, searchMemoryWiki } from "./query.js";
+import { registerProviderRecordQueryTests } from "./query.provider-runtime.test-support.js";
+import { registerSessionlessAgentScopeQueryTests } from "./query.session-scope.test-support.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
 import { createWikiGetTool } from "./tool.js";
 
 const {
   getActiveMemorySearchManagerMock,
+  getActiveMemoryProviderMock,
+  isActiveMemoryProviderNativeMock,
   loadCombinedSessionStoreForGatewayMock,
   resolveDefaultAgentIdMock,
   resolveSessionAgentIdMock,
 } = vi.hoisted(() => ({
   getActiveMemorySearchManagerMock: vi.fn(),
+  getActiveMemoryProviderMock: vi.fn(),
+  isActiveMemoryProviderNativeMock: vi.fn(),
   loadCombinedSessionStoreForGatewayMock: vi.fn(),
   resolveDefaultAgentIdMock: vi.fn(() => "main"),
   resolveSessionAgentIdMock: vi.fn(({ sessionKey }: { sessionKey?: string }) => {
@@ -30,6 +37,8 @@ const {
 
 vi.mock("openclaw/plugin-sdk/memory-host-search", () => ({
   getActiveMemorySearchManager: getActiveMemorySearchManagerMock,
+  getActiveMemoryProvider: getActiveMemoryProviderMock,
+  isActiveMemoryProviderNative: isActiveMemoryProviderNativeMock,
 }));
 
 vi.mock("@openclaw/memory-core/session-search-visibility-api.js", { spy: true });
@@ -59,10 +68,10 @@ const { createVault } = createMemoryWikiTestHarness();
 let suiteRoot = "";
 let caseIndex = 0;
 
-function collectWikiResultPaths(results: readonly { corpus: string; path: string }[]): string[] {
+function collectWikiResultPaths(results: readonly { corpus: string; path?: string }[]): string[] {
   const paths: string[] = [];
   for (const result of results) {
-    if (result.corpus === "wiki") {
+    if (result.corpus === "wiki" && result.path) {
       paths.push(result.path);
     }
   }
@@ -83,6 +92,9 @@ function expectFields(value: unknown, expected: Record<string, unknown>): Record
 beforeEach(() => {
   getActiveMemorySearchManagerMock.mockReset();
   getActiveMemorySearchManagerMock.mockResolvedValue({ manager: null, error: "unavailable" });
+  getActiveMemoryProviderMock.mockReset();
+  // Memory Core owns the slot unless a test selects a native provider.
+  isActiveMemoryProviderNativeMock.mockReset().mockResolvedValue(false);
   loadCombinedSessionStoreForGatewayMock.mockReset();
   loadCombinedSessionStoreForGatewayMock.mockReturnValue({ storePath: "(test)", store: {} });
   resolveDefaultAgentIdMock.mockClear();
@@ -1047,70 +1059,6 @@ describe("searchMemoryWiki", () => {
     },
   );
 
-  it("scopes gateway-style session memory search by agent", async () => {
-    const { config } = await createQueryVault({
-      initialize: true,
-      config: {
-        search: { backend: "shared", corpus: "memory" },
-      },
-    });
-    loadCombinedSessionStoreForGatewayMock.mockReturnValue({
-      storePath: "(test)",
-      store: {
-        "agent:secondary:visible-session": {
-          sessionId: "visible-session",
-          updatedAt: 1,
-          sessionFile: "/tmp/openclaw/visible-session.jsonl",
-        },
-      },
-    });
-    const manager = createMemoryManager({
-      searchResults: [
-        {
-          path: "sessions/visible-session.jsonl",
-          startLine: 1,
-          endLine: 2,
-          score: 30,
-          snippet: "visible transcript",
-          source: "sessions",
-        },
-        {
-          path: "sessions/other-session.jsonl",
-          startLine: 3,
-          endLine: 4,
-          score: 20,
-          snippet: "other transcript",
-          source: "sessions",
-        },
-        {
-          path: "MEMORY.md",
-          startLine: 5,
-          endLine: 6,
-          score: 10,
-          snippet: "durable memory",
-          source: "memory",
-        },
-      ],
-    });
-    getActiveMemorySearchManagerMock.mockResolvedValue({ manager });
-
-    const results = await searchMemoryWiki({
-      config,
-      appConfig: createAppConfig(),
-      agentId: "secondary",
-      query: "transcript",
-      maxResults: 10,
-    });
-
-    expect(loadCombinedSessionStoreForGatewayMock).toHaveBeenCalledWith(createAppConfig(), {
-      agentId: "secondary",
-    });
-    expect(results.map((result) => result.path)).toEqual([
-      "sessions/visible-session.jsonl",
-      "MEMORY.md",
-    ]);
-  });
-
   it("keeps context-free shared searches and reads inside the default agent", async () => {
     const { config } = await createQueryVault({
       initialize: true,
@@ -1186,7 +1134,7 @@ describe("searchMemoryWiki", () => {
     const results = await searchMemoryWiki({ config, query: "Source" });
 
     expect(results).toHaveLength(2);
-    const paths = results.map((r) => r.path).toSorted();
+    const paths = results.map((r) => r.path).toSorted((a, b) => String(a).localeCompare(String(b)));
     expect(paths).toEqual(["sources/sub/nested.md", "sources/top.md"]);
   });
 
@@ -1861,3 +1809,27 @@ describe("wiki corpus bridge page agent scoping", () => {
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
+registerSessionlessAgentScopeQueryTests({
+  createQueryVault,
+  createAppConfig: createAgentSessionVisibilityAppConfig,
+  createMemoryManager,
+  getActiveMemorySearchManagerMock,
+  loadCombinedSessionStoreForGatewayMock,
+  searchMemoryWiki,
+});
+registerConversationRecallQueryTests({
+  createQueryVault,
+  getActiveMemorySearchManagerMock,
+  loadCombinedSessionStoreForGatewayMock,
+  searchMemoryWiki,
+});
+registerProviderRecordQueryTests({
+  createQueryVault,
+  createAppConfig,
+  getActiveMemoryProviderMock,
+  getActiveMemorySearchManagerMock,
+  createMemoryManager,
+  useNativeProvider: () => isActiveMemoryProviderNativeMock.mockResolvedValue(true),
+  searchMemoryWiki,
+  getMemoryWikiPage,
+});

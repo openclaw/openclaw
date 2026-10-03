@@ -5,8 +5,62 @@ import Security
 import Testing
 @testable import OpenClaw
 
+@Suite(.testWaitLimit)
 @MainActor
 struct AppStateIsolationTests {
+    @Test
+    func `named remote profile stop leaves other profiles' Gateway services alone`() async throws {
+        try #require(AppProfile.current.isActive)
+        let home = try makeTempDirForTests()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let config = home.appendingPathComponent("openclaw.json")
+        try Data(#"{"gateway":{"mode":"remote"}}"#.utf8).write(to: config)
+        try await TestIsolation.withIsolatedState(
+            launchAgentHomeDirectory: home,
+            env: ["OPENCLAW_CONFIG_PATH": config.path, "OPENCLAW_GATEWAY_PORT": nil])
+        {
+            let defaultProfile = AppProfile(environment: [:])
+            let plist = GatewayLaunchAgentManager.plistURL(homeDirectory: home, profile: defaultProfile)
+            let runtime = defaultProfile.stateDirectoryURL(homeDirectory: home)
+                .appendingPathComponent("runtime/build-one")
+            let original = try PropertyListSerialization.data(
+                fromPropertyList: [
+                    "ProgramArguments": [
+                        runtime.appendingPathComponent("bin/bun").path,
+                        runtime.appendingPathComponent("lib/node_modules/openclaw/openclaw.mjs").path,
+                        "gateway", "--port", String(defaultProfile.defaultGatewayPort),
+                    ],
+                ],
+                format: .xml,
+                options: 0)
+            try FileManager.default.createDirectory(
+                at: plist.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try original.write(to: plist)
+            let failure = "existing managed handoff lease is incompatible; " +
+                "retain diagnostics and run openclaw triage manually"
+            GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(home.appendingPathComponent("no-marker"))
+            GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true)
+            GatewayLaunchAgentManager.setTestingDaemonStatusPayload(#"{"ok":false,"error":"\#(failure)"}"#)
+            GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+            defer {
+                GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(nil)
+                GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
+                GatewayLaunchAgentManager.setTestingDaemonStatusPayload(nil)
+                GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+            }
+
+            let manager = GatewayProcessManager()
+            manager.desiredActive = true
+            manager.stop()
+            await manager.waitForStartupAttempt()
+
+            #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().isEmpty)
+            #expect(manager.status == .stopped)
+            #expect(manager.lastFailureReason == nil)
+            #expect(try Data(contentsOf: plist) == original)
+        }
+    }
+
     @Test
     func `automatic recovery preserves a named profile port ownership failure`() async throws {
         try #require(AppProfile.current.isActive)
@@ -34,7 +88,7 @@ struct AppStateIsolationTests {
             GatewayLaunchAgentManager.setTestingDaemonStatusPayload(#"{"ok":true,"service":{"loaded":false}}"#)
             GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
             defer {
-                manager.setTestingDesiredActive(false)
+                manager.desiredActive = false
                 state.connectionMode = previousMode
                 GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(nil)
                 GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
@@ -73,7 +127,7 @@ struct AppStateIsolationTests {
             #expect(manager.log != failureLog)
             #expect(!GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().contains { $0.first == "install" })
 
-            manager.setTestingDesiredActive(false)
+            manager.desiredActive = false
             await connection.shutdown()
             await PortGuardian.shared.setTestingDescriptor(nil, forPort: port)
             await GatewayEndpointStore.shared.setLocalUnavailableReason(nil)
@@ -105,7 +159,7 @@ struct AppStateIsolationTests {
             let port = GatewayEnvironment.gatewayPort()
             await PortGuardian.shared.setTestingDescriptor(nil, forPort: port)
             defer {
-                manager.setTestingDesiredActive(false)
+                manager.desiredActive = false
                 state.connectionMode = previousMode
                 GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
                 GatewayLaunchAgentManager.setTestingDaemonStatusPayload(nil)
@@ -125,7 +179,7 @@ struct AppStateIsolationTests {
             #expect(manager.lastFailureReason == reason)
             #expect(!GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().contains { $0.first == "install" })
 
-            manager.setTestingDesiredActive(false)
+            manager.desiredActive = false
             await connection.shutdown()
             await GatewayEndpointStore.shared.setLocalUnavailableReason(nil)
         }

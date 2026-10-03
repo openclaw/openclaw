@@ -55,6 +55,25 @@ export function resolveUpdateResultNextAction(params: {
     return UPDATE_INSTALL_SKIP_GUIDANCE[result.reason];
   }
   if (result.status === "error") {
+    const doctorSettlement = result.steps.findLast(
+      (step) => step.name === "doctor process settlement",
+    );
+    if (doctorSettlement && doctorSettlement.exitCode !== 0) {
+      const detail =
+        doctorSettlement.failureFacts
+          ?.map((fact) => fact.message)
+          .filter(Boolean)
+          .join("; ") || doctorSettlement.stderrTail;
+      return `${detail ?? "Doctor process settlement could not be verified."} Keep the Gateway stopped while Doctor writers may still be running. Preserve the migrated state and recovery snapshots; after the recorded processes have stopped, run \`${formatCliCommand("openclaw update repair", env)}\`.`;
+    }
+    if (
+      result.reason === "state-migrated-no-rollback" &&
+      doctorSettlement?.exitCode === 0 &&
+      result.recovery?.serviceRestartSafe === true &&
+      result.recovery.service === "healthy"
+    ) {
+      return `Doctor did not finish normally, but all tracked process groups stopped and the candidate Gateway is healthy on the preserved migrated state. Keep the recovery snapshots and run \`${formatCliCommand("openclaw update repair", env)}\` to finish maintenance.`;
+    }
     if (
       result.reason === "state-migrated-no-rollback" &&
       result.steps.some((step) => step.name === "database rollback" && step.exitCode !== 0) &&

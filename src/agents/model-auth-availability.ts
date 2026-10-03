@@ -153,7 +153,6 @@ export type ModelAuthAvailabilityResolver = {
     provider: string,
     ref?: ModelAuthAvailabilityRef,
   ): ModelAuthAvailability;
-  hasSyntheticAuth(provider: string): boolean;
 };
 
 function evaluateCliRuntimeModelAuthAvailability(
@@ -259,7 +258,6 @@ type CreateModelAuthAvailabilityResolverParams = {
   env?: NodeJS.ProcessEnv;
   syntheticAuthProviderRefs?: readonly string[];
   metadataSnapshot?: PluginMetadataSnapshot;
-  skipSetupProviderFallback?: boolean;
   externalCliProviderIds?: readonly string[];
   routeResolverFactory?: typeof createOpenAIModelRoutesResolver;
   allowPreparedRuntimeAuth?: boolean;
@@ -1157,6 +1155,21 @@ export function createModelAuthAvailabilityResolver(
       ref.pinnedProfileId,
     );
     const materializedModelId = normalizeModelIdForProvider(provider, ref.modelId ?? "");
+    const materializationMatchesRoute = (
+      fact: RuntimeAuthMaterialization,
+      route: ProviderModelRouteCandidate,
+    ) =>
+      route.runtimePolicy?.compatibleIds.some(
+        (runtimeId) => runtimeId.trim().toLowerCase() === fact.runtimeOwnerId,
+      ) === true &&
+      route.api.toLowerCase() === fact.modelApi &&
+      route.requestTransportOverrides === fact.requestTransportOverrides &&
+      modelMatchesProviderModelRoute({
+        provider,
+        api: fact.modelApi,
+        baseUrl: fact.modelBaseUrl,
+        route,
+      });
     const materialized =
       !modelLock &&
       !ref.pinnedProfileId &&
@@ -1177,17 +1190,7 @@ export function createModelAuthAvailabilityResolver(
                   resolveProviderModelRouteAuthRequirement(configuredAuthMode);
                 return (
                   (!configuredRequirement || configuredRequirement === route.authRequirement) &&
-                  route.runtimePolicy?.compatibleIds.some(
-                    (runtimeId) => runtimeId.trim().toLowerCase() === fact.runtimeOwnerId,
-                  ) === true &&
-                  route.api.toLowerCase() === fact.modelApi &&
-                  route.requestTransportOverrides === fact.requestTransportOverrides &&
-                  modelMatchesProviderModelRoute({
-                    provider,
-                    api: fact.modelApi,
-                    baseUrl: fact.modelBaseUrl,
-                    route,
-                  }) &&
+                  materializationMatchesRoute(fact, route) &&
                   modeAllowed(
                     provider,
                     {
@@ -1299,19 +1302,8 @@ export function createModelAuthAvailabilityResolver(
             : undefined,
         );
     if (materialized && !preferredSelection) {
-      const selectedRoute = routeResolution.routes.find(
-        (route) =>
-          route.runtimePolicy?.compatibleIds.some(
-            (runtimeId) => runtimeId.trim().toLowerCase() === materialized.runtimeOwnerId,
-          ) === true &&
-          route.api.toLowerCase() === materialized.modelApi &&
-          route.requestTransportOverrides === materialized.requestTransportOverrides &&
-          modelMatchesProviderModelRoute({
-            provider,
-            api: materialized.modelApi,
-            baseUrl: materialized.modelBaseUrl,
-            route,
-          }),
+      const selectedRoute = routeResolution.routes.find((route) =>
+        materializationMatchesRoute(materialized, route),
       );
       if (selectedRoute) {
         return {
@@ -1520,14 +1512,6 @@ export function createModelAuthAvailabilityResolver(
         : evaluation;
     },
     resolveProviderAuthAvailability,
-    hasSyntheticAuth: (provider) =>
-      synthetic.has(normalizeProviderIdForAuth(provider)) ||
-      synthetic.has(normalizeProvider(provider)) ||
-      (normalizeProviderIdForAuth(provider) === OPENAI_PROVIDER_ID && synthetic.has("codex")) ||
-      hasSyntheticLocalProviderAuthConfig({
-        cfg: params.cfg,
-        provider: normalizeProviderIdForAuth(provider),
-      }),
   };
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -40,11 +40,91 @@ export function registerGatewayForcedRestartTests({
   | "systemctl"
 >): void {
   const idleActiveWorkSnapshot = createActiveWorkSnapshot();
-  it.each(
-    (["SIGTERM", "SIGUSR2"] as const).flatMap((signal) =>
-      [undefined, 180_000].map((waitMs) => ({ signal, waitMs, budget: waitMs ?? 45_000 })),
-    ),
-  )(
+  it.each([true, false])(
+    "preserves the native drain and hard deadline after deferral expires (work settles=%s)",
+    async (settles) => {
+      readCgroup.mockResolvedValue("0::/system.slice/openclaw-gateway.service\n");
+      systemctl.mockResolvedValue({
+        code: 0,
+        stdout: "LoadState=loaded\nTimeoutStopUSec=90s",
+        stderr: "",
+      });
+      const active = createActiveWorkSnapshot({ agentRuns: 1, embeddedRuns: 1, cronRuns: 1 });
+      createGatewayActiveWorkSnapshot.mockReturnValueOnce(active);
+      const drain = createDeferredCore<{ drained: boolean; snapshot: typeof active }>();
+      waitForGatewayActiveWork.mockImplementationOnce(() => drain.promise);
+
+      await withIsolatedSignals(async ({ captureSignal }) => {
+        const { close, start, runtime, exited } = await createSignaledLoopHarness();
+        const restartSignal = captureSignal("SIGUSR2");
+        const restart =
+          await vi.importActual<typeof import("../../infra/restart.js")>("../../infra/restart.js");
+        const closing = createDeferredCore();
+        if (!settles) {
+          close.mockImplementationOnce(() => closing.promise);
+        }
+        vi.useFakeTimers();
+        const clock = vi.spyOn(performance, "now").mockImplementation(() => Date.now());
+        const deferral = restart.deferGatewayRestartUntilIdle({
+          getPendingCount: () => 1,
+          maxWaitMs: 300_000,
+          timeoutIntent: { force: true, reason: "config reload forced restart" },
+          emitHooks: {
+            emitRestart: (_reason, intent) => {
+              consumeGatewayRestartIntent.mockReturnValueOnce(intent ?? null);
+              restartSignal();
+              return { status: "emitted" };
+            },
+          },
+        });
+        try {
+          await vi.advanceTimersByTimeAsync(300_000);
+          expect(waitForGatewayActiveWork).toHaveBeenCalledExactlyOnceWith(
+            75_000,
+            expect.any(Object),
+          );
+          expect(close).not.toHaveBeenCalled();
+          expect(abortActiveCronTaskRuns).not.toHaveBeenCalled();
+          expect(runtime.exit).not.toHaveBeenCalled();
+
+          await vi.advanceTimersByTimeAsync(settles ? 1_000 : 75_000);
+          expect(close).not.toHaveBeenCalled();
+          expect(abortActiveCronTaskRuns).not.toHaveBeenCalled();
+          drain.resolve({ drained: settles, snapshot: settles ? idleActiveWorkSnapshot : active });
+          await vi.advanceTimersByTimeAsync(0);
+          expectRestartCloseCall(close, settles ? 74_000 : 0);
+          if (settles) {
+            expect(start).toHaveBeenCalledTimes(2);
+          } else {
+            expect(abortActiveCronTaskRuns).toHaveBeenCalledWith("Gateway restarting.");
+            await vi.advanceTimersByTimeAsync(9_999);
+            expect(runtime.exit).not.toHaveBeenCalled();
+            await vi.advanceTimersByTimeAsync(1);
+            expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
+            expect(start).toHaveBeenCalledOnce();
+          }
+        } finally {
+          deferral.cancel();
+          restart.resetGatewayRestartStateForInProcessRestart();
+          drain.resolve({ drained: true, snapshot: idleActiveWorkSnapshot });
+          closing.resolve();
+          await vi.advanceTimersByTimeAsync(0);
+          if (runtime.exit.mock.calls.length === 0) {
+            captureSignal("SIGINT")();
+            await vi.advanceTimersByTimeAsync(0);
+          }
+          await exited;
+          clock.mockRestore();
+          vi.useRealTimers();
+        }
+      });
+    },
+  );
+
+  it.each([
+    { signal: "SIGTERM", waitMs: undefined, budget: 45_000 },
+    { signal: "SIGUSR2", waitMs: 180_000, budget: 180_000 },
+  ] as const)(
     "drains admitted work before a forced $signal restart (budget=$budget)",
     async ({ signal, waitMs, budget }) => {
       (signal === "SIGTERM"
@@ -94,13 +174,9 @@ export function registerGatewayForcedRestartTests({
   );
 
   it.each([
-    { waitMs: undefined, refreshMs: 0, stallClose: false },
-    { waitMs: undefined, refreshMs: 10_000, stallClose: false },
+    { waitMs: undefined, refreshMs: 10_000, stallClose: true },
     { waitMs: 0, refreshMs: 0, stallClose: false },
     { waitMs: 180_000, refreshMs: 0, stallClose: false },
-    { waitMs: undefined, refreshMs: 0, stallClose: true },
-    { waitMs: undefined, refreshMs: 10_000, stallClose: true },
-    { waitMs: 180_000, refreshMs: 0, stallClose: true },
   ])(
     "records cut work only when the forced caller drain budget expires (waitMs=$waitMs, refresh=$refreshMs, stalled close=$stallClose)",
     async ({ waitMs, refreshMs, stallClose }) => {

@@ -3,7 +3,10 @@ import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import type { AgentMessage } from "../../../src/agents/runtime/index.js";
 import { redactTranscriptMessage } from "../../../src/agents/transcript-redact.js";
-import { resolveChatHistoryWithCliSessionImports } from "../../../src/gateway/cli-session-history.js";
+import {
+  readChatHistoryCliSessionImportSnapshot,
+  resolveChatHistoryWithCliSessionImports,
+} from "../../../src/gateway/cli-session-history.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   chatSessionListResponse,
@@ -59,7 +62,7 @@ suite.define(() => {
         content: userText,
         timestamp: Date.parse("2026-03-26T16:29:54.800Z"),
       } as AgentMessage);
-      const mergedMessages = resolveChatHistoryWithCliSessionImports({
+      const historyParams = {
         entry: {
           sessionId: "control-ui-local-claude-history",
           updatedAt: Date.now(),
@@ -68,6 +71,10 @@ suite.define(() => {
         provider: "claude-cli",
         localMessages: [localUserMessage],
         homeDir,
+      };
+      const mergedMessages = resolveChatHistoryWithCliSessionImports({
+        ...historyParams,
+        preparedImportedMessages: await readChatHistoryCliSessionImportSnapshot(historyParams),
       }).messages;
 
       expect(mergedMessages).toHaveLength(2);

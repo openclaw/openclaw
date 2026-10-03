@@ -10,7 +10,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerCopilotActiveRun } from "./attempt-active-run.js";
 import type { AttemptTranscriptJournal } from "./attempt-transcript-journal.js";
 import {
-  cleanupAttemptTranscriptJournalFixtures,
   createFixture,
   event,
   transcriptMessages,
@@ -104,7 +103,6 @@ function createSteeringRecorder(
 }
 
 describe("registerCopilotActiveRun", () => {
-  afterEach(cleanupAttemptTranscriptJournalFixtures);
   afterEach(resetGlobalHookRunner);
   beforeEach(() => {
     harnessMocks.cancelPendingAgentQuestionForSession.mockClear();

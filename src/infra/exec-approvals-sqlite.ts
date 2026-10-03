@@ -1,14 +1,23 @@
 // Canonical SQLite row helpers for exec approval policy state.
 import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import { sha256Hex } from "./crypto-digest.js";
+import { formatErrorMessage } from "./errors.js";
 import {
+  LEGACY_EXEC_APPROVALS_DIAGNOSTIC,
   normalizeExecApprovalsInternal,
+  parsePersistedExecApprovals,
+  resolveExecApprovalsDisplayPath,
   tryParsePersistedExecApprovals,
 } from "./exec-approvals-config.js";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./exec-approvals-core.js";
+import {
+  ExecApprovalsMigrationRequiredError,
+  resetExecApprovalsMigrationGateForTest,
+} from "./exec-approvals-migration-gate.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -133,7 +142,11 @@ export function snapshotFromExecApprovalsRow(params: {
       hash: hashExecApprovalsRaw(null),
     };
   }
-  const parsed = tryParsePersistedExecApprovals(raw);
+  const result = parsePersistedExecApprovals(raw);
+  if (!result.ok && result.error === LEGACY_EXEC_APPROVALS_DIAGNOSTIC) {
+    throw new ExecApprovalsMigrationRequiredError(params.path, undefined, result.error);
+  }
+  const parsed = result.ok ? result.value : null;
   if (!parsed) {
     params.onMalformed?.();
   }
@@ -182,12 +195,20 @@ export function writeExecApprovalsConfigRow(params: {
   file: ExecApprovalsFile;
   raw?: string;
   now?: number;
-}): void {
-  const raw = params.raw ?? serializeExecApprovals(params.file);
+}): string {
+  const normalized = normalizeExecApprovalsInternal(params.file);
+  const authored = params.raw ?? serializeExecApprovals(params.file);
+  const parsed = parsePersistedExecApprovals(authored);
+  // Malformed policy must remain visible to the fail-closed reader, not become partial defaults.
+  const raw =
+    params.raw ??
+    (!parsed.ok && parsed.error === LEGACY_EXEC_APPROVALS_DIAGNOSTIC
+      ? serializeExecApprovals(normalized)
+      : authored);
   const values = {
     config_key: EXEC_APPROVALS_CONFIG_KEY,
     raw_json: raw,
-    ...projectionValues(params.file),
+    ...projectionValues(normalized),
     updated_at_ms: params.now ?? Date.now(),
   };
   executeSqliteQuerySync(
@@ -210,6 +231,7 @@ export function writeExecApprovalsConfigRow(params: {
         }),
       ),
   );
+  return raw;
 }
 
 export function deleteExecApprovalsConfigRow(db: DatabaseSync): void {
@@ -260,4 +282,40 @@ export function mintMcpToolGrantLocked(
   };
   assertExecApprovalsMutationAllowed({ db, current, next });
   writeExecApprovalsConfigRow({ db, file: next, now: nowMs });
+}
+
+const log = createSubsystemLogger("infra/exec-approvals");
+const WARN_INTERVAL_MS = 60_000;
+let lastWarnAt: number | undefined;
+
+export function warnFailClosed(message: string, error?: unknown): void {
+  const now = Date.now();
+  if (lastWarnAt !== undefined && now - lastWarnAt < WARN_INTERVAL_MS) {
+    return;
+  }
+  lastWarnAt = now;
+  log.warn(message, error === undefined ? undefined : { error: formatErrorMessage(error) });
+}
+
+export function snapshotFromExecApprovalsDatabase(
+  db: DatabaseSync,
+  displayPath = resolveExecApprovalsDisplayPath(),
+): ExecApprovalsSnapshot {
+  return snapshotFromExecApprovalsRow({
+    path: displayPath,
+    row: readExecApprovalsConfigRow(db),
+    onMalformed: () =>
+      warnFailClosed("exec approvals SQLite row is malformed; denying host execution"),
+  });
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  Object.assign(globalThis, {
+    [Symbol.for("openclaw.execApprovalsStoreTestApi")]: {
+      reset(): void {
+        resetExecApprovalsMigrationGateForTest();
+        lastWarnAt = undefined;
+      },
+    },
+  });
 }

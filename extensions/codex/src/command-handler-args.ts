@@ -332,7 +332,8 @@ export function parseComputerUseArgs(args: string[]): ParsedComputerUseArgs {
         parsed.help = true;
         continue;
       }
-      parsed.overrides[option] = value;
+      parsed.overrides[option] = value.trim();
+      parsed.hasOverrides = true;
       index += 1;
       continue;
     }
@@ -348,15 +349,6 @@ export function parseComputerUseArgs(args: string[]): ParsedComputerUseArgs {
       continue;
     }
     parsed.help = true;
-  }
-  const overrides = parsed.overrides;
-  parsed.overrides = {};
-  for (const key of ["marketplaceSource", "marketplacePath", "marketplaceName"] as const) {
-    const value = normalizeOptionalString(overrides[key]);
-    if (value) {
-      parsed.overrides[key] = value;
-      parsed.hasOverrides = true;
-    }
   }
   return parsed;
 }

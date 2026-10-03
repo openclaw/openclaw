@@ -85,8 +85,7 @@ type ChatFastModeSelectStateInput = {
 const FAST_MODE_PROVIDER_IDS = new Set(["anthropic", "minimax", "minimax-portal", "openai", "xai"]);
 
 export function isChatFastModeProviderSupported(provider: string | null | undefined): boolean {
-  const providerId = normalizeChatModelProviderId(provider ?? "");
-  return Boolean(providerId && FAST_MODE_PROVIDER_IDS.has(providerId));
+  return FAST_MODE_PROVIDER_IDS.has(normalizeChatModelProviderId(provider ?? ""));
 }
 
 function resolveModelOverrideSource(state: ChatModelSelectStateInput) {
@@ -438,11 +437,9 @@ export function resolveChatFastModeSelectState(
         ? "Ultrafast"
         : active
           ? "Fast"
-          : isOpenAI
+          : isOpenAI || currentOverride === "off"
             ? "Standard"
-            : currentOverride === "off"
-              ? "Standard"
-              : "Default";
+            : "Default";
   // A legacy override on a provider without a wire mapping stays visible so it
   // can be cleared, but the toggle must not write a new no-op fast override.
   // For mapped providers an active toggle always writes an explicit off: the

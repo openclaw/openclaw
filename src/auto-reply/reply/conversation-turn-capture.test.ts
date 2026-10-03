@@ -10,32 +10,41 @@ import {
   markConversationDeliveryQueued,
   markConversationDeliverySent,
 } from "../../config/sessions/conversation-delivery-store.js";
+import * as conversationDeliveryStore from "../../config/sessions/conversation-delivery-store.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import {
   resolveSqliteReadScope,
   toDatabaseOptions,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { readConversationDeliveryStateForTest } from "../../gateway/conversation-delivery.test-support.js";
 import { buildConversationRef } from "../../routing/conversation-ref.js";
 import { registerPendingConversationTurn } from "../../sessions/conversation-turns.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { recordAgentDatabaseAdmissions } from "../../state/agent-database-admission.js";
 import { unregisterOpenClawAgentDatabase } from "../../state/openclaw-agent-db-registry.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import type { FinalizedRuntimeMsgContext } from "../templating.js";
 import { capturePendingConversationTurnReply } from "./conversation-turn-capture.js";
 
-afterEach(() => {
-  vi.restoreAllMocks();
-  vi.unstubAllEnvs();
-  closeOpenClawAgentDatabasesForTest();
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+    await closeOpenClawAgentDatabasesAsync();
+    closeOpenClawAgentDatabasesForTest();
+    await closeStateDatabaseForTest();
+    vi.unstubAllEnvs();
+    cleanup();
+  });
 });
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 async function setupReefConversation(options: { agentId?: string; storePath?: string } = {}) {
   const stateDir = tempDirs.make("openclaw-conversation-capture-");
@@ -75,21 +84,25 @@ async function setupReefConversation(options: { agentId?: string; storePath?: st
   };
 }
 
-function persistSentOperation(params: {
+async function persistSentOperation(params: {
   scope: { agentId: string; storePath: string };
   operationId: string;
   conversationRef: string;
   outboundMessageId: string;
 }) {
-  beginConversationDeliveryOperation(params.scope, {
+  await beginConversationDeliveryOperation(params.scope, {
     operationId: params.operationId,
     operationKind: "turn",
     conversationRef: params.conversationRef,
     message: "outbound",
     preparedMessageId: params.outboundMessageId,
   });
-  markConversationDeliveryQueued(params.scope, params.operationId, `queue-${params.operationId}`);
-  markConversationDeliverySent(params.scope, params.operationId, params.outboundMessageId);
+  await markConversationDeliveryQueued(
+    params.scope,
+    params.operationId,
+    `queue-${params.operationId}`,
+  );
+  await markConversationDeliverySent(params.scope, params.operationId, params.outboundMessageId);
 }
 
 function inboundReply(
@@ -115,8 +128,11 @@ function inboundReply(
   } as FinalizedRuntimeMsgContext;
 }
 
-function registerCapture(setup: Awaited<ReturnType<typeof setupReefConversation>>, id: string) {
-  persistSentOperation({ ...setup, operationId: id, outboundMessageId: id });
+async function registerCapture(
+  setup: Awaited<ReturnType<typeof setupReefConversation>>,
+  id: string,
+) {
+  await persistSentOperation({ ...setup, operationId: id, outboundMessageId: id });
   const pending = registerPendingConversationTurn({
     agentId: setup.scope.agentId,
     id,
@@ -135,7 +151,7 @@ describe("conversation turn capture", () => {
       const setup = await setupReefConversation();
       vi.useFakeTimers();
       const id = `admission-${outcome}`;
-      const pending = registerCapture(setup, id);
+      const pending = await registerCapture(setup, id);
       pending.markReady();
       const entered = createDeferredCore();
       const release = createDeferredCore();
@@ -161,7 +177,7 @@ describe("conversation turn capture", () => {
           ctx: inboundReply(setup, id),
         });
         await prepared.promise;
-        expect(getConversationDeliveryOperation(setup.scope, id)?.status).toBe("sent");
+        expect(readConversationDeliveryStateForTest(setup.scope, id)?.status).toBe("sent");
         if (outcome === "cancel") {
           pending.cancel();
         }
@@ -181,7 +197,7 @@ describe("conversation turn capture", () => {
         release.resolve();
         await blocker;
         await expect(capture).resolves.toBe(outcome === "complete");
-        const record = getConversationDeliveryOperation(setup.scope, id);
+        const record = await getConversationDeliveryOperation(setup.scope, id);
         expect(record?.status).toBe(outcome === "complete" ? "replied" : "sent");
         if (outcome === "complete") {
           await expect(pending.wait()).resolves.toMatchObject({ messageId: "inbound-admission" });
@@ -206,13 +222,45 @@ describe("conversation turn capture", () => {
     },
   );
 
+  it("consumes a committed reply when its waiter expires before audit admission", async () => {
+    const setup = await setupReefConversation();
+    vi.useFakeTimers();
+    const id = "reply-committed-before-expiry";
+    const pending = await registerCapture(setup, id);
+    pending.markReady();
+    const markReplied = conversationDeliveryStore.markConversationDeliveryReplied;
+    vi.spyOn(conversationDeliveryStore, "markConversationDeliveryReplied").mockImplementationOnce(
+      async (...args) => {
+        const committed = await markReplied(...args);
+        await vi.advanceTimersByTimeAsync(50);
+        return committed;
+      },
+    );
+    try {
+      await expect(
+        capturePendingConversationTurnReply({ cfg: setup.cfg, ctx: inboundReply(setup, id) }),
+      ).resolves.toBe(true);
+      await expect(pending.wait()).resolves.toBeUndefined();
+      expect(await getConversationDeliveryOperation(setup.scope, id)).toMatchObject({
+        status: "replied",
+        reply: { messageId: "inbound-admission", text: "ordinary reply", replyToId: id },
+      });
+      expect(
+        await sessionAccessor.loadTranscriptEvents({ ...setup.scope, sessionId: setup.sessionId }),
+      ).toEqual([]);
+    } finally {
+      pending.cancel();
+      vi.useRealTimers();
+    }
+  });
+
   it.each(["replace", "lifecycle"] as const)(
     "rechecks the session after outbound correlation: %s",
     async (outcome) => {
       const setup = await setupReefConversation();
       vi.useFakeTimers();
       const id = `correlation-${outcome}`;
-      const pending = registerCapture(setup, id);
+      const pending = await registerCapture(setup, id);
       const capture = capturePendingConversationTurnReply({
         cfg: setup.cfg,
         ctx: inboundReply(setup, id),
@@ -228,7 +276,7 @@ describe("conversation turn capture", () => {
         });
         pending.markReady();
         await expect(capture).resolves.toBe(false);
-        expect(getConversationDeliveryOperation(setup.scope, id)?.reply).toBeUndefined();
+        expect((await getConversationDeliveryOperation(setup.scope, id))?.reply).toBeUndefined();
       } finally {
         pending.cancel();
         await capture;
@@ -240,14 +288,14 @@ describe("conversation turn capture", () => {
   it("queues the no-waiter acknowledgement without making it replayable inline", async () => {
     const setup = await setupReefConversation();
     const id = "no-waiter-admission";
-    beginConversationDeliveryOperation(setup.scope, {
+    await beginConversationDeliveryOperation(setup.scope, {
       operationId: id,
       operationKind: "turn",
       conversationRef: setup.conversationRef,
       message: "outbound",
       preparedMessageId: id,
     });
-    markConversationDeliveryQueued(setup.scope, id, `queue-${id}`);
+    await markConversationDeliveryQueued(setup.scope, id, `queue-${id}`);
     const release = createDeferredCore();
     const blocker = runOpenClawAgentWriteAdmission(
       toDatabaseOptions(resolveSqliteReadScope(setup.scope)),
@@ -259,12 +307,14 @@ describe("conversation turn capture", () => {
     });
     try {
       await setImmediate();
-      expect(getConversationDeliveryOperation(setup.scope, id)?.status).toBe("queued");
+      expect(readConversationDeliveryStateForTest(setup.scope, id)?.status).toBe("queued");
       release.resolve();
       await blocker;
       await expect(capture).resolves.toBe(false);
-      expect(getConversationDeliveryOperation(setup.scope, id)).toMatchObject({ status: "sent" });
-      expect(getConversationDeliveryOperation(setup.scope, id)?.reply).toBeUndefined();
+      expect(await getConversationDeliveryOperation(setup.scope, id)).toMatchObject({
+        status: "sent",
+      });
+      expect((await getConversationDeliveryOperation(setup.scope, id))?.reply).toBeUndefined();
       expect(
         await sessionAccessor.loadTranscriptEvents({ ...setup.scope, sessionId: setup.sessionId }),
       ).toEqual([]);
@@ -290,7 +340,7 @@ describe("conversation turn capture", () => {
       const setup = await setupReefConversation();
       vi.useFakeTimers();
       const id = `state-${refused}`;
-      const pending = registerCapture(setup, id);
+      const pending = await registerCapture(setup, id);
       const capture = capturePendingConversationTurnReply({
         cfg: setup.cfg,
         ctx: inboundReply(setup, id),
@@ -314,7 +364,10 @@ describe("conversation turn capture", () => {
         pending.markReady();
         await expect(capture).resolves.toBe(refused !== "source");
         recordAgentDatabaseAdmissions([], { env: refusalEnv });
-        const record = getConversationDeliveryOperation({ ...setup.scope, env: sourceEnv }, id);
+        const record = await getConversationDeliveryOperation(
+          { ...setup.scope, env: sourceEnv },
+          id,
+        );
         expect(record?.status).toBe(refused === "source" ? "sent" : "replied");
       } finally {
         recordAgentDatabaseAdmissions([], { env: refusalEnv });
@@ -331,14 +384,14 @@ describe("conversation turn capture", () => {
     const setup = await setupReefConversation({ agentId: "logical-agent", storePath });
     vi.useFakeTimers();
     const id = "shared-store-capture";
-    const pending = registerCapture(setup, id);
+    const pending = await registerCapture(setup, id);
     pending.markReady();
     try {
       await expect(
         capturePendingConversationTurnReply({ cfg: setup.cfg, ctx: inboundReply(setup, id) }),
       ).resolves.toBe(true);
       await expect(pending.wait()).resolves.toMatchObject({ messageId: "inbound-admission" });
-      expect(getConversationDeliveryOperation(setup.scope, id)?.status).toBe("replied");
+      expect((await getConversationDeliveryOperation(setup.scope, id))?.status).toBe("replied");
       expect(physical.agentId).toBe("schema-owner");
       expect(
         await sessionAccessor.loadTranscriptEvents({ ...setup.scope, sessionId: setup.sessionId }),
@@ -357,14 +410,14 @@ describe("conversation turn capture", () => {
     const movedDirectory = tempDirs.make("capture-moved-cwd-");
     vi.useFakeTimers();
     const id = "relative-store-capture";
-    const pending = registerCapture(setup, id);
+    const pending = await registerCapture(setup, id);
     const capture = capturePendingConversationTurnReply({ cfg, ctx: inboundReply(setup, id) });
     try {
       vi.spyOn(process, "cwd").mockReturnValue(movedDirectory);
       pending.markReady();
       await expect(capture).resolves.toBe(true);
       await expect(pending.wait()).resolves.toMatchObject({ messageId: "inbound-admission" });
-      expect(getConversationDeliveryOperation(setup.scope, id)?.status).toBe("replied");
+      expect((await getConversationDeliveryOperation(setup.scope, id))?.status).toBe("replied");
     } finally {
       vi.restoreAllMocks();
       pending.cancel();
@@ -379,21 +432,22 @@ describe("conversation turn capture", () => {
     const setup = await setupReefConversation({ agentId: "logical-agent", storePath });
     vi.useFakeTimers();
     const id = "replaced-owner-capture";
-    const pending = registerCapture(setup, id);
+    const pending = await registerCapture(setup, id);
     const capture = capturePendingConversationTurnReply({
       cfg: setup.cfg,
       ctx: inboundReply(setup, id),
     });
     try {
+      await closeOpenClawAgentDatabasesAsync();
       closeOpenClawAgentDatabasesForTest();
       fs.renameSync(storePath, `${storePath}.retired`);
       unregisterOpenClawAgentDatabase({ agentId: "original-owner", path: storePath });
       openOpenClawAgentDatabase({ agentId: "replacement-owner", path: storePath });
       const replacement = await setupReefConversation({ agentId: "logical-agent", storePath });
-      persistSentOperation({ ...replacement, operationId: id, outboundMessageId: id });
+      await persistSentOperation({ ...replacement, operationId: id, outboundMessageId: id });
       pending.markReady();
       await expect(capture).resolves.toBe(false);
-      expect(getConversationDeliveryOperation(replacement.scope, id)?.status).toBe("sent");
+      expect((await getConversationDeliveryOperation(replacement.scope, id))?.status).toBe("sent");
       expect(
         await sessionAccessor.loadTranscriptEvents({
           ...replacement.scope,
@@ -439,7 +493,7 @@ describe("conversation turn capture", () => {
   it("consumes a correlated reply inline and persists only a side artifact", async () => {
     const setup = await setupReefConversation();
     const operationId = "turn-full-id";
-    persistSentOperation({
+    await persistSentOperation({
       scope: setup.scope,
       operationId,
       conversationRef: setup.conversationRef,
@@ -487,7 +541,7 @@ describe("conversation turn capture", () => {
       timestamp: 1_710_000_000_000,
       transcriptArtifactId: `conversation-turn-reply-${operationId}`,
     });
-    expect(getConversationDeliveryOperation(setup.scope, operationId)).toMatchObject({
+    expect(await getConversationDeliveryOperation(setup.scope, operationId)).toMatchObject({
       status: "replied",
       reply: {
         messageId: "reef-inbound-full",
@@ -549,7 +603,7 @@ describe("conversation turn capture", () => {
     const outboundMessageId = "reef-outbound-redacted";
     const redactedValue = "sensitive-reply-value";
     const replyText = `trusted provenance\n\n<reef-message>secret ${redactedValue}</reef-message>`;
-    persistSentOperation({
+    await persistSentOperation({
       scope: setup.scope,
       operationId,
       conversationRef: setup.conversationRef,
@@ -594,7 +648,7 @@ describe("conversation turn capture", () => {
     ).resolves.toBe(true);
     await expect(pending.wait()).resolves.toMatchObject({ text: replyText });
 
-    const operation = getConversationDeliveryOperation(setup.scope, operationId);
+    const operation = await getConversationDeliveryOperation(setup.scope, operationId);
     expect(operation?.reply?.text).toBeTruthy();
     expect(operation?.reply?.text).not.toContain(redactedValue);
     const events = await sessionAccessor.loadTranscriptEvents({
@@ -609,7 +663,7 @@ describe("conversation turn capture", () => {
     const setup = await setupReefConversation();
     const operationId = "turn-audit-failure";
     const outboundMessageId = "reef-outbound-audit-failure";
-    persistSentOperation({
+    await persistSentOperation({
       scope: setup.scope,
       operationId,
       conversationRef: setup.conversationRef,
@@ -653,7 +707,7 @@ describe("conversation turn capture", () => {
     await expect(pending.wait()).resolves.toEqual(
       expect.objectContaining({ text: "reply survives audit failure" }),
     );
-    expect(getConversationDeliveryOperation(setup.scope, operationId)).toMatchObject({
+    expect(await getConversationDeliveryOperation(setup.scope, operationId)).toMatchObject({
       status: "replied",
       reply: { text: "reply survives audit failure" },
     });
@@ -662,14 +716,14 @@ describe("conversation turn capture", () => {
   it("does not make an ordinary post-restart reply replayable inline", async () => {
     const setup = await setupReefConversation();
     const operationId = "turn-after-restart";
-    beginConversationDeliveryOperation(setup.scope, {
+    await beginConversationDeliveryOperation(setup.scope, {
       operationId,
       operationKind: "turn",
       conversationRef: setup.conversationRef,
       message: "outbound",
       preparedMessageId: "reef-outbound-restart",
     });
-    markConversationDeliveryQueued(setup.scope, operationId, `queue-${operationId}`);
+    await markConversationDeliveryQueued(setup.scope, operationId, `queue-${operationId}`);
 
     await expect(
       capturePendingConversationTurnReply({
@@ -694,11 +748,13 @@ describe("conversation turn capture", () => {
       }),
     ).resolves.toBe(false);
 
-    expect(getConversationDeliveryOperation(setup.scope, operationId)).toMatchObject({
+    expect(await getConversationDeliveryOperation(setup.scope, operationId)).toMatchObject({
       status: "sent",
       platformMessageId: "reef-outbound-restart",
     });
-    expect(getConversationDeliveryOperation(setup.scope, operationId)?.reply).toBeUndefined();
+    expect(
+      (await getConversationDeliveryOperation(setup.scope, operationId))?.reply,
+    ).toBeUndefined();
     expect(
       await sessionAccessor.loadTranscriptEvents({
         agentId: "main",
@@ -711,14 +767,14 @@ describe("conversation turn capture", () => {
   it("leaves replies to plain sends for ordinary inbound dispatch", async () => {
     const setup = await setupReefConversation();
     const operationId = "send-before-reply";
-    beginConversationDeliveryOperation(setup.scope, {
+    await beginConversationDeliveryOperation(setup.scope, {
       operationId,
       operationKind: "send",
       conversationRef: setup.conversationRef,
       message: "one-way outbound",
       preparedMessageId: "reef-outbound-send",
     });
-    markConversationDeliveryQueued(setup.scope, operationId, `queue-${operationId}`);
+    await markConversationDeliveryQueued(setup.scope, operationId, `queue-${operationId}`);
 
     await expect(
       capturePendingConversationTurnReply({
@@ -742,7 +798,7 @@ describe("conversation turn capture", () => {
         } as FinalizedRuntimeMsgContext,
       }),
     ).resolves.toBe(false);
-    expect(getConversationDeliveryOperation(setup.scope, operationId)).toMatchObject({
+    expect(await getConversationDeliveryOperation(setup.scope, operationId)).toMatchObject({
       operationKind: "send",
       status: "queued",
     });
@@ -752,7 +808,7 @@ describe("conversation turn capture", () => {
     const setup = await setupReefConversation();
     const operationId = "turn-promoted-thread";
     const outboundMessageId = "reef-promoted-root";
-    persistSentOperation({
+    await persistSentOperation({
       scope: setup.scope,
       operationId,
       conversationRef: setup.conversationRef,
@@ -831,7 +887,7 @@ describe("conversation turn capture", () => {
       peerId: "ops-room",
       threadId: "user-context",
     });
-    persistSentOperation({
+    await persistSentOperation({
       scope,
       operationId: "turn-thread",
       conversationRef,

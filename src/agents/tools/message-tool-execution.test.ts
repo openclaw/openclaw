@@ -5,6 +5,7 @@ import {
   GatewayErrorDetailCodes,
 } from "../../../packages/gateway-protocol/src/gateway-error-details.js";
 import { withGroupThreadTurn } from "../../auto-reply/group-thread-context.js";
+import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import { resolveReactionMessageId } from "../../channels/plugins/actions/reaction-message-id.js";
 import type {
   ChannelMessageActionContext,
@@ -188,6 +189,12 @@ describe("registered message action source completion", () => {
         requesterAccountId: "default",
         toolContext: source,
       });
+      // The turn's reply operation keeps this fact so a later stall cannot answer again.
+      const operation = createReplyOperation({
+        sessionKey: identity.sessionKey,
+        sessionId: "source-completion-session",
+        resetTriggered: false,
+      });
       try {
         const tool = createMessageTool({
           config: {
@@ -197,6 +204,7 @@ describe("registered message action source completion", () => {
           ...source,
           agentId: identity.agentId,
           runId: identity.runId,
+          sessionId: operation.sessionId,
           agentSessionKey: identity.sessionKey,
           agentAccountId: "default",
           messageActionTurnCapability: capability,
@@ -237,6 +245,7 @@ describe("registered message action source completion", () => {
             (result.details as { messageDelivery?: unknown }).messageDelivery,
           );
           expect(deliveryFact?.sourceReplyDelivered).toBe(expected);
+          expect(operation.sourceReplyDelivered).toBe(expected === true);
           if (expected) {
             expect(deliveryFact).toMatchObject({
               status: "settled",
@@ -246,6 +255,7 @@ describe("registered message action source completion", () => {
           }
         }
       } finally {
+        operation.complete();
         revokeMessageActionTurnCapability(capability);
       }
     },

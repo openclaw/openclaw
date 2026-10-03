@@ -8,7 +8,8 @@ import {
   GATEWAY_CLIENT_MODES,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import * as userProfileCatalog from "../state/user-profile-list.js";
-import { ensureProfileForEmail, linkEmail } from "../state/user-profiles.js";
+import { linkEmail } from "../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { captureGatewayDeviceRevocation } from "./device-revocation.js";

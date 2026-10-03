@@ -42,7 +42,7 @@ const IDENTITY_MENU_LINKS: ReadonlyArray<{
 
 const AGENT_VALUE_PREFIX = "agent:";
 export const COMMAND_VALUE_PREFIX = "command:";
-export const LINK_VALUE_PREFIX = "link:";
+const LINK_VALUE_PREFIX = "link:";
 const sidebarMenuTypeahead = new WeakMap<
   HTMLElement,
   { query: string; timeout: ReturnType<typeof setTimeout> }
@@ -91,6 +91,10 @@ export function consumeSidebarMenuSelection(
   const value = item.value;
   if (value) {
     onClose(false);
+    if (value.startsWith(LINK_VALUE_PREFIX)) {
+      openExternalUrlSafe(decodeURIComponent(value.slice(LINK_VALUE_PREFIX.length)));
+      return undefined;
+    }
   }
   return value;
 }
@@ -320,10 +324,6 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams) {
         if (!value) {
           return;
         }
-        if (value.startsWith(LINK_VALUE_PREFIX)) {
-          openExternalUrlSafe(decodeURIComponent(value.slice(LINK_VALUE_PREFIX.length)));
-          return;
-        }
         if (value.startsWith(AGENT_VALUE_PREFIX)) {
           params.onSwitchAgent(decodeURIComponent(value.slice(AGENT_VALUE_PREFIX.length)));
           return;
@@ -396,16 +396,20 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams) {
           ? html`
               ${renderSidebarMenuAction("command:all-agents", t("agentChip.allAgents"), "bot")}
               ${renderSidebarMenuAction("command:new-agent", t("custodian.newAgent"), "users")}
-              ${renderSidebarMenuAction(
-                "command:capabilities",
-                t("agentChip.whatCanAgentDo", { name: activeName }),
-                "bot",
-                { disabled: !params.connected },
-              )}
+              ${
+                activeId
+                  ? renderSidebarMenuAction(
+                      "command:capabilities",
+                      t("agentChip.whatCanAgentDo", { name: activeName }),
+                      "bot",
+                      { disabled: !params.connected },
+                    )
+                  : nothing
+              }
             `
           : nothing
       }
-      ${renderSidebarMenuAction("command:agent-settings", t("agentChip.agentSettings"), "settings")}
+      ${renderSidebarMenuAction("command:agent-settings", t("agentChip.agentSettings"), "settings", { disabled: !activeId })}
       ${params.rosterMode ? renderSidebarHelpMenu() : nothing}
     </wa-dropdown>
   `;

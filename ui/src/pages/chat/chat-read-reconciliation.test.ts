@@ -181,13 +181,11 @@ it.each(
 
 it.each(
   [false, true].flatMap((changed) =>
-    [0, 7].flatMap((peerEpoch) =>
-      [selected, queued].map((peerSession) => ({ changed, peerEpoch, peerSession })),
-    ),
+    [selected, queued].map((peerSession) => ({ changed, peerSession })),
   ),
 )(
-  "joins a passive reader for $peerSession at epoch $peerEpoch and preserves events (changed: $changed)",
-  async ({ changed, peerEpoch, peerSession }) => {
+  "joins a passive reader for $peerSession across pane epochs and preserves events (changed: $changed)",
+  async ({ changed, peerSession }) => {
     const first = createDeferred<ChatHistoryResult>();
     const firstReadStarted = createDeferred();
     let reads = 0;
@@ -202,7 +200,7 @@ it.each(
       client: host.client,
       sessions: host.sessions,
       sessionKey: peerSession,
-      connectionEpoch: peerEpoch,
+      connectionEpoch: 7,
     });
     const event = sessionEvent(queued);
     const a = resumeStoredChatOutboxes(host, event);
@@ -272,6 +270,7 @@ it("keeps global outbox event recovery bound to the event's agent", async () => 
     [
       "chat.history",
       { sessionKey: "global", agentId: "work", inputRunIds: ["work-run"], limit: 1000 },
+      { timeoutMs: 30_000 },
     ],
   ]);
   expect(listStoredChatOutboxes(host)).toHaveLength(2);

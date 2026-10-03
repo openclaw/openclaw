@@ -116,13 +116,8 @@ function parseDevice(payload: Record<string, unknown>) {
   ) {
     throw new Error("Radius OAuth returned an invalid device authorization response.");
   }
-  let url: URL;
-  try {
-    url = new URL(payload.verification_uri);
-  } catch {
-    throw new Error("Radius OAuth returned an invalid verification URL.");
-  }
-  if (url.origin !== "https://radius.earendil.com" || url.username || url.password) {
+  const url = URL.parse(payload.verification_uri);
+  if (!url || url.origin !== "https://radius.earendil.com" || url.username || url.password) {
     throw new Error("Radius OAuth returned an invalid verification URL.");
   }
   return {

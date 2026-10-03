@@ -65,6 +65,11 @@ describe("scripts/check", () => {
       }),
     );
     expect(PREFLIGHT_CHECKS).toContainEqual({
+      name: "test timeout race ratchet",
+      args: ["check:test-timeout-race-ratchet"],
+      usesBase: true,
+    });
+    expect(PREFLIGHT_CHECKS).toContainEqual({
       name: "script TypeScript erasability",
       args: ["check:script-erasability"],
     });

@@ -1,5 +1,4 @@
 // Matrix account SecretRef redaction through generated channel metadata.
-import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { REDACTED_SENTINEL, redactConfigSnapshot } from "./redact-snapshot.js";
 import { makeSnapshot, restoreRedactedValues } from "./redact-snapshot.test-helpers.js";
@@ -28,15 +27,7 @@ describe("Matrix account SecretRef generated-metadata redaction", () => {
     });
 
     const result = redactConfigSnapshot(snapshot, hints);
-    const channels = result.config.channels as Record<
-      string,
-      { accounts?: Record<string, { password?: Record<string, string> }> }
-    >;
-    const password = expectDefined(
-      channels.matrix?.accounts?.work?.password,
-      "matrix account password",
-    );
-    expect(password).toEqual({
+    expect(result.config).toHaveProperty("channels.matrix.accounts.work.password", {
       source: "store",
       provider: "default",
       id: REDACTED_SENTINEL,

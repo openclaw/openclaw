@@ -15,7 +15,7 @@ import {
   resolveUpdateBuildManager,
 } from "./update-package-manager.js";
 import { isFailedUpdateStep } from "./update-run-step.js";
-import { runStep } from "./update-runner-command.js";
+import { reportUpdateStepCompletion, runStep } from "./update-runner-command.js";
 import { cleanupGitPreflight } from "./update-runner-git-cleanup.js";
 import {
   buildDevTargetRefResolutionCandidates,
@@ -31,7 +31,7 @@ import {
   shouldInstallWithoutScriptsOnWindows,
   shouldRunDevPreflightLint,
 } from "./update-runner-git-commands.js";
-import { checkGitCandidateNodeRuntime } from "./update-runner-git-node-preflight.js";
+import { prepareGitCandidateNodeRuntime } from "./update-runner-git-node-preflight.js";
 import { runGitCleanCheckStep } from "./update-runner-git-steps.js";
 import type { CommandRunner, UpdateRunResult, UpdateRunnerOptions } from "./update-runner-types.js";
 import type { UpdateStepResult } from "./update-step-result.js";
@@ -98,7 +98,7 @@ async function resolveExplicitTarget(params: {
         if (warnings.length > 0) {
           fetchStep.warnings = [...warnings];
         }
-        options.progress?.onStepComplete?.({
+        await reportUpdateStepCompletion(options.progress, {
           ...fetchStep,
           index: options.stepIndex,
           total: options.totalSteps,
@@ -315,9 +315,12 @@ async function testPreflightCandidate(
   // A local rebase can change package metadata from the fetched base revision.
   await params.beforeCandidate(candidateSha);
   await params.referenceSource?.copyBuildInputs(params.worktreeDir);
-  const nodeRuntimeStep = await checkGitCandidateNodeRuntime(params.worktreeDir);
-  if (nodeRuntimeStep) {
-    params.steps.push(nodeRuntimeStep);
+  const nodeRuntime = await prepareGitCandidateNodeRuntime(
+    params.worktreeDir,
+    params.defaultCommandEnv,
+  );
+  if (nodeRuntime.step) {
+    params.steps.push(nodeRuntime.step);
     return { status: "node-runtime-incompatible" };
   }
   if (params.referenceSource) {
@@ -329,7 +332,7 @@ async function testPreflightCandidate(
         "preflight-package-manager",
         ["pnpm", "--version"],
         params.worktreeDir,
-        params.defaultCommandEnv,
+        nodeRuntime.env,
       ),
       runCommand: async (argv, options) => {
         const result = version
@@ -355,7 +358,7 @@ async function testPreflightCandidate(
         params.runCommand,
         params.worktreeDir,
         params.timeoutMs,
-        params.defaultCommandEnv,
+        nodeRuntime.env,
         { timeoutMs: params.workTimeoutMs },
       );
   if (manager.kind === "missing-required") {
@@ -383,7 +386,7 @@ async function testPreflightCandidate(
     }
     const candidateCommand = await prepareCandidateCommandEnv(
       manager.manager,
-      manager.env ?? params.defaultCommandEnv,
+      manager.env ?? nodeRuntime.env,
       params.worktreeDir,
       params.runCommand,
       params.timeoutMs,

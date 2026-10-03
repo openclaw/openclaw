@@ -37,23 +37,15 @@ describe("narrow PR check families", () => {
     "packages/media-core/src/types.d.ts",
   ])("keeps runtime and declaration consumers for %s", (path) => {
     const scope = resolveCiCheckFamilyScope([path]);
-    expect(scope.checkTasks).not.toContain("bundled-channel-config-metadata");
+    expect(scope.checkTasks).toEqual(["guards", "dependencies"]);
     expect(scope.fastTasks).toEqual([]);
+    expect(scope.additionalGroups).toContain("boundaries");
     expect(scope.additionalGroups).toContain("extension-package-boundary");
     expect(scope).toMatchObject({
       baselineRatchets: true,
       lint: true,
       types: true,
     });
-  });
-
-  it("keeps extension correctness checks while exact runtime tests use the Node owner", () => {
-    const scope = resolveCiCheckFamilyScope(["extensions/telegram/src/send.ts"]);
-    expect(scope.fastTasks).toEqual([]);
-    expect(scope.checkTasks).toEqual(["guards", "dependencies"]);
-    expect(scope).toMatchObject({ types: true, lint: true });
-    expect(scope.additionalGroups).toContain("boundaries");
-    expect(scope.additionalGroups).toContain("extension-package-boundary");
   });
 
   it.each(["src/config/zod-schema.core.ts", "extensions/telegram/src/config-schema.ts"])(

@@ -2,11 +2,12 @@ import { execFileSync } from "node:child_process";
 import { getEventListeners } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
+import { setTimeout as waitForReaper } from "node:timers/promises";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createVitestResourceOwner } from "../../scripts/lib/vitest-resource-ownership.mts";
 import { runNodeStep } from "../../scripts/prepare-extension-package-boundary-artifacts.mts";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
-import { isProcessAlive, waitForDead } from "../helpers/process-wait.js";
+import { isProcessAlive } from "../helpers/process-wait.js";
 import { createDeferred } from "../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
@@ -24,6 +25,18 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllEnvs());
 const fixture = createFixtureLifetime();
 afterEach(() => fixture.cleanup());
+
+// runNodeStep exposes its joined outcome, but no ChildProcess handle for rescue
+// after an unverified join. Observe only the fixture's recorded PID.
+async function waitForRescuedChild(pid: number, signal: AbortSignal) {
+  try {
+    while (isProcessAlive(pid)) {
+      await waitForReaper(10, undefined, { signal });
+    }
+  } catch (error) {
+    throw new Error(`process still alive: ${pid}`, { cause: error });
+  }
+}
 
 it("releases inputs and claims after a native execFileSync ENOENT error", async () => {
   const lifetime = createFixtureLifetime();
@@ -361,7 +374,7 @@ it
             try {
               if (pid && isProcessAlive(pid)) {
                 process.kill(pid, "SIGKILL");
-                await waitForDead(pid, 2_000);
+                await waitForRescuedChild(pid, contextSignal);
               }
             } finally {
               await rescue;

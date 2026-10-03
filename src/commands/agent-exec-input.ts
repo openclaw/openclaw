@@ -144,10 +144,9 @@ export async function resolveExecBaseConfig(
     throw new Error(`--config cannot be combined with ${conflicting}.`);
   }
   if (opts.isolated || opts.authEnvOnly === true) {
-    // Configless exec still needs the roster that ordinary missing-config migration supplies.
-    const { migratePersistedImplicitMainRoster } = await import("../config/legacy.roster.js");
+    const { applyImplicitAgentRosterDefaults } = await import("../config/implicit-agent-roster.js");
     const { coerceConfig } = await import("../config/io.read-helpers.js");
-    return coerceConfig(migratePersistedImplicitMainRoster({}).config);
+    return coerceConfig(applyImplicitAgentRosterDefaults({}));
   }
   const { createConfigIO, getRuntimeConfig } = await import("../config/io.js");
   if (!opts.config) {

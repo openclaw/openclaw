@@ -1,7 +1,5 @@
-import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { createAccountListHelpers } from "../channels/plugins/account-helpers.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -12,12 +10,15 @@ import {
 } from "../cron/scheduled-tool-policy.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
+import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 import { resolveConversationCapabilityProfile } from "./conversation-capability-profile.js";
 import { projectConversationToolNames } from "./conversation-tool-policy-pipeline.js";
 import { resolvePluginHarnessPolicyToolsAllow } from "./harness/execution-environment.js";
 import type { ScheduledToolPolicyContext } from "./scheduled-tool-policy.js";
 import { resolveWebSearchToolPolicy } from "./web-search-tool-policy.js";
+
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-capability-profile-");
 
 describe("resolveConversationCapabilityProfile", () => {
   it("intersects base and provider profile contributions from plugin manifests", () => {
@@ -278,7 +279,7 @@ describe("resolveConversationCapabilityProfile", () => {
   });
 
   it("keeps inherited subagent grants out of explicit overrides", async () => {
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-capability-profile-"));
+    const tempDir = sessionDirs.make();
     const storePath = path.join(tempDir, "sessions.json");
     const sessionKey = "agent:main:subagent:limited";
     await replaceSessionEntry({ storePath, sessionKey }, {
@@ -292,22 +293,18 @@ describe("resolveConversationCapabilityProfile", () => {
       inheritedToolAllow: ["image_generate"],
     } as SessionEntry);
 
-    try {
-      const profile = resolveConversationCapabilityProfile({
-        config: { session: { store: storePath } },
-        sessionKey,
-        agentId: "main",
-        modelProvider: "ollama",
-        modelId: "qwen3.5:9b",
-      });
+    const profile = resolveConversationCapabilityProfile({
+      config: { session: { store: storePath } },
+      sessionKey,
+      agentId: "main",
+      modelProvider: "ollama",
+      modelId: "qwen3.5:9b",
+    });
 
-      expect(profile.policy.explicitToolAllowlist).toContain("image_generate");
-      expect(profile.policy.explicitToolOverrideAllowlist).not.toContain("image_generate");
-      expect(profile.policy.delegated).toBe(true);
-      expect(profile.policy.requesterPolicySource).toBe("persisted-child");
-    } finally {
-      fs.rmSync(tempDir, { recursive: true, force: true });
-    }
+    expect(profile.policy.explicitToolAllowlist).toContain("image_generate");
+    expect(profile.policy.explicitToolOverrideAllowlist).not.toContain("image_generate");
+    expect(profile.policy.delegated).toBe(true);
+    expect(profile.policy.requesterPolicySource).toBe("persisted-child");
   });
 
   it("keeps runtime allowlists local unless the caller opts into inheritance", () => {

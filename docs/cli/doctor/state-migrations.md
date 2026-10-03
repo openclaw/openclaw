@@ -9,20 +9,44 @@ read_when:
 `openclaw doctor --fix` owns the persistent file-to-SQLite migrations. This page
 describes each migration source and what to do when one stays blocked.
 
-Pre-June Telegram and iMessage caches, Active Memory session toggles, Nostr bus
+Pre-June iMessage caches, Active Memory session toggles, Nostr bus
 and profile state, and Microsoft Teams conversations, polls, SSO tokens, and
 feedback learnings are no longer imported from JSON files. If those sources
 remain, Doctor preserves them and directs you to [upgrade through `2026.9.5`](/install/updating#upgrading-very-old-versions)
 and run its migrations first. Existing SQLite state remains authoritative.
+
+Pre-July Telegram bot-info, sticker, thread-binding, update-offset, message,
+sent-message, and topic-name JSON sidecars are no longer inspected or archived.
+Doctor leaves their files untouched, including empty thread-binding files. If
+you still need their state, restore a complete pre-update backup and run
+`openclaw doctor --fix` on OpenClaw `2026.9.5` before updating again. The separate
+Telegram JSON ingress-spool migration still imports pending updates, processing
+claims, and failed tombstones with verified backups.
+
 Retired `subagents/runs.json` files are also ignored and left untouched;
 transient runs are never restored from them.
+
+The pre-July plugin install index at `plugins/installs.json` is no longer imported
+or archived. Doctor preserves it and stops with the same intermediate-upgrade
+guidance. July-era SQLite plugin install records remain supported.
+
+Session records that need the retired `room` → `groupChannel` conversion are refused
+without changing their original bytes. Preserve the state, install OpenClaw
+`2026.9.5`, run `openclaw doctor --fix`, then upgrade again. A canonical
+`groupChannel` with an ignored `room` field remains unchanged.
+
+The July Doctor importer could still write `provider` and `lastProvider` aliases.
+Doctor retains their repair, backs up existing SQLite rows, and updates canonical
+delivery metadata and its query projections together. Runtime reads require that
+repair; canonical delivery fields and unrelated stored values keep their values.
 
 ## Legacy state migration
 
 When Doctor selects a legacy home such as `~/.clawdbot`, it drains open database
 work before moving that directory to `~/.openclaw`. It retains exclusive source
 ownership through the move and legacy alias creation, then acquires ownership at
-the resulting path before importing plugin metadata or upgrading SQLite schemas.
+the resulting path before upgrading SQLite schemas. A retired JSON plugin install
+index blocks relocation until the intermediate release has migrated it.
 An explicit `OPENCLAW_STATE_DIR` keeps its selected location. If alias creation
 fails and the move rolls back, repair continues under ownership of the original
 location and reports the rollback.
@@ -41,6 +65,41 @@ including loose `agent/settings.json` files without an agent owner, remain untou
 and deferred. Doctor reports the retained source and continues independent migrations;
 startup reports remaining readiness advisories. An advisory never hides a separate
 required-store refusal.
+
+Doctor also converts older session-row pending-delivery, model-fallback, and
+memory-flush fields to their current structured state. Published
+`v2026.7.2-beta.5` wrote these fields directly into schema-v16 session rows;
+stable `v2026.8.1` upgrades retain those stored values. This durable upgrade
+path needs a migration even though current writers already emit structured state.
+Before rewriting an
+existing database, it saves and reports a verified SQLite backup, including the
+original row values. Pending reply text, destinations, intent IDs, timestamps,
+and memory-flush counts retain their previous meaning; existing current values
+take precedence. Obsolete retry and error details remain in the backup.
+This repair changes only those state fields. Transcript locators, other raw
+metadata, split snapshots, and malformed identity fields remain with their
+existing repair owners; scalar repair never invents or certifies an identity.
+SQLite changes only the affected top-level JSON fields, preserving unrelated
+opaque values, including numeric tokens that JavaScript cannot represent exactly.
+Doctor uses the existing snapshot and bounded rewrite owners. Its captured file
+identity also reaches the normal database admission owner, which checks it before
+changing permissions, journal mode, schema, or rows. Doctor supplies these facts
+through the database owner's internal repair admission; plugin SDK options stay
+unchanged. A repair cannot adopt a replacement file after its backup or begin a
+mutation after its owner has retired.
+Ordinary session reads require this repair instead of converting the old fields
+in memory. A Doctor preview reports the affected rows without changing them and
+defers further session inspection until `doctor --fix` runs. The update-time
+Doctor pass performs the same repair before the candidate resumes sessions.
+The migration prelude upgrades database schemas before retrying deferred scalar
+repairs. Standalone session import keeps its existing `doctor --fix` prerequisite
+for older schemas; session recovery restores or repairs its selected database
+before inspecting and converting scalar state.
+If the recovered database still needs a schema upgrade, recovery reports the
+`doctor --fix` prerequisite instead of claiming success.
+Repair failures stop Doctor instead of becoming optional health warnings. If a
+later batch is interrupted, earlier committed batches stay canonical and the
+original backups remain available; rerunning Doctor repairs the remaining rows.
 
 If Doctor is interrupted during an agent schema or media migration, stop other
 OpenClaw processes using that state and rerun `openclaw doctor --fix`. Doctor

@@ -1,4 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { SessionsPatchResult } from "../../../packages/gateway-protocol/src/index.js";
 import {
   SESSIONS_PATCH_MANY_MAX_TARGETS,
   type SessionsPatchManyResult,
@@ -15,14 +16,32 @@ import type { AgentToolGatewayRequestCaller } from "./in-process-gateway.js";
 import { recordSessionToolActionFact } from "./sessions-access.js";
 
 const SESSIONS_TOOL_RESULT_MAX_BYTES = 3_840;
+const RESOLVED_OMITTED_REASON = "response_budget_exceeded";
 
-export function sessionsToolResultFitsBudget(payload: Record<string, unknown>): boolean {
+function sessionsToolResultFitsBudget(payload: Record<string, unknown>): boolean {
   const compactSize = boundedJsonUtf8Bytes(payload, SESSIONS_TOOL_RESULT_MAX_BYTES);
   return (
     compactSize.complete &&
     compactSize.bytes <= SESSIONS_TOOL_RESULT_MAX_BYTES &&
     Buffer.byteLength(JSON.stringify(payload, null, 2), "utf8") <= SESSIONS_TOOL_RESULT_MAX_BYTES
   );
+}
+
+export function withBoundedSessionsResolved(
+  acknowledgement: Record<string, unknown>,
+  resolved: NonNullable<SessionsPatchResult["resolved"]> | undefined,
+): Record<string, unknown> {
+  if (!resolved) {
+    return acknowledgement;
+  }
+  const completeResult = { ...acknowledgement, resolved };
+  if (sessionsToolResultFitsBudget(completeResult)) {
+    return completeResult;
+  }
+  return {
+    ...acknowledgement,
+    resolvedOmitted: { reason: RESOLVED_OMITTED_REASON },
+  };
 }
 
 export function readSessionsToolPatch(params: Record<string, unknown>): SessionsPatchMutation {

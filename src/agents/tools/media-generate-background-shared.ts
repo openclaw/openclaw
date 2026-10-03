@@ -125,15 +125,10 @@ type FailMediaGenerationTaskRunParams = {
   error: unknown;
 };
 
-type WakeMediaGenerationTaskCompletionParams = {
-  handle: MediaGenerationTaskHandle | null;
-  status: "ok" | "error";
-  statusLabel: string;
-  result: string;
-  attachments?: AgentGeneratedAttachment[];
-  mediaUrls?: string[];
-  statsLine?: string;
-};
+type WakeMediaGenerationTaskCompletionParams = Omit<
+  Parameters<typeof wakeMediaGenerationTaskCompletion>[0],
+  "eventSource" | "announceType" | "toolName" | "completionLabel"
+>;
 
 function waitForMediaGenerationCompletionHandoffRetry(delayMs: number): Promise<void> {
   return new Promise((resolve) => {
@@ -190,7 +185,7 @@ export function captureMediaGenerationAdmission(assertSourceCurrent?: () => void
   const env = captureSessionTranscriptStorageEnvironment(process.env);
   const assertInvocationCurrent = captureAgentToolSourceExecutionGuard();
   const assertGatewayCallerCurrent = captureGatewayToolCallerAssertion();
-  const assertCurrent = () => {
+  return () => {
     assertInvocationCurrent();
     assertGatewayCallerCurrent?.();
     assertSourceCurrent?.();
@@ -204,7 +199,6 @@ export function captureMediaGenerationAdmission(assertSourceCurrent?: () => void
       throw new Error("Media generation admission owner is no longer current");
     }
   };
-  return assertCurrent;
 }
 
 async function createMediaGenerationTaskRun(
@@ -370,55 +364,6 @@ async function withMediaGenerationTaskKeepalive<T>(params: {
   }
 }
 
-function completeMediaGenerationTaskRun(
-  params: CompleteMediaGenerationTaskRunParams & {
-    generatedLabel: string;
-  },
-) {
-  if (!params.handle) {
-    return;
-  }
-  try {
-    const endedAt = Date.now();
-    updateMediaGenerationOperation(params.handle.runId, {
-      status: "succeeded",
-      endedAt,
-      lastEventAt: endedAt,
-      progressSummary: `Generated ${params.count} ${params.generatedLabel}${params.count === 1 ? "" : "s"}`,
-      terminalSummary:
-        params.terminalResult?.terminalSummary ??
-        `Generated ${params.count} ${params.generatedLabel}${params.count === 1 ? "" : "s"} with ${params.provider}/${params.model}.`,
-      terminalOutcome: params.terminalResult?.terminalOutcome,
-    });
-  } finally {
-    clearMediaGenerationTaskRunContext(params.handle);
-  }
-}
-
-function failMediaGenerationTaskRun(
-  params: FailMediaGenerationTaskRunParams & {
-    progressSummary: string;
-  },
-) {
-  if (!params.handle) {
-    return;
-  }
-  try {
-    const endedAt = Date.now();
-    const errorText = formatErrorMessage(params.error);
-    updateMediaGenerationOperation(params.handle.runId, {
-      status: "failed",
-      endedAt,
-      lastEventAt: endedAt,
-      error: errorText,
-      progressSummary: params.progressSummary,
-      terminalSummary: errorText,
-    });
-  } finally {
-    clearMediaGenerationTaskRunContext(params.handle);
-  }
-}
-
 export function createDefaultMediaGenerateBackgroundScheduler(params: {
   toolName: string;
   onCrash: (message: string, meta?: Record<string, unknown>) => void;
@@ -434,66 +379,6 @@ export function createDefaultMediaGenerateBackgroundScheduler(params: {
       });
     });
   };
-}
-
-export function buildMediaGenerationStartedToolResult(params: {
-  toolName: string;
-  generationLabel: string;
-  completionLabel: string;
-  taskHandle: MediaGenerationTaskHandle | null;
-  detailExtras?: Record<string, unknown>;
-  messages?: Array<string | undefined>;
-}) {
-  return {
-    content: [
-      {
-        type: "text" as const,
-        text: [
-          `Background task started for ${params.generationLabel} generation (${params.taskHandle?.taskId ?? "unknown"}). Do not call ${params.toolName} again for this request. Do not wait, poll, or yield for it: end this turn (a short acknowledgement at most); the completion arrives as a later turn and sends the finished ${params.completionLabel} here.`,
-          ...(params.messages ?? []),
-        ]
-          .filter((entry): entry is string => Boolean(entry))
-          .join("\n"),
-      },
-    ],
-    details: {
-      async: true,
-      status: "started",
-      ...(params.taskHandle
-        ? {
-            taskId: params.taskHandle.taskId,
-            runId: params.taskHandle.runId,
-            task: {
-              taskId: params.taskHandle.taskId,
-              runId: params.taskHandle.runId,
-            },
-          }
-        : {}),
-      ...params.detailExtras,
-    },
-  };
-}
-
-export async function notifyMediaGenerationAsyncTaskStarted(params: {
-  callback?: MediaGenerateAsyncStartCallback;
-  message: string;
-  toolName: string;
-  handle: MediaGenerationTaskHandle | null;
-  onFailure: (message: string, meta?: Record<string, unknown>) => void;
-}) {
-  if (!params.callback) {
-    return;
-  }
-  try {
-    await params.callback(params.message);
-  } catch (error) {
-    params.onFailure("Media generation async-start callback failed", {
-      toolName: params.toolName,
-      taskId: params.handle?.taskId,
-      runId: params.handle?.runId,
-      error,
-    });
-  }
 }
 
 export function scheduleMediaGenerationTaskCompletion<
@@ -670,18 +555,47 @@ export function createMediaGenerationTaskLifecycle(kind: "image" | "music" | "vi
 
     recordTaskProgress: recordMediaGenerationTaskProgress,
 
-    completeTaskRun(completionParams: CompleteMediaGenerationTaskRunParams) {
-      completeMediaGenerationTaskRun({
-        ...completionParams,
-        generatedLabel: kind === "music" ? "track" : kind,
-      });
+    completeTaskRun(params: CompleteMediaGenerationTaskRunParams) {
+      if (!params.handle) {
+        return;
+      }
+      try {
+        const endedAt = Date.now();
+        const generatedLabel = kind === "music" ? "track" : kind;
+        const progressSummary = `Generated ${params.count} ${generatedLabel}${params.count === 1 ? "" : "s"}`;
+        updateMediaGenerationOperation(params.handle.runId, {
+          status: "succeeded",
+          endedAt,
+          lastEventAt: endedAt,
+          progressSummary,
+          terminalSummary:
+            params.terminalResult?.terminalSummary ??
+            `${progressSummary} with ${params.provider}/${params.model}.`,
+          terminalOutcome: params.terminalResult?.terminalOutcome,
+        });
+      } finally {
+        clearMediaGenerationTaskRunContext(params.handle);
+      }
     },
 
-    failTaskRun(failureParams: FailMediaGenerationTaskRunParams) {
-      failMediaGenerationTaskRun({
-        ...failureParams,
-        progressSummary: `${title} generation failed`,
-      });
+    failTaskRun(params: FailMediaGenerationTaskRunParams) {
+      if (!params.handle) {
+        return;
+      }
+      try {
+        const endedAt = Date.now();
+        const errorText = formatErrorMessage(params.error);
+        updateMediaGenerationOperation(params.handle.runId, {
+          status: "failed",
+          endedAt,
+          lastEventAt: endedAt,
+          error: errorText,
+          progressSummary: `${title} generation failed`,
+          terminalSummary: errorText,
+        });
+      } finally {
+        clearMediaGenerationTaskRunContext(params.handle);
+      }
     },
 
     async wakeTaskCompletion(completionParams: WakeMediaGenerationTaskCompletionParams) {

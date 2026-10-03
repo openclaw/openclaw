@@ -188,6 +188,10 @@ describe("OpenAI embedding provider HTTP contract", () => {
           await expect(result).resolves.toMatchObject({
             client: { headers: { Authorization: "Bearer fixture-embedding-api-key" } },
           });
+        } else if (additional === "codex") {
+          await expect(result).resolves.toMatchObject({
+            client: { headers: { Authorization: "Bearer fixture-codex-access" } },
+          });
         } else if (server && additional === "token") {
           const { provider } = await result;
           await expect(provider.embed("hello")).resolves.toEqual([5, 1]);

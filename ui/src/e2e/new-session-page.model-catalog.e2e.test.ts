@@ -48,8 +48,9 @@ suite.define(() => {
 
         await modelSelect.click();
         await expect.poll(() => picker.getAttribute("open")).toBe("");
+        // Opening the picker moves focus to its filter so typing filters models.
         await expect
-          .poll(() => modelSelect.evaluate((element) => element === document.activeElement))
+          .poll(() => search.evaluate((element) => element === document.activeElement))
           .toBe(true);
         await revealChatModelOption(firstModel);
         await revealChatModelOption(secondModel);

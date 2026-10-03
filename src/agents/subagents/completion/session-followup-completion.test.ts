@@ -3,6 +3,7 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import { rotateAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import { rotateAgentRunRegistryLifecycleGeneration } from "../../../infra/agent-run-registry.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
+import { copySubagentRunRuntimeOwner } from "../registry/subagent-run-generation.js";
 import { transferFollowupCohort } from "./session-followup-cohort.js";
 import {
   SessionFollowupCompletion,
@@ -101,18 +102,41 @@ describe("session followup completion", () => {
     });
   });
 
-  it("follows only the canonical child's same-task replacement and rolls it back atomically", async () => {
+  it("follows only the canonical child's committed same-task replacement", async () => {
     const f = await fixture();
     const c = child();
     f.owner.promoteYield("first", [c], 1);
     const next = { ...c, runId: "C-next", taskRunId: c.runId };
-    const rollback = transferFollowupCohort(c, next);
+    transferFollowupCohort(c, next);
     expect(getFollowupForCohort([next])).toBe(f.owner);
     expect(() => f.owner.successor([next], "second", () => {})).not.toThrow();
-    rollback();
-    expect(() => f.owner.successor([next], "second", () => {})).toThrow("cohort");
-    expect(() => f.owner.successor([c], "second", () => {})).not.toThrow();
+    expect(() => f.owner.successor([c], "second", () => {})).toThrow("cohort");
   });
+
+  it.each([false, true])(
+    "rejects a retained successor after publication clears its wake (adopted=%s)",
+    async (adopted) => {
+      const f = await fixture();
+      const c = child();
+      f.owner.promoteYield("first", [c], 1);
+      await settleExecution(f.owner, "first", { status: "ok", yielded: true });
+      const successor = f.owner.successor([c], "second", () => {});
+      await f.owner.prepareSuccessor(successor);
+      if (adopted) {
+        f.owner.adopt(successor);
+        f.owner.markAccepted("second");
+      }
+      const published = copySubagentRunRuntimeOwner(c, {
+        ...c,
+        requesterSettleWake: undefined,
+        suppressCompletionDelivery: true,
+      });
+      transferFollowupCohort(c, published);
+      expect(getFollowupForCohort([published])).toBe(f.owner);
+      expect(() => successor.assertCurrent()).toThrow("completion cohort");
+      expect(() => f.owner.successor([published], "second", () => {})).toThrow("completion cohort");
+    },
+  );
 
   it("publishes only after the caller joins physical execution cleanup", async () => {
     const f = await fixture();

@@ -3,9 +3,15 @@ import { tracingChannel } from "node:diagnostics_channel";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+} from "../../../test/helpers/fixture-receipts.js";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { hasErrnoCode } from "../../infra/errno.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import {
   MAX_WORKSPACE_GIT_CANDIDATES,
@@ -19,6 +25,13 @@ import {
 import { preflightWorkerWorkspace } from "./workspace-sync-preflight.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+let receipts: FixtureReceiptChannel;
+beforeAll(async () => {
+  receipts = await openFixtureReceiptChannel();
+});
+afterAll(async () => {
+  await receipts.close();
+});
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -85,21 +98,6 @@ async function git(root: string, ...args: string[]): Promise<string> {
   });
   expect(result.code, result.stderr).toBe(0);
   return result.stdout.trim();
-}
-
-async function waitForFile(filePath: string): Promise<void> {
-  const deadline = Date.now() + 5_000;
-  while (Date.now() < deadline) {
-    try {
-      await fs.access(filePath);
-      return;
-    } catch {
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 10);
-      });
-    }
-  }
-  throw new Error(`Timed out waiting for ${filePath}`);
 }
 
 describe("runWorkspaceInventoryCommandToFile", () => {
@@ -266,7 +264,7 @@ describe("runWorkspaceInventoryCommandToFile", () => {
     );
   });
 
-  it("force-kills a command that ignores abort termination", async () => {
+  it("force-kills a command that ignores abort termination", async ({ signal, onTestFinished }) => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-sync-"));
     const outputPath = path.join(root, "output");
     const readyPath = path.join(root, "ready");
@@ -274,30 +272,67 @@ describe("runWorkspaceInventoryCommandToFile", () => {
     const operation = runWorkspaceInventoryCommandToFile({
       argv: [
         process.execPath,
+        "--input-type=module",
         "-e",
         [
-          'const fs = require("node:fs");',
+          'import fs from "node:fs";',
+          fixtureReceiptClientSource(receipts.endpoint),
           'process.on("SIGTERM", () => {});',
           'fs.writeFileSync(process.argv[1], "ready");',
+          'sendReceipt(process.argv[1], "ready");',
           "setInterval(() => {}, 1000);",
-        ].join(""),
+        ].join("\n"),
         readyPath,
       ],
       outputPath,
       signal: controller.signal,
       timeoutMs: 10_000,
     });
+    let cleanupPromise: Promise<void> | undefined;
+    const cleanup = () =>
+      (cleanupPromise ??= (async () => {
+        controller.abort();
+        await operation.catch(() => undefined);
+        await fs.rm(root, { recursive: true, force: true });
+      })());
+    // A timed-out body starts finally but Vitest does not join it; the hook retains
+    // the worker until the command's delayed force-kill and cleanup have finished.
+    onTestFinished(cleanup);
 
     try {
-      await waitForFile(readyPath);
+      // Receipts and command completion use separate pipes; the durable marker decides
+      // readiness if the operation settles before the receipt reaches this process.
+      const readReady = () =>
+        fs.readFile(readyPath, "utf8").catch((error: unknown) => {
+          if (hasErrnoCode(error, "ENOENT")) {
+            return "";
+          }
+          throw error;
+        });
+      await withinTest(
+        Promise.race([
+          receipts.waitFor(readyPath, "ready"),
+          operation.then(
+            async () => {
+              if ((await readReady()) !== "ready") {
+                throw new Error(`Timed out waiting for ${readyPath}`);
+              }
+            },
+            async (error: unknown) => {
+              if ((await readReady()) !== "ready") {
+                throw error;
+              }
+            },
+          ),
+        ]),
+        signal,
+      );
       const abortedAt = Date.now();
       controller.abort();
       await expect(operation).rejects.toBe(controller.signal.reason);
       expect(Date.now() - abortedAt).toBeLessThan(3_000);
     } finally {
-      controller.abort();
-      await operation.catch(() => undefined);
-      await fs.rm(root, { recursive: true, force: true });
+      await cleanup();
     }
   });
 

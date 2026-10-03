@@ -22,7 +22,6 @@ import {
   selectedTalkProviderOption,
   talkProviderConfigKeys,
   type TalkCatalogState,
-  type TalkRealtimeProviderOption,
 } from "./talk.ts";
 
 type GatewayClient = NonNullable<ApplicationContext["gateway"]["snapshot"]["client"]>;
@@ -54,24 +53,6 @@ type ModelDefaultResetIntent = {
   gatewayUrl: string;
   configRevision: string | null;
 };
-
-function toProviderOption(
-  provider: TalkCatalogResult["realtime"]["providers"][number],
-): TalkRealtimeProviderOption {
-  return {
-    id: provider.id,
-    label: provider.label,
-    configured: provider.configured,
-    aliases: provider.aliases ?? [],
-    models: provider.models ?? [],
-    voices: provider.voices ?? [],
-    activeVoices: provider.activeVoices,
-    activeVoiceSelectionPolicy: provider.activeVoiceSelectionPolicy,
-    voicesByModel: provider.voicesByModel,
-    transports: provider.transports ?? [],
-    defaultModel: provider.defaultModel ?? null,
-  };
-}
 
 /** Transports whose sessions are client-owned (`talk.client.create`). */
 const TALK_CLIENT_OWNED_TRANSPORTS = new Set(["webrtc", "provider-websocket"]);
@@ -393,7 +374,7 @@ class TalkSettingsPage extends OpenClawLightDomElement {
         kind: "ready",
         ready: result.realtime.ready === true,
         activeProvider: result.realtime.activeProvider ?? null,
-        providers: result.realtime.providers.map(toProviderOption),
+        providers: result.realtime.providers,
       });
       if (applied) {
         this.acknowledgeModelDefaultReset(connection);
@@ -580,7 +561,7 @@ class TalkSettingsPage extends OpenClawLightDomElement {
     // A relay-only provider (no client-owned transport) needs the transport
     // written explicitly when the current selection cannot carry across.
     const relayOnly =
-      option !== undefined &&
+      option?.transports !== undefined &&
       option.transports.length > 0 &&
       !option.transports.some((candidate) => TALK_CLIENT_OWNED_TRANSPORTS.has(candidate));
     let resultingTransport = rejectsTransport ? null : configuredTransport;

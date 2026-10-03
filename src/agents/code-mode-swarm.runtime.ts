@@ -37,8 +37,8 @@ function resolveCodeModeRequesterSessionKey(ctx: ToolSearchToolContext): string 
   if (!sessionKey) {
     throw new ToolInputError("code mode swarm globals require session and run identity.");
   }
-  const { mainKey, alias } = resolveMainSessionAlias(ctx.runtimeConfig ?? ctx.config ?? {});
-  return resolveInternalSessionKey({ key: sessionKey, alias, mainKey });
+  const { alias } = resolveMainSessionAlias(ctx.runtimeConfig ?? ctx.config ?? {});
+  return resolveInternalSessionKey({ key: sessionKey, alias });
 }
 
 function resolveCodeModeSwarmGroupId(ctx: ToolSearchToolContext): string {

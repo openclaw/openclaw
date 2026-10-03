@@ -4,15 +4,18 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { GatewayClient as TestGatewayClient } from "../../packages/gateway-client/src/client.js";
 import type { FsListDirResult } from "../../packages/gateway-protocol/src/index.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { GatewayClient } from "../gateway/client.js";
-import { saveExecApprovals, type ExecApprovalsSnapshot } from "../infra/exec-approvals.js";
+import { saveExecApprovals } from "../infra/exec-approvals-store.test-support.js";
+import type { ExecApprovalsSnapshot } from "../infra/exec-approvals.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import * as nodeRunCommand from "./invoke-run-command.js";
 import type { SkillBinsProvider } from "./invoke-types.js";
 import { handleInvoke } from "./invoke.js";
 
@@ -776,8 +779,8 @@ describe("node host invoke", () => {
     );
   });
 
-  it("forwards suppressNotifyOnExit on completed system.run events", async () => {
-    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-node-event-suppress-"));
+  it("preserves notification policy and output tails on completed system.run events", async () => {
+    const tempHome = tempDirs.make("openclaw-node-event-suppress-");
     const stateDir = path.join(tempHome, ".openclaw");
     try {
       await withEnvAsync({ OPENCLAW_HOME: tempHome, OPENCLAW_STATE_DIR: stateDir }, async () => {
@@ -787,7 +790,8 @@ describe("node host invoke", () => {
         });
         const scriptPath = path.join(tempHome, "noop.cjs");
         fs.writeFileSync(scriptPath, "");
-        const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
+        const client = new TestGatewayClient({ deviceIdentity: null });
+        const request = vi.spyOn(client, "request").mockResolvedValue(null);
         await handleInvoke(
           {
             id: "invoke-suppress-notify-prepare",
@@ -799,7 +803,7 @@ describe("node host invoke", () => {
               sessionKey: "agent:main:main",
             }),
           },
-          { request } as unknown as GatewayClient,
+          client,
           { current: async () => [] },
         );
         const prepareResult = request.mock.calls.find(
@@ -811,38 +815,66 @@ describe("node host invoke", () => {
           plan?: Record<string, unknown>;
         };
         expect(prepared.plan).toBeDefined();
-        await handleInvoke(
-          {
-            id: "invoke-suppress-notify",
-            nodeId: "node-1",
-            command: "system.run",
-            paramsJSON: JSON.stringify({
-              command: prepared.plan?.argv,
-              rawCommand: prepared.plan?.commandText,
-              cwd: prepared.plan?.cwd,
-              sessionKey: "agent:main:main",
-              systemRunPlan: prepared.plan,
-              approved: true,
-              approvalDecision: "allow-once",
+        const runCommand = vi.spyOn(nodeRunCommand, "runCommand");
+        try {
+          for (const { stdout, output } of [
+            { stdout: "", output: "" },
+            { stdout: " \t\n", output: " \t\n" },
+            { stdout: " \nfinished\n ", output: "finished" },
+            {
+              stdout: ` \nx😀${"a".repeat(19_999)}\n `,
+              output: `... (truncated) ${"a".repeat(19_999)}`,
+            },
+          ]) {
+            request.mockClear();
+            runCommand.mockResolvedValueOnce({
+              exitCode: 0,
+              timedOut: false,
+              success: true,
+              stdout,
+              stderr: "",
+              truncated: false,
+            });
+            await handleInvoke(
+              {
+                id: "invoke-suppress-notify",
+                nodeId: "node-1",
+                command: "system.run",
+                paramsJSON: JSON.stringify({
+                  command: prepared.plan?.argv,
+                  rawCommand: prepared.plan?.commandText,
+                  cwd: prepared.plan?.cwd,
+                  sessionKey: "agent:main:main",
+                  systemRunPlan: prepared.plan,
+                  approved: true,
+                  approvalDecision: "allow-once",
+                  suppressNotifyOnExit: true,
+                }),
+              },
+              client,
+              { current: async () => [] },
+            );
+            expect(request).toHaveBeenNthCalledWith(1, "node.event", {
+              event: "exec.finished",
+              payloadJSON: expect.any(String),
+            });
+            const event = request.mock.calls[0]?.[1] as { payloadJSON: string };
+            expect(JSON.parse(event.payloadJSON)).toMatchObject({
               suppressNotifyOnExit: true,
-            }),
-          },
-          { request } as unknown as GatewayClient,
-          { current: async () => [] },
-        );
-
-        const event = request.mock.calls.find(
-          ([method, params]) =>
-            method === "node.event" &&
-            (params as { event?: string } | undefined)?.event === "exec.finished",
-        )?.[1] as { payloadJSON?: string | null } | undefined;
-        expect(JSON.parse(event?.payloadJSON ?? "{}")).toMatchObject({
-          suppressNotifyOnExit: true,
-        });
+              output,
+            });
+            expect(request).toHaveBeenNthCalledWith(
+              2,
+              "node.invoke.result",
+              expect.objectContaining({ ok: true }),
+            );
+          }
+        } finally {
+          runCommand.mockRestore();
+        }
       });
     } finally {
       closeOpenClawStateDatabaseForTest();
-      fs.rmSync(tempHome, { recursive: true, force: true });
     }
   });
 

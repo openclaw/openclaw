@@ -15,7 +15,9 @@ let darwinNative:
     }
   | undefined;
 
-function readDarwinNativeIdentity(pid: number): { parentPid: number; startedAt: number } | null {
+function readDarwinNativeIdentity(
+  pid: number,
+): { parentPid: number; startedAt: number; microseconds: number } | null {
   if (
     process.platform !== "darwin" ||
     // Koffi calls segfault the x86_64 worker under Rosetta, where release packaging
@@ -43,17 +45,18 @@ function readDarwinNativeIdentity(pid: number): { parentPid: number; startedAt: 
     }
     const parentPid = bytes.readUInt32LE(16);
     const seconds = bytes.readBigUInt64LE(120);
+    const microseconds = bytes.readBigUInt64LE(128);
     if (
       bytes.readUInt32LE(12) !== pid ||
       parentPid > 0x7fffffff ||
       seconds === 0n ||
       seconds > BigInt(Number.MAX_SAFE_INTEGER) ||
-      bytes.readBigUInt64LE(128) >= 1_000_000n
+      microseconds >= 1_000_000n
     ) {
       return null;
     }
     // Published Darwin leases use ps lstart's epoch seconds, not microseconds.
-    return { parentPid, startedAt: Number(seconds) };
+    return { parentPid, startedAt: Number(seconds), microseconds: Number(microseconds) };
   } catch {
     // Missing native packages and denied queries retain the existing bounded ps path.
     return null;
@@ -94,8 +97,8 @@ function isValidPid(pid: number): boolean {
 }
 
 /**
- * Check if a Linux process has exited, including a zombie whose threads are gone.
- * Unreadable procfs is inconclusive unless an existence probe confirms exit.
+ * Check whether a Linux task is terminal and has no live sibling threads.
+ * Missing or reaped procfs snapshots require a fresh existence probe.
  */
 function isExitedLinuxProcess(pid: number): boolean {
   if (process.platform !== "linux") {
@@ -103,24 +106,28 @@ function isExitedLinuxProcess(pid: number): boolean {
   }
   try {
     const status = fsSync.readFileSync(`/proc/${pid}/status`, "utf8");
-    const stateMatch = status.match(/^State:\s+(\S)/m);
-    // pthread_exit can leave a zombie leader with live workers; missing thread
-    // evidence must not revoke a live process's locks or cleanup obligations.
-    return stateMatch?.[1] === "Z" && /^Threads:[ \t]+1[ \t]*$/m.test(status);
-  } catch {
-    // Reaping can remove procfs after the caller's existence probe. An unreadable
-    // status alone is not death evidence, so confirm that the PID is now gone.
-    try {
-      process.kill(pid, 0);
-    } catch (error) {
-      // SAFETY: Node's process.kill reports syscall failures as ErrnoException.
-      return (error as NodeJS.ErrnoException).code === "ESRCH";
+    const state = status.match(/^State:\s+(\S)/m)?.[1];
+    const threads = status.match(/^Threads:[ \t]+(\d+)[ \t]*$/m)?.[1];
+    if (threads !== "0") {
+      // pthread_exit can leave a terminal leader with live workers. Reaping also
+      // moves the last retained task from Z to X before removing its PID.
+      return (state === "Z" || state === "X") && threads === "1";
     }
-    return false;
+  } catch {
+    // Reaping can remove procfs after the caller's existence probe.
   }
+  // A successful read can outlive the task's signal metadata and report zero
+  // threads. PID reuse or a nonleader exec can still leave a live current owner.
+  try {
+    process.kill(pid, 0);
+  } catch (error) {
+    // SAFETY: Node's process.kill reports syscall failures as ErrnoException.
+    return (error as NodeJS.ErrnoException).code === "ESRCH";
+  }
+  return false;
 }
 
-/** Returns true only when a positive PID exists and is not a Linux zombie process. */
+/** Returns true only when a positive PID exists and is not a known terminal Linux task. */
 export function isPidAlive(pid: number): boolean {
   if (!isValidPid(pid)) {
     return false;
@@ -138,7 +145,7 @@ export function isPidAlive(pid: number): boolean {
   return !isExitedLinuxProcess(pid);
 }
 
-/** Returns true only when the PID is invalid, missing, or known to be a Linux zombie. */
+/** Returns true only when the PID is invalid, missing, or a known terminal Linux task. */
 export function isPidDefinitelyDead(pid: number): boolean {
   if (!isValidPid(pid)) {
     return true;
@@ -200,7 +207,7 @@ export function readDarwinProcessIdentity(
   const started = performance.now();
   const native = readDarwinNativeIdentity(pid);
   if (native) {
-    return native;
+    return { parentPid: native.parentPid, startedAt: native.startedAt };
   }
   const remainingMs =
     timeoutMs === undefined
@@ -271,6 +278,23 @@ export function getProcessStartTime(pid: number): number | null {
   } catch {
     return null;
   }
+}
+
+/** Custody recovery needs native birth precision rather than the shipped lease timestamp format. */
+export function getProcessInstanceStartTime(pid: number): number | null {
+  if (!isValidPid(pid)) {
+    return null;
+  }
+  if (process.platform === "linux") {
+    const startedAt = getProcessStartTime(pid);
+    return Number.isSafeInteger(startedAt) ? startedAt : null;
+  }
+  const native = readDarwinNativeIdentity(pid);
+  if (!native) {
+    return null;
+  }
+  const startedAt = native.startedAt * 1_000_000 + native.microseconds;
+  return Number.isSafeInteger(startedAt) ? startedAt : null;
 }
 
 /** Read a cross-platform process identity for filesystem lock ownership. */

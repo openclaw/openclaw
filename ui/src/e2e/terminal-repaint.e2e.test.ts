@@ -81,10 +81,11 @@ suite.define(() => {
         const terminalCanvas = page.locator(".tp-host canvas");
         await terminalCanvas.waitFor({ state: "visible" });
         const blankCanvasDigest = await terminalCanvasDigest(terminalCanvas);
+        const terminalOutput = "\u001b[?25lterminal repaint sentinel\r\n$ ";
         await gateway.emitGatewayEvent("terminal.data", {
           sessionId: "terminal-repaint-e2e",
-          seq: 0,
-          data: "\u001b[?25lterminal repaint sentinel\r\n$ ",
+          seq: terminalOutput.length,
+          data: terminalOutput,
         });
         await expect.poll(() => terminalCanvasDigest(terminalCanvas)).not.toBe(blankCanvasDigest);
         const renderedCanvasDigest = await terminalCanvasDigest(terminalCanvas);

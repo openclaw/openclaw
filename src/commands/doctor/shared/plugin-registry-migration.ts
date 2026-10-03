@@ -1,19 +1,14 @@
-// Doctor migration from legacy shipped plugin install config into persisted install registry.
+// Doctor recovery of the persisted plugin registry.
 import fs from "node:fs";
-import { isDeepStrictEqual } from "node:util";
-import { ConfigMutationConflictError } from "../../../config/mutation-conflict.js";
-import { inspectShippedPluginInstallConfigRecords } from "../../../config/plugin-install-config-migration.js";
 import {
   copyPluginInstallRecordMap,
   setPluginInstallRecordMapEntry,
 } from "../../../config/plugin-install-record-map.js";
-import type { ConfigFileSnapshot, OpenClawConfig } from "../../../config/types.openclaw.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../../config/types.plugins.js";
 import { inspectPersistedInstalledPluginIndexInstallRecordsSync } from "../../../plugins/installed-plugin-index-record-state.js";
 import {
   loadInstalledPluginIndexInstallRecords,
-  loadInstalledPluginIndexInstallRecordsSync,
-  readPersistedInstalledPluginIndexInstallRecords,
   withoutPluginInstallRecords,
 } from "../../../plugins/installed-plugin-index-records.js";
 import { resolveInstalledPluginIndexStateDatabaseOptions } from "../../../plugins/installed-plugin-index-store-path.js";
@@ -101,157 +96,6 @@ function invalidPersistedInstallRecordMessage(filePath: string): string {
   ].join(" ");
 }
 
-const INVALID_CONFIG_INSTALL_RECORD_MESSAGE =
-  "plugins.installs contains invalid records. Back up openclaw.json, correct or remove the invalid retired plugins.installs record, then rerun `openclaw doctor --fix`.";
-
-function readValidShippedPluginInstallConfigRecords(
-  config: unknown,
-): Record<string, PluginInstallRecord> | undefined {
-  const source = inspectShippedPluginInstallConfigRecords(config);
-  if (source.status === "invalid") {
-    throw new InvalidPluginInstallRecordStateError(INVALID_CONFIG_INSTALL_RECORD_MESSAGE);
-  }
-  return source.status === "valid" ? source.records : undefined;
-}
-
-function mergeShippedPluginInstallRecords(
-  previous: Record<string, PluginInstallRecord>,
-  persisted: Record<string, PluginInstallRecord> | null,
-  source: Record<string, PluginInstallRecord>,
-): Record<string, PluginInstallRecord> {
-  const next = copyPluginInstallRecordMap(previous);
-  for (const [pluginId, record] of Object.entries(source)) {
-    // Authored provenance outranks disk recovery, but never an existing ledger owner.
-    if (!persisted || !Object.hasOwn(persisted, pluginId)) {
-      setPluginInstallRecordMapEntry(next, pluginId, record);
-    }
-  }
-  return migrateOfficialPluginInstallProvenance(next);
-}
-
-/** Preview the same install-record merge that the importer repeats under its lease. */
-export function readShippedPluginInstallConfigImportRecords(
-  snapshot: ConfigFileSnapshot,
-  options: { env?: NodeJS.ProcessEnv } = {},
-): Record<string, PluginInstallRecord> | undefined {
-  const sourceRecords = readValidShippedPluginInstallConfigRecords(snapshot.sourceConfig);
-  if (!sourceRecords) {
-    return undefined;
-  }
-  return mergeShippedPluginInstallRecords(
-    loadInstalledPluginIndexInstallRecordsSync(options),
-    readPersistedInstalledPluginIndexInstallRecords(options),
-    sourceRecords,
-  );
-}
-
-export type ShippedPluginInstallConfigImport = {
-  source: Pick<ConfigFileSnapshot, "path" | "hash" | "sourceConfig">;
-  databasePath: string;
-  pluginInventoryChanged: boolean;
-};
-
-/** Check the accepted source again inside the config writer's lock. */
-export function assertShippedPluginInstallConfigImportCurrent(
-  snapshot: ConfigFileSnapshot,
-  imported: ShippedPluginInstallConfigImport | undefined,
-): void {
-  if (!readValidShippedPluginInstallConfigRecords(snapshot.sourceConfig)) {
-    return;
-  }
-  if (
-    !imported ||
-    imported.databasePath !== resolveInstalledPluginIndexStorePath() ||
-    !isDeepStrictEqual(imported.source, {
-      path: snapshot.path,
-      hash: snapshot.hash,
-      sourceConfig: snapshot.sourceConfig,
-    })
-  ) {
-    throw new ConfigMutationConflictError("config changed after plugin install migration");
-  }
-}
-
-/** Preserve retired source records before Doctor can restore or rewrite their config. */
-export async function importShippedPluginInstallConfigForDoctor(
-  snapshot: ConfigFileSnapshot,
-  options: {
-    validateRecords?: (records: Record<string, PluginInstallRecord>) => void;
-  } = {},
-): Promise<ShippedPluginInstallConfigImport | undefined> {
-  const sourceRecords = readValidShippedPluginInstallConfigRecords(snapshot.sourceConfig);
-  if (!sourceRecords) {
-    return undefined;
-  }
-  const { readConfigFileSnapshotForWrite, withConfigMutationExclusive } =
-    await import("../../../config/config.js");
-  const sourceIdentity = {
-    path: snapshot.path,
-    hash: snapshot.hash,
-    sourceConfig: snapshot.sourceConfig,
-  };
-  const receipt = (databasePath: string, pluginInventoryChanged: boolean) => ({
-    source: structuredClone(sourceIdentity),
-    databasePath,
-    pluginInventoryChanged,
-  });
-  if (Object.keys(sourceRecords).length === 0) {
-    return receipt(resolveInstalledPluginIndexStorePath(), false);
-  }
-  const { commitPluginInstallRecordsOnly } =
-    await import("../../../plugins/install-record-commit.js");
-  // Installers take the plugin lease before the config lock; retain that order here.
-  return await withPluginLifecycleLease({}, async (lease) =>
-    withConfigMutationExclusive(async () => {
-      const prepared = await readConfigFileSnapshotForWrite();
-      if (
-        prepared.snapshot.path !== snapshot.path ||
-        prepared.snapshot.hash !== snapshot.hash ||
-        !isDeepStrictEqual(prepared.snapshot.sourceConfig, snapshot.sourceConfig)
-      ) {
-        throw new ConfigMutationConflictError("config changed before plugin install migration");
-      }
-      const storeOptions = { filePath: lease.databasePath };
-      const previousInstallRecords = await loadInstalledPluginIndexInstallRecords(storeOptions);
-      const persisted = readPersistedInstalledPluginIndexInstallRecords(storeOptions);
-      const nextInstallRecords = mergeShippedPluginInstallRecords(
-        previousInstallRecords,
-        persisted,
-        sourceRecords,
-      );
-      options.validateRecords?.(nextInstallRecords);
-      if (isDeepStrictEqual(nextInstallRecords, persisted)) {
-        return receipt(lease.databasePath, false);
-      }
-      await commitPluginInstallRecordsOnly({
-        previousInstallRecords,
-        nextInstallRecords,
-        nextConfig: withoutPluginInstallRecords(snapshot.sourceConfig),
-        verifyConfigFresh: async () => {
-          prepared.writeOptions.assertConfigPathForWrite?.();
-          const current = await readConfigFileSnapshotForWrite();
-          // Includes can change without changing the root hash; retain the whole write ownership.
-          if (
-            current.snapshot.path !== prepared.snapshot.path ||
-            current.snapshot.hash !== prepared.snapshot.hash ||
-            !isDeepStrictEqual(
-              current.writeOptions.includeFileHashesForWrite,
-              prepared.writeOptions.includeFileHashesForWrite,
-            ) ||
-            !isDeepStrictEqual(
-              current.writeOptions.includeFileTargetsForWrite,
-              prepared.writeOptions.includeFileTargetsForWrite,
-            )
-          ) {
-            throw new ConfigMutationConflictError("config changed during plugin install migration");
-          }
-        },
-      });
-      return receipt(lease.databasePath, true);
-    }),
-  );
-}
-
 export type PluginRegistryDoctorMigrationParams = LoadInstalledPluginIndexParams &
   InstalledPluginIndexStoreOptions & {
     dryRun?: boolean;
@@ -268,9 +112,6 @@ export function preflightPluginRegistryDoctorMigration(
   if (persistedState.status === "invalid") {
     throw new InvalidPluginInstallRecordStateError(invalidPersistedInstallRecordMessage(filePath));
   }
-  const configInstallRecords = params.config
-    ? readValidShippedPluginInstallConfigRecords(params.config)
-    : undefined;
   const pathExists = params.existsSync ?? fs.existsSync;
   if (pathExists(filePath)) {
     const currentRegistry = readPersistedInstalledPluginIndexSync(params);
@@ -287,14 +128,7 @@ export function preflightPluginRegistryDoctorMigration(
       return { action: "migrate", filePath };
     }
   }
-  const hasConfigInstallRecords =
-    configInstallRecords !== undefined && Object.keys(configInstallRecords).length > 0;
-  // Only a caller that supplied config can prove nothing is left to migrate. Without config, or with
-  // retired plugins.installs records still present, stay on "migrate" so the warning is not lost.
-  return {
-    action: params.config && !hasConfigInstallRecords ? "initialize" : "migrate",
-    filePath,
-  };
+  return { action: "initialize", filePath };
 }
 
 async function readMigrationConfig(
@@ -322,13 +156,6 @@ export async function migratePluginRegistryForDoctor(
       preflight,
     };
   }
-  if (preflight.action !== "skip-existing") {
-    // Config may come from readConfig; reject it before acquiring a mutating lease.
-    preflightPluginRegistryDoctorMigration({
-      ...params,
-      config: await readMigrationConfig(params),
-    });
-  }
   return await withPluginLifecycleLease(
     resolveInstalledPluginIndexStateDatabaseOptions(params),
     async () => migratePluginRegistryForDoctorWithLease(params),
@@ -343,7 +170,6 @@ async function migratePluginRegistryForDoctorWithLease(
     return { status: "skip-existing", migrated: false, preflight };
   }
   const rawConfig = await readMigrationConfig(params);
-  readValidShippedPluginInstallConfigRecords(rawConfig);
   const config = withoutPluginInstallRecords(rawConfig);
   const installRecords = migrateOfficialPluginInstallProvenance(
     params.installRecords ?? (await loadInstalledPluginIndexInstallRecords(params)),

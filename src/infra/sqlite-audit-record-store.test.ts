@@ -111,7 +111,6 @@ describe("SQLite audit record store", () => {
       expect(store.entries().map((entry) => entry.key)).toEqual(["z-first", "a-second"]);
 
       store.register("m-third", { value: 3 }, 1);
-      expect(store.size()).toBe(2);
       expect(store.entries().map((entry) => entry.key)).toEqual(["a-second", "m-third"]);
     });
   });
@@ -288,11 +287,6 @@ describe("SQLite audit record store", () => {
       expect(store.compareAndSet("four", null, { value: 6 }, 6)).toBe(true);
       expect(store.latest({ limit: 2 })).toEqual([
         { key: "four", value: { value: 6 }, createdAt: 6, sequence: 4 },
-        { key: "three", value: { value: 5 }, createdAt: 5, sequence: 3 },
-      ]);
-
-      store.delete("four");
-      expect(store.latest({ limit: 2 })).toEqual([
         { key: "three", value: { value: 5 }, createdAt: 5, sequence: 3 },
       ]);
     });

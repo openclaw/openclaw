@@ -1,16 +1,21 @@
+import { getAdmittedSqliteSchemaFacts } from "../../infra/sqlite-schema-facts.js";
+import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
+import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { hasPendingSessionTranscriptArchives } from "./session-accessor.sqlite-archive-store-kernel.js";
 import { assertSessionCreationLabelAvailable } from "./session-accessor.sqlite-creation-read.js";
 import {
-  projectSessionSharingEntry,
+  sessionSharingEntriesEqual,
   type SessionEntryReplacementPublication,
-} from "./session-accessor.sqlite-entry-cache.js";
+} from "./session-accessor.sqlite-entry-cache.types.js";
 import { sqliteSessionEntriesEqual } from "./session-accessor.sqlite-entry-equality.js";
+import { readSessionNodesGeneration } from "./session-accessor.sqlite-entry-revision.js";
 import {
   deleteLegacySessionEntryRows,
   readExactSessionEntryRow,
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
+import { captureSessionEntryMaintenanceAgeChange } from "./session-accessor.sqlite-maintenance-age.js";
 import {
   applySessionEntryMaintenanceInDatabase,
   emptySessionEntryMaintenancePlan,
@@ -27,20 +32,50 @@ import type { SessionEntry } from "./types.js";
 /** Receipts carry only publication facts, never saved prompts or maintenance payloads. */
 export function prepareSessionEntryReplacementPublication(
   result: SessionEntryReplacementCommitted,
+  database: OpenClawAgentDatabase,
 ): SessionEntryReplacementPublication {
+  const archived = new Set(result.maintenancePlans.flatMap((plan) => plan.archivedSessionKeys));
+  const invalidated = new Set([...result.membershipInvalidatedKeys, ...archived]);
+  const current = new Map<string, SessionEntry>();
+  for (const key of result.current.keys()) {
+    // Read the final persisted bytes and side tables after assignment, alias moves and maintenance.
+    const committed = readExactSessionEntryRow(database, key, "list");
+    if (!committed) {
+      throw new Error(`Session publication lost its committed metadata: ${key}`);
+    }
+    current.set(key, freezeJsonSnapshot(committed.entry));
+  }
   return {
     kind: "session-entry-replacements",
     pendingArchiveRecovery: result.pendingArchiveRecovery,
     membershipInvalidatedKeys: result.membershipInvalidatedKeys,
+    sharingUnchangedKeys: [...current].flatMap(([key, entry]) =>
+      !invalidated.has(key) && sessionSharingEntriesEqual(result.previous.get(key), entry)
+        ? [key]
+        : [],
+    ),
     previous: new Map(
       [...result.previous].map(([key, entry]) => [
         key,
         { sessionId: entry.sessionId, lifecycleRevision: entry.lifecycleRevision },
       ]),
     ),
-    current: new Map(
-      [...result.current].map(([key, entry]) => [key, projectSessionSharingEntry(entry)]),
+    current,
+    ageChanges: [...current].map(([sessionKey, entry]) =>
+      captureSessionEntryMaintenanceAgeChange({
+        sessionKey,
+        entry,
+        previousEntry: result.previous.get(sessionKey),
+      }),
     ),
+    ...(getAdmittedSqliteSchemaFacts(database.db)
+      ? {
+          source: {
+            ...readOpenClawAgentDatabaseIdentity(database),
+            revision: readSessionNodesGeneration(database.db),
+          },
+        }
+      : {}),
     changedKeys: [
       ...new Set([
         ...result.previous.keys(),

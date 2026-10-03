@@ -2,14 +2,16 @@ import { cloneEnvWithPlatformSemantics } from "../../config/config-env-vars.js";
 import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
 import { UpdateRequesterRevokedError } from "../../infra/update-requester-authority.js";
 import type { UpdateRunPhasePatch } from "../../infra/update-run-mutation.types.js";
-import type { UpdateRunPhase } from "../../infra/update-run-record.js";
+import type { UpdateRunPhase, UpdateRunStep } from "../../infra/update-run-record.js";
 import type { UpdateRecoveryFence } from "../../infra/update-run-recovery.js";
 import {
   recordUpdateRunPhaseAsync,
+  recordUpdateRunStepAsync,
   type UpdateRunWriteOptions,
 } from "../../infra/update-run-write.async.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type { UpdateCommandOptions } from "./shared.js";
+import type { UpdateCommandExecutionGuards } from "./update-command-execution.types.js";
 import { captureUpdateCommandExecutorAuthority } from "./update-command-executor.js";
 import { retainMutableUpdateSignalWrite } from "./update-command-mutable-signals.js";
 import { assertUpdateCommandRecoveryState } from "./update-command-recovery.js";
@@ -18,23 +20,7 @@ type PhaseOwner = Readonly<{
   kind: "current-core-finalization" | "package-compensation";
   assertCurrent: () => void;
 }>;
-type CapturedWriteOptions = Required<
-  Pick<
-    UpdateRunWriteOptions,
-    "env" | "context" | "assertCurrent" | "assertAccepting" | "retainSettlement"
-  >
-> &
-  Pick<UpdateRunWriteOptions, "requireNoRecovery">;
-type PhaseWriter = {
-  recordPhase: (phase: UpdateRunPhase, patch?: UpdateRunPhasePatch) => Promise<void>;
-};
-type ExecutionGuards = PhaseWriter & {
-  captureWriteOptions: () => CapturedWriteOptions;
-  onStateHandoff: () => void;
-  admitExecutor: (acquired: UpdateRecoveryFence) => void;
-  assertCurrent: (phase?: "restore") => void;
-  assertBoundChildCurrent: () => void;
-};
+type PhaseWriter = Pick<UpdateCommandExecutionGuards, "recordPhase">;
 
 export function createUpdateCommandExecutionGuards(
   opts: UpdateCommandOptions,
@@ -44,7 +30,7 @@ export function createUpdateCommandExecutionGuards(
 export function createUpdateCommandExecutionGuards(
   opts: UpdateCommandOptions,
   root: string,
-): ExecutionGuards;
+): UpdateCommandExecutionGuards;
 /** Pin the invocation across parent work and the separately bound Doctor child. */
 export function createUpdateCommandExecutionGuards(
   opts: UpdateCommandOptions,
@@ -72,7 +58,9 @@ export function createUpdateCommandExecutionGuards(
       throw new UpdateRequesterRevokedError();
     }
   };
-  const captureWriteOptions = (): CapturedWriteOptions => {
+  const captureWriteOptions = (): ReturnType<
+    UpdateCommandExecutionGuards["captureWriteOptions"]
+  > => {
     const assertAccepting = () => {
       if (phaseOwner?.kind !== "package-compensation" && run?.interrupted) {
         throw new UpdateRequesterRevokedError();
@@ -127,6 +115,17 @@ export function createUpdateCommandExecutionGuards(
   return {
     captureWriteOptions,
     recordPhase,
+    recordStep: async (step: UpdateRunStep) => {
+      if (!run) {
+        throw new Error("Update step receipt requires an admitted run.");
+      }
+      const captured = captureWriteOptions();
+      const record = await recordUpdateRunStepAsync(run.runId, step, captured);
+      captured.context.admission.assertCurrent();
+      captured.assertCurrent();
+      captured.assertAccepting();
+      return record;
+    },
     onStateHandoff: () => {
       stateHandedOff = true;
     },

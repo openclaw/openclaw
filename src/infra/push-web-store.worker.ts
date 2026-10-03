@@ -1,74 +1,69 @@
-import type { OpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import type { WorkerOperationHandlers } from "../state/worker-operation-registry.js";
 import * as store from "./push-web-store.kernel.js";
 import { WebPushSubscriptionBindingError } from "./push-web-store.records.js";
-import type { WebPushWorkerOperations } from "./push-web-store.worker-contract.js";
-import type { SqliteWorkerCommand } from "./sqlite-worker-contract.js";
 
-type WebPushCommand = Exclude<
-  SqliteWorkerCommand<WebPushWorkerOperations>,
-  { type: "webPush.readPersistedVapidKeyPair" }
+type Input<Handler extends (input: never) => unknown> = Omit<
+  Parameters<Handler>[0],
+  "database" | "assertCurrent"
 >;
 
-export function isWebPushCommand(command: {
-  type: string;
-  input: unknown;
-}): command is WebPushCommand {
-  return (
-    command.type === "webPush.findBoundWebPushSubscriptionByEndpoint" ||
-    command.type === "webPush.setWebPushSubscriptionPreferences" ||
-    command.type === "webPush.listWebPushSubscriptions" ||
-    command.type === "webPush.hasBoundWebPushSubscriptions" ||
-    command.type === "webPush.listBoundWebPushSubscriptions" ||
-    command.type === "webPush.prepareWebPushApprovalDeliveries" ||
-    command.type === "webPush.listWebPushApprovalDeliveryTargets" ||
-    command.type === "webPush.deleteWebPushApprovalDeliveryTargets" ||
-    command.type === "webPush.listTerminalWebPushApprovalDeliveryIds" ||
-    command.type === "webPush.upsertWebPushSubscription" ||
-    command.type === "webPush.deleteBoundWebPushSubscription" ||
-    command.type === "webPush.deleteWebPushSubscriptionIfCurrent" ||
-    command.type === "webPush.insertVapidKeyPairIfAbsent"
-  );
-}
-
-export function executeWebPushCommand(
-  command: WebPushCommand,
-  database: OpenClawStateDatabase,
-): WebPushWorkerOperations[keyof WebPushWorkerOperations]["output"] {
-  switch (command.type) {
-    case "webPush.findBoundWebPushSubscriptionByEndpoint":
-      return store.findBoundWebPushSubscriptionByEndpointInDatabase({ ...command.input, database });
-    case "webPush.setWebPushSubscriptionPreferences":
-      return store.setWebPushSubscriptionPreferencesInDatabase({ ...command.input, database });
-    case "webPush.listWebPushSubscriptions":
-      return store.listWebPushSubscriptionsInDatabase(database);
-    case "webPush.hasBoundWebPushSubscriptions":
-      return store.hasBoundWebPushSubscriptionsInDatabase(database);
-    case "webPush.listBoundWebPushSubscriptions":
-      return store.listBoundWebPushSubscriptionsInDatabase(database);
-    case "webPush.prepareWebPushApprovalDeliveries":
-      return store.prepareWebPushApprovalDeliveriesInDatabase({ ...command.input, database });
-    case "webPush.listWebPushApprovalDeliveryTargets":
-      return store.listWebPushApprovalDeliveryTargetsInDatabase({ ...command.input, database });
-    case "webPush.deleteWebPushApprovalDeliveryTargets":
-      return store.deleteWebPushApprovalDeliveryTargetsInDatabase({ ...command.input, database });
-    case "webPush.listTerminalWebPushApprovalDeliveryIds":
-      return store.listTerminalWebPushApprovalDeliveryIdsInDatabase({ ...command.input, database });
-    case "webPush.upsertWebPushSubscription":
-      try {
-        return {
-          subscription: store.upsertWebPushSubscriptionInDatabase({ ...command.input, database }),
-        };
-      } catch (error) {
-        if (error instanceof WebPushSubscriptionBindingError) {
-          return { bindingError: error.message };
-        }
-        throw error;
+export const webPushOperations = {
+  "webPush.findBoundWebPushSubscriptionByEndpoint": (
+    input: Input<typeof store.findBoundWebPushSubscriptionByEndpointInDatabase>,
+    { open },
+  ) => store.findBoundWebPushSubscriptionByEndpointInDatabase({ ...input, database: open() }),
+  "webPush.setWebPushSubscriptionPreferences": (
+    input: Input<typeof store.setWebPushSubscriptionPreferencesInDatabase>,
+    { open },
+  ) => store.setWebPushSubscriptionPreferencesInDatabase({ ...input, database: open() }),
+  "webPush.listWebPushSubscriptions": (_input: undefined, { open }) =>
+    store.listWebPushSubscriptionsInDatabase(open()),
+  "webPush.hasBoundWebPushSubscriptions": (_input: undefined, { open }) =>
+    store.hasBoundWebPushSubscriptionsInDatabase(open()),
+  "webPush.listBoundWebPushSubscriptions": (_input: undefined, { open }) =>
+    store.listBoundWebPushSubscriptionsInDatabase(open()),
+  "webPush.prepareWebPushApprovalDeliveries": (
+    input: Input<typeof store.prepareWebPushApprovalDeliveriesInDatabase>,
+    { open },
+  ) => store.prepareWebPushApprovalDeliveriesInDatabase({ ...input, database: open() }),
+  "webPush.listWebPushApprovalDeliveryTargets": (
+    input: Input<typeof store.listWebPushApprovalDeliveryTargetsInDatabase>,
+    { open },
+  ) => store.listWebPushApprovalDeliveryTargetsInDatabase({ ...input, database: open() }),
+  "webPush.deleteWebPushApprovalDeliveryTargets": (
+    input: Input<typeof store.deleteWebPushApprovalDeliveryTargetsInDatabase>,
+    { open },
+  ) => store.deleteWebPushApprovalDeliveryTargetsInDatabase({ ...input, database: open() }),
+  "webPush.listTerminalWebPushApprovalDeliveryIds": (
+    input: Input<typeof store.listTerminalWebPushApprovalDeliveryIdsInDatabase>,
+    { open },
+  ) => store.listTerminalWebPushApprovalDeliveryIdsInDatabase({ ...input, database: open() }),
+  "webPush.upsertWebPushSubscription": (
+    input: Input<typeof store.upsertWebPushSubscriptionInDatabase>,
+    { open },
+  ) => {
+    const database = open();
+    try {
+      return { subscription: store.upsertWebPushSubscriptionInDatabase({ ...input, database }) };
+    } catch (error) {
+      if (error instanceof WebPushSubscriptionBindingError) {
+        return { bindingError: error.message };
       }
-    case "webPush.deleteBoundWebPushSubscription":
-      return store.deleteBoundWebPushSubscriptionInDatabase({ ...command.input, database });
-    case "webPush.deleteWebPushSubscriptionIfCurrent":
-      return store.deleteWebPushSubscriptionIfCurrentInDatabase({ ...command.input, database });
-    case "webPush.insertVapidKeyPairIfAbsent":
-      return store.insertVapidKeyPairIfAbsentInDatabase({ ...command.input, database });
-  }
-}
+      throw error;
+    }
+  },
+  "webPush.deleteBoundWebPushSubscription": (
+    input: Input<typeof store.deleteBoundWebPushSubscriptionInDatabase>,
+    { open },
+  ) => store.deleteBoundWebPushSubscriptionInDatabase({ ...input, database: open() }),
+  "webPush.deleteWebPushSubscriptionIfCurrent": (
+    input: Input<typeof store.deleteWebPushSubscriptionIfCurrentInDatabase>,
+    { open },
+  ) => store.deleteWebPushSubscriptionIfCurrentInDatabase({ ...input, database: open() }),
+  "webPush.readPersistedVapidKeyPair": (_input: undefined, { stateOptions }) =>
+    store.readPersistedVapidKeyPairInDatabase(stateOptions()),
+  "webPush.insertVapidKeyPairIfAbsent": (
+    input: Input<typeof store.insertVapidKeyPairIfAbsentInDatabase>,
+    { open },
+  ) => store.insertVapidKeyPairIfAbsentInDatabase({ ...input, database: open() }),
+} satisfies WorkerOperationHandlers;

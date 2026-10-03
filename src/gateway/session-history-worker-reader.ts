@@ -1,7 +1,21 @@
+import { toUSVString } from "node:util";
+import { expectDefined } from "@openclaw/normalization-core";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { readTranscriptSenderIdentity } from "../chat/sender-identity.js";
 import type {
   SessionHistoryWorkerRequest,
   SessionHistoryWorkerResult,
 } from "../config/sessions/session-history-types.js";
+import { readCronJobNamesInDatabase } from "../cron/store/job-name.kernel.js";
+import { resolveCronJobsStorePath } from "../cron/store/paths.js";
+import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
+import { getUserProfileDisplays } from "../state/user-profile-list.js";
+import { createCurrentUserProfileMessageProjector } from "./chat-display-projection.core.js";
+import {
+  projectForwardedMessages,
+  readForwardedCronJobIds,
+} from "./chat-display-projection.history.js";
+import { resolveCurrentUserProfileDisplay } from "./current-user-profile-display.js";
 import type { PreparedSessionHistoryReadTarget } from "./session-history-read.types.js";
 import { createReadonlySessionHistoryReader } from "./session-history-readonly-reader.js";
 import { resolveGatewaySessionStoreReadSources } from "./session-utils-store-sources.js";
@@ -23,6 +37,27 @@ export async function readSessionHistoryRequest(
     deferProfileDisplay: true,
     resolveCronJobName: () => undefined,
   };
+  if (request.kind === "active-accounting") {
+    return {
+      kind: "active-accounting",
+      result: options.readers.readTranscriptAccounting(request.params.options),
+    };
+  }
+  if (request.kind === "bounded-tail") {
+    return {
+      kind: "bounded-tail",
+      result: options.readers.readBoundedMessageTail(request.params.options),
+    };
+  }
+  if (request.kind === "summary") {
+    return {
+      kind: "summary",
+      result: await options.readers.readSessionTranscriptSummaryAsync(
+        request.params.target,
+        request.params.query,
+      ),
+    };
+  }
   if (request.kind === "artifacts") {
     const { selectSessionArtifacts } = await import("./session-artifact-read.js");
     const query = request.params.query;
@@ -62,6 +97,16 @@ export async function readSessionHistoryRequest(
     };
   }
   if (request.kind === "recent-page") {
+    if (request.params.exactArchivePath) {
+      const { ArchivedTranscriptReader } = await import("./session-transcript-archive-reader.js");
+      return {
+        kind: "recent-page",
+        result: await new ArchivedTranscriptReader({
+          exactArchivePath: request.params.exactArchivePath,
+          sessionId: request.params.target.sessionId,
+        }).readRecentWithStats(request.params.options),
+      };
+    }
     return {
       kind: "recent-page",
       result: await options.readers.readRecentSessionMessagesWithStatsAsync(
@@ -125,17 +170,61 @@ export async function readSessionHistoryRequest(
       ),
     };
   }
+  if (request.kind === "inline-visibility") {
+    const { prepareSessionHistorySubagentFacts } =
+      await import("./session-history-delta-visibility.js");
+    const { lookup } = request.params;
+    return {
+      kind: "inline-visibility",
+      subagentCoordination: prepareSessionHistorySubagentFacts(
+        options.readers.subagentCoordination,
+        (recording) =>
+          lookup.kind === "session"
+            ? recording.isSubagentSession(lookup.sessionKey)
+            : recording.isSubagentRunMessage(lookup.runId, lookup.messageSeq),
+      ),
+    };
+  }
   if (request.kind === "rpc") {
     const { readChatHistoryPageKernel } =
       await import("./server-methods/chat-history-page-kernel.js");
     const { encodeChatHistoryResponsePage } =
       await import("./server-methods/chat-history-response-page.js");
+    const page = await readChatHistoryPageKernel(request.params, options);
+    const messages = page.messages.filter(
+      (message): message is Record<string, unknown> => asOptionalRecord(message) !== undefined,
+    );
+    const profileIds = messages.flatMap((message) => {
+      const identity = readTranscriptSenderIdentity(
+        asOptionalRecord(message["__openclaw"])?.senderIdentity,
+      );
+      return message.role === "user" && identity?.type === "profile" ? [identity.id] : [];
+    });
+    const { path, environment: env } = expectDefined(
+      readTarget.stateDatabase,
+      "RPC history requires its captured shared-state owner",
+    );
+    const state = { path, env };
+    const jobIds = [...new Set(readForwardedCronJobIds(messages).map(toUSVString))];
+    const names = jobIds.length
+      ? withExistingOpenClawStateDatabaseReadOnly(
+          ({ db }) =>
+            readCronJobNamesInDatabase(db, jobIds, resolveCronJobsStorePath(undefined, env)),
+          state,
+        )
+      : undefined;
+    let profiles: ReturnType<typeof getUserProfileDisplays> | undefined;
+    const project = createCurrentUserProfileMessageProjector((id) =>
+      resolveCurrentUserProfileDisplay(id, (senderId) =>
+        (profiles ??= getUserProfileDisplays(profileIds, state)).get(senderId),
+      ),
+    );
+    page.messages = projectForwardedMessages(messages, (jobId) =>
+      names?.get(toUSVString(jobId)),
+    ).map(project);
     return {
       kind: "rpc",
-      page: encodeChatHistoryResponsePage(
-        await readChatHistoryPageKernel(request.params, options),
-        request.params,
-      ),
+      page: encodeChatHistoryResponsePage(page, request.params),
     };
   }
   const { readSessionHistorySnapshotKernel } = await import("./session-history-snapshot.js");

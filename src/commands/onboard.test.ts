@@ -507,6 +507,13 @@ describe("setupWizardCommand", () => {
 
   it.each([
     ["unsupported flow", { flow: "bogus" as never }, "Invalid --flow"],
+    ["out-of-range Gateway port", { gatewayPort: 70_000 }, "Invalid --gateway-port"],
+    ["unsupported Gateway auth", { gatewayAuth: "bogus" as never }, "Invalid --gateway-auth"],
+    [
+      "malformed Gateway token reference",
+      { gatewayTokenRefEnv: "not-an-env-name" },
+      "Invalid --gateway-token-ref-env",
+    ],
     ...([false, true] as const).map(
       (json) =>
         [

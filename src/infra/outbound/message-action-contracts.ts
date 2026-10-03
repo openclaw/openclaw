@@ -1,4 +1,4 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { AgentToolResult } from "../../agents/runtime/index.js";
 import type { ExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
@@ -9,11 +9,11 @@ import {
   normalizeConversationReadInvocationOrigin,
   type ConversationReadInvocationOrigin,
 } from "../../channels/plugins/conversation-read-origin.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type {
   ChannelId,
   ChannelMessageActionContext,
   ChannelMessageActionName,
-  ChannelPlugin,
   ChannelThreadingToolContext,
 } from "../../channels/plugins/types.public.js";
 import type { ChannelProgressDraftCompositorSnapshot } from "../../channels/progress-draft-compositor.types.js";
@@ -23,10 +23,8 @@ import type { OutboundMediaAccess } from "../../media/load-options.js";
 import type { GatewayClientMode, GatewayClientName } from "../../utils/message-channel.js";
 import type { OutboundDeliveryResult } from "./deliver-types.js";
 import type { OutboundSendDeps } from "./deliver.js";
-import type {
-  ConversationDeliveryTarget,
-  DurableDeliveryCompletion,
-} from "./delivery-completion.js";
+import type { ConversationDeliveryTarget } from "./delivery-completion.js";
+import type { DurableDeliveryCompletion } from "./delivery-queue-types.js";
 import type { MessageBroadcastAccountPlan } from "./message-account-selection.js";
 import type { MessageActionDeniedError } from "./message-action-denial.js";
 import type { OutboundMessageGatewayOptionsInput } from "./message-gateway-options.js";
@@ -255,21 +253,11 @@ export function resolveMessageActionOutcome(
 }
 
 export function resolveMessageActionMessageId(payload: unknown): string | undefined {
-  if (!payload || typeof payload !== "object") {
-    return undefined;
-  }
-  // SAFETY: The object check intentionally keeps array and prototype-backed payloads readable.
-  const record = payload as Record<string, unknown>;
-  const direct = normalizeOptionalString(record.messageId);
-  if (direct) {
-    return direct;
-  }
-  const result = record.result;
-  if (!result || typeof result !== "object") {
-    return undefined;
-  }
-  // SAFETY: The nested object check preserves the same permissive payload contract.
-  return normalizeOptionalString((result as Record<string, unknown>).messageId);
+  const record = asOptionalObjectRecord(payload);
+  return (
+    normalizeOptionalString(record?.messageId) ??
+    normalizeOptionalString(asOptionalObjectRecord(record?.result)?.messageId)
+  );
 }
 
 export type ResolvedActionContext = {

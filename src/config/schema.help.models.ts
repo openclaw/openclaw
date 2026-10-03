@@ -10,7 +10,7 @@ export const MODEL_FIELD_HELP: Record<string, string> = {
   "models.catalogRefresh.enabled":
     "Fetch hosted model catalog updates in the background (default: true). Set to false to disable all remote model catalog traffic.",
   "models.catalogRefresh.url":
-    "Override the hosted model catalog URL for a self-hosted HTTPS mirror (localhost HTTP is allowed for testing). Changes apply after a Gateway restart.",
+    "Override the hosted model catalog URL for a self-hosted HTTPS mirror (localhost HTTP is allowed for testing). A running Gateway stops using the previous source's catalog and adopts the mirror's at its next catalog check, without restarting.",
   "models.providers.*.baseUrl":
     "Base URL for the provider endpoint used to serve model requests for that provider entry. Use HTTPS endpoints and keep URLs environment-specific through config templating where needed.",
   "models.providers.*.apiKey":
@@ -156,7 +156,7 @@ export const MODEL_FIELD_HELP: Record<string, string> = {
   "agents.defaults.experimental":
     "Experimental agent-default flags. Keep these off unless you are intentionally testing a preview surface.",
   "agents.defaults.experimental.decisionAssistance":
-    "Global opt-in for future automatic Decision experiments (default: false). Also requires an effective decisionModel for each owning agent. This foundation connects no automatic consumers and does not gate the explicit decision_evaluate tool, select providers, or grant actions.",
+    "Global opt-in for experimental assistance from the owning agent’s configured Decision model (default: false; requires explicit true). The effective decisionModel can be inherited from global defaults or selected per agent; an empty per-agent value disables assistance. Supported uses may send selected data to that provider and incur provider charges. See the Decision assistance documentation for supported uses, setup, and data handling. This setting does not gate explicit decision_evaluate calls, select providers, or grant actions.",
   "agents.defaults.experimental.localModelLean":
     "Advanced troubleshooting override that restricts optional tools such as browser, automations, and message. Off by default; supported local runtimes use automatic Tool Search without this restriction. Explicit tool allows and required delivery tools are preserved.",
   "agents.defaults.startupContext":

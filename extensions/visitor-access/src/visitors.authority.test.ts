@@ -1,5 +1,6 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { z } from "zod";
 import { VisitorAccessError } from "./errors.js";
 import {
   DAY_MS,
@@ -118,6 +119,71 @@ describe("VisitorAccessService authority", () => {
     await fixture.service.invite({ email: grant.email, days: 1 }, fixture.authority);
     expect(() => fixture.service.authorize([grant.email]).assertCurrent()).not.toThrow();
     expect(() => original.assertCurrent()).toThrow(/access ended/);
+  });
+
+  it("preserves an account grant UUID through login changes, renewal and restart, but never resumes its expired authority", async () => {
+    const grant = visitorGrant(42, { githubLogin: "original-login" });
+    const other = visitorGrant("other@example.com", { expiresAt: null });
+    const fixture = visitorFixture({
+      grants: [grant, other],
+      emails: [other.email],
+      githubAccountIds: [42],
+      githubLogin: "renamed-login",
+    });
+    await fixture.service.initialize();
+    const original = fixture.service.authorize([], [42]);
+    const grantId = z.uuid().parse(original.grantId);
+    expect(grantId).toBe(grant.grantId);
+    expect(() => fixture.service.authorize(["original-login", "42"])).toThrow(
+      /active visitor invitation/,
+    );
+    expect(fixture.service.resume([other.email], grantId, [84])).toBeUndefined();
+
+    await vi.advanceTimersByTimeAsync(DAY_MS / 2);
+    await fixture.service.invite({ github: "renamed-login", days: 2 }, fixture.authority);
+    expect(fixture.grants.get("github:42")).toMatchObject({
+      grantId,
+      githubAccountId: 42,
+      githubLogin: "renamed-login",
+      createdAt: grant.createdAt,
+      expiresAt: NOW + 2.5 * DAY_MS,
+    });
+    await vi.advanceTimersByTimeAsync(DAY_MS / 2);
+    expect(() => original.assertCurrent()).not.toThrow();
+    expect(original.signal.aborted).toBe(false);
+
+    fixture.service.close();
+    expect(original.signal.aborted).toBe(true);
+    const restarted = visitorFixture({
+      grants: [...fixture.grants.values()],
+      emails: fixture.emails(),
+      githubAccountIds: [42],
+      githubLogin: "renamed-login",
+    });
+    await restarted.service.initialize();
+    const resumed = restarted.service.resume([other.email], grantId, [42]);
+    if (!resumed) {
+      throw new Error("Expected the saved GitHub account grant to resume");
+    }
+    expect(resumed.grantId).toBe(grantId);
+    expect(() => resumed.assertCurrent()).not.toThrow();
+    expect(() => restarted.service.authorize(["renamed-login"])).toThrow(
+      /active visitor invitation/,
+    );
+
+    await vi.advanceTimersByTimeAsync(1.5 * DAY_MS);
+    expect(resumed.signal.aborted).toBe(true);
+    expect(() => resumed.assertCurrent()).toThrow(/access ended/);
+    expect(restarted.service.resume([other.email], grantId, [42])).toBeUndefined();
+    expect(() => restarted.service.authorize([], [42])).toThrow(/active visitor invitation/);
+    expect(() => restarted.service.authorize([other.email]).assertCurrent()).not.toThrow();
+
+    await restarted.service.invite({ github: "renamed-login", days: 1 }, restarted.authority);
+    const replacement = restarted.service.authorize([], [42]);
+    expect(replacement.grantId).not.toBe(grantId);
+    expect(() => replacement.assertCurrent()).not.toThrow();
+    expect(restarted.service.resume([other.email], grantId, [42])).toBeUndefined();
+    expect(() => resumed.assertCurrent()).toThrow(/access ended/);
   });
 
   it("closes retained access before provider revocation settles and serializes a later renewal", async () => {

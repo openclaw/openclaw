@@ -1,8 +1,10 @@
 import { resolve } from "node:path";
 import type { SessionConfig, SessionEvent } from "@github/copilot-sdk";
 import type { AgentHarness } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { tokenFingerprint } from "./auth-bridge.js";
 import { createCopilotByokProxy } from "./byok-proxy.js";
+import { createCopilotAbortError } from "./prompt-error.js";
 import { resolveCopilotProvider } from "./provider-bridge.js";
 import type { CopilotClientPool, PooledClient } from "./runtime.js";
 import { createCopilotIsolatedSessionRestrictions } from "./session-restrictions.js";
@@ -47,15 +49,6 @@ function resolveReasoningEffort(
     : undefined;
 }
 
-function createAbortError(signal: AbortSignal): Error {
-  if (signal.reason instanceof Error) {
-    return signal.reason;
-  }
-  const error = new Error("aborted", signal.reason ? { cause: signal.reason } : undefined);
-  error.name = "AbortError";
-  return error;
-}
-
 function createTimeoutError(timeoutMs: number): Error {
   const error = new Error(`[copilot] isolated completion timed out after ${timeoutMs}ms`);
   error.name = "TimeoutError";
@@ -70,7 +63,7 @@ async function awaitWithinCompletionBoundary<T>(params: {
 }): Promise<T> {
   const signal = params.boundary.abortSignal;
   if (signal?.aborted) {
-    throw createAbortError(signal);
+    throw createCopilotAbortError(signal.reason);
   }
   const remainingMs = params.boundary.deadlineMs - Date.now();
   if (remainingMs <= 0) {
@@ -94,7 +87,7 @@ async function awaitWithinCompletionBoundary<T>(params: {
       remainingMs,
     );
     if (signal) {
-      onAbort = () => rejectBoundary(createAbortError(signal));
+      onAbort = () => rejectBoundary(createCopilotAbortError(signal.reason));
       signal.addEventListener("abort", onAbort, { once: true });
       if (signal.aborted) {
         onAbort();
@@ -267,15 +260,11 @@ export async function runCopilotIsolatedCompletion(
       content.push({ type: "text", text: event.data.content });
     }
     for (const toolRequest of event.data.toolRequests ?? []) {
-      const toolArguments = toolRequest.arguments;
       content.push({
         type: "toolCall",
         id: toolRequest.toolCallId,
         name: toolRequest.name,
-        arguments:
-          toolArguments && typeof toolArguments === "object" && !Array.isArray(toolArguments)
-            ? { ...toolArguments }
-            : {},
+        arguments: { ...asNonArrayRecord(toolRequest.arguments) },
       });
     }
     return {

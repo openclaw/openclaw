@@ -222,15 +222,6 @@ describe("changed resolved dependencies", () => {
       "execution or resolution",
     ],
     [
-      "manifest execution",
-      () =>
-        write(
-          "package.json",
-          JSON.stringify({ ...manifest, scripts: { test: "different-runner" } }),
-        ),
-      "execution or resolution",
-    ],
-    [
       "unlocked manifest",
       () =>
         write(

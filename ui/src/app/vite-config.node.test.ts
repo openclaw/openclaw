@@ -345,6 +345,8 @@ describe("Control UI Vite config", () => {
       resolveControlUiBuildInfo({
         env: { OPENCLAW_CONTROL_UI_RELEASE_BUILD: "true" },
         readGitCommit: () => null,
+        readGitBranch: () => null,
+        readGitDirty: () => null,
         readPackageVersion: () => "2026.7.10",
       }),
     ).toThrow("OPENCLAW_CONTROL_UI_RELEASE_BUILD must be 1 when set");
@@ -356,6 +358,8 @@ describe("Control UI Vite config", () => {
       resolveControlUiBuildInfo({
         env: { GITHUB_SHA: "b".repeat(40) },
         readGitCommit,
+        readGitBranch: () => null,
+        readGitDirty: () => null,
         readPackageVersion: () => null,
       }),
     ).toMatchObject({ commit: "c".repeat(40), commitAt: null });
@@ -364,6 +368,8 @@ describe("Control UI Vite config", () => {
       resolveControlUiBuildInfo({
         env: { GITHUB_SHA: "b".repeat(40) },
         readGitCommit: () => null,
+        readGitBranch: () => null,
+        readGitDirty: () => null,
         readPackageVersion: () => null,
       }).commit,
     ).toBe("b".repeat(40));
@@ -382,6 +388,8 @@ describe("Control UI Vite config", () => {
       resolveControlUiBuildInfo({
         env: { GIT_SHA: "A".repeat(40), GITHUB_SHA: "b".repeat(40) },
         readGitCommit,
+        readGitBranch: () => null,
+        readGitDirty: () => null,
         readPackageVersion: () => null,
       }).commit,
     ).toBe("a".repeat(40));
@@ -474,6 +482,8 @@ describe("Control UI Vite config", () => {
           OPENCLAW_BUILD_TIMESTAMP: "2026-07-10T13:14:15.000Z",
         },
         readGitCommit: () => "a".repeat(40),
+        readGitBranch: () => null,
+        readGitDirty: () => null,
         readPackageVersion: () => "2026.7.10",
       }).buildId,
     ).toBe("2026.7.10-aaaaaaaaaaaa-2026-07-10T13-14-15.000Z");
@@ -487,6 +497,8 @@ describe("Control UI Vite config", () => {
           OPENCLAW_BUILD_TIMESTAMP: "2026-07-10T13:14:15.000Z",
         },
         readGitCommit: () => "a".repeat(40),
+        readGitBranch: () => null,
+        readGitDirty: () => null,
         readPackageVersion: () => "2026.7.10",
       }).buildId,
     ).toBe("2026.7.10-aaaaaaaaaaaa-2026-07-10T13-14-15.000Z");

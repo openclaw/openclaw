@@ -5,8 +5,19 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import "../test-utils/prepare-compiled-subprocesses.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { isPidAlive } from "../shared/pid-alive.js";
+import {
+  scopeWrapperSource,
+  useHandoffFixtureReceipts,
+  waitForOrphanExit,
+} from "./update-managed-service-handoff-cross-process.test-support.js";
 import {
   signalMockManagedUpdateHandoffReady,
   writeConcurrentManagedHandoffParams,
@@ -17,6 +28,7 @@ const spawnMock = vi.hoisted(() => vi.fn());
 const tempDirs = new Set<string>();
 const handoffParents = new Map<string, import("node:child_process").ChildProcess>();
 const mockedHandoffLeaseCleanups = new Set<() => void>();
+const receipts = useHandoffFixtureReceipts();
 
 function createReadyChild(_command: string, args: string[]) {
   const child = Object.assign(new EventEmitter(), {
@@ -208,7 +220,7 @@ describe("managed service update handoff cross-process lease", () => {
     expect(result).not.toHaveProperty("pid");
   });
 
-  it.runIf(process.platform !== "win32").each([
+  it.runIf(process.platform !== "win32").for([
     { label: "its exact dead helper", replacement: "exact", reclaimed: true },
     { label: "a mismatched owner", replacement: "owner", reclaimed: false },
     { label: "a mismatched helper identity", replacement: "identity", reclaimed: false },
@@ -216,7 +228,7 @@ describe("managed service update handoff cross-process lease", () => {
     { label: "an unknown malformed process identity", replacement: "unknown", reclaimed: false },
   ] as const)(
     "claims a separate systemd scope helper and fences cancellation against $label",
-    async ({ replacement, reclaimed }) => {
+    async ({ replacement, reclaimed }, { signal }) => {
       const { getFileLockProcessStartTime } = await import("../shared/pid-alive.js");
       const { spawn } =
         await vi.importActual<typeof import("node:child_process")>("node:child_process");
@@ -228,31 +240,23 @@ describe("managed service update handoff cross-process lease", () => {
       const tmpDir = makeTempDir(tempDirs, "openclaw-handoff-scope-wrapper-");
       const helperExitPath = path.join(tmpDir, "nested-helper-exited");
       const launcherPath = path.join(tmpDir, "systemd-run");
-      await fs.writeFile(
-        launcherPath,
-        `#!${process.execPath}
-const fs = require("node:fs");
-const { spawn } = require("node:child_process");
-const [command, scriptPath, paramsPath] = process.argv.slice(-3);
-const helper = spawn(command, [scriptPath, paramsPath], { stdio: ["pipe", "pipe", "ignore"] });
-let helperAlive = true;
-helper.stdin.on("error", () => {});
-helper.stdout.pipe(process.stdout, { end: false });
-helper.once("exit", () => {
-  helperAlive = false;
-  fs.writeFileSync(${JSON.stringify(helperExitPath)}, String(helper.pid));
-});
-process.stdin.on("data", (chunk) => {
-  if (helperAlive) {
-    helper.stdin.write(chunk);
-  } else if (chunk.toString().includes("cancel\\n")) {
-    process.stdout.write("cancelled\\n", () => process.exit(0));
-  }
-});
-`,
-        { mode: 0o700 },
-      );
-      spawnMock.mockImplementationOnce(spawn);
+      await fs.writeFile(launcherPath, scopeWrapperSource(helperExitPath), { mode: 0o700 });
+      const helperExited = createDeferred();
+      let launcherClosed = Promise.resolve();
+      spawnMock.mockImplementationOnce((...args: Parameters<typeof spawn>) => {
+        const child = spawn(...args);
+        launcherClosed = new Promise<void>((resolve) => {
+          child.once("close", () => resolve());
+        });
+        let output = "";
+        child.stdout?.on("data", (chunk: Buffer | string) => {
+          output += chunk.toString();
+          if (output.includes("helper-exited\n")) {
+            helperExited.resolve();
+          }
+        });
+        return child;
+      });
 
       const handoffId = `scope-wrapper-${replacement}-${path.basename(tmpDir)}`;
       let launcher: import("node:child_process").ChildProcess | undefined;
@@ -318,14 +322,17 @@ process.stdin.on("data", (chunk) => {
           expect(claimManagedServiceUpdateHandoff(identity)).toBe(true);
 
           process.kill(helperPid, "SIGKILL");
-          await vi.waitFor(
-            async () => {
-              await expect(fs.readFile(helperExitPath, "utf8")).resolves.toBe(String(helperPid));
-              expect(isPidAlive(helperPid)).toBe(false);
-              expect(isPidAlive(started.pid!)).toBe(true);
-            },
-            { interval: 10, timeout: 5_000 },
+          await withinTest(
+            awaitGateBeforeSettlement(
+              helperExited.promise,
+              launcherClosed,
+              "launcher exited before its helper",
+            ),
+            signal,
           );
+          await expect(fs.readFile(helperExitPath, "utf8")).resolves.toBe(String(helperPid));
+          expect(isPidAlive(helperPid)).toBe(false);
+          expect(isPidAlive(started.pid)).toBe(true);
           expect(claimManagedServiceUpdateHandoff(identity)).toBe(false);
 
           let payload = current.payload_json;
@@ -387,6 +394,7 @@ process.stdin.on("data", (chunk) => {
         if (launcher?.pid && isPidAlive(launcher.pid)) {
           launcher.kill("SIGKILL");
         }
+        await launcherClosed;
         if (leaseDatabasePath) {
           const cleanup = new DatabaseSync(leaseDatabasePath);
           try {
@@ -792,7 +800,7 @@ childProcess.spawnSync = function(command, args, options) {
 
   it.runIf(process.platform !== "win32")(
     "keeps a surviving updater owned across helper loss and profiles",
-    async () => {
+    async ({ signal }) => {
       const { execFile, spawn } =
         await vi.importActual<typeof import("node:child_process")>("node:child_process");
       const { tmpDir, helperScriptPath, baseParams } = await prepareConcurrentHandoffHelper();
@@ -811,11 +819,15 @@ childProcess.spawnSync = function(command, args, options) {
           "-e",
           [
             'const fs = require("node:fs");',
+            "(async () => {",
+            `const { sendReceipt } = await import(${JSON.stringify(`data:text/javascript,${encodeURIComponent(receipts.clientSource() + "\nexport { sendReceipt };")}`)});`,
             `const pidPath = ${JSON.stringify(orphanPidPath)};`,
             // File existence signals readiness; never expose an empty PID as a dead updater.
             'fs.writeFileSync(pidPath + ".tmp", String(process.pid));',
             'fs.renameSync(pidPath + ".tmp", pidPath);',
+            'sendReceipt(pidPath, "started");',
             `const timer=setInterval(()=>{if(fs.existsSync(${JSON.stringify(releaseOrphanPath)})){clearInterval(timer);process.exit(0)}},10);`,
+            "})();",
           ].join("\n"),
         ],
       });
@@ -855,20 +867,17 @@ childProcess.spawnSync = function(command, args, options) {
       first.stdout.on("data", (chunk) => (firstStdout += chunk));
       let orphanPid = 0;
       try {
-        await vi
-          .waitFor(
-            async () => {
-              expect(firstStdout).toContain("OPENCLAW_UPDATE_HANDOFF_READY");
-              await expect(pathExists(orphanPidPath)).resolves.toBe(true);
-            },
-            { interval: 10, timeout: 5_000 },
-          )
-          .catch(async (error: unknown) => {
-            const log = await fs
-              .readFile(path.join(tmpDir, "orphan-first.log"), "utf8")
-              .catch(String);
-            throw new Error(`Surviving updater did not become ready: ${log}`, { cause: error });
-          });
+        await withinTest(
+          receipts.startedBeforeSettlement(orphanPidPath, firstClosed),
+          signal,
+        ).catch(async (error: unknown) => {
+          const log = await fs
+            .readFile(path.join(tmpDir, "orphan-first.log"), "utf8")
+            .catch(String);
+          throw new Error(`Surviving updater did not become ready: ${log}`, { cause: error });
+        });
+        expect(firstStdout).toContain("OPENCLAW_UPDATE_HANDOFF_READY");
+        await expect(pathExists(orphanPidPath)).resolves.toBe(true);
         const orphanPidContents = await fs.readFile(orphanPidPath, "utf8");
         orphanPid = Number(orphanPidContents);
         expect(
@@ -891,10 +900,8 @@ childProcess.spawnSync = function(command, args, options) {
         await expect(pathExists(secondStartedPath)).resolves.toBe(false);
 
         await fs.writeFile(releaseOrphanPath, "release");
-        await vi.waitFor(() => expect(isPidAlive(orphanPid)).toBe(false), {
-          interval: 20,
-          timeout: 5_000,
-        });
+        await waitForOrphanExit(orphanPid, signal);
+        expect(isPidAlive(orphanPid)).toBe(false);
 
         const third = await runHelper({
           execFile,
@@ -934,10 +941,8 @@ childProcess.spawnSync = function(command, args, options) {
         await fs.writeFile(releaseOrphanPath, "release").catch(() => undefined);
         if (orphanPid > 0 && isPidAlive(orphanPid)) {
           process.kill(orphanPid, "SIGKILL");
-          await vi.waitFor(() => expect(isPidAlive(orphanPid)).toBe(false), {
-            interval: 20,
-            timeout: 5_000,
-          });
+          await waitForOrphanExit(orphanPid, signal);
+          expect(isPidAlive(orphanPid)).toBe(false);
         }
       }
     },
@@ -945,7 +950,7 @@ childProcess.spawnSync = function(command, args, options) {
 
   it.runIf(process.platform !== "win32")(
     "serializes detached helpers across Gateway process generations",
-    async () => {
+    async ({ signal }) => {
       const { execFile, spawn } =
         await vi.importActual<typeof import("node:child_process")>("node:child_process");
       const { tmpDir, helperScriptPath, baseParams } = await prepareConcurrentHandoffHelper();
@@ -961,7 +966,7 @@ childProcess.spawnSync = function(command, args, options) {
         commandArgv: [
           process.execPath,
           "-e",
-          `const fs=require("node:fs");fs.writeFileSync(${JSON.stringify(firstStartedPath)},"started");const timer=setInterval(()=>{if(fs.existsSync(${JSON.stringify(releaseFirstPath)})){clearInterval(timer);process.stdout.write(JSON.stringify({status:"ok",root:${JSON.stringify(baseParams.updateLeaseKey)}}));process.exit(0)}},10);`,
+          `const fs=require("node:fs");(async () => {const { sendReceipt } = await import(${JSON.stringify(`data:text/javascript,${encodeURIComponent(receipts.clientSource() + "\nexport { sendReceipt };")}`)});fs.writeFileSync(${JSON.stringify(firstStartedPath)},"started");sendReceipt(${JSON.stringify(firstStartedPath)},"started");const timer=setInterval(()=>{if(fs.existsSync(${JSON.stringify(releaseFirstPath)})){clearInterval(timer);process.stdout.write(JSON.stringify({status:"ok",root:${JSON.stringify(baseParams.updateLeaseKey)}}));process.exit(0)}},10);})();`,
         ],
       });
       const secondParamsPath = await writeConcurrentHandoffParams({
@@ -1001,13 +1006,9 @@ childProcess.spawnSync = function(command, args, options) {
       });
 
       try {
-        await vi.waitFor(
-          async () => {
-            expect(firstStdout).toContain("OPENCLAW_UPDATE_HANDOFF_READY");
-            await expect(pathExists(firstStartedPath)).resolves.toBe(true);
-          },
-          { interval: 10, timeout: 5_000 },
-        );
+        await withinTest(receipts.startedBeforeSettlement(firstStartedPath, firstExit), signal);
+        expect(firstStdout).toContain("OPENCLAW_UPDATE_HANDOFF_READY");
+        await expect(pathExists(firstStartedPath)).resolves.toBe(true);
 
         const second = await runHelper({
           execFile,
@@ -1040,6 +1041,7 @@ childProcess.spawnSync = function(command, args, options) {
         if (first.exitCode === null) {
           first.kill("SIGKILL");
         }
+        await firstExit;
       }
     },
   );

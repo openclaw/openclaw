@@ -48,7 +48,7 @@ export function bindSqliteWorkerBackend(
     database: DatabaseSync;
     admit(stage: "transaction" | "commit"): void;
   },
-): SqliteWorkerBackend<TranscriptProjectionPublicationOperations> {
+) {
   const db = context.database;
   return {
     execute(command) {
@@ -111,5 +111,5 @@ export function bindSqliteWorkerBackend(
       }
     },
     close() {},
-  };
+  } satisfies SqliteWorkerBackend<TranscriptProjectionPublicationOperations>;
 }

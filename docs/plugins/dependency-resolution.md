@@ -257,6 +257,11 @@ packaged bundled runtime still uses the root runtime declarations above.
 Rebuild to pick up source edits when using a built tree. Source checkout development is pnpm-only; plain
 `npm install` at the repository root does not prepare the pnpm workspace.
 
+The root build discovers plugin packages and additional top-level source entries
+from Git's tracked files, preserving spaces and Unicode in filenames. Add new
+packages and auto-discovered entry files to the Git index before building. The
+standalone build below also supports packages that are not yet tracked.
+
 | Install shape                                   | Bundled plugin location                              | Dependency owner                                       |
 | ----------------------------------------------- | ---------------------------------------------------- | ------------------------------------------------------ |
 | Global npm install                              | Built runtime tree inside the package                | Root OpenClaw package for internal bundled runtime     |

@@ -164,7 +164,6 @@ describe("memory index", () => {
         text: string,
         signal: AbortSignal | undefined,
         provider: QueryProvider,
-        markDegraded: boolean,
         providerRuntime: { inlineQueryTimeoutMs?: number },
       ) => Promise<number[]>;
     };
@@ -194,7 +193,7 @@ describe("memory index", () => {
     try {
       await vi.waitFor(() => expect(fields.provider).toBeNull());
       await expect(
-        fields.embedQueryWithRetry("alpha", undefined, provider, false, providerRuntime),
+        fields.embedQueryWithRetry("alpha", undefined, provider, providerRuntime),
       ).rejects.toThrow("timed out");
       expect(providerFixture.providerCloseCalls).toBe(0);
     } finally {

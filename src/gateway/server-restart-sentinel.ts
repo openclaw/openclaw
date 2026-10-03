@@ -15,11 +15,11 @@ import { appendAssistantMessageToSessionTranscript } from "../config/sessions/tr
 import { removeCronRunContinuationSessionIfIdle } from "../cron/run-continuation-cleanup.js";
 import {
   captureDeliveryQueueStateContext,
-  resolveDeliveryQueueStateEnv,
   type DeliveryQueueStateContext,
 } from "../infra/delivery-queue-state-context.js";
 import { formatErrorMessage, toErrorObject } from "../infra/errors.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
+import { RESTART_CONTINUATION_CONTEXT_PREFIX } from "../infra/heartbeat-events-filter.js";
 import { requestHeartbeat } from "../infra/heartbeat-wake.js";
 import {
   clearRestartSentinelIfRevision,
@@ -49,11 +49,8 @@ import { withSystemEventOwner } from "../infra/system-event-ownership.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { isPendingControlPlaneUpdateRestartSentinel } from "../infra/update-control-plane-sentinel.js";
 import { recordUpdateRunVerification } from "../infra/update-run-ledger.js";
-import { readUpdateRunReportHealth } from "../infra/update-run-report-health.js";
-import {
-  renderUpdateRunReport,
-  updateRunReportInputFromSentinel,
-} from "../infra/update-run-report.js";
+import { renderUpdateRunSummary } from "../infra/update-run-notice.js";
+import { updateRunReportInputFromSentinel } from "../infra/update-run-report.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
@@ -121,7 +118,7 @@ function enqueueRestartSentinelWake(
   const eventOptions = {
     sessionKey,
     // Recovered work keeps its ordinary turn budget when delivered by heartbeat.
-    contextKey: `task:restart-sentinel:${entry.id}`,
+    contextKey: `${RESTART_CONTINUATION_CONTEXT_PREFIX}${entry.id}`,
     ...(deliveryContext ? { deliveryContext } : {}),
   };
   enqueueSystemEvent(message, withSystemEventOwner(eventOptions, agentId));
@@ -385,16 +382,7 @@ async function loadRestartSentinelStartupTask(params: {
   const updateRunId = updateRun?.runId;
   let noticeMessage =
     payload.kind === "update"
-      ? renderUpdateRunReport(
-          updateRun ?? updateRunReportInputFromSentinel(payload),
-          updateRun?.status === "failed"
-            ? {
-                currentHealth: await readUpdateRunReportHealth(updateRun.verification, {
-                  env: resolveDeliveryQueueStateEnv(undefined, noticeContext),
-                }),
-              }
-            : {},
-        ).markdown
+      ? renderUpdateRunSummary(updateRun ?? updateRunReportInputFromSentinel(payload))
       : message;
   const summary = summarizeRestartSentinel(payload);
   const wakeDeliveryContext = mergeDeliveryContext(
@@ -454,16 +442,7 @@ async function loadRestartSentinelStartupTask(params: {
         // runs finish here; first-terminal-wins preserves completed CLI results.
         updateRun = await finalizeRestartUpdateRun(payload, true, noticeContext);
         if (updateRun) {
-          noticeMessage = renderUpdateRunReport(
-            updateRun,
-            updateRun.status === "failed"
-              ? {
-                  currentHealth: await readUpdateRunReportHealth(updateRun.verification, {
-                    env: resolveDeliveryQueueStateEnv(undefined, noticeContext),
-                  }),
-                }
-              : {},
-          ).markdown;
+          noticeMessage = renderUpdateRunSummary(updateRun);
         }
       }
     }
@@ -631,6 +610,9 @@ async function loadRestartSentinelStartupTask(params: {
     // Every downstream intent is durable before consuming the singleton. A
     // failed or stale compare-delete cannot lose work or remove a newer row.
     const consumed = await clearRestartSentinelIfRevision(sentinelRevision, env);
+    if (params.signal.aborted || params.shouldRun?.() === false) {
+      return { status: "skipped" as const, reason: "gateway-stopped" };
+    }
     if (!consumed) {
       log.info(`${summary}: newer restart sentinel preserved while draining durable work`, {
         sessionKey: canonicalKey,

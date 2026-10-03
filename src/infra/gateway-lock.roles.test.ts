@@ -5,7 +5,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as nativeSleep } from "node:timers/promises";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { withTestTimeout } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import {
   acquireGatewayLock,
@@ -22,7 +22,7 @@ const fixtureRootTracker = createSuiteTempRootTracker({
 });
 let fixtureRoot = "";
 
-async function holdLifecycleCoordinator() {
+async function holdLifecycleCoordinator(signal: AbortSignal) {
   const stateDir = await fixtureRootTracker.make("lifecycle-handoff");
   const env = { OPENCLAW_STATE_DIR: stateDir };
   const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
@@ -48,8 +48,12 @@ async function holdLifecycleCoordinator() {
     ],
     { stdio: ["ignore", "ignore", "inherit", "ipc"] },
   );
-  lifecycleChildren.set(child, once(child, "close"));
-  await withTestTimeout(once(child, "message"), 5_000, "coordinator fixture did not start");
+  const closed = once(child, "close");
+  lifecycleChildren.set(child, closed);
+  await withinTest(
+    awaitGateBeforeSettlement(once(child, "message"), closed, "coordinator fixture did not start"),
+    signal,
+  );
   return {
     child,
     options: { env, allowInTests: true, lockDir: path.join(stateDir, "__locks") },
@@ -80,8 +84,8 @@ describe("Gateway lock roles", () => {
     lifecycleDatabases.clear();
   });
 
-  it("acquires when the predecessor releases during the startup wait", async () => {
-    const { child, options } = await holdLifecycleCoordinator();
+  it("acquires when the predecessor releases during the startup wait", async ({ signal }) => {
+    const { child, options } = await holdLifecycleCoordinator(signal);
     const lock = await acquireGatewayLock({
       ...options,
       sleep: async () => {
@@ -93,8 +97,8 @@ describe("Gateway lock roles", () => {
     await lock?.release();
   });
 
-  it("bounds a live owner's wait at five minutes and names state ownership", async () => {
-    const { options } = await holdLifecycleCoordinator();
+  it("bounds a live owner's wait at five minutes and names state ownership", async ({ signal }) => {
+    const { options } = await holdLifecycleCoordinator(signal);
     let elapsedMs = 0;
     const sleep = vi.fn(async (ms: number) => {
       elapsedMs += ms;

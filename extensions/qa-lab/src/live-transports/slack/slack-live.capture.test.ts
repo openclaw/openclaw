@@ -5,89 +5,59 @@ import {
   readSlackQaMessageWrites,
 } from "./slack-live.capture.js";
 
-function buildMessageRequest(params: {
-  channel?: string;
-  flowId: string;
-  method?: string;
-  text: string;
-  threadTs?: string;
-  ts?: string;
-}): Record<string, unknown> {
+function request(id: number, method: string, fields: Record<string, string> = {}) {
   return {
-    dataText: new URLSearchParams({
-      channel: params.channel ?? "C123",
-      text: params.text,
-      ...(params.threadTs ? { thread_ts: params.threadTs } : {}),
-      ...(params.ts ? { ts: params.ts } : {}),
-    }).toString(),
-    flowId: params.flowId,
+    id,
+    flowId: String(id),
     host: "slack.com",
     kind: "request",
     method: "POST",
-    path: `/api/${params.method ?? "chat.postMessage"}`,
+    path: `/api/${method}`,
+    dataText: new URLSearchParams({ channel: "C123", ...fields }).toString(),
   };
 }
-
-function buildResponse(
-  flowId: string,
-  ok: boolean,
-  overrides: Record<string, unknown> = {},
-): Record<string, unknown> {
+function response(id: number, fields: Record<string, unknown> = {}) {
   return {
-    dataText: JSON.stringify({ channel: "C123", ok, ts: "2.000000", ...overrides }),
-    flowId,
+    flowId: String(id),
     kind: "response",
     status: 200,
+    dataText: JSON.stringify({ channel: "C123", ok: true, ts: "2.000000", ...fields }),
   };
 }
 
 describe("Slack QA debug capture", () => {
-  it("preserves only successful Slack post and update snapshots", async () => {
-    const postRequest = buildMessageRequest({
-      flowId: "post",
+  it("reads successful inline and blob-backed writes in request order", async () => {
+    const post = request(3, "chat.postMessage", {
       text: "fallback",
-      threadTs: "1.000000",
-    });
-    postRequest.dataText = new URLSearchParams({
-      channel: "C123",
-      text: "fallback",
+      thread_ts: "1.000000",
       blocks: JSON.stringify([
         { type: "header", text: { type: "plain_text", text: "Update" } },
         { type: "section", text: { type: "mrkdwn", text: "COMMENTARY" } },
       ]),
-      thread_ts: "1.000000",
-    }).toString();
+    });
+    const posted = response(3);
+    const blobs = new Map([
+      ["request", post.dataText],
+      ["response", posted.dataText],
+    ]);
     const events = [
-      buildResponse("update", true),
-      {
-        id: 4,
-        ...buildMessageRequest({
-          flowId: "update",
-          method: "chat.update",
-          text: "receipt",
-          ts: "2.000000",
-        }),
-      },
-      buildResponse("post", true),
-      { id: 3, ...postRequest },
-      buildResponse("rejected", false),
-      { id: 2, ...buildMessageRequest({ flowId: "rejected", text: "REJECTED" }) },
-      buildResponse("non-write", true),
-      {
-        id: 1,
-        ...buildMessageRequest({ flowId: "non-write", method: "auth.test", text: "IGNORED" }),
-      },
+      response(4),
+      request(4, "chat.update", { text: "receipt", ts: "2.000000" }),
+      { ...posted, dataText: undefined, dataBlobId: "response" },
+      { ...post, dataText: undefined, dataBlobId: "request" },
+      response(2, { ok: false }),
+      request(2, "chat.postMessage", { text: "REJECTED" }),
+      response(1),
+      request(1, "auth.test", { text: "IGNORED" }),
     ];
-    const store = {
-      getSessionEvents: async () => events,
-      readBlob: async () => null,
-    };
-
     await expect(
       readSlackQaMessageWrites({
         afterRequestEventId: 0,
         sessionId: "qa-slack",
-        store,
+        store: {
+          getSessionEvents: async () => events,
+          readBlob: async (id: string) => blobs.get(id) ?? null,
+        },
       }),
     ).resolves.toEqual([
       {
@@ -101,55 +71,21 @@ describe("Slack QA debug capture", () => {
     ]);
   });
 
-  it("reads captured request and response blobs when previews are unavailable", async () => {
-    const request = buildMessageRequest({ flowId: "blob", text: "BLOB-COMMENTARY" });
-    const response = buildResponse("blob", true);
-    const blobs = new Map([
-      ["request", String(request.dataText)],
-      ["response", String(response.dataText)],
-    ]);
-    delete request.dataText;
-    delete response.dataText;
-    request.id = 1;
-    request.dataBlobId = "request";
-    response.dataBlobId = "response";
-    const store = {
-      getSessionEvents: async () => [response, request],
-      readBlob: async (blobId: string) => blobs.get(blobId) ?? null,
-    };
-
-    await expect(
-      readSlackQaMessageWrites({
-        afterRequestEventId: 0,
-        sessionId: "qa-slack",
-        store,
-      }),
-    ).resolves.toEqual([expect.objectContaining({ text: "BLOB-COMMENTARY" })]);
-  });
-
   it("uses request ids as cursors and waits for late response capture", async () => {
-    const oldRequest = { id: 4, ...buildMessageRequest({ flowId: "old", text: "OLD" }) };
-    const nextRequest = { id: 5, ...buildMessageRequest({ flowId: "next", text: "NEXT" }) };
+    const old = request(4, "chat.postMessage", { text: "OLD" });
+    const next = request(5, "chat.postMessage", { text: "NEXT" });
     let reads = 0;
     const store = {
-      getSessionEvents: async () => {
-        reads += 1;
-        return reads < 3 ? [nextRequest, oldRequest] : [buildResponse("next", true), nextRequest];
-      },
+      getSessionEvents: async () => (++reads < 3 ? [next, old] : [response(5), next]),
       readBlob: async () => null,
     };
-
     await expect(getSlackQaMessageWriteCursor({ sessionId: "qa-slack", store })).resolves.toBe(5);
     await expect(
-      readSlackQaMessageWrites({
-        afterRequestEventId: 4,
-        sessionId: "qa-slack",
-        store,
-      }),
+      readSlackQaMessageWrites({ afterRequestEventId: 4, sessionId: "qa-slack", store }),
     ).resolves.toEqual([expect.objectContaining({ text: "NEXT" })]);
   });
 
-  it("separates accepted native mutations from rejected writes and visual evidence", async () => {
+  it("classifies native mutations and settles pending writes without exposing private data", async () => {
     const methods = [
       "chat.delete",
       "reactions.add",
@@ -157,93 +93,35 @@ describe("Slack QA debug capture", () => {
       "files.completeUploadExternal",
       "files.delete",
     ];
-    const events = methods.flatMap((method, index) => [
-      {
-        ...buildResponse(
-          method,
-          true,
-          method === "files.completeUploadExternal"
-            ? { files: [{ id: "F_NEW", url_private: "private-url" }] }
-            : {},
-        ),
-        id: index * 2 + 2,
-      },
-      {
-        id: index * 2 + 1,
-        ...buildMessageRequest({ flowId: method, method, text: "", ts: "2.000000" }),
-        dataText: new URLSearchParams({
-          channel: "C123",
+    const events: Array<Record<string, unknown>> = [
+      request(1, "chat.postMessage", { text: "before cursor" }),
+      ...methods.flatMap((method, index) => [
+        request(index + 2, method, {
           ts: "2.000000",
           thread_ts: "1.000000",
           name: "eyes",
           file: "F_DELETED",
-        }).toString(),
-      },
-    ]);
-    events.push(
-      { ...buildResponse("rejected", false), id: 12 },
-      { id: 11, ...buildMessageRequest({ flowId: "rejected", method: "reactions.add", text: "" }) },
-    );
-    const writes = await readSlackQaNativeWrites({
-      afterRequestEventId: 0,
-      sessionId: "qa-slack",
-      store: { getSessionEvents: async () => events.toReversed(), readBlob: async () => null },
-    });
-    expect(writes.map((write) => [write.method, write.evidence])).toEqual(
-      methods.map((method) => [method, "api-accepted"]),
-    );
-    expect(writes.find((write) => write.method === "reactions.add")).toMatchObject({
-      messageId: "2.000000",
-      emoji: "eyes",
-    });
-    expect(writes.find((write) => write.method === "files.completeUploadExternal")).toMatchObject({
-      fileIds: ["F_NEW"],
-      threadId: "1.000000",
-    });
-    expect(writes.find((write) => write.method === "files.delete")).toMatchObject({
-      fileIds: ["F_DELETED"],
-    });
-    expect(JSON.stringify(writes)).not.toContain("private-url");
-  });
-
-  it("retains unresolved mutations without treating read-only calls or rejections as side effects", async () => {
-    const events: Array<Record<string, unknown>> = [
-      {
-        id: 1,
-        ...buildMessageRequest({ flowId: "old", text: "before cursor" }),
-      },
-      {
-        id: 2,
-        ...buildMessageRequest({ flowId: "pending", text: "private-body", threadTs: "1.000000" }),
-      },
-      {
-        id: 3,
-        ...buildMessageRequest({
-          flowId: "error",
-          method: "chat.update",
-          text: "",
-          ts: "3.000000",
         }),
-      },
+        response(
+          index + 2,
+          method === "files.completeUploadExternal"
+            ? { files: [{ id: "F_NEW", url_private: "private-url" }] }
+            : {},
+        ),
+      ]),
+      request(7, "chat.postMessage", { text: "private-body", thread_ts: "1.000000" }),
+      request(8, "chat.update", { ts: "3.000000" }),
       {
-        id: 4,
-        flowId: "error",
+        flowId: "8",
         kind: "error",
         errorText: "Authorization: private-token",
         headersJson: '{"authorization":"private-token"}',
       },
-      { id: 5, ...buildMessageRequest({ flowId: "rejected", text: "" }) },
-      { id: 6, ...buildResponse("rejected", false, { error: "private-error" }), status: 429 },
-      {
-        id: 7,
-        ...buildMessageRequest({ flowId: "read", method: "conversations.history", text: "" }),
-      },
-      { id: 8, ...buildMessageRequest({ flowId: "undecodable", text: "" }) },
-      {
-        id: 9,
-        ...buildResponse("undecodable", true),
-        dataText: '{"ok":true,"private":"truncated',
-      },
+      request(9, "reactions.add"),
+      { ...response(9, { ok: false, error: "private-error" }), status: 429 },
+      request(10, "conversations.history"),
+      request(11, "chat.postMessage"),
+      { ...response(11), dataText: '{"ok":true,"private":"truncated' },
     ];
     const params = {
       afterRequestEventId: 1,
@@ -251,9 +129,15 @@ describe("Slack QA debug capture", () => {
       store: { getSessionEvents: async () => events.toReversed(), readBlob: async () => null },
     };
     const writes = await readSlackQaNativeWrites(params);
-    expect(writes).toEqual([
+    expect(writes.slice(0, 5).map((write) => [write.method, write.evidence])).toEqual(
+      methods.map((method) => [method, "api-accepted"]),
+    );
+    expect(writes[1]).toMatchObject({ messageId: "2.000000", emoji: "eyes" });
+    expect(writes[3]).toMatchObject({ fileIds: ["F_NEW"], threadId: "1.000000" });
+    expect(writes[4]).toMatchObject({ fileIds: ["F_DELETED"] });
+    expect(writes.slice(5)).toEqual([
       expect.objectContaining({
-        requestEventId: 2,
+        requestEventId: 7,
         method: "chat.postMessage",
         evidence: "uncertain",
         reason: "response-not-captured",
@@ -261,32 +145,31 @@ describe("Slack QA debug capture", () => {
         threadId: "1.000000",
       }),
       expect.objectContaining({
-        requestEventId: 3,
+        requestEventId: 8,
         method: "chat.update",
         evidence: "uncertain",
         reason: "transport-error",
         messageId: "3.000000",
       }),
       expect.objectContaining({
-        requestEventId: 8,
+        requestEventId: 11,
         evidence: "uncertain",
         reason: "response-undecodable",
       }),
     ]);
     expect(JSON.stringify(writes)).not.toContain("private-");
-
-    events.push({ id: 10, ...buildResponse("pending", true) });
+    events.push(response(7));
     const settled = await readSlackQaNativeWrites(params);
-    expect(settled.find((write) => write.requestEventId === 2)).toMatchObject({
+    expect(settled.find((write) => write.requestEventId === 7)).toMatchObject({
       evidence: "api-accepted",
       messageId: "2.000000",
       threadId: "1.000000",
     });
-    expect(settled.find((write) => write.requestEventId === 2)).not.toHaveProperty("reason");
+    expect(settled.find((write) => write.requestEventId === 7)).not.toHaveProperty("reason");
     expect(
       settled
         .filter((write) => write.evidence === "uncertain")
         .map((write) => write.requestEventId),
-    ).toEqual([3, 8]);
+    ).toEqual([8, 11]);
   });
 });

@@ -3,11 +3,8 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import {
-  ensureGatewayOwnerProfile,
-  ensureProfileForEmail,
-  linkEmail,
-} from "../state/user-profiles.js";
+import { linkEmail } from "../state/user-profile-writes.worker.js";
+import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../state/user-profiles.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,

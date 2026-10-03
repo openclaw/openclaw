@@ -1,5 +1,6 @@
 import {
   buildChannelOutboundSessionRoute,
+  stripChannelTargetPrefix,
   type ChannelOutboundSessionRouteParams,
 } from "openclaw/plugin-sdk/core";
 import {
@@ -7,15 +8,8 @@ import {
   normalizeOptionalLowercaseString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 
-function stripZalouserTargetPrefix(raw: string): string {
-  return raw
-    .trim()
-    .replace(/^(zalouser|zlu):/i, "")
-    .trim();
-}
-
 export function normalizeZalouserTarget(raw: string): string | undefined {
-  const trimmed = stripZalouserTargetPrefix(raw);
+  const trimmed = stripChannelTargetPrefix(raw, "zalouser", "zlu");
   if (!trimmed) {
     return undefined;
   }

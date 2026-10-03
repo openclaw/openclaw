@@ -22,11 +22,7 @@ import {
   readControlPlaneUpdateSentinelMeta,
   UPDATE_RUN_ID_ENV,
 } from "../../infra/update-control-plane-sentinel.js";
-import {
-  parseDevUpdateTargetEnv,
-  type DevUpdateTarget,
-  UPDATE_DEV_TARGET_REF_ENV,
-} from "../../infra/update-dev-target.js";
+import { readDevUpdateTarget } from "../../infra/update-dev-target.js";
 import {
   createFreeBsdPkgOwnershipInspection,
   type FreeBsdPkgOwnershipInspection,
@@ -421,27 +417,35 @@ export async function withUpdatePreviewSignals<T>(
 export function createUpdateRunProgress(
   run: NonNullable<UpdateCommandOptions["run"]>,
   progress: UpdateDisplayProgress,
+  recordStep: (step: UpdateRunStep) => Promise<UpdateRunRecord>,
 ): UpdateStepProgress & {
   deferLedgerWrites: () => void;
-  flushLedgerWrites: () => void;
+  flushLedgerWrites: () => Promise<void>;
   pendingSteps: UpdateRunStep[];
 } {
   let deferred = false;
   const driver = readUpdateRunDriver();
   const pendingSteps: UpdateRunStep[] = [];
-  const record = (step: UpdateRunStep) => {
-    if (deferred) {
-      pendingSteps.push(step);
-      return undefined;
-    }
+  let flushFailure: { cause: unknown } | undefined;
+  const persist = async (step: UpdateRunStep) => {
     try {
-      return recordUpdateRunStep(run.runId, step, { env: run.env });
+      return await recordStep(step);
     } catch (cause) {
       throw new Error(
         `Could not record update step "${step.step}" (${step.status}): ${formatErrorMessage(cause)}`,
         { cause },
       );
     }
+  };
+  const record = async (step: UpdateRunStep) => {
+    if (flushFailure) {
+      throw flushFailure.cause;
+    }
+    if (deferred) {
+      pendingSteps.push(step);
+      return undefined;
+    }
+    return await persist(step);
   };
   return {
     pendingSteps,
@@ -461,22 +465,36 @@ export function createUpdateRunProgress(
       deferred = true;
       retireMutableUpdateSignalRun(run);
     },
-    flushLedgerWrites() {
-      deferred = false;
-      for (const step of pendingSteps.splice(0)) {
-        record(step);
+    async flushLedgerWrites() {
+      if (flushFailure) {
+        throw flushFailure.cause;
       }
+      while (pendingSteps[0]) {
+        try {
+          await persist(pendingSteps[0]);
+        } catch (cause) {
+          // A lost reply cannot authorize replay of this receipt or its remaining tail.
+          flushFailure = { cause };
+          throw cause;
+        }
+        pendingSteps.shift();
+      }
+      deferred = false;
     },
-    onStepStart(step) {
-      const committed = record({ step: step.name, status: "in_progress", startedAtMs: Date.now() });
+    async onStepStart(step) {
+      const committed = await record({
+        step: step.name,
+        status: "in_progress",
+        startedAtMs: Date.now(),
+      });
       progress.onStepStart?.(step, committed);
     },
-    onStepComplete(step) {
+    async onStepComplete(step) {
       const endedAtMs = Date.now();
       // A completed step may persist warnings; display its final committed row.
       let committed: UpdateRunRecord | undefined;
       for (const entry of updateRunStepsFromResultStep(step)) {
-        committed = record({
+        committed = await record({
           ...entry,
           startedAtMs: Math.max(0, endedAtMs - step.durationMs),
           endedAtMs,
@@ -581,16 +599,6 @@ export function completeUpdateCommandRun(
     }
   }
   return { ...result, runId: run.runId };
-}
-
-export function readDevUpdateTarget(): DevUpdateTarget | undefined {
-  const parsed = parseDevUpdateTargetEnv(process.env);
-  if (parsed.status === "invalid") {
-    throw new Error(
-      `Invalid internal ${UPDATE_DEV_TARGET_REF_ENV} contract; expected a plain Git ref or a supported tracked-target encoding.`,
-    );
-  }
-  return parsed.status === "valid" ? parsed.target : undefined;
 }
 
 export async function prepareUpdateCommand(opts: UpdateCommandOptions) {

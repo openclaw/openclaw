@@ -5,6 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createRetainedOperation } from "../infra/retained-operation.js";
 import type { RetainedPreparedSqliteReadOnlyLocation } from "../infra/sqlite-readonly-location.types.js";
+import { createOwnedWorkerTaskPoolMock } from "../infra/worker-task-pool.mock.test-support.js";
 import type { RetainedWorkerTask, WorkerTaskInput } from "../infra/worker-task-pool.types.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type {
@@ -87,59 +88,59 @@ beforeEach(() => {
   mock.prepareNative.mockReset();
   mock.prepareFresh.mockReset();
   mock.prepareInherited.mockReset();
-  mock.pool.mockReset().mockImplementation(() => ({
-    startTask(input: WorkerTaskInput<OpenClawStateReadRequest>) {
-      const name = owner.getStore();
-      const inContext = AsyncLocalStorage.snapshot();
-      let admitted = false;
-      let released = false;
-      let taskReply: OpenClawStateReadReply = reply;
-      const completion = createRetainedOperation<OpenClawStateReadReply>(() => {
-        if (completion.operation.read().status !== "pending") {
-          return;
-        }
-        if (!admitted && occupied < 2) {
-          const request = typeof input === "function" ? input() : input;
-          if (request instanceof Promise) {
-            throw new Error("This worker fixture requires synchronous admission");
+  mock.pool.mockReset().mockImplementation(() =>
+    createOwnedWorkerTaskPoolMock<OpenClawStateReadRequest, OpenClawStateReadReply>({
+      startTask(input: WorkerTaskInput<OpenClawStateReadRequest>) {
+        const name = owner.getStore();
+        const inContext = AsyncLocalStorage.snapshot();
+        let admitted = false;
+        let released = false;
+        let taskReply: OpenClawStateReadReply = reply;
+        const completion = createRetainedOperation<OpenClawStateReadReply>(() => {
+          if (completion.operation.read().status !== "pending") {
+            return;
           }
-          expect(owner.getStore()).toBe(name);
-          taskReply = request.command.type === "admit" ? { ok: true, type: "admit" } : reply;
-          occupied++;
-          admitted = true;
-          events.push(`admit ${name}`);
-        }
-        if (admitted && ready) {
-          completion.resolve(taskReply);
-        }
-      });
-      const cleanup = createRetainedOperation<void>(() => {
-        completion.operation.service();
-        if (completion.operation.read().status === "pending") {
-          return;
-        }
-        if (!released) {
-          released = true;
-          occupied--;
-          expect(owner.getStore()).toBe(name);
-          events.push(`release ${name}`);
-        }
-        cleanup.resolve(undefined);
-      });
-      const task = { ...completion.operation, release: () => cleanup.operation };
-      tasks.push(task);
-      releaseFixtures.push(() =>
-        inContext(() => {
-          task.service();
-          task.release().service();
-        }),
-      );
-      submitted.resolve();
-      return task;
-    },
-    closeResources: async () => {},
-    close: async () => {},
-  }));
+          if (!admitted && occupied < 2) {
+            const request = typeof input === "function" ? input() : input;
+            if (request instanceof Promise) {
+              throw new Error("This worker fixture requires synchronous admission");
+            }
+            expect(owner.getStore()).toBe(name);
+            taskReply = request.command.type === "admit" ? { ok: true, type: "admit" } : reply;
+            occupied++;
+            admitted = true;
+            events.push(`admit ${name}`);
+          }
+          if (admitted && ready) {
+            completion.resolve(taskReply);
+          }
+        });
+        const cleanup = createRetainedOperation<void>(() => {
+          completion.operation.service();
+          if (completion.operation.read().status === "pending") {
+            return;
+          }
+          if (!released) {
+            released = true;
+            occupied--;
+            expect(owner.getStore()).toBe(name);
+            events.push(`release ${name}`);
+          }
+          cleanup.resolve(undefined);
+        });
+        const task = { ...completion.operation, release: () => cleanup.operation };
+        tasks.push(task);
+        releaseFixtures.push(() =>
+          inContext(() => {
+            task.service();
+            task.release().service();
+          }),
+        );
+        submitted.resolve();
+        return task;
+      },
+    }),
+  );
 });
 
 function source() {

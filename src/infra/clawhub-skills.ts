@@ -2,6 +2,7 @@ import type { SkillsDetailResult } from "@openclaw/gateway-protocol";
 // ClawHub skill metadata, trust, install resolution, cards, and telemetry.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
+  ClawHubRequestError,
   createClawHubError,
   decodeClawHubResponseBody,
   fetchClawHubJson,
@@ -287,28 +288,179 @@ function toClawHubSkillSearchResult(
   }
 }
 
+type ClawHubSkillVersionDetail = {
+  version: {
+    version: string;
+    createdAt: number;
+    changelog?: string;
+    security?: {
+      status: string;
+      hasWarnings: boolean;
+      hasScanResult: boolean;
+      checkedAt?: number | null;
+      virustotalUrl?: string | null;
+      scanners?: { llm?: { summary?: string | null } | null };
+    } | null;
+  };
+};
+
 export async function fetchClawHubSkillDetail(
   params: ClawHubFetchOptions & {
     slug: string;
     ownerHandle?: string;
+    version?: string;
+    /** Interactive detail reads include card and release scans; install resolution needs metadata only. */
+    includeInspection?: boolean;
   },
 ): Promise<ClawHubSkillDetail> {
+  const registry = resolveClawHubBaseUrl(params.baseUrl);
   const detail = await fetchClawHubJson<ClawHubSkillDetail>({
-    baseUrl: params.baseUrl,
+    ...params,
+    baseUrl: registry,
     path: `/api/v1/skills/${encodeURIComponent(params.slug)}`,
-    token: params.token,
-    timeoutMs: params.timeoutMs,
-    fetchImpl: params.fetchImpl,
     search: params.ownerHandle ? { ownerHandle: params.ownerHandle } : undefined,
   });
+  if (detail.skill && detail.skill.slug !== params.slug) {
+    throw new Error("ClawHub returned details for a different skill.");
+  }
+  if (params.ownerHandle && detail.owner?.handle && detail.owner.handle !== params.ownerHandle) {
+    throw new Error("ClawHub returned details for a different publisher.");
+  }
+  if (!params.includeInspection && params.version === undefined) {
+    return {
+      ...detail,
+      skill: detail.skill
+        ? { ...detail.skill, icon: resolveClawHubImageUrl(detail.skill.icon, registry) }
+        : null,
+    };
+  }
+  const ownerHandle = params.ownerHandle ?? detail.owner?.handle ?? undefined;
+  const version = normalizeOptionalString(params.version) ?? detail.latestVersion?.version;
+  const request = { ...params, baseUrl: registry, ownerHandle, version };
+  const warnings: string[] = [];
+  // The version endpoint is the owner of release-specific security. Base metadata only
+  // describes latest, so it must never be relabeled as requirements for an older release.
+  const [release, card] = version
+    ? await Promise.allSettled([
+        fetchClawHubJson<ClawHubSkillVersionDetail>({
+          ...request,
+          path: `/api/v1/skills/${encodeURIComponent(params.slug)}/versions/${encodeURIComponent(version)}`,
+          search: ownerHandle ? { ownerHandle } : undefined,
+        }),
+        fetchClawHubSkillCard(request),
+      ])
+    : [];
+  if (release?.status === "rejected") {
+    warnings.push(`Selected release details unavailable: ${String(release.reason)}`);
+  }
+  const returnedVersion = release?.status === "fulfilled" ? release.value.version : undefined;
+  const selectedVersion = returnedVersion?.version === version ? returnedVersion : undefined;
+  const releaseMismatch = release?.status === "fulfilled" && selectedVersion === undefined;
+  if (releaseMismatch) {
+    warnings.push("ClawHub returned details for a different release.");
+  }
+  const releaseUnavailable =
+    release?.status === "rejected" &&
+    release.reason instanceof ClawHubRequestError &&
+    [404, 410].includes(release.reason.status);
+  const security = selectedVersion?.security;
+  const validSecurity =
+    security &&
+    typeof security.status === "string" &&
+    security.status.trim().length > 0 &&
+    typeof security.hasWarnings === "boolean" &&
+    typeof security.hasScanResult === "boolean";
+  const isLatest = version !== undefined && version === detail.latestVersion?.version;
+  const canUseLatest = isLatest && !releaseUnavailable && !releaseMismatch;
   return {
     ...detail,
-    skill: detail.skill
+    registry,
+    source: "clawhub",
+    installRef: ownerHandle ? `@${ownerHandle}/${params.slug}` : params.slug,
+    selectedRelease: selectedVersion
       ? {
-          ...detail.skill,
-          icon: resolveClawHubImageUrl(detail.skill.icon, params.baseUrl),
+          version: selectedVersion.version,
+          createdAt: selectedVersion.createdAt,
+          changelog: selectedVersion.changelog,
+          tags: Object.entries(detail.skill?.tags ?? {})
+            .filter(([, taggedVersion]) => taggedVersion === selectedVersion.version)
+            .map(([tag]) => tag),
         }
+      : canUseLatest && detail.latestVersion
+        ? {
+            version: detail.latestVersion.version,
+            createdAt: detail.latestVersion.createdAt,
+            changelog: detail.latestVersion.changelog,
+          }
+        : null,
+    // Neither listing visibility, successful card reads, nor scan verdicts assert that
+    // this exact release has a downloadable artifact. ClawHub's install resolver picks latest.
+    downloadability: !version
+      ? {
+          status: "unknown",
+          reason: "The listing has no hosted release; source-backed availability is not reported.",
+        }
+      : releaseUnavailable
+        ? { status: "unavailable", reason: "The selected release is not available from ClawHub." }
+        : {
+            status: "unknown",
+            reason:
+              release?.status === "rejected"
+                ? `Selected release details unavailable: ${String(release.reason)}`
+                : releaseMismatch
+                  ? "ClawHub returned details for a different release."
+                  : "ClawHub does not report downloadability for a selected skill release.",
+          },
+    card:
+      card?.status === "fulfilled"
+        ? { status: "available", content: card.value }
+        : {
+            status: "unavailable",
+            reason:
+              card?.status === "rejected"
+                ? String(card.reason)
+                : "No published release is available for a skill card.",
+          },
+    requirements:
+      canUseLatest && detail.metadata?.setup
+        ? {
+            status: "available",
+            setup: detail.metadata.setup,
+            os: detail.metadata.os,
+            systems: detail.metadata.systems,
+            scope: "registry-setup",
+            note: "Registry setup keys combine environment and configuration requirements; binary requirements are not reported.",
+          }
+        : {
+            status: "unavailable",
+            reason: isLatest
+              ? "ClawHub does not report setup requirements for this release."
+              : "ClawHub reports structured setup requirements only for the latest release.",
+          },
+    security: validSecurity
+      ? {
+          status: "available",
+          scanStatus: security.status,
+          hasWarnings: security.hasWarnings,
+          hasScanResult: security.hasScanResult,
+          checkedAt: typeof security.checkedAt === "number" ? security.checkedAt : null,
+          summary:
+            typeof security.scanners?.llm?.summary === "string"
+              ? security.scanners.llm.summary
+              : null,
+          virustotalUrl: typeof security.virustotalUrl === "string" ? security.virustotalUrl : null,
+        }
+      : {
+          status: "unavailable",
+          reason: "ClawHub has no security scan snapshot for this release.",
+        },
+    warnings,
+    skill: detail.skill
+      ? { ...detail.skill, icon: resolveClawHubImageUrl(detail.skill.icon, registry) }
       : null,
+    owner: detail.owner
+      ? { ...detail.owner, image: resolveClawHubImageUrl(detail.owner.image, registry) }
+      : detail.owner,
   };
 }
 

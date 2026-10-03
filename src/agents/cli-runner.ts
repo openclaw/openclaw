@@ -1,6 +1,7 @@
 /**
  * Top-level CLI-backed agent runner orchestration.
  */
+import { isSilentReplyPayloadText } from "../auto-reply/tokens.js";
 import { runWithCliHistoryWriter } from "../config/sessions/cli-history-boundary.js";
 import { prepareCronRootSessionGeneration } from "../config/sessions/session-delivery-generation.js";
 import { buildGenericCliContextEngineHostSupport } from "../context-engine/host-compat.js";
@@ -19,6 +20,10 @@ import {
 } from "../plugins/hook-agent-context.js";
 import { resolveBlockMessage } from "../plugins/hook-decision-types.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import {
+  hasAcceptedSessionSpawn,
+  hasCompletionMessageSessionSpawn,
+} from "./accepted-session-spawn.js";
 import { bindOperatorModelExecution, readRunOperatorAuthority } from "./admitted-run-context.js";
 import { runCliBeforeAgentReply } from "./cli-runner/before-agent-reply.js";
 import { runCliCleanup } from "./cli-runner/cleanup.js";
@@ -67,6 +72,8 @@ import {
 } from "./cli-runner/session-history.js";
 import type { PreparedCliRunContext, RunCliAgentParams } from "./cli-runner/types.js";
 import type { EmbeddedAgentRunResult } from "./embedded-agent-runner.js";
+import { resolveSourceReplyDelivery } from "./embedded-agent-runner/delivery-evidence.js";
+import { recordModelFallbackStop } from "./failover-error.js";
 import { bootstrapHarnessContextEngine } from "./harness/context-engine-lifecycle.js";
 import { buildAgentHookContext } from "./harness/hook-context.js";
 import { buildAgentHookConversationMessages } from "./harness/hook-history.js";
@@ -386,8 +393,12 @@ async function runPreparedCliAgentOwned(
       ? (sourceReplyMirror.visibleText ?? "")
       : output.text.trim();
     if (
-      !assistantText &&
-      !output.didSendViaMessagingTool &&
+      (!output.text.trim() || isSilentReplyPayloadText(output.text)) &&
+      resolveSourceReplyDelivery(output) === "missing" &&
+      !output.toolMediaUrls?.length &&
+      !output.yielded &&
+      !hasCompletionMessageSessionSpawn(output.acceptedSessionSpawns) &&
+      !output.terminalInterruption &&
       resolveReplyExpectation(params) === "required" &&
       // Strict isolated completion owns valid-empty output after reasoning is removed.
       !(isolatedCompletion && params.outputTextPolicy === "strict-visible")
@@ -408,14 +419,19 @@ async function runPreparedCliAgentOwned(
         ].join(" ");
         cliBackendLog.warn(`cli empty response diagnostics: ${diagnostics}`);
       }
-      throw attachCliMessagingDeliveryEvidence(
-        createCliFailoverError(
-          "CLI backend returned an empty response.",
-          "empty_response",
-          cliFailoverContext,
-        ),
-        output,
+      const error = createCliFailoverError(
+        "CLI backend returned an empty response.",
+        "empty_response",
+        cliFailoverContext,
       );
+      if (
+        (output.toolSummary?.calls ?? 0) > 0 ||
+        hasAcceptedSessionSpawn(output.acceptedSessionSpawns)
+      ) {
+        // Missing a final answer cannot authorize replaying completed tool effects.
+        recordModelFallbackStop(error);
+      }
+      throw attachCliMessagingDeliveryEvidence(error, output);
     }
     const assistantTexts = assistantText ? [assistantText] : [];
     const lastAssistant =

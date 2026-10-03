@@ -14,16 +14,10 @@ export async function runAuthProfileMigration(ctx: DoctorHealthFlowContext): Pro
   const { repairAuthProfileMigration } = await import("../commands/doctor/auth-profile-repair.js");
   const { maybeRepairLegacyOAuthProfileIds } =
     await import("../commands/doctor-auth-legacy-oauth.js");
-  const { maybeRepairLegacyOAuthSidecarProfiles } =
-    await import("../commands/doctor-auth-oauth-sidecar.js");
   const { maybeMigrateLegacyPluginModelCatalogs } =
     await import("../commands/doctor-plugin-model-catalog.js");
   const { buildGatewayConnectionDetails } = await import("../gateway/call.js");
   const { note } = await import("../../packages/terminal-core/src/note.js");
-  await maybeRepairLegacyOAuthSidecarProfiles({
-    cfg: ctx.cfg,
-    prompter: ctx.prompter,
-  });
   if (ctx.configResult.openAICodexAuthProfileIdMap === undefined) {
     const authRepair = await repairAuthProfileMigration({
       cfg: ctx.cfg,

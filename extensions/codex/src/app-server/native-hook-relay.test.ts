@@ -624,34 +624,6 @@ describe("Codex native hook relay config", () => {
     expect(config).not.toHaveProperty("hooks.UserPromptSubmit");
   });
 
-  it("includes only requested hook events", () => {
-    expect(
-      buildCodexNativeHookRelayConfig({
-        relay: createRelay(),
-        events: ["permission_request"],
-      }),
-    ).toEqual({
-      "features.hooks": true,
-      "hooks.PermissionRequest": expectedCommandHook("permission_request"),
-      "hooks.state": expectedHookState(["permission_request"]),
-    });
-  });
-
-  it("clears requested hook events when the relay reports no local work", () => {
-    expect(
-      buildCodexNativeHookRelayConfig({
-        relay: createRelay({ inactiveEvents: ["post_tool_use", "before_agent_finalize"] }),
-        events: ["pre_tool_use", "post_tool_use", "before_agent_finalize"],
-      }),
-    ).toEqual({
-      "features.hooks": true,
-      "hooks.PreToolUse": expectedCommandHook("pre_tool_use"),
-      "hooks.PostToolUse": [],
-      "hooks.Stop": [],
-      "hooks.state": expectedHookState(["pre_tool_use"]),
-    });
-  });
-
   it("clears selected PreToolUse when the relay has no local work", () => {
     const config = buildCodexNativeHookRelayConfig({
       relay: createRelay({ inactiveEvents: ["pre_tool_use"] }),

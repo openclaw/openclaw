@@ -11,6 +11,7 @@ import {
   executeGitCommandBuffered,
   normalizeGitPathForFilesystem,
   requireGitCommandOutput,
+  type GitBufferedCommandOptions,
   type GitCommandOptions,
 } from "../../infra/git-exec.js";
 import { hasGitWorkerContext, requestGitWorkerCommand } from "../../infra/git-worker-context.js";
@@ -19,7 +20,7 @@ import {
   decodeWindowsOutputBuffer,
   resolveWindowsConsoleEncoding,
 } from "../../infra/windows-encoding.js";
-import type { BufferedCommandOptions, BufferedCommandResult } from "../../process/exec.js";
+import type { BufferedCommandResult } from "../../process/exec.js";
 
 export type GitResult = Awaited<ReturnType<typeof executeGitCommand>>;
 
@@ -196,7 +197,7 @@ async function withGitRefAdmission<
 export async function runGitBuffered(
   cwd: string,
   args: string[],
-  options: BufferedCommandOptions & { beforeRun?: () => void } = {},
+  options: GitBufferedCommandOptions = {},
 ): Promise<BufferedCommandResult> {
   if (hasGitWorkerContext()) {
     const { signal: _signal, beforeRun: _beforeRun, ...forwarded } = options;
@@ -319,9 +320,7 @@ export async function resolveGitRepositoryPaths(
   const commonRaw = normalizeGitPathForFilesystem(
     await requireGit(sourceRoot, ["rev-parse", "--git-common-dir"], options),
   );
-  const commonDir = await fs.realpath(
-    path.isAbsolute(commonRaw) ? commonRaw : path.resolve(sourceRoot, commonRaw),
-  );
+  const commonDir = await fs.realpath(path.resolve(sourceRoot, commonRaw));
   const primary = (await listGitWorktrees(sourceRoot, options))[0]?.path ?? sourceRoot;
   const canonicalRoot = await fs.realpath(primary);
   return { canonicalRoot, commonDir };

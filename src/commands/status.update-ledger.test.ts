@@ -4,11 +4,15 @@ import type { UpdateCheckResult } from "../infra/update-check.js";
 import {
   createUpdateRun,
   finishUpdateRun,
+  getUpdateRun,
+  recordUpdateRunPhase,
   recordUpdateRunStep,
+  recordUpdateRunVerification,
 } from "../infra/update-run-ledger.js";
 import type { UpdateRunRecord, UpdateRunStep } from "../infra/update-run-record.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { VERSION } from "../version.js";
+import { buildStatusUpdateRows } from "./status-update-restart.ts";
 import {
   formatUpdateAvailableHint,
   formatUpdateOneLiner,
@@ -52,9 +56,23 @@ function recordRun(params: {
   status: Exclude<UpdateRunRecord["status"], "running">;
   reason?: string;
   steps?: UpdateRunStep[];
+  target?: UpdateRunRecord["target"];
+  before?: UpdateRunRecord["before"];
+  after?: UpdateRunRecord["after"];
+  verification?: UpdateRunRecord["verification"];
 }) {
   now += 1000;
-  const run = createUpdateRun({ trigger: "cli", target: { kind: "git" } });
+  const run = createUpdateRun({
+    trigger: "cli",
+    target: params.target ?? { kind: "git" },
+    before: params.before,
+  });
+  if (params.after) {
+    recordUpdateRunPhase(run.runId, "verifying", { after: params.after });
+  }
+  if (params.verification) {
+    recordUpdateRunVerification(run.runId, params.verification);
+  }
   for (const step of params.steps ?? []) {
     recordUpdateRunStep(run.runId, { endedAtMs: now, ...step });
   }
@@ -64,6 +82,296 @@ const readStatus = (fetchGit = false) =>
   getUpdateCheckResult({ timeoutMs: 5000, fetchGit, includeRegistry: false });
 
 describe("status update ledger evidence", () => {
+  it.each<{
+    name: string;
+    healthy?: boolean;
+    target?: UpdateRunRecord["target"];
+    before?: UpdateRunRecord["before"];
+    after?: UpdateRunRecord["after"];
+    verification?: UpdateRunRecord["verification"];
+    server?: { version: string | null; buildId?: string };
+    historical: boolean;
+    detail?: string;
+  }>([
+    { name: "same version", healthy: true, server: { version: "2026.9.7" }, historical: true },
+    {
+      name: "old healthy version after a failed swap",
+      healthy: true,
+      after: { version: "2026.9.6" },
+      verification: { runningVersion: "2026.9.6", versionMatch: false },
+      server: { version: "2026.9.6" },
+      historical: false,
+      detail:
+        "Gateway is still serving 2026.9.6; the update to 2026.9.7 did not complete — run `openclaw update`.",
+    },
+    {
+      name: "unknown serving version",
+      healthy: true,
+      server: { version: null },
+      historical: false,
+      detail:
+        "Gateway serving version is unknown; the update to 2026.9.7 is unverified — run `openclaw update`.",
+    },
+    {
+      name: "after identity without an explicit target",
+      healthy: true,
+      target: {},
+      after: { version: "2026.9.7" },
+      verification: { runningVersion: "2026.9.6", versionMatch: false },
+      server: { version: "2026.9.7" },
+      historical: true,
+    },
+    {
+      name: "rejected after identity without an independent target",
+      healthy: true,
+      target: {},
+      after: { version: "2026.9.6" },
+      verification: { runningVersion: "2026.9.6", versionMatch: false },
+      server: { version: "2026.9.6" },
+      historical: false,
+      detail: "Gateway is serving 2026.9.6; the update target is unknown — run `openclaw update`.",
+    },
+    {
+      name: "after identity with a different build from the rejected process",
+      healthy: true,
+      target: {},
+      after: { version: "2026.9.7", buildId: "candidate" },
+      verification: { runningVersion: "2026.9.7", runningBuildId: "previous", versionMatch: false },
+      server: { version: "2026.9.7", buildId: "candidate" },
+      historical: true,
+    },
+    {
+      name: "verified target observation",
+      healthy: true,
+      target: {},
+      verification: { runningVersion: "2026.9.7", runningBuildId: "candidate", versionMatch: true },
+      server: { version: "2026.9.7", buildId: "candidate" },
+      historical: true,
+    },
+    {
+      name: "rejected build despite an explicit matching target version",
+      healthy: true,
+      after: { version: "2026.9.7", buildId: "previous" },
+      verification: { runningVersion: "2026.9.7", runningBuildId: "previous", versionMatch: false },
+      server: { version: "2026.9.7", buildId: "previous" },
+      historical: false,
+      detail:
+        "Gateway is still serving 2026.9.7 (build previous); the intended build for 2026.9.7 is unverified — run `openclaw update`.",
+    },
+    {
+      name: "same-version rollback with successful recovery verification",
+      healthy: true,
+      before: { version: "2026.9.7", buildId: "previous" },
+      after: { version: "2026.9.7", buildId: "previous" },
+      verification: {
+        runningVersion: "2026.9.7",
+        runningBuildId: "previous",
+        versionMatch: true,
+        recovery: {
+          serviceRestartSafe: true,
+          packageRollbackVerified: true,
+          version: "2026.9.7",
+          buildId: "previous",
+          service: "healthy",
+        },
+      },
+      server: { version: "2026.9.7", buildId: "previous" },
+      historical: false,
+      detail: "the intended build for 2026.9.7 is unverified",
+    },
+    {
+      name: "same-version rollback with a file restoration receipt",
+      healthy: true,
+      before: { version: "2026.9.7", buildId: "previous" },
+      after: { version: "2026.9.7", buildId: "previous" },
+      verification: {
+        runningVersion: "2026.9.7",
+        runningBuildId: "previous",
+        versionMatch: true,
+        rollbackOutcome: {
+          status: "succeeded",
+          reason: "Previous package and configuration restored",
+        },
+      },
+      server: { version: "2026.9.7", buildId: "previous" },
+      historical: false,
+      detail: "the intended build for 2026.9.7 is unverified",
+    },
+    {
+      name: "distinct target version after package rollback",
+      healthy: true,
+      before: { version: "2026.9.6", buildId: "previous" },
+      after: { version: "2026.9.6", buildId: "previous" },
+      verification: {
+        runningVersion: "2026.9.6",
+        runningBuildId: "previous",
+        versionMatch: true,
+        recovery: {
+          serviceRestartSafe: true,
+          packageRollbackVerified: true,
+          version: "2026.9.6",
+          buildId: "previous",
+          service: "healthy",
+        },
+      },
+      server: { version: "2026.9.7", buildId: "candidate" },
+      historical: true,
+    },
+    {
+      name: "retained candidate build mismatch after failed rollback",
+      healthy: true,
+      before: { version: "2026.9.6", buildId: "previous" },
+      after: { version: "2026.9.7", buildId: "candidate" },
+      verification: {
+        runningVersion: "2026.9.6",
+        runningBuildId: "previous",
+        versionMatch: false,
+        rollbackOutcome: { status: "failed", reason: "Candidate remains active" },
+      },
+      server: { version: "2026.9.7", buildId: "other" },
+      historical: false,
+      detail:
+        "Gateway is still serving 2026.9.7 (build other); the update to 2026.9.7 (build candidate) did not complete — run `openclaw update`.",
+    },
+    {
+      name: "matching retained candidate build after failed rollback",
+      healthy: true,
+      before: { version: "2026.9.6", buildId: "previous" },
+      after: { version: "2026.9.7", buildId: "candidate" },
+      verification: {
+        runningVersion: "2026.9.6",
+        runningBuildId: "previous",
+        versionMatch: false,
+        rollbackOutcome: { status: "failed", reason: "Candidate remains active" },
+      },
+      server: { version: "2026.9.7", buildId: "candidate" },
+      historical: true,
+    },
+    {
+      name: "rejected candidate identity after failed rollback",
+      healthy: true,
+      before: { version: "2026.9.6", buildId: "previous" },
+      after: { version: "2026.9.7", buildId: "rejected" },
+      verification: {
+        runningVersion: "2026.9.7",
+        runningBuildId: "rejected",
+        versionMatch: false,
+        rollbackOutcome: { status: "failed", reason: "Candidate remains active" },
+      },
+      server: { version: "2026.9.7", buildId: "rejected" },
+      historical: false,
+      detail: "the intended build for 2026.9.7 is unverified",
+    },
+    {
+      name: "rollback observation without an independent target",
+      healthy: true,
+      target: {},
+      before: { version: "2026.9.7", buildId: "previous" },
+      after: { version: "2026.9.7", buildId: "previous" },
+      verification: {
+        runningVersion: "2026.9.7",
+        runningBuildId: "previous",
+        versionMatch: true,
+        recovery: {
+          serviceRestartSafe: true,
+          packageRollbackVerified: true,
+          version: "2026.9.7",
+          buildId: "previous",
+          service: "healthy",
+        },
+      },
+      server: { version: "2026.9.7", buildId: "previous" },
+      historical: false,
+      detail: "the update target is unknown",
+    },
+    {
+      name: "same version with an older build",
+      healthy: true,
+      after: { version: "2026.9.7", buildId: "candidate" },
+      server: { version: "2026.9.7", buildId: "previous" },
+      historical: false,
+      detail:
+        "Gateway is still serving 2026.9.7 (build previous); the update to 2026.9.7 (build candidate) did not complete — run `openclaw update`.",
+    },
+    {
+      name: "matching version and build",
+      healthy: true,
+      after: { version: "2026.9.7", buildId: "candidate" },
+      server: { version: "2026.9.7", buildId: "candidate" },
+      historical: true,
+    },
+    {
+      name: "matching version with no exposed serving build",
+      healthy: true,
+      after: { version: "2026.9.7", buildId: "candidate" },
+      server: { version: "2026.9.7" },
+      historical: true,
+    },
+    {
+      name: "unhealthy target version",
+      healthy: false,
+      server: { version: "2026.9.7" },
+      historical: false,
+    },
+    { name: "unknown health", server: { version: "2026.9.7" }, historical: false },
+  ])(
+    "preserves the update verdict for $name",
+    async ({ healthy, target, before, after, verification, server, historical, detail }) => {
+      const run = recordRun({
+        status: "failed",
+        reason: "post-update-failed",
+        target: target ?? { version: "2026.9.7" },
+        before,
+        after,
+        verification,
+        steps: [
+          {
+            step: "gateway verification",
+            status: "failed",
+            failureFacts: [
+              {
+                check: "gateway",
+                code: "post-update-failed",
+                message: "Gateway did not settle; startup phase: waiting for managed service",
+              },
+            ],
+          },
+        ],
+      });
+      const saved = getUpdateRun(run.runId);
+      const rows = await buildStatusUpdateRows(null, {
+        localGatewayHealthy: healthy,
+        gatewayServer: server,
+      });
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.Item).toBe("Update run");
+      if (historical) {
+        expect(rows[0]?.Value).toBe(
+          "Last update run failed (post-update-failed) — Gateway is serving 2026.9.7; run `openclaw update` to clear the record.",
+        );
+      } else {
+        expect(rows[0]?.Value).toContain(
+          "⚠️ OpenClaw update failed: post-update-failed. Gateway did not settle; startup phase: waiting for managed service",
+        );
+        if (detail) {
+          expect(rows[0]?.Value).toContain(detail);
+        }
+      }
+      expect(getUpdateRun(run.runId)).toEqual(saved);
+    },
+  );
+
+  it("does not replace an active update with a historical failure's current-health note", async () => {
+    recordRun({ status: "failed", reason: "post-update-failed" });
+    const active = createUpdateRun({ trigger: "cli", target: { kind: "git" } });
+    recordUpdateRunPhase(active.runId, "verifying");
+    const rows = await buildStatusUpdateRows(null, { localGatewayHealthy: true });
+    expect(rows[0]).toEqual({
+      Item: "Update run",
+      Value: "⬆️ OpenClaw update in progress: verifying.",
+    });
+  });
+
   it("reports a newer fetch failure using cached counts", async () => {
     recordRun({ status: "succeeded", steps: [{ step: "git fetch", status: "completed" }] });
     const run = recordRun({

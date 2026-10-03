@@ -12,7 +12,6 @@ import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.appcompat.app.AlertDialog
 import androidx.core.app.ActivityCompat
-import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import kotlinx.coroutines.CompletableDeferred
@@ -123,16 +122,11 @@ class PermissionRequester internal constructor(
     showSettingsOnDenial: Boolean = true,
   ): Map<String, Boolean> =
     mutex.withLock {
-      val missing =
-        permissions.filter { perm ->
-          ContextCompat.checkSelfPermission(appContext, perm) != PackageManager.PERMISSION_GRANTED
-        }
+      val missing = permissions.filterNot(appContext::hasPermission)
       if (missing.isEmpty()) return@withLock permissions.associateWith { true }
 
       if (!confirmRationaleIfNeeded(missing, timeoutMs)) {
-        return@withLock permissions.associateWith { perm ->
-          ContextCompat.checkSelfPermission(appContext, perm) == PackageManager.PERMISSION_GRANTED
-        }
+        return@withLock permissions.associateWith(appContext::hasPermission)
       }
 
       val request = reservePermissionRequest(missing)
@@ -147,8 +141,7 @@ class PermissionRequester internal constructor(
 
       val merged =
         permissions.associateWith { perm ->
-          val nowGranted =
-            ContextCompat.checkSelfPermission(appContext, perm) == PackageManager.PERMISSION_GRANTED
+          val nowGranted = appContext.hasPermission(perm)
           result[perm] == true || nowGranted
         }
 
@@ -206,12 +199,15 @@ class PermissionRequester internal constructor(
     activeActivityHost.value = active
   }
 
-  private suspend fun awaitActiveActivityHost(timeoutMs: Long): ActiveActivityHost =
+  private suspend fun awaitActiveActivityHost(
+    timeoutMs: Long,
+    rejected: ActiveActivityHost? = null,
+  ): ActiveActivityHost =
     withTimeout(timeoutMs) {
       activeActivityHost
         .filterNotNull()
         .first { active ->
-          !active.host.activity.isFinishing && !active.host.activity.isDestroyed
+          active != rejected && !active.host.activity.isFinishing && !active.host.activity.isDestroyed
         }
     }
 
@@ -223,14 +219,7 @@ class PermissionRequester internal constructor(
     withTimeout(timeoutMs) {
       var rejected: ActiveActivityHost? = null
       while (true) {
-        val active =
-          activeActivityHost
-            .filterNotNull()
-            .first { candidate ->
-              candidate != rejected &&
-                !candidate.host.activity.isFinishing &&
-                !candidate.host.activity.isDestroyed
-            }
+        val active = awaitActiveActivityHost(timeoutMs, rejected)
         val launched =
           withContext(Dispatchers.Main) {
             if (!isCurrentActiveHost(active)) return@withContext false

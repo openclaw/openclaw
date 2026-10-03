@@ -1,5 +1,6 @@
 import { GatewayClientRequestError } from "@openclaw/gateway-client";
 import { Command } from "commander";
+import "openclaw/plugin-sdk/compiled-subprocess-testing";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const gatewayMocks = vi.hoisted(() => ({

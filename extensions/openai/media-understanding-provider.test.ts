@@ -2,6 +2,8 @@
 import { inspect } from "node:util";
 import { expectDefined } from "@openclaw/normalization-core";
 import type { AuthProfileStore } from "openclaw/plugin-sdk/provider-auth";
+// Keep static: evaluates the partial auth mock and its compiled workers at collection.
+import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
 import {
   createAuthCaptureJsonFetch,
@@ -11,11 +13,11 @@ import {
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { openaiMediaUnderstandingProvider } from "./media-understanding-provider.js";
 
-const authMocks = vi.hoisted(() => ({ resolve: vi.fn() }));
 vi.mock("openclaw/plugin-sdk/provider-auth-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-auth-runtime")>()),
-  resolveApiKeyForProvider: authMocks.resolve,
+  resolveApiKeyForProvider: vi.fn(),
 }));
+const authMocks = { resolve: vi.mocked(resolveApiKeyForProvider) };
 
 installPinnedHostnameTestHooks();
 

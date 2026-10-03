@@ -85,10 +85,9 @@ struct RootTabs: View {
         if let requested = self.requestedInitialSidebarDestination(arguments: arguments) {
             return requested
         }
-        guard let flagIndex = arguments.firstIndex(of: "--openclaw-initial-tab") else { return .chat }
-        let valueIndex = arguments.index(after: flagIndex)
-        guard arguments.indices.contains(valueIndex) else { return .chat }
-        return switch arguments[valueIndex].trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        guard let value = arguments.drop(while: { $0 != "--openclaw-initial-tab" }).dropFirst().first
+        else { return .chat }
+        return switch value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
         case "control", "overview": .overview
         case "chat", "talk", "voice": .chat
         case "agent", "agents": .agents
@@ -98,12 +97,9 @@ struct RootTabs: View {
     }
 
     static func requestedInitialSidebarDestination(arguments: [String]) -> SidebarDestination? {
-        guard let flagIndex = arguments.firstIndex(of: "--openclaw-initial-destination") else {
-            return nil
-        }
-        let valueIndex = arguments.index(after: flagIndex)
-        guard arguments.indices.contains(valueIndex) else { return nil }
-        let requested = arguments[valueIndex].trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard let value = arguments.drop(while: { $0 != "--openclaw-initial-destination" }).dropFirst().first
+        else { return nil }
+        let requested = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         return SidebarDestination.allCases.first { $0.rawValue.lowercased() == requested }
     }
 
@@ -113,12 +109,9 @@ struct RootTabs: View {
 
     private static var initialChatSessionKey: String? {
         let arguments = ProcessInfo.processInfo.arguments
-        guard let flagIndex = arguments.firstIndex(of: "--openclaw-chat-session") else {
-            return nil
-        }
-        let valueIndex = arguments.index(after: flagIndex)
-        guard arguments.indices.contains(valueIndex) else { return nil }
-        let trimmed = arguments[valueIndex].trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let value = arguments.drop(while: { $0 != "--openclaw-chat-session" }).dropFirst().first
+        else { return nil }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
     }
 
@@ -307,7 +300,6 @@ struct RootTabs: View {
                 openSettings: { self.selectSidebarDestination(.gateway) })
         case .overview:
             CommandCenterTab(
-                headerTitle: "Overview",
                 headerSidebarAction: self.sidebarHeaderAction,
                 dashboardModel: self.sidebarModel,
                 openChat: { self.selectSidebarDestination(.chat) },
@@ -551,11 +543,6 @@ struct RootTabs: View {
             }
     }
 
-    private func handleGatewayProblemReport() {
-        guard self.isGatewayToastSwipeDismissed else { return }
-        self.isGatewayToastSwipeDismissed = false
-    }
-
     private func rootLifecycle(_ content: some View) -> some View {
         self.rootRequestLifecycle(
             self.rootGatewayLifecycle(
@@ -585,6 +572,7 @@ struct RootTabs: View {
     private func rootAppearLifecycle(_ content: some View) -> some View {
         content
             .onAppear {
+                self.sidebarModel.setSnoozeWakeUpdatesActive(self.scenePhase == .active)
                 self.updateIdleTimer()
                 self.evaluateOnboardingPresentation(force: false)
                 self.maybeAutoOpenSettings()
@@ -597,6 +585,7 @@ struct RootTabs: View {
             .onChange(of: self.preventSleep) { _, _ in self.updateIdleTimer() }
             .onChange(of: self.appModel.talkMode.isEnabled) { _, _ in self.updateIdleTimer() }
             .onChange(of: self.scenePhase) { _, newValue in
+                self.sidebarModel.setSnoozeWakeUpdatesActive(newValue == .active)
                 self.updateIdleTimer()
                 guard newValue == .active else {
                     self.clearVoiceWakeToast()
@@ -609,6 +598,7 @@ struct RootTabs: View {
                 }
             }
             .onDisappear {
+                self.sidebarModel.setSnoozeWakeUpdatesActive(false)
                 UIApplication.shared.isIdleTimerDisabled = false
                 self.clearVoiceWakeToast()
             }
@@ -627,7 +617,7 @@ struct RootTabs: View {
                 }
             }
             .onChange(of: self.appModel.gatewayProblemReportCount) { _, _ in
-                self.handleGatewayProblemReport()
+                self.isGatewayToastSwipeDismissed = false
             }
     }
 

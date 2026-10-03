@@ -14,12 +14,19 @@ import * as sqliteScope from "./session-accessor.sqlite-scope.js";
 import { canonicalSessionKeyMigrationRequiredError } from "./session-canonical-row.js";
 import { readSessionHistoryPageInWorker } from "./session-history-worker-runtime.js";
 import { prepareSessionTranscriptHydration } from "./session-transcript-hydration.js";
-import { withSessionHistoryWorkerReadCandidates } from "./session-transcript-worker-resources.js";
+import {
+  historyLane,
+  rotateDatabaseWorkers,
+  withSessionHistoryWorkerReadCandidates,
+} from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 
 const closeCapabilities = vi.hoisted(() => ({ explicitSqliteCloseReleasesNativeResources: true }));
 vi.mock("../../infra/bun-sqlite-library.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../infra/bun-sqlite-library.js")>()),
+  ensureSqliteLibrarySelected: () => ({ source: "runtime" }),
+  captureSqliteWorkerClosePolicy: () =>
+    closeCapabilities.explicitSqliteCloseReleasesNativeResources,
   getSqliteRuntimeCapabilities: () => ({ ...closeCapabilities, reason: "test policy" }),
 }));
 
@@ -55,6 +62,7 @@ function installWorkerTransport() {
       taskId: 7,
       interactive: Boolean(options.onRequest),
       nativeSections: new SharedArrayBuffer(4),
+      deletedAgentDatabaseFences: [],
     });
     const reply = await posted.promise;
     assert(reply && typeof reply === "object" && "status" in reply);
@@ -116,6 +124,7 @@ beforeEach(() => {
 afterEach(async () => {
   observed.rotate.mockResolvedValue(undefined);
   await Promise.all(observed.resources.splice(0).map((resource) => resource.close()));
+  await rotateDatabaseWorkers(historyLane);
   vi.restoreAllMocks();
   expect(observed.nativeWorker).not.toHaveBeenCalled();
 });

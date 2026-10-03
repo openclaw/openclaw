@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { HelloOk } from "../../packages/gateway-protocol/src/schema/frames.js";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.js";
 import type { DeviceIdentity } from "../infra/device-identity.js";
@@ -87,78 +87,67 @@ const localConnection = {
   token: "local-token",
 } satisfies Partial<CallGatewayCliOptions>;
 
-describe.each(["chat.abort", "sessions.abort"])("%s cancellation scopes", (method) => {
-  it.each<{
-    label: string;
-    options?: Partial<CallGatewayCliOptions>;
-    backend?: boolean;
-    scopes: string[];
-    deviceIdentity: DeviceIdentity | null;
-  }>([
-    {
-      label: "local shared token can cancel a run owned by another connection",
-      scopes: ["operator.admin"],
-      deviceIdentity: null,
+it.each<{
+  label: string;
+  method?: "chat.abort" | "sessions.abort";
+  options?: Partial<CallGatewayCliOptions>;
+  backend?: boolean;
+  scopes: string[];
+  deviceIdentity: DeviceIdentity | null;
+}>([
+  {
+    label: "local shared password can cancel a run owned by another connection",
+    method: "sessions.abort",
+    options: {
+      config: { gateway: { auth: { mode: "password" } } },
+      token: undefined,
+      password: "local-password",
     },
-    {
-      label: "local shared password can cancel a run owned by another connection",
-      options: {
-        config: { gateway: { auth: { mode: "password" } } },
-        token: undefined,
-        password: "local-password",
-      },
-      scopes: ["operator.admin"],
-      deviceIdentity: null,
-    },
-    {
-      label: "explicit write-only scopes remain restricted",
-      options: { scopes: ["operator.write"] },
-      scopes: ["operator.write"],
-      deviceIdentity: null,
-    },
-    {
-      label: "explicit empty scopes remain empty",
-      options: { scopes: [] },
-      scopes: [],
-      deviceIdentity: null,
-    },
-    {
-      label: "an explicitly supplied device retains ownership-based cancellation",
-      options: { deviceIdentity: fixture.identity },
-      scopes: ["operator.write"],
-      deviceIdentity: fixture.identity,
-    },
-    {
-      label: "remote shared-token calls do not acquire admin",
-      options: { url: "wss://remote.example:18789" },
-      scopes: ["operator.write"],
-      deviceIdentity: fixture.identity,
-    },
-    {
-      label: "inactive credentials under auth-none do not acquire admin",
-      options: { config: { gateway: { auth: { mode: "none" } } } },
-      scopes: ["operator.write"],
-      deviceIdentity: fixture.identity,
-    },
-    {
-      label: "backend shared-token calls retain least privilege",
-      backend: true,
-      scopes: ["operator.write"],
-      deviceIdentity: null,
-    },
-  ])("$label", async ({ options, backend, scopes, deviceIdentity }) => {
-    const params =
-      method === "chat.abort"
-        ? { sessionKey: "agent:main:running", runId: "running" }
-        : { key: "agent:main:running", runId: "running" };
-    const call = backend ? callGateway : callGatewayCli;
+    scopes: ["operator.admin"],
+    deviceIdentity: null,
+  },
+  {
+    label: "explicit empty scopes remain empty",
+    options: { scopes: [] },
+    scopes: [],
+    deviceIdentity: null,
+  },
+  {
+    label: "an explicitly supplied device retains ownership-based cancellation",
+    options: { deviceIdentity: fixture.identity },
+    scopes: ["operator.write"],
+    deviceIdentity: fixture.identity,
+  },
+  {
+    label: "remote shared-token calls do not acquire admin",
+    options: { url: "wss://remote.example:18789" },
+    scopes: ["operator.write"],
+    deviceIdentity: fixture.identity,
+  },
+  {
+    label: "inactive credentials under auth-none do not acquire admin",
+    options: { config: { gateway: { auth: { mode: "none" } } } },
+    scopes: ["operator.write"],
+    deviceIdentity: fixture.identity,
+  },
+  {
+    label: "backend shared-token calls retain least privilege",
+    backend: true,
+    scopes: ["operator.write"],
+    deviceIdentity: null,
+  },
+])("$label", async ({ method = "chat.abort", options, backend, scopes, deviceIdentity }) => {
+  const params =
+    method === "chat.abort"
+      ? { sessionKey: "agent:main:running", runId: "running" }
+      : { key: "agent:main:running", runId: "running" };
+  const call = backend ? callGateway : callGatewayCli;
 
-    await call({ ...localConnection, method, params, ...options });
+  await call({ ...localConnection, method, params, ...options });
 
-    expect(fixture.clientOptions?.scopes).toEqual(scopes);
-    expect(fixture.clientOptions?.deviceIdentity).toEqual(deviceIdentity);
-    expect(fixture.request).toHaveBeenCalledExactlyOnceWith(method, params, expect.any(Object));
-  });
+  expect(fixture.clientOptions?.scopes).toEqual(scopes);
+  expect(fixture.clientOptions?.deviceIdentity).toEqual(deviceIdentity);
+  expect(fixture.request).toHaveBeenCalledExactlyOnceWith(method, params, expect.any(Object));
 });
 
 it("keeps unrelated local shared-token CLI methods at least privilege", async () => {

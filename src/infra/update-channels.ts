@@ -176,24 +176,6 @@ export function resolveEffectiveUpdateChannel(params: {
   return { channel: DEFAULT_PACKAGE_CHANNEL, source: "default" };
 }
 
-/** Formats an operator-facing channel label that includes the deciding source. */
-function formatUpdateChannelLabel(params: {
-  channel: UpdateChannel;
-  source: UpdateChannelSource;
-  gitTag?: string | null;
-  gitBranch?: string | null;
-}): string {
-  const label =
-    params.source === "git-tag"
-      ? params.gitTag || "tag"
-      : params.source === "git-branch"
-        ? params.gitBranch || "branch"
-        : params.source === "installed-version"
-          ? "installed version"
-          : params.source;
-  return `${params.channel} (${label})`;
-}
-
 /** Resolves channel metadata plus display label for status and update UIs. */
 export function resolveUpdateChannelDisplay(params: {
   configChannel?: UpdateChannel | null;
@@ -211,12 +193,16 @@ export function resolveUpdateChannelDisplay(params: {
         ? { tag: params.gitTag ?? null, branch: params.gitBranch ?? null }
         : undefined,
   });
+  const sourceLabel =
+    channelInfo.source === "git-tag"
+      ? params.gitTag || "tag"
+      : channelInfo.source === "git-branch"
+        ? params.gitBranch || "branch"
+        : channelInfo.source === "installed-version"
+          ? "installed version"
+          : channelInfo.source;
   return {
     ...channelInfo,
-    label: formatUpdateChannelLabel({
-      ...channelInfo,
-      gitTag: params.gitTag ?? null,
-      gitBranch: params.gitBranch ?? null,
-    }),
+    label: `${channelInfo.channel} (${sourceLabel})`,
   };
 }

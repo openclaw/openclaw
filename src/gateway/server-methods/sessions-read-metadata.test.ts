@@ -8,8 +8,12 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
-import { ensureProfileForEmail, setUserProfileRole } from "../../state/user-profiles.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../../state/openclaw-agent-db.js";
+import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { invalidateOperatorRolePolicy } from "../operator-role-policy.js";
 import * as transcriptPreview from "../session-transcript-preview.js";
@@ -78,7 +82,9 @@ async function seedMetadataReads(prepareProjection = false) {
     });
     await seedLinearSessionTranscript({ ...scope, sessionId, contents: [content] });
   }
-  closeOpenClawAgentDatabasesForTest();
+  // Cold reads must start after the seed workers release the same physical stores.
+  await closeOpenClawAgentDatabasesAsync(stateDir);
+  closeOpenClawAgentDatabasesForTest(stateDir);
   const context = { ...requestContext(cfg), getRuntimeConfig: () => cfg };
   if (prepareProjection) {
     await initializeSessionReadContext(context);

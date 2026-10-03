@@ -63,14 +63,13 @@ function isIMessageAnchorless(message: IMessagePayload): boolean {
     return false;
   }
 
-  const hasExplicitBrokenAnchor =
+  return (
     message.chat_id === null ||
     (typeof message.chat_id === "number" &&
       (!Number.isFinite(message.chat_id) || message.chat_id <= 0)) ||
     isExplicitEmptyString(message.chat_guid) ||
-    isExplicitEmptyString(message.chat_identifier);
-
-  return hasExplicitBrokenAnchor;
+    isExplicitEmptyString(message.chat_identifier)
+  );
 }
 
 function extractAuthoritativeRecoveryProjection(

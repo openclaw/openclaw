@@ -287,12 +287,10 @@ export async function readLightStagedKeys(params: {
     if (entry.lightHits <= 0) {
       continue;
     }
-    const lastLightMs = Date.parse(entry.lastLightAt ?? "");
-    const lastRemMs = Date.parse(entry.lastRemAt ?? "");
-    const lastRemConsideredMs = Date.parse(entry.lastRemConsideredAt ?? "");
+    const lastLightMs = parseStoreTimestampMs(entry.lastLightAt);
     const lastConsumedMs = Math.max(
-      Number.isFinite(lastRemMs) ? lastRemMs : Number.NEGATIVE_INFINITY,
-      Number.isFinite(lastRemConsideredMs) ? lastRemConsideredMs : Number.NEGATIVE_INFINITY,
+      parseStoreTimestampMs(entry.lastRemAt),
+      parseStoreTimestampMs(entry.lastRemConsideredAt),
     );
     const hasPendingLightSignal = Number.isFinite(lastLightMs)
       ? lastLightMs > lastConsumedMs

@@ -91,8 +91,11 @@ Packaging executes verification for each runnable architecture. Verifying
 x86_64 on Apple silicon requires Rosetta; without it, packaging reports that
 architecture's execution checks as skipped. Missing binary architectures or
 nonportable native dependencies fail packaging. Downloads and package
-installation need network access. The bundled full package prepares for future
-Gateway hosting; the app still uses the external CLI and launchd Gateway.
+installation need network access on the build host. A packaged app needs no
+runtime download during onboarding: it seeds that payload into the profile's
+state directory and hosts the Gateway with Bun. The stage script writes the
+package's `openclaw-install-owner.json` marker so Gateway updates remain owned
+by the app.
 
 Packaging builds the MLX voice helper with Swift Build (`--build-system swiftbuild`)
 and copies its SwiftPM resource bundles into `Contents/Resources`. The native
@@ -123,9 +126,17 @@ immediately with "Abort trap 6", see [Troubleshooting](#troubleshooting).
 
 ## 3. Install the CLI and Gateway
 
-The packaged app embeds the canonical `scripts/install-cli.sh` installer. On a
-fresh profile, choose **This Mac** during onboarding; the app installs the
-matching user-space CLI and runtime before starting the Gateway wizard.
+On a fresh profile in a packaged app, choose **This Mac** during onboarding.
+The app prepares its bundled Bun runtime, starts the Gateway as its child,
+and creates the profile's terminal CLI shim. It does not invoke
+`scripts/install-cli.sh`, install Node, or ask for an install channel.
+Unbundled DEBUG builds retain the installer and channel chooser.
+
+Runtime copies live at `<state>/runtime/<runtimeBuildId>/`. App-hosted children
+and app-managed Bun LaunchAgents use concrete build paths; only the terminal
+shim uses `runtime/current`. Post-update setup reseeds the payload and refreshes
+app-owned Bun service pins before verifying health and collecting old builds.
+See [Gateway on macOS](/platforms/mac/bundled-gateway).
 
 For manual development recovery, install the matching CLI yourself. Read the
 version from the app: choose **About OpenClaw** in the menu bar, or run
@@ -227,6 +238,23 @@ launcher's root. Never change `OPENCLAW_PROFILE` inside a test: `AppProfile`
 and `AppDefaults` freeze their identity for the process. Tests needing another
 singleton identity require a fresh process. The cooperative helper does not
 isolate unrelated tests or the process from the host.
+
+Swift Testing runs suites concurrently in one process, so never replace the
+global executor (for example `withMainSerialExecutor` or
+`uncheckedUseMainSerialExecutor` from ConcurrencyExtras). Its hook moves every
+other suite's global jobs, actor work, and timer wakeups onto the main thread;
+one non-yielding loop there starves the timeout that would cancel it, and the
+job hangs until CI cancels it. To assert that a late reply changed nothing,
+await the task that settles that reply, as provider wizard and manual-key
+actions return it.
+
+Work a test starts must end with the test, because the process outlives it.
+Shut down Gateway channels and connections a test opens; their watchdog
+otherwise keeps reconnecting through the test's fixture. Fake transports and
+sockets must stop waiting when their read is cancelled, as the production stream
+transports do: `AsyncTimeout` cancels and abandons the operation that loses its
+race instead of joining it, so a fake that ignores cancellation keeps polling for
+the rest of the run.
 
 ## Troubleshooting
 

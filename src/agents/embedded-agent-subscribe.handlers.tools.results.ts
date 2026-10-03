@@ -8,6 +8,10 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { filterStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { consumeRootOptionToken } from "../infra/cli-root-options.js";
+import type {
+  ExecApprovalPendingReplyParams,
+  ExecApprovalUnavailableReplyParams,
+} from "../infra/exec-approval-reply.js";
 import type { ExecApprovalDecision } from "../infra/exec-approvals.js";
 import {
   parseInteractiveParam,
@@ -410,17 +414,7 @@ function queuePendingToolMedia(
   }
 }
 
-function readExecApprovalPendingDetails(result: unknown): {
-  approvalId: string;
-  approvalSlug: string;
-  expiresAtMs?: number;
-  allowedDecisions?: readonly ExecApprovalDecision[];
-  host: "gateway" | "node";
-  command: string;
-  cwd?: string;
-  nodeId?: string;
-  warningText?: string;
-} | null {
+function readExecApprovalPendingDetails(result: unknown): ExecApprovalPendingReplyParams | null {
   const outer = asOptionalObjectRecord(result);
   const details = readRecordField(outer?.details) ?? outer;
   if (details?.status !== "approval-pending") {
@@ -451,16 +445,9 @@ function readExecApprovalPendingDetails(result: unknown): {
   };
 }
 
-function readExecApprovalUnavailableDetails(result: unknown): {
-  reason: "initiating-platform-disabled" | "initiating-platform-unsupported" | "no-approval-route";
-  warningText?: string;
-  channel?: string;
-  channelLabel?: string;
-  accountId?: string;
-  sentApproverDms?: boolean;
-  host?: "gateway" | "node";
-  nodeId?: string;
-} | null {
+function readExecApprovalUnavailableDetails(
+  result: unknown,
+): ExecApprovalUnavailableReplyParams | null {
   const outer = asOptionalObjectRecord(result);
   const details = readRecordField(outer?.details) ?? outer;
   if (details?.status !== "approval-unavailable") {

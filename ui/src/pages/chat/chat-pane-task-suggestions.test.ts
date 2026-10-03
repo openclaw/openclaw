@@ -61,9 +61,9 @@ describe("chat pane task suggestion lifecycle", () => {
     pane.taskSuggestions = [suggestion];
 
     const oldList = pane.refreshTaskSuggestions();
-    const pending = pane.dismissTaskSuggestion(suggestion);
+    const pending = pane.resolveTaskSuggestion(suggestion, "dismiss");
     expect(pane.taskSuggestions).toEqual([]);
-    await pane.dismissTaskSuggestion(suggestion);
+    await pane.resolveTaskSuggestion(suggestion, "dismiss");
     expect(
       request.mock.calls.filter(([method]) => method === "taskSuggestions.dismiss"),
     ).toHaveLength(1);
@@ -90,7 +90,7 @@ describe("chat pane task suggestion lifecycle", () => {
     });
     pane.taskSuggestions = [suggestion];
 
-    const pending = pane.dismissTaskSuggestion(suggestion);
+    const pending = pane.resolveTaskSuggestion(suggestion, "dismiss");
     expect(pane.taskSuggestions).toEqual([]);
     await pane.refreshTaskSuggestions();
     expect(pane.taskSuggestions).toEqual([]);
@@ -115,7 +115,7 @@ describe("chat pane task suggestion lifecycle", () => {
       sessions: createSessionCapabilityFixture(),
     });
     pane.taskSuggestions = [suggestion];
-    const pending = pane.dismissTaskSuggestion(suggestion);
+    const pending = pane.resolveTaskSuggestion(suggestion, "dismiss");
     pane.handleTaskSuggestionEvent({
       action: "resolved",
       taskId: suggestion.id,
@@ -137,7 +137,7 @@ describe("chat pane task suggestion lifecycle", () => {
         sessions: createSessionCapabilityFixture(),
       });
       pane.taskSuggestions = [suggestion];
-      const pending = pane.dismissTaskSuggestion(suggestion);
+      const pending = pane.resolveTaskSuggestion(suggestion, "dismiss");
       if (change === "connection") {
         pane.connectionGeneration += 1;
       } else {
@@ -166,7 +166,7 @@ describe("chat pane task suggestion lifecycle", () => {
       sessions: createSessionCapabilityFixture(),
     });
     pane.taskSuggestions = [suggestion];
-    await pane.dismissTaskSuggestion(suggestion);
+    await pane.resolveTaskSuggestion(suggestion, "dismiss");
     await vi.waitFor(() => expect(pane.taskSuggestions).toEqual([suggestion]));
   });
 
@@ -190,8 +190,8 @@ describe("chat pane task suggestion lifecycle", () => {
       sessions: createSessionCapabilityFixture(),
     });
     pane.taskSuggestions = [suggestion, next];
-    const first = pane.dismissTaskSuggestion(suggestion);
-    const second = pane.dismissTaskSuggestion(next);
+    const first = pane.resolveTaskSuggestion(suggestion, "dismiss");
+    const second = pane.resolveTaskSuggestion(next, "dismiss");
     firstDismiss.resolve({ taskId: suggestion.id, dismissed: false });
     await first;
     secondDismiss.resolve({ taskId: next.id, dismissed: true });
@@ -266,7 +266,7 @@ describe("chat pane task suggestion lifecycle", () => {
     const draw = () =>
       render(renderChatTaskSuggestionTray(pane.suggestionChatProps(true, false, false)), container);
 
-    const pending = pane.acceptTaskSuggestion(suggestion);
+    const pending = pane.resolveTaskSuggestion(suggestion, "accept");
     draw();
     expect(container.querySelector<HTMLDetailsElement>("details")?.open).toBe(true);
     expect(container.textContent).toContain("Starting");
@@ -281,7 +281,7 @@ describe("chat pane task suggestion lifecycle", () => {
     expect(container.querySelector<HTMLDetailsElement>("details")?.open).toBe(true);
     expect(container.textContent).toContain(suggestion.prompt);
     expect(container.textContent).toContain("Starting");
-    await pane.acceptTaskSuggestion(suggestion);
+    await pane.resolveTaskSuggestion(suggestion, "accept");
     expect(request).toHaveBeenCalledWith("taskSuggestions.accept", {
       taskId: suggestion.id,
       mode: "local",
@@ -299,7 +299,7 @@ describe("chat pane task suggestion lifecycle", () => {
     const open = container.querySelector<HTMLAnchorElement>(".task-suggestion__open");
     expect(open?.textContent).toContain("Open session");
     expect(open?.getAttribute("href")).toContain("task");
-    await pane.acceptTaskSuggestion(suggestion);
+    await pane.resolveTaskSuggestion(suggestion, "accept");
     expect(
       request.mock.calls.filter(([method]) => method === "taskSuggestions.accept"),
     ).toHaveLength(1);
@@ -307,7 +307,7 @@ describe("chat pane task suggestion lifecycle", () => {
     expect(navigate).toHaveBeenCalledExactlyOnceWith(pane.paneId, "agent:main:task");
     holdList = true;
     const refresh = pane.refreshTaskSuggestions();
-    await pane.dismissTaskSuggestion(suggestion);
+    await pane.resolveTaskSuggestion(suggestion, "dismiss");
     lateList.resolve({ suggestions: [suggestion] });
     await refresh;
     expect(pane.taskSuggestions).toEqual([]);
@@ -352,7 +352,7 @@ describe("chat pane task suggestion lifecycle", () => {
     const container = document.createElement("div");
     const draw = () =>
       render(renderChatTaskSuggestionTray(pane.suggestionChatProps(true, false, false)), container);
-    await pane.acceptTaskSuggestion(suggestion, "worktree");
+    await pane.resolveTaskSuggestion(suggestion, "accept", "worktree");
     await vi.waitFor(() => {
       draw();
       expect(container.querySelector(".task-suggestion__repository-choice")).not.toBeNull();
@@ -426,7 +426,7 @@ describe("chat pane task suggestion lifecycle", () => {
       "projects.list",
     ]);
     pane.taskSuggestions = [suggestion];
-    await pane.acceptTaskSuggestion(suggestion, "worktree");
+    await pane.resolveTaskSuggestion(suggestion, "accept", "worktree");
     pane.connectionGeneration += 1;
     projects.resolve({
       projects: [
@@ -448,7 +448,7 @@ describe("chat pane task suggestion lifecycle", () => {
     const sessions = createSessionCapabilityFixture();
     const { pane } = createTestChatPane({ client, sessions });
     pane.taskSuggestions = [suggestion];
-    const pending = pane.acceptTaskSuggestion(suggestion);
+    const pending = pane.resolveTaskSuggestion(suggestion, "accept");
     pane.connectionGeneration += 1;
     accepted.resolve({ taskId: suggestion.id, key: "agent:main:stale" });
 
@@ -475,7 +475,7 @@ describe("chat pane task suggestion lifecycle", () => {
     state.loadAssistantIdentity = vi.fn(async () => {});
     pane.taskSuggestions = [suggestion];
     const snapshot = pane.context.gateway.snapshot;
-    const pending = pane.acceptTaskSuggestion(suggestion, "worktree");
+    const pending = pane.resolveTaskSuggestion(suggestion, "accept", "worktree");
     const container = document.createElement("div");
     const draw = (connected: boolean) =>
       render(
@@ -490,13 +490,13 @@ describe("chat pane task suggestion lifecycle", () => {
     expect(container.querySelector<HTMLButtonElement>(".task-suggestion__retry")?.disabled).toBe(
       true,
     );
-    await pane.acceptTaskSuggestion(suggestion);
+    await pane.resolveTaskSuggestion(suggestion, "accept");
     expect(attempts).toBe(1);
     pane.applyGatewaySnapshot({ ...snapshot, phase: "connected" });
     await pane.refreshTaskSuggestions();
     draw(true);
     expect(container.textContent).toContain(suggestion.prompt);
-    const retrying = pane.acceptTaskSuggestion(suggestion);
+    const retrying = pane.resolveTaskSuggestion(suggestion, "accept");
     first.resolve({ taskId: suggestion.id, key: "agent:main:stale" });
     await pending;
     draw(true);
@@ -545,7 +545,7 @@ describe("chat pane task suggestion lifecycle", () => {
         sessions: createSessionCapabilityFixture(),
       });
       pane.taskSuggestions = [suggestion];
-      const pending = pane.acceptTaskSuggestion(suggestion, "worktree");
+      const pending = pane.resolveTaskSuggestion(suggestion, "accept", "worktree");
       if (resolved) {
         pane.handleTaskSuggestionEvent({
           action: "resolved",
@@ -565,8 +565,8 @@ describe("chat pane task suggestion lifecycle", () => {
         "Acceptance response unavailable",
       );
       expect(container.querySelector(".task-suggestion__retry")?.textContent).toContain("Retry");
-      const retrying = pane.acceptTaskSuggestion(suggestion);
-      await pane.acceptTaskSuggestion(suggestion);
+      const retrying = pane.resolveTaskSuggestion(suggestion, "accept");
+      await pane.resolveTaskSuggestion(suggestion, "accept");
       expect(attempts).toBe(2);
       expect(request.mock.calls.filter(([method]) => method === "taskSuggestions.accept")).toEqual([
         ["taskSuggestions.accept", { taskId: suggestion.id, mode: "worktree" }],
@@ -601,7 +601,7 @@ describe("chat pane task suggestion lifecycle", () => {
       };
       snapshot.selfUser = { id: "operator-a", name: "Operator A" };
       pane.taskSuggestions = [suggestion];
-      const pending = pane.acceptTaskSuggestion(suggestion);
+      const pending = pane.resolveTaskSuggestion(suggestion, "accept");
       const container = document.createElement("div");
       const draw = () =>
         render(
@@ -654,7 +654,7 @@ describe("chat pane task suggestion lifecycle", () => {
       const navigate = vi.fn();
       pane.onPaneSessionChange = navigate;
       pane.taskSuggestions = [suggestion];
-      const pending = pane.acceptTaskSuggestion(suggestion);
+      const pending = pane.resolveTaskSuggestion(suggestion, "accept");
       if (phase === "failed") {
         accepted.reject(new Error("Acceptance response unavailable"));
         await pending;

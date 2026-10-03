@@ -35,6 +35,59 @@ async function readRecorderEvents(recorderPath: string): Promise<RecorderEvent[]
 
 describe("Discord Crabline real-plugin roundtrip", () => {
   it.runIf(RUN_DISCORD_CRABLINE_E2E)(
+    "accepts top-level finals and rejects native reply finals through the shipped scenario",
+    async () => {
+      for (const forceReply of [false, true]) {
+        const outputDir = path.join(
+          process.cwd(),
+          ".artifacts",
+          "qa-e2e",
+          `discord-final-shape-${process.pid}-${Date.now()}`,
+        );
+        const suite = await runQaSuite({
+          channelDriver: "crabline",
+          channelId: "discord",
+          controlUiEnabled: false,
+          outputDir,
+          providerMode: "mock-openai",
+          repoRoot: process.cwd(),
+          scenarioIds: ["channel-top-level-reply-shape"],
+          ...(forceReply
+            ? {
+                mutateConfig: (cfg) => ({
+                  ...cfg,
+                  channels: {
+                    ...cfg.channels,
+                    discord: { ...cfg.channels?.discord, replyToMode: "all" },
+                  },
+                }),
+              }
+            : {}),
+        });
+        expect(suite.result.scenarios).toEqual([
+          expect.objectContaining({ status: forceReply ? "fail" : "pass" }),
+        ]);
+        if (forceReply) {
+          expect(JSON.stringify(suite.result.scenarios)).toContain("expected top-level reply");
+        }
+        const events = await readRecorderEvents(
+          path.join(outputDir, "artifacts", "crabline", "discord-provider-server.jsonl"),
+        );
+        const final = events.findLast(
+          (event) =>
+            event.type === "api" &&
+            event.method === "POST" &&
+            event.accepted === true &&
+            event.body?.content === "QA-TOP-LEVEL-REPLY-OK",
+        );
+        expect(final).toBeDefined();
+        expect(Boolean(readObject(final?.body?.message_reference)?.message_id)).toBe(forceReply);
+      }
+    },
+    360_000,
+  );
+
+  it.runIf(RUN_DISCORD_CRABLINE_E2E)(
     "crosses the real Discord REST and Gateway boundaries and closes every owned resource",
     async () => {
       const repoRoot = process.cwd();
@@ -144,6 +197,8 @@ describe("Discord Crabline real-plugin roundtrip", () => {
       const snapshotEvents = await readRecorderEvents(
         path.resolve(suite.result.outputDir, snapshotRecorderPath),
       );
+      expect(path.resolve(suite.result.outputDir, snapshotRecorderPath)).not.toBe(recorderPath);
+      expect(snapshotEvents.some((event) => event.accepted === true)).toBe(true);
       expect(
         snapshotEvents.some(
           (event) =>
@@ -153,7 +208,7 @@ describe("Discord Crabline real-plugin roundtrip", () => {
             (readStringValue(readObject(event.body)?.content) ?? "").includes(EXPECTED_MARKER) &&
             event.accepted === true,
         ),
-      ).toBe(true);
+      ).toBe(false);
 
       // The suite returns only after Gateway, WebSocket, HTTP, recorder, and temporary runtime
       // owners have all completed their ordered cleanup.

@@ -332,6 +332,7 @@ function adaptStepForBaseline(step: ConfigStep, baselineVersion: string | null):
 function* adaptRecipeForBaseline(
   steps: ConfigStep[],
   baselineVersion: string | null,
+  scenario: string,
 ): Generator<ConfigStep> {
   // Older and suffixed releases retain their existing command and receipt contract.
   const pinnedVersion = parsePinnedReleaseVersion(baselineVersion ?? "");
@@ -341,6 +342,27 @@ function* adaptRecipeForBaseline(
   for (const [index, step] of steps.entries()) {
     if (index <= batchedThrough) {
       continue;
+    }
+    if (scenario === "base" && pinnedVersion === "2026.9.7" && step.id === "validate") {
+      yield {
+        id: "silent-reply-internal-retirement",
+        intent: "silent-reply-internal-retirement",
+        argv: [
+          "config",
+          "set",
+          "--batch-json",
+          JSON.stringify([
+            {
+              path: "agents.defaults.silentReply",
+              value: { group: "allow", internal: "allow" },
+            },
+            {
+              path: "surfaces.discord.silentReply",
+              value: { group: "disallow", internal: "disallow" },
+            },
+          ]),
+        ],
+      };
     }
     if (
       batchChannels &&
@@ -381,7 +403,13 @@ export function resolveUpgradeSurvivorConfigStepsForBaseline(
   scenario = "base",
   baselineVersion: string | null = null,
 ): ConfigStep[] {
-  return [...adaptRecipeForBaseline(resolveUpgradeSurvivorConfigSteps(scenario), baselineVersion)];
+  return [
+    ...adaptRecipeForBaseline(
+      resolveUpgradeSurvivorConfigSteps(scenario),
+      baselineVersion,
+      scenario,
+    ),
+  ];
 }
 
 export function resolveUpgradeSurvivorOpenClawCommand(
@@ -462,7 +490,7 @@ function applyRecipe() {
     steps: [],
   };
 
-  for (const step of adaptRecipeForBaseline(recipeSteps, baselineVersion)) {
+  for (const step of adaptRecipeForBaseline(recipeSteps, baselineVersion, scenario)) {
     const outcome = runUpgradeSurvivorOpenClawStep(step);
     summary.steps.push(outcome);
     if (outcome.ok) {

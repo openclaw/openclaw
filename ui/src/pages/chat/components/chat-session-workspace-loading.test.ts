@@ -50,6 +50,8 @@ function fixture() {
           name: "inventory.csv",
           kind: "read",
           missing: false,
+          previewKind: "text",
+          contentEncoding: "utf8",
           content: "item,count\nnotebooks,3",
         },
       }),

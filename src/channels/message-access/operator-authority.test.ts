@@ -27,9 +27,14 @@ import {
   prepareReplyToolAuthority,
   resolveInboundReplyToolAuthorityOverlay,
 } from "../../auto-reply/reply/reply-tool-authority.js";
+import {
+  stripInboundMetadata,
+  stripLeadingInboundMetadata,
+} from "../../auto-reply/reply/strip-inbound-meta.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { installDiscordRegistryHooks } from "../../auto-reply/test-helpers/command-auth-registry-fixture.js";
 import { prepareChannelOperatorAdmin } from "../../gateway/channel-operator-authority.js";
+import { mergeImportedChatHistoryMessages } from "../../gateway/cli-session-history.merge.js";
 import { captureGatewayOperatorRunAuthority } from "../../gateway/operator-run-authority.js";
 import { createOperatorClient } from "../../gateway/server-plugin-in-process-dispatch.test-support.js";
 import { resolveGatewayScopedTools } from "../../gateway/tool-resolution.js";
@@ -50,7 +55,12 @@ import {
   unlinkUserChannelIdentity,
   resolveUserChannelAuthorizationPolicy,
 } from "../../state/user-channel-identities.js";
-import { linkEmail, setDisplayName, setUserProfileRole } from "../../state/user-profiles.js";
+import {
+  linkEmail,
+  setDisplayName,
+  setUserProfileRole,
+  syncGitHubIdentity,
+} from "../../state/user-profile-writes.worker.js";
 import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
 import {
   buildChannelInboundEventContext,
@@ -68,6 +78,41 @@ import { createHostChannelIngressRuntime } from "./runtime.js";
 
 installDiscordRegistryHooks();
 registerOperatorAssignmentTests();
+
+it("uses a linked sender's verified GitHub role and retires authority after a login change", async () => {
+  await withAdminIngress(async ({ admins, cfg, activatePolicy, context }) => {
+    const { profile, identity } = admins[0]!;
+    setUserProfileRole(profile.id, null);
+    syncGitHubIdentity({
+      identity: { accountId: 123, login: "Channel-Admin" },
+      authenticationAlias: { kind: "email", email: "ada@example.test" },
+    });
+    await activatePolicy({
+      roles: {
+        ...cfg.gateway!.roles!,
+        assignments: { byGithubLogin: { "channel-admin": "admin" } },
+      },
+    });
+
+    const ctx = await context(identity.senderId);
+    const authority = expectDefined(
+      prepareInternalGetReplyOptions(undefined, ctx)?.operatorAuthority,
+      "GitHub-assigned channel operator authority",
+    );
+    expect(authority.profileId).toBe(profile.id);
+    expect(authority.scopes).toEqual(["operator.admin"]);
+    expect(authority.rolePolicy?.sessionAccessCap).toBe("write");
+
+    syncGitHubIdentity({
+      identity: { accountId: 123, login: "Renamed-Channel-Admin" },
+      authenticationAlias: { kind: "email", email: "ada@example.test" },
+    });
+
+    expect(() => authority.assertCurrent()).toThrow();
+    const renamed = await context(identity.senderId);
+    expect(prepareInternalGetReplyOptions(undefined, renamed)?.operatorAuthority).toBeUndefined();
+  });
+});
 
 it.each(["equivalent", "sessions", "sandbox", "agents", "roles-disabled"] as const)(
   "compares linked-channel steering permissions with %s roles",
@@ -207,6 +252,29 @@ it("exposes a verified linked requester in trusted metadata without widening own
       expect(metadata.requester_profile).toEqual(
         scenario.linked ? { id: admin.profile.id, display_name: "Ada Lovelace" } : undefined,
       );
+      // The requester hint is model-only context; display and CLI-history dedupe strip it.
+      expect(prompt.includes("requester_profile is the verified linked requester")).toBe(
+        scenario.linked,
+      );
+      expect(stripInboundMetadata(`${prompt}\n\nassign this to me`)).toBe("assign this to me");
+      expect(stripLeadingInboundMetadata(`${prompt}\n\nassign this to me`)).toBe(
+        "assign this to me",
+      );
+      // Claude CLI stores the full prompt; history merge must fold it into the local turn.
+      const sentAt = Date.parse("2026-09-29T03:28:00.915Z");
+      expect(
+        mergeImportedChatHistoryMessages({
+          localMessages: [{ role: "user", content: "assign this to me", timestamp: sentAt }],
+          importedMessages: [
+            {
+              role: "user",
+              content: `${prompt}\n\nassign this to me`,
+              timestamp: sentAt + 435,
+              __openclaw: { importedFrom: "claude-cli", externalId: "u1", cliSessionId: "s1" },
+            },
+          ],
+        }),
+      ).toHaveLength(1);
       const { senderIsOwner } = resolveCommandAuthorization({ cfg, ctx, commandAuthorized: true });
       expect(senderIsOwner).toBe(scenario.owner);
       const tools = resolveGatewayScopedTools({

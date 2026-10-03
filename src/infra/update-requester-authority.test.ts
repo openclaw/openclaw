@@ -15,7 +15,8 @@ import {
   linkUserChannelIdentity,
   unlinkUserChannelIdentity,
 } from "../state/user-channel-identities.js";
-import { ensureProfileForEmail, setUserProfileRole } from "../state/user-profiles.js";
+import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { runUpdateRepairLoop } from "./update-repair-agent.js";
 import { updateRepairParentMessageSchema } from "./update-repair-protocol.js";
 import {

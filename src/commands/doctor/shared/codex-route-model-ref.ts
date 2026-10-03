@@ -1,27 +1,16 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asOptionalRecord as asMutableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString as normalizeString } from "@openclaw/normalization-core/string-coerce";
-import { normalizeOptionalAgentRuntimeId } from "../../../agents/agent-runtime-id.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../../agents/defaults.js";
 import { splitTrailingAuthProfile } from "../../../agents/model-ref-profile.js";
 import { normalizeConfiguredProviderCatalogModelId } from "../../../agents/model-ref-shared.js";
 import { resolveConfiguredPrimaryProviderFallback } from "../../../agents/model-selection-shared.js";
 import { configuredModelRouteNeedsCodex } from "../../../config/codex-plugin-diagnostics.js";
 import { isLegacyCodexProviderId } from "../../../config/legacy-codex-provider.js";
-import type { AgentRuntimePolicyConfig } from "../../../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { normalizeAgentId } from "../../../routing/session-key.js";
 import { listMutableCodexRouteAgentEntries } from "./codex-route-agent-entries.js";
 import type { MutableRecord } from "./codex-route-types.js";
-
-export function asAgentRuntimePolicyConfig(value: unknown): AgentRuntimePolicyConfig | undefined {
-  const record = asMutableRecord(value);
-  return record ? { id: typeof record.id === "string" ? record.id : undefined } : undefined;
-}
-
-export function readLegacyDefaultsRuntime(defaults: unknown): AgentRuntimePolicyConfig | undefined {
-  return asAgentRuntimePolicyConfig(asMutableRecord(defaults)?.agentRuntime);
-}
 
 export type LegacyCodexModelIdentity = string;
 
@@ -136,16 +125,6 @@ export function toCanonicalOpenAIModelRef(model: string): string | undefined {
 
 export function toOpenAIModelId(model: string): string | undefined {
   return readLegacyCodexModelId(model);
-}
-
-export function resolveRuntime(params: {
-  agentRuntime?: AgentRuntimePolicyConfig;
-  defaultsRuntime?: AgentRuntimePolicyConfig;
-}): string | undefined {
-  return (
-    normalizeOptionalAgentRuntimeId(params.agentRuntime?.id) ??
-    normalizeOptionalAgentRuntimeId(params.defaultsRuntime?.id)
-  );
 }
 
 export function readModelConfigPrimaryRef(value: unknown): string | undefined {
@@ -408,24 +387,15 @@ export function agentUsesCodexRuntimeForCompaction(params: {
   cfg: OpenClawConfig;
   agent: unknown;
   agentId?: string;
-  currentRuntime?: string;
   inheritedModelRef?: string;
   env?: NodeJS.ProcessEnv;
 }): boolean {
-  const runtime = concreteRuntimeId(normalizeString(params.currentRuntime));
-  if (runtime) {
-    return runtime === "codex";
-  }
   return modelRefUsesCodexRuntime({
     cfg: params.cfg,
     modelRef: readAgentPrimaryModelRef(params.agent, params.inheritedModelRef),
     agentId: params.agentId,
     env: params.env,
   });
-}
-
-function concreteRuntimeId(runtime: string | undefined): string | undefined {
-  return runtime && runtime !== "auto" && runtime !== "default" ? runtime : undefined;
 }
 
 export function parseCodexRouteModelRef(

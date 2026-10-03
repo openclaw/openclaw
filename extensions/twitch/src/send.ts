@@ -7,9 +7,6 @@ import type { TwitchClientManager } from "./twitch-client.js";
 import type { TwitchAccountConfig } from "./types.js";
 import { stripMarkdownForTwitch } from "./utils/markdown.js";
 
-/**
- * Result from sending a message to Twitch.
- */
 interface SendMessageResult {
   outcome?: "not_sent";
   /** The message ID (generated for tracking) */

@@ -746,7 +746,10 @@ describe("registerSlackMessageEvents", () => {
       const actualSystemEvents = await vi.importActual<
         typeof import("openclaw/plugin-sdk/system-event-runtime")
       >("openclaw/plugin-sdk/system-event-runtime");
-      actualSystemEvents.resetSystemEventsForTest();
+      const { resetSystemEventsForTest } = await vi.importActual<
+        typeof import("openclaw/plugin-sdk/test-fixtures")
+      >("openclaw/plugin-sdk/test-fixtures");
+      resetSystemEventsForTest();
       messageQueueMock.mockImplementation(
         (text: string, { sessionKey, ...options }: { sessionKey: string }) =>
           actualSystemEvents.enqueueRoutedSystemEvent(
@@ -840,7 +843,7 @@ describe("registerSlackMessageEvents", () => {
       expect(actualSystemEvents.peekSystemEventEntries(threadSessionKey)).toHaveLength(
         threadSession ? 1 : 0,
       );
-      actualSystemEvents.resetSystemEventsForTest();
+      resetSystemEventsForTest();
     },
   );
 

@@ -345,7 +345,11 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
       context.params.onContextEngineTurnCandidate = candidate;
       context.params.userTurnTranscriptRecorder = recorder;
       if (kind === "messaging") {
-        executeMock.mockResolvedValue({ text: "", didSendViaMessagingTool: true });
+        executeMock.mockResolvedValue({
+          text: "",
+          didSendViaMessagingTool: true,
+          sourceReplyDelivered: true,
+        });
       } else {
         context.params.currentInboundEventKind = "room_event";
         context.params.persistAssistantTranscript = false;

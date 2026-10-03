@@ -2,7 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { closeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabaseByPath,
+  closeOpenClawAgentDatabaseByPathAsync,
+} from "../../state/openclaw-agent-db.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -32,6 +35,18 @@ describe("qualified session accessor projection", () => {
   afterEach(async () => {
     await state.cleanup();
   });
+
+  async function captureGlobalSession(entry: SessionEntry) {
+    const cfg: OpenClawConfig = {
+      session: { store: storePath, scope: "global" },
+      agents: { entries: { main: { default: true } } },
+    };
+    const physical = { agentId: "main", storePath, sessionKey: "global" };
+    await replaceSessionEntry(physical, entry);
+    const scope = { cfg, sessionKey: "global", agentId: "main" };
+    const target = resolveSessionEntryAccessTarget(scope, { keyFormat: "agent-qualified" });
+    return { physical, scope, target };
+  }
 
   it.each([
     { input: "global", stored: "global", logical: "agent:research:global", global: true },
@@ -197,14 +212,10 @@ describe("qualified session accessor projection", () => {
   });
 
   it("rejects replacement of a captured session before its update starts", async () => {
-    const cfg: OpenClawConfig = {
-      session: { store: storePath, scope: "global" },
-      agents: { entries: { main: { default: true } } },
-    };
-    const physical = { agentId: "main", storePath, sessionKey: "global" };
-    await replaceSessionEntry(physical, { sessionId: "original", updatedAt: 1 });
-    const scope = { cfg, sessionKey: "global", agentId: "main" };
-    const target = resolveSessionEntryAccessTarget(scope, { keyFormat: "agent-qualified" });
+    const { physical, scope, target } = await captureGlobalSession({
+      sessionId: "original",
+      updatedAt: 1,
+    });
     await replaceSessionEntry(physical, { sessionId: "replacement", updatedAt: 2 });
     const update = vi.fn((entry: SessionEntry) => {
       entry.label = "must not write";
@@ -217,18 +228,11 @@ describe("qualified session accessor projection", () => {
   });
 
   it("rejects a successor lifecycle with the same SID after waiting for FIFO admission", async () => {
-    const cfg: OpenClawConfig = {
-      session: { store: storePath, scope: "global" },
-      agents: { entries: { main: { default: true } } },
-    };
-    const physical = { agentId: "main", storePath, sessionKey: "global" };
-    await replaceSessionEntry(physical, {
+    const { physical, scope, target } = await captureGlobalSession({
       sessionId: "same-session",
       lifecycleRevision: "before",
       updatedAt: 1,
     });
-    const scope = { cfg, agentId: "main", sessionKey: "global" };
-    const target = resolveSessionEntryAccessTarget(scope, { keyFormat: "agent-qualified" });
     const entered = createDeferredCore();
     const resume = createDeferredCore();
     const successor = {
@@ -295,7 +299,7 @@ describe("qualified session accessor projection", () => {
     const scope = { cfg, agentId: "main", sessionKey: "global" };
     const target = resolveSessionEntryAccessTarget(scope, { keyFormat: "agent-qualified" });
     expect(target.readSource).toBeDefined();
-    closeOpenClawAgentDatabaseByPath(target.storePath);
+    await closeOpenClawAgentDatabaseByPathAsync(target.storePath);
     await updateResolvedSessionEntry(
       scope,
       (entry) => {
@@ -319,19 +323,12 @@ describe("qualified session accessor projection", () => {
   });
 
   it("rejects an identical database copied over the captured physical pathname", async () => {
-    const cfg: OpenClawConfig = {
-      session: { store: storePath, scope: "global" },
-      agents: { entries: { main: { default: true } } },
-    };
-    const physical = { agentId: "main", storePath, sessionKey: "global" };
-    await replaceSessionEntry(physical, {
+    const { physical, scope, target } = await captureGlobalSession({
       sessionId: "same-session",
       lifecycleRevision: "same",
       updatedAt: 1,
     });
-    const scope = { cfg, agentId: "main", sessionKey: "global" };
-    const target = resolveSessionEntryAccessTarget(scope, { keyFormat: "agent-qualified" });
-    closeOpenClawAgentDatabaseByPath(target.storePath);
+    await closeOpenClawAgentDatabaseByPathAsync(target.storePath);
     const previousPath = `${target.storePath}.original`;
     fs.renameSync(target.storePath, previousPath);
     fs.copyFileSync(previousPath, target.storePath);
@@ -392,14 +389,10 @@ describe("qualified session accessor projection", () => {
   );
 
   it("rechecks counterpart absence after an awaited captured update", async () => {
-    const cfg: OpenClawConfig = {
-      session: { store: storePath, scope: "global" },
-      agents: { entries: { main: { default: true } } },
-    };
-    const physical = { agentId: "main", storePath, sessionKey: "global" };
-    await replaceSessionEntry(physical, { sessionId: "original", updatedAt: 1 });
-    const scope = { cfg, sessionKey: "global", agentId: "main" };
-    const target = resolveSessionEntryAccessTarget(scope, { keyFormat: "agent-qualified" });
+    const { physical, scope, target } = await captureGlobalSession({
+      sessionId: "original",
+      updatedAt: 1,
+    });
     const entered = createDeferredCore();
     const resume = createDeferredCore();
     const pending = updateResolvedSessionEntry(

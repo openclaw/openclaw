@@ -31,12 +31,12 @@ import { appendTranscriptMessage, resetSessionEntryLifecycle } from "./session-a
 import * as archiveStore from "./session-accessor.sqlite-archive-store.js";
 import * as archives from "./session-accessor.sqlite-archive.js";
 import { patchSessionEntryCore, replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
+import * as entryEviction from "./session-accessor.sqlite-lifecycle.js";
 import * as reclamation from "./session-accessor.sqlite-reclamation-run.js";
 import {
   joinSessionHistoryBudgetSweeps,
   type SessionHistoryBudgetQueueObservation,
 } from "./session-history-budget.test-support.js";
-import * as entryEviction from "./session-history-entry-eviction.runtime.js";
 import {
   enforceSqliteSessionHistoryDiskBudget,
   inspectSqliteSessionHistoryDiskBudget,
@@ -182,12 +182,25 @@ it.each([
         protectedKey,
       ),
     ).toEqual({ current_session_id: currentId });
-    // Forget both the handle and process validation, exposing registration as well as lease drift.
-    closeOpenClawAgentDatabasesForTest(state.root);
+    // Forget cached reads without revoking the active sweep's database workers.
+    const databaseOptions = {
+      agentId: target.agentId ?? "main",
+      path: databasePath,
+      env: state.env,
+    };
+    const forgetCachedDatabase = () => {
+      const cached = getOpenClawAgentDatabaseIfOpen(databaseOptions);
+      if (cached) {
+        closeCachedOpenClawAgentDatabase(cached, { eviction: true });
+      }
+      clearOpenClawAgentDatabaseValidationCache(state.root);
+      expect(getOpenClawAgentDatabaseIfOpen(databaseOptions)).toBeUndefined();
+    };
+    forgetCachedDatabase();
 
     let capEntryCalls = 0;
-    const deleteEntry = entryEviction.deleteDiskBudgetArchivedSessionEntry;
-    vi.spyOn(entryEviction, "deleteDiskBudgetArchivedSessionEntry").mockImplementation(
+    const deleteEntry = entryEviction.deleteDiskBudgetSessionEntryLifecycle;
+    vi.spyOn(entryEviction, "deleteDiskBudgetSessionEntryLifecycle").mockImplementation(
       async (...args) => {
         if (victim === "cap-entry" && args[0].target.canonicalKey === sessionKey) {
           capEntryCalls += 1;
@@ -198,18 +211,7 @@ it.each([
               sessionKey,
             ),
           ).toEqual({ current_session_id: originalId });
-          // Evict the host handle before the lazy loader without revoking this active sweep's workers.
-          const databaseOptions = {
-            agentId: target.agentId ?? "main",
-            path: databasePath,
-            env: state.env,
-          };
-          const cached = getOpenClawAgentDatabaseIfOpen(databaseOptions);
-          if (cached) {
-            closeCachedOpenClawAgentDatabase(cached, { eviction: true });
-          }
-          clearOpenClawAgentDatabaseValidationCache(state.root);
-          expect(getOpenClawAgentDatabaseIfOpen(databaseOptions)).toBeUndefined();
+          forgetCachedDatabase();
         }
         return await deleteEntry(...args);
       },
@@ -382,7 +384,7 @@ it.each([
     moveRelativeCwd?.();
     // Patch commit reopened A. Remove its handle and validation before allowing
     // the REAL first measurement to return to enforcement/preview.
-    closeOpenClawAgentDatabasesForTest(state.root);
+    forgetCachedDatabase();
     release.resolve();
     if (trigger === "inspect") {
       await expect(sweep).resolves.toMatchObject({

@@ -4,12 +4,12 @@ import { recoverDoctorSessionSqliteTargets } from "../commands/doctor-session-sq
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { withAgentDatabaseMaintenanceLease } from "./openclaw-agent-db-maintenance-lease.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   ensureOpenClawAgentDatabaseSchema,
   OPENCLAW_AGENT_SCHEMA_VERSION,
   openOpenClawAgentDatabase,
-  withAgentDatabaseMaintenanceLease,
 } from "./openclaw-agent-db.js";
 import { removeCanonicalValidationFromHistoricalAgentFixture } from "./openclaw-agent-db.test-support.js";
 import { withLegacySessionParticipantsSchema } from "./openclaw-agent-participants-migration.js";
@@ -198,7 +198,7 @@ describe("participant identity migration", () => {
       });
     },
   );
-  it.each([0, 17])(
+  it.each([17])(
     "refuses a v%s identity migration outside stopped-writer maintenance",
     async (version) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {

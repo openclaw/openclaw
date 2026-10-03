@@ -10,12 +10,6 @@ import {
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
 import { sessionEntryForkedFromParent } from "../../config/sessions/session-entry-lineage.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import {
-  ProjectCheckoutError,
-  resolveProjectCheckout,
-  resolveProjectDirectory,
-  resolveProjectRegistry,
-} from "../../projects/project-registry.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { assertPreparedSkillLibrarySelection } from "../../skills/library/selection.js";
 import { captureAgentTurnPrincipal } from "../agent-turn/principal.js";
@@ -36,6 +30,7 @@ import {
 } from "../session-utils.js";
 import {
   prepareSessionWorktreeCreation,
+  resolveSessionProjectRoot,
   validateSessionWorktreeSelection,
 } from "../session-worktree-preparation.js";
 import { prepareSkillLibrarySessionCreation } from "../skill-library-session.js";
@@ -349,35 +344,12 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       p.worktree === true && !emptyWorkspace && hasInitialTurn && !existingTargetEntry;
     let projectRoot: string | undefined;
     if (requestedProjectId) {
-      const project = await resolveProjectRegistry(cfg, requestedProjectId);
-      if (!project) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, `unknown project id: ${requestedProjectId}`),
-        );
+      const project = await resolveSessionProjectRoot(cfg, requestedProjectId, p.worktree === true);
+      if (!project.ok) {
+        respond(false, undefined, project.error);
         return;
       }
-      try {
-        const checkout =
-          p.worktree === true ? await resolveProjectCheckout(project.repoRoot) : undefined;
-        projectRoot = checkout?.path ?? (await resolveProjectDirectory(project.repoRoot));
-        if (checkout && project.source !== "workspace" && checkout.path !== checkout.repoRoot) {
-          throw new ProjectCheckoutError(`project root is no longer a git checkout`);
-        }
-      } catch (error) {
-        const detail =
-          error instanceof ProjectCheckoutError ? error.message : formatErrorMessage(error);
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.UNAVAILABLE,
-            `project ${requestedProjectId} is unavailable (${detail}); update the agent workspace path or re-register the project`,
-          ),
-        );
-        return;
-      }
+      projectRoot = project.value;
     }
     let sessionAgentId = catalogAgentId ?? explicitlyRequestedAgent.agentId;
     if (repository) {

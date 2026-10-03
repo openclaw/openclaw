@@ -174,7 +174,6 @@ export function createPatchedAccountSetupAdapter<
         accountKeyPolicy: params.accountKeyPolicy,
         accountId,
         patch,
-        accountPatch: patch,
         ensureChannelEnabled: params.ensureChannelEnabled ?? !params.alwaysUseAccounts,
         ensureAccountEnabled: params.ensureAccountEnabled ?? true,
         scopeDefaultToAccounts: params.alwaysUseAccounts,

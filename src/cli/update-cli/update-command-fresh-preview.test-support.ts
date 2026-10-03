@@ -24,7 +24,7 @@ import type { installFreshUpdateFixture } from "./update-command-fresh.test-supp
 import * as initialization from "./update-command-initialization.js";
 import * as packageUpdate from "./update-command-package.js";
 import * as commandRun from "./update-command-run.js";
-import * as servicePlan from "./update-command-service-plan.js";
+import * as runtimePlan from "./update-command-runtime-preflight.js";
 import * as commandTriage from "./update-command-triage.js";
 import { updateCommand } from "./update-command.js";
 
@@ -86,7 +86,7 @@ function expectOriginalCapture(params: {
 }
 
 export function allowPackageRuntime() {
-  return vi.spyOn(servicePlan, "resolvePackageRuntimePreflight").mockResolvedValue({
+  return vi.spyOn(runtimePlan, "resolvePackageRuntimePreflight").mockResolvedValue({
     ok: true,
     value: {},
   });

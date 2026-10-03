@@ -1,9 +1,12 @@
 import { readFileSync } from "node:fs";
 import { matchesGlob } from "node:path";
 import { isPlainRepoRelativePath } from "../../test/vitest/vitest.include-patterns.ts";
+import { isTestFileTarget } from "./changed-path-facts.mjs";
+import { UI_E2E_OWNER_WATCHES } from "./ci-ui-e2e-owner-inventory.mts";
 
 type PolicyTestWatch = {
   ownerGlobs?: readonly string[];
+  sourceOnly?: boolean;
   testFile: string;
   watchGlobs: readonly string[];
 };
@@ -12,7 +15,38 @@ type PolicyTestWatch = {
 // they enforce. Boundary and contract suites have dedicated always-on lanes;
 // this inventory covers the remaining tests that changed targeting cannot
 // discover from imports alone.
-const policyTestWatches = [
+const policyTestWatches: readonly PolicyTestWatch[] = [
+  {
+    testFile: "test/scripts/ios-lifecycle-workflow.test.ts",
+    watchGlobs: [
+      ".github/workflows/ci.yml",
+      "scripts/lib/ci-ios-smoke-plan.mjs",
+      "apps/ios/project.yml",
+      "apps/ios/Tests/**",
+      "apps/macos/Tests/OpenClawIPCTests/GatewayWebSocketTestSupport.swift",
+      "apps/shared/OpenClawKit/Tests/OpenClawKitTests/NativeGatewayWebSocketFixture.swift",
+    ],
+  },
+  // Browser-served route owners are not imports of the Playwright entry point.
+  ...UI_E2E_OWNER_WATCHES.map(({ testFile, watchGlobs }): PolicyTestWatch => ({
+    testFile,
+    watchGlobs,
+    sourceOnly: true,
+  })),
+  // New or removed modules and new import edges can escape a static inventory.
+  // Watch source edits conservatively: the absent inventory entry cannot own its guard.
+  ...[
+    "test/scripts/pr-wrapper-source-closure.test.ts",
+    "test/scripts/pr-worktree-provision.test.ts",
+    "test/scripts/eager-import-closure.test.ts",
+    "test/scripts/update-restart-module-outcome.test.ts",
+    "test/scripts/type-suppression-inventory.test.ts",
+    "test/scripts/plugin-sdk-surface-report.test.ts",
+  ].map((testFile): PolicyTestWatch => ({
+    testFile,
+    sourceOnly: true,
+    watchGlobs: ["{src,extensions,packages,scripts,ui/src}/**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs}"],
+  })),
   {
     testFile: "test/vitest-pr-exempt-retention.test.ts",
     watchGlobs: [
@@ -1932,28 +1966,13 @@ const policyTestWatches = [
     ],
   },
   {
+    // Sole CI owner of the skill's node:test and Python suites: no Vitest config
+    // routes those files, so test-only skill edits must select this wrapper.
     testFile: "test/scripts/telegram-e2e-userbot-skill.test.ts",
     watchGlobs: [
-      ".agents/skills/telegram-e2e-userbot/scripts/followup-drain-control-preload.mjs",
-      ".agents/skills/telegram-e2e-userbot/scripts/published-upgrade-artifact.mjs",
-      ".agents/skills/telegram-e2e-userbot/scripts/published-upgrade-scenario.mjs",
-      ".agents/skills/telegram-e2e-userbot/scripts/qa-credential-lease.mjs",
-      ".agents/skills/telegram-e2e-userbot/scripts/run-mock-sut-user-e2e.mjs",
-      ".agents/skills/telegram-e2e-userbot/scripts/run-published-upgrade-user-e2e.mjs",
-      ".agents/skills/telegram-e2e-userbot/scripts/scenario.mjs",
-      ".agents/skills/telegram-e2e-userbot/scripts/telegram-api-ignore-abort-preload.mjs",
-      ".agents/skills/telegram-e2e-userbot/scripts/telegram-binding-checkpoint.mjs",
-      ".agents/skills/telegram-e2e-userbot/scripts/telegram-binding-forum.py",
-      ".agents/skills/telegram-e2e-userbot/scripts/telegram-binding-upgrade-verdict.mjs",
-      ".agents/skills/telegram-e2e-userbot/scripts/telegram-run-scope.mjs",
-      ".agents/skills/telegram-e2e-userbot/scripts/telegram-test-api-proxy.mjs",
-      ".agents/skills/telegram-e2e-userbot/scripts/telegram-test-credential.mjs",
-      ".agents/skills/telegram-e2e-userbot/scripts/telegram-test-doctor.mjs",
-      ".agents/skills/telegram-e2e-userbot/scripts/telegram-test-group.mjs",
-      ".agents/skills/telegram-e2e-userbot/scripts/telegram-test-recover.mjs",
-      ".agents/skills/telegram-e2e-userbot/scripts/triage-mock-openai.mjs",
-      ".agents/skills/telegram-e2e-userbot/scripts/user-driver.py",
-      ".agents/skills/telegram-e2e-userbot/scripts/user-record.py",
+      ".agents/skills/telegram-e2e-userbot/agents/openai.yaml",
+      ".agents/skills/telegram-e2e-userbot/scripts/**",
+      "test/scripts/fixtures/triage-fixture-startup.mjs",
     ],
   },
   {
@@ -2053,7 +2072,7 @@ const policyTestWatches = [
       "src/agents/sandbox/ssh-backend.ts",
     ],
   },
-] satisfies readonly PolicyTestWatch[];
+];
 
 const literalPolicyPatterns = new Set(
   policyTestWatches
@@ -2077,9 +2096,10 @@ export function resolvePolicyTestTargets(
     literal: isPlainRepoRelativePath(changedPath),
   }));
   return policyTestWatches
-    .filter(({ watchGlobs, ownerGlobs }) =>
+    .filter(({ watchGlobs, ownerGlobs, sourceOnly }) =>
       paths.some(
         ({ changedPath, literal }) =>
+          (!sourceOnly || !isTestFileTarget(changedPath)) &&
           watchGlobs.some((watchGlob) => matchesPolicyPattern(changedPath, watchGlob, literal)) &&
           (!options.completeOwnersOnly ||
             ownerGlobs?.some((ownerGlob) => matchesPolicyPattern(changedPath, ownerGlob, literal))),

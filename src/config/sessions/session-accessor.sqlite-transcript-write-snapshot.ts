@@ -51,6 +51,7 @@ export function runTranscriptWriteSnapshotSync<T>(
   beforeCommitInTransaction?: () => void,
   expectedMutationAt?: number | null,
   view?: TranscriptWriteViewGuard,
+  diagnosticContext?: { eventType: string; messageRole?: string },
 ): Result<TranscriptWriteSnapshot<T>, TranscriptAppendRefusal> {
   const fencedScope = withOwnedSessionTranscriptWriterFence(scope);
   const resolved = resolveSqliteTranscriptScope(fencedScope);
@@ -84,7 +85,14 @@ export function runTranscriptWriteSnapshotSync<T>(
       });
     },
     toDatabaseOptions(resolved),
-    { operationLabel: "session.transcript.write-snapshot" },
+    {
+      operationLabel: "session.transcript.write-snapshot",
+      diagnosticContext: {
+        sessionId: resolved.sessionId,
+        requestedEvents: 1,
+        ...diagnosticContext,
+      },
+    },
   );
   // A savepoint can return while its enclosing transaction still owns rollback.
   if (result.ok && connection && hasSqlitePostCommitScope(connection)) {

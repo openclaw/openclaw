@@ -212,6 +212,67 @@ describe("matrix thread bindings", () => {
     vi.useRealTimers();
   });
 
+  it("loads and updates thread bindings written by the July SQLite store", async () => {
+    const bindingsPath = await resolveBindingsFilePath();
+    const store = createPluginStateKeyedStoreForTests("matrix", {
+      namespace: "thread-bindings",
+      maxEntries: 10_000,
+      env: { ...process.env, OPENCLAW_STATE_DIR: path.dirname(bindingsPath) },
+    });
+    // v2026.7.1: account id plus sha256(account id, parent room, thread), NUL-separated.
+    const key = "ops:df4863925b4d3d0c82df25928e615588bf4a6bd9544af82cf52100573eba9b8b";
+    const stored = {
+      accountId,
+      conversationId: "$thread",
+      parentConversationId: "!room:example",
+      targetKind: "subagent",
+      targetSessionKey: "agent:ops:subagent:child",
+      agentId: "ops",
+      boundBy: "system",
+      boundAt: 1_783_944_000_000,
+      lastActivityAt: 1_783_944_000_000,
+      idleTimeoutMs,
+      maxAgeMs: 0,
+    };
+    await store.register(key, stored);
+
+    const manager = await createBindingManager();
+    const binding = getSessionBindingService().resolveByConversation(currentThreadConversation());
+    expect(binding?.targetSessionKey).toBe(stored.targetSessionKey);
+    expect(binding?.boundAt).toBe(stored.boundAt);
+    if (!binding) {
+      throw new Error("expected July Matrix thread binding");
+    }
+    getSessionBindingService().touch(binding.bindingId, stored.lastActivityAt + 1_000);
+    await manager.stop();
+
+    expect((await store.entries()).map((entry) => entry.key)).toEqual([key]);
+    await expect(store.lookup(key)).resolves.toMatchObject({
+      ...stored,
+      lastActivityAt: stored.lastActivityAt + 1_000,
+    });
+    expect(fsSync.existsSync(bindingsPath)).toBe(false);
+  });
+
+  it("refuses retired thread-binding JSON without importing or deleting it", async () => {
+    const bindingsPath = await resolveBindingsFilePath();
+    const source = JSON.stringify({
+      version: 1,
+      bindings: [{ conversationId: "$thread", targetSessionKey: "agent:ops:subagent:child" }],
+    });
+    await fs.mkdir(path.dirname(bindingsPath), { recursive: true });
+    await fs.writeFile(bindingsPath, source);
+
+    await expect(createBindingManager()).rejects.toThrow(/2026\.9\.5/);
+
+    expect(await fs.readFile(bindingsPath, "utf8")).toBe(source);
+    expect(fsSync.existsSync(path.join(path.dirname(bindingsPath), "state"))).toBe(false);
+    expect(
+      getSessionBindingService().resolveByConversation(currentThreadConversation()),
+    ).toBeNull();
+    expect(sendMessageMatrixMock).not.toHaveBeenCalled();
+  });
+
   it("creates child Matrix thread bindings from a top-level room context", async () => {
     await createBindingManager();
 

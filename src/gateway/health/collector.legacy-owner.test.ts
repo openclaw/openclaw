@@ -1,9 +1,11 @@
+import "../../test-utils/prepare-compiled-subprocesses.js";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
-import { retainLegacyDefaultAgentId } from "../../config/legacy.default-agent-owner.js";
+import { createSessionStoreSummaryReaderStub } from "../../config/sessions/session-store-summary.test-support.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createCanonicalAgentConfigFixture } from "../../test-utils/config-roster.js";
 
 let testConfig: OpenClawConfig = {};
 let healthPluginsForTest: ChannelPlugin[] = [];
@@ -48,13 +50,11 @@ describe("collectGatewayHealthSnapshot legacy owner projection", () => {
     vi.doMock("../../config/config.js", () => ({
       getRuntimeConfig: () => testConfig,
     }));
-    // Store paths reach real SQLite target resolution, which inspects the agent
-    // database beside them; a shared /tmp path would read machine-wide state.
     vi.doMock("../../config/sessions/paths.js", () => ({
       resolveSessionStorePathCore: () => sessionStorePath,
     }));
-    vi.doMock("../../config/sessions/session-accessor.js", () => ({
-      readSessionStoreSummaryReadOnly: () => ({ count: 0, recent: [], byAgent: new Map() }),
+    vi.doMock("../../config/sessions/session-entry-read-runtime.js", () => ({
+      withSessionStoreReaderInWorker: createSessionStoreSummaryReaderStub(),
     }));
     vi.doMock("../../channels/plugins/read-only.js", () => ({
       listReadOnlyChannelPluginsForConfig: () => healthPluginsForTest,
@@ -80,10 +80,10 @@ describe("collectGatewayHealthSnapshot legacy owner projection", () => {
     tempDirs.cleanup();
   });
 
-  it("projects the retained owner without inventing an explicit fleet default", async () => {
-    const migratedConfig = {
+  it("projects the Doctor-migrated owner without inventing an ownerless fleet default", async () => {
+    const legacyConfig = {
       agents: {
-        entries: { first: {}, ops: {}, research: {} },
+        entries: { first: {}, ops: { default: true }, research: {} },
       },
       bindings: [{ agentId: "ops", match: { channel: "telegram", accountId: "ops" } }],
       channels: {
@@ -95,7 +95,7 @@ describe("collectGatewayHealthSnapshot legacy owner projection", () => {
         },
       },
     } satisfies OpenClawConfig;
-    testConfig = retainLegacyDefaultAgentId(migratedConfig, "ops");
+    testConfig = createCanonicalAgentConfigFixture(legacyConfig).config;
 
     const migrated = await collectGatewayHealthSnapshot({ audience: "admin", probe: false });
 

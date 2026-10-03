@@ -44,8 +44,13 @@ export async function runLegacyPluginSourceCapturesHealth(
 }
 
 export async function runRetainedUpdateRuntimesHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  const { noteRetainedUpdateRuntimes } = await import("../commands/doctor-retained-runtime.js");
-  await noteRetainedUpdateRuntimes(ctx.env ?? process.env, ctx.prompter.shouldRepair);
+  if (ctx.gatewayMaintenanceActive && ctx.prompter.shouldRepair) {
+    return;
+  }
+  const { prepareRetainedUpdateRuntimeCleanup } =
+    await import("../commands/doctor-retained-runtime.js");
+  const cleanup = await prepareRetainedUpdateRuntimeCleanup(ctx.env ?? process.env);
+  await cleanup(ctx.prompter.shouldRepair);
 }
 
 export async function runReleaseConfiguredPluginInstallsHealth(
@@ -126,7 +131,7 @@ export async function runStateIntegrityHealth(ctx: DoctorHealthFlowContext): Pro
   await noteStateIntegrity(ctx.cfg, ctx.prompter, ctx.configPath, {
     stateDirExistedAtStart: ctx.stateDirExistedAtStart,
   });
-  await noteBackupDoctorHint(ctx.env ?? process.env);
+  await noteBackupDoctorHint(ctx.env ?? process.env, ctx.cfg);
   const { noteBackupScratchHealth } = await import("../commands/doctor-backup-scratch.js");
   await noteBackupScratchHealth(ctx.env ?? process.env, ctx.prompter.shouldRepair);
 }

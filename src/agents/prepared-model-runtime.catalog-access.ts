@@ -1,4 +1,5 @@
 import pLimit from "p-limit";
+import { withRemoteModelCatalogSnapshot } from "../model-catalog/remote-overlay.js";
 import { resolveInstalledManifestRegistryIndexFingerprint } from "../plugins/manifest-registry-installed.js";
 import { createPreparedRuntimeAuthProfileUsageReader } from "./auth-profiles/runtime-snapshots.js";
 import {
@@ -81,6 +82,10 @@ export async function createFullModelCatalogAccess(
     assertBuildCurrent,
   );
   assertBuildCurrent();
+  const accountCatalog = createPreparedAccountCatalogAccess(
+    params.isCurrent,
+    params.retirementSignal,
+  );
   const readUsage = createPreparedRuntimeAuthProfileUsageReader(
     params.agentFacts.input.agentDir,
     params.agentFacts.input.inheritedAuthDir,
@@ -128,6 +133,7 @@ export async function createFullModelCatalogAccess(
         params.inventoryOwner.catalogInventory = published.inventory;
       }
     },
+    params.isPublished,
   );
   const providerSource = (provider: string) =>
     preparedProviderCatalogSource(
@@ -214,14 +220,16 @@ export async function createFullModelCatalogAccess(
   let nativePending: Promise<ModelCatalogSnapshot> | undefined;
   const assertCurrent = () =>
     assertPreparedModelRuntimeInputCurrent(params.agentFacts.input, params.isCurrent);
-  const worker = createPreparedModelCatalogWorker({
-    pluginRegistry: params.pluginGeneration.pluginRegistry,
-    agentFacts: params.agentFacts,
-    pluginMetadataSnapshot: params.pluginGeneration.pluginMetadataSnapshot,
-    preferBuiltPluginArtifacts: params.pluginGeneration.preferBuiltPluginArtifacts,
-    isCurrent: params.isCurrent,
-    retirementSignal: params.retirementSignal,
-  });
+  const worker = withRemoteModelCatalogSnapshot(params.pluginGeneration.remoteCatalog, () =>
+    createPreparedModelCatalogWorker({
+      pluginRegistry: params.pluginGeneration.pluginRegistry,
+      agentFacts: params.agentFacts,
+      pluginMetadataSnapshot: params.pluginGeneration.pluginMetadataSnapshot,
+      preferBuiltPluginArtifacts: params.pluginGeneration.preferBuiltPluginArtifacts,
+      isCurrent: params.isCurrent,
+      retirementSignal: params.retirementSignal,
+    }),
+  );
   const staticCatalog = project(params.catalogFacts.modelCatalog);
   if (hasNativeCatalog) {
     staticCatalog.authoritative = false;
@@ -382,6 +390,9 @@ export async function createFullModelCatalogAccess(
       const inventory = providerIds
         ? mergePreparedModelCatalogInventory(retained, acquired, scope, normalizeProvider)
         : acquired;
+      accountCatalog.reconcileAuth(discoveredAuth.authStore, (provider) =>
+        scope.has(normalizeProvider(provider)),
+      );
       setCatalogAuth(inventory.catalog, auth);
       return {
         inventory,
@@ -495,6 +506,11 @@ export async function createFullModelCatalogAccess(
           }
         : latestInventory;
       if (nextInventory) {
+        if (nativeAuth) {
+          accountCatalog.reconcileAuth(nativeAuth.authStore, (provider) =>
+            nativeScope.has(normalizeProvider(provider)),
+          );
+        }
         setCatalogAuth(nextInventory.catalog, catalogAuth);
       }
       if (completed) {
@@ -505,12 +521,13 @@ export async function createFullModelCatalogAccess(
       for (const failure of failures) {
         attempt.failed(failure.error, failure.providers, "native");
       }
-      notifyPreparedModelCatalogPublication(
-        publishCatalog(
-          { ...latest, inventory: nextInventory, nativeCatalogAcquired: acquiredNative },
-          "native",
-        ),
+      const change = publishCatalog(
+        { ...latest, inventory: nextInventory, nativeCatalogAcquired: acquiredNative },
+        "native",
       );
+      if (params.isPublished?.() !== false) {
+        notifyPreparedModelCatalogPublication(change);
+      }
       return published.catalog ?? staticCatalog;
     })()
       .catch((error: unknown) => {
@@ -630,7 +647,7 @@ export async function createFullModelCatalogAccess(
     return promise;
   };
   return {
-    accountCatalog: createPreparedAccountCatalogAccess(params.isCurrent, params.retirementSignal),
+    accountCatalog,
     initialAuth: currentAuth,
     isCurrent: params.isCurrent,
     withRefreshStatus: attempt.withRefreshStatus,
@@ -651,6 +668,11 @@ export async function createFullModelCatalogAccess(
         previous,
         refreshed,
         (provider) => scope.has(normalizeProvider(provider)),
+      );
+      accountCatalog.reconcileAuth(
+        refreshed.authStore,
+        (provider) => scope.has(normalizeProvider(provider)),
+        profileIds,
       );
       return { authStore, authModes: Object.freeze(authModes) };
     },

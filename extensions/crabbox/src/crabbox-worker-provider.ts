@@ -16,6 +16,7 @@ import {
   stopCrabboxLease,
 } from "./crabbox-worker-command.js";
 import { createCrabboxHeartbeatManager } from "./crabbox-worker-heartbeat.js";
+import type { ParsedInspect } from "./crabbox-worker-inspect.js";
 import { createCrabboxMachineOptionsResolver } from "./crabbox-worker-machine-options.js";
 import { collectCrabboxNodeEnrollmentEvidence } from "./crabbox-worker-node-enrollment-diagnostics.js";
 import {
@@ -46,9 +47,7 @@ import {
   prepareProvisionDesktop,
   remainingProvisionTimeout,
   runProvisionSetup,
-  runProvisionSetupAndWaitReady,
   waitForProvisionReady,
-  type InspectCommandResult,
 } from "./crabbox-worker-provision-commands.js";
 import {
   createCrabboxSnapshotActions,
@@ -280,11 +279,10 @@ export function createCrabboxWorkerProvider(
         slug: operationSlug(operationId),
         timeoutMs: () => remainingProvisionTimeout(deadline, warmupTimeoutMs),
       });
-      let inspected: InspectCommandResult;
+      let inspected: ParsedInspect | undefined;
       try {
         inspected = await inspectWithContext({
-          context,
-          expectedLeaseId: leaseId,
+          ...context,
           id: leaseId,
           runCommand,
           timeoutMs: remainingProvisionTimeout(
@@ -303,34 +301,39 @@ export function createCrabboxWorkerProvider(
         }
         throw error;
       }
-      if (inspected.status === "unknown") {
+      if (!inspected) {
         throw new Error("Crabbox warmup lease was not found during inspection");
       }
       const inspectedParams = {
         ...context,
         deadline,
-        inspect: inspected.inspect,
+        inspect: inspected,
         profile: parsed,
         runCommand,
         stopLease,
         signal: preparationSignal,
       };
-      if (isNonRunnableState(inspected.inspect.state)) {
+      if (isNonRunnableState(inspected.state)) {
         return await failProvisionAfterCleanup(
           { ...inspectedParams, id: leaseId },
           new WorkerProviderError(
-            `Crabbox warmup lease entered a terminal state${inspected.inspect.failureError ? `: ${inspected.inspect.failureError}` : ""}`,
+            `Crabbox warmup lease entered a terminal state${inspected.failureError ? `: ${inspected.failureError}` : ""}`,
           ),
         );
       }
       inspectedParams.inspect = await waitForProvisionReady({ ...inspectedParams, sleep });
       inspectedParams.deadline = setupDeadline;
       if (parsed.setup && !(project?.preparation && allocationChoice.kind === "checkpoint")) {
-        inspectedParams.inspect = await runProvisionSetupAndWaitReady({
+        await runProvisionSetup({
           ...inspectedParams,
           phase: "profile setup",
           setup: parsed.setup,
           forwardedEnv,
+        });
+        // Setup may restart SSH; refresh its endpoint and security attestation before bootstrap.
+        inspectedParams.inspect = await waitForProvisionReady({
+          ...inspectedParams,
+          refresh: true,
           sleep,
         });
       }
@@ -632,12 +635,10 @@ export function createCrabboxWorkerProvider(
     async inspect(lease): Promise<WorkerLeaseStatus> {
       const { context } = await resolveLeaseContext(lease);
       const inspected = await inspectWithContext({
-        context,
-        expectedLeaseId: context.id,
-        id: context.id,
+        ...context,
         runCommand,
       });
-      if (inspected.status === "unknown" || isNonRunnableState(inspected.inspect.state)) {
+      if (!inspected || isNonRunnableState(inspected.state)) {
         await heartbeats.stop(context.id);
         return { status: "unknown" };
       }

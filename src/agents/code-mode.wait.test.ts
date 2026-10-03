@@ -9,6 +9,7 @@ import {
   prepareAgentRunAdmission,
 } from "./admitted-run-context.js";
 import * as worker from "./code-mode-executor.js";
+import * as codeModeState from "./code-mode-state.js";
 import { applyCodeModeCatalog, createCodeModeTools } from "./code-mode.js";
 import {
   createCodeModeHarness,
@@ -40,6 +41,172 @@ afterEach(async () => {
 });
 
 describe("Code Mode wait, scope, and suspended runs", () => {
+  it("keeps one execution allowance across event-driven required waits", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+    const releases = [createDeferred(), createDeferred()];
+    const parked = [createDeferred(), createDeferred()];
+    let calls = 0;
+    const target = pluginToolWithExecute("required_step", "Required step", async () => {
+      const index = calls++;
+      await releases[index]!.promise;
+      return jsonResult({ index });
+    });
+    const fixture = harness([target], { codeMode: { timeoutMs: 1_000 } });
+    const runWorker = worker.runCodeModeExecutor;
+    const grants: number[] = [];
+    const workerSpy = vi
+      .spyOn(worker, "runCodeModeExecutor")
+      .mockImplementation(async (input, options) => {
+        grants.push(input.config.timeoutMs);
+        const result = await runWorker(input, options);
+        // Controlled worker/checkpoint cost, not a real delay or waiting allowance.
+        vi.advanceTimersByTime(100);
+        return result;
+      });
+    const waitForSettlement = codeModeState.waitForPendingBridgeSettlement;
+    let waits = 0;
+    const waitSpy = vi
+      .spyOn(codeModeState, "waitForPendingBridgeSettlement")
+      .mockImplementation((...args) => {
+        parked[waits++]?.resolve();
+        return waitForSettlement(...args);
+      });
+    let settled = false;
+    const execution = fixture.exec
+      .execute("required-budget", {
+        required: true,
+        code: "const a = await required_step({}); const b = await required_step({}); return [a,b];",
+      })
+      .then((result) => {
+        settled = true;
+        return result;
+      });
+    try {
+      for (let index = 0; index < 2; index++) {
+        await parked[index]!.promise;
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(settled).toBe(false);
+        expect(calls).toBe(index + 1);
+        expect(testing.activeRuns.size).toBe(0);
+        releases[index]!.resolve();
+      }
+      expect(resultDetails(await execution)).toMatchObject({
+        status: "completed",
+        value: [{ index: 0 }, { index: 1 }],
+      });
+      expect(grants).toEqual([1_000, 900, 800]);
+      expect(waits).toBe(2);
+      expect(target.execute).toHaveBeenCalledTimes(2);
+    } finally {
+      releases.forEach((release) => release.resolve());
+      await execution;
+      workerSpy.mockRestore();
+      waitSpy.mockRestore();
+    }
+  });
+
+  it.each(["failure", "cancel", "replace"] as const)(
+    "settles required work on %s without late guest effects",
+    async (outcome) => {
+      const released = createDeferred();
+      const parked = createDeferred();
+      const target = pluginToolWithExecute("required_pending", "Required result", async () => {
+        await released.promise;
+        if (outcome === "failure") {
+          throw new Error("required result failed");
+        }
+        return jsonResult({ complete: true });
+      });
+      const effect = pluginTool("after_required", "Effect after collection");
+      const fixture = harness([target, effect]);
+      const abort = new AbortController();
+      const waitForSettlement = codeModeState.waitForPendingBridgeSettlement;
+      const waitSpy = vi
+        .spyOn(codeModeState, "waitForPendingBridgeSettlement")
+        .mockImplementation((...args) => {
+          parked.resolve();
+          return waitForSettlement(...args);
+        });
+      const result = fixture.exec.execute(
+        "required-lifetime",
+        {
+          required: true,
+          code: "await required_pending({}); return await after_required({});",
+        },
+        abort.signal,
+      );
+      try {
+        await parked.promise;
+        if (outcome === "cancel") {
+          abort.abort();
+        } else if (outcome === "replace") {
+          clearToolSearchCatalog(fixture.ctx);
+        } else {
+          released.resolve();
+        }
+        expect(resultDetails(await result)).toMatchObject({
+          status: "failed",
+          ...(outcome === "failure"
+            ? { error: expect.stringContaining("required result failed") }
+            : { code: "aborted" }),
+        });
+        released.resolve();
+        const successor = harness([]);
+        expect(
+          resultDetails(await successor.exec.execute("new-owner", { code: "return 42;" })),
+        ).toMatchObject({ status: "completed", value: 42 });
+        expect(effect.execute).not.toHaveBeenCalled();
+        expect(testing.activeRuns.size).toBe(0);
+      } finally {
+        released.resolve();
+        await result;
+        waitSpy.mockRestore();
+      }
+    },
+  );
+
+  it("does not turn guest timers into unlimited required-work waits", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+    const parked = createDeferred();
+    const waitForSettlement = codeModeState.waitForPendingBridgeSettlement;
+    const waitSpy = vi
+      .spyOn(codeModeState, "waitForPendingBridgeSettlement")
+      .mockImplementation((...args) => {
+        parked.resolve();
+        return waitForSettlement(...args);
+      });
+    const fixture = harness([], { codeMode: { timeoutMs: 1_000 } });
+    const result = fixture.exec.execute("required-timer", {
+      required: true,
+      code: "await new Promise(resolve => setTimeout(resolve, 60_000)); return 1;",
+    });
+    try {
+      await parked.promise;
+      await vi.advanceTimersByTimeAsync(1_001);
+      expect(resultDetails(await result)).toMatchObject({ status: "failed", code: "timeout" });
+      expect(testing.activeRuns.size).toBe(0);
+    } finally {
+      await result;
+      waitSpy.mockRestore();
+    }
+  });
+
+  it("refuses an unfinished explicit yield for required work", async () => {
+    const fixture = harness([]);
+    expect(
+      resultDetails(
+        await fixture.exec.execute("required-yield", {
+          required: true,
+          code: "await yield_control(); return 1;",
+        }),
+      ),
+    ).toMatchObject({
+      status: "failed",
+      error: expect.stringContaining("cannot yield an unfinished program"),
+    });
+    expect(testing.activeRuns.size).toBe(0);
+  });
+
   it.each([
     { mode: "inline", outcome: "approve" },
     { mode: "yield", outcome: "approve" },

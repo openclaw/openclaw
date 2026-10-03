@@ -19,7 +19,7 @@ import { invokeNodeWithReadinessRetry } from "../node-invoke-readiness.js";
 import { sanitizeNodeInvokeParamsForForwarding } from "../node-invoke-sanitize.js";
 import { enqueuePendingNodeAction, removePendingNodeAction } from "../node-runtime-state.js";
 import { captureNodeWakeLifecycle, releaseNodeWakeLifecycle } from "../node-wake-state.js";
-import { ADMIN_SCOPE } from "../operator-scopes.js";
+import { ADMIN_SCOPE, hasGatewayAdminScope } from "../operator-scopes.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import {
   captureGatewayClientUploadCommitGuard,
@@ -143,10 +143,7 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    if (
-      isAdminOnlyNodeInvokeCommand(command) &&
-      !nodeInvokePolicy.clientHasOperatorAdminScope(client)
-    ) {
+    if (isAdminOnlyNodeInvokeCommand(command) && !hasGatewayAdminScope(client)) {
       respond(
         false,
         undefined,

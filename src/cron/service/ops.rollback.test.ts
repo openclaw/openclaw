@@ -1,6 +1,7 @@
 // Cron mutation rollback, publication ordering, and failure recovery.
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { observeCronStoreCommits } from "../../../test/helpers/cron/runtime-mutation.js";
+import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { AgentDeletionCommitUncertainError } from "../../agents/agent-lifecycle-registry.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import * as cronSchedule from "../schedule.js";
@@ -332,8 +333,9 @@ describe("cron service ops persist rollback", () => {
         expect(enqueueSystemEvent).not.toHaveBeenCalled();
         expect(requestHeartbeat).not.toHaveBeenCalled();
         const persisted = await loadCronStore(storePath);
-        expect(persisted.jobs.find((job) => job.id === removed.id)).toBeUndefined();
-        expect(persisted.jobs.find((job) => job.id === malformed.id)?.enabled).toBe(false);
+        expect(persisted.jobs.find((job) => job.id === removed.id)?.agentId).toBe("doomed");
+        expect(persisted.jobs.find((job) => job.id === malformed.id)?.enabled).toBe(true);
+        expect(readCronJobScratchState(storePath, removed.id)).toEqual(scratchBefore);
         if (outcome === "failed") {
           throw new Error("roster commit failed");
         }
@@ -342,6 +344,30 @@ describe("cron service ops persist rollback", () => {
         }
         return "roster committed";
       });
+      const scratchWrites = trackSqliteStatementExecutions(
+        openOpenClawStateDatabase().db,
+        ["deletes"] as const,
+        (sql) => (sql.includes('delete from "cron_job_scratch"') ? "deletes" : null),
+      );
+      onTestFinished(scratchWrites.restore);
+      if (outcome !== "failed") {
+        await withCronJobWriteFailure(storePath, async () => {
+          const first = removeAgentJobsTransactional(state, "doomed", commit);
+          if (outcome === "uncertain") {
+            await expect(first).rejects.toBeInstanceOf(AgentDeletionCommitUncertainError);
+          } else {
+            await expect(first).rejects.toThrow(
+              "Agent roster committed, but cron cleanup did not complete",
+            );
+          }
+        });
+        expect((await loadCronStore(storePath)).jobs.some((job) => job.id === removed.id)).toBe(
+          true,
+        );
+        expect(readCronJobScratchState(storePath, removed.id)).toEqual(scratchBefore);
+        expect(enqueueSystemEvent).not.toHaveBeenCalled();
+        expect(requestHeartbeat).not.toHaveBeenCalled();
+      }
       const transaction = removeAgentJobsTransactional(state, "doomed", commit);
       if (outcome === "committed") {
         await expect(transaction).resolves.toBe("roster committed");
@@ -355,8 +381,9 @@ describe("cron service ops persist rollback", () => {
       }
 
       const rolledBack = outcome === "failed";
+      expect(scratchWrites.counts.deletes).toBe(0);
       const notificationCount = rolledBack ? 0 : 1;
-      expect(commit).toHaveBeenCalledOnce();
+      expect(commit).toHaveBeenCalledTimes(outcome === "failed" ? 1 : 2);
       expect(enqueueSystemEvent).toHaveBeenCalledTimes(notificationCount);
       expect(requestHeartbeat).toHaveBeenCalledTimes(notificationCount);
       expect(state.store?.jobs.some((job) => job.id === removed.id)).toBe(rolledBack);

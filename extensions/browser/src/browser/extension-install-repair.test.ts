@@ -82,6 +82,7 @@ describe("native host repair", () => {
       const value = await fixture();
       const deps = {
         ...value.deps,
+        stateDir: path.join(value.homeDir, "claw $& state's dir"),
         env: {
           ...value.deps.env,
           OPENCLAW_CONFIG_PATH: installedConfig
@@ -96,6 +97,7 @@ describe("native host repair", () => {
         browserProfile: "work",
       });
       expect(initial.issues).toEqual([]);
+      expect(initial.manualSetupRequired).toBe(false);
       const manifestPath = initial.registrations[0]!.manifestPath;
       const oldManifest = JSON.parse(await fs.readFile(manifestPath, "utf8")) as { path: string };
       const exportedContext = (content: string) =>
@@ -117,23 +119,13 @@ describe("native host repair", () => {
       });
       expect(repaired.warnings).toEqual([]);
       expect(repaired.changes).toHaveLength(1);
+      expect(repaired.retentionSafe).toBe(true);
+      expect(repaired.retainedNativeHostPaths).toEqual([nativeHostPath]);
       const current = JSON.parse(await fs.readFile(manifestPath, "utf8")) as { path: string };
       expect(exportedContext(await fs.readFile(current.path, "utf8"))).toEqual(before);
       expect(repaired.registrations[0]).toMatchObject({ browserProfile: "work" });
     },
   );
-
-  it("preserves literal replacement metacharacters in the installation path", async () => {
-    const value = await fixture();
-    const deps = { ...value.deps, stateDir: path.join(value.homeDir, "claw $& state's dir") };
-    await prepareUnpacked(value, deps);
-    const installedStatus = await installChromeExtensionBootstrap({ ...value, deps });
-    expect(installedStatus.issues).toEqual([]);
-    expect(installedStatus.manualSetupRequired).toBe(false);
-    const observed = await repairChromeExtensionNativeHosts({ ...value, deps, dryRun: true });
-    expect(observed.retentionSafe).toBe(true);
-    expect(observed.retainedNativeHostPaths).toEqual([value.nativeHostPath]);
-  });
 
   it("refreshes a retired package target without reading profiles or replacing another installation", async () => {
     const value = await fixture("darwin");

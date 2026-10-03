@@ -15,6 +15,7 @@ import {
   extractToolResultText,
 } from "./providers/tool-result-text.js";
 import type { ResolvedOpenAICompletionsCompat } from "./transports/openai-completions-compat.js";
+import { sanitizeNonEmptyTransportPayloadText } from "./transports/transport-stream-shared.js";
 import type { Context, Model, ThinkingContent, ToolCall } from "./types.js";
 import { sanitizeSurrogates } from "./utils/sanitize-unicode.js";
 import {
@@ -23,16 +24,10 @@ import {
   stripSystemPromptRelocatableBoundary,
 } from "./utils/system-prompt-cache-boundary.js";
 
-const EMPTY_TOOL_RESULT_TEXT = "(no output)";
 type ChatCompletionContentPartVideo = {
   type: "video_url";
   video_url: { url: string };
 };
-
-function sanitizeToolResultText(text: string, fallback: string): string {
-  const sanitized = sanitizeSurrogates(text);
-  return sanitized.trim().length > 0 ? sanitized : fallback;
-}
 
 /** Whether replayed messages require a tools marker for proxy compatibility. */
 export function hasToolCallHistory(messages: Context["messages"]): boolean {
@@ -252,10 +247,7 @@ export function convertMessages(
         const textResult = extractToolResultText(toolMsg.content);
         const mediaPlaceholder = describeToolResultMediaPlaceholder(toolMsg.content);
         const images = toolMsg.content.filter(isImageWithMediaPayload);
-        const content = sanitizeToolResultText(
-          textResult,
-          mediaPlaceholder ?? EMPTY_TOOL_RESULT_TEXT,
-        );
+        const content = sanitizeNonEmptyTransportPayloadText(textResult, mediaPlaceholder);
         const toolResultMsg: ChatCompletionToolMessageParam = {
           role: "tool",
           content,

@@ -225,6 +225,8 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
       const supervision = admissionPlugin.supervision;
       const mayReadRawTranscripts =
         supervision?.enabled !== true || supervision.allowRawTranscripts === true;
+      const threadResult = (response: unknown) =>
+        jsonResult(mayReadRawTranscripts ? response : redactNativeThreadResponse(response));
 
       const isMutation =
         action === "fork" || action === "rename" || action === "archive" || action === "unarchive";
@@ -247,7 +249,7 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
           await import("./app-server/config-runtime.js");
         const requestOptions = async (): Promise<CodexControlRequestOptions> => {
           const pluginConfig = admissionConfig;
-          const plugin = readCodexPluginConfig(pluginConfig);
+          const plugin = admissionPlugin;
           const base = baseRequestOptions();
           const session = currentSession();
           const identity = session ? currentIdentity(session.sessionId) : undefined;
@@ -320,9 +322,7 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
             ...(cursor ? { cursor } : {}),
             ...(searchTerm ? { searchTerm } : {}),
           });
-          return jsonResult(
-            mayReadRawTranscripts ? response : redactNativeThreadResponse(response),
-          );
+          return threadResult(response);
         }
 
         const threadId = archiveAdmission?.threadId ?? readThreadId(params);
@@ -337,9 +337,7 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
             threadId,
             includeTurns,
           });
-          return jsonResult(
-            mayReadRawTranscripts ? response : redactNativeThreadResponse(response),
-          );
+          return threadResult(response);
         }
         if (action === "rename") {
           const name = readStringParam(params, "name", { required: true, label: "name" });
@@ -348,9 +346,7 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
         }
         if (action === "unarchive") {
           const response = await scopedRequest(CODEX_CONTROL_METHODS.unarchiveThread, { threadId });
-          return jsonResult(
-            mayReadRawTranscripts ? response : redactNativeThreadResponse(response),
-          );
+          return threadResult(response);
         }
 
         const session = archiveAdmission?.session ?? currentSession();
@@ -520,7 +516,7 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
           thread: response.thread,
           attached: attach,
         };
-        return jsonResult(mayReadRawTranscripts ? result : redactNativeThreadResponse(result));
+        return threadResult(result);
       };
       if (action === "archive") {
         const threadId = readThreadId(params);

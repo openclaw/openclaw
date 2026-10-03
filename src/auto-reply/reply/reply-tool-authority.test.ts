@@ -10,7 +10,8 @@ import { createOperatorClient } from "../../gateway/server-plugin-in-process-dis
 import { resetDiagnosticRunActivityForTest } from "../../logging/diagnostic-run-activity.js";
 import type { GatewayAccessGrantRef } from "../../plugins/gateway-access-policy.types.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
-import { ensureProfileForEmail, setUserProfileRole } from "../../state/user-profiles.js";
+import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createQueueTestRun } from "./queue.test-helpers.js";
 import type { ReplyToolAuthorityOverlay } from "./reply-run-registry.contracts.js";

@@ -154,9 +154,9 @@ export async function startFaceTimeTalkDriver(params: {
     if (failurePromise) {
       return failurePromise;
     }
-    failurePromise = Promise.resolve(params.onFailure?.(error)).then((safeToClose) => {
-      return safeToClose !== false;
-    });
+    failurePromise = Promise.resolve(params.onFailure?.(error)).then(
+      (safeToClose) => safeToClose !== false,
+    );
     return failurePromise;
   };
 
@@ -382,9 +382,7 @@ export async function startFaceTimeTalkDriver(params: {
       }
       return safeToClose;
     },
-    onPlaybackDrained() {
-      finishDrainedResponse();
-    },
+    onPlaybackDrained: finishDrainedResponse,
   });
   const providerConnect = (async () => {
     let removeAbortListener: (() => void) | undefined;
@@ -650,9 +648,7 @@ export async function startFaceTimeTalkDriver(params: {
       });
       await audioReadyPromise;
     },
-    processOutputSuppressed() {
-      return pump?.processOutputSuppressed() ?? false;
-    },
+    processOutputSuppressed: pump.processOutputSuppressed,
     realtimeActive() {
       return providerReady && !mediaSuspended && !stopped;
     },

@@ -7,10 +7,19 @@ import {
 } from "openclaw/plugin-sdk/error-runtime";
 import { isPathInside } from "openclaw/plugin-sdk/file-access-runtime";
 
+type LobsterInputRequest = {
+  type?: "input_request";
+  prompt: string;
+  responseSchema: unknown;
+  defaults?: unknown;
+  subject?: unknown;
+  resumeToken?: string;
+};
+
 type LobsterEnvelope =
   | {
       ok: true;
-      status: "ok" | "needs_approval" | "cancelled";
+      status: "ok" | "needs_approval" | "needs_input" | "cancelled";
       output: unknown[];
       requiresApproval: null | {
         type: "approval_request";
@@ -19,6 +28,7 @@ type LobsterEnvelope =
         resumeToken?: string;
         approvalId?: string;
       };
+      requiresInput?: LobsterInputRequest;
     }
   | {
       ok: false;
@@ -32,6 +42,8 @@ export type LobsterRunnerParams = {
   token?: string;
   approvalId?: string;
   approve?: boolean;
+  responseJson?: string;
+  cancel?: boolean;
   cwd: string;
   timeoutMs: number;
   maxStdoutBytes: number;
@@ -61,6 +73,7 @@ type EmbeddedToolEnvelope = {
     resumeToken?: string;
     approvalId?: string;
   } | null;
+  requiresInput?: LobsterInputRequest | null;
   error?: {
     message: string;
   };
@@ -77,6 +90,8 @@ type EmbeddedToolRuntime = {
     token?: string;
     approvalId?: string;
     approved?: boolean;
+    response?: unknown;
+    cancel?: boolean;
     ctx?: EmbeddedToolContext;
   }) => Promise<EmbeddedToolEnvelope>;
 };
@@ -121,8 +136,8 @@ function normalizeEnvelope(
   if (!envelope.ok) {
     throw new Error(envelope.error?.message ?? "lobster runtime failed");
   }
-  if (envelope.status === "needs_input") {
-    throw new Error("Lobster input requests are not supported by the OpenClaw Lobster tool yet");
+  if (envelope.status === "needs_input" && !envelope.requiresInput?.resumeToken) {
+    throw new Error("Lobster input request is missing its resume token");
   }
   const normalized: Extract<LobsterEnvelope, { ok: true }> = {
     ok: true,
@@ -141,6 +156,9 @@ function normalizeEnvelope(
             : {}),
         }
       : null,
+    ...(envelope.requiresInput
+      ? { requiresInput: { ...envelope.requiresInput, type: "input_request" as const } }
+      : {}),
   };
   if (Buffer.byteLength(JSON.stringify(normalized, null, 2), "utf8") > maxStdoutBytes) {
     throw new Error("lobster runtime result exceeded maxStdoutBytes");
@@ -251,13 +269,31 @@ export function createEmbeddedLobsterRunner(options?: {
           if (!token && !approvalId) {
             throw new Error("token or approvalId required");
           }
-          if (typeof params.approve !== "boolean") {
-            throw new Error("approve required");
+          const hasApproval = typeof params.approve === "boolean";
+          const hasResponse = params.responseJson !== undefined;
+          const hasCancel = params.cancel !== undefined;
+          if (Number(hasApproval) + Number(hasResponse) + Number(hasCancel) !== 1) {
+            throw new Error(
+              "resume requires exactly one of approve, responseJson, or cancel: true",
+            );
+          }
+          if (hasCancel && params.cancel !== true) {
+            throw new Error("cancel must be true");
+          }
+          let response: unknown;
+          if (params.responseJson !== undefined) {
+            try {
+              response = JSON.parse(params.responseJson);
+            } catch {
+              throw new Error("responseJson must be valid JSON");
+            }
           }
           envelope = await runtime.resumeToolRequest({
             ...(token ? { token } : {}),
             ...(approvalId ? { approvalId } : {}),
-            approved: params.approve,
+            ...(hasApproval ? { approved: params.approve } : {}),
+            ...(hasResponse ? { response } : {}),
+            ...(hasCancel ? { cancel: true } : {}),
             ctx,
           });
         }

@@ -110,6 +110,18 @@ export type SpawnSyncResult = {
   status: number;
   signal: null;
 };
+
+export function isProcessSnapshotQuery(args: readonly string[] | undefined): boolean {
+  return (
+    args?.some(
+      (arg) =>
+        arg.includes("Get-CimInstance Win32_Process") &&
+        arg.includes("Select-Object ProcessId,CommandLine") &&
+        arg.includes("ConvertTo-Json"),
+    ) ?? false
+  );
+}
+
 export function makeSpawnSyncResult(overrides: Partial<SpawnSyncResult> = {}): SpawnSyncResult {
   return {
     pid: 0,

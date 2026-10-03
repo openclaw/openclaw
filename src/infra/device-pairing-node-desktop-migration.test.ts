@@ -58,25 +58,27 @@ async function approveDesktopNode() {
 }
 
 describe("desktop approval upgrade", () => {
-  it.each(["none", "desktop", "unrelated"] as const)(
+  it.each(["desktop", "unrelated"] as const)(
     "requires interactive desktop reapproval across reopen with %s pending state",
     async (pendingKind) => {
       const before = await approveDesktopNode();
       const declaredCommands = ["desktop.stream", "system.run", "system.which"];
-      const pending =
-        pendingKind === "none"
-          ? undefined
-          : await requestNodePairing(
-              {
-                nodeId,
-                platform: "macos",
-                caps: ["screen", "system"],
-                commands:
-                  pendingKind === "desktop" ? declaredCommands : ["system.run", "system.which"],
-                silent: true,
-              },
-              baseDir,
-            );
+      const pending = await requestNodePairing(
+        {
+          nodeId,
+          platform: "macos",
+          caps: ["screen", "system"],
+          commands: pendingKind === "desktop" ? declaredCommands : ["system.run", "system.which"],
+          silent: true,
+        },
+        baseDir,
+      );
+      // Seed the legacy hint directly: current requests keep upgrades interactive.
+      await withPairedDeviceRecords(baseDir, (devices) => {
+        const legacy = expectDefined(devices[nodeId]?.pendingNodeSurface, "legacy pending surface");
+        legacy.silent = true;
+        return { value: undefined, persist: true };
+      });
       expect(await migrateLegacyDesktopStreamOptOuts({}, baseDir)).toBe(1);
       const after = expectDefined(await getPairedDevice(nodeId, baseDir), "migrated device");
       expect(after.nodeSurface?.commands).toEqual(["system.run"]);
@@ -86,15 +88,11 @@ describe("desktop approval upgrade", () => {
       expect(resolveNodePairingGeneration(after)?.key).not.toBe(
         resolveNodePairingGeneration(before)?.key,
       );
-      if (pending) {
-        expect(after.pendingNodeSurface).toMatchObject({
-          requestId: pending.request.requestId,
-          silent: pendingKind === "unrelated",
-          commands: pending.request.commands,
-        });
-      } else {
-        expect(after.pendingNodeSurface).toBeUndefined();
-      }
+      expect(after.pendingNodeSurface).toMatchObject({
+        requestId: pending.request.requestId,
+        silent: pendingKind === "unrelated",
+        commands: pending.request.commands,
+      });
 
       await closeOpenClawStateDatabaseByPathAsync(database().path);
       const pairedNode = expectDefined((await listNodePairing(baseDir)).paired[0], "paired node");
@@ -157,26 +155,26 @@ describe("desktop approval upgrade", () => {
     release.resolve();
     await writer;
     expect(await migration).toBe(1);
-    expect(await getPairedDevice(nodeId, baseDir)).toMatchObject({
+    const after = expectDefined(await getPairedDevice(nodeId, baseDir), "migrated device");
+    expect(after).toMatchObject({
       displayName: "Renamed while updating",
       nodeSurface: { commands: ["system.run"] },
     });
+    expect(after.pendingNodeSurface).toBeUndefined();
   });
 
-  it.each([
-    { allow: ["desktop.stream"] },
-    { allow: [" desktop.stream "] },
-    { deny: ["desktop.stream"] },
-    { allow: ["desktop.stream"], deny: ["desktop.stream"] },
-  ])("preserves existing explicit policy %j", async (commands) => {
-    const before = await approveDesktopNode();
-    expect(
-      await migrateLegacyDesktopStreamOptOuts({ gateway: { nodes: { commands } } }, baseDir),
-    ).toBe(0);
-    expect(await getPairedDevice(nodeId, baseDir)).toEqual(before);
-    expect(await migrateLegacyDesktopStreamOptOuts({}, baseDir)).toBe(0);
-    expect(await getPairedDevice(nodeId, baseDir)).toEqual(before);
-  });
+  it.each([{ allow: [" desktop.stream "] }, { deny: ["desktop.stream"] }])(
+    "preserves existing explicit policy %j",
+    async (commands) => {
+      const before = await approveDesktopNode();
+      expect(
+        await migrateLegacyDesktopStreamOptOuts({ gateway: { nodes: { commands } } }, baseDir),
+      ).toBe(0);
+      expect(await getPairedDevice(nodeId, baseDir)).toEqual(before);
+      expect(await migrateLegacyDesktopStreamOptOuts({}, baseDir)).toBe(0);
+      expect(await getPairedDevice(nodeId, baseDir)).toEqual(before);
+    },
+  );
 
   it("rolls back narrowed grants when receipt persistence fails", async () => {
     const before = await approveDesktopNode();

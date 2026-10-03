@@ -1,12 +1,18 @@
 import { createSqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
-import type { WorktreeRetirementOperations } from "./registry-retirement.worker.js";
+import type { WorktreeWorkerOperations } from "./dispatch.worker.js";
+
+type WorktreeRetirementOperations = Pick<
+  WorktreeWorkerOperations,
+  "worktrees.deferCleanup" | "worktrees.retireMissing"
+>;
 
 export async function deferWorktreeCleanup(
   env: NodeJS.ProcessEnv,
   input: WorktreeRetirementOperations["worktrees.deferCleanup"]["input"],
+  assertCurrent?: () => void,
 ) {
-  return await mutateCleanupRecord(env, { type: "worktrees.deferCleanup", input });
+  return await mutateCleanupRecord(env, { type: "worktrees.deferCleanup", input }, assertCurrent);
 }
 
 export async function retireMissingRegistryWorktree(

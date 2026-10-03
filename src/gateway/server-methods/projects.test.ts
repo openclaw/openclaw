@@ -4,6 +4,7 @@ import type { StatementSync } from "node:sqlite";
 import { beforeEach, expect, test, vi } from "vitest";
 import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { insertRegistryWorktree } from "../../agents/worktrees/registry.js";
+import { managedWorktrees } from "../../agents/worktrees/service.js";
 import { loadCombinedSessionStoreForGatewayCore } from "../../config/sessions/combined-store-gateway.js";
 import {
   replaceSessionEntrySync,
@@ -12,6 +13,7 @@ import {
 import * as transcriptWorker from "../../config/sessions/session-transcript-worker-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sha256HexPrefixCore } from "../../infra/crypto-digest.js";
+import * as spawnDiagnostics from "../../process/spawn-diagnostics.js";
 import { registerProjectRegistry } from "../../projects/project-registry.js";
 import { registerClonedProjectRegistry } from "../../projects/project-registry.test-support.js";
 import { SecretSurfaceUnavailableError } from "../../secrets/runtime-degraded-state.js";
@@ -44,6 +46,79 @@ beforeEach(() => {
 function withProjectState(run: (state: OpenClawTestState) => Promise<void>) {
   return withOpenClawTestState({ layout: "state-only", prefix: "projects-rpc-" }, run);
 }
+
+test("projects.list coalesces concurrent observed Git discovery and refreshes later reads", async () => {
+  await withProjectState(async (state) => {
+    const repo = await initializeRepository(state.root);
+    replaceSessionEntrySync(
+      { agentId: "main", sessionKey: "agent:main:observed" },
+      { sessionId: "observed", updatedAt: 1, execCwd: repo },
+    );
+    const cfg = { agents: { entries: { main: { workspace: state.workspaceDir } } } };
+    const list = () =>
+      invokeProjectMethod(
+        "projects.list",
+        { includeObserved: true },
+        cfg,
+        ["operator.write"],
+        undefined,
+        registeredProjectsHandlers,
+      );
+    using spawns = vi.spyOn(spawnDiagnostics, "recordChildProcessSpawn");
+    const single = await list();
+    expect(single).toMatchObject({
+      ok: true,
+      payload: {
+        observedProjects: [
+          { name: "registered", originUrl: "https://github.com/openclaw/openclaw.git" },
+        ],
+      },
+    });
+    const gitSpawns = () =>
+      spawns.mock.calls.filter(([command]) =>
+        /^git(?:\.exe|\.cmd)?$/i.test(path.win32.basename(command)),
+      ).length;
+    const onePass = gitSpawns();
+    expect(onePass).toBeGreaterThan(0);
+    spawns.mockClear();
+    const requestCount = 10;
+    const admitted = Promise.withResolvers<void>();
+    let remaining = requestCount;
+    const resolveIdentities = managedWorktrees.resolveRepositoryIdentities.bind(managedWorktrees);
+    // SQLite preparation can stagger RPCs past a pending-only Git pass's lifetime.
+    using discovery = vi
+      .spyOn(managedWorktrees, "resolveRepositoryIdentities")
+      .mockImplementation(async (roots) => {
+        if (--remaining === 0) {
+          admitted.resolve();
+        }
+        await admitted.promise;
+        return resolveIdentities(roots);
+      });
+    const concurrent = await Promise.all(
+      Array.from({ length: requestCount }, () => list().finally(() => admitted.resolve())),
+    );
+    discovery.mockRestore();
+    for (const result of concurrent) {
+      expect(result).toEqual(single);
+    }
+    expect(gitSpawns()).toBeLessThanOrEqual(onePass);
+    await execFileAsync("git", [
+      "-C",
+      repo,
+      "remote",
+      "set-url",
+      "origin",
+      "https://example.test/changed.git",
+    ]);
+    expect(await list()).toMatchObject({
+      ok: true,
+      payload: { observedProjects: [{ originUrl: "https://example.test/changed.git" }] },
+    });
+    await fs.rm(repo, { recursive: true });
+    expect(await list()).toMatchObject({ ok: true, payload: { observedProjects: [] } });
+  });
+});
 
 test.each([
   {

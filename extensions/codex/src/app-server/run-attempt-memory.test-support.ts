@@ -16,7 +16,7 @@ import { setAgentWorkspaceForTest } from "./run-attempt-workspace.test-support.j
 /** Exercise memory-provider delivery under the attempt suite's shared runtime and cleanup. */
 export function registerCodexMemoryInstructionTests() {
   it.each([false, true])(
-    "delivers provider-native memory guidance at turn/start (legacy tools: %s)",
+    "delivers provider-native memory guidance through the thread (legacy tools: %s)",
     async (includeLegacyTools) => {
       const sessionFile = path.join(tempDir, "session.jsonl");
       const workspaceDir = path.join(tempDir, "workspace");
@@ -43,11 +43,9 @@ export function registerCodexMemoryInstructionTests() {
       await harness.waitForMethod("turn/start");
       await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
       await run;
-      const turnStart = harness.requests.find((request) => request.method === "turn/start");
-      const request = turnStart?.params as {
-        collaborationMode?: { settings?: { developer_instructions?: string | null } };
-      };
-      expect(request.collaborationMode?.settings?.developer_instructions).toContain(providerPrompt);
+      const threadStart = harness.requests.find((request) => request.method === "thread/start");
+      const request = threadStart?.params as { developerInstructions?: string };
+      expect(request.developerInstructions).toContain(providerPrompt);
       const availableTools = promptBuilder.mock.calls.at(-1)?.[0].availableTools;
       expect(availableTools?.has("knowledge_lookup")).toBe(true);
       expect(availableTools?.has("knowledge_save_page")).toBe(true);

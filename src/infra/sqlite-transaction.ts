@@ -1,5 +1,4 @@
 // Provides SQLite transaction helpers with nested savepoints.
-import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { setTimeout as sleep } from "node:timers/promises";
 import { isMainThread, threadId } from "node:worker_threads";
@@ -9,7 +8,6 @@ import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 // The cache-state module keeps this lifecycle edge off the kysely value graph
 // so cold control-plane paths using transactions do not load kysely.
 import { clearNodeSqliteKyselyCacheForDatabase } from "./kysely-sync-cache-state.js";
-import { normalizeWindowsPathPreservingCase } from "./path-guards.js";
 import {
   readSqliteBusyTimeout,
   runWithSqliteBusyTimeout,
@@ -23,6 +21,7 @@ import {
 } from "./sqlite-error-diagnostics.js";
 import { discardSqliteTransactionState } from "./sqlite-post-commit.js";
 import { captureSqliteReaderOwner } from "./sqlite-reader-lifecycle.js";
+import { normalizeDatabasePath } from "./sqlite-worker-identity.js";
 
 const DEFAULT_SLOW_BUSY_WAIT_MS = 1_000;
 const DEFAULT_SLOW_TRANSACTION_HOLD_MS = 1_000;
@@ -55,15 +54,9 @@ function writeAdmissionLocation(database: DatabaseSync): string | null {
   }
   // A native handle's filename is stable; normalize namespace aliases once, without filesystem IO.
   const location = database.location();
-  const canonical = location === null ? null : normalizeWriteAdmissionLocation(location);
+  const canonical = location === null ? null : normalizeDatabasePath(location);
   writeAdmissionLocations.set(database, canonical);
   return canonical;
-}
-
-function normalizeWriteAdmissionLocation(location: string): string {
-  const normalized =
-    process.platform === "win32" ? normalizeWindowsPathPreservingCase(location) : location;
-  return process.platform === "win32" && !path.win32.isAbsolute(normalized) ? location : normalized;
 }
 
 /** Keep worker-owned lock holders serviceable across connections and module graphs. */
@@ -89,7 +82,7 @@ export function retainSqliteWriteAdmissionService(
   nativeLocations: readonly string[],
   service: () => void,
 ): () => void {
-  const locations = new Set(nativeLocations.map(normalizeWriteAdmissionLocation));
+  const locations = new Set(nativeLocations.map(normalizeDatabasePath));
   const registrations = [...locations].map((location) => {
     const services = writeAdmissionServices.get(location) ?? new Set<() => void>();
     // Separate reservations remain valid when the same owner retains two operations.
@@ -171,6 +164,8 @@ export type SqliteTransactionOptions = {
   beginDeadlineNs?: bigint;
   busyTimeoutMs?: number;
   databaseLabel?: string;
+  /** Prepared identifiers and counts only; never transcript or session payloads. */
+  diagnosticContext?: Readonly<Record<string, string | number | boolean | null | undefined>>;
   logger?: Pick<SubsystemLogger, "warn">;
   operationLabel?: string;
   slowTransactionHoldMs?: number;
@@ -198,7 +193,9 @@ function slowBusyWaitThresholdMs(options: SqliteTransactionOptions | undefined):
 
 function transactionDiagnosticLabels(
   db: DatabaseSync | undefined,
-  options: Pick<SqliteTransactionOptions, "databaseLabel" | "operationLabel"> | undefined,
+  options:
+    | Pick<SqliteTransactionOptions, "databaseLabel" | "operationLabel" | "diagnosticContext">
+    | undefined,
 ) {
   let database = options?.databaseLabel;
   if (!database) {
@@ -212,6 +209,7 @@ function transactionDiagnosticLabels(
   return {
     database,
     operation: options?.operationLabel || captureSqliteReaderOwner()?.operation || "unlabeled",
+    ...(options?.diagnosticContext ? { context: { ...options.diagnosticContext } } : {}),
   };
 }
 
@@ -316,19 +314,6 @@ function execTimedTransactionStep(params: {
   }
 }
 
-function beginTransaction(
-  db: DatabaseSync,
-  options: SqliteTransactionOptions | undefined,
-  mode: SqliteTransactionMode,
-): void {
-  execTimedTransactionStep({
-    db,
-    options,
-    sql: mode === "immediate" ? "BEGIN IMMEDIATE" : "BEGIN",
-    step: "begin",
-  });
-}
-
 function commitImmediateTransaction(
   db: DatabaseSync,
   options: SqliteTransactionOptions | undefined,
@@ -342,14 +327,24 @@ function commitImmediateTransaction(
 }
 
 function discardUnsafeConnection(db: TransactionDatabase, error: unknown): void {
-  db[abortedTransactionSymbol] ??= { error };
-  discardSqliteTransactionState(db, error);
-  clearNodeSqliteKyselyCacheForDatabase(db);
+  const aborted = { error };
+  db[abortedTransactionSymbol] ??= aborted;
   try {
-    db.close();
-  } catch {
-    // Preserve the primary failure. The transaction helper also refuses reuse
-    // if the handle was already closed or a lifecycle close hook failed.
+    discardSqliteTransactionState(db, error);
+  } catch (rollbackError) {
+    // Retain this failure's observer aggregate across outer and future admission checks.
+    if (db[abortedTransactionSymbol] === aborted) {
+      aborted.error = rollbackError;
+    }
+    throw rollbackError;
+  } finally {
+    clearNodeSqliteKyselyCacheForDatabase(db);
+    try {
+      db.close();
+    } catch {
+      // Preserve the primary failure. The transaction helper also refuses reuse
+      // if the handle was already closed or a lifecycle close hook failed.
+    }
   }
 }
 
@@ -361,14 +356,14 @@ function abortImmediateTransaction(
   if (db[abortedTransactionSymbol]) {
     return;
   }
+  // SQLITE_IOERR/FULL can roll back an operation before commit starts. Once
+  // the commit owner runs, no transaction may instead mean a durable COMMIT
+  // followed by a guard failure or rejected Promise: retain conservative fencing.
+  if (!commitStarted && db.isOpen && !db.isTransaction) {
+    discardSqliteTransactionState(db, error);
+    return;
+  }
   try {
-    // SQLITE_IOERR/FULL can roll back an operation before commit starts. Once
-    // the commit owner runs, no transaction may instead mean a durable COMMIT
-    // followed by a guard failure or rejected Promise: retain conservative fencing.
-    if (!commitStarted && db.isOpen && !db.isTransaction) {
-      discardSqliteTransactionState(db, error);
-      return;
-    }
     db.exec("ROLLBACK");
   } catch {
     // An abandoned transaction must not leak into later writes on this handle.
@@ -410,7 +405,12 @@ function runSqliteTransactionSync<T>(
     }
   }
 
-  beginTransaction(db, options, mode);
+  execTimedTransactionStep({
+    db,
+    options,
+    sql: mode === "immediate" ? "BEGIN IMMEDIATE" : "BEGIN",
+    step: "begin",
+  });
   const transactionStartedAt = Date.now();
   let commitStarted = false;
   try {

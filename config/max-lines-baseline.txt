@@ -2,7 +2,6 @@
 # Ratchet: this list may only shrink. Split files; never add entries.
 # Existing suppressions carry a TODO at the file site.
 extensions/acpx/src/codex-auth-bridge.ts
-extensions/acpx/src/runtime.test.ts
 extensions/acpx/src/runtime.ts
 extensions/active-memory/index.test.ts
 extensions/amazon-bedrock/index.test.ts
@@ -64,7 +63,6 @@ extensions/discord/src/monitor/model-picker.test.ts
 extensions/discord/src/monitor/model-picker.view.ts
 extensions/discord/src/monitor/native-command.model-picker.test.ts
 extensions/discord/src/monitor/native-command.plugin-dispatch.test.ts
-extensions/discord/src/monitor/native-command.ts
 extensions/discord/src/outbound-adapter.test.ts
 extensions/discord/src/send.sends-basic-channel-messages.test.ts
 extensions/fal/image-generation-provider.ts
@@ -74,7 +72,6 @@ extensions/feishu/src/channel.test.ts
 extensions/feishu/src/channel.ts
 extensions/feishu/src/doctor.ts
 extensions/feishu/src/docx.ts
-extensions/feishu/src/media.ts
 extensions/feishu/src/monitor.comment.ts
 extensions/feishu/src/outbound.test.ts
 extensions/feishu/src/outbound.ts
@@ -102,7 +99,6 @@ extensions/matrix/src/matrix/monitor/events.test.ts
 extensions/matrix/src/matrix/monitor/handler.test.ts
 extensions/matrix/src/matrix/sdk.test.ts
 extensions/matrix/src/matrix/send.test.ts
-extensions/mattermost/src/channel.test.ts
 extensions/mattermost/src/channel.ts
 extensions/mattermost/src/mattermost/monitor.inbound-system-event.test.ts
 extensions/mattermost/src/mattermost/slash-http.ts
@@ -151,13 +147,11 @@ extensions/qa-lab/src/lab-server.test.ts
 extensions/qa-lab/src/lab-server.ts
 extensions/qa-lab/src/live-transports/discord/discord-live.runtime.ts
 extensions/qa-lab/src/live-transports/matrix/scenarios/scenario-runtime-e2ee-destructive.ts
-extensions/qa-lab/src/live-transports/slack/slack-live.runtime.test.ts
 extensions/qa-lab/src/live-transports/whatsapp/whatsapp-live.runtime.test.ts
 extensions/qa-lab/src/mantis/slack-desktop-smoke.runtime.ts
 extensions/qa-lab/src/providers/mock-openai/server.test.ts
 extensions/qa-lab/src/providers/mock-openai/server.ts
 extensions/qa-lab/src/runtime-parity.ts
-extensions/qa-lab/src/runtime-tool-fixture.test.ts
 extensions/qa-lab/src/runtime-tool-fixture.ts
 extensions/qa-lab/src/scorecard-taxonomy.ts
 extensions/qa-lab/src/suite-launch.runtime.test.ts
@@ -179,7 +173,6 @@ extensions/slack/src/monitor/message-handler/prepare.test.ts
 extensions/slack/src/monitor/message-handler/prepare.ts
 extensions/slack/src/monitor/provider.ts
 extensions/slack/src/monitor/replies.test.ts
-extensions/slack/src/monitor/slash.test.ts
 extensions/slack/src/monitor/slash.ts
 extensions/slack/src/send.ts
 extensions/telegram/src/action-runtime.ts
@@ -201,7 +194,6 @@ extensions/voice-call/src/webhook.test.ts
 extensions/voice-call/src/webhook.ts
 extensions/voice-call/src/webhook/realtime-handler.test.ts
 extensions/voice-call/src/webhook/realtime-handler.ts
-extensions/whatsapp/src/auto-reply/monitor/inbound-dispatch.test.ts
 extensions/whatsapp/src/auto-reply/monitor/inbound-dispatch.ts
 extensions/whatsapp/src/connection-controller.ts
 extensions/workboard/browser/pages/workboard/view.test.ts
@@ -258,7 +250,6 @@ src/agents/command/attempt-execution.ts
 src/agents/command/cli-compaction.test.ts
 src/agents/command/delivery.test.ts
 src/agents/command/delivery.ts
-src/agents/command/session-store.test.ts
 src/agents/embedded-agent-runner-extraparams.test.ts
 src/agents/embedded-agent-runner.cache.live.test.ts
 src/agents/embedded-agent-runner.e2e.test.ts
@@ -276,7 +267,6 @@ src/agents/embedded-agent-runner/run/attempt.spawn-workspace.context-engine.test
 src/agents/embedded-agent-runner/run/attempt.test.ts
 src/agents/embedded-agent-runner/runs.ts
 src/agents/embedded-agent-runner/thinking.test.ts
-src/agents/embedded-agent-runner/tool-result-context-guard.test.ts
 src/agents/embedded-agent-runner/tool-result-truncation.test.ts
 src/agents/embedded-agent-runner/tool-result-truncation.ts
 src/agents/embedded-agent-runner/transcript-file-state.test.ts
@@ -307,7 +297,6 @@ src/agents/subagents/registry/subagent-registry.test.ts
 src/agents/subagents/spawn/acp-spawn.test.ts
 src/agents/subagents/spawn/subagent-spawn.test.ts
 src/agents/system-prompt.ts
-src/agents/tool-loop-detection.test.ts
 src/agents/tool-search.test.ts
 src/agents/tools/cron-tool.test.ts
 src/agents/tools/image-generate-tool.test.ts
@@ -347,16 +336,13 @@ src/auto-reply/reply/get-reply-inline-actions.skip-when-config-empty.test.ts
 src/auto-reply/reply/get-reply-run.media-only.test.ts
 src/auto-reply/reply/get-reply.ts
 src/auto-reply/reply/inbound-meta.test.ts
-src/auto-reply/reply/model-selection.test.ts
 src/auto-reply/reply/queue.collect.test.ts
 src/auto-reply/reply/queue/drain.ts
 src/auto-reply/reply/reply-run-registry.test.ts
-src/auto-reply/reply/reply-turn-admission.test.ts
 src/auto-reply/reply/session.test.ts
 src/auto-reply/reply/session.ts
 src/auto-reply/status.test.ts
 src/channels/plugins/bundled.shape-guard.test.ts
-src/channels/plugins/message-actions.security.test.ts
 src/channels/plugins/outbound/interactive.test.ts
 src/channels/plugins/read-only.test.ts
 src/channels/plugins/setup-wizard-helpers.test.ts
@@ -368,7 +354,6 @@ src/cli/command-secret-gateway.ts
 src/cli/config-cli.test.ts
 src/cli/daemon-cli/status.gather.test.ts
 src/cli/devices-cli.runtime.ts
-src/cli/devices-cli.test.ts
 src/cli/exec-approvals-cli.ts
 src/cli/gateway-cli/register.ts
 src/cli/gateway-cli/run-loop.test.ts
@@ -382,7 +367,6 @@ src/cli/plugins-cli-test-helpers.ts
 src/cli/plugins-cli.install.test.ts
 src/cli/plugins-cli.runtime.ts
 src/cli/plugins-cli.update.test.ts
-src/cli/run-main.exit.test.ts
 src/cli/run-main.ts
 src/cli/skills-cli.ts
 src/commands/agent-via-gateway.test.ts
@@ -401,7 +385,6 @@ src/commands/doctor-memory-search.test.ts
 src/commands/doctor-session-sqlite.ts
 src/commands/doctor-state-integrity.ts
 src/commands/doctor-state-migrations.test.ts
-src/commands/doctor/cron/index.test.ts
 src/commands/doctor/repair-sequencing.test.ts
 src/commands/doctor/shared/codex-route-warnings.test.ts
 src/commands/doctor/shared/legacy-config-core-normalizers.ts
@@ -431,13 +414,9 @@ src/config/schema.test.ts
 src/config/sessions/session-accessor.conformance.test.ts
 src/config/sessions/session-accessor.test.ts
 src/config/sessions/transcript.test.ts
-src/context-engine/context-engine.test.ts
 src/cron/isolated-agent/delivery-dispatch.double-announce.test.ts
-src/cron/isolated-agent/delivery-target.test.ts
 src/cron/isolated-agent/run-executor.ts
 src/cron/isolated-agent/run.test-harness.ts
-src/cron/service/ops.test.ts
-src/cron/store.test.ts
 src/daemon/launchd.test.ts
 src/daemon/schtasks.startup-fallback.test.ts
 src/daemon/systemd.test.ts
@@ -445,7 +424,6 @@ src/fleet/backup.runtime.ts
 src/fleet/service.runtime.ts
 src/flows/channel-setup.test.ts
 src/flows/channel-setup.ts
-src/flows/doctor-core-checks.runtime.test.ts
 src/flows/doctor-core-checks.ts
 src/flows/doctor-health-contributions.test.ts
 src/flows/model-picker.ts
@@ -486,13 +464,11 @@ src/gateway/server-methods/agents-mutate.test.ts
 src/gateway/server-methods/agents.ts
 src/gateway/server-methods/approval-shared.test.ts
 src/gateway/server-methods/approval.test.ts
-src/gateway/server-methods/chat.abort-persistence.test.ts
 src/gateway/server-methods/chat.directive-tags.test.ts
 src/gateway/server-methods/config.ts
 src/gateway/server-methods/cron.ts
 src/gateway/server-methods/cron.validation.test.ts
 src/gateway/server-methods/doctor.test.ts
-src/gateway/server-methods/doctor.ts
 src/gateway/server-methods/models-auth-status.test.ts
 src/gateway/server-methods/models.test.ts
 src/gateway/server-methods/nodes.invoke-wake.test.ts
@@ -528,7 +504,6 @@ src/infra/backup-create.test.ts
 src/infra/command-explainer/extract.ts
 src/infra/device-pairing.test.ts
 src/infra/diagnostic-events.ts
-src/infra/exec-approvals-allow-always.test.ts
 src/infra/exec-approvals-allowlist.ts
 src/infra/exec-authorization-plan.ts
 src/infra/host-env-security.test.ts
@@ -540,21 +515,14 @@ src/infra/outbound/delivery-queue-recovery.ts
 src/infra/outbound/delivery-queue.recovery.test.ts
 src/infra/outbound/outbound-send-service.test.ts
 src/infra/outbound/targets.test.ts
-src/infra/package-update-steps.ts
-src/infra/restart-stale-pids.test.ts
 src/infra/restart.ts
-src/infra/run-node.test.ts
-src/infra/session-cost-usage.test.ts
 src/infra/state-migrations.doctor.ts
 src/infra/state-migrations.session-store.ts
-src/infra/state-migrations.storage.ts
 src/infra/state-migrations.test.ts
 src/infra/update-global.ts
 src/infra/update-managed-service-handoff.ts
 src/infra/update-startup.test.ts
-src/infra/update-startup.ts
 src/interactive/payload.ts
-src/llm/providers/stream-wrappers/openai.ts
 src/logging/diagnostic-stability-bundle.ts
 src/logging/diagnostic-stability.ts
 src/logging/diagnostic-support-export.ts
@@ -565,19 +533,14 @@ src/logging/redact.ts
 src/media-understanding/apply.test.ts
 src/media-understanding/runner.entries.ts
 src/media-understanding/runner.ts
-src/media/fetch.test.ts
 src/media/web-media.ts
 src/node-host/invoke-system-run-plan.test.ts
 src/node-host/invoke-system-run.test.ts
 src/node-host/invoke-system-run.ts
-src/node-host/invoke.ts
 src/plugin-sdk/core.ts
-src/plugin-sdk/provider-auth.test.ts
-src/plugin-sdk/provider-stream-shared.test.ts
 src/plugin-sdk/test-helpers/plugin-runtime-mock.ts
 src/plugin-sdk/test-helpers/provider-discovery-contract.ts
 src/plugin-sdk/test-helpers/provider-runtime-contract.ts
-src/plugins/capability-provider-runtime.test.ts
 src/plugins/channel-plugin-ids.test.ts
 src/plugins/clawhub.test.ts
 src/plugins/clawhub.ts
@@ -603,15 +566,12 @@ src/plugins/loader.registration.test-utils.ts
 src/plugins/loader.test-harness.ts
 src/plugins/manifest-registry.test.ts
 src/plugins/marketplace.ts
-src/plugins/official-external-plugin-catalog.test.ts
 src/plugins/plugin-registry-snapshot.test.ts
 src/plugins/provider-runtime.test.ts
 src/plugins/provider-runtime.ts
-src/plugins/providers.ts
 src/plugins/schema-validator.test.ts
 src/plugins/sdk-alias.test.ts
 src/plugins/sdk-alias.ts
-src/plugins/setup-registry.test.ts
 src/plugins/setup-registry.ts
 src/plugins/tools.optional.test.ts
 src/plugins/uninstall.test.ts
@@ -664,7 +624,6 @@ ui/src/pages/chat/chat-state.test.ts
 ui/src/pages/chat/chat-thread.test.ts
 ui/src/pages/chat/chat-view.test.ts
 ui/src/pages/chat/components/chat-message.test.ts
-ui/src/pages/chat/composer-persistence.test.ts
 ui/src/pages/chat/composer-persistence.ts
 ui/src/pages/chat/talk/gateway-relay.test.ts
 ui/src/pages/config/config-page.ts

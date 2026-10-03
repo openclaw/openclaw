@@ -129,6 +129,114 @@ function duringPreparation(
   return { restore: () => spy.mockRestore(), observed: () => observed };
 }
 
+it.each([false, true])(
+  "preserves authored rows and SQL ownership when the worker reserves onExit=%s",
+  async (onExit) => {
+    await withOpenClawTestState({ label: "cron-reservation-authored-data" }, async (fixture) => {
+      const now = 1_800_000_000_000;
+      const storePath = fixture.statePath("cron", "jobs.json");
+      const job = createDueIsolatedJob({ id: "legacy-reservation", nowMs: now, nextRunAtMs: now });
+      job.schedule = onExit
+        ? { kind: "on-exit", command: "true" }
+        : { kind: "every", everyMs: 60_000 };
+      const state = createCronRegressionState({
+        storePath,
+        defaultAgentId: "main",
+        nowMs: () => now + 1_000,
+        isAgentAvailable: () => true,
+        runIsolatedAgentJob: async () => {
+          throw new Error("Reservation must not execute the payload");
+        },
+      });
+      await saveCronStore(storePath, { version: 1, jobs: [job] });
+      const db = openOpenClawStateDatabase().db;
+      const storeKey = path.resolve(storePath);
+      db.prepare(
+        "UPDATE cron_jobs SET agent_id = 'main', owner_agent_id = 'main', grant_definition_generation = 17, job_json = json_set(json_remove(job_json, '$.enabled'), '$.notify', json('true'), '$.isolation', json(?), '$.authoredNote', 'preserve me') WHERE store_key = ? AND job_id = ?",
+      ).run(JSON.stringify({ legacy: "retained" }), storeKey, job.id);
+      const raw = () =>
+        db
+          .prepare("SELECT job_json FROM cron_jobs WHERE store_key = ? AND job_id = ?")
+          .get(storeKey, job.id)?.job_json;
+      const metadata = () =>
+        db
+          .prepare(
+            "SELECT agent_id, owner_agent_id, sort_order, updated_at, grant_definition_revision, grant_definition_generation, grant_definition_updated_at FROM cron_jobs WHERE store_key = ? AND job_id = ?",
+          )
+          .get(storeKey, job.id);
+      const before = raw();
+      const metadataBefore = metadata();
+      await list(state);
+      const current = (await loadCronStore(storePath)).jobs[0]!;
+      try {
+        const reservations = await persistQueuedCronRunReservations({
+          state,
+          candidates: [current],
+          reservedAtMs: now + 1_000,
+          ...(onExit
+            ? {
+                manualRun: {
+                  onExit: {
+                    commitGuard: () => {},
+                    onReserved: (reserved, runReceipt, runReceiptContext) => {
+                      reserveQueuedCronRun(state, reserved.id, now + 1_000, {
+                        runReceipt,
+                        runReceiptContext,
+                        onExit: true,
+                      });
+                    },
+                  },
+                },
+              }
+            : {}),
+        });
+        for (const reserved of reservations) {
+          if (!state.queuedRunReservationsByJobId.has(reserved.job.id)) {
+            reserveQueuedCronRun(state, reserved.job.id, now + 1_000, {
+              runReceipt: reserved.runReceipt,
+              runReceiptContext: reserved.runReceiptContext,
+            });
+          }
+        }
+        expect(reservations).toHaveLength(1);
+        expect(metadata()).toEqual(metadataBefore);
+        if (onExit) {
+          expect(JSON.parse(String(raw()))).toEqual({
+            ...JSON.parse(String(before)),
+            enabled: false,
+          });
+        } else {
+          expect(raw()).toBe(before);
+        }
+        expect(
+          db
+            .prepare("SELECT enabled FROM cron_jobs WHERE store_key = ? AND job_id = ?")
+            .get(storeKey, job.id),
+        ).toEqual({ enabled: onExit ? 0 : 1 });
+        const persisted = (await loadCronStore(storePath)).jobs[0]!;
+        expect(persisted.state.queuedAtMs).toBe(now + 1_000);
+        if (onExit) {
+          expect(persisted.enabled).toBe(false);
+          expect(persisted.state.nextRunAtMs).toBeUndefined();
+        }
+      } finally {
+        try {
+          await cleanupQueuedCronRunReservations({
+            state,
+            reservations: [...state.queuedRunReservationsByJobId].map(([jobId, reservation]) => ({
+              jobId,
+              reservationIdentity: reservation.identity,
+            })),
+          });
+        } finally {
+          stop(state);
+          await state.op;
+        }
+      }
+    });
+  },
+);
+
 it("fences an activation whose durable receipt was replaced after reservation", async () => {
   await withReservation(async ({ state, job, identity, readJob, readReceipt }) => {
     const original = state.queuedRunReservationsByJobId.get(job.id)!.runReceipt;

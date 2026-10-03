@@ -404,17 +404,36 @@ see Anthropic's [migration guide](https://platform.claude.com/docs/en/models/fab
 
 Fable 5.1 binds retained thinking to the preceding system prompt, tools, and
 conversation history. Changing that prefix can invalidate later thinking
-blocks. Claude Code manages this history for the CLI runtime. OpenClaw's
-embedded runtime uses append-only context only for prefix-binding models such as
-Fable 5.1, Opus 5.5, and Sonnet 5.5: it persists hidden runtime-context carriers
-after their user turn, keeps earlier carriers and inline inbound metadata in
-place, and preserves consecutive user turns on the Messages API. This also
-applies to matching Claude models on Bedrock, Vertex, and Foundry, although Bedrock Converse still merges
-consecutive user turns. Carriers contain only the delimited context body; the
-instruction to use it privately lives once in the stable system prompt.
-Other Claude models keep transient carriers and normal user-turn merging.
-Transient carriers are the cheaper cache shape when thinking does not bind the
-prefix: old carriers consume no later context or repeated cache-read charges.
+blocks. On direct Anthropic API-key Messages routes, OpenClaw enables
+`inHistorySystemUpdates` for Opus 4.8, Opus 5/5.5, Sonnet 5/5.5, Fable 5/5.1,
+and Mythos 5/5.1. It pins the stable system prefix and appends changed, added,
+or removed prompt sections as system messages after the current user turn.
+Workspace instructions, skills, and permission changes therefore preserve the
+earlier prefix. Changing the provider, model, or transport, or compacting the
+session, starts a new prefix series. After a Gateway restart, the series
+continues only when the current stable prefix matches the last saved rendered
+prefix.
+
+These routes also keep runtime context append-only as turn-scoped system
+messages, without user-message delimiters. OpenClaw sends
+`clear_at: "next_user_message"` with the
+`mid-conversation-system-clear-at-2026-08-21` beta: earlier carriers stay in the
+transcript but consume no input tokens after the next user message. Persistent
+prompt updates need no beta header. Operator system messages follow all other
+context for their user turn, including tool results.
+Tool results and queued extension context also clear turn-scoped messages, so
+OpenClaw renews the current user turn's runtime context after those continuations.
+
+OAuth, proxies, Bedrock, Vertex, and Foundry keep their existing behavior.
+Prefix-binding models such as Fable 5.1, Opus 5.5, and Sonnet 5.5 retain hidden
+user-role runtime-context carriers and inline inbound metadata, preserving
+consecutive user turns on the Messages API; Bedrock Converse still merges
+consecutive user turns. Those carriers contain the delimited context body,
+with interpretation guidance once in the stable system prompt. Routes without
+either capability keep transient carriers and normal user-turn merging.
+Transient carriers remain the cheaper shape on routes without in-history
+system updates when thinking does not bind the prefix: old carriers consume no
+later context or repeated cache-read charges.
 
 Direct Anthropic API-key requests with adaptive thinking send the
 `thinking-binding-controls-2026-08-01` beta and
@@ -470,7 +489,8 @@ Code sessions on the Gateway and on connected node hosts:
 - Claude CLI sessions come from valid project-index records. For unindexed
   transcripts, a bounded metadata fallback recognizes concurrent non-sidechain
   interactive (`cli`) and headless Agent SDK CLI (`sdk-cli`) sessions under
-  `~/.claude/projects/`.
+  `~/.claude/projects/`. Gateway-side discovery also recognizes bidirectional
+  stream-json (`sdk-ts`) sessions; the native macOS node reader does not.
 - Claude Desktop sessions use the Desktop title, activity time, and
   archive state when its metadata points to the same Claude Code session ID.
 - A CLI-only session has no archive flag, so it remains visible while its
@@ -485,7 +505,9 @@ their Desktop title and remain colorless.
 
 No additional OpenClaw config is required for discovery. The Anthropic plugin
 is bundled and enabled by default; a native macOS node advertises the read-only
-Claude session commands when the local `~/.claude/projects/` directory exists.
+Claude session commands when the local Claude projects directory exists
+(`$CLAUDE_CONFIG_DIR/projects/` when `CLAUDE_CONFIG_DIR` is set, otherwise
+`~/.claude/projects/`, matching Gateway-side discovery).
 Approve the node pairing upgrade when those commands first appear.
 
 The sidebar groups rows by their Gateway or paired-node host and shows each
@@ -767,7 +789,11 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
     ```json5
     {
       agents: {
+        ownership: "explicit",
         defaults: {
+          heartbeat: { agentId: "research" },
+          systemAgent: { agentId: "research" },
+          authInheritance: { agentId: "research" },
           model: { primary: "anthropic/claude-opus-4-6" },
           models: {
             "anthropic/claude-opus-4-6": {
@@ -776,10 +802,11 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
           },
         },
         entries: {
-          research: { default: true },
+          research: { workspace: "~/.openclaw/workspace" },
           alerts: { params: { cacheRetention: "none" } },
         },
       },
+      talk: { agentId: "research" },
     }
     ```
 

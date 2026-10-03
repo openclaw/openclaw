@@ -11,6 +11,7 @@ import {
   projectClawPackageRemovePlan,
 } from "../../claws/package-remove-plan.js";
 import { applyClawPackageRemovals, planClawPackageRemovals } from "../../claws/package-remove.js";
+import { claimClawPackageRefStatus } from "../../claws/provenance-write.js";
 import { readClawInstallRecord } from "../../claws/provenance.js";
 import { projectPluginRuntimeFailure } from "../../plugins/lifecycle.js";
 import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.js";
@@ -120,6 +121,7 @@ export const clawsPackageHandlers = {
           }
           return await applyClawPackageRemovals(orderClawPackageRemovals(decisions), {
             applyRuntime: applyOwnedRuntime,
+            deps: { claimPackageRef: claimClawPackageRefStatus },
             assertCurrent: beforePersistentApply,
           });
         },

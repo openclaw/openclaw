@@ -16,8 +16,8 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { convertMarkdownTables, FormatCapabilityProfile } from "openclaw/plugin-sdk/text-chunking";
-import { getMattermostRuntime } from "../runtime.js";
+import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
+import { getMattermostRuntime, getOptionalMattermostRuntime } from "../runtime.js";
 import { resolveMattermostAccount } from "./accounts.js";
 import {
   createMattermostClient,
@@ -79,21 +79,6 @@ export type MattermostSendResult = {
 
 const MATTERMOST_BOT_USER_CACHE_MAX_ENTRIES = 64;
 const MATTERMOST_TARGET_CACHE_MAX_ENTRIES = 1024;
-const MATTERMOST_FORMAT_PROFILE = FormatCapabilityProfile.define({
-  mechanism: "markdown",
-  chunk: { limit: 16_383, unit: "chars" },
-});
-
-function renderMattermostMarkdown(
-  markdown: string,
-  tableMode: Parameters<typeof convertMarkdownTables>[1],
-): string {
-  // Native tables stay byte-identical; only an explicit operator fallback uses conversion.
-  return tableMode === "off" && MATTERMOST_FORMAT_PROFILE.constructs.table === "native"
-    ? markdown
-    : convertMarkdownTables(markdown, tableMode);
-}
-
 const botUserCache = new Map<string, MattermostUser>();
 const userByNameCache = new Map<string, MattermostUser>();
 const channelByNameCache = new Map<string, string>();
@@ -119,20 +104,6 @@ function resolveMattermostReceiptKind(params: {
     return "card";
   }
   return "text";
-}
-
-function recordMattermostOutboundActivity(accountId: string): void {
-  try {
-    getMattermostRuntime().channel.activity.record({
-      channel: "mattermost",
-      accountId,
-      direction: "outbound",
-    });
-  } catch (error) {
-    if (!(error instanceof Error) || error.message !== "Mattermost runtime not initialized") {
-      throw error;
-    }
-  }
 }
 
 function cacheKey(baseUrl: string, token: string): string {
@@ -414,7 +385,7 @@ export async function sendMessageMattermost(
       channel: "mattermost",
       accountId,
     });
-    message = renderMattermostMarkdown(message, tableMode);
+    message = convertMarkdownTables(message, tableMode);
   }
 
   if (!message && (!fileIds || fileIds.length === 0)) {
@@ -461,7 +432,11 @@ export async function sendMessageMattermost(
     // Core must learn the provider identity before local bookkeeping can fail;
     // preserve the receipt if either post-send step rejects to prevent a duplicate retry.
     await opts.onDeliveryResult?.(result);
-    recordMattermostOutboundActivity(accountId);
+    getOptionalMattermostRuntime()?.channel.activity.record({
+      channel: "mattermost",
+      accountId,
+      direction: "outbound",
+    });
   } catch (error: unknown) {
     // The provider post is already durable. Preserve its identity so callers do not
     // retry and duplicate the visible message when local bookkeeping fails afterward.

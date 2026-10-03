@@ -36,3 +36,24 @@ export function tsdownPackageOutputRoot(packageName: string): string {
 function packageOutputRoot(packageName: string): string {
   return `packages/${packageName}/dist`;
 }
+
+const TSDOWN_SOURCE_EXTENSIONS = [
+  ".cjs",
+  ".cts",
+  ".js",
+  ".json",
+  ".json5",
+  ".mjs",
+  ".mts",
+  ".sql",
+  ".ts",
+  ".tsx",
+  ".yaml",
+  ".yml",
+];
+
+export const TSDOWN_PACKAGES_CACHE_INPUT = {
+  path: "packages",
+  extensions: TSDOWN_SOURCE_EXTENSIONS,
+  excludeDirectories: ["dist", "node_modules"],
+};

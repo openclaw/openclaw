@@ -121,6 +121,10 @@ export async function prepareCodexAttemptContext(
       agentAccountId: params.agentAccountId,
     }),
     channelContext: params.channelContext,
+    // Prompt hooks (Active Memory recall) need the turn's host-resolved memory audience,
+    // as dynamic tools already receive it; the shared hook builder adds its currency guard.
+    ...(params.memoryAudience ? { memoryAudience: params.memoryAudience } : {}),
+    sandboxed: sandbox?.enabled === true,
     ...hookContextWindowFields,
   };
   const hookRunner = getAgentHarnessHookRunner();
@@ -177,7 +181,16 @@ export async function prepareCodexAttemptContext(
   const skillsInstructions = renderCodexSkillsInstructions({
     attempt: runtimeParams,
     skillsPrompt: params.skillsSnapshot?.prompt,
+    dynamicTools: toolBridge.availableSpecs,
   });
+  // This section uses the existing native thread carrier only when there is no
+  // managed parent-local inference route; it is separate from immutable policy.
+  const refreshableInstructions =
+    joinPresentSections(
+      skillsInstructions,
+      workspaceBootstrapContext.sharedPersonaInstructions,
+      workspaceBootstrapContext.memoryInstructions,
+    ) || undefined;
   const baseDeveloperInstructions = joinPresentSections(
     buildDeveloperInstructions(runtimeParams, {
       dynamicTools: toolBridge.availableSpecs,
@@ -233,6 +246,7 @@ export async function prepareCodexAttemptContext(
     baseDeveloperInstructions,
     buildOpenClawPromptContext,
     skillsInstructions,
+    refreshableInstructions,
     promptState,
     codexContextProjectionMaxChars,
     codexContinuityProjectionMaxChars,

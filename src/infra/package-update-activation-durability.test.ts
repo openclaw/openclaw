@@ -1,7 +1,10 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { withUpdateCommandExecutor } from "../cli/update-cli/update-command-executor.js";
+import * as runtimePaths from "../daemon/runtime-paths.js";
 import * as durability from "./directory-durability.js";
 import {
   openPackageActivationJournal,
@@ -10,12 +13,22 @@ import {
 } from "./package-update-activation-journal.js";
 import { createPackageActivationLifetimeFixture } from "./package-update-activation-lifetime.test-support.js";
 import {
+  capturePackageActivationRuntime,
+  resolvePackageActivationAnchor,
+} from "./package-update-activation-paths.js";
+import { preparePackageActivationJournal } from "./package-update-activation-prepare.js";
+import {
   readPackageActivationStatus,
   runPackageActivationRecovery,
 } from "./package-update-activation.js";
+import { createPackageIntegrityReader } from "./package-update-integrity.js";
+import { createPackageSwapFixture } from "./package-update-swap.test-support.js";
 
 const fixture = createPackageActivationLifetimeFixture();
-beforeEach(() => fixture.setup());
+let root: string;
+beforeEach(() => {
+  ({ root } = fixture.setup());
+});
 afterEach(async () => {
   try {
     await fixture.lifetime.cleanup();
@@ -37,6 +50,69 @@ async function recover(anchor: string) {
 }
 
 describe.skipIf(process.platform === "win32")("package preparation durability", () => {
+  it.each(["before-probe", "during-probe", "unsupported-bun"] as const)(
+    "refuses %s runtime admission before taking package custody",
+    async (cut) => {
+      const f = await createPackageSwapFixture(root);
+      const executable = path.join(root, "selected-runtime");
+      fs.writeFileSync(executable, "fixture runtime", { mode: 0o700 });
+      const runtime = capturePackageActivationRuntime("bun", executable);
+      if (cut === "before-probe") {
+        fs.renameSync(executable, `${executable}.previous`);
+        fs.writeFileSync(executable, "fixture runtime", { mode: 0o700 });
+      }
+      vi.spyOn(runtimePaths, "resolveBunRuntimeInfo").mockImplementation(async () => {
+        if (cut === "during-probe") {
+          fs.writeFileSync(executable, "changed runtime executable");
+        }
+        return {
+          status: cut === "unsupported-bun" ? "unsupported" : "supported",
+          version: cut === "unsupported-bun" ? "1.3.0" : "1.4.3",
+          sqliteVersion: "3.53.4",
+          sqliteProbe: {
+            available: true,
+            version: "3.53.4",
+            text: true,
+            blob: true,
+            json: true,
+          },
+          nodeSharedSqlite: false,
+        };
+      });
+      const anchor = resolvePackageActivationAnchor(f.packageRoot);
+      const onPrepared = vi.fn();
+      const onCustody = vi.fn();
+      const reader = createPackageIntegrityReader();
+      const previous = await reader.tree(f.packageRoot);
+      const candidate = await reader.tree(f.params.stage.packageRoot);
+      await withUpdateCommandExecutor(randomUUID(), async (executor) => {
+        await expect(
+          preparePackageActivationJournal({
+            options: { fence: await executor.enter(f.packageRoot), runtime, onPrepared },
+            liveRoot: f.packageRoot,
+            stageRoot: f.params.stage.packageRoot,
+            launcherRoot: f.params.stage.layout.binDir,
+            binDir: path.dirname(f.launcher),
+            previous,
+            onCustody,
+            launchers: [],
+          }),
+        ).rejects.toThrow(
+          cut === "unsupported-bun"
+            ? "supported external Bun executable"
+            : "changed after runtime preflight",
+        );
+      });
+      expect(onPrepared).not.toHaveBeenCalled();
+      expect(onCustody).not.toHaveBeenCalled();
+      expect(fs.existsSync(anchor)).toBe(false);
+      expect(fs.existsSync(resolvePackageActivationControl(anchor))).toBe(false);
+      expect(await reader.tree(f.packageRoot)).toEqual(previous);
+      expect(await reader.tree(f.params.stage.packageRoot)).toEqual(candidate);
+      expect(fs.readFileSync(f.launcher, "utf8")).toBe("old launcher\n");
+    },
+  );
+
   it("keeps anchor removal resumable until its parent is persisted", async () => {
     const f = await fixture.prepare();
     await runPackageActivationRecovery(f.anchor, "repair", f.operationId);

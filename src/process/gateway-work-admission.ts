@@ -6,6 +6,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { AsyncWorkScope, getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { notifyListeners } from "../shared/listeners.js";
 
 type GatewaySuspendAdmissionPhase = GatewaySuspension["phase"];
 
@@ -258,13 +259,9 @@ function notifyGatewaySuspendAdmission(): void {
   const phase = getGatewaySuspendAdmissionPhase();
   // Snapshot the listeners because observers can subscribe or unsubscribe while notified.
   const listeners = Array.from(GATEWAY_WORK_ADMISSION_STATE.suspendListeners);
-  for (const listener of listeners) {
-    try {
-      listener(phase);
-    } catch (error) {
-      admissionLog.warn(`suspension observer failed: ${String(error)}`);
-    }
-  }
+  notifyListeners(listeners, phase, (error) => {
+    admissionLog.warn(`suspension observer failed: ${String(error)}`);
+  });
 }
 
 export function isGatewayRestartDraining(): boolean {

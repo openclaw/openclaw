@@ -490,8 +490,13 @@ export async function prepareGatewayServerBootstrap(input: {
     );
   }
   publishSystemEventStoreConfig(cfgAtStart);
-  const pluginBootstrap = await startupTrace.measure("plugins.bootstrap", () =>
-    prepareGatewayPluginBootstrap({
+  const pluginBootstrap = await startupTrace.measure("plugins.bootstrap", async () => {
+    if (!opts.updateCanary) {
+      const { initSubagentRegistry } =
+        await import("../agents/subagents/registry/subagent-registry.js");
+      await initSubagentRegistry();
+    }
+    return prepareGatewayPluginBootstrap({
       cfgAtStart,
       activationSourceConfig: startupActivationSourceConfig,
       pluginMetadataSnapshot: startupConfigLoad.pluginMetadataSnapshot,
@@ -499,8 +504,8 @@ export async function prepareGatewayServerBootstrap(input: {
       minimalTestGateway,
       ambientEnvTriggers,
       log,
-    }),
-  );
+    });
+  });
   const {
     gatewayPluginConfigAtStart,
     defaultWorkspaceDir,

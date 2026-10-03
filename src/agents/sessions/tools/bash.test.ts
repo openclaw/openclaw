@@ -172,10 +172,10 @@ describe("bash tool output lifecycle", () => {
     }
   });
 
-  it.runIf(process.platform !== "win32").each(nativeBashSpillScenarios)(
+  it.runIf(process.platform !== "win32").for(nativeBashSpillScenarios)(
     "settles real Bash output for %s",
-    async (scenario) => {
-      await expectNativeBashSpill("tool", scenario);
+    async (scenario, { signal }) => {
+      await expectNativeBashSpill("tool", scenario, signal);
     },
   );
 

@@ -1,4 +1,4 @@
-import { listAgentIds } from "../agents/agent-scope.js";
+import { listAgentIds, resolveAmbientOwnerAgentId } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { resolveRequestedSessionAgentInput } from "./session-request-agent.js";
@@ -38,4 +38,8 @@ export function resolveSessionResetTarget(
     ...(requestedAgentId ? { agentId: requestedAgentId } : {}),
   });
   return { ok: true as const, cfg, target, storePath: target.storePath, requestedAgentId };
+}
+
+export function resolveLifecycleAgentId(cfg: OpenClawConfig, agentId?: string): string {
+  return normalizeAgentId(agentId ?? resolveAmbientOwnerAgentId(cfg));
 }

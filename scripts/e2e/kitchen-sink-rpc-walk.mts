@@ -28,6 +28,7 @@ import {
   resolveWindowsSystem32Path,
   resolveWindowsTaskkillPath,
 } from "../lib/windows-taskkill.mjs";
+import { resolveGatewayCliPayload } from "./lib/gateway-frame-payload.mjs";
 import {
   calibrateKitchenSinkResources,
   KITCHEN_RESOURCE_CONTROLS,
@@ -1075,16 +1076,7 @@ export function unwrapRpcPayload(raw: unknown): unknown {
   ) {
     throw new Error(`gateway RPC returned error envelope: ${boundedJsonPreview(envelope.error)}`);
   }
-  if (hasOwnPayloadField(raw, "result")) {
-    return raw.result;
-  }
-  if (hasOwnPayloadField(raw, "payload")) {
-    return raw.payload;
-  }
-  if (hasOwnPayloadField(raw, "data")) {
-    return raw.data;
-  }
-  return raw;
+  return resolveGatewayCliPayload(raw);
 }
 
 async function rpcCall(method: string, params: unknown, options: RpcCallOptions) {

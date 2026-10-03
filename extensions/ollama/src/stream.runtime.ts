@@ -163,7 +163,6 @@ const OLLAMA_OPTION_PARAM_KEYS = new Set([
   "presence_penalty",
   "frequency_penalty",
   "stop",
-  "num_ctx",
   "num_batch",
   "num_gpu",
   "main_gpu",
@@ -197,23 +196,23 @@ function resolveOllamaNativeNumCtx(model: ProviderRuntimeModel): number | undefi
 }
 
 function resolveOllamaModelOptions(model: ProviderRuntimeModel): Record<string, unknown> {
-  const options: Record<string, unknown> = {};
-  const params = model.params;
-  if (params && typeof params === "object" && !Array.isArray(params)) {
-    for (const [key, value] of Object.entries(params)) {
-      if (key === "num_ctx") {
-        continue;
-      }
-      if (value !== undefined && OLLAMA_OPTION_PARAM_KEYS.has(key)) {
-        options[key] = value;
-      }
-    }
-  }
+  const options = pickOllamaParams(model.params, OLLAMA_OPTION_PARAM_KEYS);
   const numCtx = resolveOllamaNativeNumCtx(model);
   if (numCtx !== undefined) {
     options.num_ctx = numCtx;
   }
   return options;
+}
+
+function pickOllamaParams(
+  params: ProviderRuntimeModel["params"],
+  keys: ReadonlySet<string>,
+): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(isRecord(params) ? params : {}).filter(
+      ([key, value]) => value !== undefined && keys.has(key),
+    ),
+  );
 }
 
 function normalizeOllamaGreedySamplingOptions(options: Record<string, unknown>): void {
@@ -229,15 +228,8 @@ function normalizeOllamaGreedySamplingOptions(options: Record<string, unknown>):
 }
 
 function resolveOllamaTopLevelParams(model: ProviderRuntimeModel, baseUrl: string) {
-  const requestParams: Record<string, unknown> = {};
   const params = model.params;
-  if (params && typeof params === "object" && !Array.isArray(params)) {
-    for (const [key, value] of Object.entries(params)) {
-      if (value !== undefined && OLLAMA_TOP_LEVEL_PARAM_KEYS.has(key)) {
-        requestParams[key] = value;
-      }
-    }
-  }
+  const requestParams = pickOllamaParams(params, OLLAMA_TOP_LEVEL_PARAM_KEYS);
   const think = resolveOllamaThinkParamValue(params, supportsNativeOllamaMax(model, baseUrl));
   if (think !== undefined && shouldForwardNativeOllamaThink(model, think)) {
     requestParams.think = think;
@@ -840,23 +832,17 @@ function createRawOllamaStreamFn(
         const ollamaTools = extractOllamaTools(context.tools);
 
         const ollamaOptions: Record<string, unknown> = resolveOllamaModelOptions(model);
-        if (typeof options?.temperature === "number") {
-          ollamaOptions.temperature = options.temperature;
-        }
-        if (typeof options?.maxTokens === "number") {
-          ollamaOptions.num_predict = options.maxTokens;
-        }
-        if (typeof options?.topP === "number") {
-          ollamaOptions.top_p = options.topP;
-        }
-        if (typeof options?.frequencyPenalty === "number") {
-          ollamaOptions.frequency_penalty = options.frequencyPenalty;
-        }
-        if (typeof options?.presencePenalty === "number") {
-          ollamaOptions.presence_penalty = options.presencePenalty;
-        }
-        if (typeof options?.seed === "number") {
-          ollamaOptions.seed = options.seed;
+        for (const [option, wireKey] of [
+          ["temperature", "temperature"],
+          ["maxTokens", "num_predict"],
+          ["topP", "top_p"],
+          ["frequencyPenalty", "frequency_penalty"],
+          ["presencePenalty", "presence_penalty"],
+          ["seed", "seed"],
+        ] as const) {
+          if (typeof options?.[option] === "number") {
+            ollamaOptions[wireKey] = options[option];
+          }
         }
         if (options?.stop && options.stop.length > 0) {
           ollamaOptions.stop = options.stop;
@@ -1142,8 +1128,10 @@ function createRawOllamaStreamFn(
           }
 
           if (
-            pendingFinalVisibleContent !== undefined &&
-            isLikelyGarbledVisibleText({ text: pendingFinalVisibleContent, modelId: model.id })
+            isLikelyGarbledVisibleText({
+              text: pendingFinalVisibleContent || accumulatedVisibleContent,
+              modelId: model.id,
+            })
           ) {
             throw new Error(
               `Ollama returned non-linguistic garbled visible text for ${model.id}; retry or switch models`,
@@ -1151,12 +1139,6 @@ function createRawOllamaStreamFn(
           }
 
           flushVisibleText(pendingFinalVisibleContent);
-
-          if (isLikelyGarbledVisibleText({ text: accumulatedVisibleContent, modelId: model.id })) {
-            throw new Error(
-              `Ollama returned non-linguistic garbled visible text for ${model.id}; retry or switch models`,
-            );
-          }
 
           finalResponse.message.content = accumulatedVisibleContent;
           if (accumulatedThinking) {

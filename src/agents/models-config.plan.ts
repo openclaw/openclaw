@@ -3,6 +3,7 @@
  * this module to merge implicit provider discovery, explicit config, and
  * preserved secrets before touching models.json.
  */
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { ProviderCatalogOutcome } from "../plugins/provider-catalog.types.js";
@@ -60,11 +61,7 @@ export type PreparedModelsConfigContext = Readonly<{
  */
 type ModelsJsonPlan =
   | {
-      action: "skip";
-      pluginCatalogWrites?: Record<string, string>;
-    }
-  | {
-      action: "noop";
+      action: "skip" | "noop";
       pluginCatalogWrites?: Record<string, string>;
     }
   | {
@@ -197,13 +194,9 @@ function resolveProvidersForMode(params: {
   if (!isRecord(existing) || !isRecord(existing.providers)) {
     return params.providers;
   }
-  const existingProviders = existing.providers as Record<
-    string,
-    NonNullable<ModelsConfig["providers"]>[string]
-  >;
   return mergeWithExistingProviderSecrets({
     nextProviders: params.providers,
-    existingProviders: existingProviders as Record<string, ExistingProviderConfig>,
+    existingProviders: existing.providers as Record<string, ExistingProviderConfig>,
     secretRefManagedProviders: params.secretRefManagedProviders,
   });
 }
@@ -224,13 +217,8 @@ function collectGeneratedCatalogProviders(params: {
 }): Record<string, unknown> {
   const providers: Record<string, unknown> = {};
   for (const { pluginId, contents } of params.catalogs) {
-    let catalog: unknown;
-    try {
-      catalog = JSON.parse(contents) as unknown;
-    } catch {
-      continue;
-    }
-    if (!isRecord(catalog) || !isRecord(catalog.providers)) {
+    const catalog = safeParseJsonRecord(contents);
+    if (!catalog || !isRecord(catalog.providers)) {
       continue;
     }
     Object.assign(

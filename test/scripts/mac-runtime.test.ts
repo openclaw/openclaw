@@ -10,6 +10,7 @@ import {
 } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it as baseIt } from "vitest";
+import { readStandaloneInstaller } from "../../scripts/lib/standalone-installers.mjs";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { registerMacRuntimeMaterializationTests } from "./mac-runtime-materialization.test-support.js";
@@ -47,7 +48,7 @@ console.log(file);
       // version. No downloads, app signing, service control, or native build.
       writeFileSync(
         path.join(scripts, "install-cli.sh"),
-        `${readFileSync("scripts/install-cli.sh", "utf8")}
+        `${readStandaloneInstaller(process.cwd(), "install-cli.sh")}
 install_node() {
   printf '%s\\n' "$NODE_VERSION" "$DEFAULT_NODE_VERSION" "$NODE_VERSION_REQUESTED" "\${OPENCLAW_CONFIG_PATH:-}" "\${OPENCLAW_GATEWAY_TOKEN:-}"
   exit 77

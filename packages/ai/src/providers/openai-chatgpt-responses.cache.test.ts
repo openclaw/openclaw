@@ -4,9 +4,11 @@ import type { AddressInfo } from "node:net";
 import { zstdDecompressSync } from "node:zlib";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
+import { createApiRegistry } from "../api-registry.js";
 import { configureAiTransportHost } from "../host.js";
 import { responsesPromptObserver, type ResponsesPromptObservation } from "../internal/openai.js";
 import { cleanupSessionResources } from "../session-resources.js";
+import { createNodeLlmRuntime } from "../stream.js";
 import {
   buildOpenAIResponsesReasoningReplayMetadata,
   captureOpenAIResponsesCompaction,
@@ -370,6 +372,152 @@ describe("ChatGPT Responses cached transport", () => {
       releaseLoserHandshake();
       closeOpenAICodexWebSocketSessions(sessionId);
       for (const socket of server.clients) {
+        socket.terminate();
+      }
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
+
+  it("scopes sticky SSE fallback to the public runtime authority", async () => {
+    const firstToken = createJwt();
+    const secondToken = `${createJwt()}-other`;
+    const rotatedTokens = Array.from(
+      { length: 8 },
+      (_, index) => `${createJwt()}-rotated-${index}`,
+    );
+    let activeFirstToken = firstToken;
+    const websocketUpgrades: Array<{
+      authorization?: string;
+      proxyKey?: string;
+    }> = [];
+    const sseRequests: Array<{ authorization?: string; proxyKey?: string }> = [];
+    const server = createServer((request, response) => {
+      const chunks: Buffer[] = [];
+      request.on("data", (chunk: Buffer) => chunks.push(Buffer.from(chunk)));
+      request.on("end", () => {
+        sseRequests.push({
+          authorization: request.headers.authorization,
+          proxyKey: request.headers["x-proxy-key"] as string | undefined,
+        });
+        response.writeHead(200, {
+          connection: "close",
+          "content-type": "text/event-stream",
+        });
+        response.end(`data: ${JSON.stringify(completion(`resp_sse_${sseRequests.length}`))}\n\n`);
+      });
+    });
+    const websocketServer = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 });
+    websocketServer.on("connection", (socket) => {
+      socket.on("message", () => {
+        socket.send(JSON.stringify(completion(`resp_ws_${websocketUpgrades.length}`)));
+      });
+    });
+    server.on("upgrade", (request, socket, head) => {
+      const upgrade = {
+        authorization: request.headers.authorization,
+        proxyKey: request.headers["x-proxy-key"] as string | undefined,
+      };
+      websocketUpgrades.push(upgrade);
+      if (
+        (upgrade.authorization === `Bearer ${firstToken}` && upgrade.proxyKey !== "fresh") ||
+        rotatedTokens.some((token) => upgrade.authorization === `Bearer ${token}`)
+      ) {
+        socket.end(
+          "HTTP/1.1 426 Upgrade Required\r\nConnection: close\r\nContent-Length: 0\r\n\r\n",
+        );
+        return;
+      }
+      websocketServer.handleUpgrade(request, socket, head, (websocket) => {
+        websocketServer.emit("connection", websocket, request);
+      });
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const port = (server.address() as AddressInfo).port;
+    const loopbackModel = {
+      ...model,
+      baseUrl: `http://127.0.0.1:${port}/backend-api`,
+    } satisfies Model<"openai-chatgpt-responses">;
+    vi.stubGlobal("WebSocket", WebSocket);
+    const registry = createApiRegistry();
+    registry.registerApiProvider({
+      api: "openai-chatgpt-responses",
+      stream: streamOpenAICodexResponses,
+      streamSimple: streamOpenAICodexResponses,
+    });
+    const firstRuntime = createNodeLlmRuntime(registry, {
+      resolveSecretSentinel: (value) => (value === "opaque" ? activeFirstToken : value),
+    });
+    const secondRuntime = createNodeLlmRuntime(registry, {
+      resolveSecretSentinel: (value) => (value === "opaque" ? secondToken : value),
+    });
+    const sessionId = "runtime-fallback-authority";
+    const options = { apiKey: "opaque", sessionId, transport: "auto" as const };
+
+    try {
+      expect(
+        (await firstRuntime.stream(loopbackModel, simpleContext, options).result()).stopReason,
+      ).toBe("stop");
+      expect(
+        (await firstRuntime.stream(loopbackModel, simpleContext, options).result()).stopReason,
+      ).toBe("stop");
+      expect(
+        (await secondRuntime.stream(loopbackModel, simpleContext, options).result()).stopReason,
+      ).toBe("stop");
+      expect(
+        (
+          await firstRuntime
+            .stream(loopbackModel, simpleContext, {
+              ...options,
+              headers: { "x-proxy-key": "fresh" },
+            })
+            .result()
+        ).stopReason,
+      ).toBe("stop");
+      for (const [index, rotatedToken] of rotatedTokens.entries()) {
+        activeFirstToken = rotatedToken;
+        expect(
+          (await firstRuntime.stream(loopbackModel, simpleContext, options).result()).stopReason,
+        ).toBe("stop");
+        if (index === 0) {
+          activeFirstToken = firstToken;
+          expect(
+            (await firstRuntime.stream(loopbackModel, simpleContext, options).result()).stopReason,
+          ).toBe("stop");
+        }
+      }
+      activeFirstToken = firstToken;
+      expect(
+        (await firstRuntime.stream(loopbackModel, simpleContext, options).result()).stopReason,
+      ).toBe("stop");
+
+      expect(websocketUpgrades).toEqual([
+        { authorization: `Bearer ${firstToken}`, proxyKey: undefined },
+        { authorization: `Bearer ${secondToken}`, proxyKey: undefined },
+        { authorization: `Bearer ${firstToken}`, proxyKey: "fresh" },
+        ...rotatedTokens.map((token) => ({
+          authorization: `Bearer ${token}`,
+          proxyKey: undefined,
+        })),
+        { authorization: `Bearer ${firstToken}`, proxyKey: undefined },
+      ]);
+      expect(sseRequests).toEqual([
+        { authorization: `Bearer ${firstToken}`, proxyKey: undefined },
+        { authorization: `Bearer ${firstToken}`, proxyKey: undefined },
+        { authorization: `Bearer ${rotatedTokens[0]}`, proxyKey: undefined },
+        { authorization: `Bearer ${firstToken}`, proxyKey: undefined },
+        ...rotatedTokens.slice(1).map((token) => ({
+          authorization: `Bearer ${token}`,
+          proxyKey: undefined,
+        })),
+        { authorization: `Bearer ${firstToken}`, proxyKey: undefined },
+      ]);
+    } finally {
+      firstRuntime.cleanupSessionResources(sessionId);
+      secondRuntime.cleanupSessionResources(sessionId);
+      for (const socket of websocketServer.clients) {
         socket.terminate();
       }
       await new Promise<void>((resolve, reject) => {

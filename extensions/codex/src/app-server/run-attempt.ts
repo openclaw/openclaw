@@ -24,6 +24,13 @@ export async function runCodexAppServerAttempt(
   params: EmbeddedRunAttemptParamsV2,
   options: CodexRunAttemptOptions,
 ): Promise<EmbeddedRunAttemptResult> {
+  if (
+    params.requireWorkspaceOnly === true &&
+    (params.disableTools === true ||
+      typeof params.hostCapabilities?.createToolSurface !== "function")
+  ) {
+    throw new Error("Codex required-root execution requires an enabled host-mediated tool surface");
+  }
   const preparation = createCodexAttemptPreparationTiming(params);
   const connection = await preparation.measure("connection", () =>
     prepareCodexAttemptConnection({ params, options }),

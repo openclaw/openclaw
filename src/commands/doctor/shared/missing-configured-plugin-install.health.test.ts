@@ -3,6 +3,7 @@ import "./missing-configured-plugin-install.suite.test-support.js";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
+import { channelPluginEntry } from "./missing-configured-plugin-install.test-helpers.js";
 
 const { mocks, testEnv, tempDirs, setupPluginInstallSuite } =
   await import("./missing-configured-plugin-install.suite.test-support.js");
@@ -80,14 +81,7 @@ describe("configured plugin install health findings", () => {
     };
     mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue(records);
     mocks.listChannelPluginCatalogEntries.mockReturnValue([
-      {
-        id: "discord",
-        pluginId: "discord",
-        meta: { label: "Discord" },
-        install: {
-          npmSpec: "@openclaw/discord",
-        },
-      },
+      channelPluginEntry({ id: "discord", label: "Discord", npmSpec: "@openclaw/discord" }),
     ]);
 
     const {
@@ -149,14 +143,6 @@ describe("configured plugin install health findings", () => {
         "Run `openclaw plugins install clawhub:demo@1.2.3 --force` to reinstall the configured plugin package.",
     },
     {
-      name: "resolved selector without original spec",
-      source: "clawhub",
-      resolvedSpec: "clawhub:demo@1.2.3",
-      installSpec: "clawhub:demo@1.2.3",
-      fixHint:
-        "Run `openclaw plugins install clawhub:demo@1.2.3 --force` to reinstall the configured plugin package.",
-    },
-    {
       name: "original selector only",
       source: "npm",
       spec: "@example/demo@1.2.3",
@@ -184,12 +170,7 @@ describe("configured plugin install health findings", () => {
       },
     });
     mocks.listChannelPluginCatalogEntries.mockReturnValue([
-      {
-        id: "demo",
-        pluginId: "demo",
-        meta: { label: "Demo" },
-        install: { npmSpec: "@example/catalog-demo" },
-      },
+      channelPluginEntry({ id: "demo", label: "Demo", npmSpec: "@example/catalog-demo" }),
     ]);
 
     const {

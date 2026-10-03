@@ -70,7 +70,7 @@ import type { EmbeddedAgentRunResult } from "./types.js";
 
 export type { EmbeddedAgentRunEntryTerminal } from "./run-entry-terminal.js";
 
-type RunEntryCandidateOptions = {
+export type RunEntryCandidateOptions = {
   agentHarnessRuntimeOverride: string | undefined;
   assistantErrorTranscript: AssistantErrorTranscript;
   authProfileFailurePolicy?: AuthProfileFailurePolicy;
@@ -346,11 +346,6 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
                   : canFallback?.() === false
                     ? undefined
                     : result.classification,
-            }),
-        ...(canFallback ? { canFallbackAfterError: canFallback } : {}),
-        ...(params.behavior.kind === "maintenance"
-          ? {}
-          : {
               mergeExhaustedResult: ({
                 latestResult,
                 preferredResult,
@@ -365,6 +360,7 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
                 turnAttempt: latestResult.turnAttempt,
               }),
             }),
+        ...(canFallback ? { canFallbackAfterError: canFallback } : {}),
         run: async (provider, model, options) => {
           assistantErrorTranscript.clear();
           if (!options) {
@@ -627,11 +623,6 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
           }
         : {}),
     });
-    const settledResult = {
-      ...fallbackResult,
-      outcome,
-      result,
-    };
     const terminal = buildRunEntryTerminal({
       result,
       outcome: terminalOutcome,
@@ -644,7 +635,7 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
       !params.abortSignal?.aborted &&
       canAdvanceContextEngineTurn({
         result,
-        fallbackOutcome: settledResult.outcome,
+        fallbackOutcome: outcome,
         terminal,
       });
     let releaseAcceptedTerminalWork: (() => void) | undefined;
@@ -678,16 +669,16 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
       sessionOverrideSettled = true;
       if (
         !policyEscalated &&
-        settledResult.outcome === "completed" &&
+        outcome === "completed" &&
         params.sessionOverride.kind === "reconcile-completed"
       ) {
         await params.sessionOverride.reconcile({
-          provider: settledResult.provider,
-          model: settledResult.model,
+          provider: fallbackResult.provider,
+          model: fallbackResult.model,
         });
       }
     };
-    return { ...settledResult, terminal, settleSessionOverride };
+    return { ...fallbackResult, result, terminal, settleSessionOverride };
   } finally {
     if (unsettledContextEngineTurnAttempt) {
       await discardTurnAttempt(unsettledContextEngineTurnAttempt);

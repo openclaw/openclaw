@@ -12,8 +12,7 @@ import {
 } from "../agents/mcp-oauth-store.kernel.js";
 import {
   loadSubagentMaintenanceRunsInDatabase,
-  loadSubagentRegistryFromSqlite,
-  loadSubagentRunsByRunIdsFromSqlite,
+  loadVersionedSubagentRunsInDatabase,
   loadSubagentRunsForSessionsInDatabase,
   loadSubagentRunsForChildSessionFromSqlite,
   loadSubagentRunsForSessionFromSqlite,
@@ -38,6 +37,7 @@ import {
   readKnownRepositoryGitHubPublicationPullRequestUrlsInDatabase,
   readRepositoryGitHubPublicationInDatabase,
 } from "../gateway/github-repository-publication-store.js";
+import { listCronStandingGrantsInDatabase } from "../gateway/operator-approval-standing-grants.js";
 import { listTerminalOperatorApprovalsInDatabase } from "../gateway/operator-approval-store.kernel.js";
 import { readSessionGroupCatalogSnapshot } from "../gateway/session-group-catalog.kernel.js";
 import { readSessionGroupMembership } from "../gateway/session-group-membership.read.js";
@@ -47,7 +47,8 @@ import {
 } from "../gateway/worker-environments/placement-read-projection.js";
 import { readWorkerPlacementChangeSnapshotInDatabase } from "../gateway/worker-environments/placement-row-codec.js";
 import { readWorkspaceJournalInDatabase } from "../gateway/worker-environments/placement-workspace-journal.js";
-import { isWorkspaceJournalReadCommand } from "../gateway/worker-environments/placement-workspace-journal.worker-contract.js";
+import { isWorkspaceJournalReadCommand } from "../gateway/worker-environments/placement-workspace-journal.types.js";
+import { listPendingWorkerWorkspaceResultsInDatabase } from "../gateway/worker-environments/placement-workspace-result.js";
 import {
   readWorkerEnvironmentFacts,
   readWorkerEnvironmentPrunePage,
@@ -84,10 +85,8 @@ import {
 } from "../skills/library/selection-read.kernel.js";
 import { isTuiLastSessionReadCommand } from "../tui/tui-last-session.contract.js";
 import { readTuiLastSessionCommand } from "../tui/tui-last-session.kernel.js";
-import {
-  readAgentDatabaseDeletionSnapshotInDatabase,
-  readAgentDeletionJournalStatusInDatabase,
-} from "./agent-deletion-journal.read.js";
+import { readAgentDatabaseDeletionSnapshotInDatabase } from "./agent-deletion-journal.read.js";
+import { readBackupRunsInDatabase } from "./backup-run-records.kernel.js";
 import { readConfigMachineStateRowInDatabase } from "./config-machine-state.js";
 import { readGitHubPublicationSessionLifecycle } from "./github-publication-session-lifecycles.js";
 import { readOnboardingRecommendationsInDatabase } from "./onboarding-recommendations.kernel.js";
@@ -105,6 +104,7 @@ import {
   isStateDiagnosticCommand,
   readStateDiagnosticCommand,
 } from "./openclaw-state-read-diagnostics.js";
+import { stateReadRegistry } from "./openclaw-state-read-operation-registry.js";
 import { readStateRegistryCommand } from "./openclaw-state-read-registry.js";
 import type {
   OpenClawStateReadReply,
@@ -118,25 +118,30 @@ import {
   resolveUserChannelIdentityInDatabase,
 } from "./user-channel-identities.js";
 import { readUserChannelIdentityResult } from "./user-channel-identities.worker.js";
+import { listUserProfileAuthLinksInDatabase } from "./user-model-accounts.js";
 import { selectUserPreferenceValues } from "./user-preferences.store.js";
-import { readUserProfileGitHubCommand } from "./user-profile-github-identity.js";
+import {
+  readUserProfileGitHubCommand,
+  selectProfileAccessEntries,
+} from "./user-profile-github-identity.js";
 import {
   readUserProfileAuthorityInDatabase,
   readUserProfileEmailBindings,
   readUserProfileIdForEmail,
 } from "./user-profile-identity.read.js";
-import {
-  readUserProfileAvatarCommand,
-  selectProfileDisplayEntries,
-} from "./user-profiles-internal.js";
+import { readUserProfileAvatarCommand } from "./user-profiles-internal.js";
 
 serveOwnedWorkerTasks(
-  (input): OpenClawStateReadReply => {
+  function read(input): OpenClawStateReadReply | Promise<OpenClawStateReadReply> {
     let sourceAdmitted: true | undefined;
     let nativeCleanupFailure: OpenClawStateReadReply["nativeCleanupFailure"];
     try {
       if (!isReadRequest(input)) {
         throw new Error("Shared-state reader requires a captured state location and read command");
+      }
+      const prepared = stateReadRegistry.prepare(input.command.type);
+      if (prepared) {
+        return prepared.then(() => read(input));
       }
       const reply = runWithSqliteWorkerStateContext(input.context, (): OpenClawStateReadReply => {
         if (input.checkFreshAdmission) {
@@ -223,12 +228,6 @@ serveOwnedWorkerTasks(
                 ),
               };
             }
-            if (command.type === "agentDeletionJournal.status") {
-              return {
-                type: command.type,
-                status: readAgentDeletionJournalStatusInDatabase(db, command.agentId),
-              };
-            }
             if (command.type === "deliveryQueue.outbound") {
               // Custody reads retain queue ownership admission even on a read-only connection.
               assertOpenClawStateWriteAllowed({
@@ -256,9 +255,12 @@ serveOwnedWorkerTasks(
             if (isChannelIngressReadCommand(command)) {
               return readChannelIngressInDatabase(db, command);
             }
+            if ("input" in command && stateReadRegistry.has(command)) {
+              return stateReadRegistry.execute(command, db);
+            }
             if (command.type === "subagents.runs") {
               if (command.scope.kind === "all") {
-                return { type: command.type, runs: loadSubagentRegistryFromSqlite({ db }) };
+                return { type: command.type, ...loadVersionedSubagentRunsInDatabase({ db }) };
               }
               if (command.scope.kind === "maintenance") {
                 const maintenance = loadSubagentMaintenanceRunsInDatabase({ db });
@@ -285,10 +287,13 @@ serveOwnedWorkerTasks(
                   },
                 };
               }
-              const rows =
-                command.scope.kind === "session"
-                  ? loadSubagentRunsForSessionFromSqlite(command.scope.sessionKey, { db })
-                  : loadSubagentRunsByRunIdsFromSqlite(command.scope.runIds, { db });
+              if (command.scope.kind === "ids") {
+                return {
+                  type: command.type,
+                  ...loadVersionedSubagentRunsInDatabase({ db }, command.scope.runIds),
+                };
+              }
+              const rows = loadSubagentRunsForSessionFromSqlite(command.scope.sessionKey, { db });
               return {
                 type: command.type,
                 runs: new Map(rows.map((entry) => [entry.runId, entry])),
@@ -341,6 +346,9 @@ serveOwnedWorkerTasks(
                 type: command.type,
                 record: inspectCurrentConversationBindingRecordInDatabase(db, command.conversation),
               };
+            }
+            if (command.type === "backup.runs") {
+              return { type: command.type, runs: readBackupRunsInDatabase(db) };
             }
             if (isCronStateReadCommand(command)) {
               return readCronStateCommandInDatabase(db, command);
@@ -477,6 +485,12 @@ serveOwnedWorkerTasks(
                 history: listTerminalOperatorApprovalsInDatabase(command.input, db),
               };
             }
+            if (command.type === "operatorApprovals.listCronGrants") {
+              return {
+                type: command.type,
+                grants: listCronStandingGrantsInDatabase(db, command.input),
+              };
+            }
             if (command.type === "onboardingRecommendations.read") {
               return {
                 type: command.type,
@@ -574,7 +588,7 @@ serveOwnedWorkerTasks(
             }
             if (command.type === "userProfiles.reconcile") {
               const facts = runSqliteDeferredTransactionSync(db, () => ({
-                profile: selectProfileDisplayEntries(db, [command.profileId])[0]?.[1],
+                profile: selectProfileAccessEntries(db, [command.profileId])[0]?.[1],
                 emailBindings: readUserProfileEmailBindings(db, command.profileId),
               }));
               return { type: command.type, ...facts };
@@ -587,7 +601,7 @@ serveOwnedWorkerTasks(
             }
             if (command.type === "userProfiles.catalog") {
               const facts = runSqliteDeferredTransactionSync(db, () => ({
-                profiles: tableExists(db, "user_profiles") ? selectProfileDisplayEntries(db) : [],
+                profiles: tableExists(db, "user_profiles") ? selectProfileAccessEntries(db) : [],
                 emailBindings: readUserProfileEmailBindings(db),
               }));
               return { type: command.type, ...facts };
@@ -596,6 +610,14 @@ serveOwnedWorkerTasks(
               return {
                 type: command.type,
                 values: selectUserPreferenceValues(db, command.profileIds, command.key),
+              };
+            }
+            if (command.type === "userModelAccounts.links") {
+              return {
+                type: command.type,
+                links: runSqliteDeferredTransactionSync(db, () =>
+                  listUserProfileAuthLinksInDatabase(db, command.profileId),
+                ),
               };
             }
             if (command.type === "userProfiles.email.resolve") {
@@ -630,6 +652,12 @@ serveOwnedWorkerTasks(
               return {
                 type: command.type,
                 candidates: readWorkerPlacementRecoveryCandidatesInDatabase(db),
+              };
+            }
+            if (command.type === "workers.placementPendingResults") {
+              return {
+                type: command.type,
+                pendingResults: listPendingWorkerWorkspaceResultsInDatabase(db, command.sessionId),
               };
             }
             if (command.type === "workers.placementProjection") {

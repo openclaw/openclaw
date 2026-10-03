@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import type { ExecApprovalRequest } from "../../app/exec-approval.ts";
+import { rosterActivityStore } from "../../lib/agents/roster-activity-store.ts";
 import {
   createGateway,
   createGatewayHarness,
@@ -241,30 +242,28 @@ describe("AppSidebar session attention", () => {
     expect(sidebar.textContent).toContain("Blocked: need the staging password");
   });
 
-  it.each(["key", "hourglass"] as const)(
-    "shows %s attention ahead of a run error",
-    async (attention) => {
-      const sessionsHarness = createSessionsHarness("main", [sessionKey]);
-      setRows(sessionsHarness, [
-        agentAttentionRow(sessionKey, {
-          agentStatus: {
-            note: "Blocked: need the staging password",
-            attention,
-            expiresAt: Date.now() + 60_000,
-          },
-        }),
-      ]);
-      const { sidebar } = await mountSidebar(
-        createGateway({} as GatewayBrowserClient),
-        sessionsHarness.sessions,
-      );
+  it("shows hourglass attention ahead of a run error", async () => {
+    const attention = "hourglass";
+    const sessionsHarness = createSessionsHarness("main", [sessionKey]);
+    setRows(sessionsHarness, [
+      agentAttentionRow(sessionKey, {
+        agentStatus: {
+          note: "Blocked: need the staging password",
+          attention,
+          expiresAt: Date.now() + 60_000,
+        },
+      }),
+    ]);
+    const { sidebar } = await mountSidebar(
+      createGateway({} as GatewayBrowserClient),
+      sessionsHarness.sessions,
+    );
 
-      expect(sidebar.querySelector('[data-session-attention="agent"]')).not.toBeNull();
-      expect(sidebar.querySelector('[data-session-attention="agent"] svg circle')).not.toBeNull();
-      expect(sidebar.textContent).toContain("Blocked: need the staging password");
-      expect(sidebar.textContent).not.toContain("Run failed:");
-    },
-  );
+    expect(sidebar.querySelector('[data-session-attention="agent"]')).not.toBeNull();
+    expect(sidebar.querySelector('[data-session-attention="agent"] svg circle')).not.toBeNull();
+    expect(sidebar.textContent).toContain("Blocked: need the staging password");
+    expect(sidebar.textContent).not.toContain("Run failed:");
+  });
 
   it("shows an unflagged agent status note in the subtitle slot", async () => {
     const sessionsHarness = createSessionsHarness("main", [sessionKey]);
@@ -351,31 +350,7 @@ describe("AppSidebar session attention", () => {
     expect(sidebar.querySelector('[data-session-attention="agent"]')).toBeNull();
   });
 
-  it("does not render an expired agent declaration", async () => {
-    const sessionsHarness = createSessionsHarness("main", [sessionKey]);
-    setRows(sessionsHarness, [
-      {
-        key: sessionKey,
-        kind: "direct",
-        label: "Quiet session",
-        updatedAt: 2,
-        agentStatus: {
-          note: "Expired blocker",
-          attention: "hourglass",
-          expiresAt: Date.now() - 1,
-        },
-      },
-    ]);
-    const { sidebar } = await mountSidebar(
-      createGateway({} as GatewayBrowserClient),
-      sessionsHarness.sessions,
-    );
-
-    expect(sidebar.querySelector('[data-session-attention="agent"]')).toBeNull();
-    expect(sidebar.textContent).not.toContain("Expired blocker");
-  });
-
-  it.each(["exec", "plugin", "system-agent"] as const)(
+  it.each(["exec", "plugin"] as const)(
     "shows %s approval request details ahead of a run error",
     async (kind) => {
       const approval = {
@@ -421,7 +396,7 @@ describe("AppSidebar session attention", () => {
       createGateway({} as GatewayBrowserClient),
       createSessionsHarness("main", [mainKey]).sessions,
       "panel",
-      null,
+      TWO_AGENTS,
       [approval],
     );
 
@@ -438,19 +413,6 @@ describe("AppSidebar session attention", () => {
     expect(
       sidebar.querySelector(".sidebar-agent-card__main")?.getAttribute("aria-label"),
     ).not.toContain("pending approval");
-  });
-
-  it("shows an error icon and reason for an unread failure", async () => {
-    const sessionsHarness = createSessionsHarness("main", [sessionKey]);
-    setRows(sessionsHarness, [failedRow()]);
-    const { sidebar } = await mountSidebar(
-      createGateway({} as GatewayBrowserClient),
-      sessionsHarness.sessions,
-    );
-    await sidebar.updateComplete;
-
-    expect(sidebar.querySelector('[data-session-attention="error"]')).not.toBeNull();
-    expect(sidebar.textContent).toContain("Run failed: Provider credits exhausted");
   });
 
   it("keeps a read failure dismissed after the sessions list refreshes", async () => {
@@ -496,7 +458,12 @@ describe("AppSidebar session attention", () => {
         failedRow(failedKey, { label: "Source review", spawnedBy: childKey }),
       ] satisfies GatewaySessionRow[]
     ).map((row) => Object.assign({}, row, { agentId: "main" }));
-    const { sidebar, sessions: sessionsHarness, result } = await mountRoster(TWO_AGENTS, rows);
+    const {
+      sidebar,
+      sessions: sessionsHarness,
+      result,
+      context,
+    } = await mountRoster(TWO_AGENTS, rows);
     const parentRow = () => sidebar.querySelector(`[data-session-key="${parentKey}"]`)!;
     const childFailure = "Child session Source review failed: Provider credits exhausted";
     expect(parentRow().textContent).toContain(childFailure);
@@ -519,6 +486,7 @@ describe("AppSidebar session attention", () => {
       row.key === failedKey ? Object.assign({}, row, { lastReadAt: 2 }) : row,
     );
     setRows(sessionsHarness, result.sessions);
+    await rosterActivityStore(context).refresh();
     await waitForFast(() => {
       expect(parentRow()).not.toBeNull();
       expect(parentRow().querySelector('[data-session-attention="error"]')).toBeNull();

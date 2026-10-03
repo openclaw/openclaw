@@ -75,7 +75,7 @@ describe("Gateway allowlist command", () => {
         cfg: {
           agents: {
             defaults: { workspace: workspaceDir, skipBootstrap: true },
-            entries: { main: { default: true } },
+            entries: { main: {} },
           },
           channels: {
             telegram: {

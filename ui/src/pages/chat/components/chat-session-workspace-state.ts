@@ -13,7 +13,7 @@ import type {
   SessionWorkspaceHost,
   SessionWorkspaceState,
 } from "./chat-session-workspace-types.ts";
-import type { SidebarSelection } from "./chat-sidebar.ts";
+import type { SidebarSelection } from "./chat-sidebar-content-types.ts";
 
 function resolvePaneAgent(state: SessionScopeHostWithKey): string {
   if (normalizeOptionalString(state.sessionKey)?.toLowerCase() !== "global") {
@@ -35,10 +35,6 @@ export function clearWorkspaceTimer(workspace: SessionWorkspaceState | undefined
     globalThis.clearTimeout(workspace.browserSearchTimer);
     workspace.browserSearchTimer = null;
   }
-}
-
-export function clearSessionWorkspaceTimers(state: SessionWorkspaceHost) {
-  clearWorkspaceTimer(state.sessionWorkspaceState);
 }
 
 const checkoutSidebarContents = new WeakSet<object>();
@@ -164,15 +160,13 @@ export function loadSessionWorkspace(
       if (!isCurrentListing()) {
         return;
       }
-      const fileItems = files?.files ?? [];
-      const artifactItems = artifacts?.artifacts ?? [];
       workspace.list = {
         sessionKey,
         ...(files?.root ? { root: files.root } : {}),
         ...(typeof files?.gitCheckout === "boolean" ? { gitCheckout: files.gitCheckout } : {}),
-        files: fileItems,
+        files: files?.files ?? [],
         ...(files?.browser ? { browser: files.browser } : {}),
-        artifacts: artifactItems,
+        artifacts: artifacts?.artifacts ?? [],
       };
     } catch (error) {
       if (isCurrentListing()) {
@@ -219,8 +213,7 @@ export function retireSessionWorkspaceCheckout(state: SessionWorkspaceHost) {
   }
   clearSessionCheckoutSidebar(state);
   clearWorkspaceTimer(current);
-  const next = createSessionWorkspaceState(state);
-  state.sessionWorkspaceState = next;
+  state.sessionWorkspaceState = createSessionWorkspaceState(state);
   state.requestUpdate?.();
 }
 

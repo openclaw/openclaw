@@ -78,7 +78,7 @@ async function stagedFixture(
     entries,
   });
   const stagedResultRef = workerWorkspaceResultRef("read-batch");
-  await workerWorkspaceResultStaging.stageWorkerWorkspaceResult({
+  const commit = await workerWorkspaceResultStaging.stageWorkerWorkspaceResult({
     root: repository,
     stagingRoot: input,
     stagedResultRef,
@@ -87,7 +87,7 @@ async function stagedFixture(
     baseManifestRef: manifestRef(baseManifestRaw),
     currentManifestRef: manifestRef(currentManifestRaw),
   });
-  return { repository, stagedResultRef, files, entries, binaryPath };
+  return { repository, stagedResultRef, commit, files, entries, binaryPath };
 }
 
 it.each([
@@ -99,6 +99,12 @@ it.each([
   "materializes $fileCount files with $largeFileBytes large-file bytes in $objectFormat using bounded Git reads",
   async ({ fileCount, maxReads, ...fixtureOptions }) => {
     const fixture = await stagedFixture(fileCount, fixtureOptions);
+    const committed = await commandRuntime.runCommandWithTimeout(
+      ["git", "-C", fixture.repository, "rev-parse", `${fixture.stagedResultRef}^{commit}`],
+      { timeoutMs: 10_000 },
+    );
+    expect(committed.code, committed.stderr).toBe(0);
+    expect(fixture.commit).toBe(committed.stdout.trim());
     const gitReads: string[][] = [];
     const runBuffered = commandRuntime.runCommandBuffered;
     vi.spyOn(commandRuntime, "runCommandBuffered").mockImplementation(async (argv, options) => {

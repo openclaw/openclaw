@@ -55,9 +55,17 @@ export function normalizeVideoGenerationDuration(params: {
   if (!supported || supported.length === 0) {
     return rounded;
   }
+  return selectSupportedVideoDuration(rounded, supported);
+}
+
+/** Select from a nonempty duration list, preferring the longer value on ties. */
+export function selectSupportedVideoDuration(
+  durationSeconds: number,
+  supported: readonly number[],
+): number {
   return supported.reduce((best, current) => {
-    const currentDistance = Math.abs(current - rounded);
-    const bestDistance = Math.abs(best - rounded);
+    const currentDistance = Math.abs(current - durationSeconds);
+    const bestDistance = Math.abs(best - durationSeconds);
     if (currentDistance < bestDistance) {
       return current;
     }

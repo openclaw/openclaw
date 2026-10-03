@@ -21,12 +21,6 @@ const enChatCi = {
       automationAutoFix: "Auto-fix CI & address comments",
       automationAutoMerge: "Auto-merge when ready",
       automationAutoArchive: "Auto-archive on merge or close",
-      automationHelp: "Agent checks every five minutes; existing permissions and approvals apply.",
-      automationDetails: "Automation details",
-      automationStopHelp:
-        "Turning off requests cancellation; effects already accepted are not undone.",
-      automationArchiveHelp:
-        "Archive waits for unrelated work to finish and may clean the session’s worktree.",
       automationSchedulerDisabled: "The scheduler is disabled. Enabled jobs will not run.",
       automationSessionRequired:
         "Automations need a verified session identity. Reopen this session and try again.",

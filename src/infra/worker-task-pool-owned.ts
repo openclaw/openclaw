@@ -125,13 +125,8 @@ function startCloseOwnedWorkerTask<Input, Output>(
   retire = false,
 ): RetainedOperation<void> {
   const owner = task.owner;
-  if (!owner) {
-    const complete = createRetainedOperation<void>(() => {});
-    complete.resolve();
-    return complete.operation;
-  }
-  if (owner.closed) {
-    if (owner.closing) {
+  if (!owner || owner.closed) {
+    if (owner?.closing) {
       return owner.closing;
     }
     const complete = createRetainedOperation<void>(() => {});
@@ -228,6 +223,7 @@ export function prepareWorkerTaskInput<Input, Output>(
   task: Task<Input, Output>,
   receive: (input: Input) => void,
   reject: (error: unknown) => void,
+  prepareResources?: () => Promise<unknown>,
 ): void {
   // Execution owns the input now; retaining it on task duplicates the worker's clone.
   const taskInput = task.input!;
@@ -253,6 +249,13 @@ export function prepareWorkerTaskInput<Input, Output>(
   } catch (error) {
     failed(error);
     return;
+  }
+  if (prepareResources) {
+    // Retain preparation custody until cleanup code is loaded, before creating artifacts.
+    prepared = Promise.resolve(prepared).then(async (input) => {
+      await prepareResources();
+      return input;
+    });
   }
   const ready = (input: Input) => {
     finishPreparation();

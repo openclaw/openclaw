@@ -26,10 +26,13 @@ import {
   runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
+import { readSessionColdTranscript } from "../../config/sessions/session-cold-storage-state.js";
+import { runSessionColdStorageMaintenance } from "../../config/sessions/session-cold-storage.js";
 import {
   addSessionMember,
   removeSessionMember,
 } from "../../config/sessions/session-sharing-store.native.js";
+import { waitForSessionTranscriptIndexReconcile } from "../../config/sessions/session-transcript-reconcile.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -39,7 +42,7 @@ import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lif
 import { createDeferredCore } from "../../shared/deferred.js";
 import * as storeWriterQueue from "../../shared/store-writer-queue.js";
 import {
-  closeOpenClawAgentDatabaseByPath,
+  closeOpenClawAgentDatabaseByPathAsync,
   openOpenClawAgentDatabase,
   resolveIncognitoOpenClawAgentSqlitePath,
   resolveOpenClawAgentSqlitePath,
@@ -51,6 +54,7 @@ import {
   resolveSessionMutationAuthorization,
   SessionMutationAuthorizationChangedError,
 } from "../session-sharing.js";
+import { initializeSessionReadContext } from "./sessions-read-cache.test-support.js";
 import { sessionRewindHandlers } from "./sessions-rewind.js";
 import { sessionSharingHandlers } from "./sessions-sharing.js";
 import type {
@@ -385,6 +389,7 @@ async function revokeWithPublicLifecyclePredecessor(
   requestContext: GatewayRequestContext,
   invoke: () => ReturnType<typeof invokeMessageCut>,
 ) {
+  await initializeSessionReadContext(requestContext);
   const storePath = resolveSessionStorePathCore(undefined, { agentId: scope.agentId });
   const entered = createDeferredCore();
   const release = createDeferredCore();
@@ -598,7 +603,7 @@ describe("sessions.fork storage ownership", () => {
           ? resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" })
           : resolveOpenClawAgentSqlitePath({ agentId: "main" });
         expect(fs.existsSync(databasePath)).toBe(!incognito);
-        expect(closeOpenClawAgentDatabaseByPath(databasePath)).toBe(true);
+        expect(await closeOpenClawAgentDatabaseByPathAsync(databasePath)).toBe(true);
         expect(loadSessionEntry(childScope)).toEqual(incognito ? undefined : child);
         await expect(loadTranscriptEvents(childTranscriptScope)).resolves.toEqual(
           incognito ? [] : childEvents,
@@ -726,3 +731,69 @@ it.each(["SQLite writer fault injection", "public lifecycle predecessor"] as con
     });
   },
 );
+
+// Every message-cut action restores before its commit guard; fork also crosses member authority.
+it("sessions.fork retains member authority while restoring cold source history", async () => {
+  await withOpenClawTestState({ label: "message-cut-cold-restore" }, async (testState) => {
+    await testState.writeConfig(cfg);
+    const scope = await seedMessageCutSource();
+    addSessionMember(scope, {
+      identityId: "member",
+      addedBy: "owner",
+      expectedSessionId: scope.sessionId,
+    });
+    const options = toDatabaseOptions(resolveSqliteScope(scope));
+    await waitForSessionTranscriptIndexReconcile(options);
+    // Age the idle source past the cold-storage threshold through its entry owner.
+    runOpenClawAgentWriteTransaction((database) => {
+      const source = expectDefined(loadSessionEntry(scope), "source entry");
+      writeSessionEntry(database, scope.sessionKey, { ...source, updatedAt: 1 });
+      database.db
+        .prepare(
+          "UPDATE session_nodes SET last_activity_at = NULL, last_interaction_at = NULL WHERE session_key = ?",
+        )
+        .run(scope.sessionKey);
+      database.db
+        .prepare(
+          "UPDATE session_windows SET updated_at = 1, transcript_updated_at = 1 WHERE session_id = ?",
+        )
+        .run(scope.sessionId);
+    }, options);
+    expect(
+      await runSessionColdStorageMaintenance({
+        config: { ...cfg, session: { maintenance: { coldStorage: { enabled: true } } } },
+      }),
+    ).toEqual({ archivedTranscripts: 1, externalizedTranscripts: 0 });
+    const database = openOpenClawAgentDatabase(options).db;
+    expect(readSessionColdTranscript(database, scope.sessionId)).toBeDefined();
+    const client = {
+      authenticatedUserId: "member@example.com",
+      authenticatedUserProfile: {
+        profileId: "member",
+        displayName: "Member",
+        hasAvatar: false,
+        updatedAt: 1,
+      },
+      connect: { role: "operator", scopes: ["operator.write"] },
+    } as GatewayClient;
+    const requestContext = context();
+    await initializeSessionReadContext(requestContext);
+    const admission = resolveSessionMutationAuthorization({
+      client,
+      method: "sessions.fork",
+      requestParams: mutationParams("sessions.fork", scope.sessionKey),
+      context: requestContext,
+    });
+    expect(admission.error).toBeNull();
+
+    const mutation = invokeMessageCut("sessions.fork", scope, {
+      client,
+      context: requestContext,
+      sessionMutationAuthorization: expectDefined(admission.authorization, "source authority"),
+    });
+
+    expect(await mutation.error).toBeUndefined();
+    expect(mutation.respond).toHaveBeenCalledWith(true, expect.any(Object), undefined);
+    expect(readSessionColdTranscript(database, scope.sessionId)).toBeUndefined();
+  });
+});

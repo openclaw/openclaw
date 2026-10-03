@@ -25,16 +25,19 @@ import {
   type MaterializedTranscriptEntry,
   type SessionTranscriptIndex,
 } from "./session-transcript-index.fs.js";
+import type {
+  ReadRecentSessionMessagesOptions,
+  ReadSessionMessagesAsyncOptions,
+} from "./session-transcript-read.types.js";
 import {
   MAX_TRANSCRIPT_PARSE_LINE_BYTES,
   parseTranscriptRecord,
 } from "./session-transcript-record-parser.js";
 
-export type ReadRecentSessionMessagesOptions = {
-  maxMessages: number;
-  maxBytes?: number;
-  maxLines?: number;
-};
+export type {
+  ReadRecentSessionMessagesOptions,
+  ReadSessionMessagesAsyncOptions,
+} from "./session-transcript-read.types.js";
 
 type ReadSessionMessagesPageOptions = {
   offset: number;
@@ -42,15 +45,6 @@ type ReadSessionMessagesPageOptions = {
   beforeSeq?: number;
   recentAtHead?: TranscriptRecentReadLimits;
 };
-
-export type ReadSessionMessagesAsyncOptions =
-  | {
-      mode: "full";
-      reason: string;
-    }
-  | ({
-      mode: "recent";
-    } & ReadRecentSessionMessagesOptions);
 
 type ReadRecentSessionMessagesResult = {
   displaySource?: string;
@@ -71,6 +65,7 @@ const RECENT_SESSION_MESSAGES_DEFAULT_MAX_BYTES = 8 * 1024 * 1024;
 
 type ArchivedTranscriptReadScope = {
   agentId?: string | undefined;
+  exactArchivePath?: string | undefined;
   sessionFile?: string | undefined;
   sessionId: string;
   storePath?: string | undefined;
@@ -157,6 +152,13 @@ export class ArchivedTranscriptReader {
   constructor(private readonly scope: ArchivedTranscriptReadScope) {}
 
   private async resolvePath(): Promise<string | null> {
+    if (this.scope.exactArchivePath) {
+      const exactPath = this.scope.exactArchivePath;
+      if ((await fs.promises.stat(exactPath).catch(() => null))?.isFile()) {
+        return materializeSessionArchiveForRead(exactPath);
+      }
+      return null;
+    }
     const archives = await resolveSessionTranscriptResetArchiveCandidatesAsync(
       this.scope.sessionId,
       this.scope.storePath,

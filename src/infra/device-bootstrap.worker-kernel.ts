@@ -6,19 +6,23 @@ import {
   normalizeDeviceBootstrapProfile,
   resolveBootstrapProfileScopesForRole,
   type DeviceBootstrapProfile,
+  type DeviceBootstrapProfileInput,
 } from "../shared/device-bootstrap-profile.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import type { OpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import type {
+  WorkerOperationHandlers,
+  WorkerOperations,
+} from "../state/worker-operation-registry.js";
 import {
   DEVICE_BOOTSTRAP_TOKEN_TTL_MS,
   resolveDeviceBootstrapTokenExpiresAtMs,
-  type DeviceBootstrapCommand,
-  type DeviceBootstrapOperations,
   type BoundDeviceBootstrapContext,
   type DeviceBootstrapBoundContextInput,
 } from "./device-bootstrap.worker-types.js";
 import { normalizeDevicePublicKeyBase64Url } from "./device-identity.js";
 import { hasCloudWorkerSetupDeviceBinding } from "./device-pairing-cloud-worker.js";
+import { devicePairingMutation } from "./device-pairing-dispatch.worker.js";
 import { requestDevicePairingMutationAdmission } from "./device-pairing-mutation.worker.js";
 import type { CloudWorkerSetupCompletionPublication } from "./device-pairing-read.types.js";
 import {
@@ -30,7 +34,10 @@ import {
   persistDeviceBootstrapTokenRecords as persistState,
   pruneExpiredDevicePairSetupCompletionRecords,
 } from "./device-pairing-store.js";
-import type { DeviceBootstrapTokenRecord } from "./device-pairing.types.js";
+import type {
+  DeviceBootstrapTokenRecord,
+  DevicePairSetupCompletionRecord,
+} from "./device-pairing.types.js";
 import { generatePairingToken, verifyPairingToken } from "./pairing-token.js";
 
 // Outlive generic setup credentials; cloud-worker completion also binds durably
@@ -113,8 +120,9 @@ function normalizeBootstrapPublicKey(publicKey: string): string {
 
 function loadState(nowMs: number): DeviceBootstrapStateFile {
   const state = loadDeviceBootstrapTokenRecords();
+  const now = asDateTimestampMs(nowMs) ?? 0;
   for (const [token, record] of Object.entries(state)) {
-    if ((asDateTimestampMs(nowMs) ?? 0) > resolveDeviceBootstrapTokenExpiresAtMs(record)) {
+    if (now > resolveDeviceBootstrapTokenExpiresAtMs(record)) {
       delete state[token];
     }
   }
@@ -122,7 +130,7 @@ function loadState(nowMs: number): DeviceBootstrapStateFile {
 }
 
 function issueDeviceBootstrapTokenRecord(
-  params: DeviceBootstrapOperations["bootstrap.issue"]["input"],
+  params: { profile: DeviceBootstrapProfile; setupId?: string; nowMs: number },
   state = loadState(params.nowMs),
 ): { token: string; expiresAtMs: number } {
   const token = generatePairingToken();
@@ -147,9 +155,13 @@ function issueDeviceBootstrapTokenRecord(
 }
 
 /** Reuse one environment-owned setup credential across provider replay. */
-function ensureDevicePairSetupBootstrapToken(
-  params: DeviceBootstrapOperations["bootstrap.ensure"]["input"],
-): DeviceBootstrapOperations["bootstrap.ensure"]["output"] {
+function ensureDevicePairSetupBootstrapToken(params: {
+  profile: DeviceBootstrapProfileInput;
+  setupId: string;
+  nowMs: number;
+}):
+  | { status: "pending"; token: string; expiresAtMs: number; setupId: string }
+  | { status: "completed"; setupId: string; deviceId: string } {
   const setupId = params.setupId.trim();
   if (!setupId) {
     throw new Error("Device setup id must be non-empty.");
@@ -185,9 +197,9 @@ function ensureDevicePairSetupBootstrapToken(
  * worker to retry when its credential-bearing response never arrives.
  */
 function consumeDeviceBootstrapTokenWithSetupCompletion(
-  params: DeviceBootstrapOperations["bootstrap.consume"]["input"],
+  params: { token: string; deviceId: string; completedAtMs: number; nowMs: number },
   recordWorkerEnvironment: (facts: CloudWorkerSetupCompletionPublication) => void,
-): DeviceBootstrapOperations["bootstrap.consume"]["output"] {
+): { record: DeviceBootstrapTokenRecord; completion?: DevicePairSetupCompletionRecord } | null {
   const nowMs = params.nowMs;
   return consumeDeviceBootstrapTokenWithSetupCompletionInTransaction({
     token: params.token,
@@ -210,9 +222,7 @@ function consumeDeviceBootstrapTokenWithSetupCompletion(
 }
 
 /** Remove every outstanding bootstrap token from the pairing state file. */
-function clearDeviceBootstrapTokens(
-  params: DeviceBootstrapOperations["bootstrap.clear"]["input"],
-): DeviceBootstrapOperations["bootstrap.clear"]["output"] {
+function clearDeviceBootstrapTokens(params: { nowMs: number }): { removed: number } {
   const state = loadState(params.nowMs);
   const removed = Object.keys(state).length;
   persistState({});
@@ -221,9 +231,9 @@ function clearDeviceBootstrapTokens(
 
 /** Preserve already-bound cloud-worker credentials for delivery retry. */
 function revokeDeviceBootstrapToken(
-  params: DeviceBootstrapOperations["bootstrap.revoke"]["input"],
+  params: { token: string; nowMs: number },
   database: OpenClawStateDatabase,
-): DeviceBootstrapOperations["bootstrap.revoke"]["output"] {
+): { removed: boolean; record?: DeviceBootstrapTokenRecord } {
   const providedToken = params.token.trim();
   if (!providedToken) {
     return { removed: false };
@@ -283,9 +293,10 @@ export function revokeDeviceBootstrapTokensForDeviceInDatabase(
 }
 
 /** Restore an uncorrelated bootstrap bearer when its credential response was not delivered. */
-function restoreGenericDeviceBootstrapToken(
-  params: DeviceBootstrapOperations["bootstrap.restore"]["input"],
-): DeviceBootstrapOperations["bootstrap.restore"]["output"] {
+function restoreGenericDeviceBootstrapToken(params: {
+  record: DeviceBootstrapTokenRecord;
+  nowMs: number;
+}): boolean {
   if (params.record.setupId) {
     // Correlated setup credentials are settled only by their exact completion owner.
     return false;
@@ -297,9 +308,12 @@ function restoreGenericDeviceBootstrapToken(
 }
 
 /** Record that one role/scope leg of a multi-role bootstrap handoff was redeemed. */
-function redeemDeviceBootstrapTokenProfile(
-  params: DeviceBootstrapOperations["bootstrap.redeem"]["input"],
-): DeviceBootstrapOperations["bootstrap.redeem"]["output"] {
+function redeemDeviceBootstrapTokenProfile(params: {
+  token: string;
+  role: string;
+  scopes: readonly string[];
+  nowMs: number;
+}): { recorded: boolean; fullyRedeemed: boolean } {
   const providedToken = params.token.trim();
   if (!providedToken) {
     return { recorded: false, fullyRedeemed: false };
@@ -359,8 +373,8 @@ function redeemDeviceBootstrapTokenProfile(
 
 /** Verify a bootstrap token, bind it to the first device identity, and stage requested scopes. */
 function verifyDeviceBootstrapToken(
-  params: DeviceBootstrapOperations["bootstrap.verify"]["input"],
-): DeviceBootstrapOperations["bootstrap.verify"]["output"] {
+  params: DeviceBootstrapBoundContextInput & { role: string; scopes: readonly string[] },
+): { ok: true } | { ok: false; reason: string } {
   const state = loadState(params.nowMs);
   const providedToken = params.token.trim();
   if (!providedToken) {
@@ -474,40 +488,36 @@ export function getBoundDeviceBootstrapContextFromRecords(
   };
 }
 
-export function executeDeviceBootstrapMutation(
-  command: DeviceBootstrapCommand,
-  database: OpenClawStateDatabase,
-  recordWorkerEnvironment: (facts: CloudWorkerSetupCompletionPublication) => void,
-): DeviceBootstrapOperations[keyof DeviceBootstrapOperations]["output"] {
-  return withDevicePairingStoreDatabase(database, () => {
-    switch (command.type) {
-      case "bootstrap.issue":
-        return issueDeviceBootstrapTokenRecord(command.input);
-      case "bootstrap.ensure":
-        return ensureDevicePairSetupBootstrapToken(command.input);
-      case "bootstrap.consume":
-        return consumeDeviceBootstrapTokenWithSetupCompletion(
-          command.input,
-          recordWorkerEnvironment,
-        );
-      case "bootstrap.confirm":
-        return confirmDevicePairSetupCompletionDeliveryInTransaction(command.input);
-      case "bootstrap.readCompletion":
-        return loadDevicePairSetupCompletionRecord(command.input.setupId, command.input.nowMs);
-      case "bootstrap.prune":
-        return pruneExpiredDevicePairSetupCompletionRecords(command.input.nowMs);
-      case "bootstrap.clear":
-        return clearDeviceBootstrapTokens(command.input);
-      case "bootstrap.revoke":
-        return revokeDeviceBootstrapToken(command.input, database);
-      case "bootstrap.restore":
-        return restoreGenericDeviceBootstrapToken(command.input);
-      case "bootstrap.redeem":
-        return redeemDeviceBootstrapTokenProfile(command.input);
-      case "bootstrap.verify":
-        return verifyDeviceBootstrapToken(command.input);
-    }
-    command satisfies never;
-    throw new Error("Unsupported device bootstrap command");
-  });
-}
+export const deviceBootstrapOperations = {
+  "bootstrap.issue": devicePairingMutation(
+    (input: Parameters<typeof issueDeviceBootstrapTokenRecord>[0]) =>
+      issueDeviceBootstrapTokenRecord(input),
+  ),
+  "bootstrap.ensure": devicePairingMutation(ensureDevicePairSetupBootstrapToken),
+  "bootstrap.consume": devicePairingMutation(
+    (
+      input: Parameters<typeof consumeDeviceBootstrapTokenWithSetupCompletion>[0],
+      { recordWorkerEnvironment },
+    ) => consumeDeviceBootstrapTokenWithSetupCompletion(input, recordWorkerEnvironment),
+  ),
+  "bootstrap.confirm": devicePairingMutation(
+    (input: { setupId: string; deviceId: string; nowMs: number }) =>
+      confirmDevicePairSetupCompletionDeliveryInTransaction(input),
+  ),
+  "bootstrap.readCompletion": devicePairingMutation((input: { setupId: string; nowMs: number }) =>
+    loadDevicePairSetupCompletionRecord(input.setupId, input.nowMs),
+  ),
+  "bootstrap.prune": devicePairingMutation((input: { nowMs: number }) =>
+    pruneExpiredDevicePairSetupCompletionRecords(input.nowMs),
+  ),
+  "bootstrap.clear": devicePairingMutation(clearDeviceBootstrapTokens),
+  "bootstrap.revoke": devicePairingMutation(
+    (input: Parameters<typeof revokeDeviceBootstrapToken>[0], { database }) =>
+      revokeDeviceBootstrapToken(input, database),
+  ),
+  "bootstrap.restore": devicePairingMutation(restoreGenericDeviceBootstrapToken),
+  "bootstrap.redeem": devicePairingMutation(redeemDeviceBootstrapTokenProfile),
+  "bootstrap.verify": devicePairingMutation(verifyDeviceBootstrapToken),
+} satisfies WorkerOperationHandlers;
+
+export type DeviceBootstrapOperations = WorkerOperations<typeof deviceBootstrapOperations>;

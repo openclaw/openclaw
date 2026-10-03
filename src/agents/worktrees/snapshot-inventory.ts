@@ -160,14 +160,12 @@ async function inspectOtherPaths(
   for (let offset = 0; offset < replaced.length; offset += 64) {
     const batch = replaced.slice(offset, offset + 64);
     const stats = await Promise.allSettled(
-      batch.map((entry) => fs.lstat(checkoutPathFromGitBytes(checkoutPath, entry))),
+      batch.map((entry) => rawPathStat(checkoutPathFromGitBytes(checkoutPath, entry))),
     );
     for (const [index, result] of stats.entries()) {
       if (result.status === "rejected") {
-        if (!isMissingPathError(result.reason)) {
-          throw result.reason;
-        }
-      } else if (result.value.isDirectory()) {
+        throw result.reason;
+      } else if (result.value?.isDirectory()) {
         untracked.push(Buffer.concat([batch[index]!, Buffer.from("/")]));
       }
     }
@@ -394,23 +392,21 @@ async function prepareSnapshotIndex(
   for (let offset = 0; offset < candidates.length; offset += 64) {
     const batch = candidates.slice(offset, offset + 64);
     const stats = await Promise.allSettled(
-      batch.map(([, value]) => fs.lstat(checkoutPathFromGitBytes(input.checkoutPath, value))),
+      batch.map(([, value]) => rawPathStat(checkoutPathFromGitBytes(input.checkoutPath, value))),
     );
     for (const [index, result] of stats.entries()) {
       const key = batch[index]![0];
-      if (result.status === "fulfilled") {
+      if (result.status === "rejected") {
+        throw result.reason;
+      }
+      if (result.value) {
         if (provisioned.has(key)) {
           provisionedBytes += result.value.size;
         } else {
           gitBytes += result.value.size;
         }
-      } else {
-        if (!isMissingPathError(result.reason)) {
-          throw result.reason;
-        }
-        if (tracked.has(key)) {
-          missing.add(key);
-        }
+      } else if (tracked.has(key)) {
+        missing.add(key);
       }
     }
   }

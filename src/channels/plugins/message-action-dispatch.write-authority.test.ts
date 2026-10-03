@@ -11,7 +11,7 @@ import {
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
 import { dispatchChannelMessageAction } from "./message-action-dispatch.js";
-import type { ChannelMessageActionContext, ChannelPlugin } from "./types.js";
+import type { ChannelMessageActionContext, ChannelPlugin } from "./types.public.js";
 
 const receipt = { content: [{ type: "text" as const, text: "edited" }], details: { ok: true } };
 
@@ -129,6 +129,56 @@ describe("scheduled message write declaration", () => {
       expect(fixture.source.signal.aborted).toBe(false);
       expect(retained).toBeTypeOf("function");
       expect(retained).toThrow("invocation is no longer active");
+    },
+  );
+
+  it("awaits the platform dispatch hook before the final fence and adapter", async () => {
+    const fixture = registerWriter();
+    let hookFinished = false;
+    let fencedAfterHook = false;
+    fixture.context.onPlatformSendDispatch = vi.fn(async () => {
+      await Promise.resolve();
+      hookFinished = true;
+    });
+    fixture.context.assertDirectAdapterHandoff = () => {
+      if (hookFinished) {
+        fencedAfterHook = true;
+      }
+    };
+    fixture.handleAction.mockImplementation(async () => {
+      expect(hookFinished).toBe(true);
+      expect(fencedAfterHook).toBe(true);
+      return receipt;
+    });
+    await expect(dispatchChannelMessageAction(fixture.context)).resolves.toBe(receipt);
+    expect(fixture.context.onPlatformSendDispatch).toHaveBeenCalledTimes(1);
+    expect(fixture.handleAction).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([false, true])(
+    "fences a rejected platform dispatch hook without calling the adapter (revoked: %s)",
+    async (revoked) => {
+      const fixture = registerWriter();
+      let hookRejected = false;
+      let fencedAfterHook = false;
+      fixture.context.onPlatformSendDispatch = async () => {
+        await Promise.resolve();
+        hookRejected = true;
+        throw new Error("source conversation changed before delivery");
+      };
+      fixture.context.assertDirectAdapterHandoff = () => {
+        if (hookRejected) {
+          fencedAfterHook = true;
+          if (revoked) {
+            throw new Error("caller authority ended");
+          }
+        }
+      };
+      await expect(dispatchChannelMessageAction(fixture.context)).rejects.toThrow(
+        revoked ? "caller authority ended" : "source conversation changed before delivery",
+      );
+      expect(fencedAfterHook).toBe(true);
+      expect(fixture.handleAction).not.toHaveBeenCalled();
     },
   );
 

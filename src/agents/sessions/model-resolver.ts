@@ -23,14 +23,6 @@ export interface ScopedModel {
   thinkingLevel?: ThinkingLevel;
 }
 
-/**
- * Helper to check if a model ID looks like an alias (no date suffix)
- * Dates are typically in format: -20241022 or -20250929
- */
-function isAlias(id: string): boolean {
-  return !/-\d{8}$/.test(id);
-}
-
 function scopeModelsToProvider(provider: string, availableModels: Model[]): Model[] {
   const exact = availableModels.filter((model) => model.provider === provider);
   return exact.length
@@ -158,7 +150,7 @@ function matchPartialModelPattern(
   // Aliases precede snapshots; each group keeps its highest numeric version.
   const matched = matches.toSorted(
     (a, b) =>
-      Number(isAlias(b.id)) - Number(isAlias(a.id)) ||
+      Number(/-\d{8}$/.test(a.id)) - Number(/-\d{8}$/.test(b.id)) ||
       b.id.localeCompare(a.id, undefined, { numeric: true }),
   )[0];
   // Duplicate names remain searchable aliases; the first registry row owns runtime metadata.
@@ -266,7 +258,7 @@ export async function resolveModelScope(
   const scopedModels: ScopedModel[] = [];
 
   for (const pattern of patterns) {
-    // Check if pattern contains glob characters
+    let matches: ScopedModel[];
     if (pattern.includes("*") || pattern.includes("?") || pattern.includes("[")) {
       // Extract optional thinking level suffix (e.g., "provider/*:high")
       const suffix = splitModelPatternSuffix(pattern);
@@ -280,41 +272,30 @@ export async function resolveModelScope(
 
       // Match against "provider/modelId" format OR just model ID
       // This allows "*sonnet*" to match without requiring "anthropic/*sonnet*"
-      const matchingModels = availableModels.filter((m) => {
-        const fullId = `${m.provider}/${m.id}`;
-        return (
-          minimatch(fullId, globPattern, { nocase: true }) ||
-          minimatch(m.id, globPattern, { nocase: true })
-        );
-      });
-
-      if (matchingModels.length === 0) {
-        console.warn(chalk.yellow(`Warning: No models match pattern "${pattern}"`));
-        continue;
+      matches = availableModels
+        .filter((m) => {
+          const fullId = `${m.provider}/${m.id}`;
+          return (
+            minimatch(fullId, globPattern, { nocase: true }) ||
+            minimatch(m.id, globPattern, { nocase: true })
+          );
+        })
+        .map((model) => ({ model, thinkingLevel }));
+    } else {
+      const { model, thinkingLevel, warning } = parseModelPattern(pattern, availableModels);
+      if (warning) {
+        console.warn(chalk.yellow(`Warning: ${warning}`));
       }
-
-      for (const model of matchingModels) {
-        if (!scopedModels.some((sm) => modelsAreEqual(sm.model, model))) {
-          scopedModels.push({ model, thinkingLevel });
-        }
-      }
-      continue;
+      matches = model ? [{ model, thinkingLevel }] : [];
     }
 
-    const { model, thinkingLevel, warning } = parseModelPattern(pattern, availableModels);
-
-    if (warning) {
-      console.warn(chalk.yellow(`Warning: ${warning}`));
-    }
-
-    if (!model) {
+    if (matches.length === 0) {
       console.warn(chalk.yellow(`Warning: No models match pattern "${pattern}"`));
-      continue;
     }
-
-    // Avoid duplicates
-    if (!scopedModels.some((sm) => modelsAreEqual(sm.model, model))) {
-      scopedModels.push({ model, thinkingLevel });
+    for (const match of matches) {
+      if (!scopedModels.some((scoped) => modelsAreEqual(scoped.model, match.model))) {
+        scopedModels.push(match);
+      }
     }
   }
 
@@ -527,11 +508,8 @@ export async function findInitialModel(options: {
   }
 
   // 2. Use first model from scoped models (skip if continuing/resuming)
-  if (scopedModels.length > 0 && !isContinuing) {
-    const scopedModel = scopedModels.at(0);
-    if (!scopedModel) {
-      throw new Error("Scoped model list became empty during selection");
-    }
+  const scopedModel = scopedModels[0];
+  if (scopedModel && !isContinuing) {
     return {
       model: scopedModel.model,
       thinkingLevel: scopedModel.thinkingLevel ?? defaultThinkingLevel ?? DEFAULT_THINKING_LEVEL,

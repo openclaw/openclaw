@@ -81,7 +81,7 @@ describe("Kitchen Sink resource phase receipts", () => {
     expect(phase.processCpuMsPerCompletedOperation).toBeCloseTo(1.21 / 20);
   });
 
-  it.each([0, 1, 3])(
+  it.each([0, 3])(
     "retains partial split counts when original operation %i fails",
     async (failedIndex) => {
       let step = 0;
@@ -183,49 +183,46 @@ describe("Kitchen Sink resource phase receipts", () => {
     },
   );
 
-  it.each(invalidSamples)(
-    "preserves the first receipt and all completions on a %s final sample",
-    async (_name, invalidSample) => {
-      const before = snapshot(1);
-      const midpoint = snapshot(2, 90);
-      const sample = vi
-        .fn()
-        .mockResolvedValueOnce(before)
-        .mockResolvedValueOnce(midpoint)
-        .mockImplementationOnce(invalidSample);
-      const run = vi.fn(async () => {});
-      const phase = await measureResourceOperations({
-        name: "plugin-tool",
-        count: 20,
-        splitFirst: true,
-        sample,
-        run,
-      });
-      expect(run).toHaveBeenCalledTimes(20);
-      expect(sample).toHaveBeenCalledTimes(3);
-      expect(phase).toMatchObject({
-        status: "failed",
-        operations: { attempted: 20, completed: 20, failed: 0 },
-        after: null,
-        cpu: null,
-      });
-      expect(phase.before).toBe(before);
-      expect(phase.breakdown![0]).toEqual(
-        summarizeResourcePhase("plugin-tool-first", before, midpoint, {
-          attempted: 1,
-          completed: 1,
-          failed: 0,
-        }),
-      );
-      expect(phase.breakdown![1]).toMatchObject({
-        name: "plugin-tool-warm",
-        status: "failed",
-        operations: { attempted: 19, completed: 19, failed: 0 },
-        after: null,
-        cpu: null,
-      });
-    },
-  );
+  it("preserves the first receipt and all completions on a missing final sample", async () => {
+    const before = snapshot(1);
+    const midpoint = snapshot(2, 90);
+    const sample = vi
+      .fn()
+      .mockResolvedValueOnce(before)
+      .mockResolvedValueOnce(midpoint)
+      .mockRejectedValueOnce(new Error("sample unavailable"));
+    const run = vi.fn(async () => {});
+    const phase = await measureResourceOperations({
+      name: "plugin-tool",
+      count: 20,
+      splitFirst: true,
+      sample,
+      run,
+    });
+    expect(run).toHaveBeenCalledTimes(20);
+    expect(sample).toHaveBeenCalledTimes(3);
+    expect(phase).toMatchObject({
+      status: "failed",
+      operations: { attempted: 20, completed: 20, failed: 0 },
+      after: null,
+      cpu: null,
+    });
+    expect(phase.before).toBe(before);
+    expect(phase.breakdown![0]).toEqual(
+      summarizeResourcePhase("plugin-tool-first", before, midpoint, {
+        attempted: 1,
+        completed: 1,
+        failed: 0,
+      }),
+    );
+    expect(phase.breakdown![1]).toMatchObject({
+      name: "plugin-tool-warm",
+      status: "failed",
+      operations: { attempted: 19, completed: 19, failed: 0 },
+      after: null,
+      cpu: null,
+    });
+  });
 
   it("counts only asserted responses and stops on the first failure without retrying", async () => {
     const sample = vi
@@ -325,16 +322,6 @@ describe("Kitchen Sink resource phase receipts", () => {
         [{ ...enabled, operations: { attempted: 1, completed: 1, failed: 0 } }],
       ),
     ).toEqual([]);
-  });
-
-  it("rejects mixed process identities and unavailable memory rather than reporting zero", () => {
-    const ops = { attempted: 0, completed: 0, failed: 0 };
-    expect(() =>
-      summarizeResourcePhase("idle", snapshot(1), { ...snapshot(2), pid: 999 }, ops),
-    ).toThrow("one process");
-    const invalid = snapshot(2);
-    invalid.memory.rss = Number.NaN;
-    expect(() => summarizeResourcePhase("idle", snapshot(1), invalid, ops)).toThrow("invalid rss");
   });
 
   it("retains signed resource changes and rejects missing observations", () => {

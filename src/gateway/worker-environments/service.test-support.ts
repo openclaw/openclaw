@@ -668,8 +668,8 @@ export async function bindPlacementHarness(
     getExecutionIdentityCapability: (current: WorkerSessionTurnClaim) =>
       getWorkerTurnExecutionIdentityCapability(executionStore, current),
     isWorkerTurnToolAuthorized: vi.fn(() => true),
-    updateAckCursors: vi.fn(),
-    prepareWorkspaceResultOwnerRevocation: vi.fn(),
+    updateAckCursors: vi.fn(async () => {}),
+    prepareWorkspaceResultOwnerRevocation: vi.fn(async () => {}),
     registerTurnClaimClosedHandler: vi.fn(() => () => {}),
   };
   const instance = createOperationalRunInstanceRef(claim.runId);

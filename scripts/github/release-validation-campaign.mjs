@@ -84,9 +84,6 @@ function validateBetaBody(body, { tag, stableTrain, releaseUrl, releaseCommit, g
       throw new Error(`Campaign body contains unsupported placeholder {{${match[1]}}}`);
     }
   }
-  if (body.includes("{{TEST_ENV}}")) {
-    throw new Error("Campaign body contains the retired TEST_ENV placeholder");
-  }
   if (/(?:file:\/\/|\/(?:Users|home)\/[^\s)]+|[A-Za-z]:\\Users\\[^\s)]+)/u.test(body)) {
     throw new Error("Campaign body contains a local filesystem path");
   }

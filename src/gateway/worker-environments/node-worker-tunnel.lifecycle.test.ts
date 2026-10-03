@@ -1,17 +1,29 @@
 import { describe, expect, it, vi } from "vitest";
 import { WORKER_RPC_SET_VERSION } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { NODE_WORKER_ENVIRONMENT_STOP_COMMAND } from "../../infra/node-commands.js";
+import {
+  NODE_WORKER_ENVIRONMENT_STOP_COMMAND,
+  NODE_WORKER_SUPERVISOR_CANCEL_COMMAND,
+  NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
+  NODE_WORKER_SUPERVISOR_STATUS_COMMAND,
+} from "../../infra/node-commands.js";
 import { resolveNodeWorkerLaunchToolNames } from "../../infra/node-runner-inventory.js";
 import { parseWorkerLaunchPlan } from "../../worker/launch-descriptor.js";
-import type { NodeWorkerSupervisorReceipt } from "../../worker/node-supervisor-protocol.js";
+import {
+  nodeWorkerPlanHash,
+  type NodeWorkerLaunchInput,
+  type NodeWorkerSupervisorReceipt,
+} from "../../worker/node-supervisor-protocol.js";
 import {
   NODE_WORKSPACE_DRAIN_COMMAND,
   type NodeWorkerWorkspaceExecInput,
 } from "../../worker/node-workspace-protocol.js";
 import type { NodeWorkerSupervisorTransport } from "../node-registry-private.js";
 import type { createDeviceWorkerRuntime } from "./device-provider.js";
-import { measureNodeWorkerLaunchBytes } from "./node-launch-adapter.js";
+import {
+  createNodeWorkerLaunchAdapter,
+  measureNodeWorkerLaunchBytes,
+} from "./node-launch-adapter.js";
 import {
   BUILD,
   createManager,
@@ -77,7 +89,7 @@ describe("node worker tunnel lifetime", () => {
     const node = nodes[0]!;
     nodeTransport.listCurrentNodes = async () => nodes;
     let currentTransport: NodeWorkerSupervisorTransport | undefined = nodeTransport;
-    const manager = await createManager(environment(), { getTransport: () => currentTransport });
+    const manager = createManager(environment(), { getTransport: () => currentTransport });
     const handle = await manager.start(startRequest());
     const legacy = resolveNodeWorkerLaunchToolNames(node.workerHost);
     await expect(handle.readLaunchToolNames()).resolves.toEqual(legacy);
@@ -98,7 +110,7 @@ describe("node worker tunnel lifetime", () => {
     let currentClaim = turnClaim();
     const authorizations: boolean[] = [];
     const launchSizes: number[] = [];
-    const manager = await createManager(record, {
+    const manager = createManager(record, {
       launchNodeWorker: vi.fn<NodeWorkerLaunch>(async (request) => {
         authorizations.push(request.isDispatchAuthorized());
         launchSizes.push(measureNodeWorkerLaunchBytes(request.deviceId, request.input));
@@ -133,11 +145,143 @@ describe("node worker tunnel lifetime", () => {
     expect(launchPlan).toEqual(snapshot);
   });
 
+  it("stops an unconfirmed old launch before dispatching its replacement", async () => {
+    const record = environment();
+    let currentClaim = turnClaim();
+    let firstLaunch = true;
+    const stopEntered = createDeferred();
+    const stopAck = createDeferred();
+    const invoked: string[] = [];
+    const nodeTransport = transport();
+    const nodes = await nodeTransport.listCurrentNodes();
+    nodes[0]!.workerHost.capturedExecPolicy = true;
+    nodeTransport.listCurrentNodes = async () => nodes;
+    nodeTransport.invoke = withWorkspaceDrain(async (request) => {
+      invoked.push(request.command);
+      if (request.command === NODE_WORKER_ENVIRONMENT_STOP_COMMAND) {
+        stopEntered.resolve();
+        await stopAck.promise;
+        return { ok: true, payloadJSON: "null" };
+      }
+      if (request.command === NODE_WORKER_SUPERVISOR_CANCEL_COMMAND) {
+        return { ok: false, error: { code: "INVALID_REQUEST" } };
+      }
+      if (request.command === NODE_WORKER_SUPERVISOR_STATUS_COMMAND) {
+        const signal = request.signal;
+        if (!signal) {
+          throw new Error("expected node status signal");
+        }
+        await new Promise<never>((_resolve, reject) => {
+          signal.addEventListener(
+            "abort",
+            () =>
+              reject(
+                signal.reason instanceof Error ? signal.reason : new Error("node status aborted"),
+              ),
+            { once: true },
+          );
+        });
+      }
+      const input = request.params as NodeWorkerLaunchInput;
+      const identity = {
+        launchId: input.launchId,
+        planHash: nodeWorkerPlanHash(input),
+        environmentId: input.descriptor.admission.environmentId,
+        sessionId: input.descriptor.admission.sessionId,
+        ownerEpoch: input.descriptor.admission.ownerEpoch,
+        placementGeneration: input.placementGeneration,
+        runId: input.descriptor.assignment.runId,
+      };
+      if (request.command === NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND) {
+        request.onDispatchReady?.("launch-invoke");
+        if (firstLaunch) {
+          firstLaunch = false;
+          return { ok: true, payloadJSON: JSON.stringify({ ...identity, state: "running" }) };
+        }
+        return {
+          ok: true,
+          payloadJSON: JSON.stringify({
+            ...identity,
+            state: "completed",
+            resultJson: '{"status":"completed"}',
+          }),
+        };
+      }
+      throw new Error(`unexpected node command: ${request.command}`);
+    });
+    const launchAdapter = createNodeWorkerLaunchAdapter({
+      getTransport: () => nodeTransport,
+      sleep: async () => {},
+    });
+    const manager = createManager(record, {
+      getTransport: () => nodeTransport,
+      launchNodeWorker: launchAdapter.launch,
+      validateWorkerTurn: (claim) => sameWorkerSessionTurnClaim(claim, currentClaim),
+    });
+    const first = await manager.start(startRequest());
+    const staleClaim = currentClaim;
+    currentClaim = { ...staleClaim, claimId: "claim-2" };
+
+    await expect(first.launchTurn({ plan: plan(), turnClaim: staleClaim })).rejects.toThrow(
+      "authority closed",
+    );
+    expect(invoked).toEqual([]);
+
+    const controller = new AbortController();
+    const unconfirmed = first.launchTurn({
+      plan: plan(),
+      turnClaim: currentClaim,
+      signal: controller.signal,
+    });
+    const unconfirmedRejection = expect(unconfirmed).rejects.toThrow(
+      "node worker launch failed and cancellation could not be confirmed",
+    );
+    await vi.waitFor(() => expect(invoked).toContain(NODE_WORKER_SUPERVISOR_STATUS_COMMAND));
+    expect(invoked).toEqual([
+      NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
+      NODE_WORKER_SUPERVISOR_STATUS_COMMAND,
+    ]);
+    controller.abort(new Error("turn cancelled"));
+    await unconfirmedRejection;
+
+    record.ownerEpoch = 3;
+    currentClaim = {
+      ...currentClaim,
+      claimId: "claim-3",
+      placementGeneration: 5,
+      owner: { kind: "worker", environmentId: record.environmentId, ownerEpoch: 3 },
+    };
+    const replacing = manager.start({ ...startRequest(), ownerEpoch: 3 });
+    await stopEntered.promise;
+    let replacementReady = false;
+    void replacing.then(() => {
+      replacementReady = true;
+    });
+    await Promise.resolve();
+    expect(replacementReady).toBe(false);
+    stopAck.resolve();
+    const replacement = await replacing;
+
+    const replacementPlan = plan();
+    replacementPlan.admission.ownerEpoch = 3;
+    await expect(
+      replacement.launchTurn({ plan: replacementPlan, turnClaim: currentClaim }),
+    ).resolves.toMatchObject({ code: 0 });
+    expect(invoked).toEqual([
+      NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
+      NODE_WORKER_SUPERVISOR_STATUS_COMMAND,
+      NODE_WORKER_SUPERVISOR_CANCEL_COMMAND,
+      NODE_WORKER_ENVIRONMENT_STOP_COMMAND,
+      NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
+    ]);
+    await manager.stop(record.environmentId, 3, "provider-destroyed");
+  });
+
   it("projects a terminal gateway connection failure into the launch result", async () => {
     const record = environment();
     const errorText =
       "worker admission deadline exceeded after 3 attempts to gateway.example:18789: connect failed: Opening handshake has timed out";
-    const manager = await createManager(record, {
+    const manager = createManager(record, {
       launchNodeWorker: vi.fn<NodeWorkerLaunch>(async (request) => ({
         launchId: request.input.launchId,
         planHash: "b".repeat(64),
@@ -163,7 +307,7 @@ describe("node worker tunnel lifetime", () => {
 
   it("reuses only the exact same epoch binding", async () => {
     const record = environment();
-    const manager = await createManager(record);
+    const manager = createManager(record);
 
     const first = await manager.start(startRequest());
     await expect(manager.start(startRequest())).resolves.toBe(first);
@@ -184,7 +328,7 @@ describe("node worker tunnel lifetime", () => {
     const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>();
     nodeTransport.invoke = withWorkspaceDrain(invoke);
     const transfer = workspaceTransfer();
-    const manager = await createManager(record, {
+    const manager = createManager(record, {
       getTransport: () => nodeTransport,
       workspaceTransfer: transfer,
     });
@@ -209,7 +353,7 @@ describe("node worker tunnel lifetime", () => {
       return { ok: true, payloadJSON: "null" };
     });
     nodeTransport.invoke = withWorkspaceDrain(invoke);
-    const manager = await createManager(record, {
+    const manager = createManager(record, {
       getTransport: () => nodeTransport,
       launchNodeWorker: async (request) => ({
         launchId: request.input.launchId,
@@ -258,7 +402,7 @@ describe("node worker tunnel lifetime", () => {
         .mockResolvedValue({ ok: true, payloadJSON: "null" });
       nodeTransport.invoke = withWorkspaceDrain(invoke);
       const transfer = { ...workspaceTransfer(), closeAll: vi.fn(async () => {}) };
-      const manager = await createManager(record, {
+      const manager = createManager(record, {
         getTransport: () => nodeTransport,
         workspaceTransfer: transfer,
       });
@@ -316,7 +460,7 @@ describe("node worker tunnel lifetime", () => {
       };
       const transfer = workspaceTransfer();
       transfer.prepareRepository = vi.fn(async () => {});
-      const manager = await createManager(record, {
+      const manager = createManager(record, {
         getTransport: () => nodeTransport,
         workspaceTransfer: transfer,
       });
@@ -387,7 +531,7 @@ describe("node worker tunnel lifetime", () => {
         );
       });
     const launchNodeWorker = vi.fn(launch);
-    const manager = await createManager(record, {
+    const manager = createManager(record, {
       launchNodeWorker,
     });
     const first = await manager.start(startRequest());
@@ -443,7 +587,7 @@ describe("node worker tunnel lifetime", () => {
       });
     };
     const launchNodeWorker = vi.fn(launch);
-    const manager = await createManager(record, {
+    const manager = createManager(record, {
       launchNodeWorker,
     });
     const handle = await manager.start(startRequest());

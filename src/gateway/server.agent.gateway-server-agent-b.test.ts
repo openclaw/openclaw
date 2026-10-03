@@ -213,7 +213,7 @@ describe("gateway server agent", () => {
         storePath,
       };
       expect(loadTranscriptEventsSync(scope)).toEqual([]);
-      expect(listSessionPendingInputs(scope)).toMatchObject({
+      expect(await listSessionPendingInputs(scope)).toMatchObject({
         total: 1,
         items: [
           {
@@ -281,7 +281,7 @@ describe("gateway server agent", () => {
       storePath,
     };
     expect(loadTranscriptEventsSync(scope)).toEqual([]);
-    expect(listSessionPendingInputs(scope)).toMatchObject({
+    expect(await listSessionPendingInputs(scope)).toMatchObject({
       total: 1,
       items: [
         {

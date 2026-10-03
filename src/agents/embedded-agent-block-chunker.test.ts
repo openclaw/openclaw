@@ -3,8 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import * as fences from "../../packages/markdown-core/src/fences.js";
 import { markdownToIR } from "../../packages/markdown-core/src/ir.js";
 import { runNodeScript } from "../../test/helpers/run-node-script.js";
-import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
-import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
+import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { EmbeddedBlockChunker } from "./embedded-agent-block-chunker.js";
 import { agentProcessTestEntrypoints } from "./process-runtime.test-support.js";
 
@@ -223,8 +222,8 @@ describe("EmbeddedBlockChunker", () => {
       // A synchronous stalled drain needs an external deadline, not Vitest's in-process timer.
       const chunkerUrl = resolveRuntimeWorkerUrl(agentProcessTestEntrypoints.blockChunker);
       const result = await runNodeScript(
-        [
-          ...resolveRuntimeWorkerArgv(chunkerUrl, resolveTestNodeExecPath()).slice(0, -1),
+        (workerArgv) => [
+          ...workerArgv(chunkerUrl).slice(0, -1),
           "--input-type=module",
           "--eval",
           `

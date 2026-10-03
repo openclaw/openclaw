@@ -163,7 +163,9 @@ vi.mock("./tool-resolution.js", () => ({
     resolveGatewayScopedToolsMock(...args),
 }));
 
+import { mutateSubagentRuns } from "../agents/subagents/registry/subagent-registry-persistence.js";
 import { getSubagentRunByRunId } from "../agents/subagents/registry/subagent-registry.test-helpers.js";
+import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
 import {
   activateMcpLoopbackClientGrantCapture,
   deactivateMcpLoopbackClientGrantCapture,
@@ -2462,9 +2464,16 @@ describe("collector result tool across the loopback MCP boundary", () => {
 
     runBeforeToolCallHookMock.mockImplementation(async (args: { params: unknown }) => {
       // Grant liveness is untouched, so this reaches the pre-persistence re-check.
-      const entry = expectDefined(getSubagentRunByRunId(collectorRunId), "collector run");
-      entry.runId = reboundRunId;
-      entry.swarmRunId = reboundRunId;
+      await mutateSubagentRuns([collectorRunId, reboundRunId], (rows) => {
+        const entry = expectDefined(rows.get(collectorRunId), "collector run");
+        return {
+          value: undefined,
+          postimages: new Map<string, SubagentRunRecord | null>([
+            [collectorRunId, null],
+            [reboundRunId, { ...entry, runId: reboundRunId, swarmRunId: reboundRunId }],
+          ]),
+        };
+      });
       return { blocked: false, params: args.params };
     });
 

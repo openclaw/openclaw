@@ -388,8 +388,8 @@ describe("opt-in extension package boundaries", () => {
     expect(packageJson.exports?.["./provider-model-types"]?.types).toBe(
       "./dist/src/plugin-sdk/provider-model-types.d.ts",
     );
-    expect(packageJson.exports?.["./infra-runtime"]?.types).toBe(
-      "./dist/src/plugin-sdk/infra-runtime.d.ts",
+    expect(packageJson.exports?.["./system-event-runtime"]?.types).toBe(
+      "./dist/src/plugin-sdk/system-event-runtime.d.ts",
     );
     expect(fs.existsSync(resolve(REPO_ROOT, "packages/plugin-sdk/types/plugin-entry.d.ts"))).toBe(
       false,

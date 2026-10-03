@@ -50,6 +50,7 @@ export type AgentDeliveryEvidence = {
     error?: unknown;
     aborted?: unknown;
     finalAssistantVisibleText?: unknown;
+    terminalReply?: unknown;
     toolSummary?: {
       calls?: unknown;
     };
@@ -120,10 +121,6 @@ export function hasCompletedMessagingToolDeliveryEvidence(
     resolveExplicitFinalSourceReplyDeliveryEvidence(result) ??
     hasMessagingToolDeliveryEvidence(result)
   );
-}
-
-function hasNonEmptyArray(value: unknown): boolean {
-  return Array.isArray(value) && value.length > 0;
 }
 
 function hasAcceptedSessionSpawnEvidence(value: unknown): boolean {
@@ -388,7 +385,7 @@ export function hasCommittedMessagingToolDeliveryEvidence(
   return (
     hasNonEmptyStringArray(result.messagingToolSentTexts) ||
     hasNonEmptyStringArray(result.messagingToolSentMediaUrls) ||
-    hasNonEmptyArray(result.messagingToolSentTargets)
+    (Array.isArray(result.messagingToolSentTargets) && result.messagingToolSentTargets.length > 0)
   );
 }
 

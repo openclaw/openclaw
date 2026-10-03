@@ -1,4 +1,5 @@
 import { beforeAll, describe, expect, it, vi } from "vitest";
+import "../test-utils/prepare-compiled-subprocesses.js";
 import { NON_ENV_SECRETREF_MARKER } from "../secrets/provider-credential-values.js";
 import type { ExistingProviderConfig, ProviderModelCatalog } from "./models-config.merge.js";
 import type { ProviderConfig } from "./models-config.providers.secrets.js";

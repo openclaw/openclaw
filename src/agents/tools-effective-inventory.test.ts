@@ -2,12 +2,13 @@
  * Regression coverage for effective tool inventory resolution.
  * Verifies grouped tool sources, plugin registry inputs, and session-context filters.
  */
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { setPluginToolMeta } from "../plugins/tool-metadata.js";
 import type { createOpenClawCodingToolsInternal } from "./agent-tools.js";
+import { resolveEffectiveToolInventory } from "./tools-effective-inventory.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
 function mockTool(params: {
@@ -91,8 +92,6 @@ vi.mock("../plugins/provider-runtime.js", () => ({
     effectiveInventoryState.normalizeTransportMock(options),
 }));
 
-let resolveEffectiveToolInventory: typeof import("./tools-effective-inventory.js").resolveEffectiveToolInventory;
-
 async function loadHarness(options?: {
   tools?: AnyAgentTool[];
   createToolsMock?: typeof effectiveInventoryState.createToolsMock;
@@ -118,10 +117,6 @@ async function loadHarness(options?: {
 }
 
 describe("resolveEffectiveToolInventory", () => {
-  beforeAll(async () => {
-    ({ resolveEffectiveToolInventory } = await import("./tools-effective-inventory.js"));
-  });
-
   beforeEach(() => {
     effectiveInventoryState.tools = [
       mockTool({ name: "exec", label: "Exec", description: "Run shell commands" }),

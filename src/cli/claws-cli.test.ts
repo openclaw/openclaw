@@ -204,6 +204,7 @@ describe("claws cli", () => {
       },
       path: "state.sqlite",
       walMaintenance: {
+        stop: async () => {},
         checkpoint: () => false,
         close: mocks.closeReadOnlyDatabase,
         reclaimFreePages: createSqliteWalReclamationResult,

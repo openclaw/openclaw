@@ -92,11 +92,17 @@ async function withTerminal(action: () => Promise<void>) {
 }
 
 beforeEach(() => vi.resetAllMocks());
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
 
 describe("registered maintenance commands", () => {
   it("keeps plain doctor read-only on unsupported Node", async () => {
-    vi.spyOn(process.versions, "node", "get").mockReturnValue("22.23.2");
+    vi.stubGlobal("process", {
+      ...process,
+      versions: { ...process.versions, bun: undefined, node: "22.23.2" },
+    });
     const capabilities = await nodeSqlite.detectCurrentSqliteCapabilities();
     vi.spyOn(nodeSqlite, "detectCurrentSqliteCapabilities").mockResolvedValue({
       ...capabilities,

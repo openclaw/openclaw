@@ -1,3 +1,4 @@
+import type { CronCompletionDeliveryFence } from "./delivery-attempt-fence.js";
 import { makeCronJob } from "./delivery.test-helpers.js";
 import type { CronExecutionIdentityAdmission } from "./service/state.js";
 import { createCronScriptRuntime } from "./trigger-script.js";
@@ -15,6 +16,7 @@ type ScriptFixture = Omit<
   toolBudget?: number;
   abortSignal?: AbortSignal;
   executionIdentity?: CronExecutionIdentityAdmission;
+  deliveryAttemptFence?: CronCompletionDeliveryFence | null;
 };
 
 /** Builds scheduler-owned jobs while keeping individual runtime cases focused on their inputs. */
@@ -42,6 +44,7 @@ export function createCronScriptRuntimeFixture(deps: RuntimeDeps) {
   return {
     evaluateTrigger: (params: ScriptFixture) =>
       runtime.evaluateTrigger({
+        deliveryAttemptFence: params.deliveryAttemptFence ?? null,
         job: job(params, { kind: "agentTurn", message: "condition payload" }),
         script: params.script,
         state: params.state,
@@ -51,6 +54,7 @@ export function createCronScriptRuntimeFixture(deps: RuntimeDeps) {
       }),
     executePayload: (params: ScriptFixture) =>
       runtime.executePayload({
+        deliveryAttemptFence: params.deliveryAttemptFence ?? null,
         job: job(params, {
           kind: "script",
           script: params.script,

@@ -31,7 +31,14 @@ export function bindSqliteWorkerBackend(
       ...backend,
       execute(command: Parameters<typeof backend.execute>[0]) {
         const result = backend.execute(command);
-        if (command.type === operation && result && result.ok && result.value === true) {
+        if (
+          command.type === operation &&
+          result &&
+          typeof result === "object" &&
+          "ok" in result &&
+          result.ok &&
+          result.value === true
+        ) {
           throw new Error(
             input.kind === "cache-clear-result"
               ? "injected committed cache clear reply failure"
@@ -102,7 +109,13 @@ export function bindSqliteWorkerBackend(
     ...backend,
     execute(command: Parameters<typeof backend.execute>[0]) {
       const result = backend.execute(command);
-      if (input.throwResultFailure && result && !result.ok) {
+      if (
+        input.throwResultFailure &&
+        result &&
+        typeof result === "object" &&
+        "ok" in result &&
+        !result.ok
+      ) {
         throw new Error("injected result delivery failure");
       }
       return result;

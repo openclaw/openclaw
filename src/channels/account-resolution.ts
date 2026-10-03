@@ -3,7 +3,7 @@ import type { ChannelPlugin } from "./plugins/types.plugin.js";
 
 /** Prefer fresh operational preparation without retrying failures through the legacy hook. */
 export async function resolveChannelAccount<ResolvedAccount>(params: {
-  plugin: ChannelPlugin<ResolvedAccount>;
+  plugin: ChannelPlugin<ResolvedAccount, unknown, unknown, 1 | 2>;
   cfg: OpenClawConfig;
   accountId?: string | null;
 }): Promise<ResolvedAccount> {
@@ -14,7 +14,7 @@ export async function resolveChannelAccount<ResolvedAccount>(params: {
 }
 
 export async function channelHasConfiguredState<ResolvedAccount>(params: {
-  plugin: ChannelPlugin<ResolvedAccount>;
+  plugin: ChannelPlugin<ResolvedAccount, unknown, unknown, 1 | 2>;
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
 }): Promise<boolean | undefined> {

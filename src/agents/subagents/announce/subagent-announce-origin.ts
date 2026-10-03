@@ -1,8 +1,3 @@
-/**
- * Subagent announcement origin resolver.
- *
- * Merges requester and session delivery context while avoiding stale thread ids after retargeting.
- */
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -119,7 +114,6 @@ function mergeAnnounceDeliveryContext(
   return mergeDeliveryContext(normalizedPrimary, normalizedFallback);
 }
 
-/** Resolve the delivery origin for a subagent completion announcement. */
 export function resolveAnnounceOrigin(
   entry?: Pick<SessionEntry, "delivery">,
   requesterOrigin?: DeliveryContext,
@@ -275,7 +269,6 @@ export function resolveCompletionDeliveryOrigins(params: {
   };
 }
 
-/** Infer whether a normalized delivery target addresses a direct, group, or channel chat. */
 export function inferDeliveryTargetChatType(target: {
   channel?: string;
   to?: string;

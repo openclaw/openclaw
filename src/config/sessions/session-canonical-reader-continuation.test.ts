@@ -3,10 +3,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
-import {
-  disposeNodeSqliteDependents,
-  registerNodeSqliteDisposeCallback,
-} from "../../infra/kysely-sync-cache-state.js";
+import { registerNodeSqliteDisposeCallback } from "../../infra/kysely-sync-cache-state.js";
 import { deferSqlitePostCommitPublication } from "../../infra/sqlite-post-commit.js";
 import { openOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import { invalidateOpenClawAgentDatabaseValidation } from "../../state/openclaw-agent-db-validation-cache.js";
@@ -170,7 +167,6 @@ it.each([
   "release",
   "native close",
   "native dispose",
-  "replacement",
   "main key",
   "validation",
   "readiness",
@@ -192,9 +188,6 @@ it.each([
     }
     if (reason === "native dispose") {
       database.db[Symbol.dispose]();
-    }
-    if (reason === "replacement") {
-      disposeNodeSqliteDependents(database.db, "replace");
     }
     if (reason === "main key") {
       setCanonicalSqliteSessionMainKey(database, "custom");
@@ -464,22 +457,19 @@ it.runIf(process.platform !== "win32").each(["before host publication", "before 
   },
 );
 
-it.each(["COMMIT", "ROLLBACK"])(
-  "revokes prior continuations when unmanaged admission cannot stage before %s",
-  async (ending) => {
-    await withReaders(({ database }) => {
-      const held = capture(database);
-      database.db.exec("BEGIN");
-      try {
-        database.db.exec("UPDATE session_key_contract SET main_key = 'custom' WHERE id = 1");
-        assertCanonicalSqliteSessionKeysCurrent(database);
-        expect(Atomics.load(new Int32Array(held.receipt.live), 0)).toBe(0);
-      } finally {
-        database.db.exec(ending);
-      }
-      expect(() => held.assertCurrent()).toThrow("no longer current");
-      expect(captureCanonicalSessionReaderContinuation(database)).toBeUndefined();
-      held.release();
-    });
-  },
-);
+it("does not resurrect revoked continuations after an unmanaged rollback", async () => {
+  await withReaders(({ database }) => {
+    const held = capture(database);
+    database.db.exec("BEGIN");
+    try {
+      database.db.exec("UPDATE session_key_contract SET main_key = 'custom' WHERE id = 1");
+      assertCanonicalSqliteSessionKeysCurrent(database);
+      expect(Atomics.load(new Int32Array(held.receipt.live), 0)).toBe(0);
+    } finally {
+      database.db.exec("ROLLBACK");
+    }
+    expect(() => held.assertCurrent()).toThrow("no longer current");
+    expect(captureCanonicalSessionReaderContinuation(database)).toBeUndefined();
+    held.release();
+  });
+});

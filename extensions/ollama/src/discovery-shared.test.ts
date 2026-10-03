@@ -266,23 +266,39 @@ describe("resolveOllamaDiscoveryResult — hosted Ollama Cloud guard", () => {
   it.each([undefined, "http://localhost:11434", "https://ollama.mycompany.com", "not a url"])(
     "still auto-discovers for non-hosted base URL %s",
     async (baseUrl) => {
+      const buildProvider = vi.fn(buildMockProvider);
       const result = await discover(
         { baseUrl, apiKey: "test-key" },
-        { resolvedAuth: { apiKey: "test-key" } },
+        { resolvedAuth: { apiKey: "test-key" }, buildProvider },
       );
-      expect(result).not.toBeNull();
+      expect(result).toMatchObject({
+        provider: { api: "ollama", apiKey: "test-key", models: [discoveredModel] },
+        outcomes: [{ provider: "ollama", status: "ready" }],
+      });
+      expect(buildProvider).toHaveBeenCalledExactlyOnceWith(baseUrl, {
+        discoveryMode: "strict",
+        apiKey: "test-key",
+      });
     },
   );
 
   it("still auto-discovers for local base URL when no explicit models", async () => {
+    const buildProvider = vi.fn(buildMockProvider);
     const result = await discover(
       { baseUrl: "http://localhost:11434" },
       {
         env: { OLLAMA_API_KEY: "ollama-local" },
         resolvedAuth: { apiKey: "ollama-local" },
+        buildProvider,
       },
     );
-    expect(result).not.toBeNull();
+    expect(result).toMatchObject({
+      provider: { api: "ollama", apiKey: "ollama-local", models: [discoveredModel] },
+      outcomes: [{ provider: "ollama", status: "ready" }],
+    });
+    expect(buildProvider).toHaveBeenCalledExactlyOnceWith("http://localhost:11434", {
+      discoveryMode: "strict",
+    });
   });
 
   it.each(

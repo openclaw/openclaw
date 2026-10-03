@@ -1,3 +1,4 @@
+import { once } from "node:events";
 import net from "node:net";
 import type { Duplex } from "node:stream";
 import type { ClientOptions, RawData, WebSocket } from "ws";
@@ -77,20 +78,6 @@ function websocketOptions(
     applyGatewayWebSocketTlsPin(options, tlsFingerprint);
   }
   return options;
-}
-
-async function waitForSocketConnect(socket: net.Socket): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    socket.once("connect", resolve);
-    socket.once("error", reject);
-  });
-}
-
-async function waitForWebSocketOpen(ws: WebSocket): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    ws.once("open", resolve);
-    ws.once("error", reject);
-  });
 }
 
 async function sendAttachMetadata(
@@ -256,14 +243,14 @@ export async function runNodeStreamTransport(params: {
         closeCode,
       });
     });
-    await Promise.race([waitForWebSocketOpen(ws), abort]);
+    await Promise.race([once(ws, "open"), abort]);
     if (aborted) {
       return;
     }
     if ("port" in params.target && socket instanceof net.Socket) {
       // Portals attach first so a refused target closes the claimed ticket.
       socket.connect(createLoopbackConnectOptions(params.target.port));
-      await Promise.race([waitForSocketConnect(socket), abort]);
+      await Promise.race([once(socket, "connect"), abort]);
     }
     if (aborted) {
       return;

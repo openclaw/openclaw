@@ -200,33 +200,6 @@ export function createReplyMediaSourcePreparer(params: {
     return await sandboxWorkspacePromise;
   };
 
-  const resolveMediaAccessForSource = (
-    media: string,
-    sessionWorkspaceDir?: string,
-    workspaceDir?: string,
-  ) =>
-    resolveAgentScopedOutboundMediaAccess({
-      cfg: params.cfg,
-      agentId,
-      workspaceDir: workspaceDir ?? params.workspaceDir,
-      sessionWorkspaceDir: sessionWorkspaceDir ?? params.sessionWorkspaceDir,
-      workspaceOnly: params.workspaceOnly,
-      allowHostWorkspace: params.allowHostWorkspace,
-      mediaSources: [media],
-      mediaAccess: params.mediaAccess,
-      workspaceMediaAccess: params.workspaceMediaAccess,
-      sessionKey: params.sessionKey,
-      messageProvider: params.sessionKey ? undefined : params.messageProvider,
-      accountId: params.accountId,
-      requesterSenderId: params.requesterSenderId,
-      requesterSenderName: params.requesterSenderName,
-      requesterSenderUsername: params.requesterSenderUsername,
-      requesterSenderE164: params.requesterSenderE164,
-      groupId: params.groupId,
-      groupChannel: params.groupChannel,
-      groupSpace: params.groupSpace,
-    });
-
   const persistLocalReplyMedia = async (
     media: string,
     sessionWorkspaceDir?: string,
@@ -247,7 +220,27 @@ export function createReplyMediaSourcePreparer(params: {
       return await cached;
     }
     const persistPromise = resolveOutboundAttachmentFromUrl(media, maxBytes, {
-      mediaAccess: resolveMediaAccessForSource(media, sessionWorkspaceDir, workspaceDir),
+      mediaAccess: resolveAgentScopedOutboundMediaAccess({
+        cfg: params.cfg,
+        agentId,
+        workspaceDir: workspaceDir ?? params.workspaceDir,
+        sessionWorkspaceDir: sessionWorkspaceDir ?? params.sessionWorkspaceDir,
+        workspaceOnly: params.workspaceOnly,
+        allowHostWorkspace: params.allowHostWorkspace,
+        mediaSources: [media],
+        mediaAccess: params.mediaAccess,
+        workspaceMediaAccess: params.workspaceMediaAccess,
+        sessionKey: params.sessionKey,
+        messageProvider: params.sessionKey ? undefined : params.messageProvider,
+        accountId: params.accountId,
+        requesterSenderId: params.requesterSenderId,
+        requesterSenderName: params.requesterSenderName,
+        requesterSenderUsername: params.requesterSenderUsername,
+        requesterSenderE164: params.requesterSenderE164,
+        groupId: params.groupId,
+        groupChannel: params.groupChannel,
+        groupSpace: params.groupSpace,
+      }),
     })
       .then((saved) => ({
         ...saved,
@@ -429,8 +422,8 @@ export function applyPreparedReplyMedia(
     for (const source of previousSourceUrls?.get(sourceKey) ?? []) {
       sourceUrls.add(source);
     }
-    if (normalized.mediaUrl !== media.trim()) {
-      sourceUrls.add(media.trim());
+    if (normalized.mediaUrl !== media) {
+      sourceUrls.add(media);
     }
     if (sourceUrls.size > 0) {
       sourcesByReference.set(normalizedKey, sourceUrls);

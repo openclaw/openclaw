@@ -3,6 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { clearExtensionCache, loadExtensionsCached } from "./loader.js";
 
 const jitiCalls = vi.hoisted(() => ({
   options: [] as Array<Record<string, unknown>>,
@@ -36,7 +37,6 @@ let virtualModulesCase: {
 };
 
 beforeAll(async () => {
-  const { clearExtensionCache, loadExtensionsCached } = await import("./loader.js");
   clearExtensionCache();
   const dir = await mkdtemp(join(tmpdir(), "openclaw-extension-sdk-"));
   tempDirs.push(dir);
@@ -52,7 +52,6 @@ beforeAll(async () => {
 });
 
 afterEach(async () => {
-  const { clearExtensionCache } = await import("./loader.js");
   clearExtensionCache();
   jitiCalls.options.length = 0;
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { force: true, recursive: true })));

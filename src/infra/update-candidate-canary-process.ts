@@ -1,7 +1,9 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { redactSupportDiagnosticLine } from "../logging/diagnostic-support-redaction.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { signalProcessTree } from "../process/kill-tree.js";
+import { resolveRuntimeArgs } from "./runtime-worker-url.js";
 import { UPDATE_CANARY_PROGRESS_PREFIX } from "./update-candidate-canary-progress.js";
 import type { UpdateStepResult } from "./update-step-result.js";
 
@@ -19,7 +21,8 @@ export function launchCanary(params: {
 }) {
   const { entry, args, env, capture } = params;
   params.assertCurrent?.();
-  const child = spawn(params.nodeRunner ?? process.execPath, [entry, ...args], {
+  const runtime = params.nodeRunner ?? process.execPath;
+  const child = spawn(runtime, [...resolveRuntimeArgs(runtime), entry, ...args], {
     cwd: params.root,
     env,
     detached: process.platform !== "win32",
@@ -27,17 +30,34 @@ export function launchCanary(params: {
     windowsHide: true,
   });
   let stdout = "";
-  let firstStderrLine: string | undefined;
+  let lastStderrLine: string | undefined;
+  const stderrLines: string[] = [];
+  let fatalHeader: string | undefined;
+  const stderrTail = () => (fatalHeader ? [fatalHeader, ...stderrLines] : stderrLines).join("\n");
   let cliReason: string | undefined;
   const captureStderr = (line: string) => {
     if (!line.trim() || line.startsWith(UPDATE_CANARY_PROGRESS_PREFIX)) {
       return;
     }
-    const safe = redactSupportDiagnosticLine(line, { env, stateDir: params.stateDir });
-    firstStderrLine ??= safe;
+    const safe = redactSupportDiagnosticLine(
+      line,
+      { env, stateDir: params.stateDir },
+      Number.MAX_SAFE_INTEGER,
+    );
+    lastStderrLine = sliceUtf16Safe(safe, -200);
+    if (safe.startsWith("FATAL ERROR:")) {
+      // A long native stack must not evict the fatal cause with earlier warnings.
+      fatalHeader = sliceUtf16Safe(safe, 0, 512);
+      stderrLines.length = 0;
+    } else {
+      stderrLines.push(sliceUtf16Safe(safe, 0, 512));
+    }
+    while (stderrLines.length > (fatalHeader ? 79 : 80) || stderrTail().length > 8192) {
+      stderrLines.shift();
+    }
     // The CLI prints a generic heading before its actual failure reason.
     if (line.startsWith("[openclaw] Reason: ")) {
-      cliReason ??= safe.replace(/^\[openclaw\] Reason: /u, "");
+      cliReason = sliceUtf16Safe(safe.replace(/^\[openclaw\] Reason: /u, ""), -200);
     }
   };
   let stdoutBytes = 0;
@@ -75,7 +95,7 @@ export function launchCanary(params: {
         pending = "";
         droppingLine = true;
         if (stream === child.stderr) {
-          firstStderrLine ??= "[oversized log line omitted]";
+          lastStderrLine ??= "[oversized log line omitted]";
         }
         capture("[oversized log line omitted]");
       }
@@ -131,7 +151,8 @@ export function launchCanary(params: {
     hasExited: () => exited,
     processExited: () => processExited,
     stdout: () => stdout,
-    firstStderrLine: () => cliReason ?? firstStderrLine,
+    stderrDiagnostic: () => fatalHeader ?? cliReason ?? lastStderrLine,
+    stderrTail,
     outputExceeded: () => outputExceeded,
   };
 }

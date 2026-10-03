@@ -654,6 +654,8 @@ describe("automatic exact-target admission", () => {
 
   it.each([
     { name: "CI=1", expected: 2 },
+    { name: "changed targets", changed: true, expected: 2 },
+    { name: "changed targets with serial override", changed: true, serial: "1", expected: 1 },
     { name: "CI=true", ci: "true", expected: 2 },
     { name: "unresolved config outputs", args: [], expected: 1 },
     { name: "console reporter without coverage override", args: ["--reporter=dot"], expected: 1 },
@@ -682,7 +684,7 @@ describe("automatic exact-target admission", () => {
     { name: "caller cache leaf", callerLeaf: true, expected: 1 },
   ])(
     "preserves resolved specs and policy for $name",
-    async ({ ci, cpus, gib, parallel, serial, portable, callerLeaf, args, expected }) => {
+    async ({ ci, cpus, gib, parallel, serial, portable, callerLeaf, args, changed, expected }) => {
       vi.stubEnv("CI", ci ?? "1");
       vi.stubEnv("OPENCLAW_TEST_PROJECTS_PARALLEL", parallel ?? "");
       vi.stubEnv("OPENCLAW_TEST_PROJECTS_SERIAL", serial ?? "");
@@ -697,6 +699,10 @@ describe("automatic exact-target admission", () => {
       vi.mocked(os.availableParallelism).mockReturnValue(cpus ?? 8);
       vi.mocked(os.totalmem).mockReturnValue((gib ?? 24) * 1024 ** 3);
       const planner = await import("../../scripts/test-projects.test-support.mts");
+      if (changed) {
+        const lanes = await import("../../scripts/changed-lanes.mts");
+        vi.spyOn(lanes, "listChangedPathsFromGit").mockReturnValue(files);
+      }
       const produced = vi.spyOn(planner, "createVitestRunSpecs");
       const { runTestProjects } = await import("../../scripts/test-projects-run.mts");
       const selections: Array<{ config: string; include: string[] | null; workers: string }> = [];
@@ -720,11 +726,17 @@ describe("automatic exact-target admission", () => {
           getForwardedSignal: () => undefined,
         };
       });
-      await runTestProjects(async () => {}, [...files, ...(args ?? outputArgs)]);
+      await runTestProjects(async () => {}, [
+        ...(changed ? ["--changed", "origin/main"] : files),
+        ...(args ?? outputArgs),
+      ]);
       const specs = produced.mock.results[0]!.value as ReturnType<
         typeof planner.createVitestRunSpecs
       >;
       expect(specs.length).toBeGreaterThanOrEqual(3);
+      if (changed) {
+        expect(specs.some((spec) => spec.pnpmArgs.includes("--passWithNoTests=false"))).toBe(false);
+      }
       expect(peak).toBe(expected);
       const actual = selections.map(({ config, include }) => ({ config, include }));
       const planned = specs.map((spec) => ({ config: spec.config, include: spec.includePatterns }));
@@ -1271,6 +1283,10 @@ describe("test-projects build admission", () => {
       await start(mixed ? [e2eTarget, avatarTarget] : [avatarTarget]);
       await Promise.race([runtime.started, terminal.promise]);
       const ui = createPreparationGate<number>(commands.prepare);
+      if (mixed) {
+        // E2E reuse still needs the UI's stricter current-head preparation.
+        commands.prepare.mockResolvedValueOnce(0);
+      }
       try {
         expect(commands.reader).not.toHaveBeenCalled();
         expect(commands.uiAssets).not.toHaveBeenCalled();
@@ -1297,11 +1313,10 @@ describe("test-projects build admission", () => {
       }
       expect(outcome).toMatch(/^\[test\] passed /u);
       expect(commands.prepareE2e).toHaveBeenCalledTimes(mixed ? 1 : 0);
-      expect(commands.prepare.mock.calls.map(([command]) => command.args)).toEqual(
-        mixed
-          ? [["scripts/ui.js", "build"]]
-          : [["scripts/prepare-vitest-runtime.mjs"], ["scripts/ui.js", "build"]],
-      );
+      expect(commands.prepare.mock.calls.map(([command]) => command.args)).toEqual([
+        ["scripts/prepare-vitest-runtime.mjs", "--require-current-head"],
+        ["scripts/ui.js", "build"],
+      ]);
       expect(commands.uiAssets).toHaveBeenCalledTimes(2);
       expect(process.exitCode).toBe(0);
     },
@@ -1322,7 +1337,7 @@ describe("test-projects build admission", () => {
       await terminal.promise;
       expect(commands.reader).not.toHaveBeenCalled();
       expect(commands.prepare.mock.calls.map(([command]) => command.args)).toEqual([
-        ["scripts/prepare-vitest-runtime.mjs"],
+        ["scripts/prepare-vitest-runtime.mjs", "--require-current-head"],
         ["scripts/ui.js", "build"],
       ]);
       expect(process.exitCode).toBe(outcome === "nonzero" ? 7 : 1);
@@ -1361,9 +1376,9 @@ describe("test-projects build admission", () => {
         source.resolve();
         await rejected;
       }
-      expect(commands.prepare.mock.calls.map(([command]) => command.args)).toEqual(
-        mixed ? [] : [["scripts/prepare-vitest-runtime.mjs"]],
-      );
+      expect(commands.prepare.mock.calls.map(([command]) => command.args)).toEqual([
+        ["scripts/prepare-vitest-runtime.mjs", "--require-current-head"],
+      ]);
       expect(commands.uiAssets).not.toHaveBeenCalled();
       expect(commands.reader).not.toHaveBeenCalled();
       expect(exitBySignal).toHaveBeenCalledExactlyOnceWith("SIGTERM");

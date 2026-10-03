@@ -37,10 +37,7 @@
 
 /* ── Workspace shell (shared by every settings takeover page) ── */
 
-.settings-workspace {
-  width: 100%;
-}
-
+.settings-workspace,
 .settings-workspace__body {
   width: 100%;
 }
@@ -68,13 +65,7 @@
   max-width: 100%;
 }
 
-.settings-workspace--fill-height {
-  flex: 1 1 auto;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-}
-
+.settings-workspace--fill-height,
 .settings-workspace--fill-height > .settings-workspace__body {
   flex: 1 1 auto;
   min-height: 0;
@@ -96,8 +87,6 @@
 .content.content--settings-wide .content-header--settings {
   max-width: 1120px;
 }
-
-/* ── Page ── */
 
 /* Section separation stays generous (--space-8) so group surfaces read as
    distinct blocks; headings bind to their own group via the tighter
@@ -165,8 +154,6 @@
   color: var(--muted);
   font: 400 var(--control-ui-text-sm) / 1.5 var(--mono);
 }
-
-/* ── Section ── */
 
 .settings-section {
   display: flex;
@@ -345,8 +332,6 @@
   margin-top: var(--space-3);
 }
 
-/* ── Row ── */
-
 .settings-row {
   display: flex;
   align-items: center;
@@ -521,8 +506,6 @@
 .settings-subrows .settings-row + .settings-row {
   border-top: 1px solid color-mix(in srgb, var(--border) 45%, transparent);
 }
-
-/* ── Controls ── */
 
 .settings-toggle {
   display: inline-flex;
@@ -779,8 +762,6 @@ textarea.settings-input {
   overflow-wrap: anywhere;
 }
 
-/* ── Empty state ── */
-
 .settings-empty {
   padding: var(--space-5) var(--space-4);
   font-size: var(--control-ui-text-sm);
@@ -827,8 +808,6 @@ textarea.settings-input {
   width: 104px;
 }
 
-/* ── Key/value facts (About build info, agent facts) ── */
-
 .settings-kv {
   display: grid;
   grid-template-columns: minmax(120px, max-content) minmax(0, 1fr);
@@ -855,7 +834,8 @@ textarea.settings-input {
 /* Identity composes existing row controls; these wrappers only keep the
    avatar/file action and name/save action aligned as one control cluster. */
 .identity-avatar-control,
-.identity-name-control {
+.identity-name-control,
+.settings-account {
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
@@ -868,15 +848,6 @@ textarea.settings-input {
 
 .identity-error .settings-row__desc {
   color: var(--danger);
-}
-
-/* ── Account value (small round avatar + handle inside a row control) ── */
-
-.settings-account {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  min-width: 0;
 }
 
 .settings-account__avatar {

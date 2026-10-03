@@ -344,8 +344,8 @@ describe("worker turn launcher failure recovery", () => {
 
   it("fails impossible replay before handoff and keeps the active placement reusable", async () => {
     await seedActivePlacement();
-    const manager = openSessionManager();
-    manager.appendMessage(
+    const manager = await openSessionManager();
+    await manager.appendMessageAsync(
       makeAgentAssistantMessage({
         content: [{ type: "toolCall", id: "call-replay", name: "read", arguments: {} }],
         model: "gpt-test",
@@ -362,7 +362,7 @@ describe("worker turn launcher failure recovery", () => {
         timestamp: 1,
       }),
     );
-    manager.appendMessage({
+    await manager.appendMessageAsync({
       role: "toolResult",
       toolCallId: "call-replay",
       toolName: "read",

@@ -122,6 +122,7 @@ beforeEach(() => {
     OPENCLAW_PROFILE: undefined,
     OPENCLAW_CONFIG_PATH: configPath,
     OPENCLAW_STATE_DIR: stateDir,
+    OPENCLAW_OAUTH_DIR: undefined,
     OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
     OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
     OPENCLAW_COMPATIBILITY_HOST_VERSION: undefined,
@@ -141,6 +142,156 @@ afterEach(() => {
 });
 
 describe("candidate update admission", () => {
+  it.each([
+    "cron/runs",
+    "delivery-queue",
+    "session-delivery-queue/failed",
+    "credentials/auth-profiles",
+  ])("refuses a dangling %s directory link before activation", async (relative) => {
+    const sourcePath = path.join(path.dirname(configPath), relative);
+    fs.mkdirSync(path.dirname(sourcePath), { recursive: true });
+    fs.symlinkSync(path.join(home, "missing-history"), sourcePath, "junction");
+    const originalTarget = fs.readlinkSync(sourcePath);
+    const before = snapshotFiles();
+
+    await updateAdmitCommand(contextPath);
+
+    expect(process.exitCode).toBe(3);
+    expect(readVerdict()).toMatchObject({
+      verdict: "refuse",
+      reasons: [expect.objectContaining({ code: "retired-state-format" })],
+    });
+    expect(stderr).toBe("");
+    expect(snapshotFiles()).toEqual(before);
+    expect(fs.readlinkSync(sourcePath)).toBe(originalTarget);
+  });
+
+  it.each([
+    "cron/runs",
+    "delivery-queue",
+    "session-delivery-queue/failed",
+    "credentials/auth-profiles",
+  ])(
+    "refuses an uninspectable %s path instead of permitting admission fallback",
+    async (relative) => {
+      const sourcePath = path.join(path.dirname(configPath), relative);
+      fs.mkdirSync(path.dirname(sourcePath), { recursive: true });
+      fs.writeFileSync(sourcePath, "retained operator data\n");
+      const before = snapshotFiles();
+
+      await updateAdmitCommand(contextPath);
+
+      expect(process.exitCode).toBe(3);
+      expect(readVerdict()).toMatchObject({
+        verdict: "refuse",
+        reasons: [
+          expect.objectContaining({
+            code: "retired-state-format",
+            message: expect.stringContaining("Cannot inspect potentially retired state"),
+          }),
+        ],
+      });
+      expect(stderr).toBe("");
+      expect(snapshotFiles()).toEqual(before);
+    },
+  );
+
+  it.each([
+    "cron/jobs.json",
+    "cron/jobs-state.json",
+    "cron/runs/retained.jsonl",
+    "custom-cron/jobs.json",
+    "delivery-queue/pending.json",
+    "delivery-queue/failed/failed.json",
+    "session-delivery-queue/pending.json",
+    "session-delivery-queue/failed/failed.json",
+    "delivery-queue/sent.delivered",
+    "plugins/installs.json",
+    `credentials/auth-profiles/${"b".repeat(32)}.json`,
+  ])(
+    "refuses retired %s before a published updater can activate the candidate",
+    async (relative) => {
+      const stateDir = path.dirname(configPath);
+      const custom = relative.startsWith("custom-cron/");
+      const filename = path.join(custom ? home : stateDir, relative);
+      if (custom) {
+        writeConfig({ cron: { store: filename } });
+      }
+      fs.mkdirSync(path.dirname(filename), { recursive: true });
+      fs.writeFileSync(filename, "retained operator data\n");
+      const before = snapshotFiles();
+
+      await updateAdmitCommand(contextPath);
+
+      expect(process.exitCode).toBe(3);
+      expect(readVerdict()).toMatchObject({
+        verdict: "refuse",
+        reasons: [
+          expect.objectContaining({
+            code: "retired-state-format",
+            message: expect.stringContaining("Upgrade through OpenClaw 2026.9.7"),
+          }),
+        ],
+        facts: {
+          checks: expect.arrayContaining([
+            { name: "state-format", status: "refuse", detail: expect.any(String) },
+          ]),
+        },
+      });
+      expect(stderr).toBe("");
+      expect(snapshotFiles()).toEqual(before);
+      expect(fs.existsSync(resolveOpenClawStateSqlitePath())).toBe(false);
+    },
+  );
+
+  it.each(["environment", "config", "prefixed-config", "prefixed-include"])(
+    "refuses retired OAuth selected by %s without changing the live profile",
+    async (selector) => {
+      const oauthDir = path.join(home, "external-auth");
+      const selected = { env: { vars: { OPENCLAW_OAUTH_DIR: "~/external-auth" } } };
+      if (selector === "environment") {
+        vi.stubEnv("OPENCLAW_OAUTH_DIR", oauthDir);
+      } else if (selector === "prefixed-include") {
+        fs.writeFileSync(
+          path.join(path.dirname(configPath), "auth-selector.json"),
+          JSON.stringify(selected),
+        );
+        fs.writeFileSync(configPath, 'unexpected prefix\n{"$include":"auth-selector.json"}');
+      } else {
+        fs.writeFileSync(
+          configPath,
+          `${selector === "prefixed-config" ? "unexpected prefix\n" : ""}${JSON.stringify(selected)}`,
+        );
+      }
+      fs.writeFileSync(`${configPath}.bak`, "{}\n");
+      const sidecar = path.join(oauthDir, "auth-profiles", `${"a".repeat(32)}.json`);
+      fs.mkdirSync(path.dirname(sidecar), { recursive: true });
+      fs.writeFileSync(sidecar, "unparsed retired credential bytes\n", { mode: 0o600 });
+      const before = snapshotFiles();
+
+      await updateAdmitCommand(contextPath);
+
+      expect(process.exitCode).toBe(3);
+      expect(readVerdict()).toMatchObject({
+        verdict: "refuse",
+        reasons: [
+          expect.objectContaining({
+            code: "retired-state-format",
+            message: expect.stringContaining("Upgrade through OpenClaw 2026.9.7"),
+          }),
+        ],
+        facts: {
+          checks: expect.arrayContaining([
+            { name: "state-format", status: "refuse", detail: expect.any(String) },
+          ]),
+        },
+      });
+      expect(stderr).toBe("");
+      expect(snapshotFiles()).toEqual(before);
+      expect(fs.existsSync(resolveOpenClawStateSqlitePath())).toBe(false);
+    },
+  );
+
   it("uses the explicit installed root and emits one JSON verdict without creating live state", async () => {
     const before = snapshotFiles();
     const program = new Command().name("openclaw");
@@ -254,20 +405,38 @@ describe("candidate update admission", () => {
     }
   });
 
-  it("returns invalid-config with exit 3 without repairing or quoting rejected config values", async () => {
-    writeConfig({ gateway: { port: "private-invalid-value" } });
-    const before = snapshotFiles();
-    await updateAdmitCommand(contextPath);
-    expect(readVerdict()).toMatchObject({
-      verdict: "refuse",
-      reasons: [
-        { code: "invalid-config", message: expect.any(String), nextAction: expect.any(String) },
-      ],
-    });
-    expect(stdout).not.toContain("private-invalid-value");
-    expect(process.exitCode).toBe(3);
-    expect(snapshotFiles()).toEqual(before);
-  });
+  it.each([
+    {
+      kind: "invalid value",
+      config: { gateway: { port: "private-invalid-value" } },
+      nextAction: /openclaw doctor --fix/,
+    },
+    {
+      kind: "retired format",
+      config: { heartbeat: { every: "private-invalid-value" } },
+      nextAction: /Install OpenClaw 2026\.9\.5[\s\S]*openclaw doctor --fix/,
+    },
+  ])(
+    "refuses $kind without repairing or quoting rejected config values",
+    async ({ config, nextAction }) => {
+      writeConfig(config);
+      const before = snapshotFiles();
+      await updateAdmitCommand(contextPath);
+      expect(readVerdict()).toMatchObject({
+        verdict: "refuse",
+        reasons: [
+          {
+            code: "invalid-config",
+            message: expect.any(String),
+            nextAction: expect.stringMatching(nextAction),
+          },
+        ],
+      });
+      expect(stdout).not.toContain("private-invalid-value");
+      expect(process.exitCode).toBe(3);
+      expect(snapshotFiles()).toEqual(before);
+    },
+  );
 
   it.each([
     { policy: "allowlist", verdict: "admit", exitCode: 0 },

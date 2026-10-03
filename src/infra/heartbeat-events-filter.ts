@@ -126,21 +126,26 @@ export function buildExecEventPrompt(
       `${completionInstruction} Do not mention, summarize, or reuse command output.`
     );
   }
-  if (hasMissingOutputFailure) {
-    return (
-      "An async command you ran earlier completed without captured stdout/stderr. The completion details are:\n\n" +
-      eventText +
-      "\n\n" +
-      "Tell the user the command completed without captured output and include the exit status or signal. " +
+  // Delivery eligibility permits an update; it does not make every completion news.
+  const completionInstruction = useHeartbeatResponseTool
+    ? HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS
+    : `If no user-facing update is needed, reply ${SILENT_REPLY_TOKEN} only.`;
+  const missingOutputInstruction = hasMissingOutputFailure
+    ? " If reporting a failure without captured output, include the exit status or signal. " +
       "Do not ask the user to provide missing logs, and do not try to retrieve logs from an exec/session id."
-    );
-  }
+    : "";
   return (
     "An async command you ran earlier has completed. The command completion details are:\n\n" +
     eventText +
     "\n\n" +
-    "Please relay the command output to the user in a helpful way. If the command succeeded, share the relevant output. " +
-    "If it failed, explain what went wrong."
+    "Treat this completion as an internal continuation, not a new user request. " +
+    "Reconcile it with the conversation and continue any outstanding authorized work. " +
+    "Notify the user only if this provides a requested result not yet delivered, a meaningful change to the outcome, " +
+    "or a new unresolved failure, blocker, or decision they need to know about. " +
+    "Stay silent for routine output, duplicate or superseded results, and failures already recovered from; " +
+    "do not recap them or announce that nothing changed. " +
+    completionInstruction +
+    missingOutputInstruction
   );
 }
 
@@ -158,6 +163,14 @@ function isHeartbeatNoiseEvent(evt: string): boolean {
     lower.includes("heartbeat poll") ||
     lower.includes("heartbeat wake")
   );
+}
+
+/** Context-key prefix the restart sentinel gives a continuation queued for one session. */
+export const RESTART_CONTINUATION_CONTEXT_PREFIX = "task:restart-sentinel:";
+
+/** A restart continuation event resumes a specific session's interrupted turn. */
+export function isRestartContinuationEvent(event: { contextKey?: string | null }): boolean {
+  return event.contextKey?.startsWith(RESTART_CONTINUATION_CONTEXT_PREFIX) ?? false;
 }
 
 export function isExecCompletionEvent(evt: string): boolean {

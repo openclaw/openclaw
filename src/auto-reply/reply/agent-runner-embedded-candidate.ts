@@ -36,12 +36,11 @@ import {
 
 export async function runEmbeddedFallbackCandidate(
   params: AgentFallbackCandidateCommonParams & {
+    candidateAgentRuntime: string;
     effectiveRun: AgentFallbackCandidateCommonParams["candidateRun"];
     directBlockDeliveries: DirectBlockDelivery[];
-    sessionRuntimeOverride?: string;
     getLifecycleGeneration: () => string;
     onLifecycleGeneration: (generation: string) => void;
-    allowTransientCooldownProbe?: boolean;
     notifyUserAboutCompaction: boolean;
     messageToolDeliveryState: MessageToolDeliveryState;
     onCompactionFacts: (facts: {
@@ -74,12 +73,13 @@ export async function runEmbeddedFallbackCandidate(
     promptCacheKey: turn.opts?.promptCacheKey,
     allowTransientCooldownProbe: params.allowTransientCooldownProbe,
     model: params.model,
+    agentRuntime: params.candidateAgentRuntime,
   });
   if (sourceReplyDeliveryRuntime) {
     bindSourceReplyDeliveryRuntime(runBaseParams, sourceReplyDeliveryRuntime);
   }
-  const agentHarnessPolicy = params.sessionRuntimeOverride
-    ? ({ runtime: params.sessionRuntimeOverride, runtimeSource: "model" } as const)
+  const agentHarnessPolicy = params.agentHarnessRuntimeOverride
+    ? ({ runtime: params.agentHarnessRuntimeOverride, runtimeSource: "model" } as const)
     : resolveAgentHarnessPolicy({
         provider: params.provider,
         modelId: params.model,
@@ -96,7 +96,7 @@ export async function runEmbeddedFallbackCandidate(
     workspaceDir: turn.followupRun.run.workspaceDir,
   });
   const embeddedRunHarnessOverride =
-    params.sessionRuntimeOverride ??
+    params.agentHarnessRuntimeOverride ??
     (agentHarnessPolicy.runtime === "openclaw" && embeddedRunProvider !== params.provider
       ? "openclaw"
       : undefined);

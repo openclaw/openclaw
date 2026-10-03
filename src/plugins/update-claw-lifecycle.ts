@@ -1,7 +1,6 @@
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
 import { markClawPackageIndependentlyOwned } from "../state/claw-package-adoption.js";
 import { withClawPackageLifecycleLease } from "../state/claw-package-lifecycle-lease.js";
-import { installPluginFromNpmSpec } from "./install.js";
 
 type ClawHubInstallRecord = {
   source?: string;
@@ -19,13 +18,6 @@ export function resolveRecordedClawHubPackage(record: ClawHubInstallRecord): str
     parseClawHubPluginSpec(record.spec ?? "")?.name ??
     parseClawHubPluginSpec(record.resolvedSpec ?? "")?.name
   );
-}
-
-export function createTrackedNpmUpdateInstaller(onRun: () => void) {
-  return async (params: Parameters<typeof installPluginFromNpmSpec>[0]) => {
-    onRun();
-    return await installPluginFromNpmSpec(params);
-  };
 }
 
 export async function runPluginUpdateWithClawHubLease<T>(params: {

@@ -2,7 +2,12 @@ import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  loadGlobalRuntimeDotEnvFilesAsyncCore,
+  loadGlobalRuntimeDotEnvFilesCore,
+} from "./dotenv-global-core.js";
 import { readDotEnvFile } from "./dotenv-global.js";
+import { fsSafeEnvInput } from "./fs-safe-env.js";
 
 const logWarnSpy = vi.hoisted(() => vi.fn());
 
@@ -77,3 +82,25 @@ describe("readDotEnvFile", () => {
     );
   });
 });
+
+it.each(["sync", "async"] as const)(
+  "maps legacy modes from %s dotenv loads without blocking a later native setting",
+  async (mode) => {
+    const home = tmpDir();
+    const stateEnvPath = join(home, "runtime.env");
+    const env: NodeJS.ProcessEnv = { HOME: home, OPENCLAW_STATE_DIR: home };
+    const load = () =>
+      mode === "sync"
+        ? loadGlobalRuntimeDotEnvFilesCore({ env, stateEnvPath })
+        : loadGlobalRuntimeDotEnvFilesAsyncCore({ env, stateEnvPath });
+    writeFileSync(stateEnvPath, "FS_SAFE_PYTHON_MODE=require\n");
+    const initial = await load();
+    expect(env.OPENCLAW_FS_SAFE_NATIVE_MODE).toBe("require");
+    expect(initial.stateEnvAppliedKeys).toEqual(["FS_SAFE_PYTHON_MODE"]);
+    expect(fsSafeEnvInput(env).OPENCLAW_FS_SAFE_NATIVE_MODE).toBeUndefined();
+    writeFileSync(stateEnvPath, "OPENCLAW_FS_SAFE_NATIVE_MODE=off\n");
+    await load();
+    expect(env.OPENCLAW_FS_SAFE_NATIVE_MODE).toBe("off");
+    expect(fsSafeEnvInput(env).OPENCLAW_FS_SAFE_NATIVE_MODE).toBe("off");
+  },
+);

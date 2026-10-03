@@ -52,23 +52,16 @@ import {
 } from "openclaw/plugin-sdk/text-chunking";
 import { textResult } from "openclaw/plugin-sdk/tool-results";
 import { mattermostApprovalAuth } from "./approval-auth.js";
-import {
-  describeMattermostAccount,
-  mattermostConfigAdapter,
-  mattermostMeta as meta,
-  normalizeMattermostAllowEntry as normalizeAllowEntry,
-  resolveMattermostGatewayAuthBypassPaths,
-} from "./channel-config-shared.js";
+import { normalizeMattermostAllowEntry as normalizeAllowEntry } from "./channel-config-shared.js";
 import {
   createMattermostDeliveryProgressReporter,
   toMattermostOutboundResult,
 } from "./channel-send-result.js";
-import { MattermostChannelConfigSchema } from "./config-surface.js";
+import { mattermostSetupPlugin } from "./channel.setup.js";
 import { mattermostDoctor } from "./doctor.js";
 import { resolveMattermostGroupRequireMention } from "./group-mentions.js";
 import {
   inspectMattermostAccount,
-  isMattermostConfigured,
   listMattermostAccountIds,
   resolveDefaultMattermostAccountId,
   resolveMattermostAccount,
@@ -85,8 +78,6 @@ import {
 } from "./normalize.js";
 import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
 import { resolveMattermostOutboundSessionRoute } from "./session-route.js";
-import { mattermostSetupContract } from "./setup-core.js";
-import { mattermostSetupWizard } from "./setup-surface.js";
 import type { MattermostConfig } from "./types.js";
 
 const loadMattermostChannelRuntime = createLazyRuntimeModule(() => import("./channel.runtime.js"));
@@ -516,7 +507,7 @@ function resolveMattermostSendAttachmentMedia(params: Record<string, unknown>): 
   return mediaUrls[0];
 }
 
-async function sendMattermostMedia(
+async function sendMattermostContent(
   ctx: ChannelOutboundContext,
   content: { text: string; mediaUrl?: string; buttons?: unknown[]; attachmentText?: string } = ctx,
 ) {
@@ -599,7 +590,7 @@ const mattermostOutbound: ChannelOutboundAdapter = {
       })
         .map((url) => url.trim())
         .find(Boolean);
-      const result = await sendMattermostMedia(ctx, {
+      const result = await sendMattermostContent(ctx, {
         text: ctx.payload.text ?? ctx.text,
         mediaUrl,
         buttons,
@@ -623,20 +614,8 @@ const mattermostOutbound: ChannelOutboundAdapter = {
   },
   ...createAttachedChannelResultAdapter({
     channel: "mattermost",
-    sendText: async (ctx) =>
-      toMattermostOutboundResult(
-        await (
-          await loadMattermostChannelRuntime()
-        ).sendMessageMattermost(ctx.to, ctx.text, {
-          cfg: ctx.cfg,
-          accountId: ctx.accountId ?? undefined,
-          replyToId: ctx.replyToId ?? (ctx.threadId != null ? String(ctx.threadId) : undefined),
-          assertDirectAdapterHandoff: ctx.assertDirectAdapterHandoff,
-          onPlatformSendDispatch: ctx.onPlatformSendDispatch,
-          onDeliveryResult: createMattermostDeliveryProgressReporter(ctx.onDeliveryResult),
-        }),
-      ),
-    sendMedia: sendMattermostMedia,
+    sendText: (ctx) => sendMattermostContent(ctx, { text: ctx.text }),
+    sendMedia: sendMattermostContent,
   }),
 };
 
@@ -661,36 +640,9 @@ const mattermostMessageAdapter = createChannelMessageAdapterFromOutbound({
 
 export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = createChatChannelPlugin({
   base: {
-    id: "mattermost",
-    meta: {
-      ...meta,
-    },
-    setupContract: mattermostSetupContract,
-    setupWizard: mattermostSetupWizard,
-    capabilities: {
-      chatTypes: ["direct", "channel", "group", "thread"],
-      reactions: true,
-      threads: true,
-      media: true,
-      nativeCommands: true,
-    },
+    ...mattermostSetupPlugin,
     streaming: {
       blockStreamingCoalesceDefaults: { minChars: 1500, idleMs: 1000 },
-    },
-    reload: {
-      configPrefixes: ["channels.mattermost"],
-      noopPrefixes: ["messages.inbound"],
-      /**
-       * accounts.default is promoted; named resolution merges only channel-wide fields
-       * plus the selected account. Monitor debounce and durable ingress use accountId.
-       */
-      accountScopedRestart: true,
-    },
-    configSchema: MattermostChannelConfigSchema,
-    config: {
-      ...mattermostConfigAdapter,
-      isConfigured: isMattermostConfigured,
-      describeAccount: describeMattermostAccount,
     },
     approvalCapability: mattermostApprovalAuth,
     doctor: mattermostDoctor,
@@ -791,9 +743,7 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
       }),
     }),
     gateway: {
-      // Same function as the public gateway-auth artifact so the pre-plugin
-      // fast path and the loaded plugin cannot drift (pinned by contract test).
-      resolveGatewayAuthBypassPaths: resolveMattermostGatewayAuthBypassPaths,
+      ...mattermostSetupPlugin.gateway,
       startAccount: async (ctx) => {
         const account = ctx.account;
         const statusSink = createAccountStatusSink({

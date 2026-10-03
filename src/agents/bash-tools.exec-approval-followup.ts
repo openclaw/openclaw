@@ -206,10 +206,6 @@ function formatDirectExecApprovalFollowupText(
   );
 }
 
-function buildSessionResumeFallbackPrefix(): string {
-  return "Automatic session resume failed, so sending the status directly.\n\n";
-}
-
 function readGatewayStatus(value: unknown): string | undefined {
   return value && typeof value === "object" && !Array.isArray(value)
     ? normalizeOptionalString((value as { status?: unknown }).status)
@@ -383,7 +379,7 @@ async function sendDirectFollowupFallback(params: {
 
   const prefix =
     !params.allowDenied && shouldPrefixDirectFollowupWithSessionResumeFailure(params)
-      ? buildSessionResumeFallbackPrefix()
+      ? "Automatic session resume failed, so sending the status directly.\n\n"
       : "";
   const availableBodyUnits =
     DIRECT_FOLLOWUP_MAX_UTF16_UNITS - prefix.length - DIRECT_FOLLOWUP_TRUNCATION_MARKER.length - 1;

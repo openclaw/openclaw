@@ -101,8 +101,16 @@ const {
 
 const { touch: touchStateDatabase, retain: retainOpenClawStateDatabaseForIdle } =
   createStateDatabaseIdleRetirement(stateDatabaseLifecycle, retireOpenClawStateDatabaseHandle);
-const { register: registerStateDatabaseWalAdmission, readHealth: readOpenClawStateWalHealth } =
-  createStateDatabaseWalOwner(stateDatabaseLifecycle, retainOpenClawStateDatabaseForIdle);
+const {
+  register: registerStateDatabaseWalAdmission,
+  readHealth: readOpenClawStateWalHealth,
+  ownRetirement: ownStateDatabaseRetirement,
+  stop: stopOpenClawStateDatabaseMaintenance,
+} = createStateDatabaseWalOwner(
+  stateDatabaseLifecycle,
+  retainOpenClawStateDatabaseForIdle,
+  requireOpenClawStateDatabaseIdentity,
+);
 export { readOpenClawStateWalHealth, retainOpenClawStateDatabaseForIdle };
 
 function notifyOpenClawStateDatabaseLifecycle(event: OpenClawStateDatabaseLifecycleEvent): void {
@@ -184,7 +192,7 @@ function ownMaintenanceStateDatabaseHandle(database: StateDatabaseHandle): void 
       cachedDatabases.get(database.path) === database ||
       retainedDatabaseHandles.get(database.db) === database
     ) {
-      await cancelSqliteWalWriteAdmission(database.db);
+      await database.walMaintenance?.stop();
       if (
         isOpenClawDatabaseMaintenanceResourceOwned(database.db, closingScope) &&
         (cachedDatabases.get(database.path) === database ||
@@ -217,6 +225,7 @@ export const {
   capture: (pathname) => asyncResources.capture(pathname),
   retire: retireOpenClawStateDatabaseHandle,
   retainFailed: retainStateDatabaseClose,
+  ownRetirement: ownStateDatabaseRetirement,
   touch: touchStateDatabase,
 });
 
@@ -590,7 +599,6 @@ export const captureOpenClawStateDatabaseReadAdmission = asyncResources.capture;
 export function publishOpenClawStateDatabaseWorkerAdmission(
   admission: OpenClawStateDatabaseReadAdmission,
 ): void {
-  admission.assertCurrent();
   asyncResources.publish(admission.databasePath);
   admission.assertCurrent();
 }
@@ -601,18 +609,20 @@ export function closeOpenClawStateDatabaseByPathAsync(
   options?: OpenClawStateDatabaseCloseOptions,
 ): Promise<boolean> {
   const resolvedPath = path.resolve(pathname);
-  return asyncResources.close(resolvedPath, (identity) =>
-    retireOpenClawStateDatabaseHandles(resolvedPath, options, identity),
-  );
+  return asyncResources.close(resolvedPath, async (identity) => {
+    await stopOpenClawStateDatabaseMaintenance(resolvedPath, identity);
+    return retireOpenClawStateDatabaseHandles(resolvedPath, options, identity);
+  });
 }
 
 /** Orderly lifecycle close; synchronous close remains native/exit cleanup only. */
 export async function closeOpenClawStateDatabaseAsync(
   options?: OpenClawStateDatabaseCloseOptions,
 ): Promise<void> {
-  await asyncResources.close(undefined, () =>
-    retireOpenClawStateDatabaseHandles(undefined, options),
-  );
+  await asyncResources.close(undefined, async () => {
+    await stopOpenClawStateDatabaseMaintenance();
+    return retireOpenClawStateDatabaseHandles(undefined, options);
+  });
 }
 
 /** Test whether a cached shared state database handle is still open, optionally at one path. */

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../test/helpers/promise.js";
 import { CONTROL_UI_BUILD_INFO } from "../build-info.ts";
 import { i18n } from "../i18n/index.ts";
@@ -50,6 +50,10 @@ function memoryStorage(initial: Record<string, string> = {}) {
     setItem: (key: string, value: string) => void store.set(key, value),
   };
 }
+
+beforeEach(() => {
+  vi.spyOn(Math, "random").mockReturnValue(0);
+});
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -146,6 +150,31 @@ describe("document reload ownership", () => {
 });
 
 describe("scheduleStaleChunkReload", () => {
+  it.each([
+    { draw: 0.25, delayMs: 500 },
+    { draw: 0.75, delayMs: 1_500 },
+  ])("spreads build recovery once per target: %j", async ({ draw, delayMs }) => {
+    vi.useFakeTimers();
+    vi.mocked(Math.random).mockReturnValue(draw);
+    const reload = vi.fn();
+    const storage = memoryStorage();
+    const fetchMock = stubDocumentFetch(new Response(null, { status: 200 }));
+    const recover = () => scheduleStaleChunkReload({ buildId: "new-build", storage, reload });
+    const first = recover();
+    expect(fetchMock).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(100);
+    const joined = recover();
+    await vi.advanceTimersByTimeAsync(delayMs - 101);
+    expect(fetchMock).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(Promise.all([first, joined])).resolves.toEqual([true, false]);
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(reload).toHaveBeenCalledOnce();
+    expect(storage.getItem(GUARD_KEY)).toBe("new-build");
+    await expect(recover()).resolves.toBe(false);
+    expect(reload).toHaveBeenCalledOnce();
+  });
+
   it("keeps generic stale-chunk recovery single-shot after a failed probe", async () => {
     vi.useFakeTimers();
     const reload = vi.fn();

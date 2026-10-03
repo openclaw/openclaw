@@ -16,6 +16,7 @@ import { hasErrnoCode } from "../infra/errors.js";
 import { FsSafeError, root as fsSafeRoot } from "../infra/fs-safe.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { isPathInside } from "../infra/path-guards.js";
+import { resolveRuntimeArgs } from "../infra/runtime-worker-url.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { KeyedAsyncQueue } from "../plugin-sdk/keyed-async-queue.js";
 import {
@@ -50,19 +51,16 @@ const BUNDLE_DELETE_BATCH = 16;
 const WORKER_PREWARM_TIMEOUT_MS = 10 * 60_000;
 const execFileAsync = promisify(execFile);
 
-async function responseBody(response: IncomingMessage, maxBytes = 64 * 1024): Promise<string> {
-  const chunks: Buffer[] = [];
+async function drainErrorResponse(response: IncomingMessage): Promise<void> {
   let total = 0;
   for await (const value of response) {
     const chunk = Buffer.isBuffer(value) ? value : Buffer.from(value);
     total += chunk.byteLength;
-    if (total > maxBytes) {
+    if (total > 64 * 1024) {
       response.destroy(new Error("worker bundle transfer response exceeded its byte limit"));
       throw new Error("worker bundle transfer response exceeded its byte limit");
     }
-    chunks.push(chunk);
   }
-  return Buffer.concat(chunks).toString("utf8");
 }
 
 async function writeBundleArchive(params: {
@@ -148,7 +146,7 @@ async function acquireBundle(params: {
     },
     async (response) => {
       if (response.statusCode !== 200) {
-        await responseBody(response);
+        await drainErrorResponse(response);
         throw new Error(`gateway returned ${response.statusCode ?? 0}`);
       }
       const contentLength = Number(response.headers["content-length"]);
@@ -274,7 +272,11 @@ export class NodeWorkerBundleInstaller {
     try {
       await execFileAsync(
         process.execPath,
-        [path.join(bundleDir, WORKER_BUNDLE_ENTRY_PATH), "--internal-worker-prewarm"],
+        [
+          ...resolveRuntimeArgs(),
+          path.join(bundleDir, WORKER_BUNDLE_ENTRY_PATH),
+          "--internal-worker-prewarm",
+        ],
         {
           cwd: bundleDir,
           env: this.#workerEnv,

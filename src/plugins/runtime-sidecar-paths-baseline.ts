@@ -6,9 +6,6 @@ import { listBundledPluginMetadata } from "./bundled-plugin-metadata.js";
 
 function collectRootPackageExcludedRuntimeSidecarPluginDirs(rootDir: string): Set<string> {
   const packageJsonPath = path.join(rootDir, "package.json");
-  if (!fs.existsSync(packageJsonPath)) {
-    return new Set();
-  }
   const packageJson = tryReadJsonSync<{ files?: unknown }>(packageJsonPath);
   if (!Array.isArray(packageJson?.files)) {
     return new Set();

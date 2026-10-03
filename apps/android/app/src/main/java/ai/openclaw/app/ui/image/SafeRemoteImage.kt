@@ -62,7 +62,6 @@ internal class SafeWebFetcher(
       var currentUrl =
         originalUrl
           .toHttpUrlOrNull()
-          ?.takeIf(::isSafeWebUrl)
           ?.takeIf(hostPolicy)
           ?: return@withContext null
       val deadlineNanos = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMillis)
@@ -223,9 +222,7 @@ internal fun resolveRedirect(
 ): HttpUrl? =
   location
     ?.let(baseUrl::resolve)
-    ?.takeIf { isSafeWebUrl(it) && hostPolicy(it) }
-
-private fun isSafeWebUrl(url: HttpUrl): Boolean = url.scheme == "http" || url.scheme == "https"
+    ?.takeIf(hostPolicy)
 
 internal fun isPubliclyRoutableHost(url: HttpUrl): Boolean {
   val host = url.host.trimEnd('.').lowercase(Locale.US)

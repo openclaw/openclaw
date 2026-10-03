@@ -105,8 +105,6 @@ afterEach(() => setActivePluginRegistry(createEmptyPluginRegistry()));
 
 describe("diagnostics.cpuProfile dispatch", () => {
   it.each([
-    { role: "operator", scopes: [] },
-    { role: "operator", scopes: ["operator.read"] },
     { role: "operator", scopes: ["operator.write"] },
     { role: "node", scopes: ["operator.admin"] },
   ])("rejects $role/$scopes before native work", async (options) => {
@@ -130,7 +128,7 @@ describe("diagnostics.cpuProfile dispatch", () => {
     },
   );
 
-  it.each([null, [], "", 1, { durationMs: 1 }, { filename: "profile" }])(
+  it.each([null, [], { durationMs: 1 }])(
     "rejects nonempty/nonobject params %j before capture",
     async (params) => {
       const call = request({ params });

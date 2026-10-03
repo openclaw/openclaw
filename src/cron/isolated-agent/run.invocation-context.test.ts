@@ -1,5 +1,5 @@
 // Invocation ownership is independent of a persistent automation's transcript identity.
-import { assert, afterEach, beforeEach, describe, expect, it } from "vitest";
+import { assert, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { getAgentRunContext } from "../../infra/agent-run-registry.js";
 import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
@@ -74,6 +74,35 @@ describe("runCronIsolatedAgentTurn invocation ownership", () => {
     restoreFastTestEnv(previousFastTestEnv);
   });
 
+  it("retains the selected owner while reusing a global session", async () => {
+    mockRunCronFallbackPassthrough();
+    const session = makeCronSession({ isNewSession: false });
+    resolveCronSessionMock.mockReturnValue(session);
+    let admittedOwner: { sessionKey?: string; agentId?: string } | undefined;
+    runEmbeddedAgentMock.mockImplementationOnce(async (runParams) => {
+      const admitted = getAgentRunContext(runParams.runId);
+      admittedOwner = { sessionKey: admitted?.sessionKey, agentId: admitted?.agentId };
+      return { payloads: [{ text: "test output" }], meta: { agentMeta: {} } };
+    });
+    const result = await runCronIsolatedAgentTurn(
+      makeIsolatedAgentParamsFixture({
+        cfg: {
+          agents: { entries: { main: { default: true }, research: {} } },
+          session: { scope: "global" },
+        },
+        agentId: "research",
+        sessionKey: "main",
+        job: makeIsolatedAgentJobFixture({
+          sessionTarget: "session:main",
+          delivery: { mode: "none" },
+        }),
+      }),
+    );
+    expect(result.status).toBe("ok");
+    expect(result.sessionKey).toBe("global");
+    expect(admittedOwner).toEqual({ sessionKey: "global", agentId: "research" });
+  });
+
   it("releases invocation context without clearing an existing physical-id context", async () => {
     mockRunCronFallbackPassthrough();
     const initialSessionEntry = { retained: true };
@@ -106,6 +135,23 @@ describe("runCronIsolatedAgentTurn invocation ownership", () => {
     expect(getAgentRunContext("test-session-id")).toEqual(existingContext);
     expect(cronSession.store).toEqual({});
     clearAgentRunContext("test-session-id");
+  });
+
+  it("reports the invocation run id that owns the embedded run to the cron watchdog", async () => {
+    mockRunCronFallbackPassthrough();
+    const onExecutionStarted = vi.fn();
+    let invocationRunId = "";
+    runEmbeddedAgentMock.mockImplementationOnce(async (runParams) => {
+      invocationRunId = expectCronInvocationContext(runParams);
+      await runParams.onExecutionStarted?.();
+      return { payloads: [{ text: "test output" }], meta: { agentMeta: {} } };
+    });
+
+    await runCronIsolatedAgentTurn({ ...makeParams(), onExecutionStarted });
+
+    expect(onExecutionStarted).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ sessionId: "test-session-id", runId: invocationRunId }),
+    );
   });
 
   it("does not let old cron cleanup clear a newer same-id run context", async () => {

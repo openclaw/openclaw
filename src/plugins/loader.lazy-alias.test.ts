@@ -334,7 +334,7 @@ describe("native plugin alias preparation", () => {
     },
   );
 
-  it("captures private QA denial before late use even if ambient authorization changes", () => {
+  it("captures private QA denial before late use even if ambient authorization changes", async () => {
     const f = fixture();
     writeFile(
       f.root,
@@ -344,11 +344,18 @@ describe("native plugin alias preparation", () => {
     writeFile(f.root, "dist/plugin-sdk/qa-runtime.js", "export const privateValue = true;");
     vi.stubEnv("OPENCLAW_ENABLE_PRIVATE_QA_CLI", "0");
     const load = createPluginModuleLoader({ devSourceRoot: f.root, pluginSdkResolution: "dist" });
-    const metadata = load(f.entry) as { load: (name: string) => unknown };
+    const metadata = load(f.entry) as {
+      load: (name: string) => unknown;
+      loadEsm: (name: string) => Promise<unknown>;
+    };
     vi.stubEnv("OPENCLAW_ENABLE_PRIVATE_QA_CLI", "1");
     expect(() => metadata.load("@openclaw/plugin-sdk/qa-runtime")).toThrow();
+    await expect(metadata.loadEsm("@openclaw/plugin-sdk/qa-runtime")).rejects.toThrow();
     installOpenClawPluginSdkNativeResolver({ pluginModulePath: f.entry, devSourceRoot: f.root });
     expect(metadata.load("@openclaw/plugin-sdk/qa-runtime")).toMatchObject({ privateValue: true });
+    await expect(metadata.loadEsm("@openclaw/plugin-sdk/qa-runtime")).resolves.toMatchObject({
+      privateValue: true,
+    });
   });
 
   it("does not reuse a bundled private alias grant for an external plugin", () => {

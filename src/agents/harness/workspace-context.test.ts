@@ -51,6 +51,7 @@ describe("agent workspace context preparation", () => {
       { path: path.join(projectedWorkspace, "USER.md"), content: "Shared preferences." },
     ]);
     expect(context.personaInstructions).toContain("Shared preferences.");
+    expect(context.sharedPersonaInstructions).toContain("Shared preferences.");
     expect(context.personaInstructions).toContain(
       "Internalize and follow them accordingly.\n\n<AGENT_SOUL>",
     );
@@ -85,6 +86,13 @@ describe("agent workspace context preparation", () => {
         projectPath: (filePath) =>
           path.join(projectedWorkspace, path.relative(workspaceDir, filePath)),
       });
+      const shared = context.sharedPersonaInstructions ?? "";
+      expect(shared).toContain("Shared preferences.");
+      expect(shared).toContain("Agent identity.");
+      expect(shared).toContain("Agent voice.");
+      expect(shared).not.toContain("alice preferences.");
+      expect(shared).not.toContain("bob preferences.");
+      expect(shared).not.toContain("belongs to this session");
       const turn = context.personaInstructions ?? "";
       expect(turn).toContain("<AGENT_SOUL>");
       expect(turn).toContain("</AGENT_SOUL>");

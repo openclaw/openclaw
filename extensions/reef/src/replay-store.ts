@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { gcm } from "@noble/ciphers/aes.js";
 import { concatBytes, randomBytes } from "@noble/hashes/utils.js";
+import { createAsyncLock } from "openclaw/plugin-sdk/async-lock-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import type {
   PluginStateKeyedStore,
@@ -149,7 +150,7 @@ export class ReefSqliteReplayStore implements ReplayStore {
     | Required<Pick<PluginStateKeyedStore<ReefReplayRecord>, "observe" | "compareAndApply">>
     | undefined;
   readonly #claimOwners = new Map<string, string>();
-  #pending = Promise.resolve();
+  readonly #enqueue = createAsyncLock();
 
   constructor(
     runtime: PluginRuntime,
@@ -179,15 +180,6 @@ export class ReefSqliteReplayStore implements ReplayStore {
       // and owner publication. Available worker failures never select this path.
       this.#legacy = runtime.state.openSyncKeyedStore<ReefReplayRecord>(options);
     }
-  }
-
-  #enqueue<T>(operation: () => Promise<T>): Promise<T> {
-    const pending = this.#pending.then(operation);
-    this.#pending = pending.then(
-      () => undefined,
-      () => undefined,
-    );
-    return pending;
   }
 
   #mutate<T>(key: string, prepare: () => ReplayMutation<T>): T | Promise<T> {

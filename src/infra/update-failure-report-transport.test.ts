@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
+import { useStateDatabaseTempDirs } from "../test-utils/state-database-temp-dirs.js";
 import { submitGithubIssue, type RunGithubCli } from "./github-issue.js";
 import {
   finalizeUpdateFailureReportReceipt,
@@ -13,15 +13,13 @@ import {
 } from "./restart-sentinel.js";
 import { prepareUpdateFailureReport, submitUpdateFailureReport } from "./update-failure-report.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useStateDatabaseTempDirs();
 const issueUrl = "https://github.com/openclaw/openclaw/issues/123";
 const authSuccess: Awaited<ReturnType<RunGithubCli>> = {
   started: true,
   status: 0,
   stdout: Buffer.alloc(0),
 };
-
-afterEach(() => vi.restoreAllMocks());
 
 async function setup() {
   const stateDir = tempDirs.make("openclaw-report-transport-");

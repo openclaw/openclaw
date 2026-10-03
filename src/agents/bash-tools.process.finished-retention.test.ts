@@ -1,8 +1,9 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { afterEach, expect, test, vi } from "vitest";
+import { afterEach, expect, test } from "vitest";
 import {
   getActiveBackgroundExecSessionCount,
   listFinishedSessions,
+  waitForExecScope,
 } from "./bash-process-registry.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { createExecTool } from "./bash-tools.exec-run.js";
@@ -36,12 +37,8 @@ test("real completed background commands retain only the newest fully readable p
     sessionIds.push(expectDefined(details.sessionId, "background session"));
   }
 
-  await vi.waitFor(
-    () => {
-      expect(getActiveBackgroundExecSessionCount()).toBe(0);
-    },
-    { timeout: 20_000, interval: 25 },
-  );
+  await waitForExecScope(scopeKey);
+  expect(getActiveBackgroundExecSessionCount()).toBe(0);
 
   const finishedSessions = listFinishedSessions();
   const listed = await call("list");

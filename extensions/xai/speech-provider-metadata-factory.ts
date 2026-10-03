@@ -2,6 +2,7 @@ import type { PluginCapabilityCatalogContext } from "openclaw/plugin-sdk/plugin-
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import type {
   SpeechDirectiveTokenParseContext,
+  SpeechDirectiveTokenParseResult,
   SpeechProviderConfig,
   SpeechProviderOverrides,
   SpeechProviderPlugin,
@@ -135,11 +136,9 @@ export function resolveDirectXaiAudioApiKey(configApiKey?: string): string | und
   return normalizeOptionalString(configApiKey) ?? normalizeOptionalString(process.env.XAI_API_KEY);
 }
 
-function parseXaiSpeechDirectiveToken(ctx: SpeechDirectiveTokenParseContext): {
-  handled: boolean;
-  overrides?: SpeechProviderOverrides;
-  warnings?: string[];
-} {
+function parseXaiSpeechDirectiveToken(
+  ctx: SpeechDirectiveTokenParseContext,
+): SpeechDirectiveTokenParseResult {
   switch (ctx.key) {
     case "voice":
     case "voice_id":

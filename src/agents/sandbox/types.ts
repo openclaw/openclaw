@@ -5,7 +5,11 @@ import type { SandboxDockerConfig } from "./types.docker.js";
 
 export type { SandboxDockerConfig } from "./types.docker.js";
 
+/** In-process provenance, bound to the original resolved allowlist; never serialized. */
+export const SANDBOX_DEFAULT_TOOL_ALLOW = Symbol.for("openclaw.sandbox.defaultToolAllow");
+
 export type SandboxToolPolicy = {
+  [SANDBOX_DEFAULT_TOOL_ALLOW]?: readonly string[];
   allow?: string[];
   deny?: string[];
 };
@@ -19,7 +23,7 @@ export type SandboxToolPolicySource = {
   key: string;
 };
 
-export type SandboxToolPolicyResolved = {
+export type SandboxToolPolicyResolved = SandboxToolPolicy & {
   allow: string[];
   deny: string[];
   sources: {

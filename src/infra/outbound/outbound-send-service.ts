@@ -432,13 +432,9 @@ export async function executePollAction(params: {
   const result: MessagePollResult = await sendPoll({
     ...corePoll,
     cfg: params.ctx.cfg,
-    durationSeconds: corePoll.durationSeconds ?? undefined,
-    durationHours: corePoll.durationHours ?? undefined,
     channel: params.ctx.channel,
     accountId: params.ctx.accountId ?? undefined,
-    threadId: corePoll.threadId ?? undefined,
     silent: params.ctx.silent ?? undefined,
-    isAnonymous: corePoll.isAnonymous ?? undefined,
     dryRun: params.ctx.dryRun,
     gateway: params.ctx.gateway,
     idempotencyKey: params.ctx.idempotencyKey,

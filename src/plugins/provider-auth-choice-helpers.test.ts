@@ -75,6 +75,28 @@ describe("applyProviderAuthConfigPatch", () => {
     expect(Object.getPrototypeOf(next).polluted).toBeUndefined();
   });
 
+  it.each(["__proto__", "constructor", "prototype"])(
+    "ignores undefined deletions under blocked %s keys without mutating input",
+    (blockedKey) => {
+      const config = { [blockedKey]: { retained: "before" } };
+      const baseLocal = {
+        plugins: { entries: { example: { config } } },
+      } satisfies OpenClawConfig;
+      const patch = {
+        plugins: {
+          entries: {
+            example: { config: { [blockedKey]: { retained: undefined } } },
+          },
+        },
+      };
+
+      const next = applyProviderAuthConfigPatch(baseLocal, patch);
+
+      expect(config[blockedKey]).toEqual({ retained: "before" });
+      expect(next.plugins?.entries?.example?.config?.[blockedKey]).toEqual({ retained: "before" });
+    },
+  );
+
   it("drops prototype-pollution keys from opt-in model replacement", () => {
     const patch = JSON.parse(
       '{"agents":{"defaults":{"models":{"__proto__":{"polluted":true},"claude-cli/claude-sonnet-4-6":{"alias":"Sonnet","params":{"constructor":{"polluted":true},"maxTokens":12000}}}}}}',
@@ -108,13 +130,14 @@ describe("applyProviderAuthConfigPatch", () => {
     const replacement = JSON.parse(
       '[{"safe":"after","__proto__":{"polluted":true},"constructor":{"polluted":true},"nested":{"prototype":{"polluted":true},"keep":true}}]',
     );
+    replacement[0].optional = undefined;
     const patch = {
       plugins: {
         entries: {
           example: {
             config: {
               merged: { replace: "after" },
-              scalar: { added: true },
+              scalar: { added: true, removed: undefined },
               array: { added: true },
               nullified: null,
               replaced: replacement,
@@ -127,12 +150,12 @@ describe("applyProviderAuthConfigPatch", () => {
 
     const next = applyProviderAuthConfigPatch(baseLocal, patch);
 
-    expect(next.plugins?.entries?.example?.config).toEqual({
+    expect(next.plugins?.entries?.example?.config).toStrictEqual({
       merged: { keep: "base", replace: "after" },
       scalar: { added: true },
       array: { added: true },
       nullified: null,
-      replaced: [{ safe: "after", nested: { keep: true } }],
+      replaced: [{ safe: "after", nested: { keep: true }, optional: undefined }],
     });
     expect(baseLocal).toEqual(before);
     expect(Object.hasOwn(replacement[0], "__proto__")).toBe(true);

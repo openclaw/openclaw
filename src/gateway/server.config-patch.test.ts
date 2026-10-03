@@ -216,7 +216,7 @@ describe("gateway config methods", () => {
       const original = await getCurrentConfigObject();
       const model = "openai/gpt-4.1-mini";
       const agents = {
-        entries: { main: { default: true } },
+        entries: { main: {} },
         defaults: { model: { primary: "openai/gpt-4.1" } },
       };
       const includePath = path.join(path.dirname(original.path), "audit-include.json");
@@ -1591,8 +1591,9 @@ describe("gateway noncommitting config RPCs", () => {
         const agents = requireConfigObject(rosterConfig.agents ?? {}, "agents config");
         rosterConfig.agents = {
           ...agents,
+          ownership: "explicit",
           entries: {
-            main: { default: true },
+            main: {},
             worker: { workspace: "/srv/worker" },
           },
         };

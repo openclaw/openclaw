@@ -1,11 +1,11 @@
 import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contract.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
-import type { DeliveryQueueWorkerOperations } from "../delivery-queue.worker-contract.js";
 import { ackDeliveryInDatabase } from "./delivery-queue-ack.kernel.js";
 import { OUTBOUND_DELIVERY_QUEUE_NAME } from "./delivery-queue-namespaces.js";
+import type { AckDeliveryOptions } from "./delivery-queue-settlement.types.js";
 
 export function executeDeliveryQueueAck(
-  input: DeliveryQueueWorkerOperations["deliveryQueue.ack"]["input"],
+  input: { id: string; stateDir: string; options?: AckDeliveryOptions },
   writeOptions: { database: OpenClawStateDatabase; env: NodeJS.ProcessEnv },
 ): string[] {
   const { id, stateDir, options } = input;

@@ -1,6 +1,6 @@
 import type { PluginCompatRecord } from "./types.js";
 
-type SeedFields = "code" | "owner" | "removeAfter" | "removalGate" | "replacement";
+type SeedFields = "code" | "owner" | "removalGate" | "replacement";
 type PluginSdkSubpathSeed = Pick<PluginCompatRecord, SeedFields> &
   Record<"subpath", string> &
   Partial<Pick<PluginCompatRecord, "status" | "releaseNote">>;
@@ -18,11 +18,12 @@ const PLUGIN_SDK_SUBPATH_SEEDS = [
   {
     code: "plugin-sdk-config-runtime-subpath",
     subpath: "config-runtime",
-    status: "removal-pending",
+    status: "removed",
     owner: "config",
-    removeAfter: "2026-10-01",
     replacement:
-      "`api.pluginConfig`, `openclaw/plugin-sdk/config-mutation`, `openclaw/plugin-sdk/runtime-config-snapshot`, and `openclaw/plugin-sdk/config-contracts`; retain until supported external plugin migration is verified",
+      "`api.pluginConfig`, `openclaw/plugin-sdk/config-mutation`, `openclaw/plugin-sdk/runtime-config-snapshot`, and `openclaw/plugin-sdk/config-contracts`",
+    releaseNote:
+      "The deprecated `config-runtime` Plugin SDK facade was removed by the approved September 30 retirement; migrate to `api.pluginConfig`, `openclaw/plugin-sdk/config-mutation`, `openclaw/plugin-sdk/runtime-config-snapshot`, and `openclaw/plugin-sdk/config-contracts`.",
   },
   {
     code: "plugin-sdk-inbound-reply-dispatch-subpath",
@@ -34,20 +35,21 @@ const PLUGIN_SDK_SUBPATH_SEEDS = [
   {
     code: "plugin-sdk-channel-reply-pipeline-subpath",
     subpath: "channel-reply-pipeline",
-    status: "removal-pending",
+    status: "removed",
     owner: "channel",
-    removeAfter: "2026-10-01",
-    replacement:
-      "`openclaw/plugin-sdk/channel-outbound`; retain until supported external plugin migration is verified",
+    replacement: "`openclaw/plugin-sdk/channel-outbound`",
+    releaseNote:
+      "The deprecated `channel-reply-pipeline` Plugin SDK facade was removed by the approved September 30 retirement; migrate to `openclaw/plugin-sdk/channel-outbound`.",
   },
   {
     code: "plugin-sdk-infra-runtime-subpath",
     subpath: "infra-runtime",
-    status: "removal-pending",
+    status: "removed",
     owner: "sdk",
-    removeAfter: "2026-10-01",
     replacement:
-      "focused subpaths including `openclaw/plugin-sdk/delivery-queue-runtime`, `openclaw/plugin-sdk/diagnostic-runtime`, `openclaw/plugin-sdk/error-runtime`, `openclaw/plugin-sdk/exec-approvals-runtime`, `openclaw/plugin-sdk/fetch-runtime`, and `openclaw/plugin-sdk/ssrf-runtime`; retain until supported external plugin migration is verified and system-event snapshot inspection and consumption have a modern public replacement",
+      "focused typed subpaths including `openclaw/plugin-sdk/system-event-runtime`, `openclaw/plugin-sdk/error-runtime`, `openclaw/plugin-sdk/approval-runtime`, and `openclaw/plugin-sdk/ssrf-runtime`; use injected runtime APIs for host operations without a public subpath",
+    releaseNote:
+      "The deprecated `infra-runtime` Plugin SDK facade was removed by the approved September 30 retirement; migrate to focused typed subpaths including `openclaw/plugin-sdk/system-event-runtime`, `openclaw/plugin-sdk/error-runtime`, `openclaw/plugin-sdk/approval-runtime`, and `openclaw/plugin-sdk/ssrf-runtime`; use injected runtime APIs for host operations without a public subpath.",
   },
   {
     code: "plugin-sdk-text-runtime-subpath",
@@ -99,20 +101,20 @@ const PLUGIN_SDK_SUBPATH_SEEDS = [
   {
     code: "plugin-sdk-channel-lifecycle-subpath",
     subpath: "channel-lifecycle",
-    status: "removal-pending",
+    status: "removed",
     owner: "channel",
-    removeAfter: "2026-10-01",
-    replacement:
-      "`openclaw/plugin-sdk/channel-outbound`; retain until supported external plugin migration is verified",
+    replacement: "`openclaw/plugin-sdk/channel-outbound`",
+    releaseNote:
+      "The deprecated `channel-lifecycle` Plugin SDK facade was removed by the approved September 30 retirement; migrate to `openclaw/plugin-sdk/channel-outbound`.",
   },
   {
     code: "plugin-sdk-channel-message-subpath",
     subpath: "channel-message",
-    status: "removal-pending",
+    status: "removed",
     owner: "channel",
-    removeAfter: "2026-10-01",
-    replacement:
-      "`openclaw/plugin-sdk/channel-outbound` and `openclaw/plugin-sdk/channel-inbound`; retain until supported external plugin migration is verified",
+    replacement: "`openclaw/plugin-sdk/channel-outbound` and `openclaw/plugin-sdk/channel-inbound`",
+    releaseNote:
+      "The deprecated `channel-message` Plugin SDK facade was removed by the approved September 30 retirement; migrate to `openclaw/plugin-sdk/channel-outbound` and `openclaw/plugin-sdk/channel-inbound`.",
   },
   {
     code: "plugin-sdk-group-access-subpath",
@@ -144,7 +146,6 @@ function buildPluginSdkSubpathRecord(seed: (typeof PLUGIN_SDK_SUBPATH_SEEDS)[num
     surfaces: [`openclaw/plugin-sdk/${seed.subpath}`],
     tests: ["src/plugins/compat/registry.test.ts"],
   };
-  // Pending removals keep their dated migration metadata; only retired paths are tombstones.
   if ("status" in seed && seed.status === "removed") {
     return {
       ...shared,
@@ -159,7 +160,6 @@ function buildPluginSdkSubpathRecord(seed: (typeof PLUGIN_SDK_SUBPATH_SEEDS)[num
     status: "status" in seed ? seed.status : "deprecated",
     deprecated: "2026-07-06",
     warningStarts: "2026-07-06",
-    removeAfter: "removeAfter" in seed ? seed.removeAfter : undefined,
     removalGate: "removalGate" in seed ? seed.removalGate : undefined,
     diagnostics: [
       "repository deprecated API usage guard for core and bundled plugins; no external runtime import warning",

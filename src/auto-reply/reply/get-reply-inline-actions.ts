@@ -246,19 +246,18 @@ export async function handleInlineActions(params: {
   let skillSelections: ExplicitSkillSelection[] | undefined;
   const targetSessionEntry = sessionStore?.[sessionKey] ?? sessionEntry;
 
-  const isStopLikeInbound = isAbortRequestText(command.rawBodyNormalized);
-  if (!isStopLikeInbound && targetSessionEntry) {
+  if (targetSessionEntry && !isAbortRequestText(command.rawBodyNormalized)) {
     const cutoff = readAbortCutoffFromSessionEntry(targetSessionEntry);
     const incoming = resolveAbortCutoffFromContext(ctx);
-    const shouldSkip = cutoff
-      ? shouldSkipMessageByAbortCutoff({
-          cutoffMessageSid: cutoff.messageSid,
-          cutoffTimestamp: cutoff.timestamp,
-          messageSid: incoming?.messageSid,
-          timestamp: incoming?.timestamp,
-        })
-      : false;
-    if (shouldSkip) {
+    if (
+      cutoff &&
+      shouldSkipMessageByAbortCutoff({
+        cutoffMessageSid: cutoff.messageSid,
+        cutoffTimestamp: cutoff.timestamp,
+        messageSid: incoming?.messageSid,
+        timestamp: incoming?.timestamp,
+      })
+    ) {
       const runState = resolveReplyOperationRunState(opts);
       if (runState) {
         // The stop owner cancelled this queued input; no answer remains due.
@@ -281,13 +280,12 @@ export async function handleInlineActions(params: {
     }
   }
 
-  const isEmptyConfig = Object.keys(cfg).length === 0;
   const skipWhenConfigEmpty = command.channelId
     ? Boolean(getChannelPlugin(command.channelId)?.commands?.skipWhenConfigEmpty)
     : false;
   if (
     skipWhenConfigEmpty &&
-    isEmptyConfig &&
+    Object.keys(cfg).length === 0 &&
     command.from &&
     command.to &&
     command.from !== command.to
@@ -338,7 +336,7 @@ export async function handleInlineActions(params: {
       : skillCommands;
 
   const skillInvocation =
-    allowTextCommands && skillCommands.length > 0
+    skillCommands.length > 0
       ? resolveSkillCommandInvocation({
           commandBodyNormalized: command.commandBodyNormalized,
           skillCommands,

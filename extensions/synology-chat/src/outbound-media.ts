@@ -1,6 +1,7 @@
 // Synology Chat plugin module stages immutable outbound bytes for NAS attachment pickup.
 import { createHash } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import { mimeTypeFromFilePath, normalizeMimeType } from "openclaw/plugin-sdk/media-mime";
 import { resolveExpiresAtMsFromDurationMs } from "openclaw/plugin-sdk/number-runtime";
 import {
@@ -87,13 +88,7 @@ function reserveServedBytes(
     startedAt: active.startedAt,
     bytes: active.bytes + byteLength,
   });
-  while (servedByteWindows.size > SYNOLOGY_OUTBOUND_MEDIA_MAX_BUDGET_ACCOUNTS) {
-    const oldest = servedByteWindows.keys().next().value;
-    if (oldest === undefined) {
-      break;
-    }
-    servedByteWindows.delete(oldest);
-  }
+  pruneMapToMaxSize(servedByteWindows, SYNOLOGY_OUTBOUND_MEDIA_MAX_BUDGET_ACCOUNTS);
   return () => {
     const current = servedByteWindows.get(accountId);
     if (!current || current.startedAt !== active.startedAt) {

@@ -40,7 +40,9 @@ When a session first needs the current worker build, the Gateway sends its seale
 worker artifact to the paired host. The node verifies the exact content hash,
 publishes the artifact atomically, and prewarms it when supported by the execution mode.
 The artifact contains its complete JavaScript dependency closure; the node does
-not install packages or execute lifecycle scripts. Installation belongs to the
+not install packages or execute lifecycle scripts. Runtime chunks are sealed and
+verified with the artifact, and cold workers complete admission before loading
+the turn runtime. Installation belongs to the
 session request and receives its cancellation signal. Reconnect maintenance does
 not install or prewarm a worker build.
 
@@ -96,6 +98,10 @@ execution and other approved node commands retain their existing requirements.
 Updating a node first remains compatible with an older Gateway; the node
 advertises this support only when the Gateway understands it.
 
+When updating a node before a `2026.9.8` Gateway, the node preserves that
+Gateway's Skill Workshop launch binding for its supplied worker bundle.
+Ordinary attributed chat turns continue to work without updating both sides together.
+
 Turn completion uses a bounded status wait when both the Gateway and node host
 support `node-worker-status-wait-v1`. The node wakes the waiting request as soon
 as the exact turn's terminal result is journaled; transcript settlement and
@@ -132,6 +138,10 @@ for a durable slot. A slot occupied only by an idle worker can be reclaimed for
 new work; active turns and background commands keep their slots. When no free
 or reclaimable slot remains, the node stays available for status and cancellation
 but is not selected for a new session turn.
+
+Capacity, host-stat, and skill-bin updates do not interrupt active node work or
+change its pairing authority. This behavior requires an updated Gateway; node
+configuration and stored pairings remain unchanged.
 
 After a turn settles, OpenClaw can retain its worker process for up to two
 minutes so an immediate follow-up avoids loading the runtime again. The timer

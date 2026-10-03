@@ -116,7 +116,8 @@ test("repairs an owned job with an ordinary owner-topic turn whatever the heartb
   await runAndWaitForFinished(ws, jobId);
 
   await vi.waitFor(() => expect(agentCommandMock).toHaveBeenCalledOnce());
-  // The owner topic's own session and route: no `:heartbeat` side session, no dropped reply.
+  // The owner topic's own session and route: no `:heartbeat` side session, no dropped reply,
+  // and only the turn's authored reply is delivered (no runtime timeout warning).
   expect(agentCommandMock.mock.calls[0]?.[0]).toMatchObject({
     sessionKey: ownerSessionKey,
     deliver: true,
@@ -124,6 +125,7 @@ test("repairs an owned job with an ordinary owner-topic turn whatever the heartb
     to: group,
     threadId: 42,
     message: expect.stringContaining("Automation repair request from the scheduler"),
+    internalDeliverySuppressErrors: true,
   });
   expect(cronIsolatedRun).toHaveBeenCalledTimes(2);
 }, 45_000);

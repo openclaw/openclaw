@@ -5,7 +5,7 @@ import Testing
 import WebKit
 @testable import OpenClaw
 
-@Suite(.serialized, .timeLimit(.minutes(1)))
+@Suite(.serialized, .testWaitLimit)
 @MainActor
 struct DashboardExperienceTests {
     @Test func `switching experiences retains documents and restores the selected Gateway`() async throws {
@@ -124,7 +124,7 @@ struct DashboardExperienceTests {
         #expect(manager._testController() === saved)
         #expect(manager.openWindowCount(for: .primary) == 0)
         #expect(saved._testPendingNativeNavigation == nil)
-        #expect(manager._testPendingGatewayAlerts().isEmpty)
+        #expect(manager.alertPresenter._testPendingAlerts.isEmpty)
     }
 
     @Test func `a retired source socket cannot deliver a draft after Dashboard endpoint lookup`() async throws {
@@ -161,7 +161,7 @@ struct DashboardExperienceTests {
             #expect(manager._testController() === saved)
             #expect(manager._testMainTarget() == .profile("saved"))
             #expect(saved._testPendingNativeNavigation == nil)
-            #expect(manager._testPendingGatewayAlerts().isEmpty)
+            #expect(manager.alertPresenter._testPendingAlerts.isEmpty)
         } catch {
             await fixture.gateway.shutdown()
             throw error

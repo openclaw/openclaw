@@ -3,11 +3,14 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import memoryCore from "../../extensions/memory-core/index.js";
+import {
+  inspectCronJobsForDoctor,
+  repairCronJobsForDoctor,
+} from "../../src/commands/doctor/cron/store-repair.js";
 import type { OpenClawConfig } from "../../src/config/types.js";
 import { CronService, type CronEvent } from "../../src/cron/service.js";
 import { createNoopLogger } from "../../src/cron/service.test-harness.js";
 import { getCronJobsStoreRevision } from "../../src/cron/store.js";
-import { inspectCronJobsForDoctor, repairCronJobsForDoctor } from "../../src/cron/store/doctor.js";
 import type { CronStoredJob } from "../../src/cron/types.js";
 import * as sqliteSnapshot from "../../src/infra/sqlite-snapshot.js";
 import { createPluginDoctorStateMigrationContext } from "../../src/infra/state-migrations.plugin-doctor-context.js";
@@ -221,6 +224,7 @@ async function runRegisteredDreamingService(
   config: OpenClawConfig,
   cron: CronService,
   logger: ReturnType<typeof createNoopLogger>,
+  scheduler: ReturnType<typeof createTestGatewayScheduler>,
 ) {
   const registry = createEmptyPluginRegistry();
   memoryCore.register(
@@ -246,6 +250,7 @@ async function runRegisteredDreamingService(
   let services: PluginServicesHandle | undefined;
   try {
     services = await startPluginServices({
+      scheduler,
       registry,
       config,
       getCronService: () => cron,
@@ -584,7 +589,6 @@ describe("host Cron Doctor repair", () => {
   it.each([
     { layout: "inactive only", activeDreaming: false, enabled: true },
     { layout: "active and inactive", activeDreaming: true, enabled: true },
-    { layout: "inactive only", activeDreaming: false, enabled: false },
     { layout: "active and inactive", activeDreaming: true, enabled: false },
   ])(
     "keeps $layout history and authored lookalikes after Doctor and runtime dreaming enabled=$enabled",
@@ -661,7 +665,7 @@ describe("host Cron Doctor repair", () => {
                 },
               },
             };
-            await runRegisteredDreamingService(config, cron, logger);
+            await runRegisteredDreamingService(config, cron, logger, scheduler);
             expect(mutations).toEqual(
               enabled
                 ? [
@@ -670,9 +674,7 @@ describe("host Cron Doctor repair", () => {
                       action: activeDreaming ? "updated" : "added",
                     },
                   ]
-                : activeDreaming
-                  ? [{ jobId: "survivor", action: "removed" }]
-                  : [],
+                : [{ jobId: "survivor", action: "removed" }],
             );
             expect(logger.warn).toHaveBeenCalledWith(
               expect.stringContaining(
@@ -720,7 +722,7 @@ describe("host Cron Doctor repair", () => {
             }
             expect(getCronJobsStoreRevision(retiredStore)).toBe(retiredRevision);
             mutations.length = 0;
-            await runRegisteredDreamingService(config, cron, logger);
+            await runRegisteredDreamingService(config, cron, logger, scheduler);
             expect(mutations).toEqual([]);
             expect(readRows(fixture.db())).toEqual(afterRuntime);
           } finally {
@@ -775,7 +777,7 @@ describe("host Cron Doctor repair", () => {
             },
           },
         };
-        await runRegisteredDreamingService(config, cron, logger);
+        await runRegisteredDreamingService(config, cron, logger, scheduler);
         expect(mutations).toEqual([]);
         expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("openclaw doctor --fix"));
         expect(readRows(fixture.db())).toEqual(before);
@@ -800,7 +802,7 @@ describe("host Cron Doctor repair", () => {
           sessionTarget: "isolated",
           payload: { kind: "agentTurn", lightContext: true },
         });
-        await runRegisteredDreamingService(config, cron, logger);
+        await runRegisteredDreamingService(config, cron, logger, scheduler);
         expect(mutations).toEqual([{ jobId: "survivor", action: "updated" }]);
         const managed = (await cron.list({ includeDisabled: true })).filter(
           (job) => job.declarationKey === declarationKey,

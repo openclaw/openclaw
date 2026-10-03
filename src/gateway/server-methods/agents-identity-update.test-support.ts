@@ -150,7 +150,6 @@ export function registerAgentIdentityUpdateTests(harness: IdentityUpdateHarness)
       expectRespondOk(respond, { ok: true, agentId: "test-agent" });
       expectRecordFields(mockCallArg(mocks.rootRead), {
         relativePath: "IDENTITY.md",
-        nonBlockingRead: true,
       });
       const configOptions = expectRecordFields(mockCallArg(mocks.applyAgentConfig, 0, 1), {
         name: "New Name",

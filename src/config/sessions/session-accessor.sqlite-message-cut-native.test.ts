@@ -85,27 +85,20 @@ describe("message cuts and native context ownership", () => {
     },
   );
 
-  it.each(["rewind", "switch"] as const)(
-    "restores native context when the local %s transaction fails",
-    async (mode) => {
-      const { env, scope } = await createSession();
-      const owner = nativeOwner();
-      const before = loadSessionEntry(scope);
-      openOpenClawAgentDatabase({ agentId, env }).db.exec(
-        "CREATE TEMP TRIGGER reject_context_cut BEFORE UPDATE ON session_nodes BEGIN SELECT RAISE(ABORT, 'injected context cut failure'); END",
-      );
-      await expect(
-        owner.run(() =>
-          mode === "rewind"
-            ? rewindSessionToMessage({ agentId, env, sessionKey, entryId: "user-2" })
-            : switchSessionBranch({ agentId, env, sessionKey, leafEntryId: "off-path-user" }),
-        ),
-      ).rejects.toThrow("injected context cut failure");
-      expect(loadSessionEntry(scope)).toEqual(before);
-      expect(owner.binding()).toBe("native-history-before-cut");
-      expect(owner.finalized()).toBe(false);
-    },
-  );
+  it("restores native context when the local cut transaction fails", async () => {
+    const { env, scope } = await createSession();
+    const owner = nativeOwner();
+    const before = loadSessionEntry(scope);
+    openOpenClawAgentDatabase({ agentId, env }).db.exec(
+      "CREATE TEMP TRIGGER reject_context_cut BEFORE UPDATE ON session_nodes BEGIN SELECT RAISE(ABORT, 'injected context cut failure'); END",
+    );
+    await expect(
+      owner.run(() => rewindSessionToMessage({ agentId, env, sessionKey, entryId: "user-2" })),
+    ).rejects.toThrow("injected context cut failure");
+    expect(loadSessionEntry(scope)).toEqual(before);
+    expect(owner.binding()).toBe("native-history-before-cut");
+    expect(owner.finalized()).toBe(false);
+  });
 
   it.each([
     ["rewind", "missing", "missing-entry"],

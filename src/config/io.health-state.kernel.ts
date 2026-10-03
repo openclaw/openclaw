@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
 import type { Insertable } from "kysely";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
@@ -21,16 +22,9 @@ export type ConfigHealthPatch = Partial<
 >;
 
 function parseFingerprint(value: string | null): ConfigHealthFingerprint | undefined {
-  if (!value) {
-    return undefined;
-  }
-  try {
-    const parsed: unknown = JSON.parse(value);
-    // SAFETY: Preserve the existing persisted fingerprint object's permissive read contract.
-    return parsed && typeof parsed === "object" ? (parsed as ConfigHealthFingerprint) : undefined;
-  } catch {
-    return undefined;
-  }
+  const parsed = safeParseJson(value ?? "");
+  // SAFETY: Preserve the existing persisted fingerprint object's permissive read contract.
+  return parsed && typeof parsed === "object" ? (parsed as ConfigHealthFingerprint) : undefined;
 }
 
 function stringifyFingerprint(value: ConfigHealthFingerprint | null | undefined): string | null {

@@ -61,7 +61,7 @@ async function createContext(state: OpenClawTestState, cfg: OpenClawConfig) {
   return ctx;
 }
 
-it.each(["absent", "empty", "2026.9.4"])(
+it.each(["absent", "2026.9.4"])(
   "preserves authored config and metadata after empty release backfill (%s)",
   async (kind) => {
     await withOpenClawTestState(

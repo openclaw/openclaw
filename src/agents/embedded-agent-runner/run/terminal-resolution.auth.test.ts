@@ -63,7 +63,7 @@ describe("terminal auth resolution", () => {
   ])("surfaces provider recovery guidance for $reason terminal failures", async (testCase) => {
     const text = await resolveTerminalText({
       assistantProfileFailureReason: testCase.reason,
-      maxEmptyResponseRetryAttempts: 0,
+      retryState: { emptyResponseAttempts: 1 },
     });
     expect(text).toContain(testCase.expected);
     expect(text).toContain("openclaw configure");
@@ -73,7 +73,7 @@ describe("terminal auth resolution", () => {
     await expect(
       resolveTerminalText({
         assistantProfileFailureReason: "timeout",
-        maxEmptyResponseRetryAttempts: 0,
+        retryState: { emptyResponseAttempts: 1 },
       }),
     ).resolves.toBe("⚠️ Agent couldn't generate a response. Please try again.");
   });

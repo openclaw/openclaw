@@ -14,14 +14,13 @@ import { persistAuthProfileBatch } from "../agents/auth-profiles/upsert-with-loc
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import { committedConfigFiles } from "../commands/committed-config.test-support.js";
 import { createConfigIO as createRealConfigIO } from "../config/io.factory.js";
-import { coerceConfig } from "../config/io.read-helpers.js";
 import { createConfigFileSnapshot } from "../config/io.snapshot-shared.js";
-import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
 import { materializeRuntimeConfig } from "../config/materialize.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginCompatibilityNotice } from "../plugins/status.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { createCanonicalAgentConfigFixture } from "../test-utils/config-roster.js";
 import { WizardCancelledError, type WizardPrompter, type WizardSelectParams } from "./prompts.js";
 import { runSetupWizard } from "./setup.js";
 import {
@@ -468,7 +467,7 @@ describe("runSetupWizard", () => {
   }
 
   function configSnapshot(config: OpenClawConfig, exists = true): ConfigFileSnapshot {
-    const sourceConfig = coerceConfig(migratePersistedImplicitMainRoster(config).config);
+    const sourceConfig = createCanonicalAgentConfigFixture(config).config;
     return createConfigFileSnapshot({
       path: "/tmp/.openclaw/openclaw.json",
       exists,
@@ -513,11 +512,10 @@ describe("runSetupWizard", () => {
     configureGatewayForSetup.mockReset().mockImplementation(async (args) => ({
       nextConfig: args.nextConfig,
       settings: {
-        port: args.localPort ?? 18789,
+        port: args.quickstartGateway.port,
         bind: "loopback",
         authMode: "token",
         gatewayToken: "test-token",
-        tailscaleMode: "off",
       },
     }));
     let authoredConfig: OpenClawConfig | undefined;
@@ -1224,7 +1222,6 @@ describe("runSetupWizard", () => {
               bind: gateway.bind,
               authMode: gateway.authMode,
               gatewayToken: undefined,
-              tailscaleMode: gateway.tailscaleMode,
             },
           }),
         );
@@ -1251,7 +1248,6 @@ describe("runSetupWizard", () => {
           expect.objectContaining({ url: `ws://127.0.0.1:${port}`, token, password }),
         );
         expect(configureGatewayForSetup.mock.calls[0]?.[0]).toMatchObject({
-          localPort: port,
           quickstartGateway: { ...quickstartGateway, token, tailscaleMode: "off" },
         });
       } else {
