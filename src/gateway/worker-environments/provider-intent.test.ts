@@ -3,7 +3,6 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
 import { requireGit } from "../../agents/worktrees/git.js";
-import { validateProviderSettings } from "../../config/provider-settings.js";
 import type { WorkerProvider } from "../../plugins/types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { readWorkerProjectPreparation } from "./preparation-identity.js";
@@ -70,19 +69,10 @@ describe("prepared worker intent admission", () => {
       getConfig: () => support.testState.config,
       projectNamespace: "gateway-test",
       providerFor: () => provider,
-      requireWorkerProfile: (value) => {
-        const error = validateProviderSettings(value, "Worker profile");
-        if (error) {
-          throw new Error(error);
-        }
-        return value as Parameters<WorkerProvider["provision"]>[0];
-      },
       prepareNodeArtifacts,
       resumeProvision,
       isStopping: () => false,
-      inState: (record, ...states) => states.includes(record.state),
       withLock: async (_environmentId, task) => task(),
-      serviceError: (_code, message) => new Error(message),
     });
     return {
       owner,

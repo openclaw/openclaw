@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import { z } from "zod";
 import { createWorkerProjectPreparationIdentity } from "./preparation-identity.js";
 import { PROJECT_KEY, usePreparedPoolFixture } from "./prepared-pool.test-support.js";
 import { createWorkerProviderIntent } from "./provider-intent.js";
@@ -84,12 +83,9 @@ describe("prepared project retention compatibility", () => {
       getConfig: () => fixture.config,
       projectNamespace: "gateway",
       providerFor,
-      requireWorkerProfile: (value) => z.record(z.string(), z.json()).parse(value),
       prepareNodeArtifacts,
       isStopping: () => false,
-      inState: () => false,
       withLock: async (_id, run) => await run(),
-      serviceError: (_code, message) => new Error(message),
       resumeProvision: async (environment) => environment,
     });
     return {
