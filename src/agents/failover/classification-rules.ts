@@ -244,6 +244,7 @@ export function classifyFailoverClassificationFromHttpStatus(
     // Generic 410/no-body responses behave like transport failures, not session expiry.
     if (
       messageReason === "session_expired" ||
+      messageReason === "model_not_found" ||
       messageReason === "billing" ||
       messageReason === "auth_permanent" ||
       messageReason === "auth"

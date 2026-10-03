@@ -19,6 +19,17 @@ export function isModelNotFoundErrorMessage(raw: string): boolean {
   if (/unknown model/i.test(msg)) {
     return true;
   }
+  if (/\bmodel\b[^\r\n]{0,120}?\b(?:was|is|has been) retired\b/i.test(msg)) {
+    return true;
+  }
+  // Ollama's retirement response names the model id without the word "model".
+  if (
+    /\b[a-z0-9][a-z0-9._:/-]* was retired at \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} [+-]\d{4} [a-z]+ \(ref:/i.test(
+      msg,
+    )
+  ) {
+    return true;
+  }
   // "Not available" alone also describes outages; require missing-model evidence.
   if (/model(?:[_\-\s])?not(?:[_\-\s])?found|\bmodel\b.{0,60}?\bnot found\b/i.test(msg)) {
     return true;
