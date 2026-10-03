@@ -1251,7 +1251,6 @@ describe("oxlint config", () => {
     expect(ignorePatterns).toEqual([
       "dist/",
       "dist-runtime/",
-      ".agents/skills/autoreview/tests/fixtures/**",
       "test/fixtures/oxlint-boundary-guards/**",
       "**/a2ui.bundle.js",
       "extensions/diffs/assets/viewer-runtime.js",
