@@ -4,7 +4,7 @@ import type { OpenResult } from "../infra/fs-safe.js";
 export type OutboundMediaReadFile = (filePath: string) => Promise<Buffer>;
 
 /** A native descriptor, or undefined when a transport reader owns this path. */
-export type OutboundMediaOpenFile = (
+type OutboundMediaOpenFile = (
   filePath: string,
   options: { maxBytes: number },
 ) => Promise<OpenResult | undefined>;
