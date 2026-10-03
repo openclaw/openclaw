@@ -107,7 +107,7 @@ beforeEach(async () => {
         },
       },
       resultSchema,
-      { timeout: 120_000 },
+      { timeout: 600_000 },
     );
     return { content: [{ type: "text", text: JSON.stringify(result) }] };
   });
@@ -238,7 +238,10 @@ describe("MCP tool human-input timeouts", () => {
     expect(call.respond).not.toHaveBeenCalled();
     approval.resolve();
     await questionStarted.promise;
-    await vi.advanceTimersByTimeAsync(70_000);
+    expect
+      .soft(mocks.question.mock.calls.find(([method]) => method === "question.request")![1])
+      .toMatchObject({ timeoutMs: 600_000 });
+    await vi.advanceTimersByTimeAsync(500_000);
     expect(call.respond).not.toHaveBeenCalled();
     questionAnswer.resolve(answer);
     await call.pending;
@@ -265,7 +268,7 @@ describe("MCP tool human-input timeouts", () => {
       (error: unknown) => ({ error }),
     );
     await questionStarted.promise;
-    await vi.advanceTimersByTimeAsync(70_000);
+    await vi.advanceTimersByTimeAsync(500_000);
     questionAnswer.resolve(answer);
     expect(await completed).toEqual({
       result: {
@@ -303,7 +306,7 @@ describe("MCP tool human-input timeouts", () => {
             params: { message: "Confirm", requestedSchema: { type: "object", properties: {} } },
           },
           resultSchema,
-          { timeout: 120_000, signal: extra.signal },
+          { timeout: 600_000, signal: extra.signal },
         );
       }
       return { content: [] };
@@ -316,7 +319,9 @@ describe("MCP tool human-input timeouts", () => {
     questionStarted = createDeferred();
     firstAnswer.resolve({ status: "answered", answers: { answers: { confirm: ["Allow"] } } });
     await questionStarted.promise;
-    await vi.advanceTimersByTimeAsync(110_000);
+    await vi.advanceTimersByTimeAsync(589_999);
+    expect(call.respond).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
     await call.pending;
     expect(call.respond).toHaveBeenCalledWith(
       false,

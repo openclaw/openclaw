@@ -6,7 +6,7 @@ import { z } from "zod";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { getSessionMcpRequestSignal } from "./agent-bundle-mcp-request-context.js";
 
-export const MCP_ELICITATION_TIMEOUT_MS = 120_000;
+export const MCP_ELICITATION_TIMEOUT_MS = 600_000;
 
 export type McpElicitationHandler = (request: {
   method: "elicitation/create" | "openai/elicitation/create";
