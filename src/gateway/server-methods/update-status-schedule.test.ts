@@ -257,10 +257,18 @@ it.each([false, true])(
       installReceipt: null,
       status: { root: null, installKind: "package", packageManager: "npm" },
     });
-    const result = await status(
-      { update: { channel: "dev", auto: { enabled: false } } },
-      { refreshCheckout: true },
-    );
+    const config = { update: { channel: "dev" as const, auto: { enabled: false } } };
+    const respond = vi.fn();
+    await updateStatusHandlers["update.status"]!({
+      params: { refreshCheckout: true },
+      respond,
+      context: { getRuntimeConfig: () => config },
+    } as never);
+    expect(respond).toHaveBeenCalledExactlyOnceWith(false, undefined, {
+      code: "UNAVAILABLE",
+      message: "Could not check the latest update. Try again.",
+    });
+    const result = await status(config);
     expect(result.schedule).toMatchObject({
       channel: "stable",
       target,
@@ -322,64 +330,75 @@ it("omits app-owned install and stale package targets from the protocol schedule
   expect(result.updateAvailable).toBeNull();
 });
 
-it("reports a refreshed immutable preparation without enabling activation or retaining package targets", async () => {
-  const immutable = {
-    root: "/opt/openclaw",
-    currentSha: "a".repeat(40),
-    currentPath: `/opt/openclaw/releases/${"a".repeat(40)}`,
-  };
-  const discovered = {
-    root: immutable.currentPath,
-    installReceipt: null,
-    status: {
+it.each([
+  { channel: "stable", initialized: true },
+  { channel: "beta", initialized: true },
+  { channel: "stable", initialized: false },
+  { channel: "beta", initialized: false },
+] as const)(
+  "reports a refreshed immutable preparation without activation on $channel with initialized=$initialized",
+  async ({ channel, initialized }) => {
+    const immutable = {
+      root: "/opt/openclaw",
+      currentSha: "a".repeat(40),
+      currentPath: `/opt/openclaw/releases/${"a".repeat(40)}`,
+    };
+    const discovered = {
       root: immutable.currentPath,
-      installKind: "immutable",
-      packageManager: "unknown",
-      immutable,
-    },
-  };
-  install.mockResolvedValue(discovered);
-  await lifecycle.initialize();
-  setUpdateScheduleCache({
-    next: {
-      channel: "stable",
-      autoEnabled: true,
-      install: { kind: "package" },
-      target: { kind: "package", version: "99.0.0" },
-    },
-  });
-  const prepared = {
-    sha: "b".repeat(40),
-    path: `/opt/openclaw/releases/${"b".repeat(40)}`,
-    buildDigest: "c".repeat(64),
-    preparedAtMs: 123,
-  };
-  install.mockResolvedValue({
-    ...discovered,
-    status: { ...discovered.status, immutable: { ...immutable, prepared } },
-  });
+      installReceipt: null,
+      status: {
+        root: immutable.currentPath,
+        installKind: "immutable",
+        packageManager: "unknown",
+        immutable,
+      },
+    };
+    install.mockResolvedValue(discovered);
+    if (initialized) {
+      await lifecycle.initialize();
+    }
+    setUpdateScheduleCache({
+      next: {
+        channel,
+        autoEnabled: true,
+        install: { kind: "package" },
+        target: { kind: "package", version: "99.0.0" },
+      },
+    });
+    const prepared = {
+      sha: "b".repeat(40),
+      path: `/opt/openclaw/releases/${"b".repeat(40)}`,
+      buildDigest: "c".repeat(64),
+      preparedAtMs: 123,
+    };
+    install.mockResolvedValue({
+      ...discovered,
+      status: { ...discovered.status, immutable: { ...immutable, prepared } },
+    });
 
-  const result = await status(
-    { update: { channel: "stable", auto: { enabled: true } } },
-    { refreshCheckout: true },
-  );
+    const result = await status(
+      { update: { channel, auto: { enabled: true } } },
+      { refreshCheckout: true },
+    );
 
-  expect(result.schedule).toEqual({
-    channel: "stable",
-    autoEnabled: false,
-    install: { kind: "immutable", immutable: { ...immutable, prepared } },
-  });
-  expect(result.updateAvailable).toBeNull();
-  expect((await lifecycle.initialize()).status.immutable?.prepared).toEqual(prepared);
+    expect(result.schedule).toEqual({
+      channel,
+      autoEnabled: false,
+      install: { kind: "immutable", immutable: { ...immutable, prepared } },
+    });
+    expect(result.updateAvailable).toBeNull();
+    expect(install).toHaveBeenCalledWith(true, expect.any(AbortSignal));
+    expect((await lifecycle.initialize()).status.immutable?.prepared).toEqual(prepared);
 
-  install.mockResolvedValue({
-    root: immutable.currentPath,
-    installReceipt: null,
-    status: { root: immutable.currentPath, installKind: "unknown", packageManager: "unknown" },
-  });
-  const unowned = await status(
-    { update: { channel: "stable", auto: { enabled: false } } },
-    { refreshCheckout: true },
-  );
-  expect(unowned.schedule.install).toEqual({ kind: "unknown" });
-});
+    install.mockResolvedValue({
+      root: immutable.currentPath,
+      installReceipt: null,
+      status: { root: immutable.currentPath, installKind: "unknown", packageManager: "unknown" },
+    });
+    const unowned = await status(
+      { update: { channel, auto: { enabled: false } } },
+      { refreshCheckout: true },
+    );
+    expect(unowned.schedule.install).toEqual({ kind: "unknown" });
+  },
+);

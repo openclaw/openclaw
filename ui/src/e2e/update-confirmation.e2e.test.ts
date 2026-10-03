@@ -1,6 +1,7 @@
 import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { beforeEach, expect, it } from "vitest";
+import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -46,6 +47,7 @@ async function openUpdateCard(page: Page, baseUrl: string, compact = false) {
   });
   expect((await page.goto(`${baseUrl}chat`))?.status()).toBe(200);
   await gateway.waitForRequest("chat.startup");
+  await gateway.setMethodResponse("update.status", { updateAvailable: UPDATE_AVAILABLE });
   await gateway.emitGatewayEvent("update.available", { updateAvailable: UPDATE_AVAILABLE });
   if (compact) {
     await page.locator(".chat-header-session-menu__trigger").click();
@@ -64,6 +66,8 @@ async function openUpdateCard(page: Page, baseUrl: string, compact = false) {
   await updateIssue.locator("summary").click();
   const updateButton = updateIssue.locator(".sidebar-update-card__action");
   await updateButton.waitFor({ timeout: 10_000 });
+  // Expansion checks freshness; a disabled button cannot receive keyboard focus.
+  await expect.poll(() => updateButton.isEnabled()).toBe(true);
   if (compact) {
     await page.screenshot({
       animations: "disabled",
@@ -78,6 +82,349 @@ async function openConfirmation(page: Page, updateButton: Locator) {
 }
 
 suite.define(() => {
+  it.each(["absent", "before-confirm", "before-retry"] as const)(
+    "checks a fresh Gateway target before falling back from a vanished native bridge with restore=%s",
+    async (restore) => {
+      await suite.withPage(
+        { locale: "en-US", serviceWorkers: "block", viewport: { height: 900, width: 1280 } },
+        async ({ page }) => {
+          await page.addInitScript(() => {
+            Object.defineProperty(window, "webkit", {
+              configurable: true,
+              value: { messageHandlers: { openclawUpdate: { postMessage: () => undefined } } },
+            });
+          });
+          const status = (sha: string, behind: number) => ({
+            updateAvailable: {
+              channel: "dev" as const,
+              currentVersion: "1.0.0",
+              latestVersion: "1.0.0",
+              currentSha: "a".repeat(40),
+              upstreamSha: sha.repeat(40),
+              commitsBehind: behind,
+            },
+            schedule: {
+              channel: "dev" as const,
+              autoEnabled: false,
+              target: {
+                kind: "git" as const,
+                upstreamRef: "origin/main",
+                upstreamSha: sha.repeat(40),
+                commitsBehind: behind,
+              },
+            },
+          });
+          const stale = status("b", 7);
+          const gateway = await installMockGateway(page, {
+            updateAvailable: stale.updateAvailable,
+            updateSchedule: stale.schedule,
+            methodResponses: { "update.status": stale, "update.run": UPDATE_RUN_RESPONSE },
+          });
+          expect((await page.goto(suite.server.baseUrl + "chat"))?.status()).toBe(200);
+          await gateway.waitForRequest("chat.startup");
+          await page.locator(".sidebar-issues-button:visible").click();
+          const card = page.locator(
+            'openclaw-sidebar-update-card[data-attention-kind="updateAvailable"]',
+          );
+          await card.locator("summary").click();
+          await card.locator(".sidebar-update-card__action").click();
+          await page.evaluate(() => Reflect.deleteProperty(window, "webkit"));
+          await gateway.deferNext("update.status", { refreshCheckout: true });
+          await page
+            .getByRole("button", { name: "Update Mac app and restart", exact: true })
+            .click();
+          await gateway.waitForRequest("update.status", { match: { refreshCheckout: true } });
+          expect(await gateway.getRequests("update.run")).toHaveLength(0);
+          expect(await confirmationCopy(page).locator(".update-git-revisions").count()).toBe(0);
+          expect(await confirmationCopy(page).locator(".btn.danger").isDisabled()).toBe(true);
+          await gateway.rejectDeferred("update.status", {
+            code: "UNAVAILABLE",
+            message: "Latest target unavailable.",
+          });
+          await confirmationCopy(page).getByRole("alert").waitFor();
+          expect(await gateway.getRequests("update.run")).toHaveLength(0);
+          await gateway.setMethodResponse("update.status", status("c", 9));
+          await page
+            .getByRole("button", { name: "Update Mac app and restart", exact: true })
+            .click();
+          await confirmationDialog(page).waitFor();
+          expect(
+            await confirmationCopy(page).locator(".update-git-revisions").textContent(),
+          ).toContain("cccccccc");
+          expect(
+            await confirmationCopy(page).locator(".update-git-revisions").textContent(),
+          ).not.toContain("bbbbbbbb");
+          expect(await gateway.getRequests("update.run")).toHaveLength(0);
+          const restoreNative = async () => {
+            await page.evaluate(() => {
+              Object.defineProperty(window, "webkit", {
+                configurable: true,
+                value: {
+                  messageHandlers: {
+                    openclawUpdate: {
+                      postMessage: () => {
+                        document.documentElement.dataset.nativeUpdatePosted = "yes";
+                      },
+                    },
+                  },
+                },
+              });
+            });
+          };
+          if (restore === "before-confirm") {
+            await restoreNative();
+            await page.getByRole("button", { name: "Update and restart", exact: true }).click();
+            expect(await gateway.getRequests("update.run")).toHaveLength(0);
+            await page
+              .getByRole("button", { name: "Update Mac app and restart", exact: true })
+              .click();
+            expect(await page.locator("html").getAttribute("data-native-update-posted")).toBe(
+              "yes",
+            );
+            expect(await gateway.getRequests("update.run")).toHaveLength(0);
+            return;
+          }
+          const failedRun = {
+            ...createUpdateRunFixture(),
+            status: "failed" as const,
+            phase: "finished" as const,
+            reason: "build-failed",
+            finishedAtMs: Date.now(),
+          };
+          await gateway.setMethodResponse("update.runs.get", { run: failedRun });
+          await page.getByRole("button", { name: "Update and restart", exact: true }).click();
+          await gateway.waitForRequest("update.run");
+          expect(await gateway.getRequests("update.run")).toHaveLength(1);
+          await page.getByRole("button", { name: "Retry update", exact: true }).waitFor();
+          if (restore === "before-retry") {
+            await restoreNative();
+            await page.getByRole("button", { name: "Retry update", exact: true }).click();
+            expect(await confirmationCopy(page).getAttribute("label")).toBe(
+              "Update Mac app + Gateway",
+            );
+            await page
+              .getByRole("button", { name: "Update Mac app and restart", exact: true })
+              .click();
+            expect(await page.locator("html").getAttribute("data-native-update-posted")).toBe(
+              "yes",
+            );
+            expect(await gateway.getRequests("update.run")).toHaveLength(1);
+            return;
+          }
+
+          await gateway.setMethodResponse("update.status", {
+            ...status("d", 10),
+            activeRun: null,
+            lastRun: failedRun,
+          });
+          await page.getByRole("button", { name: "Retry update", exact: true }).click();
+          await gateway.waitForRequest("update.status", {
+            after: 2,
+            match: { refreshCheckout: true },
+          });
+          await page.getByRole("button", { name: "Update and restart", exact: true }).waitFor();
+          expect(
+            await confirmationCopy(page).locator(".update-git-revisions").textContent(),
+          ).toContain("dddddddd");
+          expect(
+            await confirmationCopy(page).locator(".update-git-revisions").textContent(),
+          ).not.toContain("cccccccc");
+          expect(await gateway.getRequests("update.run")).toHaveLength(1);
+          await page.getByRole("button", { name: "Cancel", exact: true }).click();
+        },
+      );
+    },
+  );
+
+  it.each(["gateway", "native"] as const)(
+    "keeps failed-run retry open and uses the current %s owner",
+    async (owner) => {
+      await suite.withPage(
+        { locale: "en-US", serviceWorkers: "block", viewport: { height: 900, width: 1280 } },
+        async ({ page }) => {
+          const run = {
+            ...createUpdateRunFixture(),
+            status: "failed" as const,
+            phase: "finished",
+            reason: "build-failed",
+            finishedAtMs: Date.now(),
+            target: { kind: "git" as const, sha: "b".repeat(40) },
+          };
+          const status = (sha: string, behind: number) => ({
+            activeRun: null,
+            lastRun: run,
+            updateAvailable: {
+              channel: "dev" as const,
+              currentVersion: "1.0.0",
+              latestVersion: "1.0.0",
+              currentSha: "a".repeat(40),
+              upstreamRef: "origin/main",
+              upstreamSha: sha.repeat(40),
+              commitsBehind: behind,
+            },
+            schedule: {
+              channel: "dev" as const,
+              autoEnabled: false,
+              target: {
+                kind: "git" as const,
+                upstreamRef: "origin/main",
+                upstreamSha: sha.repeat(40),
+                commitsBehind: behind,
+              },
+            },
+          });
+          const stale = status("b", 7);
+          const gateway = await installMockGateway(page, {
+            updateAvailable: stale.updateAvailable,
+            updateSchedule: stale.schedule,
+            methodResponses: { "update.status": stale, "update.runs.get": { run } },
+          });
+          expect((await page.goto(suite.server.baseUrl + "chat"))?.status()).toBe(200);
+          await gateway.waitForRequest("chat.startup");
+          await page.locator(".sidebar-issues-button:visible").click();
+          const card = page.locator(
+            'openclaw-sidebar-update-card[data-attention-kind="updateAvailable"]',
+          );
+          await card.locator("summary").click();
+          await card.locator(".sidebar-update-card__action").click();
+
+          if (owner === "native") {
+            await page.evaluate(() => {
+              Object.defineProperty(window, "webkit", {
+                configurable: true,
+                value: {
+                  messageHandlers: {
+                    openclawUpdate: {
+                      postMessage: () => {
+                        document.documentElement.dataset.nativeUpdatePosted = "yes";
+                      },
+                    },
+                  },
+                },
+              });
+            });
+            await page.getByRole("button", { name: "Retry update", exact: true }).click();
+            await page
+              .getByRole("button", { name: "Update Mac app and restart", exact: true })
+              .waitFor();
+            expect(await gateway.getRequests("update.run")).toHaveLength(0);
+            expect(
+              await gateway.getRequests("update.status", { refreshCheckout: true }),
+            ).toHaveLength(0);
+            await page
+              .getByRole("button", { name: "Update Mac app and restart", exact: true })
+              .click();
+            expect(await page.locator("html").getAttribute("data-native-update-posted")).toBe(
+              "yes",
+            );
+            return;
+          }
+
+          await gateway.deferNext("update.status", { refreshCheckout: true });
+          await page.getByRole("button", { name: "Retry update", exact: true }).click();
+          await gateway.waitForRequest("update.status", { match: { refreshCheckout: true } });
+          expect(await confirmationDialog(page).count()).toBe(1);
+          expect(
+            await page.getByRole("button", { name: "Retry update", exact: true }).isDisabled(),
+          ).toBe(true);
+          await gateway.rejectDeferred("update.status", {
+            code: "UNAVAILABLE",
+            message: "Latest target unavailable.",
+          });
+          await confirmationCopy(page)
+            .getByText("Status could not be refreshed. Check your connection and try again.", {
+              exact: true,
+            })
+            .waitFor();
+          expect(await gateway.getRequests("update.run")).toHaveLength(0);
+
+          await gateway.setMethodResponse("update.status", status("c", 9));
+          await page.getByRole("button", { name: "Retry update", exact: true }).click();
+          await confirmationCopy(page)
+            .getByRole("button", { name: "Update and restart", exact: true })
+            .waitFor();
+          expect(await confirmationCopy(page).textContent()).toContain("9 commits behind");
+          expect(
+            await confirmationCopy(page).locator(".update-git-revisions").textContent(),
+          ).toContain("cccccccc");
+          expect(
+            await confirmationCopy(page).locator(".update-git-revisions").textContent(),
+          ).not.toContain("bbbbbbbb");
+          expect(
+            await gateway.getRequests("update.status", { refreshCheckout: true }),
+          ).toHaveLength(2);
+          expect(await gateway.getRequests("update.run")).toHaveLength(0);
+          await page.getByRole("button", { name: "Cancel", exact: true }).click();
+        },
+      );
+    },
+  );
+
+  it("refreshes the Dev target when opening the update card and again before confirmation", async () => {
+    await suite.withPage(
+      { locale: "en-US", serviceWorkers: "block", viewport: { height: 900, width: 1280 } },
+      async ({ page }) => {
+        const available = (sha: string, behind: number): UpdateAvailable => ({
+          channel: "dev",
+          currentVersion: "1.0.0",
+          latestVersion: "1.0.0",
+          currentSha: "a".repeat(40),
+          upstreamRef: "origin/main",
+          upstreamSha: sha.repeat(40),
+          commitsBehind: behind,
+          repositoryUrl: "https://github.com/openclaw/openclaw",
+        });
+        const status = (
+          sha: string,
+          behind: number,
+        ): { updateAvailable: UpdateAvailable; schedule: UpdateScheduleState } => ({
+          updateAvailable: available(sha, behind),
+          schedule: {
+            channel: "dev",
+            autoEnabled: false,
+            target: {
+              kind: "git",
+              upstreamRef: "origin/main",
+              upstreamSha: sha.repeat(40),
+              commitsBehind: behind,
+            },
+          },
+        });
+        const stale = status("b", 7);
+        const gateway = await installMockGateway(page, {
+          updateAvailable: stale.updateAvailable,
+          updateSchedule: stale.schedule,
+          methodResponses: { "update.status": stale },
+        });
+        expect((await page.goto(`${suite.server.baseUrl}chat`))?.status()).toBe(200);
+        await gateway.waitForRequest("chat.startup");
+        await page.locator(".sidebar-issues-button:visible").click();
+        const card = page.locator(
+          'openclaw-sidebar-update-card[data-attention-kind="updateAvailable"]',
+        );
+        await card.waitFor();
+        await gateway.setMethodResponse("update.status", status("c", 9));
+        await card.locator("summary").click();
+        await card.locator(".update-git-revisions code", { hasText: "cccccccc" }).waitFor();
+        expect(await gateway.getRequests("update.status", { refreshCheckout: true })).toHaveLength(
+          1,
+        );
+        expect(await card.locator(".update-git-revisions a").getAttribute("href")).toBe(
+          `https://github.com/openclaw/openclaw/compare/${"a".repeat(40)}...${"c".repeat(40)}`,
+        );
+        await gateway.setMethodResponse("update.status", status("d", 10));
+        await card.locator(".sidebar-update-card__action").click();
+        await confirmationDialog(page).waitFor();
+        expect(await confirmationCopy(page).textContent()).toContain("10 commits behind");
+        expect(
+          await confirmationCopy(page).locator(".update-git-revisions").textContent(),
+        ).toContain("dddddddd");
+        expect(await gateway.getRequests("update.run")).toHaveLength(0);
+        await page.getByRole("button", { name: "Cancel", exact: true }).click();
+      },
+    );
+  });
+
   it("keeps a dismissed Inbox update hidden until the Gateway boot changes", async () => {
     await suite.withPage(
       { locale: "en-US", serviceWorkers: "block", viewport: { height: 720, width: 1280 } },

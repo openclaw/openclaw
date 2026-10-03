@@ -40,7 +40,8 @@ export function resolveSidebarUpdateAttention(
   const campaign = snapshot.updateSchedule?.campaign;
   const run = snapshot.updateRun;
   const runVisible = isUpdateRunAttentionVisible(run, snapshot.updateRunAcknowledged);
-  const statusBanner = run ? null : snapshot.updateStatusBanner;
+  const statusBanner =
+    snapshot.updateStatusCheckBanner ?? (run ? null : snapshot.updateStatusBanner);
   const busy =
     snapshot.updateRunning ||
     snapshot.updateReconciliationPending ||

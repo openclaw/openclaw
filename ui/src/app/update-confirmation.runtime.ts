@@ -17,7 +17,7 @@ import { registerUpdateActionsEnglish } from "../i18n/locales/en-update-actions.
 import "../components/modal-dialog.ts";
 import "../components/update-run-view.ts";
 import { formatUiError } from "../lib/format-error.ts";
-import { postNativeUpdate } from "./native-link-routing.ts";
+import { hasNativeUpdateBridge, postNativeUpdate } from "./native-link-routing.ts";
 import type { ConfirmAndStartUpdateParams, UpdateProgress } from "./update-confirmation.ts";
 import { formatUpdateTargetLabel } from "./update-schedule-projection.ts";
 
@@ -79,18 +79,9 @@ export async function confirmAndStartUpdateRuntime(
   // One surface owns the outcome at a time: the ambient copy stays hidden while
   // the dialog that started this update is still reporting it.
   document.body.classList.add(UPDATE_DIALOG_OPEN_CLASS);
-  const route = params.viaNativeApp
-    ? {
-        confirmLabel: t("updates.confirm.macAction"),
-        message: t("updates.confirm.macMessage"),
-        title: t("chat.sidebar.updateMacAndGateway"),
-      }
-    : {
-        confirmLabel: t("updates.confirm.action"),
-        message: t("updates.confirm.message"),
-        title: t("chat.sidebar.updateGateway"),
-      };
-  const details = formatInstalledAndAvailable(params.updateAvailable, params.updateSchedule);
+  let viaNativeApp = params.viaNativeApp;
+  let prepareRetry = params.prepareRetry;
+  let { updateAvailable, updateSchedule } = params;
   await new Promise<void>((resolve) => {
     let phase: DialogPhase = params.existingRun
       ? { kind: "run", run: params.existingRun }
@@ -153,6 +144,19 @@ export async function confirmAndStartUpdateRuntime(
         return;
       }
       const current = phase;
+      const route = viaNativeApp
+        ? {
+            confirmLabel: t("updates.confirm.macAction"),
+            message: t("updates.confirm.macMessage"),
+            title: t("chat.sidebar.updateMacAndGateway"),
+          }
+        : {
+            confirmLabel: t("updates.confirm.action"),
+            message: t("updates.confirm.message"),
+            title: t("chat.sidebar.updateGateway"),
+          };
+
+      const details = formatInstalledAndAvailable(updateAvailable, updateSchedule);
       const run = current.kind === "run" ? current.run : null;
       const readError = current.kind === "run" ? latestProgress?.readError : null;
       const working = current.kind === "working" || run?.status === "running";
@@ -160,7 +164,8 @@ export async function confirmAndStartUpdateRuntime(
       const failed = current.kind === "failed" || (run !== null && isReportableUpdateRun(run));
       const checkingStatus = statusCheck === "pending";
       const statusCheckError = typeof statusCheck === "object" ? statusCheck.error : null;
-      const showRecovery = failed || Boolean(readError) || statusCheck !== "idle";
+      const showRecovery =
+        failed || Boolean(readError) || (current.kind !== "confirm" && statusCheck !== "idle");
       const disconnected = latestProgress?.connected === false;
       const body =
         current.kind === "run"
@@ -191,10 +196,10 @@ export async function confirmAndStartUpdateRuntime(
               </div>
               ${statusCheckError ? html`<div role="alert" class="exec-approval-sub">${statusCheckError}</div>` : nothing}
               ${
-                details && current.kind === "confirm"
+                details && current.kind === "confirm" && !checkingStatus && !statusCheckError
                   ? html`<div class="exec-approval-command mono update-confirmation-details">
                       <div>${details}</div>
-                      ${renderUpdateGitRevisions(params.updateSchedule, params.updateAvailable)}
+                      ${renderUpdateGitRevisions(updateSchedule, updateAvailable)}
                     </div>`
                   : nothing
               }
@@ -233,12 +238,7 @@ export async function confirmAndStartUpdateRuntime(
                                 type="button"
                                 class="btn primary"
                                 ?disabled=${checkingStatus || disconnected}
-                                @click=${() => {
-                                  phase = { kind: "confirm" };
-                                  statusCheck = "idle";
-                                  stopWatching?.();
-                                  draw();
-                                }}
+                                @click=${retry}
                               >
                                 ${t("updates.dialog.retryUpdate")}
                               </button>`
@@ -264,16 +264,18 @@ export async function confirmAndStartUpdateRuntime(
                     : html`
                         <button
                           type="button"
-                          class="btn danger ${working ? "btn--busy" : ""}"
-                          ?disabled=${working}
+                          class="btn danger ${working || checkingStatus ? "btn--busy" : ""}"
+                          ?disabled=${working || checkingStatus}
                           @click=${confirm}
                         >
                           ${
-                            working
-                              ? html`<span class="btn__spinner" aria-hidden="true"></span>${t(
-                                    "chat.updating",
-                                  )}`
-                              : route.confirmLabel
+                            checkingStatus
+                              ? t("updates.dialog.checkingStatus")
+                              : working
+                                ? html`<span class="btn__spinner" aria-hidden="true"></span>${t(
+                                      "chat.updating",
+                                    )}`
+                                : route.confirmLabel
                           }
                         </button>
                         <button type="button" class="btn" autofocus @click=${finish}>
@@ -288,6 +290,72 @@ export async function confirmAndStartUpdateRuntime(
         host,
       );
     };
+
+    async function refreshTarget(
+      prepare: NonNullable<ConfirmAndStartUpdateParams["prepareRetry"]>,
+    ) {
+      statusCheck = "pending";
+      draw();
+      try {
+        const target = await prepare();
+        if (settled) {
+          return false;
+        }
+        if (!target) {
+          statusCheck = { error: t("updates.dialog.statusNotRefreshed") };
+          draw();
+          return false;
+        }
+        ({ updateAvailable, updateSchedule } = target);
+        statusCheck = "idle";
+        return true;
+      } catch (error) {
+        statusCheck = { error: formatUiError(error) };
+        draw();
+        return false;
+      }
+    }
+
+    function checkNativePermission(): boolean {
+      if (params.canStartNativeUpdate?.() === false) {
+        statusCheck = { error: t("updates.adminRequired") };
+        draw();
+        return false;
+      }
+      return true;
+    }
+
+    function restoreNativeOwner(): "unchanged" | "restored" | "denied" {
+      if (
+        (!params.viaNativeApp && !params.prepareGatewayFallback) ||
+        viaNativeApp ||
+        !hasNativeUpdateBridge()
+      ) {
+        return "unchanged";
+      }
+      if (!checkNativePermission()) {
+        return "denied";
+      }
+      viaNativeApp = true;
+      prepareRetry = undefined;
+      return "restored";
+    }
+
+    async function retry() {
+      if (statusCheck === "pending" || latestProgress?.connected === false) {
+        return;
+      }
+      if (restoreNativeOwner() === "denied") {
+        return;
+      }
+      if (prepareRetry && !(await refreshTarget(prepareRetry))) {
+        return;
+      }
+      phase = { kind: "confirm" };
+      statusCheck = "idle";
+      stopWatching?.();
+      draw();
+    }
 
     async function checkStatus() {
       if (
@@ -312,13 +380,34 @@ export async function confirmAndStartUpdateRuntime(
       }
     }
 
-    function confirm() {
-      if (phase.kind !== "confirm") {
+    async function confirm() {
+      if (phase.kind !== "confirm" || statusCheck === "pending") {
         return;
       }
-      if (params.viaNativeApp && postNativeUpdate()) {
-        finish();
+      const nativeOwner = restoreNativeOwner();
+      if (nativeOwner !== "unchanged") {
+        if (nativeOwner === "restored") {
+          statusCheck = "idle";
+          draw();
+        }
         return;
+      }
+      if (viaNativeApp) {
+        if (!checkNativePermission()) {
+          return;
+        }
+        if (postNativeUpdate()) {
+          finish();
+          return;
+        }
+        if (params.prepareGatewayFallback) {
+          if (await refreshTarget(params.prepareGatewayFallback)) {
+            viaNativeApp = false;
+            prepareRetry = params.prepareGatewayFallback;
+            draw();
+          }
+          return;
+        }
       }
       const watch = params.watchUpdateProgress;
       if (!watch) {

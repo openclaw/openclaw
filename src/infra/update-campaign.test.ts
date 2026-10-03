@@ -85,7 +85,10 @@ describe("UpdateCampaignController", () => {
     expect(apply).not.toHaveBeenCalled();
     await clock.advanceBy(10_000);
     expect(controller.getState()?.state).toBe("applying");
-    expect(apply).toHaveBeenCalledWith({ forced: false });
+    expect(apply).toHaveBeenCalledWith({
+      forced: false,
+      target: { kind: "package", version: "2.0.0" },
+    });
     await clock.advanceBy(5 * 60_000);
     expect(apply).toHaveBeenCalledOnce();
   });
@@ -118,7 +121,10 @@ describe("UpdateCampaignController", () => {
 
     await clock.advanceBy(60_000);
     expect(controller.getState()?.state).toBe("applying");
-    expect(apply).toHaveBeenCalledWith({ forced: false });
+    expect(apply).toHaveBeenCalledWith({
+      forced: false,
+      target: { kind: "package", version: "2.0.0" },
+    });
   });
 
   it("keeps an announced countdown stable when active work begins", async () => {
@@ -139,7 +145,10 @@ describe("UpdateCampaignController", () => {
 
     await clock.advanceBy(55_000);
     expect(controller.getState()?.state).toBe("applying");
-    expect(apply).toHaveBeenCalledWith({ forced: false });
+    expect(apply).toHaveBeenCalledWith({
+      forced: false,
+      target: { kind: "git", upstreamRef: "origin/main", upstreamSha: "one", commitsBehind: 1 },
+    });
   });
 
   it("starts a fresh campaign for a newer target and clears availability", () => {
@@ -324,7 +333,10 @@ describe("UpdateCampaignController", () => {
     expect(apply).not.toHaveBeenCalled();
     await clock.advanceBy(15 * 60_000);
     expect(controller.getState()?.state).toBe("applying");
-    expect(apply).toHaveBeenCalledWith({ forced: true });
+    expect(apply).toHaveBeenCalledWith({
+      forced: true,
+      target: { kind: "package", version: "2.0.0" },
+    });
   });
 
   it("holds a countdown, drops its apply deadline, and allows adoption", async () => {

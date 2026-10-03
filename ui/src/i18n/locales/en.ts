@@ -627,6 +627,8 @@ export const en: TranslationMap & {
     },
     sidebar: {
       campaignTarget: "{status} · {target}",
+      checking: "Checking for updates…",
+      checkFailed: "Could not check the latest update. Try again.",
       updating: "Updating Gateway…",
       availableTitle: "Update available",
       availableSummary: "A newer revision is ready.",

@@ -6,7 +6,9 @@ import { pathForRoute } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import type { ScopeUpgradeState } from "../app/device-scope-upgrade-availability.ts";
 import type { ExecApprovalDecision, ExecApprovalRequest } from "../app/exec-approval.ts";
+import { hasNativeUpdateBridge } from "../app/native-link-routing.ts";
 import type { UpdateProgress } from "../app/update-confirmation.ts";
+import { isUpdateActionable } from "../app/update-schedule-projection.ts";
 import { t } from "../i18n/index.ts";
 import { registerSidebarAttentionEnglish } from "../i18n/locales/en-sidebar-attention.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
@@ -148,6 +150,29 @@ export function renderSidebarUpdateSurface(params: {
   const context = params.context;
   const snapshot = context.overlays.snapshot;
   const gateway = context.gateway.snapshot;
+  const canCheck = canCallGatewayMethod(gateway, "update.status", "operator.admin");
+  const prepareRetry = async () => {
+    const canRetry = () => {
+      const liveGateway = context.gateway.snapshot;
+      const liveUpdate = context.overlays.snapshot;
+      return (
+        !hasNativeUpdateBridge() &&
+        liveGateway.phase === "connected" &&
+        canCallGatewayMethod(liveGateway, "update.status", "operator.admin") &&
+        canCallGatewayMethod(liveGateway, "update.run", "operator.admin") &&
+        !liveUpdate.updateRunning &&
+        !liveUpdate.updateReconciliationPending &&
+        liveUpdate.updateSchedule?.campaign?.state !== "applying"
+      );
+    };
+    if (!canRetry() || !(await context.overlays.refreshUpdateStatus()) || !canRetry()) {
+      return null;
+    }
+    const { updateAvailable, updateSchedule } = context.overlays.snapshot;
+    return isUpdateActionable(updateAvailable, updateSchedule, false)
+      ? { updateAvailable, updateSchedule }
+      : null;
+  };
   return html`<openclaw-sidebar-update-card
     class="sidebar-issues-panel__update"
     data-attention-kind="updateAvailable"
@@ -160,10 +185,13 @@ export function renderSidebarUpdateSurface(params: {
     .updateRunAcknowledged=${snapshot.updateRunAcknowledged}
     .connected=${gateway.phase === "connected"}
     .onAcknowledge=${() => context.overlays.acknowledgeUpdateRun()}
-    .onCheckStatus=${() => context.overlays.refreshUpdateStatus()}
-    .statusBanner=${snapshot.updateStatusBanner}
+    .prepareRetry=${prepareRetry}
+    .canStartNativeUpdate=${() => canCallGatewayMethod(context.gateway.snapshot, "update.run", "operator.admin")}
+    .onCheckStatus=${canCheck ? () => context.overlays.refreshUpdateStatus() : undefined}
+    .statusBanner=${snapshot.updateStatusCheckBanner ? { ...snapshot.updateStatusCheckBanner, source: "read" } : snapshot.updateStatusBanner}
     .watchUpdateProgress=${params.watchUpdateProgress}
-    .canUpdate=${canCallGatewayMethod(gateway, "update.run", "operator.admin")}
+    .canUpdate=${canCheck && canCallGatewayMethod(gateway, "update.run", "operator.admin")}
+    .canNativeUpdate=${canCallGatewayMethod(gateway, "update.run", "operator.admin")}
     .canHoldUpdate=${canCallGatewayMethod(gateway, "update.hold", "operator.admin")}
     .onUpdate=${() => void context.overlays.runUpdate()}
     .refreshRequired=${false}

@@ -131,7 +131,7 @@ function resolveGitInstalledAtMs(
     : undefined;
 }
 
-function resolveGitScheduleStatus(
+export function resolveGitScheduleStatus(
   update: UpdateCheckResult,
   installReceipt: VerifiedGitUpdateReceipt | null,
   root: string | null,
