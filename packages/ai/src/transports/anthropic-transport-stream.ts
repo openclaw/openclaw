@@ -17,6 +17,7 @@ import {
 } from "../providers/anthropic-model-contract.js";
 import { redactDiagnosticText } from "../utils/credential-redaction.js";
 import { createDeferredEventBuffer } from "../utils/deferred-event-buffer.js";
+import { notifyLlmRequestActivity } from "../utils/llm-request-activity.js";
 import {
   isAnthropicReplayRejection,
   suppressAnthropicCompaction,
@@ -195,13 +196,19 @@ async function* parseAnthropicSseBody(
         const frame = boundary ? buffer.slice(0, frameEnd) : buffer.trim();
         buffer = boundary ? buffer.slice(frameEnd + boundary[0].length) : "";
         delimiter.lastIndex = 0;
-        const data = frame
-          .split(/\r\n|\n|\r/)
+        const lines = frame.split(/\r\n|\n|\r/);
+        const data = lines
           .filter((line) => line.startsWith("data:"))
           .map((line) => line.slice(5).trimStart())
           .join("\n");
         if (data && data !== "[DONE]") {
           yield parseAnthropicSseEventData(data);
+        } else if (!data && lines.some((line) => line.startsWith(":"))) {
+          // A comment-only frame (": keepalive") is protocol liveness without a
+          // model event. Gateways and load balancers hold long reasoning turns
+          // open with these; without this the idle watchdog aborts a healthy
+          // stream, matching the OpenAI transport's comment handling.
+          notifyLlmRequestActivity(signal);
         }
       }
       assertAnthropicSsePendingBufferWithinLimit(buffer.length);

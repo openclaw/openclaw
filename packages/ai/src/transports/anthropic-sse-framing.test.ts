@@ -113,4 +113,34 @@ describe("Anthropic SSE framing", () => {
       unsubscribe();
     }
   });
+
+  it("reports bare comment keepalive frames as request activity", async () => {
+    const encoder = new TextEncoder();
+    const activity = vi.fn();
+    const controller = new AbortController();
+    const unsubscribe = onLlmRequestActivity(controller.signal, activity);
+    try {
+      const eventsBody = anthropicEvents
+        .map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`)
+        .join("");
+      const body = `: keepalive\n\n: keepalive\n\n${eventsBody}: keepalive\n\n`;
+      const result = await runResponse(
+        new Response(
+          new ReadableStream<Uint8Array>({
+            start(source) {
+              source.enqueue(encoder.encode(body));
+              source.close();
+            },
+          }),
+          { headers: { "content-type": "text/event-stream" } },
+        ),
+        controller.signal,
+      );
+      expect(result.stopReason).toBe("stop");
+      // The three comment frames report activity on top of the parsed events.
+      expect(activity.mock.calls.length).toBeGreaterThanOrEqual(anthropicEvents.length + 3);
+    } finally {
+      unsubscribe();
+    }
+  });
 });
