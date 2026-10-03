@@ -155,9 +155,9 @@ describe("package scripts", () => {
     },
   );
 
-  it("enables live cache validation in the package script", () => {
+  it("runs live cache validation through the shared live runtime selector", () => {
     expect(readPackageJson().scripts["test:live:cache"]).toBe(
-      "node --import ./scripts/tsx.mjs scripts/run-with-env.mts OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_CACHE_TEST=1 -- node --import ./scripts/tsx.mjs scripts/check-live-cache.ts",
+      "node --import ./scripts/tsx.mjs scripts/run-with-env.mts OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_CACHE_TEST=1 -- node --import ./scripts/tsx.mjs scripts/test-live.mts src/agents/live-cache-regression.live.test.ts",
     );
   });
 
