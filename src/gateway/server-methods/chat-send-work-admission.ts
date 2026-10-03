@@ -10,6 +10,7 @@ import {
   isCompetingSessionWorkAdmissionActive,
   type SessionWorkAdmissionLease,
 } from "../../sessions/session-lifecycle-admission.js";
+import { REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME } from "../../talk/agent-consult-tool.js";
 import type { registerChatAbortController } from "../chat-abort.js";
 import { ExpectedProfileMismatchError } from "../expected-profile.js";
 import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "../operator-role-policy.js";
@@ -247,7 +248,11 @@ export function assertChatSendExclusiveAdmission(
   request: NormalizedChatSendRequest,
   session: PreparedChatSendSession,
 ): void {
-  if (!request.goalOperation && !request.providerReviewAcknowledgment) {
+  // Queued follow-ups get a new run id and cannot retain this consult's voice binding.
+  const voiceConsult =
+    request.systemInputProvenance?.kind === "internal_system" &&
+    request.systemInputProvenance.sourceTool === REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME;
+  if (!voiceConsult && !request.goalOperation && !request.providerReviewAcknowledgment) {
     return;
   }
   const { storePath, sessionKey, backingSessionId, activeRunScopeKey } = session;
@@ -257,9 +262,11 @@ export function assertChatSendExclusiveAdmission(
     replyRunRegistry.isActive(activeRunScopeKey)
   ) {
     throw new Error(
-      request.providerReviewAcknowledgment
-        ? "The session still has active work. Review its status before continuing."
-        : "goal-session-busy",
+      voiceConsult
+        ? "Still working on the previous request. Please try again when it is finished."
+        : request.providerReviewAcknowledgment
+          ? "The session still has active work. Review its status before continuing."
+          : "goal-session-busy",
     );
   }
 }
