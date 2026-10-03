@@ -7,7 +7,7 @@ import { observeHostDataSql } from "../../test/helpers/sqlite-statement-executio
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { IncognitoSessionAuthority } from "../config/sessions/session-incognito-contract.js";
 import type { IncognitoLifecycleEntry } from "../config/sessions/session-incognito-lifecycle-contract.js";
-import { createIncognitoSessionHistoryReader } from "../gateway/session-incognito-history.js";
+import { createIncognitoSessionHistoryReader } from "../gateway/session-history-snapshot.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
 import type { IncognitoAgentDatabaseExecution } from "./openclaw-agent-execution-incognito.js";
