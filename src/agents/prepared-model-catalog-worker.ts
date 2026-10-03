@@ -47,7 +47,10 @@ import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model
 import { fingerprintPreparedRuntimeFacts } from "./prepared-model-runtime.facts.js";
 import { markPreparedModelCatalogFull } from "./prepared-model-runtime.full-catalog.js";
 import { registerPreparedModelRuntimeClose } from "./prepared-model-runtime.lifecycle.js";
-import { scopeSyntheticAuthProviderRefs } from "./prepared-model-runtime.synthetic-auth.js";
+import {
+  listRegistrySyntheticAuthProviderRefs,
+  scopeSyntheticAuthProviderRefs,
+} from "./prepared-model-runtime.synthetic-auth.js";
 import type { PreparedModelRuntimeInput } from "./prepared-model-runtime.types.js";
 import type { AuthStorageData } from "./sessions/auth-storage.js";
 
@@ -586,6 +589,10 @@ export function createPreparedModelCatalogWorker(
               command.kind === "catalog" && !command.providerIds
                 ? [
                     ...listManifestSyntheticAuthProviderRefs(metadataSnapshot.index),
+                    // Full discovery also runs credential-only providers, whose runtime hooks can
+                    // answer for refs no manifest declares (such as the provider's own id). The
+                    // closed worker cannot probe those refs, so capture them here.
+                    ...listRegistrySyntheticAuthProviderRefs(params.pluginRegistry),
                     ...workerInput.providerIds,
                   ]
                 : [

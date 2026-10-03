@@ -44,6 +44,7 @@ export type SessionState = {
   modelOverrides: Readonly<Record<string, string | null>>;
   loading: boolean;
   error: string | null;
+  startupPending?: boolean;
   deletedSessions: readonly SessionDeletionFact[];
   /** Gateway-owned custom group catalog in display order. */
   groups: readonly string[];
@@ -101,7 +102,10 @@ export type SessionRefreshOutcome =
 
 export type SessionListScope = Readonly<Omit<SessionListOptions, "offset" | "append">>;
 
-export type SessionListSnapshot = Pick<SessionState, "result" | "agentId" | "loading" | "error">;
+export type SessionListSnapshot = Pick<
+  SessionState,
+  "result" | "agentId" | "loading" | "error" | "startupPending"
+>;
 
 export type SessionRowTarget = Readonly<{ key: string; agentId: string }>;
 

@@ -5,13 +5,7 @@ import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-co
  * box. The manifest `configSchema` validates the JSON shape; this resolver
  * normalizes it and coexists with the sibling `warmImages` block.
  */
-export type ResolvedCrabboxSandboxConfig = {
-  provider?: string;
-  class?: string;
-  ttl?: string;
-  idleTimeout?: string;
-  binary?: string;
-};
+export type ResolvedCrabboxSandboxConfig = Partial<Record<(typeof FIELDS)[number], string>>;
 
 const DURATION_PATTERN = /^\d+(?:ms|s|m|h)$/u;
 const FIELDS = ["provider", "class", "binary", "ttl", "idleTimeout"] as const;

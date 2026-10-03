@@ -51,7 +51,6 @@ type AgentConfigEntry = Pick<
 > & {
   model?: unknown;
   models?: Record<string, { alias?: unknown }>;
-  agentRuntime?: unknown;
   tools?: AgentDisplayTools;
 };
 

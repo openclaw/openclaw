@@ -1,8 +1,12 @@
 import { writeFile } from "node:fs/promises";
+import { expect as expectBrowser } from "playwright/test";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
-import { controlUiBundledGatewayUrl } from "../test-helpers/control-ui-e2e.ts";
+import {
+  controlUiBundledGatewayUrl,
+  createControlUiMockSameOriginGatewayScript,
+} from "../test-helpers/control-ui-e2e.ts";
 import {
   controlUiSessionUrl,
   createChatFlowE2eSuite,
@@ -17,6 +21,86 @@ const suite = createChatFlowE2eSuite();
 const artifactRoot = ".artifacts/mock-session-owner/outbox-recovery";
 
 suite.define(() => {
+  it("keeps delivery recovery visible and keyboard-reachable in narrow chat", async () => {
+    await suite.withPage(
+      { locale: "en-US", serviceWorkers: "block", viewport: { width: 320, height: 844 } },
+      async ({ page }) => {
+        await page.addInitScript({ content: createControlUiMockSameOriginGatewayScript() });
+        await installMockGateway(page, {
+          historyMessages: ["failed", "unconfirmed", "waiting-reconnect", "held"].flatMap(
+            (state, index) => [
+              {
+                role: "user",
+                timestamp: 1_000 + index * 2,
+                content: [{ type: "text", text: "Pending " + state }],
+                __openclaw: {
+                  id: "delivery-" + index,
+                  kind: "pending-send",
+                  state,
+                  ...(index === 1
+                    ? {
+                        senderId: "peer",
+                        senderName: "Peer",
+                        senderIdentity: { type: "profile", id: "peer" },
+                      }
+                    : {}),
+                },
+              },
+              {
+                role: "assistant",
+                timestamp: 1_001 + index * 2,
+                content: [{ type: "text", text: "Separate turn" }],
+              },
+            ],
+          ),
+        });
+        await page.goto(suite.server.baseUrl + "chat");
+        const statuses = page.locator(".chat-send-status");
+        await expectBrowser(statuses).toHaveCount(4, { timeout: 30_000 });
+        const held = page.locator('.chat-send-status[data-send-state="held"]');
+        await expectBrowser(held).toContainText("Delivery uncertain");
+        await expectBrowser(
+          held.getByRole("button", { name: "Discard", exact: true }),
+        ).toBeVisible();
+        // Enlarged text must not push recovery controls outside the conversation.
+        await page.addStyleTag({ content: ".chat-send-status { font-size: 24px; }" });
+        for (const theme of ["light", "dark"]) {
+          await page.evaluate((mode) => {
+            document.documentElement.dataset.themeMode = mode;
+          }, theme);
+          for (const status of await statuses.all()) {
+            await status.scrollIntoViewIfNeeded();
+            await page.mouse.move(0, 0);
+            const footer = status.locator(
+              "xpath=ancestor::div[contains(@class, 'chat-group-footer--send-status')]",
+            );
+            await expectBrowser(footer).toHaveCSS("opacity", "1");
+            for (const action of await status.getByRole("button").all()) {
+              await expectBrowser(action).toBeVisible();
+              await expectBrowser(action).toBeEnabled();
+              const bounds = await action.boundingBox();
+              if (!bounds) {
+                throw new Error("Recovery action has no rendered bounds");
+              }
+              expect(bounds.x).toBeGreaterThanOrEqual(0);
+              expect(bounds.x + bounds.width).toBeLessThanOrEqual(320);
+            }
+          }
+          const unconfirmed = page.locator('.chat-send-status[data-send-state="unconfirmed"]');
+          const retry = unconfirmed.getByRole("button", { name: "Retry queued message" });
+          await retry.focus();
+          await page.keyboard.press("Tab");
+          await expectBrowser(
+            unconfirmed.getByRole("button", { name: "Discard", exact: true }),
+          ).toBeFocused();
+          await page.keyboard.press("Shift+Tab");
+          await expectBrowser(retry).toBeFocused();
+          await retry.evaluate((element) => (element as HTMLElement).blur());
+        }
+      },
+    );
+  }, 60_000);
+
   it("retires a delivered recovery row when its exact submission loads in history", async () => {
     await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
       const sessionKey = "agent:main:main";

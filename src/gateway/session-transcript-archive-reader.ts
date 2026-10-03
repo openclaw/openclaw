@@ -28,6 +28,7 @@ import {
 import type {
   ReadRecentSessionMessagesOptions,
   ReadSessionMessagesAsyncOptions,
+  ReadSessionMessagesResult,
 } from "./session-transcript-read.types.js";
 import {
   MAX_TRANSCRIPT_PARSE_LINE_BYTES,
@@ -54,11 +55,6 @@ type ReadRecentSessionMessagesResult = {
   transcriptEvents?: TranscriptEvent[];
   transcriptPath?: string;
   transcriptSource?: "reset-archive";
-};
-
-type ReadSessionMessagesResult = {
-  messages: unknown[];
-  transcriptPath?: string;
 };
 
 const RECENT_SESSION_MESSAGES_DEFAULT_MAX_BYTES = 8 * 1024 * 1024;

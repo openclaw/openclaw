@@ -1,9 +1,14 @@
 import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
+import { sleepWithAbort } from "@openclaw/retry";
 import type { ChatMetadataParams } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferredCore } from "../../../../src/shared/deferred.js";
 import { notifyListeners } from "../../../../src/shared/listeners.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ModelCatalogResult } from "../../api/types.ts";
+import {
+  isAgentDatabaseInspectionPendingError,
+  resolveGatewayReadRetryDelayMs,
+} from "../gateway-availability.ts";
 import {
   invalidateModelCatalogCache,
   getModelCatalogCache,
@@ -109,6 +114,7 @@ function metadataEntryFor(
         entry.validateCatalog = entry.listeners.size > 0 ? validation : undefined;
         entry.result = undefined;
         entry.writer = undefined;
+        entry.activeRequest?.controller.abort();
       }
       for (const entry of invalidated) {
         notifyChatMetadataListeners(entry, {
@@ -129,6 +135,7 @@ function metadataEntryFor(
     const catalogKey = modelCatalogKey(catalogScope);
     const created: ChatMetadataEntry = {
       scope: params,
+      catalogController: new AbortController(),
       listeners: new Map(),
       refreshRevision: 0,
       catalogRevision: 0,
@@ -258,13 +265,18 @@ function beginChatMetadataRequest(
   const queued = entry.queuedRequest;
   if (queued) {
     // Pending demand adopts the latest writer, but never adds another queued read.
+    if (queued.controller.signal.aborted) {
+      queued.controller = new AbortController();
+    }
     queued.publication = publication;
     queued.revalidation ||= revalidation;
     notifyChatMetadataListeners(entry, { type: "loading" });
     return queued.promise;
   }
   const { promise, resolve, reject } = createDeferredCore<ChatMetadataResult>();
+  const waitsForActiveRequest = entry.activeRequest !== undefined;
   const request: ChatMetadataRequest = {
+    controller: new AbortController(),
     promise,
     publication,
     revalidation,
@@ -275,7 +287,27 @@ function beginChatMetadataRequest(
         try {
           let result: ChatMetadataResponse;
           try {
-            result = await client.request<ChatMetadataResponse>("chat.metadata", entry.scope);
+            if (waitsForActiveRequest) {
+              request.controller.signal.throwIfAborted();
+            }
+            let startupAttempt = 0;
+            while (true) {
+              if (startupAttempt > 0) {
+                request.controller.signal.throwIfAborted();
+              }
+              try {
+                result = await client.request<ChatMetadataResponse>("chat.metadata", entry.scope);
+                break;
+              } catch (error) {
+                if (!isAgentDatabaseInspectionPendingError(error)) {
+                  throw error;
+                }
+                await sleepWithAbort(
+                  resolveGatewayReadRetryDelayMs(error, startupAttempt++),
+                  request.controller.signal,
+                );
+              }
+            }
           } finally {
             // Observers may retry synchronously; retire the settled request before notifying them.
             entry.activeRequest = undefined;
@@ -326,6 +358,11 @@ export function subscribeChatMetadata(
   entry.listeners.set(listener, isActive);
   return () => {
     entry.listeners.delete(listener);
+    if (entry.listeners.size === 0) {
+      entry.activeRequest?.controller.abort();
+      entry.queuedRequest?.controller.abort();
+      entry.catalogController.abort();
+    }
     if ((scope.sessionKey || scope.authProfileId) && entry.listeners.size === 0) {
       entry.refreshRevision += 1;
       entry.writer = undefined;
@@ -348,7 +385,7 @@ export function loadChatMetadata(
     return Promise.resolve(entry.result);
   }
   const request = entry.queuedRequest ?? entry.activeRequest;
-  if (request?.publication.isCurrent()) {
+  if (request?.publication.isCurrent() && !request.controller.signal.aborted) {
     return request.promise;
   }
   return beginChatMetadataRequest(client, entry, false);
@@ -362,6 +399,7 @@ export function revalidateChatMetadata(
   const request = entry.queuedRequest ?? entry.activeRequest;
   if (
     request?.publication.isCurrent() &&
+    !request.controller.signal.aborted &&
     (request.revalidation || request === entry.queuedRequest)
   ) {
     request.revalidation = true;
@@ -386,6 +424,7 @@ export function retireChatMetadataRefresh(client: GatewayBrowserClient, scope: C
   entry.refreshAfter = undefined;
   const previous = entry.refresh;
   entry.refresh = undefined;
+  // Foreground demand can adopt this catalog read; only scope release cancels it.
   previous?.start();
 }
 
@@ -396,15 +435,19 @@ export function loadChatMetadataRefresh(
   options?: { kind?: "startup" | "metadata"; revalidateMetadata?: () => boolean },
 ): ChatMetadataRefresh {
   const entry = metadataEntryFor(client, scope);
+  if (entry.catalogController.signal.aborted) {
+    entry.catalogController = new AbortController();
+  }
   // Expiry belongs to the catalog owner and may retire the previous attempt synchronously.
   peekModelCatalog(client, scope);
   const previous = entry.refresh;
   const startupOwnsMetadata =
     options?.kind === undefined &&
     previous?.revision === entry.refreshRevision &&
+    !previous.controller.signal.aborted &&
     !previous.metadataRequired;
   const metadataRequired = options?.kind !== "startup" && !startupOwnsMetadata;
-  if (previous?.phase === "waiting") {
+  if (previous?.phase === "waiting" && !previous.controller.signal.aborted) {
     previous.metadataRequired ||= metadataRequired;
     previous.revalidateMetadata = options?.revalidateMetadata ?? previous.revalidateMetadata;
     previous.revision = entry.refreshRevision;
@@ -414,6 +457,7 @@ export function loadChatMetadataRefresh(
   }
   if (
     previous &&
+    !previous.controller.signal.aborted &&
     previous.phase !== "inactive" &&
     previous.revision === entry.refreshRevision &&
     previous.catalogRevision === entry.catalogRevision &&
@@ -426,6 +470,7 @@ export function loadChatMetadataRefresh(
   const requestedCatalogRevision = entry.catalogRevision;
   const startupCatalog =
     previous?.revision === requestedRevision &&
+    !previous.controller.signal.aborted &&
     previous.catalogRevision === requestedCatalogRevision &&
     previous.phase !== "inactive" &&
     options?.kind === "metadata"
@@ -436,6 +481,7 @@ export function loadChatMetadataRefresh(
   let wakePending = false;
   let debounceTimer: ReturnType<typeof setTimeout> | undefined;
   const record: ChatMetadataRefreshRecord = {
+    controller: entry.catalogController,
     catalog: catalog.promise,
     completed: completed.promise,
     revision: requestedRevision,
@@ -454,7 +500,10 @@ export function loadChatMetadataRefresh(
       clearTimeout(debounceTimer);
       peekModelCatalog(client, scope);
       const current = entry.refresh === record;
-      const active = current && Array.from(entry.listeners.values()).some((isActive) => isActive());
+      const active =
+        current &&
+        !record.controller.signal.aborted &&
+        Array.from(entry.listeners.values()).some((isActive) => isActive());
       const delay = (entry.refreshAfter ?? 0) - Date.now();
       if (active && delay > 0) {
         debounceTimer = setTimeout(record.start, delay);
@@ -496,7 +545,9 @@ export function loadChatMetadataRefresh(
       record.phase = "admitted";
       record.revision = entry.refreshRevision;
       record.catalogRevision = entry.catalogRevision;
-      const catalogRead = inheritedCatalog ?? loadModelCatalog(client, scope);
+      const catalogRead =
+        inheritedCatalog ??
+        loadModelCatalog(client, { ...scope, signal: record.controller.signal });
       const metadataRead = record.metadataRequired
         ? record.revalidateMetadata?.()
           ? revalidateChatMetadata(client, scope)

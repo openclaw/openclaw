@@ -152,7 +152,9 @@ export function resolveToolCardOutcome(
       case "running":
         return runActive === true && card.live === true ? "running" : "unknown";
       default:
-        return "unknown";
+        return runActive === true && card.live === true && card.completed !== true
+          ? "running"
+          : "unknown";
     }
   }
   if (isToolCardError(card)) {

@@ -26,24 +26,6 @@ function normalizeRole(node: ChromeMcpSnapshotNode): string {
   return role || "generic";
 }
 
-function shouldIncludeNode(params: {
-  role: string;
-  name?: string;
-  options?: RoleSnapshotOptions;
-}): boolean {
-  if (params.options?.interactive && !INTERACTIVE_ROLES.has(params.role)) {
-    return false;
-  }
-  if (params.options?.compact && STRUCTURAL_ROLES.has(params.role) && !params.name) {
-    return false;
-  }
-  return true;
-}
-
-function shouldCreateRef(role: string, name?: string): boolean {
-  return INTERACTIVE_ROLES.has(role) || (CONTENT_ROLES.has(role) && Boolean(name));
-}
-
 /** Build ARIA nodes while preserving whether a traversal ceiling omitted input. */
 export function flattenChromeMcpSnapshotToAriaResult(
   root: ChromeMcpSnapshotNode,
@@ -113,14 +95,17 @@ export function buildAiSnapshotFromChromeMcpSnapshot(params: {
     const value = normalizeSnapshotString(node.value);
     const description = normalizeSnapshotString(node.description);
 
-    const includeNode = shouldIncludeNode({ role, name, options: params.options });
+    const interactive = INTERACTIVE_ROLES.has(role);
+    const includeNode =
+      (!params.options?.interactive || interactive) &&
+      !(params.options?.compact && STRUCTURAL_ROLES.has(role) && !name);
     if (includeNode) {
       let line = `${"  ".repeat(depth)}- ${role}`;
       if (name) {
         line += ` ${JSON.stringify(name)}`;
       }
       const ref = normalizeSnapshotString(node.id);
-      if (ref && shouldCreateRef(role, name)) {
+      if (ref && (interactive || (CONTENT_ROLES.has(role) && name))) {
         const key = `${role}:${name ?? ""}`;
         const nth = counts.get(key);
         counts.set(key, (nth ?? 0) + 1);

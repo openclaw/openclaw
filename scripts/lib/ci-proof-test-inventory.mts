@@ -3977,7 +3977,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "test/scripts/plugin-lifecycle-measure.test.ts",
   "test/scripts/plugin-npm-registry-readback.test.ts",
   "test/scripts/plugin-npm-runtime-native-import.test.ts",
-  "test/scripts/plugin-npm-security-scan-runner.test.ts",
   "test/scripts/plugin-prerelease-telegram-shards.test.ts",
   "test/scripts/plugin-prerelease-test-plan.test.ts",
   "test/scripts/plugin-release-git-lifecycle.test.ts",

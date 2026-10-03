@@ -125,7 +125,7 @@ export type PartialReplyPayload = {
   replace?: true;
 };
 
-type ReasoningStreamPayload = Pick<
+export type ReasoningStreamPayload = Pick<
   ReplyPayload,
   "text" | "mediaUrls" | "isReasoning" | "isReasoningSnapshot"
 > & {

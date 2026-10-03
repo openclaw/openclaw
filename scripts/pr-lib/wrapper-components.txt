@@ -613,6 +613,7 @@ src/config/zod-schema.agents.ts
 src/config/zod-schema.allowdeny.ts
 src/config/zod-schema.approvals.ts
 src/config/zod-schema.channel-bot-loop.ts
+src/config/zod-schema.channel-messaging-common.ts
 src/config/zod-schema.channels-config.ts
 src/config/zod-schema.channels.ts
 src/config/zod-schema.cloud-workers.ts
@@ -1290,6 +1291,7 @@ src/plugins/plugin-sdk-native-resolver.ts
 src/plugins/plugin-setup-module.ts
 src/plugins/plugin-shared-module-loader.ts
 src/plugins/plugin-source-admission-store.ts
+src/plugins/plugin-source-admission.types.ts
 src/plugins/plugin-source-build.ts
 src/plugins/plugin-source-capture-context.ts
 src/plugins/plugin-source-capture-directory.ts

@@ -206,6 +206,10 @@ jobs:
       source_admission_json: ${{ steps.publication_admission.outputs.json }}
       validation_purpose: ${{ steps.publication_request.outputs.validation_purpose }}
       publication_selection_json: ${{ steps.publication_request.outputs.publication_selection_json }}
+      plugin_npm_preflight_required: ${{ steps.plugin_npm_preflight.outputs.required }}
+      plugin_npm_publish_scope: ${{ steps.plugin_npm_preflight.outputs.publish_scope }}
+      plugin_npm_plugins: ${{ steps.plugin_npm_preflight.outputs.plugins }}
+      plugin_npm_dist_tag: ${{ steps.plugin_npm_preflight.outputs.npm_dist_tag }}
       plugin_compatibility_required: ${{ steps.plugin_compatibility.outputs.required }}
     steps:
       - name: Setup supported Node runtime
@@ -603,6 +607,38 @@ jobs:
           set -euo pipefail
           umask 077
           node workflow/scripts/full-release-publication-contract.mjs --request > "$RUNNER_TEMP/publication-source-request.json"
+
+      - name: Resolve plugin npm artifact qualification
+        id: plugin_npm_preflight
+        env:
+          PUBLICATION_SELECTION_JSON: ${{ steps.publication_request.outputs.publication_selection_json }}
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const fs = require("node:fs");
+          const selection = process.env.PUBLICATION_SELECTION_JSON
+            ? JSON.parse(process.env.PUBLICATION_SELECTION_JSON)
+            : null;
+          const scope = selection?.pluginPublishScope ?? "none";
+          if (!["none", "selected", "all-publishable"].includes(scope)) {
+            throw new Error(`Unsupported plugin publication scope: ${scope}`);
+          }
+          const plugins = Array.isArray(selection?.plugins) ? selection.plugins : [];
+          if (plugins.some((name) => typeof name !== "string" || !name.trim() || /[\r\n,\0]/u.test(name))) {
+            throw new Error("Plugin publication selection is invalid.");
+          }
+          if ((scope === "selected") !== (plugins.length > 0)) {
+            throw new Error("Selected plugin publication requires an explicit non-empty roster.");
+          }
+          const npmDistTag = selection?.npmDistTag === "extended-stable" ? "extended-stable" : "default";
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, [
+            `required=${scope === "none" ? "false" : "true"}`,
+            `publish_scope=${scope}`,
+            `plugins=${plugins.join(",")}`,
+            `npm_dist_tag=${npmDistTag}`,
+            "",
+          ].join("\n"));
+          NODE
 
       - name: Plan frozen source admission
         id: frozen_selection
@@ -1389,6 +1425,12 @@ jobs:
               fi
               dispatch_child full-release-artifacts.yml "Full Release Artifacts ${dispatch_id}" "${args[@]}"
               ;;
+            plugin-npm-preflight)
+              dispatch_id="full-release-validation-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-plugin-npm-preflight"
+              dispatch_run_name="Plugin NPM Artifact Preflight [${NPM_DIST_TAG}] ${TARGET_SHA} (${dispatch_id})"
+              args=(-f ref="$TARGET_SHA" -f publish_scope="$PLUGIN_PUBLISH_SCOPE" -f plugins="$PLUGINS" -f npm_dist_tag="$NPM_DIST_TAG" -f preflight_only=true -f trusted_publisher_preflight=false -f dispatch_id="$dispatch_id")
+              dispatch_child plugin-npm-release.yml "$dispatch_run_name" "${args[@]}"
+              ;;
             plugin-prerelease)
               case "$PHASE" in
                 independent|candidate) ;;
@@ -1834,6 +1876,96 @@ jobs:
       - name: Wait for exact npm qualification
         id: bundle
         run: node scripts/full-release-artifacts.mjs wait
+
+  prepare_plugin_npm:
+    name: Prepare exact plugin npm artifacts
+    needs: [resolve_target, plugin_compatibility_readiness, evidence_reuse]
+    if: ${{ always() && inputs.rerun_group == 'all' && needs.resolve_target.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.plugin_compatibility_readiness.result) && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) && needs.resolve_target.outputs.plugin_npm_preflight_required == 'true' }}
+    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
+    timeout-minutes: 150
+    outputs:
+      descriptor_json: ${{ steps.prepared.outputs.descriptor_json }}
+      run_id: ${{ steps.prepared.outputs.run_id }}
+      run_attempt: ${{ steps.prepared.outputs.run_attempt }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      CHILD_WORKFLOW_KIND: plugin-npm-preflight
+      TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
+      PLUGIN_PUBLISH_SCOPE: ${{ needs.resolve_target.outputs.plugin_npm_publish_scope }}
+      PLUGINS: ${{ needs.resolve_target.outputs.plugin_npm_plugins }}
+      NPM_DIST_TAG: ${{ needs.resolve_target.outputs.plugin_npm_dist_tag }}
+      CHILD_WORKFLOW_REF: ${{ github.ref_name }}
+      PARENT_WORKFLOW_SHA: ${{ github.sha }}
+      DISPATCH_ID: full-release-validation-${{ github.run_id }}-1-plugin-npm-preflight
+    steps:
+      - name: Dispatch exact plugin npm artifact preflight
+        id: dispatch
+        if: github.run_attempt == 1
+        run: *full_release_child_dispatch
+
+      - name: Resolve and seal exact plugin npm artifact descriptor
+        id: prepared
+        env:
+          DISPATCH_RUN_ID: ${{ steps.dispatch.outputs.run_id }}
+          DISPATCH_RUN_ATTEMPT: ${{ steps.dispatch.outputs.run_attempt }}
+        run: |
+          set -euo pipefail
+          expected_title="Plugin NPM Artifact Preflight [${NPM_DIST_TAG}] ${TARGET_SHA} (${DISPATCH_ID})"
+          run_id="$DISPATCH_RUN_ID"
+          if [[ -z "$run_id" ]]; then
+            matches="$({ gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/workflows/plugin-npm-release.yml/runs?event=workflow_dispatch&branch=${CHILD_WORKFLOW_REF}&per_page=100" || exit; } | jq -s --arg title "$expected_title" '[.[].workflow_runs[] | select(.display_title == $title) | .id] | unique')"
+            [[ "$(jq 'length' <<< "$matches")" == 1 ]] || {
+              echo "Expected one exact plugin npm preflight for ${DISPATCH_ID}." >&2
+              exit 1
+            }
+            run_id="$(jq -r '.[0]' <<< "$matches")"
+          fi
+
+          deadline=$((SECONDS + 8400))
+          while :; do
+            run_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}")"
+            jq -e \
+              --arg repository "$GITHUB_REPOSITORY" \
+              --arg branch "$CHILD_WORKFLOW_REF" \
+              --arg sha "$PARENT_WORKFLOW_SHA" \
+              --arg title "$expected_title" \
+              '.repository.full_name == $repository and .event == "workflow_dispatch" and .head_branch == $branch and .head_sha == $sha and .display_title == $title and (.run_attempt | type == "number" and . > 0)' \
+              <<< "$run_json" >/dev/null
+            status="$(jq -r .status <<< "$run_json")"
+            if [[ "$status" == completed ]]; then
+              [[ "$(jq -r .conclusion <<< "$run_json")" == success ]] || {
+                echo "Plugin npm artifact preflight ${run_id} failed." >&2
+                exit 1
+              }
+              break
+            fi
+            (( SECONDS < deadline )) || {
+              echo "Plugin npm artifact preflight ${run_id} did not finish before the FRV deadline." >&2
+              exit 1
+            }
+            sleep 15
+          done
+
+          run_attempt="$(jq -r .run_attempt <<< "$run_json")"
+          artifact_name="plugin-npm-prepared-${TARGET_SHA}-${run_id}-${run_attempt}"
+          artifacts="$({ gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/artifacts?per_page=100" || exit; } | jq -s '{artifacts: [.[].artifacts[]] | unique_by(.id)}')"
+          artifact="$(jq -ce --arg name "$artifact_name" '[.artifacts[] | select(.name == $name and .expired == false)] | if length == 1 then .[0] else error("expected one live prepared plugin npm artifact") end' <<< "$artifacts")"
+          descriptor="$(
+            jq -cn \
+              --arg repository "$GITHUB_REPOSITORY" \
+              --argjson runId "$run_id" \
+              --argjson runAttempt "$run_attempt" \
+              --arg workflowHeadBranch "$CHILD_WORKFLOW_REF" \
+              --arg workflowSha "$PARENT_WORKFLOW_SHA" \
+              --argjson artifact "$artifact" \
+              '{repository: $repository, runId: $runId, runAttempt: $runAttempt, workflowPath: ".github/workflows/plugin-npm-release.yml", workflowEvent: "workflow_dispatch", workflowHeadBranch: $workflowHeadBranch, workflowSha: $workflowSha, artifactId: $artifact.id, artifactName: $artifact.name, artifactDigest: $artifact.digest, artifactSizeBytes: $artifact.size_in_bytes}'
+          )"
+          jq -e '.artifactId > 0 and (.artifactDigest | test("^sha256:[0-9a-f]{64}$")) and .artifactSizeBytes > 0' <<< "$descriptor" >/dev/null
+          {
+            echo "run_id=${run_id}"
+            echo "run_attempt=${run_attempt}"
+            echo "descriptor_json=${descriptor}"
+          } >> "$GITHUB_OUTPUT"
 
   prepare_docker_release:
     name: Prepare release Docker artifacts
@@ -2362,6 +2494,7 @@ jobs:
         evidence_reuse,
         prepare_npm_package,
         qualify_npm_package,
+        prepare_plugin_npm,
         prepare_docker_release,
         candidate_acquisition,
         normal_ci,
@@ -2384,6 +2517,9 @@ jobs:
         env:
           NPM_PREPARE_RESULT: ${{ needs.prepare_npm_package.result }}
           NPM_QUALIFY_RESULT: ${{ needs.qualify_npm_package.result }}
+          PLUGIN_NPM_REQUIRED: ${{ needs.resolve_target.outputs.plugin_npm_preflight_required }}
+          PLUGIN_NPM_PREPARE_RESULT: ${{ needs.prepare_plugin_npm.result }}
+          PREPARED_PLUGIN_NPM_JSON: ${{ needs.prepare_plugin_npm.outputs.descriptor_json }}
           DOCKER_PREPARE_RESULT: ${{ needs.prepare_docker_release.result }}
           QUALIFIED_NPM_BUNDLE_JSON: ${{ needs.qualify_npm_package.outputs.qualified_preflight_bundle_json }}
           PREPARED_DOCKER_MANIFEST_SHA256: ${{ needs.prepare_docker_release.outputs.prepared_manifest_sha256 }}
@@ -2399,6 +2535,12 @@ jobs:
             echo "Release Docker preparation must succeed." >&2
             exit 1
           }
+          if [[ "$PLUGIN_NPM_REQUIRED" == true ]]; then
+            [[ "$PLUGIN_NPM_PREPARE_RESULT" == success && -n "$PREPARED_PLUGIN_NPM_JSON" ]] || {
+              echo "Exact plugin npm artifact qualification must succeed before FRV passes." >&2
+              exit 1
+            }
+          fi
 
       - name: Checkout release state verifier
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -2584,6 +2726,7 @@ jobs:
           RELEASE_EXECUTION_PLAN_PATH: ${{ runner.temp }}/full-release-execution-plan/full-release-execution-plan.json
           DIAGNOSTIC_DRAIN_PATH: ${{ runner.temp }}/full-release-diagnostics/full-release-diagnostic-manifest.json
           QUALIFIED_NPM_BUNDLE_JSON: ${{ needs.qualify_npm_package.outputs.qualified_preflight_bundle_json }}
+          PREPARED_PLUGIN_NPM_JSON: ${{ needs.prepare_plugin_npm.outputs.descriptor_json }}
           PREPARED_DOCKER_RUN_ID: ${{ needs.prepare_docker_release.outputs.prepared_run_id }}
           PREPARED_DOCKER_RUN_ATTEMPT: ${{ needs.prepare_docker_release.outputs.prepared_run_attempt }}
           PREPARED_DOCKER_ARTIFACT_NAME: ${{ needs.prepare_docker_release.outputs.prepared_artifact_name }}

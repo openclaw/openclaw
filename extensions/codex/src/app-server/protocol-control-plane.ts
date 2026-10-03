@@ -72,9 +72,7 @@ export type CodexPluginInstalledResponse = {
   marketplaceLoadErrors: CodexMarketplaceLoadErrorInfo[];
 };
 
-export type CodexPluginListResponse = {
-  marketplaces: CodexPluginMarketplaceEntry[];
-  marketplaceLoadErrors: CodexMarketplaceLoadErrorInfo[];
+export type CodexPluginListResponse = CodexPluginInstalledResponse & {
   featuredPluginIds: string[];
 };
 

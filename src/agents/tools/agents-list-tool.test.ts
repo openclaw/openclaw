@@ -47,7 +47,6 @@ describe("agents_list tool", () => {
           codex: {
             name: "Codex",
             model: "openai/gpt-5.5",
-            agentRuntime: { id: "openclaw" },
             models: {
               "openai/gpt-5.5": { agentRuntime: { id: "codex" } },
             },
@@ -220,38 +219,6 @@ describe("agents_list tool", () => {
           name: undefined,
           configured: true,
           model: "openai/gpt-5.5",
-          agentRuntime: { id: "codex", source: "implicit" },
-        },
-      ],
-    });
-  });
-
-  it("ignores legacy per-agent runtime overrides", async () => {
-    loadConfigMock.mockReturnValue({
-      agents: {
-        defaults: {
-          agentRuntime: { id: "auto" },
-          subagents: { allowAgents: ["strict"] },
-        },
-        entries: { main: {}, strict: { agentRuntime: { id: "codex" } } },
-      },
-    } satisfies OpenClawConfig);
-
-    const result = await createAgentsListTool({ agentSessionKey: "agent:main:main" }).execute(
-      "call",
-      {},
-    );
-    const details = result.details as AgentListDetails;
-
-    expect(details).toStrictEqual({
-      requester: "main",
-      allowAny: false,
-      agents: [
-        {
-          id: "strict",
-          name: undefined,
-          configured: true,
-          model: "openai/gpt-6-astra",
           agentRuntime: { id: "codex", source: "implicit" },
         },
       ],

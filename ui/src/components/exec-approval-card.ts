@@ -3,10 +3,12 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { html, nothing } from "lit";
 import { property } from "lit/decorators.js";
 import { formatApprovalDisplayPath } from "../../../src/infra/approval-display-paths.ts";
-import type { ApprovalScope } from "../../../src/infra/approval-scope.ts";
 import { normalizeCommandSpans } from "../../../src/shared/exec-approval-command-spans.ts";
 import type { GatewaySessionRow } from "../api/types.ts";
-import { compactApprovalCommand } from "../app/approval-presentation.ts";
+import {
+  compactApprovalCommand,
+  summarizeApprovalScopeLabel,
+} from "../app/approval-presentation.ts";
 import type {
   ExecApprovalDecision,
   ExecApprovalRequest,
@@ -135,32 +137,6 @@ function renderChip(kind: "plugin" | "agent", id?: string | null) {
     : nothing;
 }
 
-function summarizeScopeLabel(scope: ApprovalScope): string {
-  switch (scope.kind) {
-    case "standing-grant":
-      return scope.expiresInDays !== undefined
-        ? t("execApproval.scope.standingGrantDays", {
-            automation: scope.automation,
-            count: String(scope.expiresInDays),
-          })
-        : t("execApproval.scope.standingGrant", { automation: scope.automation });
-    case "message-send":
-      return t("execApproval.scope.messageSend", {
-        count: String(scope.recipientCount),
-        target: scope.target,
-      });
-    case "payment":
-      return t("execApproval.scope.payment", {
-        amount: scope.amount,
-        currency: scope.currency,
-        target: scope.target,
-      });
-    case "external-post":
-      return t("execApproval.scope.externalPost", { target: scope.target });
-  }
-  return scope satisfies never;
-}
-
 function renderExecBody(
   request: ExecApprovalRequestPayload,
   variant: ExecApprovalCardProps["variant"],
@@ -168,7 +144,7 @@ function renderExecBody(
   return html` ${renderCommandWithSpans(request)}
     ${
       request.scope
-        ? html`<div class="exec-approval-scope">${summarizeScopeLabel(request.scope)}</div>`
+        ? html`<div class="exec-approval-scope">${summarizeApprovalScopeLabel(request.scope)}</div>`
         : nothing
     }
     <div class="exec-approval-meta">
@@ -299,7 +275,7 @@ export function renderSidebarApprovalRow(props: SidebarApprovalRowProps) {
       ${
         approval.request.scope
           ? html`<div class="exec-approval-scope">
-              ${summarizeScopeLabel(approval.request.scope)}
+              ${summarizeApprovalScopeLabel(approval.request.scope)}
             </div>`
           : nothing
       }

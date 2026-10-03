@@ -134,6 +134,13 @@ per-agent `tools.codeMode` options.
 
 ## What the model does
 
+Each `exec` starts a fresh JavaScript context. Variables and functions do not
+carry over between cells; `wait` resumes the same cell. Use `await store(key,
+value)` and `await load(key)` for small JSON values needed across turns in this
+session, including after a restart. See the
+[session store](/tools/code-mode/guest-api#session-store) for its commit rules
+and limits.
+
 For a tool with a declared output such as
 `Array<{ id: string; paid: boolean; tons: number }>`, one guest program can
 select, call, and transform it:
@@ -201,10 +208,11 @@ expired references reject with a catchable error. `API.read("results.d.ts")`
 provides TypeScript-style documentation; loaded data is declared as `unknown`,
 so inspect its shape before composing it.
 
-References last only for the current agent run and catalog. They survive cell
-completion and `wait`, but not run end, abort, catalog replacement, permission
+References expire when the current reply ends; never reuse ids from earlier
+turns. Use `store` for small JSON values needed later. References survive cell
+completion and `wait`, but not reply end, abort, catalog replacement, permission
 changes, or Gateway restart. They are snapshots: fetch again when current
-external state matters. The store holds at most 64 values with a total encoded
+external state matters. The results store holds at most 64 values with a total encoded
 JSON allowance of `min(memoryLimitBytes, maxSnapshotBytes)` (10 MiB by default),
 separate from the cell inbox. New saves fail when full; existing references are
 never evicted automatically. No functions, tool handles, or permissions are saved.
