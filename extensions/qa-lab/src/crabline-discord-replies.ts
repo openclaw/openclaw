@@ -33,7 +33,7 @@ export async function startCrablineDiscordReplies(params: {
   const upstream = new URL(manifest.endpoints.apiRoot);
   const lifecycle = new AbortController();
   const sockets = new Set<WebSocket>();
-  const gatewayServer = new WebSocketServer({ noServer: true });
+  const gatewayServer = new WebSocketServer({ noServer: true, maxPayload: 100 * 1024 * 1024 });
   let generation = 0;
   let lastDelivery: { messageId: string; channelId: string } | undefined;
   const server = createServer((req, res) => {

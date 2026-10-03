@@ -229,13 +229,13 @@ async function runBraveSearch(params: {
         results: results.slice(0, params.count).map((entry) => {
           const description = entry.description ?? "";
           const title = entry.title ?? "";
-          const url = entry.url ?? "";
+          const resultUrl = entry.url ?? "";
           return {
             title: title ? wrapWebContent(title, "web_search") : "",
-            url,
+            url: resultUrl,
             description: description ? wrapWebContent(description, "web_search") : "",
             published: entry.page_age || undefined,
-            siteName: resolveSiteName(url) || undefined,
+            siteName: resolveSiteName(resultUrl) || undefined,
           };
         }),
       };

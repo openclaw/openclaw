@@ -29,8 +29,8 @@ describe("Matrix QA CLI JSON output", () => {
 describe("Matrix QA destructive CLI JSON boundary", () => {
   const rawDetail = "GET /_matrix/client/v3/sync?access_token=abcdef1234567890ghij";
   const redactedDetail = "GET /_matrix/client/v3/sync?access_token=abcdef…ghij";
-  const stdout = ` {"values":[0,false,null,""],"detail":"${rawDetail}"}\n`;
-  const redactedStdout = ` {"values":[0,false,null,""],"detail":"${redactedDetail}"}\n`;
+  const stdout = ` {"success":false,"backup":{"matchesDecryptionKey":null,"extra":false},"imported":0,"values":[0,false,null,""],"detail":"${rawDetail}"}\n`;
+  const redactedStdout = ` {"success":false,"backup":{"matchesDecryptionKey":null,"extra":false},"imported":0,"values":[0,false,null,""],"detail":"${redactedDetail}"}\n`;
   const stderr = `{"fallback":true,"detail":"${rawDetail}"}`;
   const redactedStderr = `{"fallback":true,"detail":"${redactedDetail}"}`;
 
@@ -58,6 +58,14 @@ describe("Matrix QA destructive CLI JSON boundary", () => {
       stderr: `\t{]\n${rawDetail}  `,
       expectedStdout: " \n",
       expectedStderr: `\t{]\n${redactedDetail}  `,
+    },
+    {
+      name: "rejects malformed status fields after preserving redacted artifacts",
+      outcome: "status",
+      stdout: `{"backup":{"decryptionKeyCached":"yes"},"detail":"${rawDetail}"}`,
+      stderr,
+      expectedStdout: `{"backup":{"decryptionKeyCached":"yes"},"detail":"${redactedDetail}"}`,
+      expectedStderr: redactedStderr,
     },
     {
       name: "rejects empty streams without a JSON parser cause",
@@ -104,13 +112,24 @@ describe("Matrix QA destructive CLI JSON boundary", () => {
       if (outcome === "success") {
         const actual = await pending;
         expect(actual.result).toBe(result);
-        expect(actual.payload).toEqual({ values: [0, false, null, ""], detail: rawDetail });
+        expect(actual.payload).toStrictEqual({
+          success: false,
+          backup: { matchesDecryptionKey: null, extra: false },
+          imported: 0,
+          values: [0, false, null, ""],
+          detail: rawDetail,
+        });
         expect(actual.artifacts).toEqual(artifacts);
       } else {
         const failure = await pending.catch((caught: unknown) => caught);
         expect(failure).toBeInstanceOf(Error);
         const error = failure as Error;
-        if (outcome === "empty") {
+        if (outcome === "status") {
+          expect(error).toMatchObject({
+            name: "ZodError",
+            issues: [{ code: "invalid_type", path: ["backup", "decryptionKeyCached"] }],
+          });
+        } else if (outcome === "empty") {
           expect(error.message).toBe(`${command} did not print JSON`);
           expect(error).not.toHaveProperty("cause");
         } else {

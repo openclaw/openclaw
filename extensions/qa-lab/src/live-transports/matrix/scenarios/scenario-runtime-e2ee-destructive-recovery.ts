@@ -5,7 +5,7 @@ import {
 import { buildMatrixQaCliE2eeAccountConfig } from "./scenario-runtime-e2ee-cli-config.js";
 import {
   loginMatrixQaCliDevice,
-  parseMatrixQaCliJson,
+  parseMatrixQaCliVerificationStatus,
   type MatrixQaCliBackupRestoreStatus,
   type MatrixQaCliVerificationStatus,
   writeMatrixQaCliOutputArtifacts,
@@ -77,7 +77,7 @@ export async function loginMatrixQaRecoveryDevice(params: {
   );
 }
 
-export async function runMatrixQaCliJson<T>(params: {
+export async function runMatrixQaCliJson(params: {
   allowNonZero?: boolean;
   args: string[];
   label: string;
@@ -97,7 +97,7 @@ export async function runMatrixQaCliJson<T>(params: {
   });
   return {
     artifacts,
-    payload: parseMatrixQaCliJson(result) as T,
+    payload: parseMatrixQaCliVerificationStatus(result),
     result,
   };
 }

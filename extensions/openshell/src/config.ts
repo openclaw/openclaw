@@ -29,23 +29,20 @@ const DEFAULT_SOURCE = "openclaw";
 const DEFAULT_REMOTE_WORKSPACE_DIR = "/sandbox";
 const DEFAULT_REMOTE_AGENT_WORKSPACE_DIR = "/agent";
 const DEFAULT_TIMEOUT_MS = 120_000;
-const OPEN_SHELL_MANAGED_REMOTE_ROOTS = [
-  DEFAULT_REMOTE_WORKSPACE_DIR,
-  DEFAULT_REMOTE_AGENT_WORKSPACE_DIR,
-] as const;
+const OPEN_SHELL_MANAGED_REMOTE_PATH = /^\/(?:sandbox|agent)(?:\/|$)/;
 
 const nonEmptyTrimmedString = (message: string) =>
   z.string({ error: message }).trim().min(1, { error: message });
 
 const openShellManagedRemotePath = (fieldName: string) =>
   nonEmptyTrimmedString(`${fieldName} must be a non-empty string`)
-    .regex(/^\/(?:sandbox|agent)(?:\/|$)/, {
+    .regex(OPEN_SHELL_MANAGED_REMOTE_PATH, {
       error: (issue) =>
         String(issue.input).startsWith("/")
           ? `OpenShell ${fieldName} must stay under /sandbox or /agent`
           : `OpenShell ${fieldName} must be absolute`,
     })
-    .refine((value) => isManagedOpenShellRemotePath(path.posix.normalize(value)), {
+    .refine((value) => OPEN_SHELL_MANAGED_REMOTE_PATH.test(path.posix.normalize(value)), {
       error: `OpenShell ${fieldName} must stay under /sandbox or /agent`,
     });
 
@@ -92,10 +89,12 @@ const OpenShellPluginConfigSchema = z.strictObject({
     .optional(),
 });
 
-function isManagedOpenShellRemotePath(value: string): boolean {
-  return OPEN_SHELL_MANAGED_REMOTE_ROOTS.some(
-    (root) => value === root || value.startsWith(`${root}/`),
-  );
+function normalizeOpenShellRemotePath(value: string): string {
+  const normalized = path.posix.normalize(value);
+  if (!OPEN_SHELL_MANAGED_REMOTE_PATH.test(normalized)) {
+    throw new Error(`OpenShell remote path must stay under /sandbox or /agent: ${value}`);
+  }
+  return normalized;
 }
 
 export function createOpenShellPluginConfigSchema(): OpenClawPluginConfigSchema {
@@ -136,10 +135,10 @@ export function resolveOpenShellPluginConfig(value: unknown): ResolvedOpenShellP
     providers: [...new Set(cfg.providers ?? [])],
     gpu: cfg.gpu ?? false,
     autoProviders: cfg.autoProviders ?? true,
-    remoteWorkspaceDir: path.posix.normalize(
+    remoteWorkspaceDir: normalizeOpenShellRemotePath(
       cfg.remoteWorkspaceDir ?? DEFAULT_REMOTE_WORKSPACE_DIR,
     ),
-    remoteAgentWorkspaceDir: path.posix.normalize(
+    remoteAgentWorkspaceDir: normalizeOpenShellRemotePath(
       cfg.remoteAgentWorkspaceDir ?? DEFAULT_REMOTE_AGENT_WORKSPACE_DIR,
     ),
     timeoutMs:

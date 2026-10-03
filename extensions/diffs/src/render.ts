@@ -532,7 +532,9 @@ async function renderPatchDiff(
       .flatMap((entry) => entry.files ?? [])
       .map(async (fileDiff): Promise<FileDiffMetadata> => {
         const lang = await normalizeSupportedLanguageHint(fileDiff.lang, { languagePackAvailable });
-        return lang === fileDiff.lang ? fileDiff : { ...fileDiff, lang: lang ?? "text" };
+        return lang === fileDiff.lang
+          ? fileDiff
+          : Object.assign({}, fileDiff, { lang: lang ?? "text" });
       }),
   );
   if (files.length === 0) {

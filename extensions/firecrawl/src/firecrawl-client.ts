@@ -491,7 +491,7 @@ export async function runFirecrawlSearch(
     query: params.query,
     provider: providerId,
     count: items.length,
-    tookMs: tookMs,
+    tookMs,
     externalContent: {
       untrusted: true,
       source: "web_search",
