@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { Value } from "typebox/value";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { createOpenClawReadTool } from "./agent-tools.read.js";
+import { createOpenClawReadTool, resolveAdaptiveReadMaxBytes } from "./agent-tools.read.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { createApplyPatchTool } from "./apply-patch.js";
 import { applyCodeModeCatalog } from "./code-mode.js";
@@ -16,6 +16,7 @@ import { createEditTool, createReadTool, createWriteTool } from "./sessions/inde
 import { createFindTool } from "./sessions/tools/find.js";
 import { createGrepTool } from "./sessions/tools/grep.js";
 import { createLsTool } from "./sessions/tools/ls.js";
+import type { ReadToolDetails } from "./sessions/tools/tool-contracts.js";
 import { DEFAULT_MAX_BYTES } from "./sessions/tools/truncate.js";
 import { resolveToolResultBudget, toolResultFitsBudget } from "./tool-result-limits.js";
 import { compactToolOutputHint } from "./tool-schema-hints.js";
@@ -304,6 +305,77 @@ describe("filesystem tool output contracts", () => {
         last: records.at(-1),
         length: original.length,
       });
+    },
+  );
+
+  it.each([
+    { name: "one leading blank line", prefix: "\n", size: 52 * 1024 },
+    { name: "no leading blank line", prefix: "", size: 52 * 1024 },
+    { name: "two leading blank lines", prefix: "\n\n", size: 52 * 1024 },
+    { name: "a short file", prefix: "\n", size: 10 },
+    { name: "an offset on a blank line", prefix: "\n", size: 52 * 1024, offset: 2 },
+    {
+      name: "an empty page at the model budget",
+      prefix: "\n",
+      size: 52 * 1024,
+      modelContextWindowTokens: 16_384,
+    },
+  ])(
+    "preserves $name across read continuations",
+    async ({ prefix, size, offset, modelContextWindowTokens }) => {
+      const expected = `${prefix}${JSON.stringify({ generated: "x".repeat(size) })}`;
+      await fs.writeFile(
+        path.join(tmpDir, "paged.json"),
+        `${offset ? "before\n" : ""}${expected}`,
+        "utf8",
+      );
+      const options = { modelContextWindowTokens };
+      const maxBytes = resolveAdaptiveReadMaxBytes(options);
+      const modelBudget = resolveToolResultBudget(modelContextWindowTokens);
+      const tool = createOpenClawReadTool(
+        createReadTool(tmpDir, { maxBytes }) as unknown as AnyAgentTool,
+        options,
+      );
+      let args: { path: string; offset?: number; cursor?: number; limit?: number } = {
+        path: "paged.json",
+        ...(offset ? { offset } : {}),
+      };
+      let actual = "";
+      let separator = "";
+      let complete = false;
+      for (let page = 0; page < 16; page++) {
+        const result = await tool.execute(`read-page-${page}`, args);
+        expectContract(tool, result.details);
+        const details = result.details as ReadToolDetails;
+        if (details.kind !== "text" && details.kind !== "truncated") {
+          throw new Error("Expected structured file text");
+        }
+        const text = result.content.find((block) => block.type === "text")!.text;
+        for (const content of [text, details.content]) {
+          expect(Buffer.byteLength(content, "utf8")).toBeLessThanOrEqual(maxBytes);
+          expect(toolResultFitsBudget(content, modelBudget)).toBe(true);
+        }
+        actual += separator + details.content;
+        if (details.kind === "text") {
+          expect(text).toBe(details.content);
+          complete = true;
+          break;
+        }
+        const footer = text.slice(details.content.length);
+        const next = details.continuation;
+        expect(text.slice(0, details.content.length)).toBe(details.content);
+        expect(footer).toContain("\n\n[Read output capped at ");
+        expect(footer).toContain(`offset=${next.offset}`);
+        if (next.kind === "cursor") {
+          expect(footer).toContain(`cursor=${next.cursor}`);
+        }
+        separator = next.kind === "line" ? "\n" : "";
+        const { kind: _kind, ...continuation } = next;
+        args = { path: "paged.json", ...continuation };
+      }
+      expect(complete).toBe(true);
+      expect(Buffer.byteLength(actual)).toBe(Buffer.byteLength(expected));
+      expect(actual).toBe(expected);
     },
   );
 
