@@ -428,8 +428,26 @@ async function runOutboundDeliveryWithQueue(
   const shouldPersistSuppressedIntent = Boolean(
     params.deliveryIntentId || params.deliveryCompletion || params.completionRetention,
   );
+  // Optional audio that repeats a delivered answer is fenced only by an in-memory
+  // writer authority, which recovery cannot rebuild: persisting it would let a
+  // restart send it past a replaced writer. The policy rides on the payload, so it
+  // holds for every caller of this boundary, not only the shared reply sender.
+  const liveOnlyCount = params.payloads.filter(
+    (payload) => payload.ttsSupplement?.liveOnly === true,
+  ).length;
+  // One batch, one lifetime. Mixing them would either strip durable custody from
+  // the ordinary reply or persist the unfenced supplement, so neither payload
+  // reaches transport: a mixed batch is a caller mistake, not a delivery choice.
+  if (liveOnlyCount > 0 && liveOnlyCount !== params.payloads.length) {
+    throw new Error(
+      "Outbound batch mixes live-only supplemental audio with durable payloads; send them separately.",
+    );
+  }
+  const liveOnlyBatch = liveOnlyCount > 0 && params.deliveryCompletion === undefined;
   const queued =
-    params.skipQueue || (preparedPayloads.length === 0 && !shouldPersistSuppressedIntent)
+    params.skipQueue ||
+    liveOnlyBatch ||
+    (preparedPayloads.length === 0 && !shouldPersistSuppressedIntent)
       ? null
       : await stageAndEnqueueOutboundDelivery(deliveryParams, preparedBatch, {
           claimForLiveDelivery: true,

@@ -1,4 +1,4 @@
-import { getFileExtension, normalizeMimeType } from "@openclaw/media-core/mime";
+import { getFileExtension, isAudioFileName, normalizeMimeType } from "@openclaw/media-core/mime";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
 /** File extensions accepted by channel voice-message upload paths. */
@@ -37,3 +37,21 @@ export function isVoiceMessageCompatibleAudio(opts: {
 
 /** @deprecated Use isVoiceMessageCompatibleAudio. Retained for the plugin SDK. */
 export { isVoiceMessageCompatibleAudio as isVoiceCompatibleAudio };
+
+/** Strips a legacy MEDIA: prefix before extension-based classification. */
+function normalizeMediaReferenceFileName(mediaUrl: string): string {
+  return mediaUrl.trim().replace(/^\s*MEDIA\s*:\s*/i, "");
+}
+
+/**
+ * Checks whether any reference is non-audio media (an image, a document, a video).
+ * Such a payload cannot also carry synthesized speech: one message owns one media set,
+ * so the audio would overwrite it. Classification follows the shared extension/MIME
+ * table, so it stays in step with the rest of the media layer.
+ */
+export function hasNonAudioMediaReference(mediaUrls: readonly string[]): boolean {
+  return mediaUrls.some((mediaUrl) => {
+    const fileName = normalizeOptionalString(mediaUrl);
+    return fileName ? !isAudioFileName(normalizeMediaReferenceFileName(fileName)) : false;
+  });
+}

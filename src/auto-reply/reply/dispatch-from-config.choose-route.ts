@@ -269,6 +269,13 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     queuedFinal: boolean;
     routedFinalCount: number;
     suppressionReason?: NormalizeReplySkipReason;
+    /**
+     * Text this delivery actually prepared for speech: dispatcher normalization has
+     * already run on it (silent/heartbeat tokens stripped, deferred block text merged),
+     * and TTS has not. A caller that synthesizes its own follow-up audio must speak
+     * this, not the raw reply — the recording cannot be normalized after the fact.
+     */
+    preparedSpeechText?: string;
     sessionWriterDeliveryRevoked?: true;
     dispatcherOutcome?: Promise<ReplyDispatchDeliveryOutcome>;
     routedOutcome?: ReplyDispatchDeliveryOutcome;
@@ -335,6 +342,18 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
           text: deferredRawText,
         })
       : payload;
+    // An explicit empty string is a result, not a missing value: when normalization or a
+    // channel transform clears the caption, callers must speak nothing rather than fall
+    // back to the raw reply they were handed.
+    const preparedSpeechText = ttsInputPayload.text ?? "";
+    // Nothing left this lane: the block already delivered it, or it holds no content.
+    const notDeliveredHere = () => ({
+      blockDeliveryOutcome,
+      pendingBlock,
+      preparedSpeechText,
+      queuedFinal: false,
+      routedFinalCount: 0,
+    });
     const deferredVisibleText = shouldAttachDeferredText
       ? cleanDeferredFinalDirectives
         ? cleanDeferredFinalText(deferredRawText)
@@ -397,7 +416,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
         (blockDeliveryOutcome === "failed-deliver" && !pendingBlock && !sourceRecovery) ||
         createBlockReplyContentKey(normalizedPayload) === createBlockReplyContentKey(payload)
       ) {
-        return { blockDeliveryOutcome, pendingBlock, queuedFinal: false, routedFinalCount: 0 };
+        return notDeliveredHere();
       }
       // The block already owns the text. Preserve final-only media without
       // letting an audio receipt finalize the block's pending text completion.
@@ -417,7 +436,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
           : undefined;
       }
       if (!hasOutboundReplyContent(normalizedPayload, { trimText: true })) {
-        return { blockDeliveryOutcome, pendingBlock, queuedFinal: false, routedFinalCount: 0 };
+        return notDeliveredHere();
       }
     }
     if (!isSessionWriterDeliveryAuthorized(normalizedPayload)) {
@@ -466,6 +485,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
         queuedFinal: result.ok,
         routedFinalCount: isRoutedReplyDelivered(result) ? 1 : 0,
         routedOutcome,
+        preparedSpeechText,
         ...(result.reason === "channel_transform"
           ? { suppressionReason: "channel_transform" as const }
           : {}),
@@ -548,6 +568,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
       pendingBlock,
       queuedFinal,
       routedFinalCount: 0,
+      preparedSpeechText,
       ...(queuedFinal && dispatcherOutcome ? { dispatcherOutcome } : {}),
     };
   };
