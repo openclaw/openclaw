@@ -1,6 +1,6 @@
 import { once } from "node:events";
 import { createServer, type Server } from "node:http";
-import { gzipSync } from "node:zlib";
+import { brotliCompressSync, deflateSync, gzipSync } from "node:zlib";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { resolvePluginRoutePathContext } from "openclaw/plugin-sdk/gateway-config-runtime";
 import { acquireTestPortBlock } from "openclaw/plugin-sdk/test-env";
@@ -136,7 +136,11 @@ describe("Microsoft Teams Gateway webhook lifecycle", () => {
     });
   });
 
-  it("retains gzip decoding and the decoded body limit", async () => {
+  it.each([
+    ["gzip", gzipSync],
+    ["deflate", deflateSync],
+    ["br", brotliCompressSync],
+  ] as const)("retains %s decoding and the decoded body limit", async (encoding, compress) => {
     await withMonitor(async () => {
       for (const [payload, status] of [
         ["ok", 200],
@@ -146,9 +150,9 @@ describe("Microsoft Teams Gateway webhook lifecycle", () => {
           headers: {
             authorization: "Bearer valid-token",
             "content-type": "application/json",
-            "content-encoding": "gzip",
+            "content-encoding": encoding,
           },
-          body: gzipSync(JSON.stringify({ payload })),
+          body: compress(JSON.stringify({ payload })),
         });
         expect(response.status).toBe(status);
         if (status === 413) {

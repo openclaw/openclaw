@@ -180,6 +180,35 @@ describe("openshell mirror fs bridges", () => {
     await expect(bridge.remove({ filePath: "missing", recursive: false })).resolves.toBeUndefined();
   });
 
+  it.each(["mkdirpRemotePath", "removeRemotePath", "renameRemotePath"] as const)(
+    "keeps local state unchanged when %s is rejected",
+    async (operation) => {
+      const sourcePath = path.join(workspaceDir, "source.txt");
+      if (operation !== "mkdirpRemotePath") {
+        await fs.writeFile(sourcePath, "payload", "utf8");
+      }
+      backend[operation].mockRejectedValue(new Error("remote rejected"));
+      const mutation =
+        operation === "mkdirpRemotePath"
+          ? bridge.mkdirp({ filePath: "nested/target.txt" })
+          : operation === "removeRemotePath"
+            ? bridge.remove({ filePath: "source.txt", force: true })
+            : bridge.rename({ from: "source.txt", to: "nested/target.txt" });
+      await expect(mutation).rejects.toThrow("remote rejected");
+      if (operation !== "mkdirpRemotePath") {
+        await expect(fs.readFile(sourcePath, "utf8")).resolves.toBe("payload");
+      }
+      if (operation !== "removeRemotePath") {
+        await expectPathMissing(
+          path.join(
+            workspaceDir,
+            operation === "mkdirpRemotePath" ? "nested" : "nested/target.txt",
+          ),
+        );
+      }
+    },
+  );
+
   it.runIf(process.platform !== "win32").each([
     {
       method: "mkdirpRemotePath",

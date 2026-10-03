@@ -41,6 +41,27 @@ function normalize(
 }
 
 describe("OpenRouter tool schemas", () => {
+  it("preserves meaningful union alternatives", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        value: {
+          anyOf: [
+            { type: "string", minLength: 2 },
+            { type: "integer", minimum: 3 },
+          ],
+        },
+        optional: { oneOf: [{ type: "string" }, { type: "null" }] },
+      },
+      required: ["value"],
+      additionalProperties: false,
+    };
+    const original = structuredClone(schema);
+    const result = normalize(schema);
+    expect(result).toEqual(schema);
+    expect(schema).toEqual(original);
+  });
+
   it.each(["moonshot/kimi-example", "openrouter/~moonshotai/kimi-example"])(
     "moves a parent type without losing constraints for %s",
     (modelId) => {
@@ -67,12 +88,16 @@ describe("OpenRouter tool schemas", () => {
     },
   );
 
-  it("preserves acceptance for numeric constraints and narrower integer branches", () => {
-    const value = {
-      type: "number",
-      minimum: 2,
-      anyOf: [{ type: "integer", maximum: 3 }, { const: 4.5 }],
-    };
+  it.each([
+    { type: ["string", "null"], anyOf: [{ const: "red" }, { const: null }] },
+    { type: "number", minimum: 2, anyOf: [{ type: "integer", maximum: 3 }, { const: 4.5 }] },
+    {
+      type: "object",
+      additionalProperties: false,
+      properties: { a: {}, b: {} },
+      anyOf: [{ required: ["a"] }, { required: ["b"] }],
+    },
+  ])("preserves acceptance for nullable, numeric and object constraints: %j", (value) => {
     const schema = { type: "object", properties: { value }, required: ["value"] };
     const result = normalize(schema);
     expect(result.properties).not.toEqual(schema.properties);
@@ -101,6 +126,7 @@ describe("OpenRouter tool schemas", () => {
     { type: "string", anyOf: [{ type: "string" }, { type: "integer" }] },
     { type: "integer", anyOf: [{ type: "number" }] },
     { type: "string", anyOf: [true, { const: "red" }] },
+    { type: "string", anyOf: [false, { const: "red" }] },
     { type: "string", anyOf: [{ $ref: "#/$defs/value" }] },
     { type: "string", anyOf: [{ anyOf: [{ const: "red" }, { const: "blue" }] }] },
     { type: "string", anyOf: [{ oneOf: [{ const: "red" }, { const: "blue" }] }] },
