@@ -5,7 +5,6 @@ import type { GatewayRequestContext } from "../../gateway/server-methods/types.j
 import { resolveWorkerToolAuthority } from "../../gateway/worker-environments/worker-tool-authority.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { bindGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
-import { WORKER_TOOL_NAMES } from "../../worker/tool-authority.js";
 import { mergeAcceptedSessionSpawnsForRun } from "../accepted-session-spawn.js";
 import {
   prepareSystemAgentRunAdmission,
@@ -232,19 +231,18 @@ describe("embedded run retry dispatch", () => {
     },
   ] satisfies Array<{
     session: ExecSessionDefaults;
-    expected: ReturnType<typeof resolveWorkerToolAuthority>["toolAuthority"]["exec"];
+    expected: ReturnType<typeof resolveWorkerToolAuthority>["exec"];
   }>)(
     "resolves a projected $expected.host session's execution authority",
     async ({ session, expected }) => {
       const result = await dispatchExecSession(session);
 
       const authority = resolveWorkerToolAuthority({
-        launchToolNames: WORKER_TOOL_NAMES,
         modelRef: { provider: "openai", model: "gpt-5.6-luna" },
         turn: result.preparedAttempt as unknown as SessionPlacementTurnParams,
       });
 
-      expect(authority.toolAuthority.exec).toEqual(expected);
+      expect(authority.exec).toEqual(expected);
     },
   );
 

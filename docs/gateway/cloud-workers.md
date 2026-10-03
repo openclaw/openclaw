@@ -43,10 +43,14 @@ Cloud workers are opt-in. Until you configure a profile, clients hide the Cloud 
 | Concern                            | OpenClaw `worker-turn` mode                          | Codex `remote-exec` mode                                |
 | ---------------------------------- | ---------------------------------------------------- | ------------------------------------------------------- |
 | Agent runtime and turn loop        | Cloud box (`openclaw worker`)                        | Gateway (Codex app-server)                              |
-| Command, filesystem, and HTTP work | Cloud box                                            | Cloud node, paired device, or SSH-backed provider       |
+| Shell commands and workspace files | Cloud box                                            | Cloud node, paired device, or SSH-backed provider       |
 | Model inference and provider auth  | Gateway, proxied by `{provider, model}` reference    | Gateway, including ChatGPT subscription or API-key auth |
 | Transcript and live session state  | Gateway, fed by the worker's replayable event stream | Gateway through the normal local harness path           |
 | Workspace file state               | Changed on the box; reconciled by the Gateway        | Changed remotely; reconciled by the Gateway             |
+
+OpenClaw tools for web search, web fetch, memory, and messaging execute on the
+Gateway under the session's prepared policy and live authority. HTTP requests
+made by commands or applications still execute at their placement.
 
 Applications that make their own model API calls need a separate credential
 route. For an exclusively owned coordinator-backed Linux lease, use

@@ -23,6 +23,7 @@ import { readAgentRuntimeExecutionLineage } from "../agent-runtime-execution-lin
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import { bindWorkerTurnOwner } from "./placement-turn-claim-events.js";
 import * as environmentServiceModule from "./service.js";
+import { registerWorkerGatewayToolExecutionTests } from "./worker-session-tool-executor.gateway-tools.suite.js";
 const {
   workerSessionToolTestMocks,
   SOURCE,
@@ -238,6 +239,8 @@ describe("worker session tool topology", () => {
     await expect(tool.execute("call-0", { action: "list" })).rejects.toThrow();
     expect(executeWorkshop).toHaveBeenCalledTimes(64);
   });
+
+  registerWorkerGatewayToolExecutionTests(getFixture);
 
   it.each(["policy", "result"] as const)(
     "revalidates tool grants after awaited %s work",
@@ -587,6 +590,7 @@ describe("worker session tool topology", () => {
       turnClaim: childClaim,
       ownerEpoch: CHILD.ownerEpoch,
     };
+    getFixture().createToolRuntime({ identity: childIdentity });
     let spawnedGrandchildKey: string | undefined;
     gatewayCreate.mockImplementation(
       async (request: { method: string; params: Record<string, unknown> }) => {

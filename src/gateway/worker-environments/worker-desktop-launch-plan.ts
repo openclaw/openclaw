@@ -2,25 +2,18 @@ import { WORKER_COMPUTER_PROTOCOL_FEATURE } from "../../../packages/gateway-prot
 import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
 import { resolveManifestActivationPluginIds } from "../../plugins/activation-planner.js";
 import type { WorkerDesktopEndpoint } from "../../plugins/types.js";
-import type { WorkerOptionalLocalToolName, WorkerToolName } from "../../worker/tool-authority.js";
 import type { PreparedWorkerComputer } from "./computer-transport.js";
-import { resolveWorkerToolAuthority } from "./worker-tool-authority.js";
 
-/** Plans desktop tools from prepared provider capabilities and normal tool policy. */
 export async function prepareWorkerDesktopLaunchPlan(params: {
   desktop: WorkerDesktopEndpoint | null;
   protocolFeatures: readonly string[];
   prepareComputer(): Promise<PreparedWorkerComputer | undefined> | undefined;
-  modelRef: { provider: string; model: string };
   turn: SessionPlacementTurnParams;
-  launchToolNames: readonly WorkerToolName[];
-  portalAvailable?: boolean;
 }) {
   const computerSupported =
     params.turn.modelHasVision !== false &&
     params.protocolFeatures.includes(WORKER_COMPUTER_PROTOCOL_FEATURE);
   const preparedComputer = computerSupported ? await params.prepareComputer() : undefined;
-  const computer = preparedComputer?.descriptor;
   const browserApp = params.desktop?.apps?.find((app) => app.id === "browser");
   const browserAvailable =
     browserApp !== undefined &&
@@ -30,35 +23,15 @@ export async function prepareWorkerDesktopLaunchPlan(params: {
       config: params.turn.config,
       onlyPluginIds: ["browser"],
     }).includes("browser");
-  const availableOptionalToolNames: WorkerOptionalLocalToolName[] = [];
-  if (browserAvailable) {
-    availableOptionalToolNames.push("browser");
-  }
-  if (computer) {
-    availableOptionalToolNames.push("computer");
-  }
-  const { toolAuthority, capabilityProfile, policy } = resolveWorkerToolAuthority({
-    modelRef: params.modelRef,
-    turn: params.turn,
-    launchToolNames: params.launchToolNames,
-    portalAvailable: params.portalAvailable,
-    availableOptionalToolNames,
-  });
   return {
-    toolAuthority,
-    capabilityProfile,
-    policy,
-    ...(computer && toolAuthority.allowedToolNames.includes("computer")
-      ? { computer, preparedComputer }
-      : {}),
-    ...(browserApp && toolAuthority.allowedToolNames.includes("browser")
+    computer: preparedComputer?.descriptor,
+    preparedComputer,
+    browser: browserAvailable
       ? {
-          browser: {
-            cdpUrl: `http://127.0.0.1:${browserApp.cdpPort}`,
-            launcherPath: browserApp.executablePath,
-            ...(browserApp.args ? { launcherArgs: [...browserApp.args] } : {}),
-          },
+          cdpUrl: `http://127.0.0.1:${browserApp.cdpPort}`,
+          launcherPath: browserApp.executablePath,
+          ...(browserApp.args ? { launcherArgs: [...browserApp.args] } : {}),
         }
-      : {}),
+      : undefined,
   };
 }

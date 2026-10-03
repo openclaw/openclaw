@@ -3,7 +3,10 @@ import { normalizeOptionalString as relationKey } from "@openclaw/normalization-
 import {
   bindAgentToolExecutionLocation,
   copyAgentToolMetadata,
+  getAgentToolExecutionLocation,
 } from "../../agents/agent-tool-metadata.js";
+import { bindAgentToolSourceExecutionGuard } from "../../agents/agent-tool-source-execution-guard.js";
+import { rewrapToolWithBeforeToolCallHook } from "../../agents/agent-tools.before-tool-call.wrapper.js";
 import { buildSubagentExecutionSessionSpawnContext } from "../../agents/subagents/spawn/subagent-spawn-execution-identity.js";
 import type { AnyAgentTool } from "../../agents/tools/common.js";
 import {
@@ -23,11 +26,13 @@ import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../../config/agent-limits.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { sha256Base64Url, sha256HexPrefixCore } from "../../infra/crypto-digest.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
-import { WORKER_TOOL_NAMES } from "../../worker/tool-authority.js";
 import type { GatewayContextResolver } from "../server-methods/types.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import type { WorkerSessionPlacementStore } from "./placement-store.js";
-import { getWorkerTurnExecutionIdentityCapability } from "./placement-turn-claim-events.js";
+import {
+  getWorkerTurnExecutionIdentityCapability,
+  getWorkerTurnToolSurface,
+} from "./placement-turn-claim-events.js";
 import type { WorkerPlacementDispatchContract } from "./service-contract.js";
 import type { WorkerEnvironmentService } from "./service.js";
 import {
@@ -69,6 +74,8 @@ type WorkerGatewayToolsDependencies = {
   dispatchChild: WorkerPlacementDispatchContract["dispatch"];
   portals: WorkerPortalToolExecutorDependencies["portals"];
   skillWorkshop?: AnyAgentTool;
+  portalAvailable?: boolean;
+  prepareTools?: (adapters: AnyAgentTool[]) => AnyAgentTool[];
 };
 
 export function createWorkerSessionToolExecutor(
@@ -100,9 +107,18 @@ export function createWorkerSessionToolExecutor(
       throw new Error("Worker source environment changed before child spawn");
     }
     const targetAgentId = normalizeAgentId(operation.request.agentId ?? operation.source.agentId);
-    const authorizedTools = WORKER_TOOL_NAMES.filter((name) =>
-      params.placements.isWorkerTurnToolAuthorized(operation.source.turnClaim, name),
+    const surface = await getWorkerTurnToolSurface(operation.identity)?.getSurface(
+      operation.identity,
     );
+    assertSource();
+    if (!surface) {
+      throw new Error("Worker tool surface is unavailable");
+    }
+    const authorizedTools = surface.tools
+      .map((tool) => tool.definition.name)
+      .filter((name) =>
+        params.placements.isWorkerTurnToolAuthorized(operation.source.turnClaim, name),
+      );
     const gatewayCall: InProcessGatewayCaller = async <T = Record<string, unknown>>(
       method: string,
       requestParams: Record<string, unknown>,
@@ -338,28 +354,32 @@ export function createWorkerSessionToolExecutor(
   return async (request) => {
     const source = await exactSource({ identity: request.identity, placements: params.placements });
     if (request.toolName !== "sessions_spawn" && request.toolName !== "sessions_send") {
-      return await runWithSource({ source, request }, async (authority, prepared) => {
-        if (prepared.toolName === "portal") {
-          return executePortal(prepared, source, authority.assertSource);
-        }
-        const tool =
-          prepared.toolName === "presence"
-            ? createPresenceTool({
-                assertSourceCurrent: authority.assertSource,
-                callGateway: authority.callGateway,
-              })
-            : prepared.toolName === "skill_workshop"
-              ? params.skillWorkshop
-              : undefined;
-        if (!tool) {
-          throw new Error("Worker tool policy changed the tool identity");
-        }
-        return tool.execute(
-          prepared.request.toolCallId,
-          workerSessionToolArguments(prepared),
-          prepared.signal,
-          prepared.onUpdate,
-        );
+      return await runWithSource({
+        source,
+        request,
+        execute: async (authority, prepared) => {
+          if (prepared.toolName === "portal") {
+            return executePortal(prepared, source, authority.assertSource);
+          }
+          const tool =
+            prepared.toolName === "presence"
+              ? createPresenceTool({
+                  assertSourceCurrent: authority.assertSource,
+                  callGateway: authority.callGateway,
+                })
+              : prepared.toolName === "skill_workshop"
+                ? params.skillWorkshop
+                : undefined;
+          if (!tool) {
+            throw new Error("Worker tool policy changed the tool identity");
+          }
+          return tool.execute(
+            prepared.request.toolCallId,
+            workerSessionToolArguments(prepared),
+            prepared.signal,
+            prepared.onUpdate,
+          );
+        },
       });
     }
     const requestDigest = sha256Base64Url(
@@ -428,48 +448,52 @@ export function createWorkerSessionToolExecutor(
       let failed = false;
       try {
         // Only the elected durable owner runs policy; retries reuse its terminal result.
-        result = await runWithSource({ source, request }, async (authority, prepared) => {
-          if (prepared.toolName !== "sessions_spawn" && prepared.toolName !== "sessions_send") {
-            throw new Error("Worker tool policy changed the tool identity");
-          }
-          if (prepared.toolName === "sessions_spawn") {
-            const targetAgentId = normalizeAgentId(prepared.request.agentId ?? source.agentId);
-            const childKey = `agent:${targetAgentId}:dashboard:cloud-${sha256HexPrefixCore(
-              `openclaw.worker-session-tool-operation.v1\0${started.operationSeed}\0child-session`,
-              32,
-            )}`;
-            if (
-              !(await params.placements.bindWorkerSessionToolOperationChild({
-                ...operationIdentity,
-                childSessionKey: childKey,
-              }))
-            ) {
-              throw new Error("Worker child spawn operation changed before execution");
+        result = await runWithSource({
+          source,
+          request,
+          execute: async (authority, prepared) => {
+            if (prepared.toolName !== "sessions_spawn" && prepared.toolName !== "sessions_send") {
+              throw new Error("Worker tool policy changed the tool identity");
             }
-            return await spawn(
-              {
-                source,
-                identity: prepared.identity,
-                request: prepared.request,
-                operationSeed: started.operationSeed,
-                childSessionKey: childKey,
-                signal: prepared.signal,
-              },
-              authority,
-            );
-          }
-          return await executeWorkerSessionSend({
-            assertSource: authority.assertSource,
-            callGateway: authority.callGateway,
-            source,
-            target: await exactAuthorizedTarget({
+            if (prepared.toolName === "sessions_spawn") {
+              const targetAgentId = normalizeAgentId(prepared.request.agentId ?? source.agentId);
+              const childKey = `agent:${targetAgentId}:dashboard:cloud-${sha256HexPrefixCore(
+                `openclaw.worker-session-tool-operation.v1\0${started.operationSeed}\0child-session`,
+                32,
+              )}`;
+              if (
+                !(await params.placements.bindWorkerSessionToolOperationChild({
+                  ...operationIdentity,
+                  childSessionKey: childKey,
+                }))
+              ) {
+                throw new Error("Worker child spawn operation changed before execution");
+              }
+              return await spawn(
+                {
+                  source,
+                  identity: prepared.identity,
+                  request: prepared.request,
+                  operationSeed: started.operationSeed,
+                  childSessionKey: childKey,
+                  signal: prepared.signal,
+                },
+                authority,
+              );
+            }
+            return await executeWorkerSessionSend({
+              assertSource: authority.assertSource,
+              callGateway: authority.callGateway,
               source,
-              requestedSessionKey: prepared.request.sessionKey,
-            }),
-            request: prepared.request,
-            idempotencyKey: `worker-session-send:${operationKey(started.operationSeed, "target-send")}`,
-            signal: prepared.signal,
-          });
+              target: await exactAuthorizedTarget({
+                source,
+                requestedSessionKey: prepared.request.sessionKey,
+              }),
+              request: prepared.request,
+              idempotencyKey: `worker-session-send:${operationKey(started.operationSeed, "target-send")}`,
+              signal: prepared.signal,
+            });
+          },
         });
       } catch (error) {
         if (error instanceof WorkerSessionToolOutcomeUnknownError || request.signal?.aborted) {
@@ -553,7 +577,7 @@ export function createWorkerGatewayTools(
     ...(params.skillWorkshop ? [params.skillWorkshop] : []),
   ];
   const retainWorkshopCall = createWorkerWorkshopCallRetention();
-  return tools.map((tool) => {
+  const adapters = tools.map((tool) => {
     const bound = copyAgentToolMetadata<AnyAgentTool>(tool, {
       ...tool,
       execute: async (toolCallId, raw, signal, onUpdate) => {
@@ -582,6 +606,9 @@ export function createWorkerGatewayTools(
     });
     bindAgentToolExecutionLocation(bound, {
       kind: "gateway",
+      ...(tool.name === "portal" && params.portalAvailable === false
+        ? { unavailableReason: "this placement has no portal transport" }
+        : {}),
       replay: tool.name === "sessions_spawn" || tool.name === "sessions_send",
       ...(tool.name === "presence"
         ? { connectionScoped: true, timeout: { minimumMs: PRESENCE_QUERY_TIMEOUT_MS } }
@@ -592,5 +619,35 @@ export function createWorkerGatewayTools(
             : {}),
     });
     return bound;
+  });
+  const adapterNames = new Set(adapters.map((tool) => tool.name));
+  const runWithSource = createWorkerSessionToolSourceRunner(params);
+  return (params.prepareTools?.(adapters) ?? adapters).map((tool) => {
+    if (getAgentToolExecutionLocation(tool).kind === "placement" || adapterNames.has(tool.name)) {
+      return tool;
+    }
+    const guarded = rewrapToolWithBeforeToolCallHook(
+      bindAgentToolSourceExecutionGuard(tool, () => {
+        capability.receiptAuthority();
+        if (!params.placements.isWorkerTurnToolAuthorized(claim, tool.name)) {
+          throw new Error("Worker tool authority changed");
+        }
+      }),
+    );
+    return copyAgentToolMetadata(guarded, {
+      ...guarded,
+      execute: (toolCallId, args, signal, onUpdate) =>
+        runWithSource({
+          source: { ...source, turnClaim: claim },
+          request: {
+            tool: guarded,
+            toolName: tool.name,
+            identity: params.identity,
+            signal,
+            onUpdate,
+            request: { toolCallId, arguments: args },
+          },
+        }),
+    });
   });
 }

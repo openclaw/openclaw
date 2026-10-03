@@ -39,24 +39,51 @@ type WorkerGatewayToolFixture = {
 };
 
 export function registerWorkerGatewayToolAvailabilityTests({ setup }: WorkerGatewayToolFixture) {
-  it("exposes exactly the Gateway-authorized worker tools", async () => {
-    const { gateway, launch } = await setup();
-    launch.assignment.toolAuthority.allowedToolNames = [
-      "read",
-      "exec",
-      "sessions_spawn",
-      "sessions_send",
-      "portal",
-    ];
+  it("admits generic Gateway tools independently of the supervisor's placement authority", async () => {
+    const args = { url: "https://example.invalid/worker-tool-proof" };
+    const { gateway, launch } = await setup({
+      inferencePlans: [{ toolName: "web_fetch", toolCallId: "gateway-fetch", args }, "text"],
+    });
+    const surface = gateway.toolSurface();
+    const gatewayTool: WorkerToolSurface["tools"][number] = {
+      id: "web_fetch",
+      execution: "gateway",
+      definition: {
+        name: "web_fetch",
+        label: "Web fetch",
+        description: "Fetch a web page through the Gateway.",
+        parameters: {
+          type: "object",
+          properties: { url: { type: "string" } },
+          required: ["url"],
+        },
+      },
+    };
+    launch.assignment.toolAuthority.allowedToolNames = ["read"];
+    let tools = [...surface.tools, gatewayTool];
+    gateway.toolSurface = () => ({ ...surface, tools });
+
+    await expect(runWorkerDescriptor(launch)).rejects.toThrow(
+      "Worker tool surface exceeds launch authority: write",
+    );
+    expect(gateway.inferenceRequests).toHaveLength(0);
+    expect(gateway.gatewayToolRequests).toHaveLength(0);
+
+    tools = [...surface.tools.filter((tool) => tool.definition.name === "read"), gatewayTool];
 
     await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
 
     expect(gateway.inferenceRequests[0]?.context.tools?.map((tool) => tool.name)).toEqual([
       "read",
-      "exec",
-      "sessions_spawn",
-      "sessions_send",
-      "portal",
+      "web_fetch",
+    ]);
+    expect(gateway.gatewayToolRequests).toEqual([
+      {
+        generation: surface.generation,
+        toolId: "web_fetch",
+        toolCallId: "gateway-fetch",
+        arguments: args,
+      },
     ]);
   });
 

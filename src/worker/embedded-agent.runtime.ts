@@ -38,7 +38,6 @@ import {
 } from "./embedded-agent-transcript.runtime.js";
 import type { createWorkerInferenceStreamAdapter } from "./inference-stream.runtime.js";
 import type { WorkerBrowserLaunchDescriptor, WorkerLaunchPlan } from "./launch-descriptor.js";
-import type { WorkerToolAuthority, WorkerToolName } from "./tool-authority.js";
 import { WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE } from "./transcript-message.js";
 import { createWorkerGatewayToolProxies } from "./worker-gateway-tools.js";
 import { createWorkerPlacementTools, WORKER_TOOL_CONFIG } from "./worker-placement-tools.js";
@@ -71,9 +70,9 @@ type RunWorkerEmbeddedTurnParams = {
   suppressPromptTranscript?: boolean;
   systemPrompt?: string;
   inferenceOptions?: WorkerInferenceOptions;
-  allowedToolNames: readonly WorkerToolName[];
+  allowedToolNames: readonly string[];
   permissionMode?: import("../../packages/gateway-protocol/src/schema/sessions-row.js").SessionPermissionMode;
-  execAuthority: WorkerToolAuthority["exec"];
+  execAuthority: WorkerLaunchPlan["assignment"]["toolAuthority"]["exec"];
   browser?: WorkerBrowserLaunchDescriptor;
   browserRuntime?: WorkerBrowserRuntime;
   computer?: Omit<Parameters<typeof createWorkerComputerTool>[0], "runId" | "registerRunCleanup">;
@@ -141,7 +140,7 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
 
     const allowedToolNameSet = new Set<string>(params.allowedToolNames);
     for (const entry of toolSurface.tools) {
-      if (!allowedToolNameSet.has(entry.definition.name)) {
+      if (entry.execution === "placement" && !allowedToolNameSet.has(entry.definition.name)) {
         throw new Error(`Worker tool surface exceeds launch authority: ${entry.definition.name}`);
       }
     }

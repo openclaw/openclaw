@@ -1,9 +1,3 @@
-/**
- * Builds the effective OpenClaw agent tool surface.
- * Assembles core, shell, channel, OpenClaw, plugin, and Tool Search tools, then
- * applies sandbox, profile, provider, sender, group, and sub-agent policy.
- */
-
 import { HEARTBEAT_RESPONSE_TOOL_NAME } from "../auto-reply/heartbeat-tool-response.js";
 import { messageToolOwnsVisibleReply } from "../auto-reply/source-reply-delivery-mode.js";
 import { resolveEventSessionRoutingPolicy } from "../infra/event-session-routing.js";
@@ -216,7 +210,7 @@ export function createOpenClawCodingToolsInternal(
     sessionId: options?.sessionId,
     sessionKey: options?.runSessionKey ?? options?.sessionKey,
   });
-  const includeCoreTools = preparedTools === undefined && options?.includeCoreTools !== false;
+  const includeCoreTools = options?.includeCoreTools !== false;
   const toolConstructionPlan = options?.toolConstructionPlan ?? {
     includeBaseCodingTools: includeCoreTools,
     includeShellTools: includeCoreTools,
@@ -227,9 +221,8 @@ export function createOpenClawCodingToolsInternal(
   const includeBaseCodingTools = includeCoreTools && toolConstructionPlan.includeBaseCodingTools;
   const includeShellTools = includeCoreTools && toolConstructionPlan.includeShellTools;
   const includeOpenClawTools = includeCoreTools && toolConstructionPlan.includeOpenClawTools;
-  const includeChannelTools =
-    preparedTools === undefined && toolConstructionPlan.includeChannelTools;
-  const includePluginTools = preparedTools === undefined && toolConstructionPlan.includePluginTools;
+  const includeChannelTools = toolConstructionPlan.includeChannelTools;
+  const includePluginTools = toolConstructionPlan.includePluginTools;
   const fsPolicy = {
     workspaceOnly: coreToolPolicy.workspaceOnly,
     ...(sessionPermissionPolicy ? { root: sessionPermissionPolicy.root } : {}),
@@ -386,7 +379,7 @@ export function createOpenClawCodingToolsInternal(
       ? getActiveAgentRingZeroTools()
       : [];
   const toolSearchTools =
-    preparedTools === undefined && toolSearchControlsEnabled && ringZeroTools.length === 0
+    toolSearchControlsEnabled && ringZeroTools.length === 0
       ? createToolSearchTools({
           ...options,
           runtimeConfig: options?.config,
@@ -417,7 +410,7 @@ export function createOpenClawCodingToolsInternal(
     }),
     isAvailable: (): boolean => authorizedTools.some((tool) => tool.name === "message"),
   });
-  const tools: AnyAgentTool[] = preparedTools ?? [
+  const assembledTools: AnyAgentTool[] = [
     ...scheduledCoreTools,
     // Include channel-defined agent tools (login, etc.).
     ...(includeChannelTools ? listChannelAgentTools({ cfg: options?.config }) : []),
@@ -488,6 +481,9 @@ export function createOpenClawCodingToolsInternal(
     ...toolSearchTools,
   ];
   options?.recordToolPrepStage?.("openclaw-tools");
+  const tools = preparedTools
+    ? [...new Map([...assembledTools, ...preparedTools].map((tool) => [tool.name, tool])).values()]
+    : assembledTools;
   const swarmStructuredOutputTool =
     options?.swarmCollector && options.swarmOutputSchema
       ? tools.find((tool) => tool.name === "structured_output")
@@ -600,6 +596,11 @@ export function createOpenClawCodingToolsInternal(
   return finalizeAgentTools({
     ...options,
     tools: filterRequesterYieldTools(authorizedTools, executionSessionKey),
+    wrapBeforeToolCallHook: preparedTools
+      ? (tool) =>
+          options?.wrapBeforeToolCallHook !== false &&
+          !preparedTools.some((prepared) => prepared.name === tool.name)
+      : options?.wrapBeforeToolCallHook,
     hookContext,
     ...(options?.swarmCollector ? { approvalMode: "deny" as const } : {}),
   }).map(wrapGatewayCaller);

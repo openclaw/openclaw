@@ -61,9 +61,6 @@ export function createWorkerGatewayToolRuntime(params: {
           policy,
           tools: tools.map((tool, index) => {
             const location = getAgentToolExecutionLocation(tool);
-            if (!location) {
-              throw new Error("Worker tool has no execution owner");
-            }
             const id = String(index);
             handles.set(id, tool);
             return {

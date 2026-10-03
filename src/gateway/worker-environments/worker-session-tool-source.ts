@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { Value } from "typebox/value";
 import { PresenceQueryParamsSchema } from "../../../packages/gateway-protocol/src/schema/presence.js";
 import { SkillLibraryWorkshopSchema } from "../../../packages/gateway-protocol/src/schema/worker-skill-workshop.js";
@@ -8,6 +9,7 @@ import {
 import { runAgentHarnessAfterToolCallHook } from "../../agents/harness/hook-helpers.js";
 import type { AgentToolResult } from "../../agents/runtime/index.js";
 import type { buildSubagentExecutionSessionSpawnContext } from "../../agents/subagents/spawn/subagent-spawn-execution-identity.js";
+import type { AnyAgentTool } from "../../agents/tools/common.js";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import {
   callAgentToolGatewayRequest,
@@ -23,7 +25,7 @@ import {
 } from "../../agents/tools/sessions-placement-tool-contract.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { GatewayContextResolver } from "../server-methods/types.js";
-import type { WorkerSessionPlacementStore } from "./placement-store.js";
+import type { WorkerSessionPlacementStore, WorkerSessionTurnClaim } from "./placement-store.js";
 import { getWorkerTurnExecutionIdentityCapability } from "./placement-turn-claim-events.js";
 import {
   workerSessionToolErrorResult as errorResult,
@@ -31,11 +33,23 @@ import {
 } from "./worker-session-tool-result.js";
 import type { WorkerSessionToolSource as ExactSource } from "./worker-session-tool-topology.js";
 
-export function workerSessionToolArguments(
-  request: WorkerSessionToolRequest,
-): Record<string, unknown> {
-  if (request.toolName === "skill_workshop") {
-    return request.request.arguments;
+type GenericWorkerToolRequest = Pick<
+  WorkerSessionToolRequest,
+  "identity" | "signal" | "onUpdate"
+> & {
+  toolName: string;
+  tool: AnyAgentTool;
+  request: { toolCallId: string; arguments: unknown };
+};
+type WorkerToolRequest = WorkerSessionToolRequest | GenericWorkerToolRequest;
+
+export function workerSessionToolArguments(request: WorkerToolRequest): Record<string, unknown> {
+  if ("tool" in request || request.toolName === "skill_workshop") {
+    const args = request.request.arguments;
+    if (!isRecord(args)) {
+      throw new Error("Worker tool arguments must be an object");
+    }
+    return args;
   }
   const { toolCallId: _toolCallId, ...args } = request.request;
   return args;
@@ -87,11 +101,20 @@ export function createWorkerSessionToolSourceRunner(params: {
   placements: WorkerSessionPlacementStore;
 }) {
   return async (
-    operation: { source: ExactSource; request: WorkerSessionToolRequest },
-    run: (
-      authority: WorkerSessionToolAuthority,
-      request: WorkerSessionToolRequest,
-    ) => Promise<AgentToolResult<unknown>>,
+    operation: {
+      source: Pick<ExactSource, "agentId" | "sessionId" | "sessionKey"> & {
+        turnClaim: WorkerSessionTurnClaim;
+      };
+    } & (
+      | { request: GenericWorkerToolRequest }
+      | {
+          request: WorkerSessionToolRequest;
+          execute: (
+            authority: WorkerSessionToolAuthority,
+            request: WorkerSessionToolRequest,
+          ) => Promise<AgentToolResult<unknown>>;
+        }
+    ),
   ): Promise<AgentToolResult<unknown>> => {
     const capability = getWorkerTurnExecutionIdentityCapability(
       params.placements,
@@ -100,6 +123,18 @@ export function createWorkerSessionToolSourceRunner(params: {
     if (!capability) {
       throw new Error("Worker source turn has no operational owner");
     }
+    const assertToolCurrent = () => {
+      capability.receiptAuthority();
+      operation.request.signal?.throwIfAborted();
+      if (
+        !params.placements.isWorkerTurnToolAuthorized(
+          operation.source.turnClaim,
+          operation.request.toolName,
+        )
+      ) {
+        throw new Error("Worker session tool authority changed");
+      }
+    };
     return await runWithScopedSessionAccess({
       cfg: getRuntimeConfig(),
       agentId: operation.source.agentId,
@@ -114,6 +149,7 @@ export function createWorkerSessionToolSourceRunner(params: {
               ...owner,
               gatewayContextResolver: params.resolveGatewayContext,
               approvalAuthority: owner.delegatedAuthority,
+              receiptAuthority: assertToolCurrent,
               workerTurnClaim: owner.turnClaim,
               workerTurnExecutionIdentityCapability: capability,
               ...(operation.request.signal ? { approvalSignals: [operation.request.signal] } : {}),
@@ -124,16 +160,9 @@ export function createWorkerSessionToolSourceRunner(params: {
                   ? (owner.assertPresenceSourceCurrent ?? capturePresenceToolAuthority())
                   : undefined;
               const assertSource = () => {
-                operation.request.signal?.throwIfAborted();
-                owner.receiptAuthority();
+                assertToolCurrent();
                 assertPresenceSourceCurrent?.();
                 const source = operation.source;
-                if (
-                  assertPresenceSourceCurrent &&
-                  !params.placements.isWorkerTurnToolAuthorized(source.turnClaim, "presence")
-                ) {
-                  throw new Error("Worker session tool authority changed");
-                }
                 if (source.agentId !== owner.agentId || source.sessionKey !== owner.sessionKey) {
                   throw new Error("Worker source turn owner changed");
                 }
@@ -175,6 +204,18 @@ export function createWorkerSessionToolSourceRunner(params: {
               let result: AgentToolResult<unknown> | undefined;
               let errorMessage: string | undefined;
               try {
+                if (!("execute" in operation)) {
+                  const generic = operation.request;
+                  result = await generic.tool.execute(
+                    generic.request.toolCallId,
+                    generic.request.arguments,
+                    generic.signal,
+                    generic.onUpdate,
+                  );
+                  assertSource();
+                  return result;
+                }
+                request = operation.request;
                 const outcome = await runBeforeToolCallHook({
                   toolName: request.toolName,
                   params: workerSessionToolArguments(request),
@@ -198,17 +239,9 @@ export function createWorkerSessionToolSourceRunner(params: {
                       outcome.params,
                     );
                 assertSource();
-                if (
-                  !params.placements.isWorkerTurnToolAuthorized(
-                    operation.source.turnClaim,
-                    request.toolName,
-                  )
-                ) {
-                  throw new Error("Worker session tool authority changed");
-                }
                 if (adjusted) {
                   request = adjusted;
-                  result = await run(
+                  result = await operation.execute(
                     {
                       assertSource,
                       callGateway,

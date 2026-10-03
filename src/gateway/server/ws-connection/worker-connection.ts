@@ -253,7 +253,9 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
       return;
     }
     const response = { type: "res", id, ok: true, payload: hello };
-    if (Buffer.byteLength(JSON.stringify(response), "utf8") > WORKER_PROTOCOL_MAX_PAYLOAD_BYTES) {
+    if (
+      Buffer.byteLength(JSON.stringify(response), "utf8") > workerMaxPayload(admission.identity)
+    ) {
       rejectAdmission({
         id,
         reason: "invalid-handshake",
