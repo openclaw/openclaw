@@ -104,13 +104,7 @@ export function resolveAgentTextAvatar(
     normalizeOptionalString(agentIdentity?.emoji),
     normalizeOptionalString(agentIdentity?.avatar),
   ];
-  for (const candidate of candidates) {
-    const textAvatar = resolveAssistantTextAvatar(candidate);
-    if (textAvatar) {
-      return textAvatar;
-    }
-  }
-  return null;
+  return candidates.map(resolveAssistantTextAvatar).find(Boolean) ?? null;
 }
 
 type FormatBytesOptions = {

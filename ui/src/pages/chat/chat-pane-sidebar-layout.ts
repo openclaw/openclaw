@@ -14,7 +14,6 @@ import type { ChatPageHost } from "./chat-state-host.ts";
 import type { SidebarFullMessageLoader } from "./components/chat-sidebar-content-types.ts";
 import type {
   SidebarPanelDefinition,
-  SidebarPanelTemplates,
   SidebarRegionCallbacks,
 } from "./components/chat-sidebar-region-types.ts";
 import type { LinkFaviconFetcher } from "./link-favicon-cache.ts";
@@ -172,30 +171,28 @@ export function renderSidebarRegion(params: {
   fetchFavicon?: LinkFaviconFetcher;
   availableWidth: number;
   callbacks: SidebarRegionCallbacks;
-  availableSlots: SidebarSlotId[];
   layout: SidebarLayout;
   narrow: boolean;
   panelDefinitions?: SidebarPanelDefinition[];
-  panelActions: SidebarPanelTemplates;
-  panelTemplates: SidebarPanelTemplates;
   header?: TemplateResult | typeof nothing;
   primary: TemplateResult;
   requestUpdate: () => void;
 }): TemplateResult {
   const panelIdPrefix = `chat-panel-${encodeURIComponent(params.presentationId)}`;
-  const panelDefinitions = params.panelDefinitions ?? sidebarPanelDefinitions();
+  let panelDefinitions = params.panelDefinitions ?? sidebarPanelDefinitions();
   const panelOpen = params.layout.open === true;
   const hasPanels = params.layout.columns.length > 0;
   const regionError = hasPanels
     ? ensureLazySidebarElement("region", params.requestUpdate)
     : undefined;
-  let panelTemplates: SidebarPanelTemplates | null = null;
   for (const panel of params.layout.columns[0]?.panels ?? []) {
     const lazyState = ensureLazySidebarElement(panel.slot, params.requestUpdate);
     if (lazyState !== undefined) {
-      panelTemplates ??= { ...params.panelTemplates };
-      panelTemplates[panel.slot] =
-        lazyState ?? panelDefinitions.find((definition) => definition.slot === panel.slot)?.loading;
+      panelDefinitions = panelDefinitions.map((definition) =>
+        definition.slot === panel.slot
+          ? { ...definition, content: lazyState ?? definition.loading }
+          : definition,
+      );
     }
   }
   const availableWidth =
@@ -232,9 +229,6 @@ export function renderSidebarRegion(params: {
             .layout=${params.layout}
             .fetchFavicon=${params.fetchFavicon}
             .panelDefinitions=${panelDefinitions}
-            .panelTemplates=${panelTemplates ?? params.panelTemplates}
-            .panelActions=${params.panelActions}
-            .availableSlots=${params.availableSlots}
             .callbacks=${params.callbacks}
             .narrow=${params.narrow}
             .availableWidth=${params.availableWidth}

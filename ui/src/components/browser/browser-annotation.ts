@@ -120,8 +120,8 @@ function annotationDisplayUrl(url: string): string {
 
 /** Selector fragments (tag/id/class) are page-controlled too: keep only
  * word characters and dashes so they cannot carry quotes or directives. */
-function sanitizeSelectorToken(value: string, maxLength = 40): string {
-  return value.replace(/[^\w-]/g, "").slice(0, maxLength);
+function sanitizeSelectorToken(value: string): string {
+  return value.replace(/[^\w-]/g, "").slice(0, 40);
 }
 
 /** Compact human/agent-readable element descriptor, e.g. `button#save.btn "Save"`. */
@@ -213,10 +213,6 @@ export function buildBrowserAnnotationContent(params: {
 
 const ANNOTATION_STROKE_COLOR = "#e0442d";
 
-function annotationStrokeWidth(imageWidth: number): number {
-  return Math.max(4, Math.round(imageWidth * 0.005));
-}
-
 /**
  * Draws the strokes (and optional element highlight, both in normalized
  * screenshot coordinates) onto a 2D context sized to the capture resolution.
@@ -235,7 +231,7 @@ export function paintAnnotations(
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
   ctx.strokeStyle = ANNOTATION_STROKE_COLOR;
-  ctx.lineWidth = annotationStrokeWidth(params.width);
+  ctx.lineWidth = Math.max(4, Math.round(params.width * 0.005));
   for (const stroke of params.strokes) {
     if (stroke.points.length === 0) {
       continue;

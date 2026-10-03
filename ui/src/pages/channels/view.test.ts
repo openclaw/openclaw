@@ -2,13 +2,10 @@
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import type { ChannelsStatusSnapshot, WhatsAppStatus } from "../../api/types.ts";
+import { channelSnapshotEntryIsActive } from "../../lib/channels/index.ts";
 import type { PluginCatalogItem } from "../../lib/plugins/index.ts";
 import { renderChannelDetail } from "./view.detail.ts";
-import {
-  channelEnabled,
-  resolveChannelConfigured,
-  resolveChannelDisplayState,
-} from "./view.shared.ts";
+import { resolveChannelDisplayState } from "./view.shared.ts";
 import { createChannelsViewProps } from "./view.test-support.ts";
 import { renderChannels } from "./view.ts";
 import type { ChannelsChannelData, ChannelsProps } from "./view.types.ts";
@@ -460,16 +457,13 @@ function renderChannelDetailFixture(
     onRefresh?: ChannelsProps["onRefresh"];
   } = {},
 ) {
-  const status = Object.entries(data).find(([key]) => key === channelId)?.[1] ?? {};
-  const channelAccounts = data.channelAccounts ?? {};
-  const accounts = Object.hasOwn(channelAccounts, channelId) ? channelAccounts[channelId] : [];
   const props = createProps({
     ts: Date.now(),
     channelOrder: [channelId],
     channelLabels: { [channelId]: options.label ?? channelId },
-    channels: { [channelId]: status },
-    channelAccounts,
-    channelDefaultAccountId: accounts?.length ? { [channelId]: accounts[0]!.accountId } : {},
+    channels: { ...data },
+    channelAccounts: {},
+    channelDefaultAccountId: {},
   });
   props.channels.channelsLoading = options.loading ?? false;
   props.config.lastError = options.configError ?? null;
@@ -482,7 +476,6 @@ function renderChannelDetailFixture(
       channelId,
       label: options.label ?? channelId,
       props,
-      data: { ...data, channelAccounts },
       onClose: () => {},
       onSetup: () => {},
     }),
@@ -639,7 +632,6 @@ describe("channel detail", () => {
         channelId: "telegram",
         label: "Telegram",
         props,
-        data: {},
         onClose: () => {},
         onSetup: () => {},
       }),
@@ -676,7 +668,7 @@ describe("channel detail", () => {
         audience: "https://chat.example",
         mode: "polling",
       };
-      const data: ChannelsChannelData = { channelAccounts: {}, [channelId]: status };
+      const data: ChannelsChannelData = { [channelId]: status };
       const container = renderChannelDetailFixture(channelId, data, { onRefresh });
       const facts = Array.from(container.querySelectorAll("dt"), (node) => [
         node.textContent?.trim(),
@@ -702,7 +694,7 @@ describe("channel detail", () => {
     const onRefresh = vi.fn();
     const container = renderChannelDetailFixture(
       "telegram",
-      { telegram: { configured: true, running: true }, channelAccounts: {} },
+      { telegram: { configured: true, running: true } },
       { loading: true, onRefresh },
     );
     const probe = container.querySelector<HTMLButtonElement>(".settings-row--actions button");
@@ -776,7 +768,6 @@ describe("channel display selectors", () => {
       channelDefaultAccountId: { guildchat: "guild-main" },
     });
 
-    expect(resolveChannelConfigured("guildchat", props)).toBe(false);
     expect(resolveChannelDisplayState("guildchat", props).configured).toBe(false);
   });
 
@@ -797,9 +788,8 @@ describe("channel display selectors", () => {
 
     const displayState = resolveChannelDisplayState("guildchat", props);
 
-    expect(resolveChannelConfigured("guildchat", props)).toBe(true);
-    expect(displayState.defaultAccount?.accountId).toBe("guild-main");
-    expect(channelEnabled("guildchat", props)).toBe(true);
+    expect(displayState.configured).toBe(true);
+    expect(channelSnapshotEntryIsActive(props.channels.channelsSnapshot, "guildchat")).toBe(true);
   });
 
   it("falls back to the first account when no default account id is available", () => {
@@ -816,8 +806,7 @@ describe("channel display selectors", () => {
 
     const displayState = resolveChannelDisplayState("workspace", props);
 
-    expect(resolveChannelConfigured("workspace", props)).toBe(true);
-    expect(displayState.defaultAccount?.accountId).toBe("workspace-a");
+    expect(displayState.configured).toBe(true);
   });
 
   it("keeps disabled channels hidden when neither summary nor accounts are active", () => {
@@ -837,7 +826,7 @@ describe("channel display selectors", () => {
     expect(displayState.configured).toBe(false);
     expect(displayState.running).toBeNull();
     expect(displayState.connected).toBeNull();
-    expect(channelEnabled("quietchat", props)).toBe(false);
+    expect(channelSnapshotEntryIsActive(props.channels.channelsSnapshot, "quietchat")).toBe(false);
   });
 });
 

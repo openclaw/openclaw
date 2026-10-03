@@ -421,7 +421,7 @@ function renderInventoryEntry(entry: DeviceInventoryEntry, props: DevicesProps) 
 }
 
 function renderPresenceRow(
-  presence: { kind: "gateway"; entry: PresenceEntry } | { kind: "unpaired"; entry: PresenceEntry },
+  presence: { kind: "gateway" | "unpaired"; entry: PresenceEntry },
   props: DevicesProps,
 ) {
   const { entry } = presence;

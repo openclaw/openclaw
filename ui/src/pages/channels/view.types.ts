@@ -1,6 +1,5 @@
 // Channels page view contracts.
 import type {
-  ChannelAccountSnapshot,
   ChannelsPairingRequest,
   ChannelStatus,
   NostrProfile,
@@ -75,5 +74,4 @@ export type ChannelsChannelData = {
   signal?: ChannelStatus | null;
   imessage?: ChannelStatus | null;
   nostr?: NostrStatus | null;
-  channelAccounts?: Record<string, ChannelAccountSnapshot[]> | null;
 };

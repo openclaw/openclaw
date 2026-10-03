@@ -2,7 +2,6 @@ import { bytesToBase64 } from "../../lib/bytes-base64.ts";
 
 const MAX_PROFILE_AVATAR_EDGE = 512;
 const MAX_PROFILE_AVATAR_BYTES = 512 * 1024;
-const MAX_PROFILE_AVATAR_BASE64_CHARS = 700_000;
 const MAX_PROFILE_AVATAR_SOURCE_BYTES = 10 * 1024 * 1024;
 
 type ProcessedProfileAvatar = {
@@ -66,9 +65,6 @@ async function encodeAvatarBlob(
   }
   const bytes = new Uint8Array(await blob.arrayBuffer());
   const avatarBase64 = bytesToBase64(bytes);
-  if (avatarBase64.length > MAX_PROFILE_AVATAR_BASE64_CHARS) {
-    throw new ProfileAvatarError("too-large");
-  }
   return { mime, avatarBase64, byteLength: bytes.byteLength };
 }
 

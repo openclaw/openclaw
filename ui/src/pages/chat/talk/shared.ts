@@ -402,26 +402,19 @@ export function shouldInterruptRealtimeTalkControlResponse(result: unknown): boo
 export async function steerRealtimeTalkActiveConsult(params: {
   ctx: RealtimeTalkTransportContext;
   text: string;
-  mode?: RealtimeVoiceAgentControlMode;
-  sessionId?: string;
   emitTalkEvent?: (input: RealtimeTalkEventInput) => void;
   onControlResult?: (result: unknown) => void;
   speakControlResult?: (message: string) => void;
-  suppressSpeechForModes?: readonly RealtimeVoiceAgentControlMode[];
 }): Promise<void> {
   const text = params.text.trim();
   if (!text) {
     return;
   }
-  const request = requestRealtimeTalkSteer(params.ctx, params.sessionId, text, params.mode);
+  const request = requestRealtimeTalkSteer(params.ctx, undefined, text);
   try {
     const result = await request;
     params.onControlResult?.(result);
-    maybeSpeakRealtimeTalkControlResult(
-      result,
-      params.speakControlResult,
-      params.suppressSpeechForModes,
-    );
+    maybeSpeakRealtimeTalkControlResult(result, params.speakControlResult);
     params.emitTalkEvent?.(realtimeTalkControlProgress(result));
   } catch (error) {
     params.emitTalkEvent?.({
@@ -479,21 +472,15 @@ export async function submitRealtimeTalkAgentControl(params: {
 function maybeSpeakRealtimeTalkControlResult(
   result: unknown,
   speakControlResult: ((message: string) => void) | undefined,
-  suppressSpeechForModes: readonly RealtimeVoiceAgentControlMode[] | undefined,
 ): void {
   const record = asOptionalObjectRecord(result);
-  if (!speakControlResult || !record) {
-    return;
-  }
-  const mode =
-    typeof record.mode === "string" ? (record.mode as RealtimeVoiceAgentControlMode) : undefined;
-  if (mode && suppressSpeechForModes?.includes(mode)) {
+  if (!speakControlResult || !record || record.mode === "cancel") {
     return;
   }
   const message = typeof record.message === "string" ? record.message.trim() : "";
   const shouldSpeak =
     (record.speak === true && record.suppress !== true) ||
-    (record.ok === true && mode === "steer" && record.suppress === true);
+    (record.ok === true && record.mode === "steer" && record.suppress === true);
   if (shouldSpeak && message) {
     speakControlResult(buildRealtimeVoiceAgentControlSpeechMessage(message));
   }

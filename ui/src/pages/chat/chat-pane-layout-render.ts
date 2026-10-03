@@ -15,11 +15,7 @@ import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts
 import { resolveSessionWorkspace } from "../../lib/sessions/workspace.ts";
 import { livePresentation, presentedContent } from "../../lit/presentation-binding.ts";
 import { ChatPaneBrowserAnnotationRender } from "./chat-pane-browser-annotation-render.ts";
-import {
-  availableSidebarSlots,
-  sidebarPanelDefinitions,
-  sidebarPanelTemplates,
-} from "./chat-pane-embedded-panels.ts";
+import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
 import { resolveChatPaneDesktopTarget } from "./chat-pane-placement.ts";
 import type { createChatPaneRails } from "./chat-pane-rails.ts";
 import type { ResolvedBoardView } from "./chat-pane-shared.ts";
@@ -312,9 +308,6 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
           this.active && this.presented && isSidebarSlotVisible(sidebarLayout, slot),
       }),
     });
-    const availableSlots = availableSidebarSlots(panelDefinitions);
-    const panelTemplates = sidebarPanelTemplates(panelDefinitions);
-    const panelActions = sidebarPanelTemplates(panelDefinitions, "headerAction");
     const connectionGeneration = this.connectionGeneration;
     // Main panel actions share the task toolbar. Content roots stay in the
     // sidebar region so changing their presentation never reconnects them.
@@ -356,7 +349,6 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       },
       availableWidth: this.paneWidth,
       fetchFavicon: resolveChatLinkFaviconFetcher(state),
-      availableSlots,
       callbacks: sidebarRegionCallbacks({
         state,
         layout: sidebarLayout,
@@ -369,9 +361,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       }),
       layout: sidebarLayout,
       panelDefinitions,
-      panelActions,
       narrow: this.paneWidth < SIDEBAR_NARROW_BREAKPOINT_PX,
-      panelTemplates,
       header,
       primary,
       requestUpdate: state.requestUpdate!,
