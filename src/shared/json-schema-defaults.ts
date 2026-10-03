@@ -5,7 +5,7 @@ import {
   type JsonSchemaValue,
 } from "@openclaw/normalization-core/json-schema";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { Compile } from "typebox/schema";
+import { Check } from "typebox/schema";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 
 type LocalRefResolution =
@@ -657,9 +657,8 @@ function schemaMatches(
 ): boolean {
   try {
     const matchSchema = inlineLocalRefsForMatch(schema, root, resourceRoot, resourceBaseId);
-    return Compile(
-      normalizeJsonSchemaForTypeBox(schemaWithResourceContext(matchSchema, resourceRoot)) as never,
-    ).Check(value);
+    const contextualSchema = schemaWithResourceContext(matchSchema, resourceRoot);
+    return Check(normalizeJsonSchemaForTypeBox(contextualSchema) as never, value);
   } catch {
     return false;
   }
