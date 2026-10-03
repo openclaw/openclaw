@@ -92,7 +92,7 @@ describe("retryAsync", () => {
     "respects Retry-After: %s",
     async (_name, retryAfterMs, minDelayMs, maxDelayMs, jitter, expectedDelay) => {
       const sleeps: number[] = [];
-      const run = createRetryRunner({ sleep: async (ms) => void sleeps.push(ms) });
+      const run = createRetryRunner();
 
       await expect(
         run(createRetryOperation(), {
@@ -102,6 +102,7 @@ describe("retryAsync", () => {
           jitter,
           random: () => 0,
           retryAfterMs: () => retryAfterMs,
+          sleep: async (ms) => void sleeps.push(ms),
         }),
       ).resolves.toBe("ok");
       expect(sleeps).toEqual([expectedDelay]);
@@ -136,10 +137,20 @@ describe("retryAsync", () => {
   });
 
   it("clamps numeric overload delays to the Node timer ceiling", async () => {
-    const sleeps: number[] = [];
-    const run = createRetryRunner({ sleep: async (ms) => void sleeps.push(ms) });
-    await run(createRetryOperation(), 2, Number.POSITIVE_INFINITY);
-    expect(sleeps).toEqual([2_147_000_000]);
+    vi.useFakeTimers();
+    const timer = vi.spyOn(globalThis, "setTimeout");
+    const operation = createRetryOperation();
+    const result = createRetryRunner()(operation, 2, Number.POSITIVE_INFINITY);
+    const settled = result.then(
+      (value) => ({ value }),
+      (error: unknown) => ({ error }),
+    );
+    await vi.advanceTimersByTimeAsync(2_147_000_000 - 1);
+    expect(operation).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(await settled).toEqual({ value: "ok" });
+    expect(operation).toHaveBeenCalledTimes(2);
+    expect(timer.mock.calls.map((call) => call[1])).toEqual([2_147_000_000]);
   });
 });
 
