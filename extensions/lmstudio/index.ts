@@ -33,12 +33,12 @@ const setupMethod = createLazyRuntimeMethodBinder(loadSetup);
 
 function resolveLmstudioAugmentedCatalogEntries(config: OpenClawConfig | undefined) {
   return normalizeLmstudioConfiguredCatalogEntries(config?.models?.providers?.lmstudio?.models).map(
-    (entry) => ({
-      ...entry,
-      provider: PROVIDER_ID,
-      name: entry.name ?? entry.id,
-      compat: { ...entry.compat, supportsUsageInStreaming: true },
-    }),
+    (entry) =>
+      Object.assign({}, entry, {
+        provider: PROVIDER_ID,
+        name: entry.name ?? entry.id,
+        compat: { ...entry.compat, supportsUsageInStreaming: true },
+      }),
   );
 }
 
