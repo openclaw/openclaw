@@ -15,6 +15,7 @@ import {
   runRealtimeTalkCleanup,
 } from "./google-live-lifecycle.ts";
 import { GoogleLiveToolOwner, type GoogleLiveFunctionCall } from "./google-live-tools.ts";
+import { openRealtimeTalkCamera } from "./input.ts";
 import {
   type RealtimeTalkJsonPcmWebSocketSessionResult,
   createRealtimeTalkEventEmitter,
@@ -109,6 +110,7 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
       sendResult: (callId, name, result) => this.sendToolResult(callId, name, result),
     });
     this.camera = new RealtimeTalkCameraController({
+      acquire: (deviceId, signal) => openRealtimeTalkCamera(deviceId, { signal }),
       getDeviceId: () => this.ctx.videoDeviceId,
       setDeviceId: (deviceId) => (this.ctx.videoDeviceId = deviceId),
       isClosed: () => this.closed,
@@ -478,6 +480,7 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
         emitTalkEvent: this.emitTalkEvent,
         onControlResult: (result) => this.stopOutputForSuppressedControl(result),
         speakControlResult: (message) => this.sendControlSpeechMessage(message),
+        suppressSpeechForModes: ["cancel"],
       });
     }
     return !this.closed;

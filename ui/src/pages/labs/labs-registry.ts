@@ -17,6 +17,9 @@ export type LabFeature = {
   configPath: readonly [string, ...string[]];
   /** Explicit writes preserve gates whose on/off values are modes, not booleans. */
   onValue: LabFeatureValue;
+  offValue: LabFeatureValue;
+  /** Include broader enabled modes so the toggle never narrows an existing choice. */
+  activeValues: readonly LabFeatureValue[];
   /** Runtime-owned enablement from the parent, including boolean shorthand. */
   readEnabled: ((raw: unknown) => boolean) | null;
   /** Sibling writes pin the recommended variant rather than a bare enable's defaults. */
@@ -31,18 +34,26 @@ type LabFeatureState = {
   overridden: boolean;
 };
 
-function readConfiguredFeatureEnabled(raw: unknown): boolean {
+function readConfiguredFeatureEnabled(
+  raw: unknown,
+  activeValues: readonly LabFeatureValue[],
+): boolean {
+  if (typeof raw === "boolean" || typeof raw === "string") {
+    return activeValues.includes(raw);
+  }
   if (!isRecord(raw)) {
-    return raw === true;
+    return false;
   }
   const enabled = raw.enabled;
   return typeof enabled === "boolean" || typeof enabled === "string"
-    ? enabled === true
+    ? activeValues.includes(enabled)
     : Object.keys(raw).some((key) => key !== "enabled");
 }
 
 const BOOLEAN_GATE = {
   onValue: true,
+  offValue: false,
+  activeValues: [true],
   readEnabled: null,
   enableAlso: null,
   resetScope: "gate",
@@ -67,6 +78,7 @@ export const LAB_FEATURES = [
     // The on position writes the "auto" tier, never `true`: Labs offers
     // Auto/Off, and force-on for unevaluated models stays a config-only choice.
     onValue: "auto",
+    activeValues: [true, "auto"],
     // Mirrors resolveCodeModeConfig: absence inherits auto; authored objects opt in.
     readEnabled: (raw) =>
       raw === undefined ||
@@ -83,7 +95,7 @@ export const LAB_FEATURES = [
     configPath: ["tools", "toolSearch", "enabled"],
     // Mirrors resolveToolSearchConfig: unauthored config is on, while explicit
     // booleans and objects retain their own enablement semantics.
-    readEnabled: (raw) => raw === undefined || readConfiguredFeatureEnabled(raw),
+    readEnabled: (raw) => raw === undefined || readConfiguredFeatureEnabled(raw, [true]),
     // Explicit objects without a mode retain the legacy "code" surface.
     // Pin structured calls when writing an enabled override from Labs.
     enableAlso: { mode: "tools" },
@@ -132,13 +144,15 @@ function readEnabledFromParent(feature: LabFeature, parent: unknown): boolean {
   if (feature.readEnabled) {
     return feature.readEnabled(parent);
   }
-  if (key === "enabled" && typeof parent === "boolean") {
-    return parent;
+  // Feature gates can accept a boolean or mode shorthand as well as the object
+  // form. A registry path ending in `enabled` must reflect every active shape.
+  if (key === "enabled" && (typeof parent === "boolean" || typeof parent === "string")) {
+    return feature.activeValues.includes(parent);
   }
   if (!isRecord(parent) || !key) {
     return false;
   }
-  return parent[key] === true;
+  return feature.activeValues.includes(parent[key] as LabFeatureValue);
 }
 
 function labFeatureOverridePath(
@@ -200,7 +214,7 @@ export function labFeatureMergePatch(
   // Companion keys ride in the same patch as the gate so one save cannot leave
   // the feature on in a variant Labs never offered.
   let patch: unknown = {
-    [key]: enabled ? feature.onValue : false,
+    [key]: enabled ? feature.onValue : feature.offValue,
     ...(enabled ? feature.enableAlso : null),
   };
   for (const segment of feature.configPath.slice(0, -1).toReversed()) {

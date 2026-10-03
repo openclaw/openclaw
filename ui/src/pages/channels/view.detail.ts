@@ -55,7 +55,7 @@ function renderChannelStatusBody(
   const status = standardKey ? data[standardKey] : undefined;
   const displayState = resolveChannelDisplayState(key, props);
   const configured = displayState.configured;
-  const accounts = resolveChannelAccounts(props.channels.channelsSnapshot?.channelAccounts, key);
+  const accounts = resolveChannelAccounts(data.channelAccounts, key);
   const showAccounts =
     standardKey === "telegram" ? accounts.length > 1 : !standardKey && accounts.length > 0;
   const extraRows =
@@ -181,11 +181,8 @@ function renderChannelStatusBody(
   );
 }
 
-function renderChannelBody(key: ChannelKey, props: ChannelsProps) {
-  const snapshot = props.channels.channelsSnapshot;
-  // SAFETY: Gateway summaries use the built-in channel shapes consumed by these renderers.
-  const data = (snapshot?.channels ?? {}) as ChannelsChannelData;
-  const accountCount = resolveChannelAccountCount(key, snapshot?.channelAccounts);
+function renderChannelBody(key: ChannelKey, props: ChannelsProps, data: ChannelsChannelData) {
+  const accountCount = resolveChannelAccountCount(key, data.channelAccounts);
   switch (key) {
     case "whatsapp":
       return renderWhatsAppCard({
@@ -194,7 +191,7 @@ function renderChannelBody(key: ChannelKey, props: ChannelsProps) {
         accountCount,
       });
     case "nostr": {
-      const nostrAccounts = resolveChannelAccounts(snapshot?.channelAccounts, "nostr");
+      const nostrAccounts = resolveChannelAccounts(data.channelAccounts, "nostr");
       const primaryAccount = nostrAccounts[0];
       const accountId = primaryAccount?.accountId ?? "default";
       const profile =
@@ -230,10 +227,11 @@ export function renderChannelDetail(params: {
   label: string;
   pluginIconUrl?: string;
   props: ChannelsProps;
+  data: ChannelsChannelData;
   onClose: () => void;
   onSetup: () => void;
 }): TemplateResult {
-  const body = renderChannelBody(params.channelId, params.props);
+  const body = renderChannelBody(params.channelId, params.props, params.data);
   const statusIssues = params.props.channels.channelsSnapshot?.statusIssues?.filter(
     (issue) => issue.channel === params.channelId,
   );

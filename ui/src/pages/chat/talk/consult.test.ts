@@ -478,7 +478,7 @@ describe("RealtimeTalkSession consult handoff", () => {
     });
   });
 
-  it("suppresses cancel control speech while the original consult submits the cancel result", async () => {
+  it("can suppress cancel control speech while the original consult submits the cancel result", async () => {
     const request = vi.fn(async () => ({
       ok: true,
       mode: "cancel",
@@ -500,6 +500,7 @@ describe("RealtimeTalkSession consult handoff", () => {
       } as never,
       text: "cancel that",
       speakControlResult,
+      suppressSpeechForModes: ["cancel"],
     });
 
     expect(request).toHaveBeenCalledWith("talk.client.steer", {

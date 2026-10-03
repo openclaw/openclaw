@@ -3,6 +3,7 @@ import { REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME } from "../../../../../src/talk/
 import { formatUiError } from "../../../lib/format-error.ts";
 import { RealtimeTalkMediaStreamMeter } from "./audio.ts";
 import { RealtimeTalkCameraController } from "./camera-controller.ts";
+import { openRealtimeTalkCamera } from "./input.ts";
 import {
   type RealtimeTalkWebRtcSdpSessionResult,
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
@@ -70,6 +71,7 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
       }
     };
     this.camera = new RealtimeTalkCameraController({
+      acquire: (deviceId, signal) => openRealtimeTalkCamera(deviceId, { signal }),
       getDeviceId: () => this.ctx.videoDeviceId,
       setDeviceId: (deviceId) => (this.ctx.videoDeviceId = deviceId),
       isClosed: () => this.closed,
@@ -365,6 +367,7 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
               emitTalkEvent: this.emitTalkEvent,
               onControlResult: (result) => this.interruptSuppressedControlResponse(result),
               speakControlResult: (message) => this.sendControlSpeechMessage(message),
+              suppressSpeechForModes: ["cancel"],
             });
           }
         }
