@@ -37,12 +37,15 @@ export async function discoverLlamaServer(params: {
   baseUrl?: string;
   apiKey?: string;
   headers?: Record<string, string>;
+  /** Mirrors an explicit provider.request.allowPrivateNetwork: true; absent or false keeps discovery strict. */
+  allowPrivateNetwork?: boolean;
   timeoutMs?: number;
   cacheTtlMs?: number;
   signal?: AbortSignal;
 }): Promise<LlamaServerDiscoveryResult> {
   const endpoint = resolveLlamaServerEndpoint(params.baseUrl);
   const apiKey = params.apiKey?.trim();
+  const allowPrivateNetwork = params.allowPrivateNetwork === true;
   const hasCredentialScope =
     Boolean(apiKey && !isNonSecretApiKeyMarker(apiKey)) ||
     Boolean(params.headers && Object.keys(params.headers).length > 0);
@@ -51,13 +54,19 @@ export async function discoverLlamaServer(params: {
     : Math.max(0, params.cacheTtlMs ?? LLAMA_SERVER_DISCOVERY_CACHE_TTL_MS);
 
   return await getCachedLiveCatalogValue({
-    keyParts: ["llama-cpp", "external", endpoint.origin],
+    keyParts: [
+      "llama-cpp",
+      "external",
+      endpoint.origin,
+      allowPrivateNetwork ? "private" : "public",
+    ],
     ttlMs: cacheTtlMs,
     shouldCache: (result) => result.kind === "success",
     load: async () => {
       const result = await discoverOpenAICompatibleLocalModels({
         baseUrl: endpoint.inferenceBaseUrl,
         serverBaseUrl: endpoint.origin,
+        allowPrivateNetwork,
         apiKey: params.apiKey,
         headers: params.headers,
         label: "llama-server",

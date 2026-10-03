@@ -10,7 +10,7 @@ import {
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import { cancelUnreadResponseBody } from "../infra/http-body.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
-import { ssrfPolicyFromHttpBaseUrlAllowedOrigin } from "../infra/net/ssrf.js";
+import { SsrFBlockedError, ssrfPolicyFromHttpBaseUrlAllowedOrigin } from "../infra/net/ssrf.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 
@@ -94,21 +94,38 @@ async function fetchSelfHostedDiscoveryJson(params: {
   apiKey?: string;
   headers?: Record<string, string>;
   acceptJson?: boolean;
+  allowPrivateNetwork?: boolean;
   timeoutMs: number;
   signal?: AbortSignal;
   readBody: boolean;
   label: string;
 }): Promise<DiscoveryResponse> {
   let guarded: Awaited<ReturnType<typeof fetchWithSsrFGuard>>;
+  const guardParams = {
+    url: params.url,
+    init: { headers: buildSelfHostedDiscoveryHeaders(params) },
+    policy: ssrfPolicyFromHttpBaseUrlAllowedOrigin(params.origin),
+    timeoutMs: params.timeoutMs,
+    signal: params.signal,
+    auditContext: "self-hosted-provider-discovery",
+  };
   try {
-    guarded = await fetchWithSsrFGuard({
-      url: params.url,
-      init: { headers: buildSelfHostedDiscoveryHeaders(params) },
-      policy: ssrfPolicyFromHttpBaseUrlAllowedOrigin(params.origin),
-      timeoutMs: params.timeoutMs,
-      signal: params.signal,
-      auditContext: "self-hosted-provider-discovery",
-    });
+    try {
+      guarded = await fetchWithSsrFGuard(guardParams);
+    } catch (error) {
+      if (params.allowPrivateNetwork !== true || !(error instanceof SsrFBlockedError)) {
+        throw error;
+      }
+      // Same private-network flag as the inference transport (on unless disabled) for hosts that resolve to
+      // link-local addresses, e.g. Podman's host gateway. Only reached after the exact-origin
+      // policy rejected the target, and redirects are not followed so the flag cannot widen
+      // to another destination.
+      guarded = await fetchWithSsrFGuard({
+        ...guardParams,
+        policy: { ...guardParams.policy, allowPrivateNetwork: true },
+        maxRedirects: 0,
+      });
+    }
   } catch (error) {
     return { kind: "unreachable", error };
   }
@@ -288,6 +305,7 @@ async function discoverOpenAICompatibleModelRows(
 
 type OpenAICompatibleLocalModelsParams = {
   baseUrl: string;
+  allowPrivateNetwork?: boolean;
   serverBaseUrl?: string;
   apiKey?: string;
   headers?: Record<string, string>;

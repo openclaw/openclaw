@@ -44,6 +44,7 @@ export async function discoverLlamaServerProvider(
         baseUrl: configured?.baseUrl,
         apiKey,
         headers,
+        allowPrivateNetwork: configured?.request?.allowPrivateNetwork,
         cacheTtlMs: 0,
       });
       if (discovery.kind !== "success") {
@@ -81,6 +82,7 @@ export async function prepareLlamaServerDynamicModel(
     baseUrl: ctx.providerConfig?.baseUrl,
     apiKey: hasLlamaServerAuthorizationHeader(headers) ? undefined : apiKey,
     headers,
+    allowPrivateNetwork: ctx.providerConfig?.request?.allowPrivateNetwork,
     cacheTtlMs: 0,
   });
   const model =

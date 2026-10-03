@@ -17,6 +17,7 @@ type ProviderRuntimeProviderConfig = {
   auth?: ModelProviderConfig["auth"];
   models?: ModelProviderConfig["models"];
   headers?: unknown;
+  request?: ModelProviderConfig["request"];
 };
 
 /**

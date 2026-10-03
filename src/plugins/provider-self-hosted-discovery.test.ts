@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
+import { SsrFBlockedError } from "../infra/net/ssrf.js";
 import { discoverOpenAICompatibleLocalModels } from "./provider-self-hosted-discovery.js";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
@@ -472,5 +473,59 @@ describe("discoverOpenAICompatibleLocalModels context metadata", () => {
       "invalid-parent": 128_000,
       "invalid-child": 128_000,
     });
+  });
+});
+
+describe("discoverOpenAICompatibleLocalModels private-network opt-in", () => {
+  const origin = "http://host.containers.internal:8081";
+  const discover = (allowPrivateNetwork?: boolean) =>
+    discoverOpenAICompatibleLocalModels({
+      baseUrl: `${origin}/v1`,
+      serverBaseUrl: origin,
+      allowPrivateNetwork,
+      label: "llama-server",
+      healthPath: "/health",
+      rawResult: true,
+    });
+  const blocked = () =>
+    new SsrFBlockedError("Blocked: resolves to private/internal/special-use IP address");
+
+  it("does not retry a blocked target without the opt-in", async () => {
+    fetchWithSsrFGuardMock.mockRejectedValueOnce(blocked());
+    await expect(discover()).resolves.toMatchObject({ kind: "unreachable" });
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
+    expect(fetchWithSsrFGuardMock.mock.calls[0]?.[0].policy).toEqual({ allowedOrigins: [origin] });
+  });
+
+  it("does not retry a blocked target when the opt-in is false", async () => {
+    fetchWithSsrFGuardMock.mockRejectedValueOnce(blocked());
+    await expect(discover(false)).resolves.toMatchObject({ kind: "unreachable" });
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the exact-origin policy when the first attempt succeeds", async () => {
+    fetchWithSsrFGuardMock.mockResolvedValueOnce(guarded(new Response(null, { status: 404 })));
+    await discover(true);
+    expect(fetchWithSsrFGuardMock.mock.calls[0]?.[0].policy).toEqual({ allowedOrigins: [origin] });
+    expect(
+      fetchWithSsrFGuardMock.mock.calls.some(([call]) => call.policy?.allowPrivateNetwork),
+    ).toBe(false);
+  });
+
+  it("does not retry non-SSRF failures", async () => {
+    fetchWithSsrFGuardMock.mockRejectedValueOnce(new Error("connection refused"));
+    await expect(discover(true)).resolves.toMatchObject({ kind: "unreachable" });
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries a blocked target once with the private-network opt-in and no redirects", async () => {
+    fetchWithSsrFGuardMock
+      .mockRejectedValueOnce(blocked())
+      .mockResolvedValueOnce(guarded(new Response(null, { status: 404 })));
+    await discover(true);
+    const [first, second] = fetchWithSsrFGuardMock.mock.calls.map(([call]) => call);
+    expect(first.policy).toEqual({ allowedOrigins: [origin] });
+    expect(second.policy).toEqual({ allowedOrigins: [origin], allowPrivateNetwork: true });
+    expect(second.maxRedirects).toBe(0);
   });
 });

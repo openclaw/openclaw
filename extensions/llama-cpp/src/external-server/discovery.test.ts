@@ -71,6 +71,7 @@ describe("llama-server discovery projection", () => {
         ],
       });
       expect(discoverRowsMock).toHaveBeenCalledWith({
+        allowPrivateNetwork: false,
         baseUrl: "http://localhost:8080/v1",
         serverBaseUrl: "http://localhost:8080",
         apiKey: undefined,
@@ -176,6 +177,26 @@ describe("llama-server discovery projection", () => {
           "cacheTtlMs" in access ? undefined : "Bearer endpoint-key",
         ]);
       },
+    );
+  });
+  it.each([
+    { name: "is absent", input: undefined, expected: false },
+    { name: "keeps explicit opt-in", input: true, expected: true },
+    { name: "honors explicit opt-out", input: false, expected: false },
+  ])("passes allowPrivateNetwork to shared discovery when $name", async ({ input, expected }) => {
+    discoverRowsMock.mockResolvedValue({
+      kind: "success",
+      health: "ready",
+      fetchedAt: 1,
+      rows: [],
+    });
+    await discoverLlamaServer({
+      baseUrl: "http://host.containers.internal:8081",
+      allowPrivateNetwork: input,
+      cacheTtlMs: 0,
+    });
+    expect(discoverRowsMock).toHaveBeenCalledWith(
+      expect.objectContaining({ allowPrivateNetwork: expected }),
     );
   });
 });
