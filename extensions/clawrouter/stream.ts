@@ -2,7 +2,7 @@ import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
-import { containsAsciiControlCharacter } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { containsAsciiControlCharacter } from "openclaw/plugin-sdk/string-normalization-runtime";
 import { prepareClawRouterRequestModel } from "./provider-catalog.js";
 
 const ENV_API_KEY_MARKER = "CLAWROUTER_API_KEY";

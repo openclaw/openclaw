@@ -11,7 +11,7 @@
  */
 
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
-import { containsAsciiControlCharacter as hasControlChar } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { containsAsciiControlCharacter as hasControlChar } from "openclaw/plugin-sdk/string-normalization-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { OcEmitSentinelError, REDACTED_SENTINEL } from "./sentinel.js";
 

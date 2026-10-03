@@ -1,9 +1,7 @@
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
-import {
-  containsAsciiControlCharacter,
-  normalizeBoundedOptionalString,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeBoundedOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { containsAsciiControlCharacter } from "openclaw/plugin-sdk/string-normalization-runtime";
 import { getDiscordEndpointRuntime, type DiscordEndpointRuntime } from "../endpoint-runtime.js";
 
 export const DISCORD_TOKEN_URL = "https://discord.com/api/oauth2/token";

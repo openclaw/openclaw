@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { containsAsciiControlCharacter } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { containsAsciiControlCharacter } from "openclaw/plugin-sdk/string-normalization-runtime";
 import { setBoundedCache } from "./session-catalog-scan.js";
 
 const groupCache = new Map<string, { signature: string; assignments: Map<string, string> }>();

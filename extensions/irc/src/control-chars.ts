@@ -1,4 +1,4 @@
-export { containsAsciiControlCharacter as hasIrcControlChars } from "openclaw/plugin-sdk/string-coerce-runtime";
+export { containsAsciiControlCharacter as hasIrcControlChars } from "openclaw/plugin-sdk/string-normalization-runtime";
 
 function isIrcControlChar(charCode: number): boolean {
   return charCode <= 0x1f || charCode === 0x7f;

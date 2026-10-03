@@ -2,7 +2,7 @@ import {
   isBlockedHostnameOrIp,
   resolvePinnedHostnameWithPolicy,
 } from "openclaw/plugin-sdk/ssrf-runtime";
-import { containsAsciiControlCharacter } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { containsAsciiControlCharacter } from "openclaw/plugin-sdk/string-normalization-runtime";
 
 const FEISHU_MEDIA_UPLOAD_FAILURE_FALLBACK_TEXT = "Media upload failed. Please try again.";
 
