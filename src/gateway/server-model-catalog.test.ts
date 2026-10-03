@@ -151,7 +151,12 @@ describe("gateway prepared model catalog", () => {
         roles: {
           default: "reader",
           definitions: {
-            reader: { modelPolicy: { sourceAgent: "main", allow: ["custom/*"] } },
+            reader: {
+              agents: ["main"],
+              scopes: ["operator.read"],
+              sessions: { others: "view" },
+              modelPolicy: { sourceAgent: "main", allow: ["custom/*"] },
+            },
           },
         },
       },

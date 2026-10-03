@@ -411,7 +411,12 @@ describe("gateway method authorization", () => {
           false,
           undefined,
           expect.objectContaining({
-            details: expect.objectContaining({ code: "SESSION_MUTATION_AUTHORIZATION_CHANGED" }),
+            details: expect.objectContaining({
+              code:
+                change === "reassignment"
+                  ? "SESSION_PARTICIPATION_REQUIRED"
+                  : "SESSION_MUTATION_AUTHORIZATION_CHANGED",
+            }),
           }),
         );
         expect(loadSessionEntry({ agentId: "main", sessionKey })).toMatchObject({

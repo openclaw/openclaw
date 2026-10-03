@@ -161,15 +161,17 @@ export async function withSessionRowDatabaseFacts(
           const prepared = facts.get(identity(row));
           return prepared?.entry ? [{ row, prepared, entry: prepared.entry }] : [];
         });
-        const acpMetadata = await readAcpSessionMetaForEntries({
-          env,
-          cfg: owner.cfg,
-          entries: acpRows.map(({ row, entry }) => ({
-            agentId: row.agentId,
-            sessionKey: row.key,
-            entry,
-          })),
-        });
+        const acpMetadata = acpRows.length
+          ? await readAcpSessionMetaForEntries({
+              env,
+              cfg: owner.cfg,
+              entries: acpRows.map(({ row, entry }) => ({
+                agentId: row.agentId,
+                sessionKey: row.key,
+                entry,
+              })),
+            })
+          : [];
         for (const [index, { prepared }] of acpRows.entries()) {
           prepared.acpMeta = acpMetadata[index] ?? null;
         }
