@@ -648,21 +648,6 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
         ) {
           throw new Error("Memory source owner changed before replacement");
         }
-        // The workspace lock remains held through the Worker reply. Forget's
-        // tombstone writer uses this same lock and bumps the publication revision.
-        if (
-          source === "sessions" &&
-          hasMemorySessionTombstone(
-            (generation?.database ?? database).db,
-            this.agentId,
-            expectDefined(entry.sessionId, "memory index session identity"),
-          )
-        ) {
-          this.markFailedFullReindexRetry({ memory: false, sessions: true });
-          throw new Error(
-            "A session was forgotten while memory indexing was running; retry the memory index.",
-          );
-        }
       };
       const createReplacement = (): MemorySourceIndexReplacement => ({
         entry: { path: entry.path, hash: entry.hash, mtimeMs: entry.mtimeMs, size: entry.size },
@@ -695,6 +680,24 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
           }
         }
         assertCurrent();
+        // Worker admission reruns assertCurrent while the publication may hold the agent
+        // database lock, which a rollback-journal cache spill makes EXCLUSIVE. Read
+        // tombstones here, before BEGIN, so the host never waits on its own Worker.
+        // The workspace lock remains held through the Worker reply. Forget's
+        // tombstone writer uses this same lock and bumps the publication revision.
+        if (
+          source === "sessions" &&
+          hasMemorySessionTombstone(
+            (generation?.database ?? database).db,
+            this.agentId,
+            expectDefined(entry.sessionId, "memory index session identity"),
+          )
+        ) {
+          this.markFailedFullReindexRetry({ memory: false, sessions: true });
+          throw new Error(
+            "A session was forgotten while memory indexing was running; retry the memory index.",
+          );
+        }
         return true;
       };
       const published = await database.replaceSource(createReplacement(), assertCurrent, prepare);
