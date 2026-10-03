@@ -247,11 +247,13 @@ function buildQaProfileEvidenceShardPlan(
   );
   const groupsByDescendingCost = scenarioGroups
     .map((group) => ({
-      ...group,
+      categoryIds: group.categoryIds,
       estimatedCost: group.scenarios.reduce(
         (cost, scenario) => cost + estimateQaProfileScenarioCost(scenario),
         0,
       ),
+      key: group.key,
+      scenarios: group.scenarios,
     }))
     .toSorted(
       (left, right) =>

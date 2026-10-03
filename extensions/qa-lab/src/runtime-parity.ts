@@ -455,13 +455,12 @@ function createToolCallCapture() {
       }
     },
     finish(): RuntimeParityObservedToolCall[] {
-      return ordered.map((pending) => {
-        const toolCall = { ...pending };
+      for (const toolCall of ordered) {
         if (!toolCall.hasResult) {
           toolCall.errorClass ??= TOOL_RESULT_MISSING_ERROR_CLASS;
         }
-        return toolCall;
-      });
+      }
+      return ordered;
     },
   };
 }
