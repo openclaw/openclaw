@@ -65,41 +65,28 @@ describe("Hermes migration provider", () => {
     }
   });
 
-  it("detects Hermes sources supported by planning", async () => {
-    const { root, source } = makeHermesPaths(testWorkspace.dir);
-    await writeFile(path.join(source, "SOUL.md"), "# Hermes soul\n");
+  for (const [name, sourcePath, contents] of [
+    ["detects Hermes sources supported by planning", ["SOUL.md"], "# Hermes soul\n"],
+    ["detects archive-only Hermes sources", ["logs", "run.log"], "log line\n"],
+  ] as const) {
+    it(name, async () => {
+      const { root, source } = makeHermesPaths(testWorkspace.dir);
+      await writeFile(path.join(source, ...sourcePath), contents);
 
-    const provider = buildHermesMigrationProvider();
-    const detected = await provider.detect?.(
-      makeContext({
-        source,
-        stateDir: path.join(root, "state"),
-        workspaceDir: path.join(root, "workspace"),
-      }),
-    );
+      const provider = buildHermesMigrationProvider();
+      const detected = await provider.detect?.(
+        makeContext({
+          source,
+          stateDir: path.join(root, "state"),
+          workspaceDir: path.join(root, "workspace"),
+        }),
+      );
 
-    expect(detected?.found).toBe(true);
-    expect(detected?.source).toBe(source);
-    expect(detected?.confidence).toBe("high");
-  });
-
-  it("detects archive-only Hermes sources", async () => {
-    const { root, source } = makeHermesPaths(testWorkspace.dir);
-    await writeFile(path.join(source, "logs", "run.log"), "log line\n");
-
-    const provider = buildHermesMigrationProvider();
-    const detected = await provider.detect?.(
-      makeContext({
-        source,
-        stateDir: path.join(root, "state"),
-        workspaceDir: path.join(root, "workspace"),
-      }),
-    );
-
-    expect(detected?.found).toBe(true);
-    expect(detected?.source).toBe(source);
-    expect(detected?.confidence).toBe("high");
-  });
+      expect(detected?.found).toBe(true);
+      expect(detected?.source).toBe(source);
+      expect(detected?.confidence).toBe("high");
+    });
+  }
 
   it("detects only memory files in memory-only mode", async () => {
     const { root, source, workspaceDir } = makeHermesPaths(testWorkspace.dir);

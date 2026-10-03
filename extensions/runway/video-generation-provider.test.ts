@@ -204,7 +204,7 @@ describe("runway video generation provider", () => {
 
   it("does not round malformed duration values into create requests", async () => {
     mockSuccessfulTask();
-    await generateVideo({ durationSeconds: 4.5, aspectRatio: "16:9" });
+    await generateVideo({ durationSeconds: 4.25, aspectRatio: "16:9" });
 
     expect(postJsonRequestMock).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ body: expect.objectContaining({ duration: 5 }) }),
