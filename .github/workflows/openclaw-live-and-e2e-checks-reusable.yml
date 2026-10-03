@@ -634,6 +634,7 @@ jobs:
     runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON(!inputs.use_github_hosted_runners && github.repository == 'openclaw/openclaw' && vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04'))) || (!inputs.use_github_hosted_runners && github.repository == 'openclaw/openclaw' && vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 30
     outputs:
+      test_bun_artifact_id: ${{ steps.test_bun_artifact.outputs.artifact-id }}
       fs_safe_native_contract: ${{ steps.frozen_admission.outputs.fs_safe_native_contract }}
       package_artifact_present: ${{ steps.validate.outputs.package_artifact_present }}
       selected_sha: ${{ steps.validate.outputs.selected_sha }}
@@ -709,6 +710,26 @@ jobs:
           path: .release-harness
           fetch-depth: 1
           persist-credentials: false
+
+      # Prepare the pinned executable before any selected-target code runs.
+      - name: Setup Bun test runtime
+        if: inputs.test_runtime == 'bun' && !inputs.prepare_only
+        uses: ./.release-harness/.github/actions/setup-test-bun
+
+      - name: Pack Bun test runtime
+        if: inputs.test_runtime == 'bun' && !inputs.prepare_only
+        run: tar -czf "$RUNNER_TEMP/test-bun.tar.gz" -C "$(dirname "$(command -v bun)")" bun
+
+      - name: Upload Bun test runtime
+        id: test_bun_artifact
+        if: inputs.test_runtime == 'bun' && !inputs.prepare_only
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: test-bun-${{ github.run_id }}-${{ github.run_attempt }}-${{ job.check_run_id }}
+          path: ${{ runner.temp }}/test-bun.tar.gz
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 1
 
       - name: Setup admission Node.js
         env:
@@ -1255,21 +1276,26 @@ jobs:
             exit 1
           fi
 
-      - &checkout_test_bun
-        name: Checkout trusted Bun test runtime action
+      - &download_test_bun
+        name: Download Bun test runtime
+        id: test_bun_download
         if: inputs.test_runtime == 'bun'
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
-          repository: ${{ needs.validate_selected_ref.outputs.workflow_repository }}
-          ref: ${{ needs.validate_selected_ref.outputs.workflow_sha }}
-          path: .release-harness
-          fetch-depth: 1
-          persist-credentials: false
-          sparse-checkout: .github/actions/setup-test-bun
+          artifact-ids: ${{ needs.validate_selected_ref.outputs.test_bun_artifact_id }}
+          path: ${{ runner.temp }}/test-bun-runtime
 
-      - name: Setup Bun test runtime
-        if: inputs.test_runtime == 'bun'
-        uses: ./.release-harness/.github/actions/setup-test-bun
+      - &activate_test_bun
+        name: Activate Bun test runtime
+        if: steps.test_bun_download.outcome == 'success'
+        shell: bash
+        run: |
+          set -euo pipefail
+          bun_dir="$(mktemp -d "$RUNNER_TEMP/openclaw-test-bun.XXXXXX")"
+          tar -xzf "$RUNNER_TEMP/test-bun-runtime/test-bun.tar.gz" -C "$bun_dir"
+          "$bun_dir/bun" --version
+          "$bun_dir/bun" --revision
+          echo "$bun_dir" >> "$GITHUB_PATH"
 
       - name: Verify live prompt cache floors
         env:
@@ -1285,6 +1311,7 @@ jobs:
     uses: ./.github/workflows/openclaw-repo-e2e-reusable.yml
     with:
       test_runtime: ${{ inputs.test_runtime }}
+      test_bun_artifact_id: ${{ needs.validate_selected_ref.outputs.test_bun_artifact_id }}
       runner_group: ${{ inputs.runner_group }}
       ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
       workflow_repository: ${{ needs.validate_selected_ref.outputs.workflow_repository }}
@@ -1306,6 +1333,7 @@ jobs:
     uses: ./.github/workflows/openclaw-repo-e2e-reusable.yml
     with:
       test_runtime: ${{ inputs.test_runtime }}
+      test_bun_artifact_id: ${{ needs.validate_selected_ref.outputs.test_bun_artifact_id }}
       runner_group: ${{ inputs.runner_group }}
       ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
       workflow_repository: ${{ needs.validate_selected_ref.outputs.workflow_repository }}
@@ -1367,11 +1395,8 @@ jobs:
           OPENCLAW_BUILD_PRIVATE_QA: "1"
         run: pnpm build
 
-      - *checkout_test_bun
-
-      - name: Setup Bun test runtime
-        if: inputs.test_runtime == 'bun' && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id)
-        uses: ./.release-harness/.github/actions/setup-test-bun
+      - *download_test_bun
+      - *activate_test_bun
 
       - name: Install OpenShell CLI
         if: |
@@ -4646,9 +4671,15 @@ jobs:
               ;;
           esac
 
-      - name: Setup Bun test runtime
+      - name: Download Bun test runtime
+        id: test_bun_download
         if: inputs.test_runtime == 'bun' && steps.selection.outputs.run == 'true'
-        uses: ./.release-harness/.github/actions/setup-test-bun
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          artifact-ids: ${{ needs.validate_selected_ref.outputs.test_bun_artifact_id }}
+          path: ${{ runner.temp }}/test-bun-runtime
+
+      - *activate_test_bun
 
       - name: Run ${{ matrix.label }}
         if: steps.selection.outputs.run == 'true'
@@ -5043,9 +5074,15 @@ jobs:
             echo "OPENCLAW_DOCKER_PROFILE_ENV_ONLY=1" >> "$GITHUB_ENV"
           fi
 
-      - name: Setup Bun test runtime
+      - name: Download Bun test runtime
+        id: test_bun_download
         if: inputs.test_runtime == 'bun' && contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || (inputs.live_suite_filter == 'native-live-extensions-media-video' && startsWith(matrix.suite_id, 'native-live-extensions-media-video-')))
-        uses: ./.release-harness/.github/actions/setup-test-bun
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          artifact-ids: ${{ needs.validate_selected_ref.outputs.test_bun_artifact_id }}
+          path: ${{ runner.temp }}/test-bun-runtime
+
+      - *activate_test_bun
 
       - name: Run ${{ matrix.label }}
         if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || (inputs.live_suite_filter == 'native-live-extensions-media-video' && startsWith(matrix.suite_id, 'native-live-extensions-media-video-')))

@@ -390,16 +390,20 @@ the existing Release Checks and Full Release Validation callers.
 For the normal stable release repo/live selection:
 
 ```sh
+target_sha="$(gh api repos/openclaw/openclaw/commits/main --jq .sha)"
 gh workflow run openclaw-live-and-e2e-checks-reusable.yml --ref main \
-  -f ref=main -f test_runtime=bun -f release_test_profile=stable \
+  -f ref="$target_sha" -f test_runtime=bun -f release_test_profile=stable \
   -f include_repo_e2e=true -f include_live_suites=true \
   -f include_release_path_suites=false -f include_openwebui=false \
-  -f gateway_repo_e2e_use_github_hosted_runners=false
+  -f gateway_repo_e2e_use_github_hosted_runners=false \
+  -f allow_unreleased_changelog=true
 ```
 
 Bun jobs are labeled advisory and report failures normally in their separate
 run. They do not replace Node release evidence or add PR jobs. The existing
-`setup-test-bun` action owns the fork pin. Only test steps select Bun; dependency
+`setup-test-bun` action owns the fork pin. The existing trusted admission job
+installs it once and shares its executable by artifact ID with the test jobs.
+Only test steps select Bun; dependency
 installation, build preparation, packaging, and workflow tooling keep their
 current toolchain.
 

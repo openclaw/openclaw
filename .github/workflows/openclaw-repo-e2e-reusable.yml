@@ -8,6 +8,11 @@ on:
         required: false
         default: node
         type: string
+      test_bun_artifact_id:
+        description: Same-run pinned Bun artifact from the trusted live/E2E admission job
+        required: false
+        default: ""
+        type: string
       runner_group:
         description: Optional dedicated release runner group; empty retains the current labels
         required: false
@@ -82,7 +87,6 @@ jobs:
           sparse-checkout: |
             /package.json
             /scripts/
-            /.github/actions/setup-test-bun/
             /src/shared/non-packaged-plugin-dirs.ts
           sparse-checkout-cone-mode: false
       - name: Setup Node environment
@@ -152,9 +156,23 @@ jobs:
         run: pnpm --dir ui exec playwright install --with-deps chromium
       - name: Build sandbox image
         run: scripts/sandbox-setup.sh
-      - name: Setup Bun test runtime
+      - name: Download Bun test runtime
+        id: test_bun_download
         if: inputs.test_runtime == 'bun'
-        uses: ./.release-harness/.github/actions/setup-test-bun
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          artifact-ids: ${{ inputs.test_bun_artifact_id }}
+          path: ${{ runner.temp }}/test-bun-runtime
+      - name: Activate Bun test runtime
+        if: steps.test_bun_download.outcome == 'success'
+        shell: bash
+        run: |
+          set -euo pipefail
+          bun_dir="$(mktemp -d "$RUNNER_TEMP/openclaw-test-bun.XXXXXX")"
+          tar -xzf "$RUNNER_TEMP/test-bun-runtime/test-bun.tar.gz" -C "$bun_dir"
+          "$bun_dir/bun" --version
+          "$bun_dir/bun" --revision
+          echo "$bun_dir" >> "$GITHUB_PATH"
       - name: Run repo E2E suite
         env:
           OPENCLAW_VITEST_RUNTIME: ${{ inputs.test_runtime }}
