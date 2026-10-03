@@ -200,6 +200,8 @@ export function parseWorkerGitHubLaunchBinding(
 }
 
 const AssignmentSchema = workerProtocolObject({
+  // Relay published 2026.9.8 assignments unchanged until the next supervisor dialect.
+  skillAuthoring: workerProtocolObject({ multipleProfiles: z.boolean() }).optional(),
   skillResources: z
     .custom<SkillResourceDelivery>((value) => Value.Check(SkillResourceDeliverySchema, value))
     .optional(),
@@ -255,18 +257,6 @@ const AssignmentSchema = workerProtocolObject({
       : !Object.hasOwn(value, "workerContainmentRoot")),
 );
 
-function parseAssignment(value: unknown): WorkerLaunchAssignment | undefined {
-  const parsed = AssignmentSchema.safeParse(value);
-  if (!parsed.success) {
-    return undefined;
-  }
-  const { permissionMode, workerContainmentRoot, ...assignment } = parsed.data;
-  if (permissionMode !== undefined && workerContainmentRoot !== undefined) {
-    return { ...assignment, permissionMode, workerContainmentRoot };
-  }
-  return assignment;
-}
-
 export function buildWorkerConnectParams(
   descriptor: Pick<WorkerLaunchPlan, "admission" | "assignment">,
 ): WorkerConnectParams {
@@ -320,14 +310,18 @@ export function parseWorkerLaunchPlan(value: unknown): WorkerLaunchPlan {
   ) {
     throw new Error("invalid worker launch descriptor");
   }
-  const assignment = parseAssignment(value.assignment);
-  if (!assignment || !isRecord(value.admission)) {
+  const parsed = AssignmentSchema.safeParse(value.assignment).data;
+  if (!parsed || !isRecord(value.admission)) {
     throw new Error("invalid worker launch descriptor");
   }
+  const { permissionMode, workerContainmentRoot, ...assignment } = parsed;
   return validateWorkerLaunchPlan({
     version: LAUNCH_VERSION,
     admission: value.admission as WorkerLaunchAdmission,
-    assignment,
+    assignment:
+      permissionMode !== undefined && workerContainmentRoot !== undefined
+        ? { ...assignment, permissionMode, workerContainmentRoot }
+        : assignment,
   });
 }
 

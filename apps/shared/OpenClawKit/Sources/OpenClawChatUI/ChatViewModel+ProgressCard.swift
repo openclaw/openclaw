@@ -23,13 +23,14 @@ extension OpenClawChatViewModel {
         self.scheduleProgressCardFetch(for: session)
     }
 
-    func scheduleProgressCardFetch(for session: SessionSnapshot? = nil) {
+    @discardableResult
+    func scheduleProgressCardFetch(for session: SessionSnapshot? = nil) -> Task<Void, Never>? {
         let session = session ?? self.currentSessionSnapshot()
-        guard self.isCurrentSession(session) else { return }
+        guard self.isCurrentSession(session) else { return nil }
         self.lastIssuedProgressCardRequestID &+= 1
         let requestID = self.lastIssuedProgressCardRequestID
         let generation = self.progressCardGeneration
-        Task { [weak self] in
+        return Task { [weak self] in
             guard let self else { return }
             let storeAvailable = await self.transport.gatewayAdvertisesMethod("progressCard.get")
             guard self.isCurrentProgressCardRequest(
