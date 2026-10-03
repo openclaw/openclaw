@@ -9,6 +9,7 @@ import {
 } from "../test-helpers/settings-node.ts";
 import { createApplicationTheme } from "./bootstrap-theme.ts";
 import { createGatewayStoreTestStore } from "./gateway-store.test-support.ts";
+import { SYNCED_PREF_KEYS } from "./server-prefs-state.ts";
 import {
   applyServerUiPrefs,
   resetServerUiPrefsSync,
@@ -27,6 +28,16 @@ describe("settings preference persistence", () => {
   installSettingsStorageLifecycle();
   beforeEach(() => {
     setTestLocation({ protocol: "https:", host: "gateway.example:8443", pathname: "/" });
+  });
+
+  it("keeps the direct Archive shortcut opt-out device-local and default-on", () => {
+    expect(loadSettings().archiveShortcutEnabled).toBeUndefined();
+    patchSettings({ archiveShortcutEnabled: false });
+    expect(loadUiPreferences(loadSettings().gatewayUrl).archiveShortcutEnabled).toBe(false);
+    // The opt-out is browser-local: it must never join the synced ui.prefs set.
+    expect(SYNCED_PREF_KEYS).not.toContain("archiveShortcutEnabled");
+    patchSettings({ archiveShortcutEnabled: true });
+    expect(loadSettings().archiveShortcutEnabled).toBeUndefined();
   });
 
   it("preserves an older browser-panel preference through external opt-in, reload, and opt-out", () => {

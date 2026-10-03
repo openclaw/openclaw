@@ -373,6 +373,12 @@ navigating. Archive remains blocked while help is open. New Session preserves th
 existing conversation's draft through normal navigation. Archive does not clear
 that draft or navigate to another conversation.
 
+The direct Archive chord is on by default and can be turned off in
+**Settings → Chat** with **Archive keyboard shortcut**. The choice is stored in the
+current browser profile only, so turning it off returns the chord to that browser
+without changing the other browsers you use with the same Gateway. Turning it off
+does not remove **Archive** from the current chat's header menu.
+
 Browser shortcut handling can vary by browser version and configuration. If your
 browser handles a chord itself, use the corresponding New Session control or
 **Archive** in the current chat's header menu. The menu's **A** shortcut still

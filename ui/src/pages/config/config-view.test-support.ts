@@ -103,6 +103,8 @@ export const baseProps = () => ({
   chatSendShortcutProvenance: "default" as const,
   chatSendShortcutResetValue: "enter" as const,
   setChatSendShortcut: vi.fn(),
+  archiveShortcutEnabled: true,
+  setArchiveShortcutEnabled: vi.fn(),
   chatFollowUpMode: undefined,
   chatFollowUpModeOverridden: false,
   chatFollowUpModeProvenance: "default" as const,

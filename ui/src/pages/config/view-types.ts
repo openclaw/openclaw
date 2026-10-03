@@ -174,6 +174,8 @@ export type ConfigProps = {
   setLobsterPetVisits: (enabled: boolean) => void;
   sessionDeleteConfirm: boolean;
   setSessionDeleteConfirm: (enabled: boolean) => void;
+  archiveShortcutEnabled?: boolean;
+  setArchiveShortcutEnabled?: (enabled: boolean) => void;
   lobsterPetSounds: boolean;
   setLobsterPetSounds: (enabled: boolean) => void;
   lobsterdexHref?: string;

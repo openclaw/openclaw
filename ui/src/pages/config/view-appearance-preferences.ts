@@ -193,6 +193,15 @@ export function renderChatPreferencesSection(props: ConfigProps) {
     props.chatSendShortcutOverridden,
   );
   const sendShortcutProvenance = serverUiPrefProvenanceHint(props.chatSendShortcutProvenance);
+  // Device-local opt-out (not synced): the direct Archive chord collides with a
+  // browser's own shortcuts on some browsers, so it must stay per-browser.
+  const setArchiveShortcutEnabled = props.setArchiveShortcutEnabled;
+  const archiveShortcutEnabled =
+    props.archiveShortcutEnabled ?? UI_APPEARANCE_DEFAULTS.archiveShortcutEnabled;
+  const archiveShortcutDefaultDescription = renderSettingsDefaultDescription(
+    t("common.enabled"),
+    archiveShortcutEnabled !== UI_APPEARANCE_DEFAULTS.archiveShortcutEnabled,
+  );
   const followUpProvenance = serverUiPrefProvenanceHint(props.chatFollowUpModeProvenance);
   const catalogTargetDefaultDescription = renderSettingsDefaultDescription(
     t("chat.catalogOpenTargetViewer"),
@@ -271,6 +280,17 @@ export function renderChatPreferencesSection(props: ConfigProps) {
           ],
           onChange: (value) => props.setChatSendShortcut(normalizeChatSendShortcut(value)),
         })}
+        ${
+          setArchiveShortcutEnabled
+            ? renderSettingsToggleRow({
+                title: t("chat.archiveShortcut"),
+                description: html`${t("chat.archiveShortcutHint")}<br />
+                  ${archiveShortcutDefaultDescription} ${t("quickSettings.personal.browserOnly")}`,
+                checked: archiveShortcutEnabled,
+                onChange: setArchiveShortcutEnabled,
+              })
+            : nothing
+        }
         ${renderSettingsRow({
           title: t("chat.followUpMode"),
           description: html`${followUpDescription} ${followUpProvenance}`,

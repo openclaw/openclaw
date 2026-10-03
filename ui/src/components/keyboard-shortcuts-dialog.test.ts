@@ -9,6 +9,7 @@ import "./keyboard-shortcuts-dialog.ts";
 type KeyboardShortcutsTestDialog = HTMLElement & {
   isOpen: boolean;
   sendShortcut: "enter" | "modifier-enter";
+  archiveShortcutEnabled: boolean;
   toggle(): void;
   newSessionHost?: ShellNewSessionHost;
   updateComplete: Promise<boolean>;
@@ -166,6 +167,29 @@ describe("keyboard shortcuts dialog", () => {
       }
     },
   );
+
+  it("hides the direct Archive row when this browser disables the chord", async () => {
+    const dialog = document.body.appendChild(
+      document.createElement("openclaw-keyboard-shortcuts-dialog") as KeyboardShortcutsTestDialog,
+    );
+    const archiveRow = () =>
+      Array.from(dialog.shadowRoot?.querySelectorAll(".shortcut-row") ?? []).find((row) =>
+        row.textContent?.includes("Archive current session"),
+      );
+    dialog.toggle();
+    await dialog.updateComplete;
+    expect(archiveRow()).toBeDefined();
+
+    dialog.archiveShortcutEnabled = false;
+    await dialog.updateComplete;
+    expect(archiveRow()).toBeUndefined();
+    // The rest of the Chat section still renders.
+    expect(
+      Array.from(dialog.shadowRoot?.querySelectorAll(".shortcut-row") ?? []).some((row) =>
+        row.textContent?.includes("Send message"),
+      ),
+    ).toBe(true);
+  });
 
   it("closes when the modal dispatches its Escape cancellation", async () => {
     const dialog = document.body.appendChild(

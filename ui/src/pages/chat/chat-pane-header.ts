@@ -642,7 +642,12 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
               .forkDisabled=${this.state.sessionsLoading || row.modelSelectionLocked === true}
               .forkFromLastCompleted=${row.hasActiveRun === true}
               .archiveAllowed=${archiveAllowed}
-              .archiveShortcut=${this.active && this.presented && !this.onboarding}
+              .archiveShortcut=${
+                this.active &&
+                this.presented &&
+                !this.onboarding &&
+                this.state?.settings?.archiveShortcutEnabled !== false
+              }
               .deleteAllowed=${deleteAllowed}
               .onOpen=${this.onHeaderMenuOpen}
               .onOpenCommandPalette=${this.onHeaderCommandPalette}

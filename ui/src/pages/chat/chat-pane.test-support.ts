@@ -522,6 +522,10 @@ export function createTestChatPane(params: {
     requestUpdate,
     sessionKey: "agent:main:current",
     sessions: context.sessions,
+    // Defaults only: an empty settings object makes pref reads (chat send/archive
+    // shortcuts) safe without seeding real stored preferences, which would leak
+    // this host's settings into unrelated pane timing assertions.
+    settings: {},
     sessionsError: null,
     sessionsLoading: false,
     sidebarContent: null,

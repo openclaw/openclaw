@@ -3401,6 +3401,9 @@ export const en: TranslationMap & {
     sendShortcut: "Send shortcut",
     sendShortcutEnter: "Enter",
     sendShortcutModifierEnter: "⌘/Ctrl+Enter",
+    archiveShortcut: "Archive keyboard shortcut",
+    archiveShortcutHint:
+      "Use ⌘⇧A on Mac or Ctrl+Shift+A on Windows/Linux to archive the current chat. Turn this off when your browser owns the chord (Chrome tab search, Firefox add-ons). Archive stays available in the chat header menu and with its A key.",
     followUpMode: "Follow-ups while the agent is working",
     followUpModeQueue: "Queue until the run ends",
     followUpModeServer: "Server default ({mode})",
