@@ -78,6 +78,8 @@ function buildStrandedReplyRetryPrompt(finalText: string): string {
       `you did not call message(action=send). Your reply text was:\n\n` +
       `"${finalText}"\n\n` +
       `Please deliver this reply now by calling message(action=send). ` +
+      `Harnesses that expose OpenClaw tools over MCP register it under the \`openclaw\` server ` +
+      `(Claude Code: \`mcp__openclaw__message\`); load it with tool search if it is not visible. ` +
       `Do not add any extra commentary; just deliver the original reply.`,
   );
 }

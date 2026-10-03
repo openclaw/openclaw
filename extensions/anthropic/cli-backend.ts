@@ -18,6 +18,7 @@ import {
   resolveClaudeCliExecutionArgs,
   resolveClaudeCliThinkingEnv,
 } from "./cli-shared.js";
+import { appendClaudeCliToolNamingGuidance } from "./cli-tool-naming.js";
 
 type ClaudeCliAuthCredential =
   | { type: "oauth"; access: string; expires: number }
@@ -178,6 +179,9 @@ export function buildAnthropicCliBackend(
     hostOwnedTools: ["exec", "process"],
     toolAvailabilityEnforcement: "execution-args",
     isolatesInstructionsWithExactTools: true,
+    // Claude Code sees bundled OpenClaw tools as `mcp__openclaw__<name>`; the
+    // shared prompt names them by short id, so spell out the mapping.
+    transformSystemPrompt: ({ systemPrompt }) => appendClaudeCliToolNamingGuidance(systemPrompt),
     projectNativeToolAuthority: projectClaudeNativeToolAuthority,
     sideQuestionToolMode: "disabled",
     ownsNativeCompaction: true,

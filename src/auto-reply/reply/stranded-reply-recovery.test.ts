@@ -125,6 +125,15 @@ describe("resolveStrandedReplyRecovery", () => {
       expect(recovery.run.strandedReplyRetry).toBe(true);
       expect(recovery.run.disableCollectBatching).toBe(true);
       expect(recovery.run.toolsAllow).toEqual(expected);
+      expect(recovery.run.prompt).toBe(
+        `[System] Your previous reply was not delivered to the conversation because ` +
+          `you did not call message(action=send). Your reply text was:\n\n` +
+          `"${substantiveFinal}"\n\n` +
+          `Please deliver this reply now by calling message(action=send). ` +
+          `Harnesses that expose OpenClaw tools over MCP register it under the \`openclaw\` server ` +
+          `(Claude Code: \`mcp__openclaw__message\`); load it with tool search if it is not visible. ` +
+          `Do not add any extra commentary; just deliver the original reply.`,
+      );
     }
   });
 
@@ -154,6 +163,7 @@ describe("resolveStrandedReplyRecovery", () => {
       expect(recovery.run.disableCollectBatching).toBe(true);
       expect(recovery.run.prompt).toContain(substantiveCjkFinal);
       expect(recovery.run.prompt).toContain("message(action=send)");
+      expect(recovery.run.prompt).toContain("`mcp__openclaw__message`");
     }
   });
 
