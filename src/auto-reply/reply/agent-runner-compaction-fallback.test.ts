@@ -26,8 +26,9 @@ import { createTestFollowupRun } from "./agent-runner.test-fixtures.js";
 import { createTypingController } from "./typing.js";
 
 // Real reply turns: preflight compaction, the native compaction delegate, and the
-// foreground run all reach a local OpenAI-compatible provider. Only summary requests stall.
-it("answers through a stalled compaction summary and does not re-run it next turn", async () => {
+// foreground run all reach a local OpenAI-compatible provider. Summary requests time out
+// at the provider, so the turn takes no host deadline wait.
+it("answers through a timed-out compaction summary and does not re-run it next turn", async () => {
   await withOpenClawTestState({ label: "compaction-summary-fallback" }, async (state) => {
     let summaryRequests = 0;
     let answers = 0;
@@ -41,7 +42,8 @@ it("answers through a stalled compaction summary and does not re-run it next tur
         // Built-in summarization requests carry SUMMARIZATION_SYSTEM_PROMPT.
         if (body.includes("context summarization assistant")) {
           summaryRequests += 1;
-          response.writeHead(200, { "content-type": "text/event-stream" });
+          response.writeHead(408, { "content-type": "application/json" });
+          response.end(JSON.stringify({ error: { message: "upstream request timed out" } }));
           return;
         }
         answers += 1;
@@ -78,7 +80,7 @@ it("answers through a stalled compaction summary and does not re-run it next tur
         defaults: {
           workspace: state.workspaceDir,
           model: { primary: "test-provider/test-model" },
-          compaction: { timeoutSeconds: 5, keepRecentTokens: 2_000 },
+          compaction: { keepRecentTokens: 2_000 },
         },
       },
       session: { store: storePath },

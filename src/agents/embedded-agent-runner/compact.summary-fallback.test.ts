@@ -125,7 +125,12 @@ function appendToolTurns(fixture: Fixture, first: number, count: number): string
 
 async function withSession(
   run: (fixture: Fixture) => Promise<void>,
-  options: { fallbackModel?: "fallback-model" | "rejecting-model"; safeguard?: boolean } = {},
+  options: {
+    fallbackModel?: "fallback-model" | "rejecting-model";
+    safeguard?: boolean;
+    // Only the watchdog-stall case waits for this deadline; others fail immediately.
+    timeoutSeconds?: number;
+  } = {},
 ) {
   const state = await createOpenClawTestState({ prefix: "openclaw-summary-fallback-" });
   try {
@@ -147,7 +152,7 @@ async function withSession(
             ...(options.fallbackModel ? { fallbacks: [`fixture/${options.fallbackModel}`] } : {}),
           },
           compaction: {
-            timeoutSeconds: 5,
+            timeoutSeconds: options.timeoutSeconds ?? 60,
             keepRecentTokens: 300,
             ...(options.safeguard ? { mode: "safeguard" as const } : {}),
           },
@@ -209,49 +214,52 @@ function openSession(fixture: Fixture) {
 
 describe("automatic compaction summary failure", () => {
   it("commits a deterministic reduction after a summary timeout", async () => {
-    await withSession(async (fixture) => {
-      const seeded = appendToolTurns(fixture, 0, 8);
-      summaryMode = "stall";
-      const result = await compactSession(fixture);
+    await withSession(
+      async (fixture) => {
+        const seeded = appendToolTurns(fixture, 0, 8);
+        summaryMode = "stall";
+        const result = await compactSession(fixture);
 
-      expect(result).toMatchObject({ ok: true, compacted: true });
-      expect(summaryRequests.length).toBeGreaterThan(0);
-      const branch = openSession(fixture).getBranch();
-      const compactions = branch.filter((entry) => entry.type === "compaction");
-      expect(compactions).toHaveLength(1);
-      expect(compactions[0]?.summary).toContain("removed without a summary");
-      // Durable history is untouched; the boundary keeps a verbatim tool-call/result suffix.
-      expect(branch.filter((entry) => entry.type === "message").map((entry) => entry.id)).toEqual(
-        seeded,
-      );
-      const firstKept = seeded.indexOf(compactions[0]!.firstKeptEntryId);
-      expect(firstKept).toBeGreaterThan(0);
-      expect(firstKept % 3).not.toBe(2);
-      const context = openSession(fixture).buildSessionContext().messages;
-      expect(context[0]?.role).toBe("compactionSummary");
-      expect(context.slice(1)).toHaveLength(seeded.length - firstKept);
-      expect(context.at(-1)).toMatchObject({ role: "toolResult", toolCallId: "call-7" });
+        expect(result).toMatchObject({ ok: true, compacted: true });
+        expect(summaryRequests.length).toBeGreaterThan(0);
+        const branch = openSession(fixture).getBranch();
+        const compactions = branch.filter((entry) => entry.type === "compaction");
+        expect(compactions).toHaveLength(1);
+        expect(compactions[0]?.summary).toContain("removed without a summary");
+        // Durable history is untouched; the boundary keeps a verbatim tool-call/result suffix.
+        expect(branch.filter((entry) => entry.type === "message").map((entry) => entry.id)).toEqual(
+          seeded,
+        );
+        const firstKept = seeded.indexOf(compactions[0]!.firstKeptEntryId);
+        expect(firstKept).toBeGreaterThan(0);
+        expect(firstKept % 3).not.toBe(2);
+        const context = openSession(fixture).buildSessionContext().messages;
+        expect(context[0]?.role).toBe("compactionSummary");
+        expect(context.slice(1)).toHaveLength(seeded.length - firstKept);
+        expect(context.at(-1)).toMatchObject({ role: "toolResult", toolCallId: "call-7" });
 
-      // A later turn's model compaction still works and carries the fallback summary forward.
-      appendToolTurns(fixture, 8, 4);
-      summaryMode = "ok";
-      summaryRequests = [];
-      expect(await compactSession(fixture)).toMatchObject({ ok: true, compacted: true });
-      expect(summaryRequests.join("\n")).toContain("removed without a summary");
-      expect(
-        openSession(fixture)
-          .getBranch()
-          .filter((entry) => entry.type === "compaction")
-          .at(-1)?.summary,
-      ).toContain("Model summary after recovery.");
-    });
+        // A later turn's model compaction still works and carries the fallback summary forward.
+        appendToolTurns(fixture, 8, 4);
+        summaryMode = "ok";
+        summaryRequests = [];
+        expect(await compactSession(fixture)).toMatchObject({ ok: true, compacted: true });
+        expect(summaryRequests.join("\n")).toContain("removed without a summary");
+        expect(
+          openSession(fixture)
+            .getBranch()
+            .filter((entry) => entry.type === "compaction")
+            .at(-1)?.summary,
+        ).toContain("Model summary after recovery.");
+      },
+      { timeoutSeconds: 1 },
+    );
   });
 
   it("lets a configured fallback model summarize a timed-out compaction first", async () => {
     await withSession(
       async (fixture) => {
         appendToolTurns(fixture, 0, 8);
-        summaryMode = "stall";
+        summaryMode = "provider-timeout";
 
         expect(await compactSession(fixture)).toMatchObject({ ok: true, compacted: true });
         expect(summaryRequests.some((body) => body.includes('"model":"fallback-model"'))).toBe(
@@ -272,7 +280,7 @@ describe("automatic compaction summary failure", () => {
     await withSession(
       async (fixture) => {
         appendToolTurns(fixture, 0, 8);
-        summaryMode = "stall";
+        summaryMode = "provider-timeout";
 
         expect(await compactSession(fixture)).toMatchObject({ ok: true, compacted: true });
         expect(summaryRequests.some((body) => body.includes('"model":"rejecting-model"'))).toBe(
@@ -310,7 +318,12 @@ describe("automatic compaction summary failure", () => {
 
   it.each([
     { failure: "a caller Stop", mode: "stall", trigger: "budget", stop: true },
-    { failure: "a manual /compact timeout", mode: "stall", trigger: "manual", stop: false },
+    {
+      failure: "a manual /compact timeout",
+      mode: "provider-timeout",
+      trigger: "manual",
+      stop: false,
+    },
     { failure: "a non-timeout summary error", mode: "error", trigger: "budget", stop: false },
   ] as const)("keeps $failure as a failed compaction", async ({ mode, trigger, stop }) => {
     await withSession(async (fixture) => {

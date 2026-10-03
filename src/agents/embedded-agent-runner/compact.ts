@@ -27,7 +27,7 @@ import {
 } from "../agent-scope.js";
 import { resolveCliBackendConfig } from "../cli-backends.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
-import { coerceToFailoverError } from "../failover-error.js";
+import { coerceToFailoverError, hasModelFallbackStop } from "../failover-error.js";
 import { ensureSelectedAgentHarnessPlugin } from "../harness/runtime-plugin.js";
 import { isFallbackSummaryError } from "../model-fallback-attempt.js";
 import { resolveModelCandidateChain } from "../model-fallback-candidates.js";
@@ -572,7 +572,9 @@ export async function compactEmbeddedAgentSessionDirect(
           });
           chainResult = fallbackResult.result;
         } catch (error) {
-          if (!isFallbackSummaryError(error)) {
+          // Terminal and coordination stops end the operation; candidate-local failures,
+          // including fallback harness preparation, still leave the timed-out candidate.
+          if (!timedOutCandidate || hasModelFallbackStop(error)) {
             throw error;
           }
           chainError = error;

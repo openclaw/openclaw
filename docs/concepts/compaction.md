@@ -32,7 +32,8 @@ generated body, while pending asks and exact identifiers must remain in the
 exact text that would be stored. Invalid output gets only the configured number
 of corrective attempts. If no finalized summary passes, compaction stops before
 writing a transcript entry, keeps the original history, and surfaces the
-existing recovery outcome.
+existing recovery outcome. A summary timeout is the one exception; see
+[Auto-compaction](#auto-compaction).
 
 ## Auto-compaction
 
@@ -44,7 +45,9 @@ Overflow recovery trims tool results within the current model-context window. Ol
 
 Stopping or timing out a run also stops its overflow or timeout recovery. The built-in OpenClaw runtime does not start further recovery hooks, maintenance, transcript truncation, or retries after cancellation. Cancellation is not rollback: a compaction that already completed remains in the transcript and is still counted, without sending a late reply. The context estimate follows the latest model or compaction observation; billing totals remain separate.
 
-If an automatic compaction's summary times out while the turn is still active, OpenClaw commits that compaction without a summary instead of ending the turn. It keeps the same recent messages verbatim, including complete tool calls and results, carries the previous summary forward, and notes how many older messages were removed. The reply then continues, and the next turn does not wait for the same summary again. The transcript keeps every message, so a later compaction summarizes normally. Gateway logs record `[compaction-diag] fallback ... reason=timeout summary=deterministic`; no chat notice is added. A configured model fallback chain gets the summary first. Stop, run timeouts, manual `/compact`, and other summarizer errors keep reporting the failure.
+If an automatic compaction's summary times out while the turn is still active, OpenClaw commits that compaction without a summary instead of ending the turn. It keeps the same recent messages verbatim, including complete tool calls and results, the pending request, and a split turn's original request, carries the previous summary forward, and notes how many older messages were removed. The reply then continues, and the next turn does not wait for the same summary again. Gateway logs record `[compaction-diag] fallback ... reason=timeout summary=deterministic`; no chat notice is added. A configured model fallback chain gets the summary first. Stop, run timeouts, manual `/compact`, and other summarizer errors keep reporting the failure.
+
+This applies in safeguard mode too, which gives up its identifier-retention guarantee for that compaction: older facts that were never summarized leave the model context. The transcript keeps every message, so a later successful compaction can still summarize them. Without this exception, every following turn would wait out the same timeout and the session would stay unusable.
 
 The built-in OpenClaw runtime performs required checkpointing and compaction before inference. In persistent Gateway sessions, optional memory flushing and compaction wait until reply delivery has settled and its foreground owner has closed. That work uses a separate session owner and the turn's remaining time. A new message cancels and settles optional work before reading the session for its own inference.
 
