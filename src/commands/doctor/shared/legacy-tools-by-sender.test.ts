@@ -45,6 +45,9 @@ describe("Doctor sender tool policy migration", () => {
     "tools.toolsBySender",
     "agents.entries.main.tools.toolsBySender",
     "channels.slack.accounts.work.channels.general.toolsBySender",
+    "channels.discord.guilds.guild.channels.general.toolsBySender",
+    "channels.msteams.teams.team.channels.general.toolsBySender",
+    "channels.telegram.direct.user.toolsBySender",
   ])("migrates the declared policy scope %s", (location) => {
     const raw: Record<string, unknown> = {};
     const path = location.split(".");

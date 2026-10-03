@@ -75,6 +75,9 @@ it("resolves string templates, escapes and defaults without warnings", () => {
     ).toEqual({ key: expected });
     expect(warnings, input).toEqual([]);
   }
+  expect(
+    resolveConfigEnvVars({ missing: "${MISSING:-60}", empty: "${EMPTY:-}" }, { EMPTY: "" }),
+  ).toEqual({ missing: "60", empty: "" });
 });
 
 it("resolves nested containers and preserves non-string values", () => {

@@ -480,6 +480,7 @@ describe("Doctor btrfs NOCOW", () => {
     "authority",
     "corrupt",
     "exchange-failed",
+    "changed-source",
     ...(process.platform === "win32" ? [] : ["changed-symlink" as const]),
     "new-wal",
     "changed-wal",
@@ -519,6 +520,11 @@ describe("Doctor btrfs NOCOW", () => {
     }
     if (failure === "getfacl" || failure === "setfacl") {
       fixture.unavailableAclTool = failure;
+    }
+    if (failure === "changed-source") {
+      vi.mocked(setSqliteDirectoryNoCow).mockImplementation(() => {
+        fs.writeFileSync(path.join(directory, "sibling.txt"), "changed by another writer");
+      });
     }
     if (failure === "changed-directory-acl") {
       vi.mocked(setSqliteDirectoryNoCow).mockImplementation(() => {
@@ -562,6 +568,7 @@ describe("Doctor btrfs NOCOW", () => {
       ).toEqual([]);
     }
     if (
+      failure === "changed-source" ||
       failure === "changed-directory-acl" ||
       failure === "changed-symlink" ||
       failure === "new-wal" ||
