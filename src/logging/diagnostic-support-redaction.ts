@@ -374,17 +374,12 @@ export function redactSupportDiagnosticLine(
       .find((line) => line.trim()) ?? "",
   );
   const redacted = redactSupportString(first, context, { maxLength: Number.MAX_SAFE_INTEGER });
-  // Quoted paths have a known end. An unquoted path may contain spaces, so
-  // retain the diagnostic prefix and redact the rest rather than guess.
-  const paths = redacted
-    .replace(
-      /(["'`])(?:\$OPENCLAW_STATE_DIR|~[\\/]|[A-Za-z]:[\\/]|\/+|\\+)[^"'`]*\1/gu,
-      "[redacted-path]",
-    )
-    .replace(
-      /(?:file:\/\/|\$OPENCLAW_STATE_DIR|(?:^|(?<=[\s=(:[]))(?:~[\\/]|[A-Za-z]:[\\/]|\/+|\\+)).*/gu,
-      "[redacted-path]",
-    );
+  // Paths may contain spaces and quotes; neither can safely mark the end of private text.
+  // Retain the diagnostic prefix and redact the rest rather than guess.
+  const paths = redacted.replace(
+    /["'`]?(?:file:\/\/|\$OPENCLAW_STATE_DIR|(?:^|(?<=[\s=(:["'`]))(?:~[\\/]|[A-Za-z]:[\\/]|\/+|\\+)).*/gu,
+    "[redacted-path]",
+  );
   const commandRedacted = paths.replace(
     /\b(?:Command failed:|command (?:sh|cmd|powershell|bash)\b).*/giu,
     "[redacted-command]",
@@ -422,6 +417,12 @@ const PUBLIC_ERROR_CODES = new Set([
   "DEPTH_ZERO_SELF_SIGNED_CERT",
   "ERR_MODULE_NOT_FOUND",
   "ERR_PACKAGE_PATH_NOT_EXPORTED",
+  "ERR_SQLITE_ERROR",
+  "SQLITE_BUSY",
+  "SQLITE_LOCKED",
+  "SQLITE_READONLY",
+  "SQLITE_IOERR",
+  "SQLITE_FULL",
 ]);
 
 /** Error-code syntax alone cannot distinguish private identifiers from known errors. */
@@ -524,7 +525,7 @@ export function redactPublicSupportDiagnosticLine(
     .split(/[\r\n\u2028\u2029]/u)
     .map((entry) => redactSupportDiagnosticLine(entry, context))
     .join("\n");
-  const codes = (lines.match(/\b(?:E[A-Z0-9_]+)\b/gu) ?? []).filter((code) =>
+  const codes = (lines.match(/\b[A-Z][A-Z0-9_]+\b/gu) ?? []).filter((code) =>
     normalizeSupportDiagnosticErrorCode(code),
   );
   const causes = (

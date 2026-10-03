@@ -175,6 +175,10 @@ recorded rollback outcome. Failed steps use stable identifiers such as
 `candidate-state-snapshot`, `candidate-doctor-lint`, and `post-install-verify` in
 the report body and issue title; command arguments and private paths remain redacted.
 Snapshot errors identify the active database, execution approvals, or plugin phase.
+Schema inspection failures put recognized worker error codes and causes before private
+source context, including causes after warning lines, so they survive redaction. Saved
+diagnostic lines omit a path and its trailing text, including quoted paths whose filenames
+may themselves contain spaces or quotes.
 A completed database snapshot does not establish that later plugin paths are readable;
 inspect the source path and filesystem error named by the failing phase.
 A failure during installation or target resolution keeps
