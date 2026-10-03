@@ -301,6 +301,7 @@ describe("AgentSession model-visible tool-result redaction", () => {
       cwd,
       agentDir: cwd,
       model,
+      thinkingLevel: "medium",
       modelRegistry,
       authStorage,
       tools: [toolName],

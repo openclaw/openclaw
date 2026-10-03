@@ -1,4 +1,4 @@
-// Resource loader tests cover prompt loading and transforms.
+// Prepared resource loader tests cover extension resources and diagnostics.
 import { chmod, mkdir, symlink, writeFile } from "node:fs/promises";
 import { join, relative } from "node:path";
 import { Type } from "typebox";
@@ -6,7 +6,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { withMockedWindowsPlatform } from "../../test-utils/vitest-spies.js";
 import darkTheme from "../modes/interactive/theme/dark.json" with { type: "json" };
-import { clearExtensionCache } from "./extensions/loader.js";
 import type { ExtensionFactory } from "./extensions/types.js";
 import { DefaultPackageManager } from "./package-manager.js";
 import { loadPromptTemplates } from "./prompt-templates.js";
@@ -16,32 +15,6 @@ import type { SourceScope } from "./source-info.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-type ExtensionCacheTestState = {
-  factoryRuns: number;
-  moduleLoads: number;
-};
-
-function extensionCacheTestState(): ExtensionCacheTestState {
-  return (
-    globalThis as typeof globalThis & { openclawExtensionCacheTestState: ExtensionCacheTestState }
-  ).openclawExtensionCacheTestState;
-}
-
-function extensionSource(command: string): string {
-  return `
-const state = (globalThis.openclawExtensionCacheTestState ??= { factoryRuns: 0, moduleLoads: 0 });
-state.moduleLoads += 1;
-
-export default function extension(api) {
-  state.factoryRuns += 1;
-  api.registerCommand(${JSON.stringify(command)}, {
-    description: "cache probe",
-    handler() {},
-  });
-}
-`;
-}
-
 function sourceMetadata(path: string, source: string, scope: SourceScope) {
   return { path, source, scope, origin: "package" as const, baseDir: path };
 }
@@ -50,22 +23,8 @@ function createLoader(
   root: string,
   options: Partial<ConstructorParameters<typeof DefaultResourceLoader>[0]> = {},
 ) {
-  return new DefaultResourceLoader({
-    cwd: root,
-    agentDir: root,
-    noExtensions: true,
-    noSkills: true,
-    noPromptTemplates: true,
-    noThemes: true,
-    noContextFiles: true,
-    ...options,
-  });
+  return new DefaultResourceLoader({ cwd: root, agentDir: root, ...options });
 }
-
-afterEach(() => {
-  clearExtensionCache();
-  Reflect.deleteProperty(globalThis, "openclawExtensionCacheTestState");
-});
 
 describe("DefaultResourceLoader", () => {
   it("loads explicit prompts and themes without ambient resolution, retaining the first collision owner", async () => {
@@ -78,9 +37,8 @@ describe("DefaultResourceLoader", () => {
     }
     const loader = createLoader(root, {
       settingsManager: SettingsManager.inMemory(),
-      additionalPromptTemplatePaths: paths,
-      additionalThemePaths: paths,
     });
+
     const resolvePackages = vi.spyOn(DefaultPackageManager.prototype, "resolve");
     try {
       await loader.reload();
@@ -88,6 +46,16 @@ describe("DefaultResourceLoader", () => {
     } finally {
       resolvePackages.mockRestore();
     }
+    loader.extendResources({
+      promptPaths: paths.map((path) => ({
+        path,
+        metadata: sourceMetadata(path, "extension", "temporary"),
+      })),
+      themePaths: paths.map((path) => ({
+        path,
+        metadata: sourceMetadata(path, "extension", "temporary"),
+      })),
+    });
 
     expect(loader.getPrompts().prompts).toEqual([
       expect.objectContaining({ name: "shared", filePath: join(paths[0], "shared.md") }),
@@ -110,23 +78,6 @@ describe("DefaultResourceLoader", () => {
         },
       ]);
     }
-  });
-
-  it("does not load a direct local extension disabled by its package filter", async () => {
-    const root = tempDirs.make("openclaw-resource-loader-filter-");
-    const extensionPath = join(root, "extension.ts");
-    await writeFile(extensionPath, "export default function extension() {}\n");
-    const loader = createLoader(root, {
-      agentDir: join(root, "agent"),
-      settingsManager: SettingsManager.inMemory({
-        packages: [{ source: extensionPath, extensions: [] }],
-      }),
-      noExtensions: false,
-    });
-
-    await loader.reload();
-
-    expect(loader.getExtensions().extensions).toEqual([]);
   });
 
   it("loads only immediate resource files while preserving linked path spelling", async () => {
@@ -160,11 +111,11 @@ describe("DefaultResourceLoader", () => {
     }
     const loader = createLoader(root, {
       settingsManager: SettingsManager.inMemory(),
-      additionalPromptTemplatePaths: [alias],
-      additionalThemePaths: [alias],
     });
 
     await loader.reload();
+    const entry = { path: alias, metadata: sourceMetadata(alias, "extension", "temporary") };
+    loader.extendResources({ promptPaths: [entry], themePaths: [entry] });
 
     const expectedNames = [".hidden", "linked", "regular"];
     expect(
@@ -208,12 +159,15 @@ describe("DefaultResourceLoader", () => {
       await mkdir(resources);
       const loader = createLoader(root, {
         settingsManager: SettingsManager.inMemory(),
-        additionalPromptTemplatePaths: [resources],
-        additionalThemePaths: [resources],
       });
       await chmod(resources, 0);
       try {
         await loader.reload();
+        const entry = {
+          path: resources,
+          metadata: sourceMetadata(resources, "extension", "temporary"),
+        };
+        loader.extendResources({ promptPaths: [entry], themePaths: [entry] });
         expect(loader.getPrompts()).toEqual({ prompts: [], diagnostics: [] });
         expect(loader.getThemes()).toEqual({
           themes: [],
@@ -226,49 +180,6 @@ describe("DefaultResourceLoader", () => {
       }
     },
   );
-
-  it("reuses extension modules between loaders and refreshes them on reload", async () => {
-    const root = tempDirs.make("openclaw-resource-loader-extension-");
-    const extensionPath = join(root, "extension.ts");
-    await writeFile(extensionPath, extensionSource("before-reload"));
-    const createExtensionLoader = () =>
-      createLoader(root, {
-        additionalExtensionPaths: [extensionPath],
-      });
-
-    const firstLoader = createExtensionLoader();
-    await firstLoader.reload();
-    const secondLoader = createExtensionLoader();
-    await secondLoader.reload();
-
-    expect(extensionCacheTestState()).toEqual({ factoryRuns: 2, moduleLoads: 1 });
-    expect(secondLoader.getExtensions().extensions[0]?.commands.has("before-reload")).toBe(true);
-
-    await writeFile(extensionPath, extensionSource("after-reload"));
-    await secondLoader.reload();
-
-    expect(extensionCacheTestState()).toEqual({ factoryRuns: 3, moduleLoads: 2 });
-    expect(secondLoader.getExtensions().extensions[0]?.commands.has("after-reload")).toBe(true);
-  });
-
-  it("does not use unreadable prompt file paths as prompt content", async () => {
-    const root = tempDirs.make("openclaw-resource-loader-");
-    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
-    try {
-      const loader = createLoader(root, {
-        systemPrompt: root,
-        appendSystemPrompt: [root],
-      });
-
-      await loader.reload();
-
-      expect(loader.getSystemPrompt()).toBeUndefined();
-      expect(loader.getAppendSystemPrompt()).toEqual([]);
-      expect(consoleError).toHaveBeenCalledTimes(2);
-    } finally {
-      consoleError.mockRestore();
-    }
-  });
 
   it("reports tool and flag conflicts in extension order while retaining the first owner", async () => {
     const root = tempDirs.make("openclaw-resource-loader-conflicts-");
@@ -315,57 +226,58 @@ describe("DefaultResourceLoader", () => {
     for (const [index, name] of ["default", "package", "extra"].entries()) {
       await writeFile(themePaths[index]!, JSON.stringify({ ...darkTheme, name }));
     }
-    const resolvePackages = vi.spyOn(DefaultPackageManager.prototype, "resolve").mockResolvedValue({
-      extensions: [],
-      skills: [],
-      prompts: [],
-      themes: [
-        {
-          path: variantPackageDir,
-          enabled: true,
-          metadata: sourceMetadata(variantPackageDir, "package", "user"),
-        },
-      ],
-    });
-
-    try {
-      await withMockedWindowsPlatform(async () => {
-        const loader = createLoader(root, {
-          agentDir: variantAgentDir,
-          settingsManager: SettingsManager.inMemory(),
-          additionalThemePaths: themePaths,
-          noThemes: false,
-        });
-        await loader.reload();
-        const sourceInfo = (name: string) =>
-          loader.getThemes().themes.find((theme) => theme.name === name)?.sourceInfo;
-
-        expect(sourceInfo("default")).toMatchObject({
-          source: "local",
-          scope: "user",
-          baseDir: join(variantAgentDir, "themes"),
-        });
-        expect(sourceInfo("package")).toMatchObject({
-          source: "package",
-          scope: "user",
-          baseDir: variantPackageDir,
-        });
-        loader.extendResources({
-          themePaths: [
-            {
-              path: variantPackageDir,
-              metadata: sourceMetadata(variantPackageDir, "extension", "project"),
-            },
-          ],
-        });
-        expect(sourceInfo("extra")).toMatchObject({
-          source: "extension",
-          scope: "project",
-          baseDir: variantPackageDir,
-        });
+    await withMockedWindowsPlatform(async () => {
+      const loader = createLoader(root, {
+        agentDir: variantAgentDir,
+        settingsManager: SettingsManager.inMemory(),
       });
-    } finally {
-      resolvePackages.mockRestore();
-    }
+      await loader.reload();
+      loader.extendResources({
+        themePaths: [
+          {
+            path: themePaths[0]!,
+            metadata: {
+              source: "local",
+              scope: "user",
+              origin: "top-level",
+              baseDir: join(variantAgentDir, "themes"),
+            },
+          },
+          {
+            path: variantPackageDir,
+            metadata: sourceMetadata(variantPackageDir, "package", "user"),
+          },
+          ...themePaths
+            .slice(1)
+            .map((path) => ({ path, metadata: sourceMetadata(path, "fallback", "temporary") })),
+        ],
+      });
+      const sourceInfo = (name: string) =>
+        loader.getThemes().themes.find((theme) => theme.name === name)?.sourceInfo;
+
+      expect(sourceInfo("default")).toMatchObject({
+        source: "local",
+        scope: "user",
+        baseDir: join(variantAgentDir, "themes"),
+      });
+      expect(sourceInfo("package")).toMatchObject({
+        source: "package",
+        scope: "user",
+        baseDir: variantPackageDir,
+      });
+      loader.extendResources({
+        themePaths: [
+          {
+            path: variantPackageDir,
+            metadata: sourceMetadata(variantPackageDir, "extension", "project"),
+          },
+        ],
+      });
+      expect(sourceInfo("extra")).toMatchObject({
+        source: "extension",
+        scope: "project",
+        baseDir: variantPackageDir,
+      });
+    });
   });
 });

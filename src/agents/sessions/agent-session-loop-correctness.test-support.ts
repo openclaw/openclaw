@@ -153,6 +153,7 @@ export async function createTestSession(
   });
   const sessionOptions = {
     model,
+    thinkingLevel: "medium" as const,
     authStorage,
     noTools: "builtin" as const,
     customTools: options.customTools,
