@@ -128,6 +128,7 @@ local turns, including the Gateway's resolved model settings and limits. Code
 Mode runs on the node and calls each catalog tool at its declared execution
 location. Its catalog and pending cells belong to the current turn; a retained
 worker receives a fresh presentation on the next turn.
+Node workers use `tool_call` for Tool Search, including when directory mode is configured.
 
 Concurrent Gateway tool calls wait for the existing transport budget, so larger
 model tool batches do not lose calls. Cancellation and heartbeats remain independent.

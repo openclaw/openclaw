@@ -266,6 +266,7 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
           runId: params.runId,
           abortSignal: toolSignal,
           presentation: toolSurface.presentation,
+          supportsDeferredToolCalls: false,
           modelToolsEnabled: tools.length > 0,
           model,
         });

@@ -40,9 +40,10 @@ type WorkerGatewayToolFixture = {
 };
 
 export function registerWorkerGatewayToolAvailabilityTests({ setup }: WorkerGatewayToolFixture) {
-  it.each([false, true])(
-    "admits and executes Gateway tools with Code Mode %s",
-    async (codeMode) => {
+  it.each(["direct", "code-mode", "directory"] as const)(
+    "admits and executes Gateway tools with the %s presentation",
+    async (mode) => {
+      const codeMode = mode === "code-mode";
       const args = { url: "https://example.invalid/worker-tool-proof" };
       const { gateway, launch } = await setup({
         inferencePlans: [
@@ -55,13 +56,19 @@ export function registerWorkerGatewayToolAvailabilityTests({ setup }: WorkerGate
                   code: `return await web_fetch(${JSON.stringify(args)})`,
                 },
               }
-            : { toolName: "web_fetch", toolCallId: "gateway-fetch", args },
+            : mode === "directory"
+              ? {
+                  toolName: "tool_call",
+                  toolCallId: "gateway-fetch",
+                  args: { id: "web_fetch", args },
+                }
+              : { toolName: "web_fetch", toolCallId: "gateway-fetch", args },
           "text",
         ],
       });
       const surface = gateway.toolSurface();
       surface.presentation = createToolSurfacePresentationForTest({
-        tools: { codeMode, toolSearch: false },
+        tools: { codeMode, toolSearch: mode === "directory" ? { enabled: true, mode } : false },
       });
       const gatewayTool: WorkerToolSurface["tools"][number] = {
         id: "web_fetch",
@@ -92,13 +99,25 @@ export function registerWorkerGatewayToolAvailabilityTests({ setup }: WorkerGate
       await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
 
       expect(gateway.inferenceRequests[0]?.context.tools?.map((tool) => tool.name)).toEqual(
-        codeMode ? ["exec", "wait"] : ["read", "web_fetch"],
+        codeMode
+          ? ["exec", "wait"]
+          : mode === "directory"
+            ? ["tool_search", "tool_describe", "tool_call", "read"]
+            : ["read", "web_fetch"],
       );
+      if (mode === "directory") {
+        expect(gateway.inferenceRequests[0]?.context.systemPrompt).toContain(
+          "Deferred names are not directly callable.",
+        );
+        expect(gateway.inferenceRequests[0]?.context.systemPrompt).not.toContain(
+          "Call a unique deferred tool name directly",
+        );
+      }
       expect(gateway.gatewayToolRequests).toEqual([
         {
           generation: surface.generation,
           toolId: "web_fetch",
-          toolCallId: codeMode ? expect.stringContaining("web_fetch") : "gateway-fetch",
+          toolCallId: mode === "direct" ? "gateway-fetch" : expect.stringContaining("web_fetch"),
           arguments: args,
         },
       ]);

@@ -9,7 +9,7 @@ import { getWorkerTurnToolSurface } from "./placement-turn-claim-events.js";
 import * as support from "./service.test-support.js";
 import { createWorkerGatewayToolRuntime } from "./worker-gateway-tool-runtime.js";
 
-async function toolHarness(name: string, codeMode = false) {
+async function toolHarness(name: string, mode: boolean | "directory" = false) {
   const fixture = await support.placementHarness(`worker-${name}`, `session-${name}`);
   let sourceCurrent = true;
   const assertSource = vi.fn(() => {
@@ -48,7 +48,10 @@ async function toolHarness(name: string, codeMode = false) {
     prepare: async () => ({
       tools: [tool],
       presentation: createToolSurfacePresentationForTest({
-        tools: { codeMode, toolSearch: false },
+        tools: {
+          codeMode: mode === true,
+          toolSearch: mode === "directory" ? { enabled: true, mode } : false,
+        },
       }),
       policy: {
         workspaceOnly: true,
@@ -88,65 +91,71 @@ async function toolHarness(name: string, codeMode = false) {
 describe("worker Gateway tool RPC authority", () => {
   support.setupWorkerEnvironmentServiceSuite();
 
-  it("admits the worker's Code Mode schemas while rejecting raw or altered schemas", async () => {
-    const h = await toolHarness("model-presentation", true);
-    const worker = createAgentHarnessToolSurfaceRuntimeCore({
-      presentation: h.surface.presentation,
-      modelToolsEnabled: true,
-    });
-    try {
-      const projected = worker
-        .compactTools(
-          h.surface.tools.map(({ definition }) => ({ ...definition, execute: h.execute })),
-          { prepared: { preserveToolNames: [] } },
-        )
-        .tools.map(({ name, description, parameters }) => ({ name, description, parameters }));
-      expect(projected.map((tool) => tool.name)).toEqual(["exec", "wait"]);
-      const request = support.inferenceRequest(h.identity);
-      for (const tools of [
-        h.surface.tools.map(({ definition: { name, description, parameters } }) => ({
-          name,
-          description,
-          parameters,
-        })),
-        projected.map((tool) => ({ ...tool, description: "unadmitted description" })),
-      ]) {
-        await expect(
-          h.workerService.startInference(
-            h.identity,
-            {
-              ...request,
-              context: { ...request.context, tools },
-            },
-            { connectionId: "schema-mismatch", send: vi.fn() },
-          ),
-        ).resolves.toEqual({ ok: false, reason: "invalid-context" });
-      }
-      const finished = createDeferred();
-      const started = await h.workerService.startInference(
-        h.identity,
-        {
-          ...request,
-          context: { ...request.context, tools: projected },
-        },
-        { connectionId: "projected-tools", send: () => finished.resolve() },
-      );
-      expect(started.ok).toBe(true);
-      if (!started.ok) {
-        throw new Error("Projected worker tools were not admitted");
-      }
-      await h.workerService.cancelInference(h.identity, request);
-      started.launch();
-      await finished.promise;
-      expect(h.execute).not.toHaveBeenCalled();
-      await expect(h.invoke()).resolves.toMatchObject({
-        ok: true,
-        result: { details: { ok: true } },
+  it.each([true, "directory"] as const)(
+    "admits the worker's %s schemas while rejecting raw or altered schemas",
+    async (mode) => {
+      const h = await toolHarness(`model-presentation-${mode}`, mode);
+      const worker = createAgentHarnessToolSurfaceRuntimeCore({
+        presentation: h.surface.presentation,
+        modelToolsEnabled: true,
+        supportsDeferredToolCalls: false,
       });
-    } finally {
-      worker.cleanup();
-    }
-  });
+      try {
+        const projected = worker
+          .compactTools(
+            h.surface.tools.map(({ definition }) => ({ ...definition, execute: h.execute })),
+            { prepared: { preserveToolNames: [] } },
+          )
+          .tools.map(({ name, description, parameters }) => ({ name, description, parameters }));
+        expect(projected.map((tool) => tool.name)).toEqual(
+          mode === true ? ["exec", "wait"] : ["tool_search", "tool_describe", "tool_call"],
+        );
+        const request = support.inferenceRequest(h.identity);
+        for (const tools of [
+          h.surface.tools.map(({ definition: { name, description, parameters } }) => ({
+            name,
+            description,
+            parameters,
+          })),
+          projected.map((tool) => ({ ...tool, description: "unadmitted description" })),
+        ]) {
+          await expect(
+            h.workerService.startInference(
+              h.identity,
+              {
+                ...request,
+                context: { ...request.context, tools },
+              },
+              { connectionId: "schema-mismatch", send: vi.fn() },
+            ),
+          ).resolves.toEqual({ ok: false, reason: "invalid-context" });
+        }
+        const finished = createDeferred();
+        const started = await h.workerService.startInference(
+          h.identity,
+          {
+            ...request,
+            context: { ...request.context, tools: projected },
+          },
+          { connectionId: "projected-tools", send: () => finished.resolve() },
+        );
+        expect(started.ok).toBe(true);
+        if (!started.ok) {
+          throw new Error("Projected worker tools were not admitted");
+        }
+        await h.workerService.cancelInference(h.identity, request);
+        started.launch();
+        await finished.promise;
+        expect(h.execute).not.toHaveBeenCalled();
+        await expect(h.invoke()).resolves.toMatchObject({
+          ok: true,
+          result: { details: { ok: true } },
+        });
+      } finally {
+        worker.cleanup();
+      }
+    },
+  );
 
   it("keeps catalog and cancellation available while stale source authority fences effects", async () => {
     const h = await toolHarness("source-custody");

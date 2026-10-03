@@ -110,6 +110,7 @@ export function createWorkerGatewayToolRuntime(params: {
       if (!modelTools) {
         const runtime = createAgentHarnessToolSurfaceRuntimeCore({
           presentation: surface.presentation,
+          supportsDeferredToolCalls: false,
           modelToolsEnabled: surface.tools.length > 0,
           contextTokenBudget: surface.policy.modelContextWindowTokens,
         });
