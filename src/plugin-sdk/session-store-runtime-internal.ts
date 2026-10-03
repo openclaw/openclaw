@@ -2,6 +2,7 @@ import { MAIN_SESSION_RECOVERY_CLEAR_PATCH } from "../agents/main-session-recove
 import type { SessionAccessScope } from "../config/sessions/session-accessor.js";
 import {
   projectPublicSessionEntry,
+  projectPublicSessionEntryPatch,
   SESSION_ENTRY_PRIVATE_CLEAR_PATCH,
 } from "../config/sessions/session-entry-projection.js";
 import type { InternalSessionEntry, SessionEntry } from "../config/sessions/types.js";
@@ -39,21 +40,23 @@ export function projectPluginSessionEntry(entry: InternalSessionEntry): SessionE
   };
 }
 
-export function preserveGenerationPrivateFields(
-  existingEntry: InternalSessionEntry,
-  publicPatch: Partial<SessionEntry>,
-): Partial<InternalSessionEntry> {
+export function projectPluginSessionEntryPatch(
+  patch: Partial<InternalSessionEntry>,
+): Partial<SessionEntry> {
+  return projectPublicSessionEntryPatch(patch);
+}
+
+export function generationValidPrivateFieldsForSameSession(
+  existingEntry: InternalSessionEntry | undefined,
+  nextSessionId: string | undefined,
+  nextLifecycleRevision: string | undefined,
+): Partial<InternalSessionEntry> | undefined {
   if (
-    (Object.hasOwn(publicPatch, "sessionId") &&
-      publicPatch.sessionId !== existingEntry.sessionId) ||
-    (Object.hasOwn(publicPatch, "lifecycleRevision") &&
-      publicPatch.lifecycleRevision !== existingEntry.lifecycleRevision)
+    !existingEntry ||
+    existingEntry.sessionId !== nextSessionId ||
+    existingEntry.lifecycleRevision !== nextLifecycleRevision
   ) {
-    return {
-      ...publicPatch,
-      ...SESSION_ENTRY_PRIVATE_CLEAR_PATCH,
-      ...MAIN_SESSION_RECOVERY_CLEAR_PATCH,
-    };
+    return undefined;
   }
   const state: Partial<InternalSessionEntry> = {
     ...(existingEntry.cliHistoryBoundary
@@ -82,14 +85,21 @@ export function preserveGenerationPrivateFields(
         }
       : {}),
   };
-  return Object.keys(state).length > 0
+  return Object.keys(state).length > 0 ? state : undefined;
+}
+
+export function clearGenerationPrivateFieldsForRotatedSessionPatch(
+  existingEntry: InternalSessionEntry,
+  publicPatch: Partial<SessionEntry>,
+): Partial<InternalSessionEntry> {
+  return (Object.hasOwn(publicPatch, "sessionId") &&
+    publicPatch.sessionId !== existingEntry.sessionId) ||
+    (Object.hasOwn(publicPatch, "lifecycleRevision") &&
+      publicPatch.lifecycleRevision !== existingEntry.lifecycleRevision)
     ? {
         ...publicPatch,
-        ...(!Object.hasOwn(publicPatch, "lifecycleRevision") &&
-        existingEntry.lifecycleRevision !== undefined
-          ? { lifecycleRevision: existingEntry.lifecycleRevision }
-          : {}),
-        ...state,
+        ...SESSION_ENTRY_PRIVATE_CLEAR_PATCH,
+        ...MAIN_SESSION_RECOVERY_CLEAR_PATCH,
       }
     : publicPatch;
 }
