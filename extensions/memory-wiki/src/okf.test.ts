@@ -147,6 +147,7 @@ describe("importMemoryWikiOkfBundle", () => {
     const ordersRaw = await fs.readFile(path.join(config.vault.path, ordersPath!), "utf8");
     const orders = parseWikiMarkdown(ordersRaw);
     expect(orders.frontmatter).toMatchObject({
+      type: "BigQuery Table",
       pageType: "concept",
       title: "Orders",
       sourceType: "okf",
@@ -187,6 +188,20 @@ describe("importMemoryWikiOkfBundle", () => {
           kind: "okf-link",
         }),
       ]),
+    );
+
+    const { config: reimportConfig } = await createVault({
+      rootDir: path.join(rootDir, "reimport-vault"),
+    });
+    const reimport = await importMemoryWikiOkfBundle({
+      config: reimportConfig,
+      bundlePath: path.join(config.vault.path, "concepts"),
+      nowMs: Date.UTC(2026, 5, 12, 10, 10, 0),
+    });
+    expect(reimport.importedCount).toBe(3);
+    expect(reimport.skippedCount).toBe(0);
+    expect(reimport.warnings).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: "missing-type" })]),
     );
 
     const customersPath = result.pagePaths.find((pagePath) => pagePath.includes("customers"));
