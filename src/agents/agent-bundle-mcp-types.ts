@@ -120,6 +120,8 @@ export type McpToolCatalogDiagnostic = {
   safeServerName: string;
   launchSummary: string;
   message: string;
+  /** Set only by the catalog owner after a known external availability failure. */
+  errorCode?: "mcp-service-unavailable";
 };
 
 export type McpRequestOptions = {

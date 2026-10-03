@@ -1,12 +1,13 @@
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { redactMcpDiagnosticError } from "./mcp-error.js";
+import { isMcpServiceAvailabilityError, redactMcpDiagnosticError } from "./mcp-error.js";
 
 type StartupState = {
   owner: AbortSignal;
   delayMs: number;
   retryAfterMs: number;
   message: string;
+  serviceUnavailable: boolean;
   pending?: Promise<void>;
 };
 
@@ -16,7 +17,8 @@ const startups = resolveGlobalSingleton(
   () => new Map<string, StartupState>(),
 );
 
-export class McpStartupBackoffError extends Error {
+class McpStartupBackoffError extends Error {
+  readonly serviceUnavailable: boolean;
   constructor(
     state: StartupState,
     readonly reportFailure: boolean,
@@ -25,7 +27,25 @@ export class McpStartupBackoffError extends Error {
     super(
       `${state.message}; server unavailable; retry after ${new Date(retryAfterMs).toISOString()}. Check server reachability or reload MCP after fixing it.`,
     );
+    this.serviceUnavailable = state.serviceUnavailable;
   }
+}
+
+/** Classifies a catalog failure for logging, retry timing, and Doctor severity. */
+export function classifyMcpCatalogFailure(error: unknown): {
+  reportFailure: boolean;
+  retryAfterMs?: number;
+  errorCode?: "mcp-service-unavailable";
+} {
+  const backoff = error instanceof McpStartupBackoffError ? error : undefined;
+  const serviceUnavailable = backoff
+    ? backoff.serviceUnavailable
+    : isMcpServiceAvailabilityError(error);
+  return {
+    reportFailure: backoff?.reportFailure ?? true,
+    ...(backoff ? { retryAfterMs: backoff.retryAfterMs } : {}),
+    ...(serviceUnavailable ? { errorCode: "mcp-service-unavailable" as const } : {}),
+  };
 }
 
 export function resetMcpStartupBackoff(key?: string): void {
@@ -55,6 +75,7 @@ export async function connectWithMcpStartupBackoff(
     delayMs: 15_000,
     retryAfterMs: 0,
     message: "",
+    serviceUnavailable: false,
   };
   // Only the first failing runtime gets its normal catalog retry after retirement.
   // New runtimes share the cooldown; a second failure applies it to the owner too.
@@ -82,6 +103,7 @@ export async function connectWithMcpStartupBackoff(
     state.delayMs = Math.min(state.delayMs * 2, 600_000);
     state.retryAfterMs = Date.now() + state.delayMs;
     state.message = redactMcpDiagnosticError(error);
+    state.serviceUnavailable = isMcpServiceAvailabilityError(error);
     throw new McpStartupBackoffError(state, true, retryAfterMs());
   } finally {
     state.pending = undefined;

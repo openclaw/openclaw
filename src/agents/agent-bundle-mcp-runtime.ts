@@ -54,8 +54,8 @@ import { createMcpJsonSchemaValidator } from "./mcp-json-schema-validator.js";
 import { buildMcpClientCapabilities, summarizeServerCapabilities } from "./mcp-metadata.js";
 import { collectMcpPaginatedItems } from "./mcp-pagination.js";
 import {
+  classifyMcpCatalogFailure,
   connectWithMcpStartupBackoff,
-  McpStartupBackoffError,
   resetMcpStartupBackoff,
 } from "./mcp-startup-backoff.js";
 import { isMcpToolAllowed, normalizeMcpToolFilter } from "./mcp-tool-filter.js";
@@ -861,12 +861,9 @@ function createServerMcpRuntime(
         };
       } catch (error) {
         const message = redactMcpDiagnosticError(error);
-        startupRetryAfterMs =
-          error instanceof McpStartupBackoffError ? error.retryAfterMs : undefined;
-        if (
-          !retiredCatalog &&
-          (!(error instanceof McpStartupBackoffError) || error.reportFailure)
-        ) {
+        const failure = classifyMcpCatalogFailure(error);
+        startupRetryAfterMs = failure.retryAfterMs;
+        if (params.logCatalogFailures !== false && !retiredCatalog && failure.reportFailure) {
           const action = reusedSession ? "refresh" : "start";
           logWarn(
             `bundle-mcp: failed to ${action} server "${serverName}" (${launchDescription}): ${message}`,
@@ -878,6 +875,7 @@ function createServerMcpRuntime(
             safeServerName,
             launchSummary: launchDescription,
             message,
+            ...(failure.errorCode ? { errorCode: failure.errorCode } : {}),
           },
         ];
         if (

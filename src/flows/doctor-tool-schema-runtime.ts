@@ -79,14 +79,17 @@ function bundleMcpRuntimeLoadFailureFinding(error: unknown): HealthFinding {
 }
 
 function bundleMcpRuntimeDiagnosticFinding(diagnostic: McpToolCatalogDiagnostic): HealthFinding {
+  const serviceUnavailable = diagnostic.errorCode === "mcp-service-unavailable";
   return {
     checkId: "core/doctor/runtime-tool-schemas",
-    severity: "error",
+    severity: serviceUnavailable ? "warning" : "error",
+    ...(serviceUnavailable ? { errorCode: diagnostic.errorCode } : {}),
     message: `Configured MCP server "${diagnostic.serverName}" could not expose runtime tools for schema validation.`,
     path: `mcp.servers.${diagnostic.serverName}`,
     requirement: diagnostic.message,
-    fixHint:
-      "Fix or disable the offending MCP server, then rerun doctor before relying on assistant tool startup.",
+    fixHint: serviceUnavailable
+      ? "Check the MCP service connection and authentication, then rerun doctor when the service is available."
+      : "Fix or disable the offending MCP server, then rerun doctor before relying on assistant tool startup.",
   };
 }
 
@@ -393,6 +396,7 @@ export async function collectRuntimeToolSchemaFindings(
                 cfg,
                 excludeServerNames,
                 safeServerNamesByServer,
+                logCatalogFailures: false,
               }),
             );
           } catch (error) {

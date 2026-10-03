@@ -52,4 +52,6 @@ export type CreateSessionMcpRuntime = (params: {
   configFingerprint?: string;
   toolOverrides?: Pick<SessionToolOverrides, "mcpServers" | "mcpToolsDeny">;
   toolDenylist?: string[];
+  /** Doctor reports catalog failures as findings and need not repeat them in stderr. */
+  logCatalogFailures?: boolean;
 }) => SessionMcpRuntime | Promise<SessionMcpRuntime>;

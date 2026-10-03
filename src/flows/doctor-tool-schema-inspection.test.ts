@@ -12,6 +12,7 @@ import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-reque
 import * as pluginTools from "../plugins/tools.js";
 import { defaultRuntime } from "../runtime.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { getFreePort } from "../test-utils/ports.js";
 import { CORE_HEALTH_CHECKS } from "./doctor-core-checks.js";
 
 afterEach(() => {
@@ -226,6 +227,88 @@ module.exports = { id, register(api) {
             .map((row) => row.id)
             .toSorted((left, right) => left.localeCompare(right)),
         ).toEqual(["failed-tool", "fleet-tool"]);
+      },
+    );
+  },
+);
+
+it.each([
+  {
+    name: "closed MCP transport",
+    server: { command: process.execPath, args: ["-e", "process.exit(1)"] as string[] },
+    severity: "warning",
+    errorCode: "mcp-service-unavailable",
+  },
+  {
+    name: "missing local executable",
+    server: { command: "/nonexistent/openclaw-mcp-doctor-test-command" },
+    severity: "error",
+    errorCode: undefined,
+  },
+  {
+    name: "refused remote HTTP connection",
+    server: undefined,
+    severity: "warning",
+    errorCode: "mcp-service-unavailable",
+  },
+] as const)(
+  "reports $name through the Doctor runtime check",
+  async ({ server, severity, errorCode }) => {
+    await withOpenClawTestState(
+      { env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" } },
+      async (state) => {
+        const configuredServer = server ?? {
+          url: `http://127.0.0.1:${await getFreePort()}/mcp`,
+          transport: "streamable-http" as const,
+        };
+        const cfg: OpenClawConfig = {
+          agents: {
+            defaults: { model: "fixture/local", workspace: state.path("workspace") },
+          },
+          models: {
+            providers: {
+              fixture: {
+                api: "openai-completions",
+                baseUrl: "http://127.0.0.1:1/v1",
+                models: [
+                  {
+                    id: "local",
+                    name: "Local fixture",
+                    reasoning: false,
+                    input: ["text"],
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                    contextWindow: 128000,
+                    maxTokens: 8192,
+                  },
+                ],
+              },
+            },
+          },
+          mcp: { servers: { broken: configuredServer } },
+        };
+        const check = CORE_HEALTH_CHECKS.find(
+          (entry) => entry.id === "core/doctor/runtime-tool-schemas",
+        );
+        expect(check).toBeDefined();
+        const findings = await check!.detect({
+          mode: "lint",
+          cfg,
+          runtime: defaultRuntime,
+          env: process.env,
+        });
+        expect(findings).toContainEqual(
+          expect.objectContaining({
+            checkId: "core/doctor/runtime-tool-schemas",
+            path: "mcp.servers.broken",
+            severity,
+            ...(errorCode ? { errorCode } : {}),
+          }),
+        );
+        if (!errorCode) {
+          expect(
+            findings.find((finding) => finding.path === "mcp.servers.broken")?.errorCode,
+          ).toBeUndefined();
+        }
       },
     );
   },
