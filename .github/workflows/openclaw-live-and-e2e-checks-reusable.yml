@@ -4443,7 +4443,7 @@ jobs:
             profile_env_only: false
             profiles: full
     env:
-      VOLCENGINE_TTS_API_KEY: ${{ matrix.suite_id == 'native-live-extensions-o-z-other' && secrets.VOLCENGINE_TTS_API_KEY || '' }}
+      ELEVENLABS_API_KEY: ${{ matrix.suite_id == 'native-live-extensions-l-n' && secrets.ELEVENLABS_API_KEY || '' }}
       MODEL_API_KEY: ${{ matrix.suite_id == 'native-live-extensions-l-n' && secrets.MODEL_API_KEY || '' }}
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
@@ -4873,6 +4873,7 @@ jobs:
       GRADIUM_API_KEY: ${{ matrix.suite_id == 'native-live-extensions-a-k' && secrets.GRADIUM_API_KEY || '' }}
       INWORLD_API_KEY: ${{ matrix.suite_id == 'native-live-extensions-a-k' && secrets.INWORLD_API_KEY || '' }}
       DISCORD_BOT_TOKEN: ${{ matrix.suite_id == 'native-live-extensions-a-k' && secrets.OPENCLAW_DISCORD_SMOKE_BOT_TOKEN || '' }}
+      VOLCENGINE_TTS_API_KEY: ${{ matrix.suite_id == 'native-live-extensions-media-audio' && secrets.VOLCENGINE_TTS_API_KEY || '' }}
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
