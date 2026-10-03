@@ -189,8 +189,14 @@ export type SubagentManagerOptions = {
   completeSubagentRun(args: SubagentCompletionRequest): Promise<void>;
 };
 
-export class SubagentWaitManager {
+export abstract class SubagentWaitManager {
   constructor(protected readonly options: SubagentManagerOptions) {}
+
+  protected abstract readonly adoptPausedSubagentRunIntoSuccessor: (params: {
+    childSessionKey: string;
+    childAgentId?: string;
+    assertCurrent?: () => void;
+  }) => Promise<boolean>;
 
   protected currentRunOwnsSession(entry: SubagentRunRecord): boolean {
     const current = this.options.runs.get(entry.runId);
@@ -337,6 +343,14 @@ export class SubagentWaitManager {
           if (paused?.pauseReason === "sessions_yield") {
             this.options.clearPendingLifecycleError(runId);
             this.options.clearPendingLifecycleTimeout(runId);
+            if (
+              await this.adoptPausedSubagentRunIntoSuccessor({
+                childSessionKey: paused.childSessionKey,
+                childAgentId: paused.childAgentId,
+              })
+            ) {
+              return;
+            }
             if (paused.requesterSettleWake?.pauseNotice) {
               this.options.resumedRuns.delete(getSubagentRunRuntimeKey(paused));
               this.options.resumeSubagentRun(runId);

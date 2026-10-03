@@ -47,6 +47,7 @@ import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import { publishSubagentRunChanges } from "./subagent-registry-publication.js";
 import { registerSubagentResultRefreshCases } from "./subagent-registry-result-refresh.test-support.js";
 import { saveSubagentRegistryChangesToSqlite } from "./subagent-registry-state.fixture.test-support.js";
+import { registerYieldFollowupAdoptionTests } from "./subagent-registry-yield-followup-adoption.test-support.js";
 import { registerYieldedParentCleanupCase } from "./subagent-registry-yielded-cleanup.test-support.js";
 import {
   observeRootWork,
@@ -227,8 +228,8 @@ describe("subagent registry seam flow", () => {
     await mod.initSubagentRegistry();
     await activateRegistry();
   };
-  const findRequesterRun = (runId: string) =>
-    mod.listSubagentRunsForRequester("agent:main:main").find((entry) => entry.runId === runId);
+  const findRequesterRun = (runId: string, requesterSessionKey = "agent:main:main") =>
+    mod.listSubagentRunsForRequester(requesterSessionKey).find((entry) => entry.runId === runId);
   const { mockRestoredRuns } = mocks;
   const mockPendingAgentWait = () =>
     mockGatewayMethods(mocks.callGateway, { "agent.wait": { status: "pending" } });
@@ -2107,97 +2108,15 @@ describe("subagent registry seam flow", () => {
     },
   );
 
-  describe("sessions_yield follow-up adoption", () => {
-    const CHILD_SESSION_KEY = "agent:main:subagent:yield-followup";
-    const PAUSED_RUN_ID = "run-yield-followup-paused";
-    const FOLLOW_UP_RUN_ID = "run-yield-followup-continued";
-    const SIBLING_RUN_ID = "run-yield-followup-sibling";
-
-    /**
-     * Drives a child run to the paused state a `sessions_yield` produces, then
-     * arms the wake credential that `settleRequesterTurnAfterSessionSpawns`
-     * writes when the parent yields behind its own spawn batch.
-     */
-    const arrangePausedChildWithYieldedRequester = async () => {
-      mockGatewayMethods(mocks.callGateway, {
-        "agent.wait": {
-          status: "ok",
-          startedAt: 111,
-          endedAt: 222,
-          stopReason: "end_turn",
-          livenessState: "paused",
-          yielded: true,
-        },
-      });
-      await mod.registerSubagentRun({
-        runId: PAUSED_RUN_ID,
-        childSessionKey: CHILD_SESSION_KEY,
-        task: "wait for the remote job",
-      });
-      await waitForFast(() => {
-        const run = expectDefined(findRequesterRun(PAUSED_RUN_ID), "paused subagent run");
-        expect(run.pauseReason).toBe("sessions_yield");
-        return run;
-      });
-      await updateFixtureRun(PAUSED_RUN_ID, (next) => {
-        next.requesterSettleWake = {
-          status: "pending",
-          attemptCount: 0,
-          requesterYieldBatch: true,
-          afterRequesterYield: true,
-          rearmGeneration: 1,
-          batchRunIds: [SIBLING_RUN_ID, PAUSED_RUN_ID].toSorted(),
-        };
-      });
-      expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
-      return expectDefined(findRequesterRun(PAUSED_RUN_ID), "published paused run");
-    };
-
-    it("announces to the original requester once the adopted follow-up ends normally", async () => {
-      await arrangePausedChildWithYieldedRequester();
-
-      mockGatewayMethods(mocks.callGateway, {
-        "agent.wait": {
-          status: "ok",
-          startedAt: 333,
-          endedAt: 444,
-          stopReason: "end_turn",
-        },
-      });
-      expect(
-        await mod.adoptPausedSubagentRunForFollowUp({
-          childSessionKey: CHILD_SESSION_KEY,
-          runId: FOLLOW_UP_RUN_ID,
-          task: "the remote job finished",
-        }),
-      ).toBe(true);
-
-      expect(findRequesterRun(PAUSED_RUN_ID)).toBeUndefined();
-      const adopted = expectDefined(findRequesterRun(FOLLOW_UP_RUN_ID), "adopted follow-up run");
-      // Adoption continues the same unit of work: the requester identity that
-      // spawned the paused run must survive, or the announce lands on the
-      // child's own session instead of the waiting parent.
-      expect(adopted.requesterSessionKey).toBe("agent:main:main");
-      expect(adopted.task).toBe("the remote job finished");
-      expect(adopted.pauseReason).toBeUndefined();
-      // The frozen batch is addressed by runId, so the retired id must be
-      // remapped or this row drops out of the batch it still gates.
-      expect(adopted.requesterSettleWake?.batchRunIds).toEqual(
-        [SIBLING_RUN_ID, FOLLOW_UP_RUN_ID].toSorted(),
-      );
-      expect(adopted.requesterSettleWake).toMatchObject({
-        requesterYieldBatch: true,
-        rearmGeneration: 1,
-      });
-
-      await waitForFast(() => {
-        expect(
-          expectDefined(findRequesterRun(FOLLOW_UP_RUN_ID), "adopted follow-up run").execution
-            .endedAt,
-        ).toBe(444);
-        expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalled();
-      });
-    });
+  registerYieldFollowupAdoptionTests({
+    getRegistry: () => mod,
+    mocks,
+    findRequesterRun,
+    getLifecycleHandler,
+    updateFixtureRun,
+    settleLifecycle,
+    mockPendingAgentWait,
+    wakeRequester,
   });
 
   it("ignores a late yield lifecycle event after the paused run is killed", async () => {
