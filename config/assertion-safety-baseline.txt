@@ -2379,7 +2379,6 @@ src/infra/state-migrations.legacy-sessions.ts	1
 src/infra/state-migrations.mcp-oauth.ts	2
 src/infra/state-migrations.meeting-transcripts-detection.ts	4
 src/infra/state-migrations.meeting-transcripts-files.ts	5
-src/infra/state-migrations.meeting-transcripts-verify.ts	2
 src/infra/state-migrations.meeting-transcripts.ts	2
 src/infra/state-migrations.node-host.ts	2
 src/infra/state-migrations.runtime-state.ts	1
@@ -2391,13 +2390,12 @@ src/infra/state-migrations.update-check.ts	2
 src/infra/state-migrations.workspace-setup-store.ts	2
 src/infra/state-migrations.workspace-setup.ts	1
 src/infra/system-presence.ts	1
-src/infra/tailscale.ts	7
+src/infra/tailscale.ts	4
 src/infra/tmp-openclaw-dir.ts	3
 src/infra/unhandled-rejections.ts	2
 src/infra/update-check-package-target.ts	2
 src/infra/update-global.ts	3
 src/infra/update-package-manager.ts	1
-src/infra/voicewake-routing.ts	4
 src/infra/warning-filter.ts	4
 src/infra/windows-gateway-firewall-diagnostics.ts	2
 src/infra/windows-port-pids.ts	2
