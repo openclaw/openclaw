@@ -1,4 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
+import {
+  createNodeBootstrapFixture,
+  createWorkerArchiveFixture,
+} from "./crabbox-worker-node-enrollment.test-support.js";
 import { commandResult } from "./crabbox-worker-provider.test-support.js";
 import {
   createWarmProvider,
@@ -11,9 +15,17 @@ const COLD_PROFILE = { ...PROFILE, warmImage: false };
 const COORDINATOR_TIMEOUT = `coordinator read retry 1/4 reason=timeout\ncontext deadline exceeded\nGet "https://coordinator.example/v1/leases/${LEASE_ID}": context deadline exceeded`;
 
 describe("Crabbox worker coordinator retries", () => {
-  it.each(["", "CRABBOX_PHASE:openclaw-bootstrap-start"])(
-    "retries enrollment only before script output %j",
-    async (stdout) => {
+  it.each([
+    { phase: "node enrollment setup", stdout: "", prepareRuntime: false },
+    {
+      phase: "node enrollment setup",
+      stdout: "CRABBOX_PHASE:openclaw-bootstrap-start",
+      prepareRuntime: false,
+    },
+    { phase: "node runtime preparation", stdout: "", prepareRuntime: true },
+  ])(
+    "retries $phase only before script output '$stdout'",
+    async ({ phase, stdout, prepareRuntime }) => {
       let attempts = 0;
       const { provider, calls } = createWarmProvider(({ argv }) => {
         if (argv[1] === "run" && ++attempts <= 2) {
@@ -21,15 +33,29 @@ describe("Crabbox worker coordinator retries", () => {
         }
         return undefined;
       });
-      const provisioning = provisionWarmProfile(provider, COLD_PROFILE);
+      const provisioning = provisionWarmProfile(
+        provider,
+        COLD_PROFILE,
+        undefined,
+        undefined,
+        prepareRuntime
+          ? {
+              prepareNodeRuntime: async () => ({
+                nodeBootstrap: createNodeBootstrapFixture(),
+                workerBundle: createWorkerArchiveFixture(),
+              }),
+            }
+          : undefined,
+      );
       if (stdout) {
-        await expect(provisioning).rejects.toThrow("Crabbox node enrollment setup failed");
+        await expect(provisioning).rejects.toThrow(`Crabbox ${phase} failed`);
       } else {
         await expect(provisioning).resolves.toMatchObject({ leaseId: LEASE_ID });
       }
       const scripts = calls.filter(({ argv }) => argv[1] === "run");
-      expect(scripts).toHaveLength(stdout ? 1 : 3);
-      expect(new Set(scripts.map(({ options }) => options.input)).size).toBe(1);
+      expect(scripts).toHaveLength(stdout ? 1 : prepareRuntime ? 4 : 3);
+      const retriedScripts = prepareRuntime ? scripts.slice(0, -1) : scripts;
+      expect(new Set(retriedScripts.map(({ options }) => options.input)).size).toBe(1);
       expect(calls.filter(({ argv }) => argv[1] === "warmup")).toHaveLength(1);
       expect(calls.filter(({ argv }) => argv[1] === "stop")).toHaveLength(stdout ? 1 : 0);
     },

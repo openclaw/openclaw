@@ -261,7 +261,9 @@ export async function runProvisionSetup(
 ): Promise<void> {
   try {
     const run =
-      params.phase === "profile setup" || params.phase === "node enrollment setup"
+      params.phase === "profile setup" ||
+      params.phase === "node runtime preparation" ||
+      params.phase === "node enrollment setup"
         ? runCrabboxCommandWithCoordinatorRetry
         : runCrabboxCommand;
     const result = await withCrabboxWorkerEnvProfile(
