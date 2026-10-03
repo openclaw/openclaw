@@ -108,73 +108,73 @@ test.each([undefined, "main"])(
   },
 );
 
-test("sessions.create preserves an explicit parent under main dmScope", async () => {
-  const { storePath } = await createSessionStoreDir();
-  testState.sessionConfig = { dmScope: "main" };
-  const conversationLink = { url: "https://chat.example.test/thread/123", label: "Source Thread" };
-  await writeSessionStore({
-    entries: {
-      "agent:main:explicit-parent": sessionStoreEntry("sess-explicit-parent", { conversationLink }),
-    },
-  });
+test.each([undefined, 2])(
+  "sessions.create preserves explicit lineage with spawnDepth %s",
+  async (spawnDepth) => {
+    const { storePath } = await createSessionStoreDir();
+    testState.sessionConfig = { dmScope: "main" };
+    const conversationLink = {
+      url: "https://chat.example.test/thread/123",
+      label: "Source Thread",
+    };
+    await writeSessionStore({
+      entries: {
+        "agent:main:explicit-parent": sessionStoreEntry("sess-explicit-parent", {
+          conversationLink,
+        }),
+      },
+    });
 
-  const created = await directSessionReq<{
-    key?: string;
-    entry?: { parentSessionKey?: string; spawnDepth?: number };
-  }>("sessions.create", {
-    agentId: "main",
-    parentSessionKey: "agent:main:explicit-parent",
-  });
+    const created = await directSessionReq<{
+      key?: string;
+      entry?: { parentSessionKey?: string; spawnDepth?: number };
+    }>("sessions.create", {
+      agentId: "main",
+      parentSessionKey: "agent:main:explicit-parent",
+      spawnDepth,
+    });
 
-  expect(created.ok, JSON.stringify(created.error)).toBe(true);
-  expect(created.payload?.entry?.parentSessionKey).toBe("agent:main:explicit-parent");
-  const childKey = requireNonEmptyString(created.payload?.key, "child session key");
-  expect(loadSessionEntry({ sessionKey: childKey, storePath })?.conversationLink).toEqual(
-    conversationLink,
-  );
-  // Operator creations with a parent (UI forks/threads) are still roots: only a
-  // declared spawnDepth marks spawn lineage.
-  expect(created.payload?.entry?.spawnDepth).toBe(0);
+    expect(created.ok, JSON.stringify(created.error)).toBe(true);
+    expect(created.payload?.entry?.parentSessionKey).toBe("agent:main:explicit-parent");
+    const childKey = requireNonEmptyString(created.payload?.key, "child session key");
+    expect(loadSessionEntry({ sessionKey: childKey, storePath })?.conversationLink).toEqual(
+      conversationLink,
+    );
+    // Operator creations with a parent (UI forks/threads) are still roots: only a
+    // declared spawnDepth marks spawn lineage.
+    expect(created.payload?.entry?.spawnDepth).toBe(spawnDepth ?? 0);
 
-  const reused = await directSessionReq<{
-    entry?: { parentSessionKey?: string };
-  }>("sessions.create", {
-    agentId: "main",
-    key: created.payload?.key,
-  });
+    const reused = await directSessionReq<{
+      entry?: { parentSessionKey?: string };
+    }>("sessions.create", {
+      agentId: "main",
+      key: created.payload?.key,
+    });
 
-  expect(reused.ok, JSON.stringify(reused.error)).toBe(true);
-  expect(reused.payload?.entry?.parentSessionKey).toBe("agent:main:explicit-parent");
-  expect(loadSessionEntry({ sessionKey: childKey, storePath })?.conversationLink).toEqual(
-    conversationLink,
-  );
-});
-
-test("sessions.create persists declared spawn lineage for spawn-owned creations", async () => {
-  await createSessionStoreDir();
-  testState.sessionConfig = { dmScope: "main" };
-  await writeSessionStore({
-    entries: {
-      "agent:main:main": sessionStoreEntry("sess-spawn-parent"),
-    },
-  });
-
-  const created = await directSessionReq<{
-    entry?: { parentSessionKey?: string; spawnDepth?: number };
-  }>("sessions.create", {
-    agentId: "main",
-    parentSessionKey: "agent:main:main",
-    spawnDepth: 2,
-  });
-
-  expect(created.ok, JSON.stringify(created.error)).toBe(true);
-  expect(created.payload?.entry?.parentSessionKey).toBe("agent:main:main");
-  expect(created.payload?.entry?.spawnDepth).toBe(2);
-});
+    expect(reused.ok, JSON.stringify(reused.error)).toBe(true);
+    expect(reused.payload?.entry?.parentSessionKey).toBe("agent:main:explicit-parent");
+    expect(loadSessionEntry({ sessionKey: childKey, storePath })?.conversationLink).toEqual(
+      conversationLink,
+    );
+  },
+);
 
 test.each([
   { params: { agentId: "main", spawnDepth: 1 }, message: "spawnDepth requires parentSessionKey" },
   { params: { fork: true }, message: "fork requires parentSessionKey" },
+  {
+    params: { agentId: "ops", parentSessionKey: "agent:main:missing" },
+    message: "unknown parent session: agent:main:missing",
+  },
+  {
+    params: {
+      key: "main",
+      parentSessionKey: "agent:main:main",
+      emitCommandHooks: true,
+      task: "hello after replacing parent",
+    },
+    message: "sessions.create key must differ from parentSessionKey",
+  },
   {
     params: { parentSessionKey: "main", forkFrom: "last-completed" },
     message: "forkFrom requires fork=true",
@@ -183,62 +183,29 @@ test.each([
   "sessions.create rejects invalid child intent: $message",
   async ({ params, message }) => {
     await createSessionStoreDir();
+    testState.agentsConfig = { list: [{ id: "main", default: true }, { id: "ops" }] };
+    await writeSessionStore({ entries: { main: sessionStoreEntry("sess-parent-task") } });
     const created = await directSessionReq("sessions.create", params);
     expect(created).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST", message } });
   },
 );
 
-test("sessions.create leaves dashboard sessions unparented under per-channel-peer dmScope", async () => {
-  testState.sessionConfig = { dmScope: "per-channel-peer" };
+test.each([
+  { session: { dmScope: "per-channel-peer" }, key: undefined },
+  { session: { dmScope: "main", scope: "global" }, key: undefined },
+  { session: { dmScope: "main" }, key: "main" },
+] as const)("sessions.create leaves roots unparented for %j", async ({ session, key }) => {
+  testState.sessionConfig = session;
   await createSessionStoreDir();
-
-  const created = await directSessionReq<{
-    entry?: { parentSessionKey?: string };
-  }>("sessions.create", { agentId: "main" });
-
-  expect(created.ok, JSON.stringify(created.error)).toBe(true);
-  expect(created.payload?.entry?.parentSessionKey).toBeUndefined();
-});
-
-test("sessions.create leaves dashboard sessions unparented under global session scope", async () => {
-  testState.sessionConfig = { dmScope: "main", scope: "global" };
-  await createSessionStoreDir();
-
-  const created = await directSessionReq<{
-    entry?: { parentSessionKey?: string };
-  }>("sessions.create", { agentId: "main" });
-
-  expect(created.ok, JSON.stringify(created.error)).toBe(true);
-  expect(created.payload?.entry?.parentSessionKey).toBeUndefined();
-});
-
-test("sessions.create does not parent the main session to itself", async () => {
-  testState.sessionConfig = { dmScope: "main" };
-  await createSessionStoreDir();
-
   const created = await directSessionReq<{
     key?: string;
     entry?: { parentSessionKey?: string };
-  }>("sessions.create", { agentId: "main", key: "main" });
-
+  }>("sessions.create", { agentId: "main", key });
   expect(created.ok, JSON.stringify(created.error)).toBe(true);
-  expect(created.payload?.key).toBe("agent:main:main");
+  if (key) {
+    expect(created.payload?.key).toBe("agent:main:main");
+  }
   expect(created.payload?.entry?.parentSessionKey).toBeUndefined();
-});
-
-test("sessions.create rejects unknown parentSessionKey", async () => {
-  await createSessionStoreDir();
-  testState.agentsConfig = { list: [{ id: "main", default: true }, { id: "ops" }] };
-
-  const created = await directSessionReq("sessions.create", {
-    agentId: "ops",
-    parentSessionKey: "agent:main:missing",
-  });
-
-  expect(created.ok).toBe(false);
-  expect((created.error as { message?: string } | undefined)?.message ?? "").toContain(
-    "unknown parent session",
-  );
 });
 
 test("sessions.create forks the parent transcript into the new session", async () => {
@@ -388,228 +355,187 @@ async function seedSizedForkParent(dir: string, entry: Parameters<typeof session
   });
 }
 
-test("sessions.create retains the 100K fallback when only another provider has model capacity", async () => {
-  const { dir } = await createSessionStoreDir();
-  testState.sessionConfig = { scope: "per-sender" };
-  resetContextWindowCacheForTest();
-  applyDiscoveredContextWindows({
-    cache: getContextWindowCaches().discoveredTokenCache,
-    models: [{ id: "unresolved-model", provider: "other-provider", contextTokens: 300_000 }],
-  });
-  await seedSizedForkParent(dir, {
-    providerOverride: "unresolved-provider",
-    modelOverride: "unresolved-model",
-    modelOverrideSource: "user",
-    // Fresh persisted usage above DEFAULT_PARENT_FORK_MAX_TOKENS (100K).
-    totalTokens: 200_000,
-  });
-
-  try {
-    const created = await directSessionReq("sessions.create", {
-      agentId: "main",
-      parentSessionKey: "main",
-      fork: true,
-    });
-
-    expect(created.ok).toBe(false);
-    expect((created.error as { message?: string } | undefined)?.message ?? "").toContain(
-      "200000/100000 tokens",
-    );
-  } finally {
+test.each([
+  {
+    name: "provider-scoped fallback",
+    model: "unresolved-model",
+    provider: "unresolved-provider",
+    tokens: 200_000,
+    window: undefined,
+    limit: "200000/100000 tokens",
+  },
+  {
+    name: "inherited large model",
+    model: "gpt-large",
+    provider: "openai",
+    tokens: 391_869,
+    window: 922_000,
+    limit: undefined,
+  },
+  {
+    name: "explicit small model",
+    model: "gpt-small",
+    provider: "openai",
+    tokens: 150_000,
+    window: 128_000,
+    limit: "150000/128000 tokens",
+  },
+  {
+    name: "selected window clamps configured capacity",
+    model: "gpt-selectable",
+    provider: "openai",
+    tokens: 300_000,
+    window: 200_000,
+    limit: "300000/200000 tokens",
+  },
+])(
+  "sessions.create enforces fork capacity: $name",
+  async ({ model, provider, tokens, window, limit }) => {
+    const { dir } = await createSessionStoreDir();
+    testState.sessionConfig = { scope: "per-sender" };
     resetContextWindowCacheForTest();
-    testState.sessionConfig = undefined;
-  }
-});
-
-test("sessions.create admits an explicit fork within the child model context window", async () => {
-  const { dir } = await createSessionStoreDir();
-  testState.sessionConfig = { scope: "per-sender" };
-  agentDiscoveryMock.models = [
-    { id: "gpt-large", name: "Large", provider: "openai", contextWindow: 922_000 },
-  ];
-  await seedSizedForkParent(dir, {
-    providerOverride: "openai",
-    modelOverride: "gpt-large",
-    totalTokens: 391_869,
-  });
-
-  const created = await directSessionReq("sessions.create", {
-    agentId: "main",
-    parentSessionKey: "main",
-    fork: true,
-  });
-
-  expect(created.ok, JSON.stringify(created.error)).toBe(true);
-  agentDiscoveryMock.models = [];
-  testState.sessionConfig = undefined;
-});
-
-test("sessions.create rejects an explicit fork above the selected child model window", async () => {
-  const { dir } = await createSessionStoreDir();
-  testState.sessionConfig = { scope: "per-sender" };
-  agentDiscoveryMock.models = [
-    { id: "gpt-small", name: "Small", provider: "openai", contextWindow: 128_000 },
-  ];
-  await seedSizedForkParent(dir, {
-    totalTokens: 150_000,
-  });
-
-  const created = await directSessionReq("sessions.create", {
-    agentId: "main",
-    model: "openai/gpt-small",
-    parentSessionKey: "main",
-    fork: true,
-  });
-
-  expect(created.ok).toBe(false);
-  expect((created.error as { message?: string } | undefined)?.message ?? "").toContain(
-    "150000/128000 tokens",
-  );
-  agentDiscoveryMock.models = [];
-  testState.sessionConfig = undefined;
-});
-
-test("sessions.create clamps configured capacity to the selected child model window", async () => {
-  const { dir } = await createSessionStoreDir();
-  testState.sessionConfig = { scope: "per-sender" };
-  agentDiscoveryMock.models = [
-    {
-      id: "gpt-selectable",
-      name: "Selectable",
-      provider: "openai",
-      contextWindows: [
-        { id: "200k", label: "200K", contextWindow: 200_000 },
-        { id: "1m", label: "1M", contextWindow: 1_000_000 },
-      ],
-      contextWindowDefault: "1m",
-    },
-  ];
-  await seedSizedForkParent(dir, {
-    totalTokens: 300_000,
-  });
-  const cfg = {
-    ...getRuntimeConfig(),
-    models: {
-      providers: {
-        openai: { models: [{ id: "gpt-selectable", contextTokens: 1_000_000 }] },
-      },
-    },
-  };
-
-  const created = await directSessionReq(
-    "sessions.create",
-    {
-      agentId: "main",
-      contextWindow: "200k",
-      fork: true,
-      model: "openai/gpt-selectable",
-      parentSessionKey: "main",
-    },
-    {
-      context: {
-        getRuntimeConfig: () => cfg,
-      },
-    },
-  );
-
-  expect(created.ok).toBe(false);
-  expect((created.error as { message?: string } | undefined)?.message ?? "").toContain(
-    "300000/200000 tokens",
-  );
-  agentDiscoveryMock.models = [];
-  testState.sessionConfig = undefined;
-});
-
-test("sessions.create rejects fork while the parent session is active", async () => {
-  await createSessionStoreDir();
-  testState.sessionConfig = { scope: "per-sender" };
-  const parentSessionId = "sess-active-fork-parent";
-  await writeSessionStore({ entries: { main: sessionStoreEntry(parentSessionId) } });
-  embeddedRunMock.activeIds.add(parentSessionId);
-  try {
-    const created = await directSessionReq("sessions.create", {
-      parentSessionKey: "main",
-      fork: true,
+    onTestFinished(() => {
+      resetContextWindowCacheForTest();
+      agentDiscoveryMock.models = [];
+      testState.sessionConfig = undefined;
     });
-
-    expect(created.ok).toBe(false);
-    expect(created.error).toMatchObject({
-      code: "UNAVAILABLE",
-      message: "Parent session main is still active; try again in a moment.",
+    const selectable = model === "gpt-selectable";
+    if (!window) {
+      applyDiscoveredContextWindows({
+        cache: getContextWindowCaches().discoveredTokenCache,
+        models: [{ id: model, provider: "other-provider", contextTokens: 300_000 }],
+      });
+    } else {
+      agentDiscoveryMock.models = [
+        {
+          id: model,
+          name: model,
+          provider,
+          ...(selectable
+            ? {
+                contextWindows: [
+                  { id: "200k", label: "200K", contextWindow: 200_000 },
+                  { id: "1m", label: "1M", contextWindow: 1_000_000 },
+                ],
+                contextWindowDefault: "1m",
+              }
+            : { contextWindow: window }),
+        },
+      ];
+    }
+    const inherited = !window || model === "gpt-large";
+    await seedSizedForkParent(dir, {
+      totalTokens: tokens,
+      ...(inherited ? { providerOverride: provider, modelOverride: model } : {}),
+      ...(!window ? { modelOverrideSource: "user" } : {}),
     });
-  } finally {
-    embeddedRunMock.activeIds.delete(parentSessionId);
-    testState.sessionConfig = undefined;
-  }
-});
-
-test("sessions.create forks an active parent from its last completed message", async () => {
-  const { storePath } = await createSessionStoreDir();
-  testState.sessionConfig = { scope: "per-sender" };
-  const parentSessionId = "sess-active-completed-fork-parent";
-  await writeSessionStore({
-    entries: {
-      main: sessionStoreEntry(parentSessionId, {
-        // The in-flight tail can make the whole parent exceed the cap; only the
-        // selected completed prefix should govern this fork.
-        totalTokens: 200_000,
-        totalTokensFresh: true,
-        totalTokensVersion: 1,
-      }),
-    },
-  });
-  await seedSessionTranscript({
-    sessionId: parentSessionId,
-    sessionKey: "agent:main:main",
-    storePath,
-    messages: [
-      { role: "user", content: "completed question" },
+    const cfg = {
+      ...getRuntimeConfig(),
+      models: {
+        providers: { openai: { models: [{ id: model, contextTokens: 1_000_000 }] } },
+      },
+    };
+    const created = await directSessionReq(
+      "sessions.create",
       {
-        role: "assistant",
-        content: [{ type: "text", text: "completed answer" }],
-        stopReason: "stop",
+        agentId: "main",
+        parentSessionKey: "main",
+        fork: true,
+        ...(!inherited ? { model: `${provider}/${model}` } : {}),
+        ...(selectable ? { contextWindow: "200k" } : {}),
       },
-      { role: "user", content: "active question" },
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "active tool call" }],
-        stopReason: "toolUse",
-      },
-    ],
-  });
-  embeddedRunMock.activeIds.add(parentSessionId);
-  try {
-    const created = await directSessionReq<{ key: string; sessionId: string }>("sessions.create", {
-      parentSessionKey: "main",
-      fork: true,
-      forkFrom: "last-completed",
-    });
+      selectable ? { context: { getRuntimeConfig: () => cfg } } : undefined,
+    );
+    expect(created.ok, JSON.stringify(created.error)).toBe(limit === undefined);
+    if (limit) {
+      expect(created.error?.message).toContain(limit);
+    }
+  },
+);
 
-    expect(created.ok, JSON.stringify(created.error)).toBe(true);
-    const messages = await loadTranscriptEvents({
-      sessionId: created.payload?.sessionId ?? "",
-      sessionKey: created.payload?.key ?? "",
+test.each([undefined, "last-completed"] as const)(
+  "sessions.create forks an active parent only from a completed prefix: %s",
+  async (forkFrom) => {
+    const { storePath } = await createSessionStoreDir();
+    testState.sessionConfig = { scope: "per-sender" };
+    const parentSessionId = "sess-active-completed-fork-parent";
+    await writeSessionStore({
+      entries: {
+        main: sessionStoreEntry(parentSessionId, {
+          // The in-flight tail can make the whole parent exceed the cap; only the
+          // selected completed prefix should govern this fork.
+          totalTokens: 200_000,
+          totalTokensFresh: true,
+          totalTokensVersion: 1,
+        }),
+      },
+    });
+    await seedSessionTranscript({
+      sessionId: parentSessionId,
+      sessionKey: "agent:main:main",
       storePath,
+      messages: [
+        { role: "user", content: "completed question" },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "completed answer" }],
+          stopReason: "stop",
+        },
+        { role: "user", content: "active question" },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "active tool call" }],
+          stopReason: "toolUse",
+        },
+      ],
     });
-    expect(
-      messages.flatMap((entry) =>
-        entry &&
-        typeof entry === "object" &&
-        "type" in entry &&
-        entry.type === "message" &&
-        "message" in entry
-          ? [entry.message]
-          : [],
-      ),
-    ).toEqual([
-      expect.objectContaining({ role: "user", content: "completed question" }),
-      expect.objectContaining({ role: "assistant", stopReason: "stop" }),
-    ]);
-  } finally {
-    embeddedRunMock.activeIds.delete(parentSessionId);
-    testState.sessionConfig = undefined;
-  }
-});
+    embeddedRunMock.activeIds.add(parentSessionId);
+    try {
+      const created = await directSessionReq<{ key: string; sessionId: string }>(
+        "sessions.create",
+        {
+          parentSessionKey: "main",
+          fork: true,
+          forkFrom,
+        },
+      );
+
+      if (!forkFrom) {
+        expect(created).toMatchObject({
+          ok: false,
+          error: {
+            code: "UNAVAILABLE",
+            message: "Parent session main is still active; try again in a moment.",
+          },
+        });
+        return;
+      }
+      expect(created.ok, JSON.stringify(created.error)).toBe(true);
+      const messages = await loadTranscriptEvents({
+        sessionId: created.payload?.sessionId ?? "",
+        sessionKey: created.payload?.key ?? "",
+        storePath,
+      });
+      expect(
+        messages.flatMap((entry) =>
+          entry &&
+          typeof entry === "object" &&
+          "type" in entry &&
+          entry.type === "message" &&
+          "message" in entry
+            ? [entry.message]
+            : [],
+        ),
+      ).toEqual([
+        expect.objectContaining({ role: "user", content: "completed question" }),
+        expect.objectContaining({ role: "assistant", stopReason: "stop" }),
+      ]);
+    } finally {
+      embeddedRunMock.activeIds.delete(parentSessionId);
+      testState.sessionConfig = undefined;
+    }
+  },
+);
 
 test("sessions.create resolves an agent-qualified fork from the parent store", async () => {
   const { dir } = await createSessionStoreDir();
@@ -685,23 +611,4 @@ test("sessions.create resolves an agent-qualified fork from the parent store", a
     testState.sessionConfig = undefined;
     testState.agentsConfig = undefined;
   }
-});
-
-test("sessions.create rejects replacing its parent key", async () => {
-  await createSessionStoreDir();
-  testState.agentsConfig = { list: [{ id: "main", default: true }] };
-  await writeSessionStore({ entries: { main: sessionStoreEntry("sess-parent-task") } });
-
-  const created = await directSessionReq("sessions.create", {
-    key: "main",
-    parentSessionKey: "agent:main:main",
-    emitCommandHooks: true,
-    task: "hello after replacing parent",
-  });
-
-  expect(created.ok).toBe(false);
-  expect(created.error).toMatchObject({
-    code: "INVALID_REQUEST",
-    message: "sessions.create key must differ from parentSessionKey",
-  });
 });

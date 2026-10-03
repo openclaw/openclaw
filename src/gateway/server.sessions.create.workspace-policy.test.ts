@@ -55,89 +55,104 @@ async function makeNonGitTempDir(prefix: string): Promise<string> {
   }
 }
 
-test("sessions.create accepts a node-host cwd without provisioning a Gateway worktree", async () => {
-  // A running suite server can read config before this test installs its per-case session store.
-  getRuntimeConfig();
-  const { storePath } = await createSessionStoreDir();
-  const created = await directSessionReq<{
-    key: string;
-    entry: { execHost?: string; execNode?: string; execCwd?: string; spawnedCwd?: string };
-  }>(
-    "sessions.create",
-    { agentId: "main", execNode: "macbook", cwd: "/Users/peter/Projects/openclaw" },
-    { client: { connect: { scopes: ["operator.admin"] } } as never },
-  );
+test.each([
+  { execNode: "macbook", cwd: "/Users/peter/Projects/openclaw" },
+  { execNode: "windows-box", cwd: "C:\\Users\\peter\\Projects" },
+])(
+  "sessions.create binds node cwd without a Gateway worktree: $execNode",
+  async ({ execNode, cwd }) => {
+    getRuntimeConfig();
+    const { storePath } = await createSessionStoreDir();
+    const created = await directSessionReq<{
+      key: string;
+      entry: { execHost?: string; execNode?: string; execCwd?: string; spawnedCwd?: string };
+    }>(
+      "sessions.create",
+      { agentId: "main", execNode, cwd },
+      { client: { connect: { scopes: ["operator.admin"] } } as never },
+    );
+    expect(created.ok).toBe(true);
+    expect(created.payload?.entry).toMatchObject({ execHost: "node", execNode, execCwd: cwd });
+    expect(created.payload?.entry.spawnedCwd).toBeUndefined();
+    const sessionKey = requireNonEmptyString(created.payload?.key, "node session key");
+    const stored = loadSessionEntry({ agentId: "main", sessionKey, storePath });
+    expect(stored).toMatchObject({ execHost: "node", execNode });
+    expect(stored).not.toHaveProperty("sessionDiffBaselineCapture");
+  },
+);
 
-  expect(created.ok).toBe(true);
-  expect(created.payload?.entry).toMatchObject({
-    execHost: "node",
-    execNode: "macbook",
-    execCwd: "/Users/peter/Projects/openclaw",
-  });
-  expect(created.payload?.entry.spawnedCwd).toBeUndefined();
-  const sessionKey = requireNonEmptyString(created.payload?.key, "node session key");
-  const stored = loadSessionEntry({ agentId: "main", sessionKey, storePath });
-  expect(stored).toMatchObject({ execHost: "node", execNode: "macbook" });
-  expect(stored).not.toHaveProperty("sessionDiffBaselineCapture");
-});
-
-test("sessions.create accepts a Windows node-host cwd from a non-Windows Gateway", async () => {
+test.each([
+  {
+    params: { agentId: "main", execNode: "macbook", worktree: true },
+    message: "sessions.create worktree cannot target execNode",
+  },
+  { params: { cwd: "~/repo" }, message: "sessions.create cwd must be absolute" },
+])("sessions.create rejects invalid workspace intent: $message", async ({ params, message }) => {
   await createSessionStoreDir();
-  const created = await directSessionReq<{
-    entry: { execNode?: string; execCwd?: string; spawnedCwd?: string };
-  }>(
-    "sessions.create",
-    { agentId: "main", execNode: "windows-box", cwd: "C:\\Users\\peter\\Projects" },
-    { client: { connect: { scopes: ["operator.admin"] } } as never },
-  );
-
-  expect(created.ok).toBe(true);
-  expect(created.payload?.entry).toMatchObject({
-    execNode: "windows-box",
-    execCwd: "C:\\Users\\peter\\Projects",
+  const created = await directSessionReq("sessions.create", params, {
+    client: { connect: { scopes: ["operator.admin"] } } as never,
   });
-  expect(created.payload?.entry.spawnedCwd).toBeUndefined();
+  expect(created).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST", message } });
 });
 
-test("sessions.create rejects a Gateway worktree targeting a node", async () => {
-  await createSessionStoreDir();
-  const created = await directSessionReq(
-    "sessions.create",
-    { agentId: "main", execNode: "macbook", worktree: true },
-    { client: { connect: { scopes: ["operator.admin"] } } as never },
-  );
-
-  expect(created).toMatchObject({
-    ok: false,
-    error: { message: "sessions.create worktree cannot target execNode" },
-  });
-});
-
-test("sessions.create rejects a regular-file Gateway cwd before creating session state", async () => {
-  const root = tempDirs.make("openclaw-session-file-cwd-");
-  const cwd = path.join(root, "workspace.txt");
-  const key = "agent:main:dashboard:file-cwd";
-  await fs.writeFile(cwd, "not a directory\n");
-  const { storePath } = await createSessionStoreDir();
-  const { ws } = await openClient({
-    scopes: ["operator.admin"],
-    deviceIdentityPath: path.join(root, "device.json"),
-  });
-  try {
-    const created = await rpcReq(ws, "sessions.create", { agentId: "main", key, cwd });
-
-    expect(created).toMatchObject({
-      ok: false,
-      error: {
-        code: "INVALID_REQUEST",
-        message: "sessions.create cwd is not a directory",
-      },
+test.each([
+  {
+    kind: "file",
+    scope: "operator.admin",
+    code: "INVALID_REQUEST",
+    message: "sessions.create cwd is not a directory",
+  },
+  {
+    kind: "outside",
+    scope: "operator.write",
+    code: "FORBIDDEN",
+    message: "missing scope: operator.admin",
+  },
+  {
+    kind: "symlink",
+    scope: "operator.admin",
+    code: "INVALID_REQUEST",
+    message: "sessions.create cwd is outside the sandboxed agent workspace",
+  },
+])(
+  "sessions.create rejects $kind cwd before creating state",
+  async ({ kind, scope, code, message }) => {
+    const root = tempDirs.make("openclaw-session-denied-cwd-");
+    const workspace = path.join(root, "workspace");
+    const outside = path.join(root, "outside");
+    await fs.mkdir(workspace);
+    await fs.mkdir(outside);
+    const cwd =
+      kind === "file"
+        ? path.join(workspace, "workspace.txt")
+        : kind === "symlink"
+          ? path.join(workspace, "escape")
+          : outside;
+    if (kind === "file") {
+      await fs.writeFile(cwd, "not a directory\n");
+    } else if (kind === "symlink") {
+      await fs.symlink(outside, cwd, directoryLinkType);
+    }
+    testState.agentConfig = {
+      workspace,
+      ...(kind === "symlink" ? { sandbox: { mode: "all" } } : {}),
+    };
+    const { storePath } = await createSessionStoreDir();
+    const { ws } = await openClient({
+      scopes: [scope],
+      deviceIdentityPath: path.join(root, "device.json"),
     });
-    expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })).toBeUndefined();
-  } finally {
-    ws.close();
-  }
-});
+    try {
+      const key = "agent:main:dashboard:denied-cwd";
+      const created = await rpcReq(ws, "sessions.create", { agentId: "main", key, cwd });
+      expect(created).toMatchObject({ ok: false, error: { code, message } });
+      expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })).toBeUndefined();
+    } finally {
+      ws.close();
+      testState.agentConfig = undefined;
+    }
+  },
+);
 
 test.each(["operator.admin", "operator.write"])(
   "sessions.create canonicalizes sandbox workspace aliases for %s",
@@ -235,86 +250,46 @@ test("sessions.create requires admin for full permission mode", async () => {
   }
 });
 
-test("sessions.create rejects a write-scoped cwd outside configured workspaces", async () => {
-  const workspace = tempDirs.make("openclaw-session-cwd-workspace-");
-  const outside = tempDirs.make("openclaw-session-cwd-outside-");
-  testState.agentConfig = { workspace };
-  await createSessionStoreDir();
-  const { ws } = await openClient({
-    scopes: ["operator.write"],
-    deviceIdentityPath: path.join(workspace, "outside-cwd-device.json"),
-  });
-  try {
-    const created = await rpcReq(ws, "sessions.create", { cwd: outside });
-
-    expect(created).toMatchObject({
-      ok: false,
-      error: { code: "FORBIDDEN", message: "missing scope: operator.admin" },
-    });
-  } finally {
-    ws.close();
-    testState.agentConfig = undefined;
-  }
-});
-
-test("sessions.create uses a non-git Gateway cwd directly but not as a worktree source", async () => {
-  const cwd = await makeNonGitTempDir("openclaw-session-direct-cwd-");
-  const client = { client: { connect: { scopes: ["operator.admin"] } } as never };
-  const direct = await directSessionReq("sessions.create", { cwd }, client);
-  expect(direct.ok).toBe(true);
-  expect((direct.payload as { entry?: { spawnedCwd?: string } })?.entry?.spawnedCwd).toBe(cwd);
-
-  const isolated = await directSessionReq("sessions.create", { cwd, worktree: true }, client);
-  expect(isolated.ok).toBe(false);
-  expect(isolated.error).toMatchObject({
-    code: "INVALID_REQUEST",
-    message: "agent workspace is not a git checkout",
-  });
-});
-
-test("sessions.create keeps its cwd contract absolute-only", async () => {
-  const created = await directSessionReq("sessions.create", { cwd: "~/repo" });
-
-  expect(created.ok).toBe(false);
-  expect(created.error).toMatchObject({
-    code: "INVALID_REQUEST",
-    message: "sessions.create cwd must be absolute",
-  });
-});
-
-test("sessions.create rejects sandboxed admin cwd via a symlink escape without creating a session", async () => {
-  const root = tempDirs.make("openclaw-session-sandbox-workspace-");
-  const workspace = path.join(root, "workspace");
-  const outside = path.join(root, "outside");
-  await fs.mkdir(workspace);
-  await fs.mkdir(outside);
-  const link = path.join(workspace, "escape");
-  await fs.symlink(outside, link, directoryLinkType);
-  testState.agentConfig = { workspace, sandbox: { mode: "all" } };
-  const { storePath } = await createSessionStoreDir();
-  const { ws } = await openClient({
-    scopes: ["operator.admin"],
-    deviceIdentityPath: path.join(root, "admin-device.json"),
-  });
-  try {
-    const key = "agent:main:dashboard:denied-cwd";
-    const created = await rpcReq(ws, "sessions.create", {
-      key,
-      cwd: link,
-    });
-    expect(created).toMatchObject({
-      ok: false,
-      error: {
-        code: "INVALID_REQUEST",
-        message: "sessions.create cwd is outside the sandboxed agent workspace",
-      },
-    });
-    expect(loadSessionEntry({ sessionKey: key, storePath })).toBeUndefined();
-  } finally {
-    ws.close();
-    testState.agentConfig = undefined;
-  }
-});
+test.each([false, true])(
+  "sessions.create requires a committed checkout for worktrees (git=%s)",
+  async (initialized) => {
+    const cwd = await makeNonGitTempDir("openclaw-session-direct-cwd-");
+    if (initialized) {
+      await execFileAsync("git", ["init", cwd]);
+    }
+    testState.agentConfig = { workspace: cwd };
+    await createSessionStoreDir();
+    try {
+      const client = { client: { connect: { scopes: ["operator.admin"] } } as never };
+      const direct = await directSessionReq<{ entry?: { spawnedCwd?: string } }>(
+        "sessions.create",
+        { cwd },
+        client,
+      );
+      expect(direct.ok).toBe(true);
+      expect(direct.payload?.entry?.spawnedCwd).toBe(cwd);
+      const isolated = await directSessionReq(
+        "sessions.create",
+        initialized ? { agentId: "main", worktree: true } : { cwd, worktree: true },
+        client,
+      );
+      expect(isolated).toMatchObject({
+        ok: false,
+        error: {
+          code: "INVALID_REQUEST",
+          message: initialized
+            ? expect.stringContaining("git checkout has no commits")
+            : "agent workspace is not a git checkout",
+        },
+      });
+      if (initialized) {
+        expect(isolated.error?.message).toContain("Create an initial commit, then retry.");
+      }
+    } finally {
+      testState.agentConfig = undefined;
+    }
+  },
+);
 
 test.each([
   { name: "a dirty checkout", outcome: "dirty" },
@@ -580,28 +555,5 @@ test("sessions.create reset-in-place detaches the prior worktree permission boun
     testState.agentConfig = undefined;
     testState.sessionConfig = undefined;
     await openClawState.cleanup();
-  }
-});
-
-test("sessions.create rejects worktrees for agent workspaces without a commit", async () => {
-  const workspace = await makeNonGitTempDir("openclaw-session-unborn-workspace-");
-  await execFileAsync("git", ["init", workspace]);
-  testState.agentConfig = { workspace };
-  await createSessionStoreDir();
-  try {
-    const created = await directSessionReq(
-      "sessions.create",
-      { agentId: "main", worktree: true },
-      { client: { connect: { scopes: ["operator.admin"] } } as never },
-    );
-
-    expect(created.ok).toBe(false);
-    expect(created.error).toMatchObject({
-      code: "INVALID_REQUEST",
-      message: expect.stringContaining("git checkout has no commits"),
-    });
-    expect(created.error?.message).toContain("Create an initial commit, then retry.");
-  } finally {
-    testState.agentConfig = undefined;
   }
 });
