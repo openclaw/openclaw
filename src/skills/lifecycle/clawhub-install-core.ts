@@ -43,7 +43,7 @@ import {
   resolveWorkspaceClawHubSkills,
 } from "./clawhub-store.js";
 import type { ClawHubSkillFileState } from "./skill-tree-digest.js";
-import type { ClawHubSkillRef } from "./workspace-types.js";
+import type { ClawHubSkillRef, SkillArchiveInstallResult } from "./workspace-types.js";
 
 export type Logger = {
   info?: (message: string) => void;
@@ -262,7 +262,10 @@ async function installDownloadedResolution(
     authority: "official" | "openclaw" | "third-party";
     github?: Extract<ClawHubSkillInstallResolutionResponse, { installKind: "github" }>["github"];
   },
-) {
+): Promise<
+  | Extract<SkillArchiveInstallResult, { ok: true }>
+  | Extract<InstallClawHubSkillResult, { ok: false }>
+> {
   const { github } = params;
   return await withExtractedArchiveRoot({
     archivePath: params.archivePath,

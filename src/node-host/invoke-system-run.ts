@@ -395,6 +395,7 @@ async function parseSystemRunPhase(opts: HandleSystemRunInvokeOptions) {
     overrides: opts.params.env ?? undefined,
     shellWrapper: shellWrapperInvocation,
   });
+  const validatedApprovalSource: ExecHostRequest["approvalSource"] = approvalSource ?? undefined;
   return {
     argv: command.argv,
     shellPayload,
@@ -406,7 +407,7 @@ async function parseSystemRunPhase(opts: HandleSystemRunInvokeOptions) {
     runId,
     execution: { sessionKey, runId, commandText, suppressNotifyOnExit },
     approvalDecision,
-    approvalSource: approvalSource ?? undefined,
+    approvalSource: validatedApprovalSource,
     delayedApprovalPolicySnapshot,
     envOverrides,
     env: sanitizeHostExecEnv({ overrides: envOverrides, blockPathOverrides: true }),

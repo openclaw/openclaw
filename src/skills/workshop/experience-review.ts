@@ -9,7 +9,6 @@ import {
   createCronCreatorAuthorityCapability,
   runWithCronCreatorAuthorityCapability,
 } from "../../agents/cron-creator-authority-context.js";
-import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
 import { rootedAgentRunParams } from "../../agents/rooted-run-params.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
@@ -222,7 +221,9 @@ async function runSkillExperienceReviewInner(candidate: ExperienceReviewCandidat
     });
     const run = async () => {
       const reviewAbortSignal = AbortSignal.any([getGatewayRestartDrainSignal(), abortSignal]);
-      const reviewParams: RunEmbeddedAgentParams = {
+      const reviewParams: Parameters<
+        typeof import("../../agents/embedded-agent.js").runEmbeddedAgent
+      >[0] = {
         ...foregroundPromptContext,
         preparedRunAdmission,
         sessionId: reviewSession.sessionId,
