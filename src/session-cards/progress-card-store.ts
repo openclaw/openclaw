@@ -6,6 +6,7 @@ import type { ProgressCard, ProgressCardStep } from "../../packages/gateway-prot
 import {
   clearNodeSqliteKyselyCacheForDatabase,
   executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
@@ -45,14 +46,14 @@ function withProgressCardDatabase<T>(
 function selectProgressCard(db: DatabaseSync, sessionKey: string): StoredProgressCardRow | null {
   const kysely = getNodeSqliteKysely<ProgressCardDatabase>(db);
   return (
-    executeSqliteQuerySync(
+    executeSqliteQueryTakeFirstSync(
       db,
       kysely
         .selectFrom("session_progress_cards")
         .select(["session_key", "markdown", "steps_json", "revision", "created_at", "updated_at"])
         .where("session_key", "=", sessionKey)
         .limit(1),
-    ).rows[0] ?? null
+    ) ?? null
   );
 }
 
@@ -62,14 +63,14 @@ function selectProgressCardMetadata(
 ): StoredProgressCardMetadata | null {
   const kysely = getNodeSqliteKysely<ProgressCardDatabase>(db);
   return (
-    executeSqliteQuerySync(
+    executeSqliteQueryTakeFirstSync(
       db,
       kysely
         .selectFrom("session_progress_cards")
         .select(["session_key", "revision", "created_at", "updated_at"])
         .where("session_key", "=", sessionKey)
         .limit(1),
-    ).rows[0] ?? null
+    ) ?? null
   );
 }
 

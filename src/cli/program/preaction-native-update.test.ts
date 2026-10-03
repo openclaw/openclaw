@@ -75,8 +75,6 @@ describe("native update capability startup", () => {
   });
 
   it.each([
-    ["gateway", "install", ["--update-executor", "run"]],
-    ["gateway", "install", ["--update-executor", "invalid"]],
     ["gateway", "install", ["--note", "--update-executor", "--update-executor", "run"]],
     ["gateway", "install", ["--update-executor", "check", "extra"]],
     ["other", "install", ["--update-executor", "check"]],

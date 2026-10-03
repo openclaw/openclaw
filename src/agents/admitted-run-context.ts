@@ -21,6 +21,7 @@ import {
 } from "../infra/agent-run-registry.js";
 import type { GatewayAccessGrantRef } from "../plugins/gateway-access-policy.types.js";
 import { prepareGatewayContextBindingOwner } from "../plugins/runtime/gateway-context-binding-owner.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { PreparedOperatorModelPolicy } from "./operator-model-policy.types.js";
 
 /** Operational lifecycle correlation. This is never identity or authorization evidence. */
@@ -50,6 +51,8 @@ export type AdmittedRunOperatorAuthority = Readonly<{
   retain?: () => () => void;
   /** Live assignment from the original prepared profile lease. */
   readCurrentRoleAssignment?: (this: void) => string | null;
+  /** Verified primary login from the same live profile authority. */
+  readCurrentGithubLogin?: (this: void) => string | null;
   /** Prepared role permissions; source-policy changes revoke the owning authority. */
   rolePolicy?: Readonly<{
     sessionAccessCap: GatewayOperatorRoleDefinition["sessions"]["others"];
@@ -61,7 +64,11 @@ export type AdmittedRunOperatorAuthority = Readonly<{
   onModelPolicyChanged?: (listener: () => void) => () => void;
 }>;
 
-const operatorAuthorityIssuers = new WeakSet<object>();
+// Source and bundled module instances must recognize the same host-issued object.
+const operatorAuthorityIssuers = resolveGlobalSingleton(
+  Symbol.for("openclaw.admittedRunOperatorAuthority.issuers"),
+  () => new WeakSet<object>(),
+);
 
 /** Host-only construction; public reply options cannot manufacture a source capability. */
 export function createAdmittedRunOperatorAuthority(
@@ -85,6 +92,7 @@ export function createAdmittedRunOperatorAuthority(
     }
   };
   const readCurrentRoleAssignment = source.readCurrentRoleAssignment;
+  const readCurrentGithubLogin = source.readCurrentGithubLogin;
   const authority = Object.freeze({
     profileId: source.profileId,
     scopes: Object.freeze([...source.scopes]),
@@ -103,6 +111,12 @@ export function createAdmittedRunOperatorAuthority(
       ? () => {
           assertCurrent();
           return readCurrentRoleAssignment();
+        }
+      : undefined,
+    readCurrentGithubLogin: readCurrentGithubLogin
+      ? () => {
+          assertCurrent();
+          return readCurrentGithubLogin();
         }
       : undefined,
     rolePolicy: source.rolePolicy

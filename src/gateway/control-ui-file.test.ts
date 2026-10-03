@@ -40,10 +40,19 @@ describe("pinned Control UI file reads", () => {
     const body = "a small static response";
     const file = createFile(body);
     const read = fs.readSync;
-    vi.spyOn(fs, "readSync").mockImplementation((fd, buffer, options) => {
-      fs.appendFileSync(file.filePath, "extra");
-      return read(fd, buffer, { ...options, length: Math.min(options?.length ?? 0, 3) });
-    });
+    vi.spyOn(fs, "readSync").mockImplementation(
+      (
+        fd,
+        buffer,
+        offset?: number | fs.ReadOptions,
+        length?: number,
+        position?: fs.ReadPosition | null,
+      ) => {
+        fs.appendFileSync(file.filePath, "extra");
+        const options = typeof offset === "number" ? { offset, length, position } : offset;
+        return read(fd, buffer, { ...options, length: Math.min(options?.length ?? 0, 3) });
+      },
+    );
     const result = readControlUiFile(file);
     expect(result && new TextDecoder().decode(result.body)).toBe(body);
     expectClosed();
@@ -52,10 +61,18 @@ describe("pinned Control UI file reads", () => {
   it("returns only bytes read when the pinned file is truncated", () => {
     const file = createFile("original longer content");
     const read = fs.readSync;
-    vi.spyOn(fs, "readSync").mockImplementationOnce((fd, buffer, options) => {
-      fs.writeFileSync(file.filePath, "short");
-      return read(fd, buffer, options);
-    });
+    vi.spyOn(fs, "readSync").mockImplementationOnce(
+      (
+        fd,
+        buffer,
+        offset?: number | fs.ReadOptions,
+        length?: number,
+        position?: fs.ReadPosition | null,
+      ) => {
+        fs.writeFileSync(file.filePath, "short");
+        return read(fd, buffer, typeof offset === "number" ? { offset, length, position } : offset);
+      },
+    );
     const result = readControlUiFile(file);
     expect(result && new TextDecoder().decode(result.body)).toBe("short");
     expectClosed();

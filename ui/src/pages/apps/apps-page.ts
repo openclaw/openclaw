@@ -36,9 +36,12 @@ class AppsPage extends OpenClawLightDomElement {
     this,
     () => this.context,
     () => ({
-      sessionKey: this.context?.gateway.snapshot.sessionKey ?? "",
+      sessionKey: mcpAppRouteFromSearch(this.appSearch)
+        ? (this.context?.gateway.snapshot.sessionKey ?? "")
+        : "",
       agentId: this.context?.agentSelection.state.selectedId ?? undefined,
     }),
+    () => true,
   );
 
   constructor() {
@@ -51,7 +54,7 @@ class AppsPage extends OpenClawLightDomElement {
     if (!this.conversationError) {
       void ensureCustomElementDefined(
         "openclaw-chat-pane",
-        () => import("./app-conversation.ts"),
+        () => import("../chat/route-entry.ts"),
       ).catch((error: unknown) => {
         this.conversationError = formatUiError(error);
         this.requestUpdate();

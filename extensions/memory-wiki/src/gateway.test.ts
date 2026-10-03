@@ -627,6 +627,7 @@ describe("memory-wiki gateway methods", () => {
     });
 
     expect(searchMemoryWiki).toHaveBeenCalledWith({
+      memoryContext: expect.objectContaining({ assertCurrent: expect.any(Function) }),
       config,
       appConfig: undefined,
       query: "Teams Azure",
@@ -664,6 +665,7 @@ describe("memory-wiki gateway methods", () => {
     });
 
     expect(searchMemoryWiki).toHaveBeenCalledWith({
+      memoryContext: expect.objectContaining({ assertCurrent: expect.any(Function) }),
       config,
       appConfig,
       agentId: "main",

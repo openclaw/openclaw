@@ -4,11 +4,7 @@ import {
   type ErrorShape,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import {
-  hasOperatorBoundary,
-  operatorSessionCap,
-  resolveGatewayOperatorRoleActor,
-} from "../operator-role-policy.js";
+import { hasOperatorBoundary } from "../operator-role-policy.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import {
@@ -26,9 +22,12 @@ import {
   SessionMutationFactsUnavailableError,
   type SessionFactsRead,
 } from "../session-sharing-preparation.js";
-import { prepareProjectedSessionSharing } from "../session-sharing-read.js";
 import { readProjectedSessionMutationTarget } from "../session-sharing-target-read.js";
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
+import {
+  isSameSessionSharingTarget,
+  prepareCurrentSessionSharing,
+} from "./sessions-sharing-authority.js";
 import { requireVisibleSuggestionRole } from "./sessions-suggestions-access.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
@@ -88,45 +87,18 @@ export async function withSessionReactionAccess(
     }
     const readCurrent = (selected?: SessionSharingTarget) => {
       assertCaller();
-      const currentCfg = context.getRuntimeConfig();
-      const policyConfig = context.getCommittedRuntimeConfig?.() ?? currentCfg;
       let membership: ReadonlySet<string> | undefined;
-      // Synthetic caller preparation can invoke authority callbacks. Read session facts afterward.
-      const sharing = prepareProjectedSessionSharing({
-        cfg: policyConfig,
+      const { currentCfg, policyConfig, sharing } = prepareCurrentSessionSharing({
         client,
+        context,
+        projection,
+        actorId,
+        runAuthority,
         isMember: (target, identityId) =>
           retained
             ? membership!.has(identityId)
             : projection.hasMembership(target.storePath, target.storeKey, identityId),
       });
-      const preparedProfile = client?.preparedSessionProfile;
-      if (runAuthority) {
-        const actor = resolveGatewayOperatorRoleActor(client);
-        if (
-          actor?.kind !== "operator" ||
-          actor.profileId !== runAuthority.profileId ||
-          operatorSessionCap(client, policyConfig) !== sharing.sessionCap
-        ) {
-          throw new SessionMutationFactsUnavailableError();
-        }
-      }
-      const currentActor = resolveGatewayOperatorRoleActor(client);
-      if (
-        (runAuthority &&
-          (currentActor?.kind !== "operator" ||
-            currentActor.profileId !== runAuthority.profileId)) ||
-        client?.invalidated ||
-        client?.connectionSignal?.aborted ||
-        gatewayClientSessionCreator(client)?.id !== actorId ||
-        getSessionRowProjection(context) !== projection ||
-        client?.internal?.operatorRunAuthority !== runAuthority ||
-        client?.preparedSessionProfile !== preparedProfile ||
-        context.getRuntimeConfig() !== currentCfg ||
-        (context.getCommittedRuntimeConfig?.() ?? currentCfg) !== policyConfig
-      ) {
-        throw new SessionMutationFactsUnavailableError();
-      }
       assertRouting(currentCfg);
       let target: SessionSharingTarget | null;
       if (retained) {
@@ -140,20 +112,7 @@ export async function withSessionReactionAccess(
         }
         target = current.target;
       }
-      if (
-        selected &&
-        (!target ||
-          target.agentId !== selected.agentId ||
-          target.canonicalKey !== selected.canonicalKey ||
-          target.storeKey !== selected.storeKey ||
-          target.storePath !== selected.storePath ||
-          target.entry.sessionId !== selected.entry.sessionId ||
-          target.entry.lifecycleRevision !== selected.entry.lifecycleRevision ||
-          target.readSource?.path !== selected.readSource?.path ||
-          target.readSource?.agentId !== selected.readSource?.agentId ||
-          target.readSource?.databaseIdentity !== selected.readSource?.databaseIdentity ||
-          target.readSource?.databaseBirthtime !== selected.readSource?.databaseBirthtime)
-      ) {
+      if (selected && !isSameSessionSharingTarget(target, selected)) {
         throw new SessionMutationFactsUnavailableError();
       }
       if (

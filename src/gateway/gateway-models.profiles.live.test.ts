@@ -2133,7 +2133,7 @@ describe("resolveGatewayLiveModelThinkingLevel", () => {
             ...createGatewayLiveTestModel(provider, "grok-build-0.1"),
             reasoning: true,
             thinkingLevelMap: {
-              off: null,
+              off: undefined,
               minimal: null,
               low: null,
               medium: null,
@@ -5616,7 +5616,6 @@ async function resolveGatewayLiveRequestedModels(): Promise<string | undefined> 
     platform: "linux",
     deps: {
       probeLocalCommand: async (command) => ({ command, found: false }),
-      detectClaudeLoginState: async () => ({ credentials: false }),
       readCodexCliCredentials: () => null,
       readGeminiCliCredentials: () => null,
     },

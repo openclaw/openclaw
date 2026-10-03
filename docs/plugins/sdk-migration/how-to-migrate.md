@@ -9,6 +9,26 @@ sidebarTitle: "How to migrate"
 
 The ordered migration steps. Work through them in order; each step is self-contained. Part of the [Plugin SDK migration](/plugins/sdk-migration) guide.
 
+## Workspace mutation guards
+
+Await `api.runtime.agent.ensureAgentWorkspace({ dir, guard: { assertHost } })`.
+Prepare database-derived inputs asynchronously before calling it; `assertHost`
+must synchronously check current caller authority without accessing SQLite.
+Core-owned recovery predicates execute on the worker's transaction connection.
+
+The released `beforePersistentApply: () => void` option remains supported for
+TypeScript and JavaScript plugins until the next Plugin SDK major. It runs on the
+host once immediately before each worker mutation dispatch, outside admission
+grants, and at host filesystem mutation boundaries. Throwing stops that apply.
+Synchronous OpenClaw database access in the callback is allowed and deprecated;
+a warning explains the timing and typed replacement once per process.
+
+There is no compatibility break for legacy callbacks or their database reads.
+The timing nuance is that the legacy check runs just before dispatch, while
+`guard.assertHost` is also rechecked inside transaction and commit grants.
+Prefer the typed guard for live revocation at commit. Callback errors continue
+to propagate. No schema, retention, durability, or update migration is required.
+
 ## Await session transcript persistence
 
 Use the awaited `SessionManager` methods from
@@ -90,6 +110,22 @@ awaited replacement. The
 October 1, 2026, with removal at the next Plugin SDK major
 (`next-plugin-sdk-major`); there is no calendar removal deadline. Bundled callers
 use the awaited methods. Do not add a sync fallback when adopting the new API.
+
+User-turn transcript recorders also provide optional
+`completeProcessingAsync(outcome)` and `waitForPendingInputSettlement()` methods.
+Await processing completion before publishing its outcome. Completion records
+processing separately from transcript consumption; it does not append or consume
+the pending input. The synchronous `completeProcessing` callback shipped in
+`v2026.9.8` retains its immediate result for existing SDK consumers. The host
+uses that legacy callback only when a supplied recorder has no async companion,
+never after an async failure or an undefined async result.
+
+`finishPendingInput(disposition)` still revokes prompt custody synchronously.
+After calling it, await `waitForPendingInputSettlement()` when available before
+releasing the turn's session admission. This joins accepted completion and
+disposition writes, including each original source of a collected input. An
+uncertain write outcome is preserved and must not be replayed through either
+callback. These additions change no schema, retention, or update behavior.
 
 ### Await extension session changes
 

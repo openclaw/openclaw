@@ -61,13 +61,11 @@ import {
 import {
   isLegacyDefaultMainAliasKey,
   resolveCanonicalAgentSessionOwner,
-  isSurfaceGroupKey,
   type PreparedLegacySessionSurfaces,
 } from "./state-migrations.session-surfaces.js";
 import type { MigrationMessages, SessionStoreAliasPlan } from "./state-migrations.types.js";
 
-function canonicalizeSessionKeyForAgent(params: {
-  key: string;
+type SessionKeyCanonicalizationOptions = {
   agentId: string;
   mainKey: string;
   scope?: SessionScope;
@@ -76,7 +74,11 @@ function canonicalizeSessionKeyForAgent(params: {
   preserveAmbiguousKeys?: boolean;
   preserveForeignMainAliases?: boolean;
   legacySessionSurfaces?: PreparedLegacySessionSurfaces["surfaces"];
-}): string {
+};
+
+function canonicalizeSessionKeyForAgent(
+  params: SessionKeyCanonicalizationOptions & { key: string },
+): string {
   const raw = params.key.trim();
   if (!raw) {
     return raw;
@@ -192,7 +194,7 @@ function canonicalizeSessionKeyForAgent(params: {
   if (rawLower.startsWith("group:") || rawLower.startsWith("channel:")) {
     return normalizeLowercaseStringOrEmpty(`agent:${agentId}:unknown:${raw}`);
   }
-  if (isSurfaceGroupKey(raw)) {
+  if (raw.includes(":group:") || raw.includes(":channel:")) {
     return `agent:${agentId}:${normalized}`;
   }
   return normalizeSessionKeyPreservingOpaquePeerIds(`agent:${agentId}:${raw}`);
@@ -214,36 +216,21 @@ export function normalizeSessionEntry(
   return normalized;
 }
 
-export function canonicalizeSessionStore(params: {
+export function canonicalizeSessionStore({
+  store,
+  ...options
+}: SessionKeyCanonicalizationOptions & {
   store: Record<string, SessionEntryLike>;
-  agentId: string;
-  mainKey: string;
-  scope?: SessionScope;
-  skipCrossAgentRemap?: boolean;
-  preserveCanonicalAgentOwner?: boolean;
-  preserveAmbiguousKeys?: boolean;
-  preserveForeignMainAliases?: boolean;
-  legacySessionSurfaces?: PreparedLegacySessionSurfaces["surfaces"];
 }): { store: Record<string, SessionEntryLike>; legacyKeys: string[] } {
   const canonical = Object.create(null) as Record<string, SessionEntryLike>;
   const meta = new Map<string, { isCanonical: boolean; updatedAt: number }>();
   const legacyKeys: string[] = [];
 
-  for (const [key, entry] of Object.entries(params.store)) {
+  for (const [key, entry] of Object.entries(store)) {
     if (!entry || typeof entry !== "object") {
       continue;
     }
-    const canonicalKey = canonicalizeSessionKeyForAgent({
-      key,
-      agentId: params.agentId,
-      mainKey: params.mainKey,
-      scope: params.scope,
-      skipCrossAgentRemap: params.skipCrossAgentRemap,
-      preserveCanonicalAgentOwner: params.preserveCanonicalAgentOwner,
-      preserveAmbiguousKeys: params.preserveAmbiguousKeys,
-      preserveForeignMainAliases: params.preserveForeignMainAliases,
-      legacySessionSurfaces: params.legacySessionSurfaces,
-    });
+    const canonicalKey = canonicalizeSessionKeyForAgent({ ...options, key });
     const isCanonical = canonicalKey === key;
     if (!isCanonical) {
       legacyKeys.push(key);
@@ -376,33 +363,24 @@ function sessionStoreMayNeedCanonicalization(params: {
   return false;
 }
 
-export function listLegacySessionKeys(params: {
+export function listLegacySessionKeys({
+  store,
+  ...options
+}: Omit<
+  SessionKeyCanonicalizationOptions,
+  "skipCrossAgentRemap" | "preserveCanonicalAgentOwner"
+> & {
   store: Record<string, SessionEntryLike>;
-  agentId: string;
-  mainKey: string;
-  scope?: SessionScope;
-  preserveAmbiguousKeys?: boolean;
-  preserveForeignMainAliases?: boolean;
-  legacySessionSurfaces?: PreparedLegacySessionSurfaces["surfaces"];
 }): string[] {
-  const legacy: string[] = [];
-  for (const key of Object.keys(params.store)) {
-    const canonical = canonicalizeSessionKeyForAgent({
-      key,
-      agentId: params.agentId,
-      mainKey: params.mainKey,
-      scope: params.scope,
-      skipCrossAgentRemap: params.preserveAmbiguousKeys,
-      preserveCanonicalAgentOwner: params.preserveAmbiguousKeys,
-      preserveAmbiguousKeys: params.preserveAmbiguousKeys,
-      preserveForeignMainAliases: params.preserveForeignMainAliases,
-      legacySessionSurfaces: params.legacySessionSurfaces,
-    });
-    if (canonical !== key) {
-      legacy.push(key);
-    }
-  }
-  return legacy;
+  return Object.keys(store).filter(
+    (key) =>
+      canonicalizeSessionKeyForAgent({
+        ...options,
+        key,
+        skipCrossAgentRemap: options.preserveAmbiguousKeys,
+        preserveCanonicalAgentOwner: options.preserveAmbiguousKeys,
+      }) !== key,
+  );
 }
 
 export function removeDirIfEmpty(dir: string) {
@@ -989,7 +967,6 @@ export async function saveSessionStoreStrict(
   store: Record<string, SessionEntry>,
 ): Promise<void> {
   await saveLegacySessionStore(storePath, store, {
-    requireWriteSuccess: true,
     skipMaintenance: true,
   });
 }

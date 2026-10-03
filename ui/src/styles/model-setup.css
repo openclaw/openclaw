@@ -1,4 +1,5 @@
-.model-setup {
+.model-setup,
+.model-setup__loading-sections {
   display: grid;
   gap: 18px;
 }
@@ -27,11 +28,6 @@
   gap: 10px;
 }
 
-.model-setup__loading-sections {
-  display: grid;
-  gap: 18px;
-}
-
 .model-setup__loading-row {
   min-height: 72px;
 }
@@ -52,7 +48,8 @@
   margin: 0 0 12px;
 }
 
-.model-setup__loading-icon {
+.model-setup__loading-icon,
+.model-setup__icon {
   width: 24px;
   height: 24px;
   flex: 0 0 24px;
@@ -101,9 +98,6 @@
 }
 
 .model-setup__icon {
-  width: 24px;
-  height: 24px;
-  flex: 0 0 24px;
   object-fit: contain;
   border-radius: 5px;
 }

@@ -59,6 +59,7 @@ export function loadGatewaySessionStoreReads(reads: readonly GatewaySessionStore
   const results = loadExactSessionEntryCandidatesReadOnlyBatch(
     pending.map((read) => ({
       agentId: read.agentId,
+      env: read.options.env,
       storePath: read.storePath,
       projection: read.options.projection,
       clone: false,
@@ -85,10 +86,10 @@ function loadGatewaySessionLookupStore(
   clone: boolean | undefined,
   agentId?: string,
   options: {
+    env?: NodeJS.ProcessEnv;
     readOnly?: boolean;
     cache?: GatewaySessionStoreCache;
     exactKeys?: readonly string[];
-    listKeys?: readonly string[];
     projection?: SessionEntryListScope["projection"];
     readConsistency?: SessionEntryListScope["readConsistency"];
     readSource?: SessionEntryReadSource;
@@ -96,7 +97,7 @@ function loadGatewaySessionLookupStore(
 ): GatewaySessionStoreView {
   const cache = options.cache;
   const cacheKey = cache
-    ? `${storePath}\u0000${agentId ?? ""}\u0000${clone === false ? "0" : "1"}\u0000${options.readOnly}\u0000${options.projection ?? "full"}\u0000${options.readConsistency ?? ""}\u0000${options.exactKeys?.join("\u0001") ?? ""}\u0000${options.listKeys ? JSON.stringify(options.listKeys) : ""}`
+    ? `${storePath}\u0000${agentId ?? ""}\u0000${clone === false ? "0" : "1"}\u0000${options.readOnly}\u0000${options.projection ?? "full"}\u0000${options.readConsistency ?? ""}\u0000${options.exactKeys?.join("\u0001") ?? ""}`
     : "";
   if (cache) {
     const cached = cache.get(cacheKey);
@@ -128,6 +129,7 @@ function loadGatewaySessionLookupStoreUncached(
         };
     const entries = loadExactSessionEntryCandidates({
       ...target,
+      env: options.env,
       projection: options.projection,
       sessionKeys: options.exactKeys,
       onReadSource: (source) => {
@@ -147,11 +149,11 @@ function loadGatewaySessionLookupStoreUncached(
   return {
     store: Object.fromEntries(
       listEntries({
+        env: options.env,
         ...(agentId ? { agentId } : {}),
         ...(clone === false ? { clone: false } : {}),
         ...(options.projection ? { projection: options.projection } : {}),
         ...(options.readConsistency ? { readConsistency: options.readConsistency } : {}),
-        ...(options.listKeys ? { sessionKeys: options.listKeys } : {}),
         storePath,
       }).map(({ sessionKey, entry }) => [sessionKey, entry]),
     ),

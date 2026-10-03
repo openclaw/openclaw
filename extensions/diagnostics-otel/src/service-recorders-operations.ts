@@ -61,7 +61,7 @@ export function createOperationsRecorders(runtime: DiagnosticsRecorderRuntime) {
     evt: Extract<DiagnosticEventPayload, { type: "gateway.rpc" }>,
     metadata: DiagnosticEventMetadata,
   ) => {
-    if (!metadata.trusted) {
+    if (!metadata.trusted || (evt.phase === "response" && evt.firstResponse === false)) {
       return;
     }
     const attrs = { "openclaw.gateway.rpc.method": evt.method };

@@ -227,8 +227,7 @@ final class VoicePushToTalk {
     func end(cancelled: Bool = false) {
         let wasStarting = self.startupTask != nil
         self.holdID = nil
-        self.startupTask?.cancel()
-        self.startupTask = nil
+        SimpleTaskSupport.stop(task: &self.startupTask)
         if cancelled || wasStarting {
             self.finalize(transcriptOverride: nil, reason: "cancelled", forward: false)
             return
@@ -252,13 +251,7 @@ final class VoicePushToTalk {
         }
 
         // Otherwise, give Speech a brief window to deliver the final result; then fall back.
-        self.timeoutTask?.cancel()
-        self.timeoutTask = Task { [weak self] in
-            do {
-                try await Task.sleep(nanoseconds: 1_500_000_000) // 1.5s grace period to await final result
-            } catch {
-                return
-            }
+        SimpleTaskSupport.schedule(task: &self.timeoutTask, delay: 1.5) { [weak self] in
             guard let self, self.sessionID == sessionID else { return }
             self.finalize(transcriptOverride: nil, reason: "timeout")
         }
@@ -280,10 +273,8 @@ final class VoicePushToTalk {
         SpeechRecognitionRequestPolicy.configureInteractiveTranscription(request)
 
         // Lazily create the engine here so app launch doesn't grab audio resources / trigger Bluetooth HFP.
-        if self.audioEngine == nil {
-            self.audioEngine = AVAudioEngine()
-        }
-        guard let audioEngine = self.audioEngine else { return }
+        let audioEngine = self.audioEngine ?? AVAudioEngine()
+        self.audioEngine = audioEngine
 
         guard AudioInputDeviceObserver.hasUsableDefaultInputDevice() else {
             self.audioEngine = nil
@@ -394,8 +385,7 @@ final class VoicePushToTalk {
 
     private func retireCapture() {
         self.isCapturing = false
-        self.timeoutTask?.cancel()
-        self.timeoutTask = nil
+        SimpleTaskSupport.stop(task: &self.timeoutTask)
         self.recognitionTask?.cancel()
         self.recognitionRequest = nil
         self.recognitionTask = nil

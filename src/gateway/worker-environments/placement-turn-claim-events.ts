@@ -21,11 +21,13 @@ import {
 } from "../../process/gateway-work-admission.js";
 import { safeEqualSecret } from "../../security/secret-equal.js";
 import { extractAssistantTranscriptSourceText } from "../../shared/chat-message-content.js";
+import type { FastMode } from "../../shared/fast-mode.js";
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import type { WorkerSessionTurnClaim } from "./placement-record.js";
 import type { PlacementTurnClaimAuthority } from "./placement-turn-authority.js";
 import type { WorkerGatewayToolRuntime } from "./worker-gateway-tool-contract.js";
+import type { WorkerReplyMediaPreparer } from "./worker-reply-media.types.js";
 
 type TurnClaimReleaseWaiter = (error?: Error) => void;
 
@@ -80,6 +82,9 @@ type WorkerTurnFinishingOutcome = { error?: string; replayInvalid?: true };
 export type WorkerTurnPromptCacheContext = Readonly<{
   boundaryCount: number;
   promptCacheKey?: string;
+  fastMode?: FastMode;
+  fastModeStartedAtMs?: number;
+  fastModeAutoOnSeconds?: number;
 }>;
 
 type BoundWorkerTurnOwner = {
@@ -88,6 +93,7 @@ type BoundWorkerTurnOwner = {
   runtime: {
     assertActive: () => void;
     toolSurface?: WorkerGatewayToolRuntime;
+    prepareReplyMedia?: WorkerReplyMediaPreparer;
     delegatedAuthority: AgentRunDelegatedAuthority;
     approvalLifetime: AbortController;
     finishing?: {
@@ -375,10 +381,13 @@ export function readWorkerTurnPromptCacheContext(
   return resolveWorkerTurnRuntime(identity)?.promptCacheContext;
 }
 
-export function bindWorkerTurnToolSurface(
+export function bindWorkerTurnCapabilities(
   store: WorkerTurnExecutionIdentityStore,
   claim: WorkerSessionTurnClaim,
-  toolSurface: WorkerGatewayToolRuntime,
+  capabilities: {
+    toolSurface: WorkerGatewayToolRuntime;
+    prepareReplyMedia?: WorkerReplyMediaPreparer;
+  },
 ): void {
   const path = store[WORKER_TURN_EXECUTION_IDENTITY_PATH];
   const owner = path ? workerTurnOwners.get(path)?.get(claim.sessionId) : undefined;
@@ -391,7 +400,11 @@ export function bindWorkerTurnToolSurface(
     throw new Error("Worker turn has no admitted tool surface owner");
   }
   owner.runtime.toolSurface?.abort();
-  owner.runtime.toolSurface = toolSurface;
+  Object.assign(owner.runtime, capabilities);
+}
+
+export function captureWorkerReplyMedia(identity: WorkerConnectionIdentity) {
+  return resolveWorkerTurnRuntime(identity)?.prepareReplyMedia;
 }
 
 export function getWorkerTurnToolSurface(identity: Parameters<typeof resolveWorkerTurnRuntime>[0]) {

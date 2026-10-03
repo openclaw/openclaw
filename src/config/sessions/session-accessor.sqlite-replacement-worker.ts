@@ -35,7 +35,7 @@ import type { SessionEntryCommitContext } from "./session-accessor.types.js";
 
 type ReplacementDatabaseOptions = OpenClawAgentDatabaseOptions & { path: string };
 
-type SessionEntryWorkerPreparation = (
+export type SessionEntryWorkerPreparation = (
   execution: OpenClawAgentDatabaseExecution,
   source: AgentDatabaseRequestExecutionSource,
 ) => {
@@ -70,6 +70,7 @@ export async function withSessionEntryWorker<T>(
   retainedExecution?: OpenClawAgentDatabaseExecution,
   signal?: AbortSignal,
   prepare?: SessionEntryWorkerPreparation,
+  onTransaction?: (facts: unknown) => void,
 ): Promise<T> {
   const execution =
     retainedExecution ??
@@ -132,6 +133,8 @@ export async function withSessionEntryWorker<T>(
           assertHeld();
           if (request.stage === "commit") {
             onCommit?.(admission, retained, request.facts);
+          } else if (request.stage === "transaction") {
+            onTransaction?.(request.facts);
           }
           if (!grant()) {
             throw new Error("Session replacement authority expired");
@@ -149,7 +152,10 @@ export async function withSessionEntryWorker<T>(
       // Cold native admission still owns the writer; snapshot planning releases it.
       const opened = await runOpenClawAgentWorkerWrite(
         options,
-        () => execution.runExisting(source, async () => true),
+        async () => {
+          await execution.prepare(source);
+          return execution.runExisting(source, async () => true);
+        },
         undefined,
         signal,
       );

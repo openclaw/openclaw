@@ -192,27 +192,20 @@ export const startSubagentAnnounceCleanupFlow = (
       onPublished,
     });
   };
-  if (
-    !checkDescendants &&
-    (typeof entry.delivery?.announcedAt === "number" || entry.delivery?.status === "delivered")
-  ) {
+  const alreadyDelivered = () =>
+    typeof entry.delivery?.announcedAt === "number" || entry.delivery?.status === "delivered";
+  const finalizeDelivered = (options?: { skipRequesterDelivery: boolean }) =>
+    finalizeSubagentCleanup(context, entry, cleanup, "delivered", cleanupGeneration, stateContext, {
+      skipAnnounce: true,
+      ...options,
+    });
+  if (!checkDescendants && alreadyDelivered()) {
     runDetachedCleanupAttempt(context, {
       runId,
       entry,
       cleanupGeneration,
       stateContext,
-      run: () =>
-        finalizeSubagentCleanup(
-          context,
-          entry,
-          cleanup,
-          "delivered",
-          cleanupGeneration,
-          stateContext,
-          {
-            skipAnnounce: true,
-          },
-        ),
+      run: () => finalizeDelivered(),
     });
     return true;
   }
@@ -259,7 +252,7 @@ export const startSubagentAnnounceCleanupFlow = (
         await Promise.resolve();
         assertPersistenceCurrent();
         if (!context.isCleanupAttemptCurrent(runId, entry, cleanupGeneration)) {
-          await retireSupersededCleanupIfNeeded(context, runId, entry, cleanupGeneration);
+          await retireSupersededCleanupIfNeeded(context, entry, cleanupGeneration);
           return;
         }
         if (
@@ -281,20 +274,8 @@ export const startSubagentAnnounceCleanupFlow = (
           }
           return;
         }
-        if (
-          checkDescendants &&
-          (typeof entry.delivery?.announcedAt === "number" ||
-            entry.delivery?.status === "delivered")
-        ) {
-          await finalizeSubagentCleanup(
-            context,
-            entry,
-            cleanup,
-            "delivered",
-            cleanupGeneration,
-            stateContext,
-            { skipAnnounce: true },
-          );
+        if (checkDescendants && alreadyDelivered()) {
+          await finalizeDelivered();
           return;
         }
         if (cleanup === "delete" && (await prepareChildSessionEffects())) {
@@ -343,21 +324,10 @@ export const startSubagentAnnounceCleanupFlow = (
         }
         assertPersistenceCurrent();
         if (!context.isCleanupAttemptCurrent(runId, entry, cleanupGeneration)) {
-          await retireSupersededCleanupIfNeeded(context, runId, entry, cleanupGeneration);
+          await retireSupersededCleanupIfNeeded(context, entry, cleanupGeneration);
           return;
         }
-        await finalizeSubagentCleanup(
-          context,
-          entry,
-          cleanup,
-          "delivered",
-          cleanupGeneration,
-          stateContext,
-          {
-            skipAnnounce: true,
-            skipRequesterDelivery,
-          },
-        );
+        await finalizeDelivered({ skipRequesterDelivery });
       },
     });
     return true;
@@ -380,7 +350,7 @@ export const startSubagentAnnounceCleanupFlow = (
   const finalizeAnnounceCleanup = async (announceOutcome: SubagentAnnounceFlowOutcome) => {
     assertPersistenceCurrent();
     if (!context.isCleanupAttemptCurrent(runId, entry, cleanupGeneration)) {
-      await retireSupersededCleanupIfNeeded(context, runId, entry, cleanupGeneration);
+      await retireSupersededCleanupIfNeeded(context, entry, cleanupGeneration);
       return;
     }
     assertCurrent();
@@ -392,7 +362,7 @@ export const startSubagentAnnounceCleanupFlow = (
         : undefined;
     assertPersistenceCurrent();
     if (!context.isCleanupAttemptCurrent(runId, entry, cleanupGeneration)) {
-      await retireSupersededCleanupIfNeeded(context, runId, entry, cleanupGeneration);
+      await retireSupersededCleanupIfNeeded(context, entry, cleanupGeneration);
       return;
     }
     // Requester-settle can commit delivery while the mirror lookup is pending.

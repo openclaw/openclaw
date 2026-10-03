@@ -66,7 +66,7 @@ describe("failed worker placement redispatch", () => {
     expect(corrupted).toBe(1);
     expect(placement).toEqual(store.get(SESSION.sessionId));
     expect(
-      store.transition({
+      await store.transition({
         sessionId: SESSION.sessionId,
         from: "requested",
         to: "provisioning",
@@ -78,21 +78,21 @@ describe("failed worker placement redispatch", () => {
 
   it("uses the canonical generation and identity reset", async () => {
     let placement = await store.startDispatch(SESSION);
-    placement = store.transition({
+    placement = await store.transition({
       sessionId: SESSION.sessionId,
       from: "requested",
       to: "provisioning",
       expectedGeneration: placement.generation,
       patch: { environmentId: "environment-failed-dispatch" },
     });
-    placement = store.transition({
+    placement = await store.transition({
       sessionId: SESSION.sessionId,
       from: "provisioning",
       to: "syncing",
       expectedGeneration: placement.generation,
       patch: { workerBundleHash: "a".repeat(64) },
     });
-    placement = store.transition({
+    placement = await store.transition({
       sessionId: SESSION.sessionId,
       from: "syncing",
       to: "starting",
@@ -102,7 +102,7 @@ describe("failed worker placement redispatch", () => {
         remoteWorkspaceDir: "/workspace/failed-dispatch",
       },
     });
-    const failed = store.fail({
+    const failed = await store.fail({
       sessionId: SESSION.sessionId,
       expectedGeneration: placement.generation,
       recoveryError: "gateway restarted during activation",
@@ -140,7 +140,7 @@ describe("failed worker placement redispatch", () => {
           owner: placementTurnOwner(active),
         });
         if (scenario === "result") {
-          store.markWorkspaceResultPending(claim);
+          await store.markWorkspaceResultPending(claim);
         }
       } else if (scenario === "journal") {
         const basePack = Buffer.from("retained workspace rollback");
@@ -195,7 +195,7 @@ describe("failed worker placement redispatch", () => {
         const draining =
           scenario === "move"
             ? store.get(SESSION.sessionId)
-            : store.startDrain({
+            : await store.startDrain({
                 sessionId: SESSION.sessionId,
                 environmentId: active.environmentId,
                 ownerEpoch: active.activeOwnerEpoch,
@@ -204,13 +204,13 @@ describe("failed worker placement redispatch", () => {
         if (draining?.state !== "draining") {
           throw new Error("expected draining worker placement");
         }
-        const reconciling = store.startReconcile({
+        const reconciling = await store.startReconcile({
           sessionId: SESSION.sessionId,
           environmentId: active.environmentId,
           ownerEpoch: active.activeOwnerEpoch,
           expectedGeneration: draining.generation,
         });
-        store.fail({
+        await store.fail({
           sessionId: SESSION.sessionId,
           expectedGeneration: reconciling.generation,
           recoveryError: "worker stopped",
@@ -228,7 +228,7 @@ describe("failed worker placement redispatch", () => {
       });
       if (scenario === "replaced") {
         const replacement = await store.startDispatch({ ...SESSION, executionMode });
-        store.fail({
+        await store.fail({
           sessionId: SESSION.sessionId,
           expectedGeneration: replacement.generation,
           recoveryError: "replacement failed",

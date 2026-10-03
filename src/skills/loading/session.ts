@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync, type Dirent } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { getAgentDir } from "../../agents/config.js";
 import { CONFIG_DIR_NAME } from "../../agents/package-metadata.js";
@@ -54,13 +54,18 @@ function validateSkillMetadata(name: string, description: string | undefined): s
   return errors;
 }
 
-function resolveSkillSourceOptions(
-  source: string,
-): Parameters<typeof materializeSkill>[0]["sourceOptions"] {
-  if (source === "user" || source === "project") {
-    return { source: "local", scope: source };
+function resolveSkillEntryType(
+  dir: string,
+  entry: Dirent,
+): Pick<Dirent, "isFile" | "isDirectory"> | undefined {
+  if (!entry.isSymbolicLink()) {
+    return entry;
   }
-  return { source: source === "path" ? "local" : source };
+  try {
+    return statSync(join(dir, entry.name));
+  } catch {
+    return undefined;
+  }
 }
 
 function loadSkillsFromDirInternal(
@@ -83,28 +88,13 @@ function loadSkillsFromDirInternal(
   try {
     const entries = readdirSync(dir, { withFileTypes: true });
 
-    for (const entry of entries) {
-      if (entry.name !== "SKILL.md") {
-        continue;
-      }
-
-      const fullPath = join(dir, entry.name);
-
-      let isFile = entry.isFile();
-      if (entry.isSymbolicLink()) {
-        try {
-          isFile = statSync(fullPath).isFile();
-        } catch {
-          continue;
-        }
-      }
-
+    const skillFile = entries.find((entry) => entry.name === "SKILL.md");
+    if (skillFile && resolveSkillEntryType(dir, skillFile)?.isFile()) {
+      const fullPath = join(dir, skillFile.name);
       const relPath = normalizeNativePathSeparators(relative(root, fullPath));
-      if (!isFile || ig.ignores(relPath)) {
-        continue;
+      if (!ig.ignores(relPath)) {
+        return loadSkillFromFile(fullPath, source);
       }
-
-      return loadSkillFromFile(fullPath, source);
     }
 
     for (const entry of entries) {
@@ -118,25 +108,21 @@ function loadSkillsFromDirInternal(
 
       const fullPath = join(dir, entry.name);
 
-      let isDirectory = entry.isDirectory();
-      let isFile = entry.isFile();
-      if (entry.isSymbolicLink()) {
-        try {
-          const stats = statSync(fullPath);
-          isDirectory = stats.isDirectory();
-          isFile = stats.isFile();
-        } catch {
-          continue;
-        }
+      const entryType = resolveSkillEntryType(dir, entry);
+      if (!entryType) {
+        continue;
       }
-
+      const isDirectory = entryType.isDirectory();
       const relPath = normalizeNativePathSeparators(relative(root, fullPath));
       const ignorePath = isDirectory ? `${relPath}/` : relPath;
       if (ig.ignores(ignorePath)) {
         continue;
       }
 
-      if (!isDirectory && (!isFile || !includeRootFiles || !entry.name.endsWith(".md"))) {
+      if (
+        !isDirectory &&
+        (!entryType.isFile() || !includeRootFiles || !entry.name.endsWith(".md"))
+      ) {
         continue;
       }
       const result = isDirectory
@@ -180,7 +166,10 @@ function loadSkillFromFile(filePath: string, source: string): LoadSkillsResult {
           filePath,
           baseDir: skillDir,
           source,
-          sourceOptions: resolveSkillSourceOptions(source),
+          sourceOptions:
+            source === "user" || source === "project"
+              ? { source: "local", scope: source }
+              : { source: source === "path" ? "local" : source },
         }),
       ],
       diagnostics,

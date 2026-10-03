@@ -2,7 +2,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import {
   openOpenClawStateDatabase,
-  runOpenClawStateWriteTransaction,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { useStateDatabaseTempDirs } from "../../test-utils/state-database-temp-dirs.js";
@@ -67,16 +66,16 @@ describe("worker session placement gate", () => {
 
   it("rejects an identical claim readmitted while runtime refresh hands off its result", async () => {
     const claim = await preclaim("run-refresh-handoff");
-    store.markWorkspaceResultPending(claim);
+    await store.markWorkspaceResultPending(claim);
     const gate = createWorkerSessionPlacementGate(store, { rejectExistingWorkerClaims: true });
     const handoff = store.handoffRuntimeRefreshResult.bind(store);
     vi.spyOn(store, "handoffRuntimeRefreshResult").mockImplementationOnce(async (...args) => {
       const placement = await handoff(...args);
-      store.acceptWorkspaceResult(claim);
-      store.completeWorkspaceResultAndReleaseTurn(claim);
+      await store.acceptWorkspaceResult(claim);
+      await store.completeWorkspaceResultAndReleaseTurn(claim);
       const replacement = await store.claimTurn({ ...SESSION, ...claim });
-      store.markWorkspaceResultPending(replacement);
-      store.handoffWorkspaceResultRecovery(replacement);
+      await store.markWorkspaceResultPending(replacement);
+      await store.handoffWorkspaceResultRecovery(replacement);
       return placement;
     });
 
@@ -88,7 +87,7 @@ describe("worker session placement gate", () => {
       }),
     ).rejects.toThrow("turn recovery owner");
     expect(store.validateTurnClaim(claim)).toBe(true);
-    expect(store.listPendingWorkspaceResults()).toMatchObject([
+    expect(await store.listPendingWorkspaceResultsAsync()).toMatchObject([
       { claimId: claim.claimId, recoveryRequestedAtMs: expect.any(Number) },
     ]);
   });
@@ -118,20 +117,20 @@ describe("worker session placement gate", () => {
           target: { kind: "gateway" },
         });
       } else {
-        store.startDrain({ ...binding, expectedGeneration: active.generation });
+        await store.startDrain({ ...binding, expectedGeneration: active.generation });
       }
       if (turn) {
-        store.markWorkspaceResultPending(turn);
-        store.handoffWorkspaceResultRecovery(turn);
+        await store.markWorkspaceResultPending(turn);
+        await store.handoffWorkspaceResultRecovery(turn);
       } else if (state !== "missing result") {
-        const claim = store.claimReclaimWorkspaceResult({
+        const claim = await store.claimReclaimWorkspaceResult({
           ...SESSION,
           claimId: "reclaim-gate",
           runId: "reclaim-gate",
           owner: { kind: "worker", environmentId: ENVIRONMENT_ID, ownerEpoch: OWNER_EPOCH },
         });
         if (state === "move") {
-          store.handoffWorkspaceResultRecovery(claim);
+          await store.handoffWorkspaceResultRecovery(claim);
         }
       }
 
@@ -150,36 +149,36 @@ describe("worker session placement gate", () => {
         environmentId: ENVIRONMENT_ID,
         ownerEpoch: OWNER_EPOCH,
       };
-      store.startDrain({ ...binding, expectedGeneration: active.generation });
-      const claim = store.claimReclaimWorkspaceResult({
+      await store.startDrain({ ...binding, expectedGeneration: active.generation });
+      const claim = await store.claimReclaimWorkspaceResult({
         ...SESSION,
         claimId: "reclaim-refresh",
         runId: "reclaim-refresh",
         owner: { kind: "worker", environmentId: ENVIRONMENT_ID, ownerEpoch: OWNER_EPOCH },
       });
-      store.handoffWorkspaceResultRecovery(claim);
+      await store.handoffWorkspaceResultRecovery(claim);
       const gate = createWorkerSessionPlacementGate(store);
       const refresh = await gate.prepareWorkerRuntimeRefresh(binding);
       if (change === "metadata") {
         sessionChanges.emit({ agentId: SESSION.agentId, sessionKey: SESSION.sessionKey });
         expect(() => refresh.assertCurrent()).not.toThrow();
       } else if (change === "rollback") {
-        expect(() =>
-          runOpenClawStateWriteTransaction(
-            () => {
-              store.handoffWorkspaceResultRecovery(claim);
-              expect(() => refresh.assertCurrent()).toThrow("placement authority changed");
-              throw new Error("rollback recovery handoff");
-            },
-            { path: database.path },
-          ),
-        ).toThrow("rollback recovery handoff");
+        database.db.exec(`
+          CREATE TRIGGER reject_recovery_handoff
+          BEFORE UPDATE OF recovery_requested_at_ms ON worker_workspace_pending_results
+          BEGIN
+            SELECT RAISE(ABORT, 'rollback recovery handoff');
+          END;
+        `);
+        await expect(store.handoffWorkspaceResultRecovery(claim)).rejects.toThrow(
+          "rollback recovery handoff",
+        );
         expect(() => refresh.assertCurrent()).not.toThrow();
       } else {
         if (change === "handoff") {
-          store.handoffWorkspaceResultRecovery(claim);
+          await store.handoffWorkspaceResultRecovery(claim);
         } else {
-          store.abandonWorkspaceResult(store.listPendingWorkspaceResults()[0]!);
+          await store.abandonWorkspaceResult((await store.listPendingWorkspaceResultsAsync())[0]!);
         }
         expect(() => refresh.assertCurrent()).toThrow("placement authority changed");
       }
@@ -206,7 +205,7 @@ describe("worker session placement gate", () => {
     };
 
     expect(restartedStore.validateTurnClaim(claim)).toBe(true);
-    expect(restartedStore.listPendingWorkspaceResults()).toMatchObject([
+    expect(await restartedStore.listPendingWorkspaceResultsAsync()).toMatchObject([
       { sessionId: claim.sessionId, claimId: claim.claimId },
     ]);
     expect(gate.validateWorkerTurn(claim)).toBe(false);
@@ -215,10 +214,10 @@ describe("worker session placement gate", () => {
     await expect(gate.updateAckCursors({ claim, transcriptSeq: 2 })).rejects.toThrow(
       "stale worker turn",
     );
-    expect(() =>
+    await expect(
       gate.prepareWorkspaceResultOwnerRevocation(binding, new Error("restart owner revoked")),
-    ).not.toThrow();
-    expect(restartedStore.listPendingWorkspaceResults()).toMatchObject([
+    ).resolves.toBeUndefined();
+    expect(await restartedStore.listPendingWorkspaceResultsAsync()).toMatchObject([
       { sessionId: claim.sessionId, recoveryRequestedAtMs: null },
     ]);
   });
@@ -279,7 +278,7 @@ describe("worker session placement gate", () => {
     const binding = bindingFor(claim);
 
     await gate.updateAckCursors({ claim: binding, transcriptSeq: 4 });
-    expect(store.listPendingWorkspaceResults()).toEqual([]);
+    expect(await store.listPendingWorkspaceResultsAsync()).toEqual([]);
     await gate.updateAckCursors({ claim: binding, liveSeq: 9 });
     expect(store.get(SESSION.sessionId)).toMatchObject({
       generation: claim.placementGeneration,
@@ -287,11 +286,11 @@ describe("worker session placement gate", () => {
       lastLiveEventAckCursor: 9,
     });
     expect(gate.readWorkerTurnLiveAckCursor(binding)).toBe(9);
-    expect(store.listPendingWorkspaceResults()).toMatchObject([
+    expect(await store.listPendingWorkspaceResultsAsync()).toMatchObject([
       { sessionId: SESSION.sessionId, runId },
     ]);
-    store.acceptWorkspaceResult(claim);
-    store.completeWorkspaceResultAndReleaseTurn(claim);
+    await store.acceptWorkspaceResult(claim);
+    await store.completeWorkspaceResultAndReleaseTurn(claim);
     expect(store.get(SESSION.sessionId)?.turnClaim).toBeNull();
     expect(gate.validateWorkerTurn(binding)).toBe(false);
   });
@@ -301,12 +300,12 @@ describe("worker session placement gate", () => {
     const gate = createWorkerSessionPlacementGate(store);
     await gate.updateAckCursors({ claim, liveSeq: 1 });
 
-    gate.prepareWorkspaceResultOwnerRevocation(
+    await gate.prepareWorkspaceResultOwnerRevocation(
       { sessionId: claim.sessionId, environmentId: ENVIRONMENT_ID, ownerEpoch: OWNER_EPOCH },
       new Error("worker owner revoked"),
     );
 
-    expect(store.listPendingWorkspaceResults()).toMatchObject([
+    expect(await store.listPendingWorkspaceResultsAsync()).toMatchObject([
       { sessionId: claim.sessionId, recoveryRequestedAtMs: expect.any(Number) },
     ]);
     expect(store.get(claim.sessionId)).toMatchObject({
@@ -325,14 +324,14 @@ describe("worker session placement gate", () => {
       runId: "run-local-revoked",
       owner: { kind: "local", environmentId: ENVIRONMENT_ID, ownerEpoch: OWNER_EPOCH },
     });
-    store.markWorkspaceResultPending(claim);
+    await store.markWorkspaceResultPending(claim);
 
-    createWorkerSessionPlacementGate(store).prepareWorkspaceResultOwnerRevocation(
+    await createWorkerSessionPlacementGate(store).prepareWorkspaceResultOwnerRevocation(
       { sessionId: claim.sessionId, environmentId: ENVIRONMENT_ID, ownerEpoch: OWNER_EPOCH },
       new Error("local owner revoked"),
     );
 
-    expect(store.listPendingWorkspaceResults()).toEqual([]);
+    expect(await store.listPendingWorkspaceResultsAsync()).toEqual([]);
     expect(store.get(claim.sessionId)).toMatchObject({
       state: "failed",
       recoveryError: "local owner revoked",
@@ -350,15 +349,15 @@ describe("worker session placement gate", () => {
       runId: "run-local-staged",
       owner: { kind: "local", environmentId: ENVIRONMENT_ID, ownerEpoch: OWNER_EPOCH },
     });
-    store.markWorkspaceResultPending(claim);
+    await store.markWorkspaceResultPending(claim);
     await store.recordStagedWorkspaceResult(claim, "refs/openclaw/worker-results/local-staged");
 
-    createWorkerSessionPlacementGate(store).prepareWorkspaceResultOwnerRevocation(
+    await createWorkerSessionPlacementGate(store).prepareWorkspaceResultOwnerRevocation(
       { sessionId: claim.sessionId, environmentId: ENVIRONMENT_ID, ownerEpoch: OWNER_EPOCH },
       new Error("local owner revoked"),
     );
 
-    expect(store.listPendingWorkspaceResults()).toMatchObject([
+    expect(await store.listPendingWorkspaceResultsAsync()).toMatchObject([
       {
         sessionId: claim.sessionId,
         recoveryRequestedAtMs: expect.any(Number),
@@ -378,7 +377,7 @@ describe("worker session placement gate", () => {
     if (active?.state !== "active") {
       throw new Error("expected active placement");
     }
-    store.startDrain({
+    await store.startDrain({
       sessionId: SESSION.sessionId,
       environmentId: active.environmentId,
       ownerEpoch: active.activeOwnerEpoch,
@@ -464,21 +463,21 @@ describe("worker session placement gate", () => {
         requestDigest: "digest-reconcile-send",
       }),
     ).toMatchObject({ kind: "execute" });
-    const draining = store.startDrain({
+    const draining = await store.startDrain({
       sessionId: claim.sessionId,
       environmentId: ENVIRONMENT_ID,
       ownerEpoch: OWNER_EPOCH,
       expectedGeneration: claim.placementGeneration,
     });
 
-    expect(() =>
+    await expect(
       store.startReconcile({
         sessionId: claim.sessionId,
         environmentId: ENVIRONMENT_ID,
         ownerEpoch: OWNER_EPOCH,
         expectedGeneration: draining.generation,
       }),
-    ).toThrow("running worker session operation");
+    ).rejects.toThrow("running worker session operation");
     expect(store.get(claim.sessionId)).toMatchObject({
       state: "draining",
       turnClaim: { claimId: claim.claimId },
@@ -494,7 +493,7 @@ describe("worker session placement gate", () => {
       }),
     ).toBe(true);
     expect(
-      store.startReconcile({
+      await store.startReconcile({
         sessionId: claim.sessionId,
         environmentId: ENVIRONMENT_ID,
         ownerEpoch: OWNER_EPOCH,

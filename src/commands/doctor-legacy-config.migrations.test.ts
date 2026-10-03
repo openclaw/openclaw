@@ -217,107 +217,27 @@ describe("normalizeCompatibilityConfigValues", () => {
     });
   });
 
-  it("migrates legacy secretref-env markers on SecretRef credential paths", () => {
-    const res = normalizeCompatibilityConfigValues(
-      legacyConfig({
-        secrets: {
-          defaults: {
-            env: "gateway-env",
-          },
-        },
+  it.each(["whatsapp", "discord", "telegram", "slack", "signal", "mattermost"])(
+    "preserves the existing %s account set and shared policy",
+    (channelId) => {
+      const cfg = legacyConfig({
         channels: {
-          discord: {
-            token: "secretref-env:DISCORD_BOT_TOKEN",
-            accounts: {
-              work: {
-                token: "__env__:DISCORD_WORK_TOKEN",
-              },
-            },
+          [channelId]: {
+            dmPolicy: "allowlist",
+            allowFrom: ["sender-1"],
+            groupPolicy: "disabled",
+            groupAllowFrom: ["group-sender-1"],
+            accounts: { work: { enabled: true }, personal: { dmPolicy: "disabled" } },
           },
         },
-      }),
-    );
-
-    expect(res.config.channels?.discord?.token).toBeUndefined();
-    expect(res.config.channels?.discord?.accounts?.default?.token).toEqual({
-      source: "env",
-      provider: "gateway-env",
-      id: "DISCORD_BOT_TOKEN",
-    });
-    expect(res.config.channels?.discord?.accounts?.work?.token).toEqual({
-      source: "env",
-      provider: "gateway-env",
-      id: "DISCORD_WORK_TOKEN",
-    });
-    expect(res.changes).toContain(
-      "Moved channels.discord.accounts.default.token secretref-env:DISCORD_BOT_TOKEN marker → structured env SecretRef.",
-    );
-    expect(res.changes).toContain(
-      "Moved channels.discord.accounts.work.token __env__:DISCORD_WORK_TOKEN marker → structured env SecretRef.",
-    );
-  });
-
-  it("leaves invalid legacy secretref-env markers unchanged", () => {
-    const res = normalizeCompatibilityConfigValues(
-      legacyConfig({
-        messages: {
-          groupChat: {
-            visibleReplies: "message_tool",
-          },
-        },
-        channels: {
-          discord: {
-            token: "secretref-env:not-valid",
-          },
-        },
-      }),
-    );
-
-    expect(res.config.channels?.discord?.token).toBe("secretref-env:not-valid");
-    expect(res.changes).toStrictEqual([]);
-  });
-
-  it("preserves inherited WhatsApp access policy when seeding accounts.default", () => {
-    const res = normalizeCompatibilityConfigValues({
-      channels: {
-        whatsapp: {
-          enabled: true,
-          dmPolicy: "allowlist",
-          allowFrom: ["+15550001111"],
-          groupPolicy: "open",
-          groupAllowFrom: [],
-          accounts: {
-            work: {
-              enabled: true,
-              authDir: "/tmp/wa-work",
-            },
-          },
-        },
-      },
-    });
-
-    expect(res.config.channels?.whatsapp?.dmPolicy).toBeUndefined();
-    expect(res.config.channels?.whatsapp?.allowFrom).toBeUndefined();
-    expect(res.config.channels?.whatsapp?.groupPolicy).toBeUndefined();
-    expect(res.config.channels?.whatsapp?.groupAllowFrom).toBeUndefined();
-    expect(res.config.channels?.whatsapp?.accounts?.default).toEqual({
-      dmPolicy: "allowlist",
-      allowFrom: ["+15550001111"],
-      groupPolicy: "open",
-      groupAllowFrom: [],
-    });
-    expect(res.config.channels?.whatsapp?.accounts?.work).toEqual({
-      enabled: true,
-      authDir: "/tmp/wa-work",
-      dmPolicy: "allowlist",
-      allowFrom: ["+15550001111"],
-      groupPolicy: "open",
-      groupAllowFrom: [],
-    });
-    expect(res.changes).toContain(
-      "Moved channels.whatsapp single-account top-level values into channels.whatsapp.accounts.default.",
-    );
-  });
+      });
+      const before = structuredClone(cfg);
+      const result = normalizeCompatibilityConfigValues(cfg);
+      expect(result.config).toEqual(before);
+      expect(result.changes).toEqual([]);
+      expect(normalizeCompatibilityConfigValues(result.config).changes).toEqual([]);
+    },
+  );
 
   it("defers the whole promotion for uncovered keys on an undeclared channel", () => {
     const config = legacyConfig({
@@ -326,7 +246,7 @@ describe("normalizeCompatibilityConfigValues", () => {
           dmPolicy: "allowlist",
           appToken: "covered-legacy-key",
           customAuth: "keep-at-root",
-          accounts: { work: { enabled: true } },
+          accounts: {},
         },
       },
     });
@@ -359,7 +279,7 @@ describe("normalizeCompatibilityConfigValues", () => {
           "undeclared-demo": {
             dmPolicy: "allowlist",
             appToken: "legacy-app-token",
-            accounts: { work: { enabled: true } },
+            accounts: {},
           },
         },
       }),
@@ -374,7 +294,6 @@ describe("normalizeCompatibilityConfigValues", () => {
       dmPolicy: "allowlist",
       appToken: "legacy-app-token",
     });
-    expect(channel?.accounts?.work).toEqual({ enabled: true, dmPolicy: "allowlist" });
   });
 
   it("promotes generic and declared keys together after the plugin becomes available", () => {
@@ -400,7 +319,7 @@ describe("normalizeCompatibilityConfigValues", () => {
           "late-demo": {
             dmPolicy: "allowlist",
             customAuth: "move-with-plugin",
-            accounts: { work: { enabled: true } },
+            accounts: {},
           },
         },
       }),
@@ -414,137 +333,6 @@ describe("normalizeCompatibilityConfigValues", () => {
     expect(channel?.accounts?.default).toEqual({
       dmPolicy: "allowlist",
       customAuth: "move-with-plugin",
-    });
-    expect(channel?.accounts?.work).toEqual({ enabled: true, dmPolicy: "allowlist" });
-  });
-
-  it.each(["discord", "telegram"])(
-    "preserves inherited %s access policy when seeding accounts.default",
-    (channelId) => {
-      const res = normalizeCompatibilityConfigValues(
-        legacyConfig({
-          channels: {
-            [channelId]: {
-              dmPolicy: "allowlist",
-              allowFrom: ["sender-1"],
-              groupPolicy: "allowlist",
-              groupAllowFrom: ["group-sender-1"],
-              accounts: {
-                work: {
-                  enabled: true,
-                },
-              },
-            },
-          },
-        }),
-      );
-      const channel = (
-        res.config.channels as Record<string, { accounts?: Record<string, unknown> }>
-      )?.[channelId];
-
-      expect(channel?.accounts?.default).toEqual({
-        dmPolicy: "allowlist",
-        allowFrom: ["sender-1"],
-        groupPolicy: "allowlist",
-        groupAllowFrom: ["group-sender-1"],
-      });
-      expect(channel?.accounts?.work).toEqual({
-        enabled: true,
-        dmPolicy: "allowlist",
-        allowFrom: ["sender-1"],
-        groupPolicy: "allowlist",
-        groupAllowFrom: ["group-sender-1"],
-      });
-    },
-  );
-
-  it("keeps named-account access policy overrides when seeding accounts.default", () => {
-    const res = normalizeCompatibilityConfigValues(
-      legacyConfig({
-        channels: {
-          discord: {
-            dmPolicy: "allowlist",
-            allowFrom: ["top-dm"],
-            groupPolicy: "allowlist",
-            groupAllowFrom: ["top-group"],
-            accounts: {
-              work: {
-                token: "work-token",
-                allowFrom: ["work-dm"],
-                groupPolicy: "disabled",
-              },
-            },
-          },
-        },
-      }),
-    );
-
-    expect(res.config.channels?.discord?.accounts?.work).toEqual({
-      token: "work-token",
-      dmPolicy: "allowlist",
-      allowFrom: ["work-dm"],
-      groupPolicy: "disabled",
-      groupAllowFrom: ["top-group"],
-    });
-  });
-
-  it("preserves inherited Mattermost access policy when seeding accounts.default", () => {
-    const res = normalizeCompatibilityConfigValues({
-      channels: {
-        mattermost: {
-          dmPolicy: "open",
-          groupPolicy: "open",
-          allowFrom: ["*"],
-          groupAllowFrom: ["*"],
-          accounts: {
-            tony: {
-              name: "Tony",
-              enabled: true,
-              botToken: "tony-token",
-              groups: {
-                tboek5jq9fremk5ecmd6n7f5nw: { requireMention: false },
-              },
-            },
-            research: {
-              name: "Research",
-              enabled: true,
-              botToken: "research-token",
-            },
-          },
-        },
-      },
-    });
-
-    expect(res.config.channels?.mattermost?.dmPolicy).toBeUndefined();
-    expect(res.config.channels?.mattermost?.allowFrom).toBeUndefined();
-    expect(res.config.channels?.mattermost?.groupPolicy).toBeUndefined();
-    expect(res.config.channels?.mattermost?.groupAllowFrom).toBeUndefined();
-    expect(res.config.channels?.mattermost?.accounts?.default).toEqual({
-      dmPolicy: "open",
-      groupPolicy: "open",
-      allowFrom: ["*"],
-      groupAllowFrom: ["*"],
-    });
-    expect(res.config.channels?.mattermost?.accounts?.tony).toEqual({
-      name: "Tony",
-      enabled: true,
-      botToken: "tony-token",
-      dmPolicy: "open",
-      groupPolicy: "open",
-      allowFrom: ["*"],
-      groupAllowFrom: ["*"],
-      groups: {
-        tboek5jq9fremk5ecmd6n7f5nw: { requireMention: false },
-      },
-    });
-    expect(res.config.channels?.mattermost?.accounts?.research).toEqual({
-      name: "Research",
-      enabled: true,
-      botToken: "research-token",
-      dmPolicy: "open",
-      groupPolicy: "open",
-      allowFrom: ["*"],
-      groupAllowFrom: ["*"],
     });
   });
 

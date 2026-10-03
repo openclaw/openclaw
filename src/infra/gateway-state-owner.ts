@@ -3,7 +3,6 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { isMainThread } from "node:worker_threads";
 import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
@@ -21,16 +20,16 @@ import { resolveOpenClawStateDirForDatabasePath } from "../state/openclaw-state-
 import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
 import { sha256HexPrefixCore } from "./crypto-digest.js";
 import { acquireFileLockSync } from "./file-lock-manager.js";
-import {
-  type GatewayLockRole,
-  type LockPayload,
-  parseGatewayLockPayload,
-} from "./gateway-lock-payload.js";
+import { type LockPayload, parseGatewayLockPayload } from "./gateway-lock-payload.js";
 import {
   ensureOwnerDirectory,
   removeCreatedProjectionDirectories,
   type StateOwnerDirectoryIdentity,
 } from "./gateway-state-owner-directory.js";
+import {
+  assertPersistedStateDatabaseAccessAllowed,
+  StateDatabaseAdmissionPendingError,
+} from "./gateway-state-owner-record.js";
 import { normalizeSqliteNonNegativeInteger } from "./sqlite-busy-timeout.js";
 import { runWithSqliteCleanup } from "./sqlite-lifecycle-errors.js";
 import { isLockOwnerDefinitelyStale } from "./stale-lock-file.js";
@@ -180,19 +179,6 @@ export type GatewayStateOwnerContentionError = InstanceType<
   typeof GatewayStateOwnerContentionError
 >;
 
-const StateDatabaseAdmissionPendingError = resolveGlobalSingleton(
-  Symbol.for("openclaw.stateDatabaseAdmissionPendingError"),
-  () =>
-    class extends Error {
-      constructor(
-        readonly databasePath: string,
-        message: string,
-      ) {
-        super(message);
-      }
-    },
-);
-
 /** Retry cold admission only; the same budget covers opening and its first unentered write. */
 export function withStateDatabaseColdAdmission<T>(
   params: { databasePath: string; busyTimeoutMs: number; canRetry?: () => boolean },
@@ -248,10 +234,7 @@ export function resolveGatewayStateOwnerPath(databasePath: string): string {
   );
 }
 
-function defaultPayload(
-  databasePath: string,
-  role: GatewayLockRole = "sqlite-maintenance",
-): LockPayload {
+function defaultPayload(databasePath: string): LockPayload {
   const stateDir = resolveOpenClawStateDirForDatabasePath(databasePath);
   const startTime = getFileLockProcessStartTime(process.pid);
   return {
@@ -260,7 +243,7 @@ function defaultPayload(
     createdAt: new Date().toISOString(),
     stateDir,
     configPath: path.join(stateDir, "openclaw.json"),
-    role,
+    role: "sqlite-maintenance",
     ...(startTime === null ? {} : { startTime }),
   };
 }
@@ -578,6 +561,29 @@ export function hasActiveGatewayStateOwner(databasePath: string): boolean {
   );
 }
 
+/** Capture registered process custody; a PID or copied lock payload grants no authority. */
+export function captureGatewayStateOwner(databasePath: string) {
+  const pathname = resolveGatewayStateOwnerPath(databasePath);
+  const owner = owners.get(pathname);
+  if (!owner || owner.kind !== "process") {
+    return undefined;
+  }
+  const assertCurrent = () => {
+    if (
+      owners.get(pathname) !== owner ||
+      !owner.accepting ||
+      resolveGatewayStateOwnerPath(databasePath) !== pathname ||
+      !hasPhysicalOwnership(owner) ||
+      (owner.getProjection && !owner.getProjection()?.verifyStillHeld())
+    ) {
+      throw new GatewayStateOwnerContentionError(databasePath);
+    }
+    assertStateDatabaseAccessAllowed(databasePath);
+  };
+  assertCurrent();
+  return { ownerId: owner.payload.ownerId, role: owner.payload.role ?? "gateway", assertCurrent };
+}
+
 function hasRecentVerification(verifiedAt: number | undefined, now: number): boolean {
   return verifiedAt !== undefined && now - verifiedAt < READ_OWNERSHIP_MAX_AGE_MS;
 }
@@ -663,55 +669,11 @@ export function assertStateDatabaseAccessAllowed(
     }
     return;
   }
-  let raw: string;
-  try {
-    raw = fs.readFileSync(pathname, "utf8");
-  } catch (error) {
-    if (extractErrorCode(error) === "ENOENT") {
-      return;
-    }
-    throw new Error(unavailable, { cause: error });
-  }
-  const owner = parseGatewayLockPayload(raw);
-  if (!owner) {
-    // Native exclusive creation precedes the payload write; cold admission may wait for publication.
-    throw new StateDatabaseAdmissionPendingError(databasePath, unavailable);
-  }
-  if (!Number.isSafeInteger(owner.pid) || owner.pid <= 0) {
-    throw new Error(unavailable);
-  }
-  if (
-    isLockOwnerDefinitelyStale({
-      payload: { pid: owner.pid, starttime: owner.startTime },
-    })
-  ) {
-    return;
-  }
-  // Workers share the process PID, but their schema authority still comes from
-  // the host operation's retained lease and is never inferred from this record.
-  if (owner.pid === process.pid && !isMainThread) {
-    return;
-  }
-  if (!isPidAlive(owner.pid)) {
-    throw new Error(unavailable);
-  }
-  const role = owner.role ?? "gateway";
-  if (role === "gateway" || role === "agent-embedded") {
-    return;
-  }
-  if (owner.pid === process.pid) {
-    assertMaintenance();
-    return;
-  }
-  if (owner.stateOwnerKind === "schema" && owner.role === "sqlite-maintenance") {
-    throw new StateDatabaseAdmissionPendingError(
-      databasePath,
-      `OpenClaw state at ${databasePath} is undergoing offline maintenance; retry when it finishes.`,
-    );
-  }
-  throw new Error(
-    `OpenClaw state at ${databasePath} is undergoing offline maintenance; retry when it finishes.`,
-  );
+  assertPersistedStateDatabaseAccessAllowed({
+    databasePath,
+    ownerPath: pathname,
+    assertMaintenance,
+  });
 }
 
 /** Cleanup must compete with local roots too; it cannot borrow a live Gateway's authority. */

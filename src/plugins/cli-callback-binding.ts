@@ -1,6 +1,10 @@
 import { EventEmitter } from "node:events";
 import type { Argument, Command, Option } from "commander";
 import { pluginInstanceInvocation } from "./plugin-instance-invocation.js";
+import {
+  getPluginServiceSchedulerBinding,
+  withPluginServiceSchedulerBinding,
+} from "./service-scheduler-binding.js";
 
 // These mark native objects whose public registration methods have been adapted,
 // not runtime owners. Each callback resolves its owner from the existing invocation.
@@ -12,8 +16,11 @@ function bindCallback<T>(value: T): T {
   if (typeof value !== "function" || !instance) {
     return value;
   }
+  const scheduler = getPluginServiceSchedulerBinding();
   const bound = function (this: unknown, ...args: unknown[]) {
-    return instance.run(() => Reflect.apply(value, this, args));
+    return withPluginServiceSchedulerBinding(scheduler, () =>
+      instance.run(() => Reflect.apply(value, this, args)),
+    );
   };
   // CLI callbacks receive native Commander objects and parser-produced data, not plugin views.
   // SAFETY: The wrapper forwards the same receiver, arguments, and return value.

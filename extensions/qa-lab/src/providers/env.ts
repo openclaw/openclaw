@@ -5,20 +5,11 @@ import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { QaProviderMode } from "./index.js";
 import { getQaProvider } from "./index.js";
 
-const QA_LIVE_ENV_ALIASES = Object.freeze([
-  {
-    liveVar: "OPENCLAW_LIVE_OPENAI_KEY",
-    providerVar: "OPENAI_API_KEY",
-  },
-  {
-    liveVar: "OPENCLAW_LIVE_ANTHROPIC_KEY",
-    providerVar: "ANTHROPIC_API_KEY",
-  },
-  {
-    liveVar: "OPENCLAW_LIVE_GEMINI_KEY",
-    providerVar: "GEMINI_API_KEY",
-  },
-]);
+const QA_LIVE_ENV_ALIASES = Object.freeze({
+  OPENCLAW_LIVE_OPENAI_KEY: "OPENAI_API_KEY",
+  OPENCLAW_LIVE_ANTHROPIC_KEY: "ANTHROPIC_API_KEY",
+  OPENCLAW_LIVE_GEMINI_KEY: "GEMINI_API_KEY",
+});
 
 export const QA_LIVE_PROVIDER_CONFIG_PATH_ENV = "OPENCLAW_QA_LIVE_PROVIDER_CONFIG_PATH";
 const QA_LIVE_CLI_BACKEND_PRESERVE_ENV = "OPENCLAW_LIVE_CLI_BACKEND_PRESERVE_ENV";
@@ -100,7 +91,7 @@ function resolveUserPath(value: string, env: NodeJS.ProcessEnv = process.env) {
 }
 
 function applyLiveProviderEnvAliases(env: NodeJS.ProcessEnv | Record<string, string>) {
-  for (const { liveVar, providerVar } of QA_LIVE_ENV_ALIASES) {
+  for (const [liveVar, providerVar] of Object.entries(QA_LIVE_ENV_ALIASES)) {
     const liveValue = env[liveVar]?.trim();
     if (!liveValue || env[providerVar]?.trim()) {
       continue;
@@ -126,7 +117,7 @@ function parsePreservedCliEnv(baseEnv: NodeJS.ProcessEnv) {
 
 export function normalizeQaProviderModeEnv(env: NodeJS.ProcessEnv, providerMode?: QaProviderMode) {
   const provider = providerMode ? getQaProvider(providerMode) : null;
-  if (provider?.scrubsLiveProviderEnv) {
+  if (provider?.kind === "mock") {
     for (const key of QA_MOCK_BLOCKED_ENV_VARS) {
       delete env[key];
     }
@@ -138,7 +129,7 @@ export function normalizeQaProviderModeEnv(env: NodeJS.ProcessEnv, providerMode?
     return env;
   }
 
-  if (provider?.appliesLiveEnvAliases) {
+  if (provider?.kind === "live") {
     applyLiveProviderEnvAliases(env);
   }
 

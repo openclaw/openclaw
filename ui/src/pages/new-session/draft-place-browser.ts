@@ -142,8 +142,31 @@ export class DraftPlaceBrowser {
     return this.projectCatalog?.snapshot.ready ?? false;
   }
 
+  get projectsLoading(): boolean {
+    return this.projectCatalog?.loading ?? false;
+  }
+
   get projectRecents(): readonly ProjectRecent[] | undefined {
     return this.projectCatalog?.snapshot.result?.recents;
+  }
+
+  get githubHost(): string | undefined {
+    return this.projectCatalog?.snapshot.result?.githubHost;
+  }
+
+  get defaultRemoteProject(): DraftRemoteProject | null {
+    const configured = this.projectCatalog?.snapshot.result?.defaultRepository;
+    return configured
+      ? {
+          identity: configured.identity,
+          cloneUrl: configured.url,
+          ...(configured.ref ? { defaultBranch: configured.ref } : {}),
+        }
+      : null;
+  }
+
+  get defaultRemoteProjectProfileId(): string {
+    return this.projectCatalog?.snapshot.result?.defaultRepository?.profileId ?? "";
   }
 
   get projectId(): string {

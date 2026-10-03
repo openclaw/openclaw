@@ -5,12 +5,12 @@ import {
   formatTransportErrorCopy,
   parseApiErrorInfo,
 } from "../../shared/assistant-error-format.js";
-import { isNonProviderRuntimeCoordinationError } from "../failover-error.js";
 import { classifyFailoverSignalCore } from "./classify-core.js";
 import { isContextOverflowErrorFromTables } from "./context-overflow-tables.js";
 import {
   isServerErrorMessage,
   isSessionTranscriptValidationErrorMessage,
+  resolveExecutionApprovalFailureMessage,
 } from "./message-patterns.js";
 import { extractFailoverSignalDetails } from "./signal-details.js";
 import type { FailoverReason } from "./signal.js";
@@ -115,14 +115,9 @@ export function renderAssistantRequestFailureCopy(
   return `⚠️ OpenClaw couldn't finish this reply. ${ERROR_DETAILS_HINT}`;
 }
 
-export function renderRuntimeCoordinationFailureCopy(
-  error: unknown,
-  code: string | undefined,
-): string | undefined {
-  if (!code || !isNonProviderRuntimeCoordinationError(error)) {
-    return undefined;
-  }
-  const copy = RUNTIME_COORDINATION_FAILURE_CODE_COPY[code];
+/** Render already-classified coordination facts without loading provider runtime. */
+export function renderRuntimeCoordinationFailureCopy(code: string | undefined): string | undefined {
+  const copy = code ? RUNTIME_COORDINATION_FAILURE_CODE_COPY[code] : undefined;
   return copy ? `⚠️ ${copy}` : undefined;
 }
 
@@ -180,6 +175,12 @@ export function renderRecordedAssistantFailureCopy(message: {
   errorCode?: unknown;
   errorType?: unknown;
 }): string | undefined {
+  const approvalMessage = resolveExecutionApprovalFailureMessage(
+    typeof message.errorMessage === "string" ? message.errorMessage : undefined,
+  );
+  if (approvalMessage) {
+    return `⚠️ ${approvalMessage}`;
+  }
   const formatCopy = renderAssistantFormatFailureCopy(message);
   if (formatCopy) {
     return formatCopy;

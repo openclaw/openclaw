@@ -268,16 +268,15 @@ export function replaceTranscriptEventsSync(
   // Every sync replacement inherits and enforces the admitted writer claim.
   const fencedScope = withOwnedSessionTranscriptWriterFence(scope);
   const resolved = resolveSqliteTranscriptScope(fencedScope);
-  let replaced = false;
-  runOpenClawAgentWriteTransaction(
+  const replaced = runOpenClawAgentWriteTransaction(
     (database) => {
       assertOwnedTranscriptWriteCommit(fencedScope);
       const fresh = readSessionEntryRow(database, resolved.sessionKey);
       if (!transcriptWriteScopeIsCurrent(fresh?.entry, resolved.sessionId, fencedScope)) {
-        return;
+        return false;
       }
       replaceSqliteTranscriptEventsInTransaction(database, resolved, events);
-      replaced = true;
+      return true;
     },
     toDatabaseOptions(resolved),
     { operationLabel: "session.transcript.replace" },
@@ -414,7 +413,11 @@ export function appendTranscriptEventSnapshotSync(
   scope: SessionTranscriptWriteScope,
   event: TranscriptEvent,
   options: TranscriptEventAppendOptions = {},
-  projection?: { scheduleProjectionReconcile: false; onProjectionReconcileNeeded: () => void },
+  projection?: {
+    scheduleProjectionReconcile: false;
+    onProjectionReconcileNeeded: () => void;
+    eventJson?: string;
+  },
   view?: TranscriptWriteViewGuard,
 ): Result<TranscriptWriteSnapshot<TranscriptEventAppendResult>, TranscriptAppendRefusal> {
   assertNonMessageTranscriptEvent(event);
@@ -428,14 +431,15 @@ export function appendTranscriptEventSnapshotSync(
         options,
       );
       if (
-        appendTranscriptEventInTransaction(database, resolved, resolvedEvent, projection) === false
+        appendTranscriptEventInTransaction(database, resolved, resolvedEvent, {
+          ...projection,
+          eventJson: resolvedEvent === event ? projection?.eventJson : undefined,
+        }) === false
       ) {
         return { appended: false };
       }
       if (
-        resolvedEvent &&
-        typeof resolvedEvent === "object" &&
-        !Array.isArray(resolvedEvent) &&
+        isRecord(resolvedEvent) &&
         "parentId" in resolvedEvent &&
         (resolvedEvent.parentId === null || typeof resolvedEvent.parentId === "string")
       ) {

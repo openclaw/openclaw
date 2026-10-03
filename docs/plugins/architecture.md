@@ -148,6 +148,8 @@ Channel setup catalogs retain the requested workspace and load-path scope, inclu
 
 After startup, runtime readers reuse that inventory without filesystem discovery, manifest rereads, or freshness checks. Narrow plugin selections are in-memory views of the same inventory. Changing an account or an agent's run workspace does not invalidate it. Explicit plugin lifecycle operations prepare a new inventory for installs, updates, removals, source or manifest edits, and discovery-root changes before publishing it to the running Gateway.
 
+Rooted background runs, including skill workshop reviews and isolated cron jobs, reuse the agent's prepared plugin generation when their bootstrap workspace resolves to that agent's canonical workspace. Their execution directory and filesystem confinement remain at the task root, including during compaction. Runs without a canonical bootstrap workspace retain their own workspace-scoped generation.
+
 Plugin reload reconciles config watcher events after asynchronous metadata preparation. An unchanged source event does not cancel the operation; newer writes or changed config, install records, or source ownership still supersede it.
 
 Legacy session-key migration selects plugins that declare that capability before checking channel presence. Owners already eligible under migration policy do not need a channel-presence probe. Scoped selections probe persisted credentials only for their channel owners, so unrelated authentication modules stay unloaded during Doctor repairs. This credential scope does not limit environment-based presence signals: configured channels with missing plugins still produce installation and recovery hints.
@@ -168,7 +170,7 @@ The snapshot and lookup table keep repeated startup decisions on the fast path:
 
 Startup and hot replacement share one prepared registry publisher and the same inventory across all configured agent workspaces. Reload preserves workspace provenance so an unchanged linked plugin is not replaced when another plugin changes. Replacement retains unchanged plugin instances and validates candidate metadata before draining affected services and channels. Reordering object keys in equivalent metadata or settings does not replace a registration; changed values, ordered lists, and explicit reload requests still do. It stops and disposes the previous registration before registering its replacement, then publishes runtime methods and metadata together. Connected clients refresh their plugin capabilities after publication. If replacement fails before publication and cleanup succeeds, recovery registers captured previous code and configuration with fresh resource ownership. A failure after publication reports the committed generation. Plugin runtime imports remain lazy; retaining metadata does not activate every discovered plugin.
 
-Durable final channel replies can use the admitting Gateway's current registry after an unrelated reload only when their exact channel registration is retained. The handoff also requires unchanged channel settings, shared channel defaults, and owning-plugin settings, plus channel-owned validation that preserves the admitted sender. Telegram checks its resolved bot credential and pins it for the final send; changed token-file contents, environment tokens, and SecretRef values cannot select another bot. Channels without sender preparation, new or replaced channel registrations, changed settings, and closing Gateways remain blocked. This never falls back to another Gateway or retries a send that may already have reached the provider.
+Durable final channel replies can use the admitting Gateway's current registry after an unrelated reload only when their exact channel registration is retained. The handoff also requires unchanged channel settings, shared channel defaults, and owning-plugin settings. Channels may add sender preparation for credentials that can change outside config: Telegram checks its resolved bot credential and pins it for the final send, so changed token-file contents, environment tokens, and SecretRef values cannot select another bot. Channels without sender preparation deliver with the unchanged successor config. New or replaced channel registrations, changed settings, and closing Gateways remain blocked. This never falls back to another Gateway or retries a send that may already have reached the provider.
 
 Replacement reserves the affected instance even when agent turns or unfinished cleanup retain it. The prepared-model replacement gate holds new runs while already admitted runs finish using their original callbacks. New top-level retained work cannot acquire the old instance; already admitted consumers can still derive work needed to finish their runs. Detailed readiness and logs report the retained-work count and drain deadline; the final RPC receipt reports application and any drain notices. Reload from the instance's own active callback still fails during preparation to avoid waiting on itself. Idle prepared publications do not block replacement.
 
@@ -216,13 +218,14 @@ unchanged plugin preserves that proof; changing its selected runtime files
 invalidates it.
 
 A managed runtime instance owns its module results, registered callables, and
-runtime-store slots. With Node's synchronous module hooks, it also owns a captured
-source artifact. Package plugins capture their package inputs when the instance
-is created. Standalone files capture their entry and statically known inputs
-without copying the surrounding workspace. Compiled bundled runtime and setup
-modules share the host's code identity; each inventory still owns its registered
-callbacks and cleanup. Replacing that compiled code requires a build and Gateway
-restart. Conditional package aliases retain their package metadata, and native
+runtime-store slots. Non-bundled instances also own a captured source artifact.
+Package plugins capture their package inputs when the instance is created.
+Standalone files capture their entry and statically known inputs
+without copying the surrounding workspace. Bundled runtime and setup modules,
+including TypeScript source entries, share the host's code identity; each inventory
+still owns its registered callbacks and cleanup. Loading edited bundled code requires
+a Gateway restart; rebuild first when the installation loads compiled output.
+Conditional package aliases retain their package metadata, and native
 Node conditions, including `module-sync`, select the target from that captured metadata.
 Source inspection uses the same synchronous-module condition without evaluating plugin code.
 Captured source retains the difference between authored imports and require calls, so Bun's
@@ -248,6 +251,14 @@ directory snapshot per admitted identity, preserving old binary and companion
 bytes through in-place edits. Files in this namespace are prepared at admission;
 module execution remains on demand. Registrations share admission facts without
 sharing their runtime authority.
+Managed npm plugins support capture storage on another filesystem, including a
+`tmpfs` mount, and npm roots reached through symlinks. Retained native
+directories validate the admitting plugin's OpenClaw peer against the selected
+host's canonical package root. A hoisted native dependency does not need its own
+host link, but any host it resolves must match. A mismatch names the peer path,
+resolved target, and selected host; run `openclaw doctor --fix` with that host,
+then reload the affected plugin. The loader records the failure for that plugin
+and continues loading unrelated plugins.
 Private Doctor inspections keep their native admission facts separate from the
 operator's state. Their temporary captures never become deferred writes to the
 installed index after inspection ends; ordinary deferred writes retain their
@@ -544,6 +555,10 @@ source remains raw bytes; its code and TypeScript configuration are not evaluate
 This can read more files at startup than Node's demand-driven capture. Other
 deferred imports still acquire source on first use through the instance's current
 admission; already prepared modules need no new acquisition.
+Package imports that select a dependency promote its retained files together,
+including physical aliases of a prefetched entry. Compiler previews of deferred
+`require` calls do not acquire nested dependency bodies before the call executes.
+Bun keeps ownership of built-in package-import targets and their native validation.
 
 When using Jiti's TypeScript path settings, keep the original tsconfig files and
 configuration dependencies available while the plugin is active. Loaded modules

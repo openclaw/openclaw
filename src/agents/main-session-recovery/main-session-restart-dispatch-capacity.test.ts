@@ -54,28 +54,36 @@ function dispatchRecovery(
   });
 }
 
-it("holds cached in-flight recovery capacity until agent.wait observes completion", async () => {
-  const terminal = createDeferred<{ endedAt: number; status: "ok" }>();
-  const runtime = recoveryRuntime(async <T>() => {
-    // SAFETY: this test's only waiter requests the terminal shape resolved below.
-    return (await terminal.promise) as T;
-  });
-  const capacity = createMainSessionRecoveryCapacity({ limit: 1 });
-  const onSettled = vi.fn();
-
-  await expect(
-    dispatchRecovery({
-      capacity,
-      gatewayRuntime: runtime,
-      onSettled,
-    }),
-  ).resolves.toMatchObject({ kind: "started" });
-  terminal.resolve({ endedAt: Date.now(), status: "ok" });
-  await vi.waitFor(() => expect(onSettled).toHaveBeenCalledOnce());
-  const release = await capacity.acquire(() => true);
-  expect(release).toBeTypeOf("function");
-  release?.();
-});
+it.each(["completed", "timeout", "error"] as const)(
+  "releases recovery capacity after a %s terminal observation",
+  async (kind) => {
+    if (kind !== "completed") {
+      vi.spyOn(agentRuns, "hasLiveAgentRunContext").mockReturnValue(false);
+    }
+    const terminal = createDeferred<{ endedAt?: number; status: string }>();
+    const runtime = recoveryRuntime(async <T>() => {
+      // SAFETY: the capacity observer requests this terminal projection.
+      return (await terminal.promise) as T;
+    });
+    const capacity = createMainSessionRecoveryCapacity({ limit: 1 });
+    const onSettled = vi.fn();
+    await expect(
+      dispatchRecovery({ capacity, gatewayRuntime: runtime, onSettled }),
+    ).resolves.toMatchObject({ kind: "started" });
+    expect(onSettled).not.toHaveBeenCalled();
+    if (kind === "error") {
+      terminal.reject(new Error("agent.wait unavailable"));
+    } else {
+      terminal.resolve(
+        kind === "completed" ? { endedAt: Date.now(), status: "ok" } : { status: "timeout" },
+      );
+    }
+    await vi.waitFor(() => expect(onSettled).toHaveBeenCalledOnce());
+    const release = await capacity.acquire(() => true);
+    expect(release).toBeTypeOf("function");
+    release?.();
+  },
+);
 
 it("does not add terminal probes when no capacity lease was acquired", async () => {
   const dispatch = vi.mocked(dispatchStart.dispatchRestartRecoveryUntilStarted);
@@ -94,32 +102,3 @@ it("does not add terminal probes when no capacity lease was acquired", async () 
   dispatch.mock.calls[0]?.[0].onSettled?.();
   expect(onSettled).toHaveBeenCalledOnce();
 });
-
-it.each([
-  ["missing terminal snapshot", "timeout"],
-  ["terminal observation error", "error"],
-] as const)(
-  "releases recovery capacity after %s when the run is no longer live",
-  async (_, kind) => {
-    vi.spyOn(agentRuns, "hasLiveAgentRunContext").mockReturnValue(false);
-    const runtime = recoveryRuntime(async <T>() => {
-      if (kind === "error") {
-        throw new Error("agent.wait unavailable");
-      }
-      // SAFETY: the capacity observer requests only the timeout/endedAt terminal projection.
-      return { status: "timeout" } as T;
-    });
-    const capacity = createMainSessionRecoveryCapacity({ limit: 1 });
-    const onSettled = vi.fn();
-
-    await dispatchRecovery({
-      capacity,
-      gatewayRuntime: runtime,
-      onSettled,
-    });
-    await vi.waitFor(() => expect(onSettled).toHaveBeenCalledOnce());
-    const release = await capacity.acquire(() => true);
-    expect(release).toBeTypeOf("function");
-    release?.();
-  },
-);

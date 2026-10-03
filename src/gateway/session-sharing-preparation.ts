@@ -124,6 +124,7 @@ export async function prepareSessionMutationFacts(
   let expectedPlaceholder: SessionEntryPlaceholder | undefined;
   let assertSource: () => void;
   const selectedPaths = new Set<string>();
+  let selectedDatabaseIdentity: string | undefined;
   const acquiringPaths = new Set<string>();
   const acquiringReads = new Map<string, ReturnType<typeof retainPreparedSessionSharingFacts>>();
   const initializedReads = new Set<string>();
@@ -560,6 +561,7 @@ export async function prepareSessionMutationFacts(
         for (const candidate of sourceCandidates) {
           selectedPaths.add(path.resolve(candidate.path));
         }
+        selectedDatabaseIdentity = sharing.databaseIdentity;
       }
       if (!match) {
         if (!params.allowMissing) {
@@ -644,6 +646,7 @@ export async function prepareSessionMutationFacts(
             agentId,
             sessionKey: canonicalKey,
             paths: selectedPaths,
+            databaseIdentity: selectedDatabaseIdentity,
           });
         }
         return readFacts();
@@ -663,6 +666,7 @@ export async function prepareSessionMutationFacts(
         agentId,
         sessionKey: canonicalKey,
         paths: selectedPaths,
+        databaseIdentity: selectedDatabaseIdentity,
       });
       creation = operation;
     };

@@ -661,7 +661,7 @@ describe("sessions.assignOwner", () => {
       }
       const entered = createDeferredCore();
       const release = createDeferredCore();
-      const lifecycle = runExclusiveSessionLifecycleMutation({
+      const lifecycle = runExclusiveSessionLifecycleMutation("assign-owner", {
         scope: target.storePath,
         identities: [target.storeKey, sessionId],
         run: async () => {
@@ -719,7 +719,7 @@ describe("sessions.assignOwner", () => {
       }
       const entered = createDeferredCore();
       const release = createDeferredCore();
-      const lifecycle = runExclusiveSessionLifecycleMutation({
+      const lifecycle = runExclusiveSessionLifecycleMutation("assign-owner", {
         scope: target.storePath,
         identities: [target.storeKey, sessionId],
         run: async () => {

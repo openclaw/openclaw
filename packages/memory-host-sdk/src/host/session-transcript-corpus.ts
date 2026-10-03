@@ -26,7 +26,6 @@ import {
   resolveSessionTranscriptsDirForAgent,
   resolveStorePath,
   type SessionEntry,
-  type SessionTranscriptInstance,
 } from "./openclaw-runtime-session.js";
 import type {
   SessionTranscriptCorpusEntry,
@@ -194,96 +193,6 @@ function collectCronGeneratedSessionKeys(
   return cronGeneratedKeys;
 }
 
-function toSessionStoreCorpusEntry(
-  agentId: string,
-  storePath: string,
-  summary: SessionEntrySummary,
-  cronGeneratedSessionKeys: ReadonlySet<string>,
-  includeContentRevision: boolean,
-  env: NodeJS.ProcessEnv,
-  databasePath = storePath,
-): SessionTranscriptCorpusEntry | null {
-  const sessionId = summary.entry.sessionId?.trim();
-  if (!sessionId) {
-    return null;
-  }
-  const sessionKey = summary.sessionKey.trim();
-  const classification = classifySessionEntry(
-    summary.sessionKey,
-    summary.entry,
-    cronGeneratedSessionKeys,
-  );
-  const contentRevision = includeContentRevision
-    ? sqliteContentRevision({
-        agentId,
-        env,
-        sessionId,
-        ...(sessionKey ? { sessionKey } : {}),
-        storePath: databasePath,
-      })
-    : undefined;
-  return {
-    agentId,
-    artifactKind: "active-session",
-    sessionFile: sessionKey,
-    sessionId,
-    ...(contentRevision ? { contentRevision } : {}),
-    transcriptSource: "sqlite",
-    storePath,
-    ...(Number.isFinite(summary.entry.updatedAt) ? { updatedAtMs: summary.entry.updatedAt } : {}),
-    ...(sessionKey ? { sessionKey } : {}),
-    ...(classification.generatedByDreamingNarrative ? { generatedByDreamingNarrative: true } : {}),
-    ...(classification.generatedByCronRun ? { generatedByCronRun: true } : {}),
-    sessionKind: classification.sessionKind,
-  };
-}
-
-function toRetainedSessionCorpusEntry(
-  agentId: string,
-  instance: SessionTranscriptInstance,
-  sessionKey: string,
-  storePath: string,
-  cronGeneratedSessionKeys: ReadonlySet<string>,
-  includeContentRevision: boolean,
-  env: NodeJS.ProcessEnv,
-  databasePath = storePath,
-): SessionTranscriptCorpusEntry | null {
-  // Retained rows predate the current logical session entry. Only rows whose
-  // exclusion-sensitive ownership was captured may enter historical ingestion.
-  if (
-    !instance.provenanceKnown ||
-    instance.acpOwned ||
-    instance.entry.pluginOwnerId ||
-    instance.entry.hookExternalContentSource
-  ) {
-    return null;
-  }
-  const classification = classifySessionEntry(sessionKey, instance.entry, cronGeneratedSessionKeys);
-  const contentRevision = includeContentRevision
-    ? sqliteContentRevision({
-        agentId,
-        env,
-        sessionId: instance.sessionId,
-        ...(sessionKey ? { sessionKey } : {}),
-        storePath: databasePath,
-      })
-    : undefined;
-  return {
-    agentId,
-    artifactKind: "retained-session",
-    sessionFile: sessionKey,
-    sessionId: instance.sessionId,
-    ...(contentRevision ? { contentRevision } : {}),
-    storePath,
-    transcriptSource: "sqlite",
-    updatedAtMs: instance.updatedAtMs,
-    ...(sessionKey ? { sessionKey } : {}),
-    ...(classification.generatedByDreamingNarrative ? { generatedByDreamingNarrative: true } : {}),
-    ...(classification.generatedByCronRun ? { generatedByCronRun: true } : {}),
-    sessionKind: classification.sessionKind,
-  };
-}
-
 function listSessionTranscriptArtifactFiles(sessionsDir: string): string[] {
   try {
     return sessionTranscriptArtifactPaths(
@@ -395,6 +304,42 @@ function projectSessionTranscriptCorpusEntries(
     ...retainedInstances.map(({ entry, sessionKey }) => ({ entry, sessionKey })),
     ...sessionEntries,
   ]);
+  const toSqliteEntry = (
+    agentId: string,
+    sessionId: string,
+    sessionKey: string,
+    entry: SessionEntry,
+    artifactKind: "active-session" | "retained-session",
+    updatedAtMs?: number,
+  ): SessionTranscriptCorpusEntry => {
+    const classification = classifySessionEntry(sessionKey, entry, cronGeneratedSessionKeys);
+    const transcriptKey = artifactKind === "active-session" ? sessionKey.trim() : sessionKey;
+    const contentRevision = includeContentRevision
+      ? sqliteContentRevision({
+          agentId,
+          env,
+          sessionId,
+          ...(transcriptKey ? { sessionKey: transcriptKey } : {}),
+          storePath: databasePath,
+        })
+      : undefined;
+    return {
+      agentId,
+      artifactKind,
+      sessionFile: transcriptKey,
+      sessionId,
+      ...(contentRevision ? { contentRevision } : {}),
+      transcriptSource: "sqlite",
+      storePath,
+      ...(updatedAtMs !== undefined ? { updatedAtMs } : {}),
+      ...(transcriptKey ? { sessionKey: transcriptKey } : {}),
+      ...(classification.generatedByDreamingNarrative
+        ? { generatedByDreamingNarrative: true }
+        : {}),
+      ...(classification.generatedByCronRun ? { generatedByCronRun: true } : {}),
+      sessionKind: classification.sessionKind,
+    };
+  };
   const resolveSessionOwnership = (key: string) => {
     const sessionKey = isSharedFixedStore
       ? key
@@ -412,18 +357,18 @@ function projectSessionTranscriptCorpusEntries(
   };
   for (const summary of sessionEntries) {
     const { ownerAgentId } = resolveSessionOwnership(summary.sessionKey);
-    const entry = toSessionStoreCorpusEntry(
-      ownerAgentId,
-      storePath,
-      summary,
-      cronGeneratedSessionKeys,
-      includeContentRevision,
-      env,
-      databasePath,
-    );
-    if (!entry) {
+    const sessionId = summary.entry.sessionId?.trim();
+    if (!sessionId) {
       continue;
     }
+    const entry = toSqliteEntry(
+      ownerAgentId,
+      sessionId,
+      summary.sessionKey,
+      summary.entry,
+      "active-session",
+      Number.isFinite(summary.entry.updatedAt) ? summary.entry.updatedAt : undefined,
+    );
     entryOwnersBySessionId.set(entry.sessionId, ownerAgentId);
     if (ownerAgentId === normalizedAgentId) {
       activeEntriesBySessionId.set(entry.sessionId, entry);
@@ -437,22 +382,26 @@ function projectSessionTranscriptCorpusEntries(
         continue;
       }
       const { sessionKey, ownerAgentId } = resolveSessionOwnership(instance.sessionKey);
-      if (ownerAgentId !== normalizedAgentId) {
+      // Retained rows need captured ownership before historical ingestion.
+      if (
+        ownerAgentId !== normalizedAgentId ||
+        !instance.provenanceKnown ||
+        instance.acpOwned ||
+        instance.entry.pluginOwnerId ||
+        instance.entry.hookExternalContentSource
+      ) {
         continue;
       }
-      const entry = toRetainedSessionCorpusEntry(
-        ownerAgentId,
-        instance,
-        sessionKey,
-        storePath,
-        cronGeneratedSessionKeys,
-        includeContentRevision,
-        env,
-        databasePath,
+      corpusEntries.push(
+        toSqliteEntry(
+          ownerAgentId,
+          instance.sessionId,
+          sessionKey,
+          instance.entry,
+          "retained-session",
+          instance.updatedAtMs,
+        ),
       );
-      if (entry?.transcriptSource === "sqlite") {
-        corpusEntries.push(entry);
-      }
     }
   }
   for (const { path: artifactPath, contentRevision } of artifacts) {

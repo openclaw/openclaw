@@ -18,7 +18,9 @@ import { cleanupSessionResources } from "../session-resources.js";
 import {
   OpenAIResponsesWebSocketSafeRetryError,
   responsesPromptObserver,
+  responsesServiceTierObserver,
   type ResponsesPromptObservation,
+  type ResponsesServiceTierObservation,
 } from "./openai-responses-contracts.js";
 import {
   withProviderAcceptanceObserver,
@@ -356,6 +358,31 @@ describe("native OpenAI Responses WebSocket client integration", () => {
   afterEach(() => {
     cleanupSessionResources();
     configureAiTransportHost(initialHost);
+  });
+
+  it("observes the dispatched WebSocket service tier and raw terminal downgrade", async () => {
+    const completed = completedEvent("resp_tier", "ok");
+    transportState.responseBatches.push([
+      message({ ...completed, response: { ...completed.response, service_tier: "default" } }),
+    ]);
+    const observations: ResponsesServiceTierObservation[] = [];
+    const options = {
+      apiKey: "test-key",
+      transport: "websocket" as const,
+      onPayload: (payload: unknown) => ({
+        ...(payload as Record<string, unknown>),
+        service_tier: "ultrafast",
+      }),
+    };
+    responsesServiceTierObserver.set(options, (observation) => observations.push(observation));
+    const stream = await createOpenAIResponsesTransportStreamFn()(
+      model,
+      { messages: [userMessage("hello", 1)], tools: [] },
+      options,
+    );
+    expect((await stream.result()).stopReason).toBe("stop");
+    expect(transportState.websocketRequests[0]?.service_tier).toBe("ultrafast");
+    expect(observations).toEqual([{ requestedTier: "ultrafast", responseTier: "default" }]);
   });
 
   it.each([undefined, "short", "none"] as const)(

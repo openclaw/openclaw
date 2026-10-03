@@ -15,12 +15,17 @@ import {
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import { SessionMetadataUnavailableError } from "../../state/session-metadata-unavailable-error.js";
+import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import { readSessionActivitySummary } from "./activity-summary.js";
 import { resolveSessionLifecycleTimestampsWithHeader } from "./lifecycle-timestamps.js";
+import { matchesPluginHostCleanupSession } from "./plugin-host-cleanup.js";
 import { hasPendingSessionTranscriptArchives } from "./session-accessor.sqlite-archive-store-kernel.js";
 import { readSessionCreationSnapshotInDatabase } from "./session-accessor.sqlite-creation-read.js";
 import { readExactSessionEntryCandidatesInDatabase } from "./session-accessor.sqlite-entry-cache.js";
-import { readSelectedSessionEntriesInDatabase } from "./session-accessor.sqlite-entry-list.read.js";
+import {
+  listSessionEntriesReadOnly,
+  readSelectedSessionEntriesInDatabase,
+} from "./session-accessor.sqlite-entry-list.read.js";
 import {
   readSessionEntryByIdInDatabase,
   readSessionEntryRow,
@@ -49,6 +54,12 @@ import {
   assertSessionEntryCurrentNativeSource,
   readSessionEntryCurrentFactsInDatabase,
 } from "./session-entry-current-admission.worker.js";
+import type {
+  SessionEntryReadWorkerInput,
+  SessionEntryReadWorkerResult,
+  SessionRuntimeTargetWorkerInput,
+  SessionRuntimeTargetWorkerResult,
+} from "./session-entry-read.types.js";
 import { listSessionMembersInDatabase } from "./session-sharing-store.kernel.js";
 import { runWithSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 import {
@@ -56,12 +67,138 @@ import {
   type SessionDiagnosticTextWorkerInput,
   type SessionEntryCurrentWorkerInput,
   type SessionEntryCurrentWorkerResult,
+  type SessionEntryListWorkerInput,
   type SessionExactEntriesWorkerInput,
   type SessionExactEntriesWorkerResult,
   type SessionRowDatabaseFacts,
   type SessionRowFactsWorkerInput,
   type SessionRowFactsWorkerResult,
 } from "./session-transcript-worker.types.js";
+
+/** Private entry and transcript-target reads share the same admitted reader and error codec. */
+export async function readSessionEntryWorkerRequest(
+  request: SessionEntryReadWorkerInput | SessionRuntimeTargetWorkerInput,
+): Promise<SessionEntryReadWorkerResult | SessionRuntimeTargetWorkerResult> {
+  if (request.kind === "session-runtime-target") {
+    const { readSessionTranscriptRuntimeTarget } =
+      await import("./session-accessor.transcript-target.js");
+    const readTarget = () =>
+      readSessionTranscriptRuntimeTarget(request.scope, {
+        keyFormat: request.keyFormat,
+        databaseAgentId: request.database.agentId,
+        continuation: request.continuation,
+      });
+    const read = withOpenClawAgentDatabaseReadOnly(
+      (database) => {
+        const target = readTarget();
+        const identity = readOpenClawAgentDatabaseIdentity(database);
+        if (
+          typeof identity.identity !== "string" ||
+          !isOpenClawAgentDatabasePathCurrent(database)
+        ) {
+          throw new Error("Session runtime target requires its current durable owner");
+        }
+        return {
+          target,
+          source: {
+            agentId: database.agentId,
+            path: database.path,
+            databaseIdentity: identity.identity,
+            databaseBirthtime: identity.birthtime,
+          },
+        };
+      },
+      { ...request.database, env: request.scope.env },
+    );
+    return {
+      kind: "session-runtime-target",
+      ...(read.found
+        ? read.value
+        : {
+            target: {
+              agentId: request.scope.agentId,
+              sessionId: request.scope.sessionId,
+              sessionKey: resolveSqliteSessionKey(request.scope.sessionKey, request.scope.agentId),
+              storePath: request.scope.storePath,
+              ...(request.keyFormat
+                ? { selectedSessionId: null, selectedLifecycleRevision: null }
+                : {}),
+            },
+          }),
+    };
+  }
+  const [{ loadSessionEntryReadOnlyResultInScope }, { encodeSessionTranscriptWorkerError }] =
+    await Promise.all([
+      import("./session-accessor.sqlite-exact-read.js"),
+      import("./session-history-worker-errors.js"),
+    ]);
+  let source: SessionEntryReadWorkerResult["source"];
+  const read = loadSessionEntryReadOnlyResultInScope(
+    {
+      ...request.scope,
+      env: cloneEnvWithPlatformSemantics(request.scope.env ?? process.env),
+    },
+    request.continuation,
+    (readSource) => {
+      if (typeof readSource.databaseIdentity !== "string") {
+        throw new Error("Private session entry requires its process-held owner");
+      }
+      source = { ...readSource, databaseIdentity: readSource.databaseIdentity };
+    },
+  );
+  if (!read.ok) {
+    const readError = encodeSessionTranscriptWorkerError(read.error);
+    if (!readError || readError.kind === "fence") {
+      throw read.error;
+    }
+    return { kind: "session-entry-read", entry: undefined, source, readError };
+  }
+  return { kind: "session-entry-read", entry: read.value, source };
+}
+
+/** Cleanup selects identity columns before materializing metadata in the same worker snapshot. */
+export function readSessionEntryList(request: SessionEntryListWorkerInput) {
+  const scope = {
+    ...request.scope,
+    env: cloneEnvWithPlatformSemantics(request.scope.env ?? process.env),
+  };
+  if (scope.cleanupSession === undefined) {
+    return listSessionEntriesReadOnly(scope, { continuation: request.continuation });
+  }
+  const result = withOpenClawAgentDatabaseReadOnly(
+    (database) =>
+      readWithCanonicalSessionReaderContinuation(database, request.continuation, () =>
+        withSqlitePostCommitPublications(database.db, () =>
+          runSqliteDeferredTransactionSync(database.db, () => {
+            const identities = executeSqliteQuerySync(
+              database.db,
+              getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(database.db)
+                .selectFrom("session_nodes")
+                .select(["session_key as sessionKey", "current_session_id as sessionId"])
+                .orderBy("session_key"),
+            ).rows;
+            const keys = identities
+              .filter((row) =>
+                matchesPluginHostCleanupSession(row.sessionKey, row, scope.cleanupSession),
+              )
+              .map((row) => row.sessionKey);
+            const entries = new Map(
+              readSelectedSessionEntriesInDatabase(database, keys).map((entry) => [
+                entry.sessionKey,
+                entry,
+              ]),
+            );
+            return keys.flatMap((key) => {
+              const entry = entries.get(key);
+              return entry ? [entry] : [];
+            });
+          }),
+        ),
+      ),
+    { ...request.database, env: scope.env },
+  );
+  return result.found ? result.value : [];
+}
 
 /** Canonical entry currency reuses parsed facts only at the same native connection revision. */
 export function readSessionEntryCurrentFacts(
@@ -408,13 +545,14 @@ export function readSessionRowDatabaseFacts(
             if (!selected.ok) {
               throw selected.error;
             }
+            const boardKeys = readBoardSessionKeys(database, request.sessionKeys);
             return {
               kind: "session-row-facts" as const,
               rows: selected.value.map(({ sessionKey, entry }) => {
                 const facts: SessionRowDatabaseFacts = {
                   sessionKey,
                   entry,
-                  hasBoard: readBoardSessionKeys(database, sessionKey).length > 0,
+                  hasBoard: boardKeys.has(sessionKey),
                 };
                 if (readSessionActivitySummary(entry)) {
                   facts.activitySummaryWatermark = readSessionTranscriptWatermarkInDatabase(

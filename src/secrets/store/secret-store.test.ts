@@ -8,7 +8,7 @@ import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import { isSecretValueRegisteredForRedaction } from "../../logging/secret-redaction-registry.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
 import {
-  closeOpenClawStateDatabaseForTest,
+  closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { looksLikeSecretSentinel, resolveSecretSentinel } from "../sentinel.js";
@@ -56,20 +56,20 @@ function countStoredRows(database: ReturnType<typeof createDatabaseOptions>, nam
   return row.count;
 }
 
-afterEach(() => {
+afterEach(async () => {
   vi.useRealTimers();
   vi.unstubAllEnvs();
-  closeOpenClawStateDatabaseForTest();
+  await closeOpenClawStateDatabaseAsync();
   for (const root of roots.splice(0)) {
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
 
 describe("secret store", () => {
-  it("consumes only a fresh, unbound GitHub setup handoff", () => {
+  it("consumes only a fresh, unbound GitHub setup handoff", async () => {
     const database = createDatabaseOptions();
     const name = "github-setup-11111111111111111111111111111111";
-    writeSecretStoreEntry({
+    await writeSecretStoreEntry({
       scope: team,
       name,
       value: "temporary-value",
@@ -78,7 +78,7 @@ describe("secret store", () => {
       updatedBy: "test",
       database,
     });
-    writeSecretStoreEntry({
+    await writeSecretStoreEntry({
       scope: team,
       name: "DEPLOY_TOKEN",
       value: "unrelated-value",
@@ -91,15 +91,15 @@ describe("secret store", () => {
     expect(countStoredRows(database, name)).toBe(0);
     expect(consumeGitHubSetupHandoff({ name, database })).toBeUndefined();
     expect(consumeGitHubSetupHandoff({ name: "DEPLOY_TOKEN", database })).toBeUndefined();
-    expect(readSecretStoreValue({ scope: team, name: "DEPLOY_TOKEN", database })).toEqual({
+    expect(await readSecretStoreValue({ scope: team, name: "DEPLOY_TOKEN", database })).toEqual({
       ok: true,
       value: "unrelated-value",
     });
   });
 
-  it("saves a chat secret under a fresh name beside the entry its key name suggests", () => {
+  it("saves a chat secret under a fresh name beside the entry its key name suggests", async () => {
     const database = createDatabaseOptions();
-    writeSecretStoreEntry({
+    await writeSecretStoreEntry({
       scope: team,
       name: "GATEWAY_REMOTE_TOKEN",
       value: "owned-elsewhere",
@@ -114,13 +114,15 @@ describe("secret store", () => {
     );
 
     expect(write.name).toMatch(/^GATEWAY_REMOTE_TOKEN_[0-9A-F]{16}$/);
-    expect(readSecretStoreValue({ scope: team, name: "GATEWAY_REMOTE_TOKEN", database })).toEqual({
+    expect(
+      await readSecretStoreValue({ scope: team, name: "GATEWAY_REMOTE_TOKEN", database }),
+    ).toEqual({
       ok: true,
       value: "owned-elsewhere",
     });
   });
 
-  it("rotates a key into a new entry and leaves its previous entry for other users", () => {
+  it("rotates a key into a new entry and leaves its previous entry for other users", async () => {
     const database = createDatabaseOptions();
     const save = (value: string) =>
       writeSecretStoreEntryForConfigRefInDatabase(
@@ -132,17 +134,17 @@ describe("secret store", () => {
     const second = save("new-key");
 
     expect(second).not.toBe(first);
-    expect(readSecretStoreValue({ scope: team, name: first, database })).toEqual({
+    expect(await readSecretStoreValue({ scope: team, name: first, database })).toEqual({
       ok: true,
       value: "old-key",
     });
   });
 
-  it("never hands a chat key to a stale reference whose entry was removed and purged", () => {
+  it("never hands a chat key to a stale reference whose entry was removed and purged", async () => {
     const database = createDatabaseOptions();
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
-    writeSecretStoreEntry({
+    await writeSecretStoreEntry({
       scope: team,
       name: "GATEWAY_REMOTE_TOKEN",
       value: "retired",
@@ -151,7 +153,7 @@ describe("secret store", () => {
       updatedBy: "cli",
       database,
     });
-    deleteSecretStoreEntry({ scope: team, name: "GATEWAY_REMOTE_TOKEN", database });
+    await deleteSecretStoreEntry({ scope: team, name: "GATEWAY_REMOTE_TOKEN", database });
     vi.setSystemTime(new Date("2026-02-01T00:00:00.001Z"));
     expect(purgeExpiredSecretStoreEntries({ database })).toBe(1);
 
@@ -161,17 +163,19 @@ describe("secret store", () => {
     );
 
     // A config key still holding the old name keeps resolving to nothing.
-    expect(readSecretStoreValue({ scope: team, name: "GATEWAY_REMOTE_TOKEN", database })).toEqual({
+    expect(
+      await readSecretStoreValue({ scope: team, name: "GATEWAY_REMOTE_TOKEN", database }),
+    ).toEqual({
       ok: false,
       error: expect.objectContaining({ code: "SECRET_STORE_NOT_FOUND" }),
     });
-    expect(readSecretStoreValue({ scope: team, name: write.name, database })).toEqual({
+    expect(await readSecretStoreValue({ scope: team, name: write.name, database })).toEqual({
       ok: true,
       value: "from-chat",
     });
   });
 
-  it("writes nothing when the requester loses authority before commit", () => {
+  it("writes nothing when the requester loses authority before commit", async () => {
     const database = createDatabaseOptions();
 
     expect(() =>
@@ -186,12 +190,14 @@ describe("secret store", () => {
       ),
     ).toThrow("no longer active");
 
-    expect(listSecretStoreEntries({ scope: team, includeDeleted: true, database })).toEqual([]);
+    expect(await listSecretStoreEntries({ scope: team, includeDeleted: true, database })).toEqual(
+      [],
+    );
   });
 
-  it("round-trips env and secret entries without disclosing secret list values", () => {
+  it("round-trips env and secret entries without disclosing secret list values", async () => {
     const database = createDatabaseOptions();
-    writeSecretStoreEntry({
+    await writeSecretStoreEntry({
       scope: team,
       name: "SERVICE_URL",
       value: "https://service.test",
@@ -199,7 +205,7 @@ describe("secret store", () => {
       updatedBy: "test",
       database,
     });
-    writeSecretStoreEntry({
+    await writeSecretStoreEntry({
       scope: team,
       name: "SERVICE_API_KEY",
       value: "stored-super-secret",
@@ -209,7 +215,7 @@ describe("secret store", () => {
       database,
     });
 
-    expect(listSecretStoreEntries({ scope: team, database })).toEqual([
+    expect(await listSecretStoreEntries({ scope: team, database })).toEqual([
       expect.objectContaining({
         name: "SERVICE_API_KEY",
         kind: "secret",
@@ -221,14 +227,16 @@ describe("secret store", () => {
         valuePreview: "https://service.test",
       }),
     ]);
-    expect(listSecretStoreEntries({ scope: team, database })[0]).not.toHaveProperty("valuePreview");
-    expect(readSecretStoreValue({ scope: team, name: "SERVICE_API_KEY", database })).toEqual({
+    expect((await listSecretStoreEntries({ scope: team, database }))[0]).not.toHaveProperty(
+      "valuePreview",
+    );
+    expect(await readSecretStoreValue({ scope: team, name: "SERVICE_API_KEY", database })).toEqual({
       ok: true,
       value: "stored-super-secret",
     });
     expect(isSecretValueRegisteredForRedaction("stored-super-secret")).toBe(true);
     expect(
-      readSecretStoreExecEnvironment({ includeSecretSentinels: true, database })
+      (await readSecretStoreExecEnvironment({ includeSecretSentinels: true, database }))
         .secretEgressBindings,
     ).toEqual([
       expect.objectContaining({
@@ -237,7 +245,7 @@ describe("secret store", () => {
       }),
     ]);
     expect(
-      readSecretStoreExecEnvironment({
+      await readSecretStoreExecEnvironment({
         includeSecretSentinels: true,
         excludeNames: ["SERVICE_API_KEY"],
         database,
@@ -245,11 +253,11 @@ describe("secret store", () => {
     ).not.toHaveProperty("secretSentinels");
   });
 
-  it("seals protected exec values when provider sentinels are disabled", () => {
+  it("seals protected exec values when provider sentinels are disabled", async () => {
     vi.stubEnv("OPENCLAW_SECRET_SENTINELS", "off");
     const database = createDatabaseOptions();
     const secret = "protected-store-fixture-value";
-    writeSecretStoreEntry({
+    await writeSecretStoreEntry({
       scope: team,
       name: "SERVICE_API_KEY",
       value: secret,
@@ -258,7 +266,7 @@ describe("secret store", () => {
       updatedBy: "test",
       database,
     });
-    const environment = readSecretStoreExecEnvironment({
+    const environment = await readSecretStoreExecEnvironment({
       includeSecretSentinels: true,
       database,
     });
@@ -269,14 +277,16 @@ describe("secret store", () => {
     expect(environment.secretEgressBindings).toEqual([
       { name: "SERVICE_API_KEY", sentinel, allowedHosts: ["api.example.com"] },
     ]);
-    expect(readSecretStoreExecEnvironment({ includeSecretSentinels: false, database })).toEqual({});
+    expect(
+      await readSecretStoreExecEnvironment({ includeSecretSentinels: false, database }),
+    ).toEqual({});
   });
 
-  it("soft-deletes idempotently and purges after the 30-day retention", () => {
+  it("soft-deletes idempotently and purges after the 30-day retention", async () => {
     const database = createDatabaseOptions();
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
-    writeSecretStoreEntry({
+    await writeSecretStoreEntry({
       scope: team,
       name: "DELETE_TOKEN",
       value: "delete-me",
@@ -284,27 +294,31 @@ describe("secret store", () => {
       updatedBy: null,
       database,
     });
-    deleteSecretStoreEntry({ scope: team, name: "DELETE_TOKEN", database });
-    deleteSecretStoreEntry({ scope: team, name: "DELETE_TOKEN", database });
-    expect(listSecretStoreEntries({ scope: team, database })).toEqual([]);
-    expect(listSecretStoreEntries({ scope: team, includeDeleted: true, database })).toHaveLength(1);
+    await deleteSecretStoreEntry({ scope: team, name: "DELETE_TOKEN", database });
+    await deleteSecretStoreEntry({ scope: team, name: "DELETE_TOKEN", database });
+    expect(await listSecretStoreEntries({ scope: team, database })).toEqual([]);
+    expect(
+      await listSecretStoreEntries({ scope: team, includeDeleted: true, database }),
+    ).toHaveLength(1);
     expect(purgeExpiredSecretStoreEntries({ database })).toBe(0);
 
     vi.setSystemTime(new Date("2026-02-01T00:00:00.001Z"));
     expect(purgeExpiredSecretStoreEntries({ database })).toBe(1);
-    expect(listSecretStoreEntries({ scope: team, includeDeleted: true, database })).toEqual([]);
+    expect(await listSecretStoreEntries({ scope: team, includeDeleted: true, database })).toEqual(
+      [],
+    );
   });
 
   it.each([
     { kind: "env" as const, allowedHosts: undefined, ageMs: 0 },
     { kind: "secret" as const, allowedHosts: ["github.com"], ageMs: 0 },
     { kind: "secret" as const, allowedHosts: undefined, ageMs: 10 * 60_000 + 1 },
-  ])("rejects a non-handoff store entry %#", ({ kind, allowedHosts, ageMs }) => {
+  ])("rejects a non-handoff store entry %#", async ({ kind, allowedHosts, ageMs }) => {
     const database = createDatabaseOptions();
     const now = Date.now();
     vi.useFakeTimers();
     vi.setSystemTime(now - ageMs);
-    writeSecretStoreEntry({
+    await writeSecretStoreEntry({
       scope: team,
       name: "github-setup-22222222222222222222222222222222",
       value: "temporary-value",
@@ -322,14 +336,14 @@ describe("secret store", () => {
     ).toBeUndefined();
   });
 
-  it("keeps every hidden GitHub record out of listings, reads, and exec projection", () => {
+  it("keeps every hidden GitHub record out of listings, reads, and exec projection", async () => {
     const database = createDatabaseOptions();
     const setupName = "github-setup-33333333333333333333333333333333";
     const deviceName = "github-device-33333333333333333333333333333333";
     const oauthName = "github-oauth-33333333333333333333333333333333";
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
-    writeSecretStoreEntry({
+    await writeSecretStoreEntry({
       scope: team,
       name: setupName,
       value: "abandoned-value",
@@ -350,7 +364,7 @@ describe("secret store", () => {
       updatedBy: "test",
       database,
     });
-    writeSecretStoreEntry({
+    await writeSecretStoreEntry({
       scope: team,
       name: "UNRELATED_SECRET",
       value: "keep-value",
@@ -369,22 +383,22 @@ describe("secret store", () => {
     expect(readHiddenGitHubSecretRecord({ name: oauthName, database })).toBe("oauth-value");
     expect(isSecretValueRegisteredForRedaction("device-value")).toBe(true);
     expect(isSecretValueRegisteredForRedaction("oauth-value")).toBe(true);
-    expect(listSecretStoreEntries({ scope: team, database }).map((entry) => entry.name)).toEqual([
-      "UNRELATED_SECRET",
-    ]);
     expect(
-      listSecretStoreEntries({ scope: team, includeDeleted: true, database }).map(
+      (await listSecretStoreEntries({ scope: team, database })).map((entry) => entry.name),
+    ).toEqual(["UNRELATED_SECRET"]);
+    expect(
+      (await listSecretStoreEntries({ scope: team, includeDeleted: true, database })).map(
         (entry) => entry.name,
       ),
     ).toEqual(["UNRELATED_SECRET"]);
-    const execEnvironment = readSecretStoreExecEnvironment({
+    const execEnvironment = await readSecretStoreExecEnvironment({
       includeSecretSentinels: true,
       database,
     });
     for (const name of [setupName, deviceName, oauthName]) {
       expect(execEnvironment.secretSentinels ?? {}).not.toHaveProperty(name);
       expect(execEnvironment.env ?? {}).not.toHaveProperty(name);
-      expect(readSecretStoreValue({ scope: team, name, database })).toMatchObject({
+      expect(await readSecretStoreValue({ scope: team, name, database })).toMatchObject({
         ok: false,
         error: { code: "SECRET_STORE_INVALID_NAME" },
       });
@@ -506,14 +520,14 @@ describe("secret store", () => {
     },
   );
 
-  it("purges transient GitHub records on their own deadlines and retains OAuth state", () => {
+  it("purges transient GitHub records on their own deadlines and retains OAuth state", async () => {
     const database = createDatabaseOptions();
     const setupName = "github-setup-55555555555555555555555555555555";
     const deviceName = "github-device-55555555555555555555555555555555";
     const oauthName = "github-oauth-55555555555555555555555555555555";
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
-    writeSecretStoreEntry({
+    await writeSecretStoreEntry({
       scope: team,
       name: setupName,
       value: "setup-value",
@@ -672,10 +686,10 @@ describe("secret store", () => {
     },
   );
 
-  it("hard-deletes reserved setup names while ordinary secrets remain soft-deleted", () => {
+  it("hard-deletes reserved setup names while ordinary secrets remain soft-deleted", async () => {
     const database = createDatabaseOptions();
     const name = "github-setup-44444444444444444444444444444444";
-    writeSecretStoreEntry({
+    await writeSecretStoreEntry({
       scope: team,
       name,
       value: "temporary-value",
@@ -683,11 +697,11 @@ describe("secret store", () => {
       updatedBy: "test",
       database,
     });
-    deleteSecretStoreEntry({ scope: team, name, database });
+    await deleteSecretStoreEntry({ scope: team, name, database });
     expect(countStoredRows(database, name)).toBe(0);
   });
 
-  it("validates and hard-deletes exact hidden GitHub device and OAuth records", () => {
+  it("validates and hard-deletes exact hidden GitHub device and OAuth records", async () => {
     const database = createDatabaseOptions();
     const deviceName = "github-device-66666666666666666666666666666666";
     const oauthName = "github-oauth-66666666666666666666666666666666";
@@ -699,7 +713,7 @@ describe("secret store", () => {
     });
     writeHiddenGitHubSecretRecord({ name: oauthName, value: "oauth-value", database });
 
-    expect(() =>
+    await expect(
       writeSecretStoreEntry({
         scope: team,
         name: "github-oauth-66666666666666666666666666666666",
@@ -708,14 +722,14 @@ describe("secret store", () => {
         updatedBy: null,
         database,
       }),
-    ).toThrow(expect.objectContaining({ code: "SECRET_STORE_INVALID_NAME" }));
-    expect(() =>
+    ).rejects.toThrow(expect.objectContaining({ code: "SECRET_STORE_INVALID_NAME" }));
+    await expect(
       deleteSecretStoreEntry({
         scope: team,
         name: "github-oauth-66666666666666666666666666666666",
         database,
       }),
-    ).toThrow(expect.objectContaining({ code: "SECRET_STORE_INVALID_NAME" }));
+    ).rejects.toThrow(expect.objectContaining({ code: "SECRET_STORE_INVALID_NAME" }));
     expect(() =>
       writeHiddenGitHubSecretRecord({
         name: "github-device-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
@@ -741,9 +755,9 @@ describe("secret store", () => {
     expect(readHiddenGitHubSecretRecord({ name: deviceName, database })).toBe(undefined);
   });
 
-  it("makes duplicate team rows impossible at the schema boundary", () => {
+  it("makes duplicate team rows impossible at the schema boundary", async () => {
     const database = createDatabaseOptions();
-    writeSecretStoreEntry({
+    await writeSecretStoreEntry({
       scope: team,
       name: "UNIQUE_TOKEN",
       value: "first-value",
@@ -761,9 +775,9 @@ describe("secret store", () => {
     ).toThrow(/UNIQUE constraint failed/u);
   });
 
-  it("rejects invalid names and values over the UTF-8 byte cap", () => {
+  it("rejects invalid names and values over the UTF-8 byte cap", async () => {
     const database = createDatabaseOptions();
-    expect(() =>
+    await expect(
       writeSecretStoreEntry({
         scope: team,
         name: "lowercase",
@@ -772,8 +786,8 @@ describe("secret store", () => {
         updatedBy: null,
         database,
       }),
-    ).toThrow(expect.objectContaining({ code: "SECRET_STORE_INVALID_NAME" }));
-    expect(() =>
+    ).rejects.toThrow(expect.objectContaining({ code: "SECRET_STORE_INVALID_NAME" }));
+    await expect(
       writeSecretStoreEntry({
         scope: team,
         name: "github-setup-token",
@@ -782,8 +796,8 @@ describe("secret store", () => {
         updatedBy: null,
         database,
       }),
-    ).toThrow(expect.objectContaining({ code: "SECRET_STORE_INVALID_NAME" }));
-    expect(() =>
+    ).rejects.toThrow(expect.objectContaining({ code: "SECRET_STORE_INVALID_NAME" }));
+    await expect(
       writeSecretStoreEntry({
         scope: team,
         name: "LARGE_SECRET",
@@ -792,13 +806,13 @@ describe("secret store", () => {
         updatedBy: null,
         database,
       }),
-    ).toThrow(expect.objectContaining({ code: "SECRET_STORE_VALUE_TOO_LARGE" }));
+    ).rejects.toThrow(expect.objectContaining({ code: "SECRET_STORE_VALUE_TOO_LARGE" }));
   });
 
   it.each(["*.example.com", "https://api.example.com", "api.example.com:443", "bad host"])(
     "rejects invalid allowed host %s at write time",
-    (allowedHost) => {
-      expect(() =>
+    async (allowedHost) => {
+      await expect(
         writeSecretStoreEntry({
           scope: team,
           name: "HOST_BOUND_SECRET",
@@ -808,15 +822,15 @@ describe("secret store", () => {
           updatedBy: null,
           database: createDatabaseOptions(),
         }),
-      ).toThrow(expect.objectContaining({ code: "SECRET_STORE_INVALID_ALLOWED_HOST" }));
+      ).rejects.toThrow(expect.objectContaining({ code: "SECRET_STORE_INVALID_ALLOWED_HOST" }));
     },
   );
 
-  it("rejects an empty secret value but keeps empty env values legal", () => {
+  it("rejects an empty secret value but keeps empty env values legal", async () => {
     const database = createDatabaseOptions();
     // A silently-empty secret (a failed `op read |` pipe) is undiagnosable later:
     // get refuses secret kinds and listings mask them, so reject it at the writer.
-    expect(() =>
+    await expect(
       writeSecretStoreEntry({
         scope: team,
         name: "EMPTY_SECRET",
@@ -825,9 +839,9 @@ describe("secret store", () => {
         updatedBy: null,
         database,
       }),
-    ).toThrow(expect.objectContaining({ code: "SECRET_STORE_VALUE_EMPTY" }));
+    ).rejects.toThrow(expect.objectContaining({ code: "SECRET_STORE_VALUE_EMPTY" }));
 
-    writeSecretStoreEntry({
+    await writeSecretStoreEntry({
       scope: team,
       name: "EMPTY_ENV",
       value: "",
@@ -835,14 +849,14 @@ describe("secret store", () => {
       updatedBy: null,
       database,
     });
-    const stored = readSecretStoreValue({ scope: team, name: "EMPTY_ENV", database });
+    const stored = await readSecretStoreValue({ scope: team, name: "EMPTY_ENV", database });
     expect(stored.ok && stored.value).toBe("");
   });
 
-  it("treats a missing lazy table as empty and preserves the current schema version", () => {
+  it("treats a missing lazy table as empty and preserves the current schema version", async () => {
     const database = createDatabaseOptions();
     openOpenClawStateDatabase(database);
-    closeOpenClawStateDatabaseForTest();
+    await closeOpenClawStateDatabaseAsync();
     const { DatabaseSync } = requireNodeSqlite();
     const before = new DatabaseSync(database.path);
     expect(before.prepare("PRAGMA user_version").get()).toEqual({
@@ -851,8 +865,10 @@ describe("secret store", () => {
     before.exec("DROP TABLE secret_store_entries;");
     before.close();
 
-    expect(listSecretStoreEntries({ scope: team, database })).toEqual([]);
-    expect(readSecretStoreValue({ scope: team, name: "MISSING_SECRET", database })).toMatchObject({
+    expect(await listSecretStoreEntries({ scope: team, database })).toEqual([]);
+    expect(
+      await readSecretStoreValue({ scope: team, name: "MISSING_SECRET", database }),
+    ).toMatchObject({
       ok: false,
       error: { code: "SECRET_STORE_NOT_FOUND" },
     });
@@ -864,7 +880,7 @@ describe("secret store", () => {
     ).toBeUndefined();
     stillMissing.close();
 
-    writeSecretStoreEntry({
+    await writeSecretStoreEntry({
       scope: team,
       name: "CREATED_SECRET",
       value: "created-after-lazy-ensure",
@@ -872,7 +888,7 @@ describe("secret store", () => {
       updatedBy: null,
       database,
     });
-    closeOpenClawStateDatabaseForTest();
+    await closeOpenClawStateDatabaseAsync();
     const after = new DatabaseSync(database.path, { readOnly: true });
     expect(after.prepare("PRAGMA user_version").get()).toEqual({
       user_version: OPENCLAW_STATE_SCHEMA_VERSION,

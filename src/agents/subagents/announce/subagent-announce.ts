@@ -115,21 +115,15 @@ export function hasUsableSessionEntry(entry: unknown): entry is Record<string, u
 }
 
 function stripAndClassifyReply(text: string): string | null {
-  let result = text;
-  let didStrip = false;
-  const hasLeadingSilentToken = startsWithSilentToken(result, SILENT_REPLY_TOKEN);
-  if (hasLeadingSilentToken) {
-    result = stripLeadingSilentToken(result, SILENT_REPLY_TOKEN);
-    didStrip = true;
+  const hasLeadingSilentToken = startsWithSilentToken(text, SILENT_REPLY_TOKEN);
+  if (!hasLeadingSilentToken && !text.toLowerCase().includes(SILENT_REPLY_TOKEN.toLowerCase())) {
+    return text;
   }
-  if (hasLeadingSilentToken || result.toLowerCase().includes(SILENT_REPLY_TOKEN.toLowerCase())) {
-    result = stripSilentToken(result, SILENT_REPLY_TOKEN);
-    didStrip = true;
-  }
-  if (didStrip && (!result.trim() || isSilentReplyText(result, SILENT_REPLY_TOKEN))) {
-    return null;
-  }
-  return result;
+  const result = stripSilentToken(
+    hasLeadingSilentToken ? stripLeadingSilentToken(text, SILENT_REPLY_TOKEN) : text,
+    SILENT_REPLY_TOKEN,
+  );
+  return !result || isSilentReplyText(result, SILENT_REPLY_TOKEN) ? null : result;
 }
 
 type SubagentAnnounceFlowParams = {

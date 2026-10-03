@@ -153,42 +153,28 @@ function isWindowsAbsolutePath(value: string): boolean {
   return /^(?:[A-Za-z]:[\\/]|\\\\)/u.test(value);
 }
 
-function normalizePathPrefix(value: string): string {
-  return isWindowsAbsolutePath(value) ? path.win32.resolve(value) : path.resolve(value);
-}
-
-function addPathPrefix(
-  prefixes: Map<string, PathRedactionPrefix>,
-  prefix: string,
-  label: string,
-  caseInsensitive: boolean,
-): void {
-  if (!prefixes.has(prefix)) {
-    prefixes.set(prefix, { prefix, label, caseInsensitive });
-  }
-}
-
-function addPathPrefixVariants(
-  prefixes: Map<string, PathRedactionPrefix>,
-  value: string | undefined,
-  label: string,
-): void {
-  if (!value) {
-    return;
-  }
-  const normalized = normalizePathPrefix(value);
-  const caseInsensitive = isWindowsAbsolutePath(normalized);
-  addPathPrefix(prefixes, normalized, label, caseInsensitive);
-  if (isWindowsAbsolutePath(normalized)) {
-    addPathPrefix(prefixes, normalized.replaceAll("\\", "/"), label, caseInsensitive);
-  }
-}
-
 function pathRedactionPrefixes(options: SupportRedactionContext): PathRedactionPrefix[] {
   const prefixes = new Map<string, PathRedactionPrefix>();
-  addPathPrefixVariants(prefixes, options.stateDir, "$OPENCLAW_STATE_DIR");
-  addPathPrefixVariants(prefixes, options.env.HOME, "~");
-  addPathPrefixVariants(prefixes, options.env.USERPROFILE, "~");
+  for (const [value, label] of [
+    [options.stateDir, "$OPENCLAW_STATE_DIR"],
+    [options.env.HOME, "~"],
+    [options.env.USERPROFILE, "~"],
+  ] as const) {
+    if (!value) {
+      continue;
+    }
+    const normalized = isWindowsAbsolutePath(value)
+      ? path.win32.resolve(value)
+      : path.resolve(value);
+    const caseInsensitive = isWindowsAbsolutePath(normalized);
+    for (const prefix of caseInsensitive
+      ? [normalized, normalized.replaceAll("\\", "/")]
+      : [normalized]) {
+      if (!prefixes.has(prefix)) {
+        prefixes.set(prefix, { prefix, label, caseInsensitive });
+      }
+    }
+  }
   return [...prefixes.values()].toSorted((a, b) => b.prefix.length - a.prefix.length);
 }
 
@@ -260,7 +246,7 @@ export function redactPathForSupport(
       }
     }
   }
-  return redactSensitiveTextForSupport(candidates[0] ?? file);
+  return redactSensitiveText(candidates[0] ?? file, { mode: "tools" });
 }
 
 // Win32 namespace markers ("\\?\" extended-length, "\\.\" device) can precede a known
@@ -322,7 +308,7 @@ export function redactTextForSupport(value: string): string {
     () => "<redacted-aws-secret-key>",
   );
   return (
-    redactSensitiveTextForSupport(credentialsRedacted)
+    redactSensitiveText(credentialsRedacted, { mode: "tools" })
       .replace(URL_USERINFO_RE, (_match, scheme: string, _username: string, password?: string) =>
         password ? `${scheme}<redacted>:<redacted>@` : `${scheme}<redacted>@`,
       )
@@ -339,10 +325,6 @@ export function redactTextForSupport(value: string): string {
       .replace(HANDLE_RE, "$1<redacted-handle>")
       .replace(LONG_DECIMAL_ID_RE, "<redacted-id>")
   );
-}
-
-function redactSensitiveTextForSupport(value: string): string {
-  return redactSensitiveText(value, { mode: "tools" });
 }
 
 export function redactSupportString(
@@ -374,17 +356,12 @@ export function redactSupportDiagnosticLine(
       .find((line) => line.trim()) ?? "",
   );
   const redacted = redactSupportString(first, context, { maxLength: Number.MAX_SAFE_INTEGER });
-  // Quoted paths have a known end. An unquoted path may contain spaces, so
-  // retain the diagnostic prefix and redact the rest rather than guess.
-  const paths = redacted
-    .replace(
-      /(["'`])(?:\$OPENCLAW_STATE_DIR|~[\\/]|[A-Za-z]:[\\/]|\/+|\\+)[^"'`]*\1/gu,
-      "[redacted-path]",
-    )
-    .replace(
-      /(?:file:\/\/|\$OPENCLAW_STATE_DIR|(?:^|(?<=[\s=(:[]))(?:~[\\/]|[A-Za-z]:[\\/]|\/+|\\+)).*/gu,
-      "[redacted-path]",
-    );
+  // Paths may contain spaces and quotes; neither can safely mark the end of private text.
+  // Retain the diagnostic prefix and redact the rest rather than guess.
+  const paths = redacted.replace(
+    /["'`]?(?:file:\/\/|\$OPENCLAW_STATE_DIR|(?:^|(?<=[\s=(:["'`]))(?:~[\\/]|[A-Za-z]:[\\/]|\/+|\\+)).*/gu,
+    "[redacted-path]",
+  );
   const commandRedacted = paths.replace(
     /\b(?:Command failed:|command (?:sh|cmd|powershell|bash)\b).*/giu,
     "[redacted-command]",
@@ -422,6 +399,12 @@ const PUBLIC_ERROR_CODES = new Set([
   "DEPTH_ZERO_SELF_SIGNED_CERT",
   "ERR_MODULE_NOT_FOUND",
   "ERR_PACKAGE_PATH_NOT_EXPORTED",
+  "ERR_SQLITE_ERROR",
+  "SQLITE_BUSY",
+  "SQLITE_LOCKED",
+  "SQLITE_READONLY",
+  "SQLITE_IOERR",
+  "SQLITE_FULL",
 ]);
 
 /** Error-code syntax alone cannot distinguish private identifiers from known errors. */
@@ -524,7 +507,7 @@ export function redactPublicSupportDiagnosticLine(
     .split(/[\r\n\u2028\u2029]/u)
     .map((entry) => redactSupportDiagnosticLine(entry, context))
     .join("\n");
-  const codes = (lines.match(/\b(?:E[A-Z0-9_]+)\b/gu) ?? []).filter((code) =>
+  const codes = (lines.match(/\b[A-Z][A-Z0-9_]+\b/gu) ?? []).filter((code) =>
     normalizeSupportDiagnosticErrorCode(code),
   );
   const causes = (

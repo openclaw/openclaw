@@ -1,5 +1,5 @@
 import type { SqliteWalHealth } from "../../infra/sqlite-wal-checkpoint.js";
-import type { SessionEntrySummary } from "./session-accessor.types.js";
+import type { SessionEntrySummary, TranscriptEvent } from "./session-accessor.types.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 export type {
   DeletedAgentSessionEntryPurgeParams,
@@ -28,6 +28,21 @@ export type SessionTranscriptContextVersion = {
   updatedAt: number | null;
 };
 
+export type SessionTranscriptBoundedActiveContext = {
+  activeLeafEntryId: string | null;
+  version: SessionTranscriptContextVersion;
+  opaqueParents: Map<string, string | null>;
+  parents: Map<string, string | null>;
+  firstKeptRanges: Map<string, { startIndex: number; endIndex: number }>;
+  persistedSuffixStartSeq: number;
+  boundaryCount: number;
+  events: TranscriptEvent[];
+  serializedBytes: number;
+  totalEvents: number;
+  transcriptMutationAt: number | null;
+  truncated: boolean;
+};
+
 export type CanonicalSessionValidationResult = {
   validatedRows: number;
   certifiedRows: number;
@@ -51,6 +66,7 @@ export type SqliteSessionReclamationDiagnostics = {
     | "maintenance-plan"
     | "maintenance-finalize"
     | "maintenance-statistics"
+    | "maintenance-age"
     | "maintenance-pages"
     | "cold-batch"
     | "cold-maintain"
@@ -183,17 +199,6 @@ export type {
 export type LatestTranscriptAssistantMessage = {
   id?: string;
   message: unknown;
-};
-
-type SessionEntryBatchProjectionMutation = {
-  entry: SessionEntry;
-  previousSessionKeys?: readonly string[];
-  sessionKey: string;
-};
-
-export type SessionEntryBatchProjectionUpdate<T> = {
-  mutations?: Iterable<SessionEntryBatchProjectionMutation>;
-  result: T;
 };
 
 export type {

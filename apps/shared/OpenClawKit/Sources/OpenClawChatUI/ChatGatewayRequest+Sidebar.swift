@@ -49,6 +49,7 @@ public struct OpenClawChatSidebarQuery: Equatable, Sendable {
 
 public protocol OpenClawChatSidebarTransport: OpenClawChatTransport {
     func acquireSidebarRequest() async throws -> @Sendable (OpenClawChatGatewayRequest) async throws -> Data
+    func loadSidebarAgentAvatar(_ source: String) async -> Data?
 }
 
 extension OpenClawChatGatewayRequests {

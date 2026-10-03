@@ -140,8 +140,8 @@ test.each(["channel-only", "slow-warning"])("attributes %s operations", async (m
     const waitMs = warn ? 1_100 : 0;
     setDiagnosticsEnabledForProcess(warn);
     vi.mocked(sessionLog.isEnabled).mockReturnValue(warn);
-    vi.spyOn(owner, "prepareSelection").mockImplementation(async () => {
-      await ensure();
+    vi.spyOn(owner, "prepareSelection").mockImplementation(async (...args) => {
+      await ensure(...args);
       clock += waitMs;
     });
     const presentation = controlProjectionClock();

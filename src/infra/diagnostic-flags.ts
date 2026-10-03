@@ -18,14 +18,18 @@ function resolveDiagnosticFlags(
   return normalizeUniqueStringEntriesLower([...configFlags, ...envFlags.flags]);
 }
 
-/** Matches one diagnostic flag against exact, wildcard, and namespace-enabled flags. */
-function matchesDiagnosticFlag(flag: string, enabledFlags: string[]): boolean {
+/** Returns whether a diagnostic flag is enabled after config/env resolution. */
+export function isDiagnosticFlagEnabled(
+  flag: string,
+  cfg?: OpenClawConfig,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  const enabledFlags = resolveDiagnosticFlags(cfg, env);
   const target = normalizeLowercaseStringOrEmpty(flag);
   if (!target) {
     return false;
   }
-  for (const raw of enabledFlags) {
-    const enabled = normalizeLowercaseStringOrEmpty(raw);
+  for (const enabled of enabledFlags) {
     if (enabled === "*" || enabled === "all") {
       return true;
     }
@@ -46,13 +50,4 @@ function matchesDiagnosticFlag(flag: string, enabledFlags: string[]): boolean {
     }
   }
   return false;
-}
-
-/** Returns whether a diagnostic flag is enabled after config/env resolution. */
-export function isDiagnosticFlagEnabled(
-  flag: string,
-  cfg?: OpenClawConfig,
-  env: NodeJS.ProcessEnv = process.env,
-): boolean {
-  return matchesDiagnosticFlag(flag, resolveDiagnosticFlags(cfg, env));
 }

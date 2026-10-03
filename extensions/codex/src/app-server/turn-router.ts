@@ -55,17 +55,10 @@ type RouteOptions = Partial<CodexThreadRouteHandlers> & {
   releaseOn?: AbortSignal;
 };
 
-export type CodexAppServerTurnRouter = {
-  withMcpToolCall: <T>(options: CodexMcpToolCallOptions, run: () => Promise<T>) => Promise<T>;
-  reserveThread: (options: RouteOptions) => CodexThreadRouteReservation;
-  watchNativeTurnCompletion: (options: {
-    threadId: string;
-    turnId: string;
-    timeoutMs: number;
-    signal?: AbortSignal;
-    onStarted?: () => void;
-  }) => CodexNativeTurnCompletionWatch;
-};
+export type CodexAppServerTurnRouter = Pick<
+  ClientTurnRouter,
+  "withMcpToolCall" | "reserveThread" | "watchNativeTurnCompletion"
+>;
 
 type CodexNativeTurnCompletionWatch = {
   completion: Promise<boolean>;
@@ -127,7 +120,7 @@ export function getCodexAppServerTurnRouter(
   return router;
 }
 
-class ClientTurnRouter implements CodexAppServerTurnRouter {
+class ClientTurnRouter {
   private readonly routes = new Map<string, Route>();
   private readonly mcpRequests = new CodexMcpRequestRoutes();
   private readonly globalWarnings: CodexServerNotification[] = [];

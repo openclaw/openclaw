@@ -97,7 +97,6 @@ export class GatewayPlugin extends Plugin implements GatewayPluginContract {
     this.options = {
       ...options,
       reconnect: { maxAttempts: 50, ...options.reconnect },
-      autoInteractions: options.autoInteractions ?? true,
       intents: options.intents ?? 0,
     };
     this.gatewayInfo = gatewayInfo;
@@ -394,9 +393,6 @@ export class GatewayPlugin extends Plugin implements GatewayPluginContract {
         ? payload.d
         : mapGatewayDispatchData(this.client, payload.t, payload.d);
     await this.client.dispatchGatewayEvent(payload.t, data);
-    if (payload.t === GatewayDispatchEvents.InteractionCreate && this.options.autoInteractions) {
-      await this.client.handleInteraction(payload.d);
-    }
   }
 
   private resetSessionState(): void {

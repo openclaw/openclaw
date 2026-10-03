@@ -28,50 +28,13 @@ const meta = {
   lastActivityAt: 100,
 };
 
-it("Doctor retains conflicting aliases while moving the exact raw winner without changing its binding", async () => {
-  await withOpenClawTestState({ scenario: "empty" }, async ({ env }) => {
-    replaceSessionEntrySync({ agentId: "harness", sessionKey: key, env }, entry);
-    writeAcpSessionMetaForMigration({
-      env,
-      sessionKey: key,
-      lifecycleRevision: entry.lifecycleRevision,
-      meta,
-      now: () => 100,
-    });
-    writeAcpSessionMetaForMigration({
-      env,
-      sessionKey: alias,
-      lifecycleRevision: entry.lifecycleRevision,
-      meta: { ...meta, runtimeSessionName: "conflicting-alias", lastActivityAt: 200 },
-      now: () => 200,
-    });
-    const { db } = stateDatabase.openOpenClawStateDatabase({ env });
-    const before = db.prepare("SELECT * FROM acp_sessions ORDER BY session_key").all();
-    const result = await repairAcpSessionMetaKeysForDoctor({
-      cfg,
-      env,
-      apply: true,
-      authority: { assertCurrent() {} },
-    });
-    expect(result).toEqual({
-      found: 1,
-      repaired: 1,
-      scannedRows: 2,
-      warnings: [expect.stringContaining("conflicting payloads retained")],
-    });
-    expect(db.prepare("SELECT * FROM acp_sessions ORDER BY session_key").all()).toEqual([
-      {
-        ...before.find((row) => row.session_key === key),
-        session_key: buildAcpDatabaseSessionKey(key, "harness"),
-      },
-      before.find((row) => row.session_key === alias),
-    ]);
-  });
-});
-
-it.each([undefined, entry.sessionId])(
-  "Doctor preserves an ACP alias payload and %s binding through repair and rerun",
-  async (binding) => {
+it.each([
+  { source: key, binding: entry.lifecycleRevision, conflicting: true },
+  { source: alias, binding: undefined, conflicting: false },
+  { source: alias, binding: entry.sessionId, conflicting: false },
+])(
+  "Doctor preserves $source with binding=$binding and conflicting=$conflicting aliases",
+  async ({ source, binding, conflicting }) => {
     await withOpenClawTestState({ scenario: "empty" }, async ({ env, stateDir }) => {
       expect(await repairAcpSessionMetaKeysForDoctor({ cfg, env, apply: false })).toEqual({
         found: 0,
@@ -83,20 +46,30 @@ it.each([undefined, entry.sessionId])(
       replaceSessionEntrySync({ agentId: "harness", sessionKey: key, env }, entry);
       writeAcpSessionMetaForMigration({
         env,
-        sessionKey: alias,
+        sessionKey: source,
         lifecycleRevision: binding,
         meta,
         now: () => 100,
       });
+      if (conflicting) {
+        writeAcpSessionMetaForMigration({
+          env,
+          sessionKey: alias,
+          lifecycleRevision: entry.lifecycleRevision,
+          meta: { ...meta, runtimeSessionName: "conflicting-alias", lastActivityAt: 200 },
+          now: () => 200,
+        });
+      }
       const { db } = stateDatabase.openOpenClawStateDatabase({ env });
       const readRows = () => db.prepare("SELECT * FROM acp_sessions ORDER BY session_key").all();
       const before = readRows();
-      expect(await repairAcpSessionMetaKeysForDoctor({ cfg, env, apply: false })).toEqual({
+      const report = {
         found: 1,
         repaired: 0,
-        scannedRows: 1,
-        warnings: [],
-      });
+        scannedRows: conflicting ? 2 : 1,
+        warnings: conflicting ? [expect.stringContaining("conflicting payloads retained")] : [],
+      };
+      expect(await repairAcpSessionMetaKeysForDoctor({ cfg, env, apply: false })).toEqual(report);
       expect(readRows()).toEqual(before);
       await expect(repairAcpSessionMetaKeysForDoctor({ cfg, env, apply: true })).rejects.toThrow(
         "maintenance authority",
@@ -110,27 +83,28 @@ it.each([undefined, entry.sessionId])(
           run: async (authority) => {
             expect(
               await repairAcpSessionMetaKeysForDoctor({ cfg, env, apply: true, authority }),
-            ).toEqual({
-              found: 1,
-              repaired: 1,
-              scannedRows: 1,
-              warnings: [],
-            });
-            expect(
-              await repairAcpSessionMetaKeysForDoctor({ cfg, env, apply: true, authority }),
-            ).toEqual({
-              found: 0,
-              repaired: 0,
-              scannedRows: 1,
-              warnings: [],
-            });
+            ).toEqual({ ...report, repaired: 1 });
+            if (!conflicting) {
+              expect(
+                await repairAcpSessionMetaKeysForDoctor({ cfg, env, apply: true, authority }),
+              ).toEqual({
+                found: 0,
+                repaired: 0,
+                scannedRows: 1,
+                warnings: [],
+              });
+            }
           },
         });
       } finally {
         unsubscribe();
       }
       expect(readRows()).toEqual([
-        { ...before[0], session_key: buildAcpDatabaseSessionKey(key, "harness") },
+        {
+          ...before.find((row) => row.session_key === source),
+          session_key: buildAcpDatabaseSessionKey(key, "harness"),
+        },
+        ...before.filter((row) => row.session_key !== source),
       ]);
       expect(changes).toEqual([{ agentId: "harness", sessionKey: key }]);
     });

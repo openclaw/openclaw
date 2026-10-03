@@ -1,4 +1,5 @@
 import { KeyedAsyncQueue } from "../plugin-sdk/keyed-async-queue.js";
+import { createDeferredCore } from "../shared/deferred.js";
 
 const browserActLock = new KeyedAsyncQueue();
 const BROWSER_ACT_TIMEOUT_MESSAGE =
@@ -17,10 +18,7 @@ export async function runMeetingBrowserAct<T>(params: {
     throw new Error(BROWSER_ACT_TIMEOUT_MESSAGE);
   }
   let acquired = false;
-  let markAcquired: (() => void) | undefined;
-  const acquisition = new Promise<void>((resolve) => {
-    markAcquired = resolve;
-  });
+  const { promise: acquisition, resolve: markAcquired } = createDeferredCore();
   let timeout: ReturnType<typeof setTimeout> | undefined;
   const queued = browserActLock.enqueue(params.targetId, async () => {
     const remainingMs = Math.floor(params.deadline - performance.now());
@@ -29,7 +27,7 @@ export async function runMeetingBrowserAct<T>(params: {
     }
     acquired = true;
     clearTimeout(timeout);
-    markAcquired?.();
+    markAcquired();
     return await params.operation(remainingMs);
   });
   // The acquisition race may return before this queued no-op reaches the lock.

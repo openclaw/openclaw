@@ -28,6 +28,7 @@ import { resolveRunnerMatrix } from "../../scripts/lib/cross-os-release-checks/c
 import { runManagedCommand } from "../../scripts/lib/managed-child-process.mts";
 import { parseUpgradeSurvivorScenarios } from "../../scripts/lib/upgrade-survivor-policy.mjs";
 import { createReleaseWorkflowMatrixPlan } from "../../scripts/plan-release-workflow-matrix.mjs";
+import { selectLiveShardFiles } from "../../scripts/test-live-shard.mts";
 import { createBoundedChildOutput } from "../helpers/bounded-child-output.js";
 import { copyTreeCloseOnExec } from "../helpers/close-on-exec-copy.js";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
@@ -2782,6 +2783,7 @@ type Workflow = {
     schedule?: Array<{ cron?: string }>;
     workflow_call?: {
       inputs?: Record<string, unknown>;
+      secrets?: Record<string, unknown>;
     };
     workflow_dispatch?: {
       inputs?: Record<string, unknown>;
@@ -8381,6 +8383,18 @@ test "$package_manager" = "pnpm@12.1.0"
     expect(JSON.stringify(npm12Job)).not.toContain("secrets.");
   });
 
+  it("checks the installed package tree budget immediately after npm 12 installation", () => {
+    const job = workflowJob(PACKAGE_ACCEPTANCE_WORKFLOW, "npm_12_install_sh");
+    const install = workflowStep(job, "Run install.sh with npm 12");
+    const budget = workflowStep(job, "Check installed package tree budget");
+    const steps = job.steps ?? [];
+    expect(steps.indexOf(budget)).toBe(steps.indexOf(install) + 1);
+    expect(budget.shell).toBe("bash");
+    expect(budget.run).toBe(
+      'set -euo pipefail\nnode scripts/check-openclaw-installed-package-budget.mts "$RUNNER_TEMP/openclaw-npm12-prefix/lib/node_modules/openclaw"\n',
+    );
+  });
+
   it("binds npm 12 installation to the supplied prerelease dependency artifact", () => {
     const job = workflowJob(PACKAGE_ACCEPTANCE_WORKFLOW, "npm_12_install_sh");
     const validate = workflowStep(job, "Validate prerelease plugin registry artifact identity");
@@ -10631,7 +10645,17 @@ describe("package artifact reuse", () => {
     expect(dockerRows).toContainEqual(
       expect.objectContaining({ suite_id: "live-gateway-docker", timeout_minutes: 40 }),
     );
-    expect(workflow).toContain("suite_id: native-live-extensions-a-k");
+    expect(
+      workflowMatrixEntry(
+        LIVE_E2E_WORKFLOW,
+        "validate_live_media_provider_suites",
+        "native-live-extensions-a-k",
+      ),
+    ).toMatchObject({
+      command:
+        "OPENCLAW_LIVE_ANTHROPIC_COMPACTION=1 node .release-harness/scripts/test-live-shard.mjs native-live-extensions-a-k",
+      profiles: "full",
+    });
     expect(workflow).toContain("suite_id: native-live-extensions-l-n");
     expect(workflow).toContain("suite_id: native-live-extensions-moonshot");
     expect(workflow).toContain("suite_id: native-live-extensions-openai");
@@ -11198,18 +11222,83 @@ describe("package artifact reuse", () => {
     expect(
       workflowJob(SCHEDULED_LIVE_CHECKS_WORKFLOW, "weekly_upgrade_survivors").secrets,
     ).toBeUndefined();
+    for (const key of ["KIE_API_KEY", "NOVITA_API_KEY", "PIXVERSE_API_KEY"]) {
+      expect(readWorkflow(LIVE_E2E_WORKFLOW).on?.workflow_call?.secrets?.[key]).toEqual({
+        required: false,
+      });
+      for (const job of [
+        workflowJob(RELEASE_CHECKS_WORKFLOW, "live_repo_e2e_release_checks"),
+        workflowJob(SCHEDULED_LIVE_CHECKS_WORKFLOW, "live_and_openwebui_checks"),
+      ]) {
+        expect(job.secrets, key).toMatchObject({ [key]: "${{ secrets." + key + " }}" });
+      }
+      expect(
+        workflowJob(LIVE_E2E_WORKFLOW, "validate_live_media_provider_suites").env?.[key],
+        key,
+      ).toBe("${{ secrets." + key + " }}");
+    }
+    const nativeCredentialConsumers: Record<string, string[]> = {
+      "extensions/azure-speech/azure-speech.live.test.ts": [
+        "AZURE_SPEECH_KEY",
+        "AZURE_SPEECH_REGION",
+      ],
+      "extensions/baseten/baseten.live.test.ts": ["BASETEN_API_KEY"],
+      "extensions/cloudflare/cloudflare.live.test.ts": [
+        "OPENCLAW_LIVE_R2_ACCOUNT_ID",
+        "OPENCLAW_LIVE_R2_BUCKET",
+        "OPENCLAW_LIVE_R2_ACCESS_KEY_ID",
+        "OPENCLAW_LIVE_R2_SECRET_ACCESS_KEY",
+      ],
+      "extensions/elevenlabs/elevenlabs.live.test.ts": ["ELEVENLABS_API_KEY"],
+      "extensions/featherless/featherless.live.test.ts": ["FEATHERLESS_API_KEY"],
+      "extensions/github-copilot/connection-bound-ids.live.test.ts": [
+        "OPENCLAW_LIVE_GITHUB_COPILOT_TOKEN",
+      ],
+      "extensions/google-meet/google-meet.live.test.ts": [
+        "OPENCLAW_GOOGLE_MEET_LIVE_MEETING",
+        "OPENCLAW_GOOGLE_MEET_CLIENT_ID",
+        "OPENCLAW_GOOGLE_MEET_CLIENT_SECRET",
+        "OPENCLAW_GOOGLE_MEET_REFRESH_TOKEN",
+      ],
+      "extensions/gradium/gradium.live.test.ts": ["GRADIUM_API_KEY"],
+      "extensions/inworld/inworld.live.test.ts": ["INWORLD_API_KEY"],
+      "extensions/discord/src/internal/live-smoke.live.test.ts": ["DISCORD_BOT_TOKEN"],
+      "extensions/meta/meta.live.test.ts": ["MODEL_API_KEY"],
+      "extensions/mistral/mistral.live.test.ts": ["ELEVENLABS_API_KEY"],
+      "extensions/volcengine/tts.live.test.ts": ["VOLCENGINE_TTS_API_KEY"],
+    };
+    const nativeCredentialKeys = [...new Set(Object.values(nativeCredentialConsumers).flat())];
+    const hydratedValues = {
+      DEEPSEEK_API_KEY: "deepseek-sentinel",
+      DEEPINFRA_API_KEY: "deepinfra-sentinel",
+      KIE_API_KEY: "kie-sentinel",
+      NOVITA_API_KEY: "novita-sentinel",
+      PIXVERSE_API_KEY: "pixverse-sentinel",
+      ...Object.fromEntries(
+        nativeCredentialKeys
+          .filter((key) => key !== "DISCORD_BOT_TOKEN")
+          .map((key) => [key, key + "-native 'literal' $value"]),
+      ),
+    };
     const hydrationHome = tempDirs.make("live-auth-hydration-");
     const hydrated = spawnSync(
       "bash",
       [
         "-euc",
-        `bash "$1" "$2"
-unset DEEPSEEK_API_KEY DEEPINFRA_API_KEY
-source "$2"
-printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
+        [
+          'profile_path="$2"',
+          'bash "$1" "$profile_path"',
+          "shift 2",
+          'for key in "$@"; do unset "$key"; done',
+          "unset DISCORD_BOT_TOKEN OPENCLAW_DISCORD_SMOKE_BOT_TOKEN",
+          'source "$profile_path"',
+          'for key in "$@"; do printf \'%s\\n\' "${!key}"; done',
+          '[[ -z "${DISCORD_BOT_TOKEN+x}" && -z "${OPENCLAW_DISCORD_SMOKE_BOT_TOKEN+x}" ]]',
+        ].join("\n"),
         "hydrate-live-auth",
         CI_HYDRATE_LIVE_AUTH_SCRIPT,
         resolve(hydrationHome, "live.profile"),
+        ...Object.keys(hydratedValues),
       ],
       {
         encoding: "utf8",
@@ -11217,13 +11306,70 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
         env: {
           PATH: process.env.PATH,
           HOME: hydrationHome,
-          DEEPSEEK_API_KEY: "deepseek-sentinel",
-          DEEPINFRA_API_KEY: "deepinfra-sentinel",
+          ...hydratedValues,
+          DISCORD_BOT_TOKEN: "must-not-hydrate-discord",
+          OPENCLAW_DISCORD_SMOKE_BOT_TOKEN: "must-not-hydrate-smoke",
         },
       },
     );
     expect(hydrated.status, hydrated.stderr).toBe(0);
-    expect(hydrated.stdout).toBe("deepseek-sentinel\ndeepinfra-sentinel\n");
+    expect(hydrated.stdout).toBe(Object.values(hydratedValues).join("\n") + "\n");
+    const nativeRows = [
+      "validate_live_provider_suites",
+      "validate_live_media_provider_suites",
+    ].flatMap((jobName) => {
+      const nativeJob = workflowJob(LIVE_E2E_WORKFLOW, jobName);
+      const rows = nativeJob.strategy?.matrix?.include ?? [];
+      expect(rows.length).toBeGreaterThan(0);
+      return rows.map((row) => {
+        const shard = row.command?.match(/scripts\/test-live-shard\.mjs ([a-z-]+)/u)?.[1];
+        if (!shard) {
+          throw new Error("Missing live shard command for " + row.suite_id);
+        }
+        const selectedFiles = selectLiveShardFiles(shard, Object.keys(nativeCredentialConsumers));
+        return {
+          jobName,
+          env: nativeJob.env,
+          row,
+          requiredKeys: new Set(
+            selectedFiles.flatMap((file) => nativeCredentialConsumers[file] ?? []),
+          ),
+        };
+      });
+    });
+    for (const key of nativeCredentialKeys) {
+      const secretKey = key === "DISCORD_BOT_TOKEN" ? "OPENCLAW_DISCORD_SMOKE_BOT_TOKEN" : key;
+      const sentinel = key + "-scoped-sentinel";
+      expect(readWorkflow(LIVE_E2E_WORKFLOW).on?.workflow_call?.secrets?.[secretKey]).toEqual({
+        required: false,
+      });
+      for (const job of [
+        workflowJob(RELEASE_CHECKS_WORKFLOW, "live_repo_e2e_release_checks"),
+        workflowJob(SCHEDULED_LIVE_CHECKS_WORKFLOW, "live_and_openwebui_checks"),
+      ]) {
+        expect(job.secrets, secretKey).toMatchObject({
+          [secretKey]: "${{ secrets." + secretKey + " }}",
+        });
+      }
+      expect(
+        nativeRows.some(({ requiredKeys }) => requiredKeys.has(key)),
+        key,
+      ).toBe(true);
+      for (const { jobName, env, row, requiredKeys } of nativeRows) {
+        const value = env?.[key]
+          ? evaluateWorkflowExpression(env[key], {
+              eventName: "workflow_dispatch",
+              repository: "openclaw/openclaw",
+              runAttempt: 1,
+              matrix: row,
+              secrets: { [secretKey]: sentinel },
+            })
+          : "";
+        expect
+          .soft(value, key + ":" + jobName + ":" + row.suite_id)
+          .toBe(requiredKeys.has(key) ? sentinel : "");
+      }
+    }
     expect(reusableWorkflow).toContain("FACTORY_API_KEY:\n        required: false");
     expect(packageAcceptanceWorkflow).toContain("FACTORY_API_KEY:\n        required: false");
     expectTextToIncludeAll(reusableWorkflow, [

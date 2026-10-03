@@ -430,7 +430,7 @@ describe.skipIf(process.platform === "win32")("Doctor native repair authority or
         const tokenRef = persisted.gateway?.auth?.token;
         const storedToken =
           typeof tokenRef === "object" && tokenRef.source === "store"
-            ? readSecretStoreValue({ scope: { kind: "team" }, name: tokenRef.id })
+            ? await readSecretStoreValue({ scope: { kind: "team" }, name: tokenRef.id })
             : undefined;
         const diagnostics = [...edges.note.mock.calls.map(([message]) => message), ...errors].join(
           "\n",

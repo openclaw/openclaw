@@ -417,7 +417,12 @@ describe("session deletion and native owner state", () => {
               deleteWindows ? { removedSessionKeys: [sessionKey] } : { deleted: true },
             );
           }
-          expect.soft(counter.counts.inventory).toBeGreaterThan(0);
+          if (deleteWindows) {
+            // Admitted schema facts already own the node artifact inventory.
+            expect.soft(counter.counts.inventory).toBe(0);
+          } else {
+            expect.soft(counter.counts.inventory).toBeGreaterThan(0);
+          }
           // Successful public deletion also inventories board cleanup after the node artifacts.
           const inventoryBudget = !deleteWindows && !rejectSuggestions ? 2 : 1;
           expect.soft(counter.counts.inventory).toBeLessThanOrEqual(inventoryBudget);

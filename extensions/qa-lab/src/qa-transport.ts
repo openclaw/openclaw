@@ -1,9 +1,6 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
-import type { QaRunnerCliRegistration } from "openclaw/plugin-sdk/qa-runner-runtime";
-import { QaSuiteInfraError } from "./errors.js";
-import { extractQaFailureReplyText } from "./reply-failure.js";
 import type {
   QaBusEditMessageInput,
   QaBusEvent,
@@ -14,7 +11,10 @@ import type {
   QaBusSearchMessagesInput,
   QaBusStateSnapshot,
   QaBusWaitForInput,
-} from "./runtime-api.js";
+} from "openclaw/plugin-sdk/qa-channel-protocol";
+import type { QaRunnerCliRegistration } from "openclaw/plugin-sdk/qa-runner-runtime";
+import { QaSuiteInfraError } from "./errors.js";
+import { extractQaFailureReplyText } from "./reply-failure.js";
 
 type QaTransportAdapterDefinition = Awaited<
   ReturnType<NonNullable<QaRunnerCliRegistration["adapterFactory"]>["create"]>

@@ -5,6 +5,7 @@ import {
   createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import type {
   RealtimeVoiceBridge,
   RealtimeVoiceBridgeCreateRequest,
@@ -156,6 +157,7 @@ describe("voice-call realtime route ownership", () => {
       } as OpenClawConfig;
 
       runtime = await createVoiceCallRuntime({
+        scheduler: createTestPluginServiceScheduler(),
         config,
         coreConfig: fullConfig,
         fullConfig,

@@ -1,6 +1,7 @@
 import { performance } from "node:perf_hooks";
 import { isMainThread, threadId } from "node:worker_threads";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { tryResolveCronJobEffectiveAgentId } from "../agent-id.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
@@ -263,13 +264,14 @@ export async function listPage(
             // In-process visibility must share the sorted snapshot and its revision.
             return !matchesJob || matchesJob(job);
           });
-          // Recheck visibility on every request; only sorting and full-result hashing
-          // share the owner's prepared snapshot. Passive readers still reload/repair.
-          const storeRevision = getCronJobsStoreRevision(state.deps.storePath);
-          let snapshot = state.schedulerStarted ? state.listPageSnapshot : undefined;
+          // Recheck visibility per request; passive readers still reload and repair.
+          // Empty visibility prepasses must not evict the prepared nonempty list.
+          const revision = getCronJobsStoreRevision(state.deps.storePath);
+          const cached = state.schedulerStarted ? state.listPageSnapshot : undefined;
+          let snapshot = cached;
           if (
             !snapshot ||
-            snapshot.storeRevision !== storeRevision ||
+            snapshot.storeRevision !== revision ||
             snapshot.sortBy !== sortBy ||
             snapshot.sortDir !== sortDir ||
             snapshot.filteredJobs.length !== filtered.length ||
@@ -277,23 +279,34 @@ export async function listPage(
           ) {
             const jobs = sortCronJobs([...filtered], sortBy, sortDir);
             snapshot = {
-              storeRevision,
+              storeRevision: revision,
               filteredJobs: filtered,
               sortBy,
               sortDir,
               jobs,
+              readJobs:
+                cached?.storeRevision === revision
+                  ? cached.readJobs
+                  : new WeakMap<CronJob, CronJob>(),
               snapshotRevision: resolveCronListSnapshotRevision(jobs),
             };
-            if (state.schedulerStarted) {
+            if (state.schedulerStarted && (jobs.length > 0 || cached?.storeRevision !== revision)) {
               state.listPageSnapshot = snapshot;
             }
           }
-          const { jobs: sortedJobs, snapshotRevision } = snapshot;
+          const { jobs: sortedJobs, readJobs, snapshotRevision } = snapshot;
           const total = sortedJobs.length;
           const offset = Math.max(0, Math.min(total, Math.floor(opts?.offset ?? 0)));
           const defaultLimit = total === 0 ? 50 : total;
           const limit = Math.max(1, Math.min(200, Math.floor(opts?.limit ?? defaultLimit)));
-          const jobs = structuredClone(sortedJobs.slice(offset, offset + limit));
+          const jobs = sortedJobs.slice(offset, offset + limit).map((job) => {
+            let frozenJob = readJobs.get(job);
+            if (!frozenJob) {
+              frozenJob = freezeJsonSnapshot(structuredClone(job));
+              readJobs.set(job, frozenJob);
+            }
+            return frozenJob;
+          });
           const nextOffset = offset + jobs.length;
           return (result = {
             jobs,

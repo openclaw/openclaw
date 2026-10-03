@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
@@ -21,8 +21,10 @@ import { createPackageActivationLifetimeFixture } from "./package-update-activat
 import { packageActivationRuntimeForTest } from "./package-update-activation-runtime.test-support.js";
 import { assertNoPendingPackageActivation } from "./package-update-activation.js";
 import * as packageFilesystem from "./package-update-filesystem.js";
+import { interceptPackageFileHashes } from "./package-update-integrity-hasher.test-support.js";
 import { createNpmTarget, writePackageRoot } from "./package-update-steps.test-support.js";
-import { swapStagedPackageInstall, type PackageUpdateTransaction } from "./package-update-swap.js";
+import type { PackageUpdateTransaction } from "./package-update-swap-contract.js";
+import { swapStagedPackageInstall } from "./package-update-swap.js";
 import { createPackageSwapFixture } from "./package-update-swap.test-support.js";
 import * as snapshot from "./sqlite-snapshot.js";
 import { resolveUpdateInstallRoot } from "./update-install-root.js";
@@ -99,16 +101,15 @@ it.skipIf(process.platform === "win32").each(["owned", "replacement"] as const)(
         "candidate bytes",
       );
       const reads = { previous: 0, candidate: 0 };
-      const open = fsp.open.bind(fsp);
-      vi.spyOn(fsp, "open").mockImplementation((...args) => {
-        const name = path.basename(String(args[0]));
+      interceptPackageFileHashes((file, _stat, next) => {
+        const name = path.basename(file);
         if (name === "previous.payload") {
           reads.previous++;
         }
         if (name === "candidate.payload") {
           reads.candidate++;
         }
-        return open(...args);
+        return next();
       });
       await withUpdateCommandExecutor(randomUUID(), async (executor) => {
         const fence = await executor.enter(f.packageRoot);
@@ -218,13 +219,14 @@ it.skipIf(process.platform === "win32").each(["activation", "publication", "reti
           ? Promise.resolve(unchanged)
           : lstat(...args),
       );
-      const open = fsp.open.bind(fsp);
-      vi.spyOn(fsp, "open").mockImplementation(async (...args) => {
-        const handle = await open(...args);
-        if (path.basename(String(args[0])) === name) {
-          vi.spyOn(handle, "stat").mockResolvedValue(unchanged);
+      let changedBytesRead = false;
+      interceptPackageFileHashes(async (file, _stat, next) => {
+        if (path.basename(file) === name) {
+          const contents = fs.readFileSync(file);
+          changedBytesRead ||= contents.toString() === "modified bytes";
+          return createHash("sha256").update(contents).digest("hex");
         }
-        return handle;
+        return next();
       });
       const anchor = resolvePackageActivationAnchor(f.packageRoot);
       const change = (directory: string) =>
@@ -265,6 +267,7 @@ it.skipIf(process.platform === "win32").each(["activation", "publication", "reti
           expect(result.status).toBe("failed");
           expect(result.step.stderrTail).toContain("Package publication object changed");
         }
+        expect(changedBytesRead).toBe(true);
         if (boundary === "activation") {
           expect(packageActivationIdentity(f.packageRoot, true)).toBe(previousIdentity);
           expect(fs.readFileSync(f.launcher, "utf8")).toBe("old launcher\n");

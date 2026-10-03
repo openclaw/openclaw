@@ -17,7 +17,6 @@ import {
   hasSensitiveConfigData,
   hintForPath,
   pathKey as configPathKey,
-  redactedPlaceholder,
   type JsonSchema,
 } from "./config-form.shared.ts";
 import { renderSettingsDefaultDescription, renderSettingsSegmented } from "./settings-ui.ts";
@@ -441,7 +440,7 @@ export function renderJsonTextareaControl(params: {
       aria-label=${params.ariaLabel}
       aria-describedby=${describedBy || nothing}
       aria-invalid="false"
-      placeholder=${sensitiveState.isRedacted ? redactedPlaceholder() : t("configForm.jsonValue")}
+      placeholder=${sensitiveState.isRedacted ? t("configForm.redactedPlaceholder") : t("configForm.jsonValue")}
       rows=${params.rows}
       .value=${renderedFallback}
       ?disabled=${disabled}

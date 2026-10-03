@@ -40,27 +40,46 @@ describe("persisted assistant transcript matching", () => {
     return payload;
   };
 
+  const answer = {
+    id: "answer",
+    message: { role: "assistant", idempotencyKey: "wanted", content: "complete answer" },
+  };
+  const encodedCases = [
+    { key: "a\u0000b", content: "answer", compress: false },
+    { key: "\ud800", content: "answer", compress: false },
+    { key: "wanted", content: "compressed answer ".repeat(256), compress: true },
+  ].map(({ key, content, compress }) => {
+    const message = { role: "assistant", idempotencyKey: key, content };
+    const event = compress ? { id: "compressed", message } : { message };
+    return {
+      name: compress ? "compressed payload" : `Unicode ${JSON.stringify(key)}`,
+      json: JSON.stringify(event),
+      event,
+      compress,
+    };
+  });
   it.each([
     {
       name: "duplicate root message envelopes",
       json: '{"id":"answer","message":{"role":"user","idempotencyKey":"other"},"message":{"role":"assistant","idempotencyKey":"wanted","content":"complete answer"}}',
+      event: answer,
+      compress: false,
     },
     {
       name: "duplicate nested roles and idempotency keys",
       json: '{"id":"answer","message":{"role":"user","role":"assistant","idempotencyKey":"other","idempotencyKey":"wanted","content":"complete answer"}}',
+      event: answer,
+      compress: false,
     },
-    {
-      name: "unindexed rows without an event type",
-      json: '{"id":"answer","message":{"role":"assistant","idempotencyKey":"wanted","content":"complete answer"}}',
-    },
-  ])("retains JavaScript matching for $name", ({ json }) => {
-    insert(0, json);
-    expect(findAssistantTranscriptEventInDatabase({ db }, sessionId, "wanted")).toEqual({
-      event: {
-        id: "answer",
-        message: { role: "assistant", idempotencyKey: "wanted", content: "complete answer" },
-      },
-    });
+    ...encodedCases,
+  ])("retains complete JavaScript matches for $name", ({ json, event, compress }) => {
+    const payload = insert(0, json, compress);
+    if (compress) {
+      expect(payload.event_zstd).not.toBeNull();
+    }
+    expect(
+      findAssistantTranscriptEventInDatabase({ db }, sessionId, event.message.idempotencyKey),
+    ).toEqual({ event });
     expect(findAssistantTranscriptEventInDatabase({ db }, sessionId, "other")).toBeUndefined();
   });
 
@@ -110,26 +129,5 @@ describe("persisted assistant transcript matching", () => {
     expect(findAssistantTranscriptEventInDatabase({ db }, sessionId, "wanted")).toMatchObject({
       event: { id: "deep", message: { role: "assistant", idempotencyKey: "wanted" } },
     });
-  });
-
-  it.each(["a\u0000b", "\ud800", "雪🦞"])("matches exact persisted Unicode identity %j", (key) => {
-    insert(
-      0,
-      JSON.stringify({ message: { role: "assistant", idempotencyKey: key, content: "answer" } }),
-    );
-    expect(findAssistantTranscriptEventInDatabase({ db }, sessionId, key)).toEqual({
-      event: { message: { role: "assistant", idempotencyKey: key, content: "answer" } },
-    });
-  });
-
-  it("hydrates the complete matching compressed payload", () => {
-    const content = "compressed answer ".repeat(256);
-    const event = {
-      id: "compressed",
-      message: { role: "assistant", idempotencyKey: "wanted", content },
-    };
-    const payload = insert(0, JSON.stringify(event), true);
-    expect(payload.event_zstd).not.toBeNull();
-    expect(findAssistantTranscriptEventInDatabase({ db }, sessionId, "wanted")).toEqual({ event });
   });
 });

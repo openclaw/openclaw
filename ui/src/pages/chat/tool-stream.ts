@@ -599,53 +599,44 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
     entry = {
       toolCallId,
       runId: payload.runId,
-      ...(parentToolCallId ? { parentToolCallId } : {}),
       sessionKey,
       name,
-      args,
-      output: output || undefined,
-      ...(initialResultDetails !== undefined ? { details: initialResultDetails } : {}),
-      ...(resultIsError !== undefined ? { isError: resultIsError } : {}),
-      ...(exitCode !== undefined ? { exitCode } : {}),
-      ...(liveDiffStat ? { liveDiffStat } : {}),
-      ...(phase === "result" ? { resultReceived: true } : {}),
       startedAt: typeof payload.ts === "number" ? payload.ts : now,
       receivedAt: now,
       message: {},
     };
     host.toolStreamById.set(toolStreamIdentity, entry);
     host.toolStreamOrder.push(toolStreamIdentity);
-  } else {
-    entry.name = name;
-    entry.parentToolCallId ??= parentToolCallId;
-    if (args !== undefined) {
-      entry.args = args;
-    }
-    if (output !== undefined) {
-      entry.output = output || undefined;
-    }
-    if (resultDetails !== undefined || resultApprovalReviewOutcome) {
-      const currentOutcome = readToolApprovalReviewOutcome(entry.details);
-      const outcome =
-        currentOutcome === "denied" ? "denied" : (resultApprovalReviewOutcome ?? currentOutcome);
-      const reviews = readToolApprovalReviews(entry.details);
-      entry.details = reviews.length
-        ? withToolApprovalReviews(resultDetails, reviews, outcome)
-        : initialResultDetails;
-    }
-    if (resultIsError !== undefined) {
-      entry.isError = resultIsError;
-    }
-    if (exitCode !== undefined) {
-      entry.exitCode = exitCode;
-    }
-    if (liveDiffStat) {
-      entry.liveDiffStat = liveDiffStat;
-    }
-    if (phase === "result") {
-      entry.liveDiffStat = undefined;
-      entry.resultReceived = true;
-    }
+  }
+  entry.name = name;
+  entry.parentToolCallId ??= parentToolCallId;
+  if (args !== undefined) {
+    entry.args = args;
+  }
+  if (output !== undefined) {
+    entry.output = output || undefined;
+  }
+  if (resultDetails !== undefined || resultApprovalReviewOutcome) {
+    const currentOutcome = readToolApprovalReviewOutcome(entry.details);
+    const outcome =
+      currentOutcome === "denied" ? "denied" : (resultApprovalReviewOutcome ?? currentOutcome);
+    const reviews = readToolApprovalReviews(entry.details);
+    entry.details = reviews.length
+      ? withToolApprovalReviews(resultDetails, reviews, outcome)
+      : initialResultDetails;
+  }
+  if (resultIsError !== undefined) {
+    entry.isError = resultIsError;
+  }
+  if (exitCode !== undefined) {
+    entry.exitCode = exitCode;
+  }
+  if (liveDiffStat) {
+    entry.liveDiffStat = liveDiffStat;
+  }
+  if (phase === "result") {
+    entry.liveDiffStat = undefined;
+    entry.resultReceived = true;
   }
 
   if (approvalReview) {

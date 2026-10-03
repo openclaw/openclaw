@@ -102,6 +102,8 @@ For traces, logs, OTLP push, and OpenTelemetry GenAI semantic attributes, see [O
 | `openclaw_gc_duration_seconds`                       | histogram | none                                                                                      |
 | `openclaw_gateway_rpc_requests_total`                | counter   | `method`                                                                                  |
 | `openclaw_gateway_rpc_first_response_seconds`        | histogram | `method`                                                                                  |
+| `openclaw_gateway_rpc_response_bytes`                | histogram | `method`                                                                                  |
+| `openclaw_gateway_rpc_handler_heap_delta_bytes`      | histogram | `method`                                                                                  |
 | `openclaw_gateway_rpc_handler_seconds`               | histogram | `method`                                                                                  |
 | `openclaw_gateway_rpc_admission_seconds`             | histogram | `method`                                                                                  |
 | `openclaw_gateway_rpc_queue_wait_seconds`            | histogram | `method`                                                                                  |
@@ -158,6 +160,7 @@ For traces, logs, OTLP push, and OpenTelemetry GenAI semantic attributes, see [O
 | `openclaw_payload_large_total`                       | counter   | `action`, `channel`, `plugin`, `reason`, `surface`                                        |
 | `openclaw_payload_large_bytes`                       | histogram | `action`, `channel`, `plugin`, `reason`, `surface`                                        |
 | `openclaw_memory_bytes`                              | gauge     | `kind`                                                                                    |
+| `openclaw_heap_space_bytes`                          | gauge     | `space`, `stat`                                                                           |
 | `openclaw_worker_count`                              | gauge     | none                                                                                      |
 | `openclaw_worker_heap_sampled_count`                 | gauge     | none                                                                                      |
 | `openclaw_worker_heap_used_bytes`                    | gauge     | `script`                                                                                  |
@@ -193,11 +196,16 @@ observations: an unfinished handler has no handler-duration sample yet. Compare
 request counts, completed timings, and event-loop observations when investigating
 a timeout; low handler latency alone does not establish a responsive client path.
 
-RPC method labels contain canonical core method names, `other` for plugin
-methods, or `unknown`. Outcome totals aggregate by phase and outcome without a
-method dimension. Each method with all four timings occupies five aggregate
+RPC method labels contain exact core and registered plugin method names, `other`
+for unregistered requests, or `unknown` for unrecognized dedicated worker RPCs.
+Catalog membership is checked at request receipt, so plugin registry replacement
+affects subsequent requests without a separate label cache.
+Outcome totals aggregate by phase and outcome without a
+method dimension. Each method with all four timings and both byte histograms occupies seven aggregate
 samples in the shared 2,048-sample cap. A duration histogram occupies one sample
-but expands into 19 scrape series (buckets, sum, and count). Existing samples keep
+but expands into 19 scrape series (buckets, sum, and count). The response-size
+and signed heap-delta histograms expand into 20 and 38 series respectively; see
+[RPC response size and heap changes](/gateway/diagnostics#rpc-response-size-and-heap-changes). Existing samples keep
 updating when the cap fills; unseen RPC or other operational samples are refused
 and increment `openclaw_prometheus_series_dropped_total`. Monitor that counter:
 coverage of every core method can fill the cap, so a zero value matters when

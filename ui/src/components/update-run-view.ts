@@ -47,6 +47,14 @@ const STEP_MARKS = {
 } as const;
 const ORACLE_MARKS = { pass: "✓", warn: "!", fail: "×", pending: "○" } as const;
 
+function renderReportHeadline(headline: string) {
+  // Terminal reports lead with a status symbol; give it a visible gap even when
+  // the emoji font paints beyond the ordinary space's advance width.
+  const separator = headline.indexOf(" ");
+  return html`<span class="update-run-view__headline-mark">${headline.slice(0, separator)}</span
+    >${headline.slice(separator)}`;
+}
+
 class UpdateRunView extends OpenClawLightDomElement {
   @property({ attribute: false }) run: UpdateRunRecord | null = null;
   @property({ type: Boolean }) connected = true;
@@ -108,6 +116,7 @@ ${details}</pre>
       return nothing;
     }
     const view = projectUpdateRun(this.run, this.connected);
+    const headline = view.terminal ? renderReportHeadline(view.headline) : view.headline;
     return html`<section
       class="update-run-view"
       data-run-id=${this.run.runId}
@@ -115,7 +124,7 @@ ${details}</pre>
       aria-label=${t("updates.run.title")}
     >
       <header class="update-run-view__heading">
-        <h3 role="status" aria-live="polite">${view.headline}</h3>
+        <h3 role="status" aria-live="polite">${headline}</h3>
         ${view.compactLabel ? html`<span class="update-run-view__progress">${view.compactLabel}</span>` : nothing}
       </header>
       ${!this.connected && !view.terminal ? html`<p class="update-run-view__connection">${t("updates.run.reconnecting")}</p>` : nothing}
@@ -182,7 +191,7 @@ ${view.details || t(view.detailStep === "updater-runtime-retention" ? "updates.r
               class="update-run-view__report ${view.reconciled ? "" : `update-run-view__report--${this.run.status}`}"
               aria-label=${t("updates.run.report")}
             >
-              <h4>${view.report.headline}</h4>
+              <h4>${renderReportHeadline(view.report.headline)}</h4>
               <div class="update-run-view__report-body" tabindex="0">
                 ${view.report.lines.map((line) => html`<p>${line}</p>`)}
               </div>

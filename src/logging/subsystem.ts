@@ -39,19 +39,9 @@ export type SubsystemLogger = {
 type ChalkInstance = InstanceType<typeof Chalk>;
 
 const inspectValue: ((value: unknown) => string) | null = (() => {
-  const getBuiltinModule = (
-    process as NodeJS.Process & {
-      getBuiltinModule?: (id: string) => unknown;
-    }
-  ).getBuiltinModule;
-  if (typeof getBuiltinModule !== "function") {
-    return null;
-  }
   try {
-    const utilNamespace = getBuiltinModule("util") as {
-      inspect?: (value: unknown) => string;
-    };
-    return typeof utilNamespace.inspect === "function" ? utilNamespace.inspect : null;
+    const inspect = process.getBuiltinModule?.("util").inspect;
+    return typeof inspect === "function" ? inspect : null;
   } catch {
     return null;
   }
@@ -162,7 +152,7 @@ function formatSubsystemForConsole(subsystem: string): string {
   return parts.join("/");
 }
 
-export function stripRedundantSubsystemPrefixForConsole(
+function stripRedundantSubsystemPrefixForConsole(
   message: string,
   displaySubsystem: string,
 ): string {

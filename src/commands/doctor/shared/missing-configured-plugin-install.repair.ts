@@ -134,18 +134,10 @@ export async function repairMissingConfiguredPluginInstalls(
 ): Promise<RepairMissingPluginInstallsResult> {
   return repairMissingPluginInstalls(
     copyPluginInstallTransactionRequest(params, {
-      cfg: params.cfg,
-      timeoutMs: params.timeoutMs,
-      workTimeoutMs: params.workTimeoutMs,
-      env: params.env,
+      ...params,
       pluginIds: collectConfiguredPluginIds(params.cfg, params.env),
       channelIds: collectConfiguredChannelIds(params.cfg, params.env),
       blockedPluginIds: collectBlockedPluginIds(params.cfg),
-      repairVersionDrift: params.repairVersionDrift,
-      onWarning: params.onWarning,
-      ...(params.onCapabilityConsent ? { onCapabilityConsent: params.onCapabilityConsent } : {}),
-      beforePersistentEffect: params.beforePersistentEffect,
-      ...(params.baselineRecords ? { baselineRecords: params.baselineRecords } : {}),
     }),
   );
 }
@@ -160,10 +152,7 @@ export async function repairMissingPluginInstallsForIds(
 ): Promise<RepairMissingPluginInstallsResult> {
   return repairMissingPluginInstalls(
     copyPluginInstallTransactionRequest(params, {
-      cfg: params.cfg,
-      timeoutMs: params.timeoutMs,
-      workTimeoutMs: params.workTimeoutMs,
-      env: params.env,
+      ...params,
       pluginIds: new Set(
         [...params.pluginIds].map((pluginId) => pluginId.trim()).filter((pluginId) => pluginId),
       ),
@@ -177,10 +166,6 @@ export async function repairMissingPluginInstallsForIds(
           .map((pluginId) => pluginId.trim())
           .filter((pluginId) => pluginId),
       ),
-      ...(params.onCapabilityConsent ? { onCapabilityConsent: params.onCapabilityConsent } : {}),
-      onWarning: params.onWarning,
-      beforePersistentEffect: params.beforePersistentEffect,
-      ...(params.baselineRecords ? { baselineRecords: params.baselineRecords } : {}),
     }),
   );
 }
@@ -564,14 +549,7 @@ async function repairMissingPluginInstallsWithLease(
       candidate,
       records: nextRecords,
       env,
-      context: {
-        bundledPluginsById,
-        officialReplacementPluginIds,
-        knownIds,
-        installedPluginIdsWithStaleVersionBoundRuntimePackages,
-        installedPluginIdsWithRepairablePackageDiagnostics,
-        configuredPluginIdsWithStaleDescriptors,
-      },
+      context: installContext,
     });
     if (!repair) {
       continue;

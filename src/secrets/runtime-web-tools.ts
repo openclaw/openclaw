@@ -1,7 +1,7 @@
 /** Builds web-tool secret metadata from config, plugins, and provider contracts. */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveSecretInputRef } from "../config/types.secrets.js";
+import { coerceSecretRef } from "../config/types.secrets.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "../plugins/installed-plugin-index-records.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import type {
@@ -425,10 +425,8 @@ async function resolveSecretInputWithEnvFallback(params: {
   restrictEnvRefsToEnvVars?: boolean;
   forceColdRefKeys?: ReadonlySet<string>;
 }): Promise<SecretResolutionResult<SecretResolutionSource>> {
-  const { ref } = resolveSecretInputRef({
-    value: params.value,
-    defaults: params.defaults,
-  });
+  // Provider credential callbacks retain their shipped unknown-valued input contract.
+  const ref = coerceSecretRef(params.value, params.defaults);
 
   if (!ref) {
     const configValue = normalizeSecretInput(params.value);

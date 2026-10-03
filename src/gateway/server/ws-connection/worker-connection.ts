@@ -392,7 +392,10 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
           ? { type: "res", id: parsed.id, ok, payload }
           : { type: "res", id: parsed.id, ok, error },
       );
-      diagnostics?.response(result.kind === "sent" ? (ok ? "ok" : "error") : "unavailable");
+      diagnostics?.response(
+        result.kind === "sent" ? (ok ? "ok" : "error") : "unavailable",
+        result.kind === "sent" ? result.bytes : undefined,
+      );
     };
     const dispatch = (signal?: AbortSignal) => {
       const invoke = () =>

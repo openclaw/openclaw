@@ -27,41 +27,34 @@ export type PrivateCommandRouteTarget = {
 const PRIVATE_COMMAND_APPROVAL_ROUTE_TTL_MS = 5 * 60_000;
 const EXPIRED_PRIVATE_COMMAND_APPROVAL_ROUTE_EXPIRES_AT_MS = 0;
 
-export function buildPrivateCommandApprovalRequest(params: {
+/** Finds private owner DM routes that can receive sensitive command replies. */
+export async function resolvePrivateCommandRouteTargets(params: {
   commandParams: HandleCommandsParams;
   id: string;
   command: string;
   commandArgv?: string[];
-  agentId: string | undefined;
-  createdAtMs: number;
-}): ExecApprovalRequest {
+}): Promise<PrivateCommandRouteTarget[]> {
   const { commandParams } = params;
-  return {
+  const createdAtMs = Date.now();
+  const request: ExecApprovalRequest = {
     approvalKind: "exec",
     id: params.id,
     request: {
       command: params.command,
       ...(params.commandArgv === undefined ? {} : { commandArgv: params.commandArgv }),
-      agentId: params.agentId,
+      agentId: commandParams.agentId,
       ...(commandParams.sessionKey ? { sessionKey: commandParams.sessionKey } : {}),
       turnSourceChannel: commandParams.command.channel,
       turnSourceTo: readCommandDeliveryTarget(commandParams) ?? null,
       turnSourceAccountId: commandParams.ctx.AccountId ?? null,
       turnSourceThreadId: readCommandMessageThreadId(commandParams) ?? null,
     },
-    createdAtMs: params.createdAtMs,
+    createdAtMs,
     expiresAtMs:
       resolveExpiresAtMsFromDurationMs(PRIVATE_COMMAND_APPROVAL_ROUTE_TTL_MS, {
-        nowMs: params.createdAtMs,
+        nowMs: createdAtMs,
       }) ?? EXPIRED_PRIVATE_COMMAND_APPROVAL_ROUTE_EXPIRES_AT_MS,
   };
-}
-
-/** Finds private owner DM routes that can receive sensitive command replies. */
-export async function resolvePrivateCommandRouteTargets(params: {
-  commandParams: HandleCommandsParams;
-  request: ExecApprovalRequest;
-}): Promise<PrivateCommandRouteTarget[]> {
   const originChannel = params.commandParams.command.channel;
   const targets: PrivateCommandRouteTarget[] = [];
   for (const candidate of listPrivateCommandRouteCandidateChannels(originChannel)) {
@@ -77,7 +70,7 @@ export async function resolvePrivateCommandRouteTargets(params: {
       cfg: params.commandParams.cfg,
       accountId,
       approvalKind: "exec",
-      request: params.request,
+      request,
     });
     if (!capabilities.enabled || !capabilities.supportsApproverDmSurface) {
       continue;
@@ -86,7 +79,7 @@ export async function resolvePrivateCommandRouteTargets(params: {
       cfg: params.commandParams.cfg,
       accountId,
       approvalKind: "exec",
-      request: params.request,
+      request,
     });
     for (const target of resolvedTargets) {
       targets.push({

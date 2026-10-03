@@ -89,19 +89,23 @@ function resolveTerminalRequest(
   const recoveryRequested = completeParams.recoverInterrupted === true;
   let completionReason = completeParams.reason;
   let requestedEndedAt = completeParams.endedAt ?? now;
+  const existingEndedAt = entry.execution.endedAt;
   const previousOutcome = entry.execution.outcome;
   const olderEquivalent =
-    typeof entry.execution.endedAt === "number" &&
-    requestedEndedAt < entry.execution.endedAt &&
+    typeof existingEndedAt === "number" &&
+    requestedEndedAt < existingEndedAt &&
     entry.endedReason === completeParams.reason &&
     previousOutcome?.status === completeParams.outcome.status &&
     (previousOutcome.status !== "error" || previousOutcome.error === completeParams.outcome.error);
-  const shouldDrainExistingTerminal =
-    (recoveryRequested && typeof entry.execution.endedAt === "number") || olderEquivalent;
-  if (shouldDrainExistingTerminal) {
-    // Preserve the newer canonical timing while allowing this duplicate
-    // caller to rescue a stalled cleanup and delivery tail.
-    requestedEndedAt = entry.execution.endedAt!;
+  // Preserve the newer canonical timing while allowing this duplicate
+  // caller to rescue a stalled cleanup and delivery tail.
+  const drainedEndedAt =
+    typeof existingEndedAt === "number" && (recoveryRequested || olderEquivalent)
+      ? existingEndedAt
+      : undefined;
+  const shouldDrainExistingTerminal = drainedEndedAt !== undefined;
+  if (drainedEndedAt !== undefined) {
+    requestedEndedAt = drainedEndedAt;
     completionReason = entry.endedReason ?? completeParams.reason;
   }
   let endedAt = requestedEndedAt;
@@ -633,9 +637,7 @@ function planTerminalCompletion(
       suppressSessionEffects: suppressSessionEffects ? true : undefined,
     };
   }
-  if (entry.endedReason !== completionReason) {
-    entry.endedReason = completionReason;
-  }
+  entry.endedReason = completionReason;
   if (completionReason === SUBAGENT_ENDED_REASON_KILLED && entry.terminalOwner !== undefined) {
     entry.terminalOwner = undefined;
   }
@@ -645,13 +647,8 @@ function planTerminalCompletion(
 
   if (completeParams.completionSnapshot) {
     const completion = ensureCompletionState(entry);
-    if (
-      completion.resultText !== completeParams.completionSnapshot.resultText ||
-      completion.capturedAt !== completeParams.completionSnapshot.capturedAt
-    ) {
-      completion.resultText = completeParams.completionSnapshot.resultText;
-      completion.capturedAt = completeParams.completionSnapshot.capturedAt;
-    }
+    completion.resultText = completeParams.completionSnapshot.resultText;
+    completion.capturedAt = completeParams.completionSnapshot.capturedAt;
   }
 
   if (terminalReply) {

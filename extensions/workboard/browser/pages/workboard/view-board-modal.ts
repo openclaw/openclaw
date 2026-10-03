@@ -114,7 +114,7 @@ export function renderBoardModal(props: {
         }
         await props.client.request("workboard.sessionsBoard.update", {
           boardId: draft.id,
-          patch: { columns: sessions.columns, instructions: sessions.instructions ?? "" },
+          patch: { columns: sessions.columns },
         });
       }
       props.onSaved(draft.id);
@@ -318,30 +318,20 @@ function renderSessionsEditor(draft: BoardDraft, canWrite: boolean, requestUpdat
           />${t("workboard.sessionsBoard.fallback")}</label
         >
         <div class="workboard-sessions-editor__actions">
-          <button
-            class="btn"
-            type="button"
-            ?disabled=${disabled || index === 0}
-            @click=${() => {
-              spec.columns.splice(index, 1);
-              spec.columns.splice(index - 1, 0, column);
-              requestUpdate();
-            }}
-          >
-            ${t("workboard.sessionsBoard.moveUp")}
-          </button>
-          <button
-            class="btn"
-            type="button"
-            ?disabled=${disabled || index === spec.columns.length - 1}
-            @click=${() => {
-              spec.columns.splice(index, 1);
-              spec.columns.splice(index + 1, 0, column);
-              requestUpdate();
-            }}
-          >
-            ${t("workboard.sessionsBoard.moveDown")}
-          </button>
+          ${[-1, 1].map(
+            (offset) => html`<button
+              class="btn"
+              type="button"
+              ?disabled=${disabled || index + offset < 0 || index + offset >= spec.columns.length}
+              @click=${() => {
+                spec.columns.splice(index, 1);
+                spec.columns.splice(index + offset, 0, column);
+                requestUpdate();
+              }}
+            >
+              ${t(offset < 0 ? "workboard.sessionsBoard.moveUp" : "workboard.sessionsBoard.moveDown")}
+            </button>`,
+          )}
           <button
             class="btn"
             type="button"
@@ -371,22 +361,6 @@ function renderSessionsEditor(draft: BoardDraft, canWrite: boolean, requestUpdat
     >
       ${icons.plus}${t("workboard.sessionsBoard.addColumn")}
     </button>
-    <label
-      ><span>${t("workboard.sessionsBoard.instructions")}</span
-      ><textarea
-        class="settings-input"
-        maxlength="2000"
-        rows="4"
-        aria-label=${t("workboard.sessionsBoard.instructions")}
-        .value=${live(spec.instructions ?? "")}
-        @input=${(event: Event) => {
-          if (event.currentTarget instanceof HTMLTextAreaElement) {
-            spec.instructions = event.currentTarget.value;
-            requestUpdate();
-          }
-        }}
-      ></textarea>
-    </label>
-    <p class="workboard-sessions-editor__help">${t("workboard.sessionsBoard.instructionsHelp")}</p>
+    <p class="workboard-sessions-editor__help">${t("workboard.sessionsBoard.rulesHelp")}</p>
   </fieldset>`;
 }

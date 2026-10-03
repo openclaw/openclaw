@@ -8,11 +8,16 @@ import { downloadArtifact, isHttpArtifactDownloadUrl } from "../../../api/artifa
 import { GatewayRequestError } from "../../../api/gateway.ts";
 import type { ArtifactDownloadResult, SessionWorkspaceGetResult } from "../../../api/types.ts";
 import { hasOperatorAdminAccess } from "../../../app/operator-access.ts";
+import type { MarkdownFileLinkTarget } from "../../../components/markdown-file-links.ts";
 import { t } from "../../../i18n/index.ts";
+import { registerFilePreviewEnglish } from "../../../i18n/locales/en-file-preview.ts";
+import { readBlobAsDataUrl } from "../../../lib/blob-data-url.ts";
+import { base64ToBytes } from "../../../lib/bytes-base64.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../../../lib/gateway-methods.ts";
 import { pathDisplayName } from "../../../lib/path-display.ts";
 import { resolveSessionDisplayName } from "../../../lib/session-display.ts";
+import { parseAgentSessionKey } from "../../../lib/sessions/session-key.ts";
 import { sessionWorkspaceFileKey } from "../../../lib/sessions/workspace.ts";
 import { openWorkspaceItem } from "./chat-session-workspace-preview.ts";
 import {
@@ -29,12 +34,12 @@ import type {
   SessionWorkspaceProps,
   SessionWorkspaceState,
 } from "./chat-session-workspace-types.ts";
-import { hasUniformLineEndings, type SidebarContent } from "./chat-sidebar.ts";
+import type { SidebarContent } from "./chat-sidebar-content-types.ts";
+import { hasUniformLineEndings } from "./chat-sidebar-file-view.ts";
 
-export {
-  clearSessionWorkspaceTimers,
-  retireSessionWorkspaceCheckout,
-} from "./chat-session-workspace-state.ts";
+registerFilePreviewEnglish();
+
+export { retireSessionWorkspaceCheckout } from "./chat-session-workspace-state.ts";
 export { renderSessionWorkspaceRail } from "./chat-session-workspace-rail.ts";
 export type {
   SessionWorkspaceHost,
@@ -112,25 +117,9 @@ async function loadArtifactSidebarContent(
   if (blob) {
     if (mimeType.startsWith("image/")) {
       // Workspace previews outlive the ticket, so retain the image in the existing data URL form.
-      imageSource = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.addEventListener(
-          "load",
-          () => {
-            if (typeof reader.result === "string") {
-              resolve(reader.result);
-            } else {
-              reject(new Error("Artifact image could not be decoded"));
-            }
-          },
-          { once: true },
-        );
-        reader.addEventListener(
-          "error",
-          () => reject(reader.error ?? new Error("Artifact image could not be decoded")),
-          { once: true },
-        );
-        reader.readAsDataURL(blob);
+      imageSource = await readBlobAsDataUrl(blob, {
+        readError: "Artifact image could not be decoded",
+        invalidResultError: "Artifact image could not be decoded",
       });
     } else {
       text = await blob.text();
@@ -139,9 +128,7 @@ async function loadArtifactSidebarContent(
     if (mimeType.startsWith("image/")) {
       imageSource = `data:${mimeType};base64,${data}`;
     } else if (mimeType === "application/json" || mimeType.startsWith("text/")) {
-      text = new TextDecoder().decode(
-        Uint8Array.from(globalThis.atob(data), (char) => char.charCodeAt(0)),
-      );
+      text = new TextDecoder().decode(base64ToBytes(data));
     }
   }
   if (imageSource) {
@@ -187,19 +174,24 @@ function openFile(
   state: SessionWorkspaceHost,
   workspace: SessionWorkspaceState,
   path: string,
-  opts: { line?: number | null; requestPath?: string } = {},
+  opts: { line?: number | null; requestPath?: string; sessionKey?: string } = {},
 ) {
   const requestPath = opts.requestPath ?? path;
+  const sessionKey = opts.sessionKey ?? workspace.sessionKey;
+  const agentId = opts.sessionKey
+    ? parseAgentSessionKey(opts.sessionKey)?.agentId
+    : workspace.agentId;
+  const viewingSession = sessionKey === workspace.sessionKey;
   const draftScope = state.sessionWorkspaceDraftScope;
   const draftContext = state.sessionWorkspaceDraftContext;
   const gatewayUrl = state.settings?.gatewayUrl ?? "";
   openWorkspaceItem(
     state,
     workspace,
-    `file:${requestPath}`,
+    viewingSession ? `file:${requestPath}` : JSON.stringify(["file", sessionKey, requestPath]),
     () =>
-      state.sessions.getFile(workspace.sessionKey, requestPath, {
-        agentId: workspace.agentId,
+      state.sessions.getFile(sessionKey, requestPath, {
+        agentId,
       }),
     (result) => {
       const file = result.file;
@@ -225,7 +217,10 @@ function openFile(
         };
       }
       if (file.previewKind === "unsupported") {
-        return unsupportedFileSidebarContent(file, path);
+        return {
+          ...unsupportedFileSidebarContent(file, path),
+          fileLinkSessionKey: result.sessionKey,
+        };
       }
       if (
         file.previewKind !== "text" ||
@@ -249,13 +244,17 @@ function openFile(
                   requestPath,
                   content,
                   {
-                    agentId: workspace.agentId,
+                    agentId,
                     expectedHash,
                   },
                 );
                 const hash = saved?.file.hash;
                 const updatedAtMs = saved?.file.updatedAtMs;
-                if (typeof hash === "string" && isCurrentSessionWorkspace(state, workspace)) {
+                if (
+                  typeof hash === "string" &&
+                  viewingSession &&
+                  isCurrentSessionWorkspace(state, workspace)
+                ) {
                   refreshSessionWorkspace(state, true);
                 }
                 return typeof hash === "string"
@@ -290,7 +289,7 @@ function openFile(
             },
             fetchLatest: async () => {
               const latest = await state.sessions.getFile(result.sessionKey, requestPath, {
-                agentId: workspace.agentId,
+                agentId,
               });
               const latestFile = latest?.file;
               if (
@@ -315,6 +314,11 @@ function openFile(
         path: file.workspacePath || file.path || path,
         name,
         content: file.content,
+        sessionFileSource: {
+          sessionKey: result.sessionKey,
+          agentId,
+          path: file.workspacePath || file.path || path,
+        },
         draftKey: [
           gatewayUrl,
           draftScope ?? "",
@@ -324,7 +328,9 @@ function openFile(
         ].join("\u0000"),
         draftContext: {
           sessionKey: result.sessionKey,
-          sessionTitle: draftContext?.sessionTitle ?? resolveSessionDisplayName(result.sessionKey),
+          sessionTitle:
+            (viewingSession ? draftContext?.sessionTitle : undefined) ??
+            resolveSessionDisplayName(result.sessionKey),
           paneLabel: draftContext?.paneLabel,
         },
         root: result.root ?? null,
@@ -343,17 +349,34 @@ function openFile(
       resolveLabel: (result) => result.file?.name,
       resolveKey: (result) => {
         const canonicalPath = result.file?.workspacePath || result.file?.path;
-        return canonicalPath ? sessionWorkspaceFileKey(result.root, canonicalPath) : undefined;
+        return canonicalPath
+          ? sessionWorkspaceFileKey(result.sessionKey, result.root, canonicalPath)
+          : undefined;
       },
+      resolveError: (error) =>
+        error instanceof GatewayRequestError &&
+        typeof error.details === "object" &&
+        error.details !== null &&
+        "reason" in error.details &&
+        error.details.reason === "outside_session_boundary"
+          ? t("chat.detailPanel.outsideSessionBoundary", {
+              session:
+                (viewingSession ? draftContext?.sessionTitle : undefined) ??
+                resolveSessionDisplayName(sessionKey),
+            })
+          : undefined,
     },
   );
 }
 
 export function openSessionWorkspaceFile(
   state: SessionWorkspaceHost,
-  target: { path: string; line?: number | null },
+  target: MarkdownFileLinkTarget,
 ) {
-  openFile(state, getSessionWorkspace(state), target.path, { line: target.line });
+  openFile(state, getSessionWorkspace(state), target.path, {
+    line: target.line,
+    sessionKey: target.sessionKey,
+  });
 }
 
 export function revealSessionWorkspaceFile(state: SessionWorkspaceHost, path: string) {
@@ -407,7 +430,7 @@ function openArtifact(
     if (result?.encoding !== "base64" || result.data === undefined) {
       return null;
     }
-    return new Blob([Uint8Array.from(atob(result.data), (char) => char.charCodeAt(0))], {
+    return new Blob([base64ToBytes(result.data)], {
       type: result.artifact.mimeType ?? "application/octet-stream",
     });
   };

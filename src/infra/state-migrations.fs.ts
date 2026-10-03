@@ -22,10 +22,6 @@ export function existsDir(dir: string): boolean {
   return safeStatSync(dir)?.isDirectory() ?? false;
 }
 
-export function ensureMigrationDir(dir: string) {
-  fs.mkdirSync(dir, { recursive: true });
-}
-
 export function migrationFileExists(p: string): boolean {
   return safeStatSync(p)?.isFile() ?? false;
 }

@@ -8,12 +8,10 @@ import net from "node:net";
 import path from "node:path";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import {
-  fixtureReceiptClientSource,
   openFixtureReceiptChannel,
   type FixtureReceiptChannel,
   withinTest,
 } from "openclaw/plugin-sdk/test-fixtures";
-import * as tar from "tar";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { crabboxState } from "./crabbox-state.test-support.js";
 import {
@@ -23,6 +21,7 @@ import {
 } from "./crabbox-worker-node-enrollment.js";
 import {
   createNodeBootstrapFixture,
+  createNodePackageFixture,
   expectSetupPhases,
   readLaunch,
   type DesktopFixture,
@@ -55,56 +54,8 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanupDirectories) => {
 const leaseId = "cbx_bootstrap_test";
 const setupCode = "synthetic-enrollment-credential";
 
-async function packageFixture(build: string, postinstall = ""): Promise<Buffer> {
-  const root = tempDirs.make("crabbox-bootstrap-package-");
-  const packageRoot = path.join(root, "package");
-  fs.mkdirSync(packageRoot);
-  fs.writeFileSync(
-    path.join(packageRoot, "package.json"),
-    JSON.stringify({
-      name: "openclaw",
-      version: "2026.8.1",
-      scripts: { postinstall: "node install.cjs" },
-    }),
-  );
-  fs.writeFileSync(
-    path.join(packageRoot, "install.cjs"),
-    `require("node:fs").writeFileSync("installed.json", JSON.stringify({ token: process.env.CRABBOX_WORKER_BOOTSTRAP_TOKEN, setupCode: process.env.CRABBOX_WORKER_SETUP_CODE, scriptsRan: true }));${postinstall}`,
-  );
-  fs.writeFileSync(
-    path.join(packageRoot, "openclaw.mjs"),
-    `import fs from "node:fs";
-import path from "node:path";
-${fixtureReceiptClientSource(receipts.endpoint)}
-const args = process.argv.slice(2);
-const state = process.env.OPENCLAW_STATE_DIR;
-if (args[0] === "--version") {
-  console.log("OpenClaw 2026.8.1");
-} else if (args[0] === "plugins" && args[1] === "enable") {
-  fs.appendFileSync(path.join(state, "activation.jsonl"), JSON.stringify({ runtimePublished: fs.existsSync(path.join(state, "runtime")) }) + "\\n");
-  if (${JSON.stringify(build)} === "activation-failed") process.exit(1);
-  for (const id of args.slice(2)) {
-    if (${JSON.stringify(build)} === "verbose-activation") process.stdout.write("x".repeat(700_000));
-    fs.appendFileSync(path.join(state, "enabled"), id + "\\n");
-  }
-} else {
-  process.title = "openclaw-connect";
-  const enabledFile = path.join(state, "enabled");
-  const enabledPlugins = fs.existsSync(enabledFile) ? fs.readFileSync(enabledFile, "utf8").trim().split("\\n") : [];
-  fs.writeFileSync(path.join(state, "launch.json.tmp"), JSON.stringify({ build: ${JSON.stringify(build)}, args, cli: process.argv[1], token: process.env.CRABBOX_WORKER_BOOTSTRAP_TOKEN, setupCode: process.env.CRABBOX_WORKER_SETUP_CODE, environment: { DISPLAY: process.env.DISPLAY, DBUS_SESSION_BUS_ADDRESS: process.env.DBUS_SESSION_BUS_ADDRESS, XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR }, enabledPlugins }));
-  // Existence signals readiness only after the child publishes complete JSON.
-  fs.renameSync(path.join(state, "launch.json.tmp"), path.join(state, "launch.json"));
-  sendReceipt(state, "launched:" + process.pid + ":ready");
-  const desktopReady = path.join(process.env.HOME, "desktop-ready");
-  if (fs.existsSync(desktopReady)) fs.writeFileSync(desktopReady, "ready\\n");
-  setInterval(() => {}, 60000);
-}
-`,
-  );
-  const archive = path.join(root, "package.tgz");
-  await tar.create({ cwd: root, file: archive, gzip: true }, ["package"]);
-  return fs.readFileSync(archive);
-}
+const packageFixture = (build: string, postinstall = "") =>
+  createNodePackageFixture((prefix) => tempDirs.make(prefix), build, receipts, postinstall);
 
 function testHome() {
   const home = fs.realpathSync(tempDirs.make("crabbox-bootstrap-home-"));
@@ -508,7 +459,9 @@ describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
     const result = await enroll(home, nodeBootstrap);
     expect(result).toMatchObject({
       code: 1,
-      output: expect.stringContaining("could not enable plugin"),
+      output: expect.stringMatching(
+        /could not enable plugins demo: exit code 1, signal none: plugin dependency missing/u,
+      ),
     });
     expect(fs.existsSync(path.join(stateDir, "runtime"))).toBe(false);
     expect(fs.existsSync(path.join(stateDir, "node.pid"))).toBe(false);
@@ -674,6 +627,9 @@ describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
         "Bootstrap test",
       ],
     });
+    if (process.platform !== "win32") {
+      expect(launch.tool).toBe("verified-tool");
+    }
     expect(launch).not.toHaveProperty("token");
     expect(launch).not.toHaveProperty("setupCode");
     expect(launch.cli).toContain(`/node-runtimes/${nodeBootstrap.sha256}/`);
@@ -739,9 +695,8 @@ require("node:http").get(${JSON.stringify(postinstall.nodeBootstrap.url)}, (resp
         await Promise.all([postinstall.requested, worker.requested]);
         if (failure === "worker download") {
           workerResponse.resolve();
-          await worker.closed;
-          expect(fs.existsSync(finished)).toBe(false);
-          expect(fs.readdirSync(runtimeRoot)).toEqual([expect.stringMatching(/^node-bootstrap-/)]);
+          await postinstall.closed;
+          await preparation;
         } else {
           postinstallResponse.resolve();
           await worker.closed;
@@ -759,7 +714,7 @@ require("node:http").get(${JSON.stringify(postinstall.nodeBootstrap.url)}, (resp
             : "package installation failed (exit code 17)",
         ),
       });
-      expect(fs.readFileSync(finished, "utf8")).toBe("complete");
+      expect(fs.existsSync(finished)).toBe(failure === "npm installation");
       expect(fs.readdirSync(runtimeRoot)).toEqual([]);
     },
     30_000,

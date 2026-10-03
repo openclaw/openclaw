@@ -13,26 +13,18 @@ export function commitPendingSkillProposalTransition(
     assertCommitAllowed?: () => void;
   },
 ) {
+  const { store, assertCommitAllowed, ...input } = params;
   return executeSkillWorkshopOperation(
     "workshop.transition.commit",
-    {
-      expected: params.expected,
-      record: params.record,
-      event: params.event,
-      operationLabel: params.operationLabel,
-      invalidateRollback: params.invalidateRollback,
-    },
-    params.store,
-    params.assertCommitAllowed,
+    input,
+    store,
+    assertCommitAllowed,
   );
 }
 
 export function readCommittedSkillProposalTransition(
   params: ReadCommittedSkillProposalTransitionInput & { store?: SkillWorkshopStoreOptions },
 ) {
-  return executeSkillWorkshopOperation(
-    "workshop.transition.committed",
-    { record: params.record, event: params.event },
-    params.store,
-  );
+  const { store, ...input } = params;
+  return executeSkillWorkshopOperation("workshop.transition.committed", input, store);
 }

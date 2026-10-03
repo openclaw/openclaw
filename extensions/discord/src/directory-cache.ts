@@ -9,7 +9,7 @@ import { discordDirectoryCacheState } from "./directory-cache-state.js";
 const DISCORD_DIRECTORY_CACHE_MAX_ENTRIES = 4000;
 const DISCORD_DISCRIMINATOR_SUFFIX = /#\d{4}$/;
 
-function normalizeSnowflake(value: string | number | bigint): string | null {
+export function normalizeDiscordSnowflake(value: string | number | bigint): string | null {
   const text = normalizeOptionalStringifiedId(value) ?? "";
   if (!/^\d+$/.test(text)) {
     return null;
@@ -59,7 +59,7 @@ export function rememberDiscordDirectoryUser(params: {
   userId: string | number | bigint;
   handles: Array<string | null | undefined>;
 }): void {
-  const userId = normalizeSnowflake(params.userId);
+  const userId = normalizeDiscordSnowflake(params.userId);
   if (!userId) {
     return;
   }

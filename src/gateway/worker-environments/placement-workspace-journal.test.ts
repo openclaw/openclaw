@@ -18,6 +18,9 @@ import {
   type WorkerSessionPlacementStore,
 } from "./placement-store.js";
 import { seedAttachedPlacementEnvironment } from "./placement-test-fixtures.js";
+import { AcceptedWorkspacePublicationIndeterminateError } from "./workspace-accepted-publication.js";
+import { recoverWorkerWorkspaceReconciliation } from "./workspace-reconcile-recovery.js";
+import { createWorkspaceResultJournal } from "./workspace-result-settlement.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(async () => {
@@ -75,7 +78,7 @@ describe("worker placement workspace journal", () => {
     const { active, owner } = await seedJournal();
 
     expect(await prune()).toEqual([]);
-    const draining = store.startDrain({
+    const draining = await store.startDrain({
       sessionId: REQUEST.sessionId,
       environmentId: active.environmentId,
       ownerEpoch: active.activeOwnerEpoch,
@@ -84,7 +87,7 @@ describe("worker placement workspace journal", () => {
     if (draining.state !== "draining") {
       throw new Error("expected draining placement");
     }
-    store.startReconcile({
+    await store.startReconcile({
       sessionId: draining.sessionId,
       environmentId: draining.environmentId,
       ownerEpoch: draining.activeOwnerEpoch,
@@ -97,7 +100,7 @@ describe("worker placement workspace journal", () => {
 
   it("retains a failed owner whose forced rollback is retryable", async () => {
     const { active, owner } = await seedJournal();
-    const draining = store.startDrain({
+    const draining = await store.startDrain({
       sessionId: active.sessionId,
       environmentId: active.environmentId,
       ownerEpoch: active.activeOwnerEpoch,
@@ -106,13 +109,13 @@ describe("worker placement workspace journal", () => {
     if (draining.state !== "draining") {
       throw new Error("expected draining placement");
     }
-    const reconciling = store.startReconcile({
+    const reconciling = await store.startReconcile({
       sessionId: draining.sessionId,
       environmentId: draining.environmentId,
       ownerEpoch: draining.activeOwnerEpoch,
       expectedGeneration: draining.generation,
     });
-    store.fail({
+    await store.fail({
       sessionId: reconciling.sessionId,
       expectedGeneration: reconciling.generation,
       recoveryError: FORCED_WORKER_ABANDONMENT_ERROR,
@@ -138,7 +141,18 @@ describe("worker placement workspace journal", () => {
         ownerEpoch: active.activeOwnerEpoch,
       },
     });
-    store.markWorkspaceResultPending(claim);
+    await store.markWorkspaceResultPending(claim);
+    const pendingResult = store.preparedWorkspaceResult(claim)!;
+    const placement = store.preparedWorkspaceResultPlacement(claim)!;
+    expect(store.preparedWorkspaceResult(claim)).toBe(pendingResult);
+    expect(store.preparedWorkspaceResultPlacement(claim)).toBe(placement);
+    expect(() => {
+      pendingResult.claimId = "different-claim";
+    }).toThrow(TypeError);
+    expect(() => {
+      placement.turnClaim!.claimId = "different-claim";
+    }).toThrow(TypeError);
+    expect(store.validateWorkspaceResultClaim(claim)).toBe(true);
     const queries = observeHostDataSql();
     try {
       expect(await store.getWorkspaceReconciliationPlacement(owner)).toMatchObject({
@@ -150,12 +164,18 @@ describe("worker placement workspace journal", () => {
       await store.abortWorkspaceReconciliation(owner);
       expect(await store.listWorkspaceReconciliationOwners()).toEqual([]);
       await store.beginWorkspaceReconciliation(owner, journal);
+      expect(store.validateWorkspaceResultClaim(claim)).toBe(true);
       expect(await prune()).toEqual([]);
       const accepted = await store.updateWorkspaceBaseManifest({
         claim,
         manifestRef: journal.currentManifestRef,
       });
       expect(accepted.workspaceBaseManifestRef).toBe(journal.currentManifestRef);
+      expect(store.preparedWorkspaceResultPlacement(claim)).not.toBe(placement);
+      expect(store.preparedWorkspaceResultPlacement(claim)?.workspaceBaseManifestRef).toBe(
+        journal.currentManifestRef,
+      );
+      expect(placement.workspaceBaseManifestRef).toBe(active.workspaceBaseManifestRef);
       expect((await store.loadWorkspaceReconciliation(owner))?.appliedManifestRef).toBe(
         journal.currentManifestRef,
       );
@@ -220,27 +240,143 @@ describe("worker placement workspace journal", () => {
     expect(await store.loadWorkspaceReconciliation(owner)).toBeUndefined();
   });
 
-  it("retains the committed journal when its actual worker reply is corrupted", async () => {
-    const { owner } = await seedJournal();
+  it.each([
+    { operation: "journal", outcome: "committed" },
+    { operation: "acceptance", outcome: "committed" },
+    { operation: "acceptance", outcome: "unknown" },
+    { operation: "acceptance", outcome: "rollback" },
+  ] as const)("preserves $operation custody when settlement is $outcome", async (scenario) => {
+    const { active, owner } = await seedJournal();
     const journal = await store.loadWorkspaceReconciliation(owner);
     if (!journal) {
       throw new Error("expected journal");
     }
-    await store.abortWorkspaceReconciliation(owner);
+    const claim =
+      scenario.operation === "acceptance"
+        ? await store.claimTurn({
+            ...REQUEST,
+            claimId: "journal-acceptance-claim",
+            runId: "journal-acceptance-run",
+            owner: {
+              kind: "worker",
+              environmentId: active.environmentId,
+              ownerEpoch: active.activeOwnerEpoch,
+            },
+          })
+        : undefined;
+    if (claim) {
+      await store.markWorkspaceResultPending(claim);
+      await store.updateWorkspaceBaseManifest({ claim, manifestRef: journal.currentManifestRef });
+      expect(await store.loadWorkspaceReconciliation(owner)).toEqual({
+        ...journal,
+        appliedManifestRef: journal.currentManifestRef,
+      });
+      expect(store.preparedWorkspaceResult(claim)?.workspaceAcceptedAtMs).toBeNull();
+    } else {
+      await store.abortWorkspaceReconciliation(owner);
+    }
+    if (scenario.outcome === "unknown") {
+      const createAdmission = operationAdmission.createSqliteWorkerOperationAdmission;
+      vi.spyOn(operationAdmission, "createSqliteWorkerOperationAdmission").mockImplementationOnce(
+        (admit, attachment) => {
+          const admission = createAdmission(admit, attachment);
+          return {
+            ...admission,
+            get committed() {
+              return undefined;
+            },
+            get settlement() {
+              return { kind: "unknown" as const };
+            },
+          };
+        },
+      );
+    } else if (scenario.outcome === "rollback") {
+      database.db.exec(`
+        CREATE TRIGGER reject_accepted_journal_cleanup
+        BEFORE DELETE ON worker_workspace_reconciliations
+        BEGIN
+          SELECT RAISE(ABORT, 'accepted journal cleanup refused');
+        END;
+      `);
+    }
     const receive = brokerReply.receiveSqliteWorkerReply;
     let corrupted = 0;
     vi.spyOn(brokerReply, "receiveSqliteWorkerReply").mockImplementation((slot, reply, broker) => {
       if (slot.current?.request.type === "execute" && reply.ok && !reply.transfer && !reply.input) {
         const value: unknown = deserialize(reply.value);
-        if (isRecord(value) && value.type === "placementJournals.begin") {
+        const matches =
+          isRecord(value) &&
+          (claim
+            ? isRecord(value.placement) && value.placement.sessionId === claim.sessionId
+            : value.type === "placementJournals.begin");
+        if (matches) {
           corrupted += 1;
           return receive(slot, { ...reply, value: new Uint8Array([0]) }, broker);
         }
       }
       return receive(slot, reply, broker);
     });
-    await store.beginWorkspaceReconciliation(owner, journal);
-    expect(corrupted).toBe(1);
-    expect(await store.loadWorkspaceReconciliation(owner)).toEqual(journal);
+    if (!claim) {
+      await store.beginWorkspaceReconciliation(owner, journal);
+      expect(corrupted).toBe(1);
+      expect(await store.loadWorkspaceReconciliation(owner)).toEqual(journal);
+      return;
+    }
+    const assertCurrent = () => {
+      if (!store.validateWorkspaceResultClaim(claim)) {
+        throw new Error("workspace result authority lost");
+      }
+    };
+    const acceptance = store.acceptWorkspaceResult(claim, assertCurrent);
+    if (scenario.outcome === "unknown") {
+      await expect(acceptance).rejects.toBeInstanceOf(
+        AcceptedWorkspacePublicationIndeterminateError,
+      );
+      expect(store.validateWorkspaceResultClaim(claim)).toBe(false);
+      expect(store.preparedWorkspaceResult(claim)).toBeUndefined();
+      const { adapter } = createWorkspaceResultJournal({
+        placement: active,
+        placements: store,
+        turnClaim: claim,
+        assertCurrent,
+      });
+      expect(() => adapter.abort()).toThrow("workspace result authority lost");
+      expect(() => adapter.begin(journal)).toThrow("workspace result authority lost");
+      await expect(
+        recoverWorkerWorkspaceReconciliation({
+          root,
+          journal: { ...journal, appliedManifestRef: journal.currentManifestRef },
+          assertCurrent,
+        }),
+      ).rejects.toThrow("already applied and awaits fence acceptance");
+    } else if (scenario.outcome === "rollback") {
+      await expect(acceptance).rejects.toThrow("accepted journal cleanup refused");
+      expect(store.validateWorkspaceResultClaim(claim)).toBe(true);
+      expect(store.preparedWorkspaceResult(claim)?.workspaceAcceptedAtMs).toBeNull();
+    } else {
+      await expect(acceptance).resolves.toBeUndefined();
+      expect(store.validateWorkspaceResultClaim(claim)).toBe(true);
+      expect(store.preparedWorkspaceResult(claim)).toMatchObject({
+        claimId: claim.claimId,
+        runId: claim.runId,
+        workspaceAcceptedAtMs: 1_000,
+      });
+    }
+    expect(corrupted).toBe(scenario.outcome === "rollback" ? 0 : 1);
+    expect(await store.loadWorkspaceReconciliation(owner)).toEqual(
+      scenario.outcome === "rollback"
+        ? { ...journal, appliedManifestRef: journal.currentManifestRef }
+        : undefined,
+    );
+    expect(await store.listPendingWorkspaceResultsAsync(claim.sessionId)).toMatchObject([
+      {
+        claimId: claim.claimId,
+        runId: claim.runId,
+        gatewayInstanceId: store.workspaceResultInstanceId(),
+        workspaceAcceptedAtMs: scenario.outcome === "rollback" ? null : 1_000,
+      },
+    ]);
+    expect(store.validateTurnClaim(claim)).toBe(true);
   });
 });

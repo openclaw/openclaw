@@ -1,6 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import {
   assertAdmittedRunOperatorAuthority,
   type AdmittedRunOperatorAuthority,
@@ -116,14 +116,29 @@ describe("native profile-bound input admission", () => {
               await release.promise;
             });
             await entered.promise;
-            request = fixture.send(undefined, { expectedProfileId: source.id });
-            await vi.waitFor(() =>
-              expect(
-                fixture.context.dedupe.has(
-                  `${PENDING_CHAT_SEND_DEDUPE_PREFIX}${fixture.params.idempotencyKey}`,
-                ),
-              ).toBe(true),
-            );
+            const pendingKey = `${PENDING_CHAT_SEND_DEDUPE_PREFIX}${fixture.params.idempotencyKey}`;
+            const reserved = createDeferred();
+            const setDedupe = fixture.context.dedupe.set.bind(fixture.context.dedupe);
+            const observeReservation = vi
+              .spyOn(fixture.context.dedupe, "set")
+              .mockImplementation((key, entry) => {
+                const result = setDedupe(key, entry);
+                if (key === pendingKey) {
+                  reserved.resolve();
+                }
+                return result;
+              });
+            try {
+              request = fixture.send(undefined, { expectedProfileId: source.id });
+              await awaitGateBeforeSettlement(
+                reserved.promise,
+                request,
+                "chat.send settled before its pending reservation",
+              );
+              expect(fixture.context.dedupe.has(pendingKey)).toBe(true);
+            } finally {
+              observeReservation.mockRestore();
+            }
             linkEmail(email, target.id);
             release.resolve();
             await writer;

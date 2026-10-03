@@ -66,6 +66,7 @@ it.each(["cold", "preexisting"] as const)(
     );
     setCanonicalSqliteSessionMainKey(initial, "previous");
     if (lifetime === "cold") {
+      await closeOpenClawAgentDatabasesAsync(stateDir);
       closeOpenClawAgentDatabasesForTest();
     }
 
@@ -143,6 +144,7 @@ it.each([false, true])(
     }
     setCanonicalSqliteSessionMainKey(survivor, "previous");
     setCanonicalSqliteSessionMainKey(deleted, "previous");
+    await closeOpenClawAgentDatabasesAsync(stateDir);
     closeOpenClawAgentDatabasesForTest();
     const deletion = beginAgentDeletionJournal(
       {
@@ -198,6 +200,7 @@ it("observes committed deletion before startup handoff after canonical database 
     { sessionId: "retained-session", updatedAt: 1 },
   );
   setCanonicalSqliteSessionMainKey(database, "previous");
+  await closeOpenClawAgentDatabasesAsync(stateDir);
   closeOpenClawAgentDatabasesForTest();
   expect(readAgentDatabaseAdmissionRefusal("alpha", { env })).toBeUndefined();
 
@@ -301,6 +304,7 @@ it.each(["missing", "receipt-held", "malformed-receipt", "malformed-journal"])(
           { sessionId: `${agentId}-session`, updatedAt: 1 },
         );
       }
+      await closeOpenClawAgentDatabasesAsync(stateDir);
       closeOpenClawAgentDatabasesForTest();
       runOpenClawStateWriteTransaction(
         (database) => {
@@ -411,6 +415,7 @@ it("re-registers durable lineage children before configured-only runtime reads",
       agentId: "codex",
       env,
     }).path;
+    await closeOpenClawAgentDatabasesAsync(stateDir);
     closeOpenClawAgentDatabasesForTest();
     unregisterOpenClawAgentDatabase({ agentId: "codex", env, path: childDatabasePath });
 
@@ -475,6 +480,7 @@ it("keeps copied state directories self-contained for combined gateway reads", a
       { agentId: "main", env, sessionKey },
       { sessionId: "copied-session", updatedAt: 1 },
     );
+    await closeOpenClawAgentDatabasesAsync(canonicalSourceStateDir);
     closeOpenClawAgentDatabasesForTest();
     closeOpenClawStateDatabaseForTest();
     invalidateRegisteredAgentDatabasesMemo({ env });

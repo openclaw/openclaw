@@ -11,13 +11,13 @@ import {
 } from "./openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import {
+  selectProfileAccessEntries,
   selectStoredGitHubIdentities,
   selectUserProfileGitHubIdentities,
 } from "./user-profile-github-identity.js";
 import {
   matchUserProfileReference,
   resolveCatalogProfile,
-  selectProfileDisplayEntries,
   projectUserProfileDisplay,
   selectResolvedUserProfile,
   selectUserProfileEmailAlias,
@@ -30,7 +30,12 @@ import {
   ensureUserProfilesSchema,
   hasEnsuredUserProfileRoleSchema,
 } from "./user-profiles-schema.js";
-import type { ProfileDisplayRow, UserProfileEmailBinding } from "./user-profiles.types.js";
+import type {
+  ProfileDisplayRow,
+  UserProfileEmailBinding,
+  UserProfileIdentity,
+  UserProfileAuthority,
+} from "./user-profiles.types.js";
 
 export const profileCatalogPath = (options: OpenClawStateDatabaseOptions) =>
   path.resolve(options.path ?? resolveOpenClawStateSqlitePath(options.env ?? process.env));
@@ -144,7 +149,10 @@ export function readUserProfileSnapshotSync(
 }
 
 /** Resolve current authority and display together on the caller's admitted connection. */
-export function readUserProfileAuthorityInDatabase(db: DatabaseSync, profileId: string) {
+export function readUserProfileAuthorityInDatabase(
+  db: DatabaseSync,
+  profileId: string,
+): UserProfileAuthority | undefined {
   return runSqliteDeferredTransactionSync(db, () => {
     const current = tableExists(db, "user_profiles")
       ? selectResolvedUserProfileMetadataById(db, profileId)
@@ -152,7 +160,7 @@ export function readUserProfileAuthorityInDatabase(db: DatabaseSync, profileId: 
     if (!current) {
       return undefined;
     }
-    const display = selectProfileDisplayEntries(db, [current.id])[0]?.[1];
+    const display = selectProfileAccessEntries(db, [current.id])[0]?.[1];
     if (!display) {
       return undefined;
     }
@@ -167,6 +175,7 @@ export function readUserProfileAuthorityInDatabase(db: DatabaseSync, profileId: 
     return {
       profileId: current.id,
       role: current.role ?? null,
+      githubLogin: display.githubLogin ?? null,
       aliases: [current.id, ...aliases.map((alias) => alias.id)],
       display: projectUserProfileDisplay(display),
     };
@@ -222,7 +231,10 @@ export function selectHasMultipleSessionSharingIdentities(db: DatabaseSync): boo
 }
 
 /** Exact canonical identity and aliases selected on the caller's admitted connection. */
-export function selectUserProfileIdentityInDatabase(db: DatabaseSync, profileId: string) {
+export function selectUserProfileIdentityInDatabase(
+  db: DatabaseSync,
+  profileId: string,
+): UserProfileIdentity | undefined {
   const profile = selectResolvedUserProfileMetadataById(db, profileId);
   return (
     profile && {

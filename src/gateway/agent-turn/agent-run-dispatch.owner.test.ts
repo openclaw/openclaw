@@ -201,11 +201,14 @@ describe("Gateway dispatch run ownership", () => {
   });
 
   it.each(["success", "failure", "cancelled"] as const)(
-    "awaits continuation settlement before releasing the run and reporting %s",
+    "joins continuation and input settlement before publishing final or replay for %s",
     async (outcome) => {
       const { runId, entry, params } = createDispatch();
       const entered = createDeferred();
       const resume = createDeferred();
+      const cleanupEntered = createDeferred();
+      const finishCleanup = createDeferred();
+      let recover: (() => void) | undefined;
       mocks.agentCommand.mockImplementationOnce(async () => {
         if (outcome === "failure") {
           throw new Error("Synthetic active run failure");
@@ -218,7 +221,12 @@ describe("Gateway dispatch run ownership", () => {
       });
       const { emitFinal } = params.io;
       const { cleanupAbortController } = params;
-      const onSettled = vi.fn(async () => {
+      cleanupAbortController.mockImplementation(async () => {
+        cleanupEntered.resolve();
+        await finishCleanup.promise;
+      });
+      const onSettled = vi.fn(async ({ onRecovered }: { onRecovered?: () => void }) => {
+        recover = onRecovered;
         entered.resolve();
         await resume.promise;
         return true;
@@ -232,7 +240,14 @@ describe("Gateway dispatch run ownership", () => {
         expect(emitFinal).not.toHaveBeenCalled();
         expect(cleanupAbortController).not.toHaveBeenCalled();
         resume.resolve();
+        await cleanupEntered.promise;
+        expect(emitFinal).not.toHaveBeenCalled();
+        expect(setGatewayDedupeEntries).not.toHaveBeenCalled();
+        recover?.();
+        expect(setGatewayDedupeEntries).not.toHaveBeenCalled();
+        finishCleanup.resolve();
         await completion;
+        expect(setGatewayDedupeEntries).toHaveBeenCalledOnce();
         expect(cleanupAbortController).toHaveBeenCalledOnce();
         expect(emitFinal).toHaveBeenCalledOnce();
         expect(emitFinal).toHaveBeenCalledWith(
@@ -250,6 +265,7 @@ describe("Gateway dispatch run ownership", () => {
         );
       } finally {
         resume.resolve();
+        finishCleanup.resolve();
         await completion;
       }
     },

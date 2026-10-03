@@ -91,10 +91,12 @@ describe("cli json stdout contract", () => {
         const configPath = path.join(tempHome, "missing-openclaw.json");
         const stateDir = path.join(tempHome, "isolated-state");
         const gatewayError = "AUTOQA_INJECTED_GATEWAY_FAILURE";
+        const concurrentSparkplug = "AUTOQA_CONCURRENT_SPARKPLUG";
         const preload = Buffer.from(
           [
             'import net from "node:net";',
             `net.Socket.prototype.connect = function () { throw new Error(${JSON.stringify(gatewayError)}); };`,
+            `if (!process.versions.bun && !process.execArgv.includes("--no-concurrent-sparkplug")) process.stderr.write(${JSON.stringify(`${concurrentSparkplug}\n`)});`,
             ...("configReadFailure" in testCase
               ? [
                   'import fs from "node:fs";',
@@ -129,6 +131,8 @@ describe("cli json stdout contract", () => {
           { execArgv: [`--import=data:text/javascript;base64,${preload}`] },
         );
 
+        // Concurrent Sparkplug can deadlock process.exit, so the child times out with status null.
+        expect(result.stderr).not.toContain(concurrentSparkplug);
         expect(result.status, result.stderr).toBe(1);
         expect(result.stdout, result.stderr).not.toContain("\u001B");
         expect(result.stdout, result.stderr).not.toContain("\u0007");

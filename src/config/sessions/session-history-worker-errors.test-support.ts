@@ -23,7 +23,6 @@ type QuarantineDatabase = {
   close: () => void;
 };
 const observed = vi.hoisted(() => ({
-  handler: undefined as ((input: unknown) => unknown) | undefined,
   receive: undefined as ((message: Request) => void) | undefined,
   post: vi.fn<(message: unknown) => void>(),
   read: vi.fn<() => unknown>(),
@@ -105,16 +104,6 @@ vi.mock("../../infra/worker-task-pool.js", async (importOriginal) => {
     },
   };
 });
-vi.mock("../../infra/worker-task-server.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../infra/worker-task-server.js")>();
-  return {
-    ...actual,
-    serveOwnedWorkerTasks: (handler: (input: unknown) => unknown) => {
-      observed.handler = handler;
-      actual.serveOwnedWorkerTasks(handler);
-    },
-  };
-});
 vi.mock("../../state/openclaw-agent-db-resources.js", () => ({
   matchesAgentDatabaseReadCandidatePath: (candidate: { path: string }, targetPath: string) =>
     candidate.path === targetPath,
@@ -158,7 +147,7 @@ vi.mock("./disk-budget-runtime.js", () => ({
 vi.mock("./session-transcript-hydration.worker.js", () => ({
   streamSessionTranscriptHydration: observed.hydrate,
 }));
-vi.mock("./session-accessor.sqlite-entry.js", () => ({
+vi.mock("./session-accessor.sqlite-exact-read.js", () => ({
   loadSessionEntryReadOnlyInScope: () => observed.read(),
 }));
 vi.mock("./session-sharing-store.js", () => ({

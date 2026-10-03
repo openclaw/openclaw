@@ -288,9 +288,7 @@ export function createReplyRestartRecoveryClaimController(params: {
       deliveryContext && sourceTurnId ? deliveryContext : undefined;
     if (recoverableDeliveryContext) {
       const sourceMessage = recorder?.getPersistedMessage?.() ?? (await recorder?.resolveMessage());
-      const persistedSourceTurnId = normalizeOptionalString(
-        (sourceMessage as { idempotencyKey?: unknown } | undefined)?.idempotencyKey,
-      );
+      const persistedSourceTurnId = normalizeOptionalString(sourceMessage?.idempotencyKey);
       if (!recorder || persistedSourceTurnId !== sourceTurnId) {
         throw new Error("channel restart recovery requires source-keyed user-turn admission");
       }
@@ -493,11 +491,13 @@ export function createReplyRestartRecoveryClaimController(params: {
       {
         // Restart recovery can reuse this run id. Validate after async patch preparation,
         // inside the synchronous commit, so old cleanup cannot retire its successor's route.
-        assertCommitAllowed: () => {
-          assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
-          if (params.isRestartAbort()) {
-            throw createAgentRunStaleLifecycleError();
-          }
+        workerGuard: {
+          assertCurrent: () => {
+            assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
+            if (params.isRestartAbort()) {
+              throw createAgentRunStaleLifecycleError();
+            }
+          },
         },
       },
     );

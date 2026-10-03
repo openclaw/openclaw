@@ -1,46 +1,26 @@
-import type { AllMiddlewareArgs } from "@slack/bolt";
-import type { AgentSessionStoppedEvent, AgentSessionTitleChangedEvent } from "@slack/types";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { resolveSlackAccount } from "../../accounts.js";
 import { getSlackRuntime } from "../../runtime.js";
 import { markSlackStreamsStopped } from "../../streaming.js";
 import { authorizeSlackSystemEventSender } from "../auth.js";
+import { resolveSlackChatType } from "../channel-type.js";
 import type { SlackMonitorContext } from "../context.js";
 import { resolveSlackSenderAuthentication } from "../ingress.js";
 import { resolveSlackSessionEventRoutingContext } from "../message-handler/prepare-routing.js";
 import { getSlackSessionRuns } from "../session-run-targets.js";
 import { createSlackCommandHandler, deliverSlackSlashResponseWithWebApi } from "../slash.js";
-import type { SlackAppContextChangedEvent } from "../types.js";
 import { resolveSlackListenerEventScope } from "./system-event-context.js";
-
-type SlackAgentEvent =
-  | SlackAppContextChangedEvent
-  | AgentSessionStoppedEvent
-  | AgentSessionTitleChangedEvent;
-
-type SlackAgentEventHandler<Event extends SlackAgentEvent> = (args: {
-  event: Event;
-  body: unknown;
-  context?: AllMiddlewareArgs["context"];
-  client?: AllMiddlewareArgs["client"];
-}) => Promise<void>;
-
-type SlackAgentEventRegistrar = <Name extends SlackAgentEvent["type"]>(
-  name: Name,
-  handler: SlackAgentEventHandler<Extract<SlackAgentEvent, { type: Name }>>,
-) => void;
 
 export function registerSlackAgentEvents(params: {
   ctx: SlackMonitorContext;
   trackEvent?: () => void;
 }) {
   const { ctx, trackEvent } = params;
-  const slackApp = ctx.app as unknown as { event: SlackAgentEventRegistrar };
   const account = resolveSlackAccount({ cfg: ctx.cfg, accountId: ctx.accountId });
   const handleCommand = createSlackCommandHandler({ ctx, account, trackEvent });
 
-  slackApp.event("app_context_changed", async ({ body }) => {
+  ctx.app.event("app_context_changed", async ({ body }) => {
     if (ctx.shouldDropMismatchedSlackEvent(body)) {
       return;
     }
@@ -48,7 +28,7 @@ export function registerSlackAgentEvents(params: {
     await ctx.recordSlackAgentView();
   });
 
-  slackApp.event("agent_session_stopped", async ({ event, body, context, client }) => {
+  ctx.app.event("agent_session_stopped", async ({ event, body, context, client }) => {
     if (ctx.shouldDropMismatchedSlackEvent(body)) {
       return;
     }
@@ -119,7 +99,7 @@ export function registerSlackAgentEvents(params: {
     });
   });
 
-  slackApp.event("agent_session_title_changed", async ({ event, body, context, client }) => {
+  ctx.app.event("agent_session_title_changed", async ({ event, body, context, client }) => {
     const runtimeContext = await params.ctx.readRuntimeContext();
     const runtimeAccount = resolveSlackAccount({
       cfg: runtimeContext.cfg,
@@ -148,9 +128,6 @@ export function registerSlackAgentEvents(params: {
       if (!auth.allowed) {
         return;
       }
-      const isDirectMessage = auth.channelType === "im";
-      const isGroupDm = auth.channelType === "mpim";
-      const isRoom = auth.channelType === "channel" || auth.channelType === "group";
       const routing = await resolveSlackSessionEventRoutingContext({
         intent: "title",
         ctx: runtimeContext,
@@ -162,10 +139,7 @@ export function registerSlackAgentEvents(params: {
           ts: event.event_ts,
           thread_ts: event.thread_ts,
         },
-        isDirectMessage,
-        isGroupDm,
-        isRoom,
-        isRoomish: isRoom || isGroupDm,
+        chatType: resolveSlackChatType(auth.channelType),
         eventScope,
       });
       const updated = await getSlackRuntime().agent.session.patchSessionEntry({

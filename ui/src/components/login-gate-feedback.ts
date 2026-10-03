@@ -83,22 +83,24 @@ export type LoginFailureFeedbackParams = Parameters<typeof resolveAuthHintKind>[
   reconnectAt?: number;
 };
 
-function buildFeedback(params: {
-  kind: LoginFailureKind;
-  placement?: LoginFailurePlacement;
-  tone?: LoginFailureTone;
-  field?: LoginFormField;
-  rawError: string;
-  docsHref?: string;
-  titleKey: string;
-  summaryKey?: string;
-  primaryCommand?: string;
-  stepKeys: LoginFailureStepDefinition[];
-  stepParams?: Record<string, string>;
-  refreshAction?: { label: string };
-}): LoginFailureFeedback {
+function buildFeedback(
+  error: string,
+  params: {
+    kind: LoginFailureKind;
+    placement?: LoginFailurePlacement;
+    tone?: LoginFailureTone;
+    field?: LoginFormField;
+    docsHref?: string;
+    titleKey: string;
+    summaryKey?: string;
+    primaryCommand?: string;
+    stepKeys: LoginFailureStepDefinition[];
+    stepParams?: Record<string, string>;
+    refreshAction?: { label: string };
+  },
+): LoginFailureFeedback {
   const docsHref = params.docsHref ?? "https://docs.openclaw.ai/web/dashboard";
-  const rawError = redactLoginFailureError(params.rawError);
+  const rawError = redactLoginFailureError(error);
   return {
     kind: params.kind,
     placement: params.placement ?? "status",
@@ -131,10 +133,9 @@ export function resolveLoginFailureFeedback(
   const host = formatGatewayHost(params.gatewayUrl);
 
   if (lastErrorCode === "GATEWAY_BUSY" && params.reconnectPending) {
-    return buildFeedback({
+    return buildFeedback(rawError, {
       kind: "busy",
       tone: "pending",
-      rawError,
       titleKey: "login.failure.busy.title",
       summaryKey: "login.failure.busy.summary",
       stepKeys: [],
@@ -142,10 +143,9 @@ export function resolveLoginFailureFeedback(
   }
 
   if (lastErrorCode === ConnectErrorDetailCodes.AUTH_BOOTSTRAP_TOKEN_INVALID) {
-    return buildFeedback({
+    return buildFeedback(rawError, {
       kind: "bootstrap-invalid",
       tone: "warn",
-      rawError,
       titleKey: "login.failure.bootstrapInvalid.title",
       summaryKey: "login.failure.bootstrapInvalid.summary",
       primaryCommand: "openclaw dashboard",
@@ -161,10 +161,9 @@ export function resolveLoginFailureFeedback(
   }
 
   if (lastErrorCode === ConnectErrorDetailCodes.AUTHENTICATED_PROFILE_UNAVAILABLE) {
-    return buildFeedback({
+    return buildFeedback(rawError, {
       kind: "profile-unavailable",
       tone: "pending",
-      rawError,
       titleKey: "login.failure.profileUnavailable.title",
       summaryKey: "login.failure.profileUnavailable.summary",
       stepKeys: [
@@ -176,9 +175,8 @@ export function resolveLoginFailureFeedback(
   }
 
   if (lastErrorCode === ConnectErrorDetailCodes.AUTH_VERIFIED_USER_REQUIRED) {
-    return buildFeedback({
+    return buildFeedback(rawError, {
       kind: "verified-user-required",
-      rawError,
       titleKey: "login.failure.verifiedUserRequired.title",
       summaryKey: "login.failure.verifiedUserRequired.summary",
       stepKeys: [
@@ -190,10 +188,9 @@ export function resolveLoginFailureFeedback(
   }
 
   if (lastErrorCode === ConnectErrorDetailCodes.OPERATOR_ACCESS_DENIED) {
-    return buildFeedback({
+    return buildFeedback(rawError, {
       kind: "access-denied",
       tone: "warn",
-      rawError,
       titleKey: "login.failure.accessDenied.title",
       summaryKey: "login.failure.accessDenied.summary",
       stepKeys: [
@@ -209,10 +206,9 @@ export function resolveLoginFailureFeedback(
   }
 
   if (lastErrorCode === ConnectErrorDetailCodes.CONTROL_UI_BUILD_MISMATCH) {
-    return buildFeedback({
+    return buildFeedback(rawError, {
       kind: "build-mismatch",
       tone: "pending",
-      rawError,
       titleKey: "chat.sidebar.serverUpdatedTitle",
       summaryKey: "chat.sidebar.serverUpdatedRefresh",
       refreshAction: { label: t("login.failure.protocol.refresh") },
@@ -223,10 +219,9 @@ export function resolveLoginFailureFeedback(
 
   const pairing = resolvePairingHint(false, rawError, lastErrorCode);
   if (pairing) {
-    return buildFeedback({
+    return buildFeedback(rawError, {
       kind: "pairing-required",
       tone: "pending",
-      rawError,
       docsHref: "https://docs.openclaw.ai/web/control-ui#device-pairing-first-connection",
       titleKey:
         pairing.kind === "scope-upgrade-pending"
@@ -259,10 +254,9 @@ export function resolveLoginFailureFeedback(
     lower.includes("too many failed authentication attempts") ||
     lower.includes("rate limit")
   ) {
-    return buildFeedback({
+    return buildFeedback(rawError, {
       kind: "auth-rate-limited",
       tone: "warn",
-      rawError,
       titleKey: "login.failure.rateLimited.title",
       summaryKey: "login.failure.rateLimited.summary",
       stepKeys: [
@@ -274,9 +268,8 @@ export function resolveLoginFailureFeedback(
   }
 
   if (shouldShowInsecureContextHint(false, rawError, lastErrorCode)) {
-    return buildFeedback({
+    return buildFeedback(rawError, {
       kind: "insecure-context",
-      rawError,
       docsHref: "https://docs.openclaw.ai/web/control-ui#insecure-http",
       titleKey: "login.failure.insecure.title",
       summaryKey: "login.failure.insecure.summary",
@@ -288,9 +281,8 @@ export function resolveLoginFailureFeedback(
     lastErrorCode === ConnectErrorDetailCodes.CONTROL_UI_ORIGIN_NOT_ALLOWED ||
     lower.includes("origin not allowed")
   ) {
-    return buildFeedback({
+    return buildFeedback(rawError, {
       kind: "origin-not-allowed",
-      rawError,
       docsHref:
         "https://docs.openclaw.ai/web/control-ui/development#debugging%2Ftesting%3A-dev-server-%2B-remote-gateway",
       titleKey: "login.failure.origin.title",
@@ -304,9 +296,8 @@ export function resolveLoginFailureFeedback(
   }
 
   if (lower.includes("protocol mismatch")) {
-    return buildFeedback({
+    return buildFeedback(rawError, {
       kind: "protocol-mismatch",
-      rawError,
       docsHref:
         "https://docs.openclaw.ai/web/control-ui/development#debugging%2Ftesting%3A-dev-server-%2B-remote-gateway",
       titleKey: "login.failure.protocol.title",
@@ -323,9 +314,8 @@ export function resolveLoginFailureFeedback(
   const authHintKind = resolveAuthHintKind(params);
   const expectsPassword = isPasswordModeErrorCode(lastErrorCode);
   if (authHintKind === "trusted-proxy") {
-    return buildFeedback({
+    return buildFeedback(rawError, {
       kind: "trusted-proxy",
-      rawError,
       titleKey: "login.failure.trustedProxy.title",
       summaryKey: "login.failure.trustedProxy.summary",
       stepKeys: [
@@ -337,12 +327,11 @@ export function resolveLoginFailureFeedback(
     });
   }
   if (authHintKind === "required") {
-    return buildFeedback({
+    return buildFeedback(rawError, {
       kind: "auth-required",
       placement: "form",
       tone: "warn",
       field: "credential",
-      rawError,
       titleKey: expectsPassword
         ? "login.failure.authRequired.passwordTitle"
         : "login.failure.authRequired.title",
@@ -364,11 +353,10 @@ export function resolveLoginFailureFeedback(
     });
   }
   if (authHintKind === "failed") {
-    return buildFeedback({
+    return buildFeedback(rawError, {
       kind: "auth-failed",
       placement: "form",
       field: "credential",
-      rawError,
       titleKey: expectsPassword
         ? "login.failure.authRequired.passwordTitle"
         : lastErrorCode === ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH
@@ -393,12 +381,11 @@ export function resolveLoginFailureFeedback(
     });
   }
 
-  return buildFeedback({
+  return buildFeedback(rawError, {
     kind: "network",
     placement: "form",
     tone: "warn",
     field: "url",
-    rawError,
     titleKey: "login.failure.network.title",
     summaryKey: "login.failure.network.summary",
     stepKeys: [

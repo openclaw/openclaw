@@ -447,14 +447,34 @@ describe("update run report", () => {
     expect(report.markdown).toContain(guidance);
   });
 
-  it("reports changed git commits when the package version stays the same", () => {
-    const report = renderUpdateRunReport(
-      run({
-        before: { version: "2026.8.1", sha: "1111111111111111111111111111111111111111" },
-        after: { version: "2026.8.1", sha: "9f3c21a0000000000000000000000000000000aa" },
-      }),
-    );
-    expect(report.headline).toBe("✅ OpenClaw updated to 9f3c21a0 (from 11111111).");
+  it.each([
+    {
+      label: "version upgrade without a recorded previous commit",
+      before: { version: "2026.9.6" },
+      after: { version: "2026.9.7", sha: "2dd93a290b748686160b4a478b7ee003cc0f9f24" },
+      expected: "2026.9.7 (2dd93a29) (from 2026.9.6)",
+    },
+    {
+      label: "version upgrade with both commits",
+      before: { version: "2026.9.6", sha: "1111111111111111111111111111111111111111" },
+      after: { version: "2026.9.7", sha: "9f3c21a0000000000000000000000000000000aa" },
+      expected: "2026.9.7 (9f3c21a0) (from 2026.9.6 (11111111))",
+    },
+    {
+      label: "commit change within the same version",
+      before: { version: "2026.8.1", sha: "1111111111111111111111111111111111111111" },
+      after: { version: "2026.8.1", sha: "9f3c21a0000000000000000000000000000000aa" },
+      expected: "2026.8.1 (9f3c21a0) (from 2026.8.1 (11111111))",
+    },
+    {
+      label: "legacy record with only commits",
+      before: { sha: "1111111111111111111111111111111111111111" },
+      after: { sha: "9f3c21a0000000000000000000000000000000aa" },
+      expected: "9f3c21a0 (from 11111111)",
+    },
+  ])("identifies the installed version and revision for $label", ({ before, after, expected }) => {
+    const report = renderUpdateRunReport(run({ before, after }));
+    expect(report.headline).toBe(`✅ OpenClaw updated to ${expected}.`);
     expect(report.markdown).toContain(report.headline);
   });
 

@@ -6,7 +6,7 @@ import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
-import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import { createLazyPromise, createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { resolveRepoBundledPluginEnv } from "./repo-bundled-plugin-env.js";
 import type { ConfigSchemaResponse } from "./schema.js";
 import {
@@ -91,8 +91,6 @@ const DEFAULT_CHANNEL_OUTPUT = "docs/.generated/config-baseline.channel.json";
 const DEFAULT_PLUGIN_OUTPUT = "docs/.generated/config-baseline.plugin.json";
 const DEFAULT_HASH_OUTPUT = "docs/.generated/config-baseline.sha256";
 const DEFAULT_COUNTS_OUTPUT = "docs/.generated/config-baseline.counts.json";
-// A successful schema snapshot is process-stable; failures clear below so tooling can retry.
-let cachedConfigDocBaselinePromise: Promise<ConfigDocBaseline> | null = null;
 const uiHintIndexCache = new WeakMap<
   ConfigSchemaResponse["uiHints"],
   Map<number, Array<{ parts: string[]; hint: ConfigSchemaResponse["uiHints"][string] }>>
@@ -425,37 +423,26 @@ function dedupeConfigDocBaselineEntries(
   );
 }
 
-async function buildConfigDocBaseline(): Promise<ConfigDocBaseline> {
-  if (cachedConfigDocBaselinePromise) {
-    return await cachedConfigDocBaselinePromise;
+const buildConfigDocBaseline = createLazyPromise(async (): Promise<ConfigDocBaseline> => {
+  const response = await loadBundledConfigSchemaResponse();
+  const schemaRoot = asSchemaObject(response.schema);
+  if (!schemaRoot) {
+    throw new Error("config schema root is not an object");
   }
-  cachedConfigDocBaselinePromise = (async () => {
-    const response = await loadBundledConfigSchemaResponse();
-    const schemaRoot = asSchemaObject(response.schema);
-    if (!schemaRoot) {
-      throw new Error("config schema root is not an object");
-    }
-    const entries = dedupeConfigDocBaselineEntries(
-      collectConfigDocBaselineEntries(schemaRoot, response.uiHints),
-    );
-    const baseline: ConfigDocBaseline = {
-      generatedBy: GENERATED_BY,
-      coreEntries: [],
-      channelEntries: [],
-      pluginEntries: [],
-    };
-    for (const entry of entries) {
-      baseline[`${entry.kind}Entries`].push(entry);
-    }
-    return baseline;
-  })();
-  try {
-    return await cachedConfigDocBaselinePromise;
-  } catch (error) {
-    cachedConfigDocBaselinePromise = null;
-    throw error;
+  const entries = dedupeConfigDocBaselineEntries(
+    collectConfigDocBaselineEntries(schemaRoot, response.uiHints),
+  );
+  const baseline: ConfigDocBaseline = {
+    generatedBy: GENERATED_BY,
+    coreEntries: [],
+    channelEntries: [],
+    pluginEntries: [],
+  };
+  for (const entry of entries) {
+    baseline[`${entry.kind}Entries`].push(entry);
   }
-}
+  return baseline;
+});
 
 function renderKindBaseline(
   kind: ConfigDocBaselineKind,

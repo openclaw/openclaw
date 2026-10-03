@@ -1,10 +1,8 @@
-import type { SessionFreshness } from "../../config/sessions/reset.js";
 import type { SessionResetBoundaryWrite } from "../../config/sessions/session-accessor.lifecycle-types.js";
 import {
   createSessionResetBoundaryId,
   type SessionResetBoundaryRequest,
 } from "../../config/sessions/session-reset-boundary-event.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
 import { createResetBoundaryTranscriptSource } from "../../gateway/session-end-transcript-reader.js";
 import type {
   PluginHookSessionEndEvent,
@@ -27,13 +25,6 @@ export function resolveExplicitSessionEndReason(
   matchedResetTriggerLower?: string,
 ): Extract<ReplySessionEndReason, "new" | "reset"> {
   return matchedResetTriggerLower === "/reset" ? "reset" : "new";
-}
-
-export function resolveStaleSessionEndReason(params: {
-  entry: SessionEntry | undefined;
-  freshness?: SessionFreshness;
-}): ReplySessionEndReason | undefined {
-  return params.entry ? params.freshness?.staleReason : undefined;
 }
 
 export function createReplySessionResetBoundary(params: {

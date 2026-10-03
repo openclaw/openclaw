@@ -13,10 +13,13 @@ const runtime = vi.hoisted(() => ({ beforeHandler: vi.fn<() => Promise<void>>() 
 vi.mock("./authenticated-request-dispatch.server-methods.runtime.js", async () => {
   const { sessionSubscriptionHandlers } =
     await import("../../server-methods/sessions-subscriptions.js");
+  const { sessionObserverHandlers } = await import("../../session-observer-rpc.js");
   return {
     handleGatewayRequest: async (options: GatewayRequestOptions) => {
       await runtime.beforeHandler();
-      const handler = sessionSubscriptionHandlers[options.req.method];
+      const handler =
+        sessionSubscriptionHandlers[options.req.method] ??
+        sessionObserverHandlers[options.req.method];
       if (!handler) {
         throw new Error(`missing test handler for ${options.req.method}`);
       }
@@ -37,14 +40,25 @@ describe("authenticated request connection liveness", { concurrent: false }, () 
     {
       method: "sessions.subscribe",
       params: {},
+      expectedResponse: { ok: true },
       assertEmpty: (state: ReturnType<typeof createGatewayConnectionState>) =>
         expect(state.sessionEventSubscribers.getAll()).toEqual(new Set()),
     },
     {
       method: "sessions.messages.subscribe",
       params: { key: "agent:main:main" },
+      expectedResponse: { ok: true },
       assertEmpty: (state: ReturnType<typeof createGatewayConnectionState>) =>
         expect(state.sessionMessageSubscribers.get("agent:main:main")).toEqual(new Set()),
+    },
+    {
+      method: "sessions.observer.visibility",
+      params: { visible: true },
+      expectedResponse: { ok: false, error: { code: "FORBIDDEN" } },
+      assertEmpty: (
+        _state: ReturnType<typeof createGatewayConnectionState>,
+        setConnectionVisibility: ReturnType<typeof vi.fn>,
+      ) => expect(setConnectionVisibility).not.toHaveBeenCalled(),
     },
   ])("rejects a late $method mutation after disconnect cleanup", async (testCase) => {
     const held = createDeferredCore();
@@ -64,6 +78,7 @@ describe("authenticated request connection liveness", { concurrent: false }, () 
       scopes: ["operator.read"],
     });
     state.clients.add(client);
+    const setConnectionVisibility = vi.fn();
     const harness = createDispatchTestHarness({
       connId: client.connId,
       buildRequestContext: () => ({
@@ -71,6 +86,8 @@ describe("authenticated request connection liveness", { concurrent: false }, () 
         logGateway: { error: vi.fn() },
         subscribeSessionEvents: state.sessionEventSubscribers.subscribe,
         subscribeSessionMessageEvents: state.sessionMessageSubscribers.subscribe,
+        isConnectionActive: state.isConnectionActive,
+        sessionObserver: { setConnectionVisibility },
       }),
     });
 
@@ -89,7 +106,9 @@ describe("authenticated request connection liveness", { concurrent: false }, () 
       await dispatch;
     }
 
-    expect(await harness.awaitResponseFrame(testCase.method)).toMatchObject({ ok: true });
-    testCase.assertEmpty(state);
+    expect(await harness.awaitResponseFrame(testCase.method)).toMatchObject(
+      testCase.expectedResponse,
+    );
+    testCase.assertEmpty(state, setConnectionVisibility);
   });
 });

@@ -70,7 +70,6 @@ describe("PR failure cancellation", () => {
               configs: ["test/vitest/vitest.unit-fast.config.ts"], requiresDist: false,
               runner: "blacksmith-4vcpu-ubuntu-2404" }];
           }
-          export function createChangedExtensionFallbackShards() { return []; }
         `,
       });
       expect(manifest.status, manifest.output).toBe(0);

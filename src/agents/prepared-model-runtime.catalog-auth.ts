@@ -2,12 +2,14 @@ import { isDeepStrictEqual } from "node:util";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import type { ProviderCatalogOutcome } from "../plugins/provider-catalog-outcome.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
+import { isUserModelAuthProfileId } from "../state/user-model-account-id.js";
 import { resolveUsableAgentCredentialModes } from "./agent-auth-credentials.js";
 import { withPreparedAuthStorePathForDisplay } from "./auth-profiles/paths.js";
 import { mergeAuthProfileStores } from "./auth-profiles/persisted.js";
 import { removeRuntimeExternalProfileReferences } from "./auth-profiles/runtime-external-profile-references.js";
 import type { AuthProfileCredential, RuntimeAuthProfileStore } from "./auth-profiles/types.js";
 import { prepareModelCatalogAuthLabels } from "./model-catalog-auth-labels.js";
+import { normalizeCatalogRouteBaseUrl } from "./model-compat-catalog.js";
 import type {
   PreparedAccountCatalogAccess,
   PreparedModelCatalogAuth,
@@ -15,55 +17,149 @@ import type {
 import type { PreparedModelRuntimeCatalogAccessParams } from "./prepared-model-runtime.catalog-contract.js";
 import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
 
+type ModelServiceTierObservation = NonNullable<ProviderCatalogOutcome["modelServiceTiers"]>[number];
+type AccountCatalogObservation = {
+  credential: AuthProfileCredential;
+  result?: Promise<readonly ProviderCatalogOutcome[]>;
+  outcomes?: readonly ProviderCatalogOutcome[];
+  modelServiceTiers?: readonly ModelServiceTierObservation[];
+};
+
+function matchesServiceTierRoute(
+  observation: ModelServiceTierObservation,
+  route: Omit<ModelServiceTierObservation, "serviceTiers">,
+): boolean {
+  return (
+    observation.modelId === route.modelId &&
+    observation.runtimeId === route.runtimeId &&
+    observation.api === route.api &&
+    observation.baseUrl === route.baseUrl
+  );
+}
+
 /** The existing catalog generation owns selected-account initialization and explicit refresh. */
 export function createPreparedAccountCatalogAccess(
   isCurrent: () => boolean,
   retirementSignal?: AbortSignal,
 ): PreparedAccountCatalogAccess {
   const ownerIsCurrent = () => !retirementSignal?.aborted && isCurrent();
-  const accounts = new Map<
-    string,
-    {
-      credential: AuthProfileCredential;
-      result: Promise<readonly ProviderCatalogOutcome[]>;
-      outcomes?: readonly ProviderCatalogOutcome[];
+  const accounts = new Map<string, AccountCatalogObservation>();
+  const readAccount = (profileId: string, credential: AuthProfileCredential) => {
+    const account = accounts.get(profileId);
+    if (account && !isDeepStrictEqual(account.credential, credential)) {
+      accounts.delete(profileId);
+      return undefined;
     }
-  >();
+    return account;
+  };
+  const createAccount = (profileId: string, credential: AuthProfileCredential) => {
+    const account: AccountCatalogObservation = { credential: structuredClone(credential) };
+    accounts.set(profileId, account);
+    pruneMapToMaxSize(accounts, 64);
+    return account;
+  };
   retirementSignal?.addEventListener("abort", () => accounts.clear(), { once: true });
   return {
+    reconcileAuth(authStore, includesProvider, profileIds) {
+      if (!ownerIsCurrent()) {
+        return;
+      }
+      for (const [profileId, account] of accounts) {
+        const credential = authStore.profiles[profileId];
+        // Shared auth refresh never loads unselected personal accounts.
+        if (!credential && isUserModelAuthProfileId(profileId)) {
+          continue;
+        }
+        if (
+          (includesProvider(account.credential.provider) || profileIds?.includes(profileId)) &&
+          !isDeepStrictEqual(account.credential, credential)
+        ) {
+          accounts.delete(profileId);
+        }
+      }
+    },
+    readServiceTiers(params) {
+      if (!ownerIsCurrent()) {
+        return undefined;
+      }
+      const route = {
+        ...params,
+        baseUrl: normalizeCatalogRouteBaseUrl(params.baseUrl) ?? params.baseUrl,
+      };
+      const observation = accounts
+        .get(params.profileId)
+        ?.modelServiceTiers?.find((candidate) => matchesServiceTierRoute(candidate, route));
+      return observation && [...observation.serviceTiers];
+    },
+    prepareServiceTierObserver(params) {
+      if (!ownerIsCurrent()) {
+        return () => false;
+      }
+      const captured =
+        readAccount(params.profileId, params.credential) ??
+        createAccount(params.profileId, params.credential);
+      return (observation) => {
+        if (!ownerIsCurrent() || accounts.get(params.profileId) !== captured) {
+          return false;
+        }
+        const route = {
+          ...observation,
+          baseUrl: normalizeCatalogRouteBaseUrl(observation.baseUrl) ?? observation.baseUrl,
+        };
+        const previous = captured.modelServiceTiers?.find((candidate) =>
+          matchesServiceTierRoute(candidate, route),
+        );
+        if (isDeepStrictEqual(previous?.serviceTiers, observation.serviceTiers)) {
+          return false;
+        }
+        captured.modelServiceTiers = [
+          ...(captured.modelServiceTiers ?? [])
+            .filter((candidate) => !matchesServiceTierRoute(candidate, route))
+            .slice(-127),
+          { ...route, serviceTiers: [...observation.serviceTiers] },
+        ];
+        return true;
+      };
+    },
     async acquire(params) {
       if (!ownerIsCurrent()) {
         throw new PreparedModelRuntimePublicationSupersededError(
           "Selected account catalog changed",
         );
       }
-      let observation = accounts.get(params.profileId);
-      if (observation && !isDeepStrictEqual(observation.credential, params.credential)) {
+      if (params.allowDiscovery && params.refresh) {
         accounts.delete(params.profileId);
-        observation = undefined;
       }
-      if (!observation || (params.allowDiscovery && params.refresh)) {
+      let observation = readAccount(params.profileId, params.credential);
+      if (!observation) {
         if (!params.allowDiscovery) {
           return { outcomes: [], isCurrent: ownerIsCurrent };
         }
-        const result = Promise.resolve().then(params.load);
-        observation = { credential: structuredClone(params.credential), result };
-        accounts.set(params.profileId, observation);
-        pruneMapToMaxSize(accounts, 64);
+        observation = createAccount(params.profileId, params.credential);
+      }
+      // A response observation does not mean this account's catalog was discovered.
+      if (params.allowDiscovery && !observation.result) {
+        observation.result = Promise.resolve().then(params.load);
       }
       // Startup/read-only projections never join an in-flight remote acquisition.
-      if (!params.allowDiscovery && !observation.outcomes) {
+      const result = observation.result;
+      if (!result || (!params.allowDiscovery && !observation.outcomes)) {
         return { outcomes: [], isCurrent: ownerIsCurrent };
       }
       const captured = observation;
       const current = () => ownerIsCurrent() && accounts.get(params.profileId) === captured;
       let outcomes: readonly ProviderCatalogOutcome[];
       try {
-        outcomes = captured.outcomes ?? (await captured.result);
+        outcomes = captured.outcomes ?? (await result);
       } catch (error) {
         // A revoked request cannot poison a later authorized selection of this account.
         if (current()) {
-          accounts.delete(params.profileId);
+          if (captured.modelServiceTiers?.length) {
+            // Catalog failure cannot erase a tier actually observed on the API route.
+            captured.result = undefined;
+          } else {
+            accounts.delete(params.profileId);
+          }
         }
         throw error;
       }

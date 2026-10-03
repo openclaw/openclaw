@@ -544,7 +544,7 @@ describe("realtime voice agent consult runtime", () => {
     };
     const mutationStarted = createDeferred();
     const releaseMutation = createDeferred();
-    const mutation = runExclusiveSessionLifecycleMutation({
+    const mutation = runExclusiveSessionLifecycleMutation("patch", {
       scope: testTempPath("sessions.json"),
       identities: [sessionKey, "active-session"],
       run: async () => {
@@ -758,6 +758,10 @@ describe("realtime voice agent consult runtime", () => {
     expect(forkedEntry).toStrictEqual({
       sessionId: "forked-session",
       spawnedBy: "agent:main:main",
+      // The consult child's lineage receipt; the fixture parent has no lifecycle revision.
+      spawnedBySessionId: "parent-session",
+      parentSessionLifecycleRevision: undefined,
+      spawnedBySenderIsOwner: false,
       forkedFromParent: true,
       createdVia: "talk",
       createdActor: { type: "human", source: "profile", id: "profile-required" },
@@ -869,6 +873,10 @@ describe("realtime voice agent consult runtime", () => {
     expect(voiceEntry).toStrictEqual({
       sessionId: voiceEntry.sessionId,
       spawnedBy: "agent:main:discord:channel:123",
+      // The consult child's lineage receipt; the fixture parent has no lifecycle revision.
+      spawnedBySessionId: "parent-session",
+      parentSessionLifecycleRevision: undefined,
+      spawnedBySenderIsOwner: false,
       createdVia: "talk",
       createdActor: { type: "agent", id: "agent:main:discord:channel:123" },
       createdAt: voiceEntry.createdAt,

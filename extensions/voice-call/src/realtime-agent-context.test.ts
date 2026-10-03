@@ -1,4 +1,3 @@
-// Voice Call tests cover realtime agent context plugin behavior.
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -57,230 +56,126 @@ function createCoreConfig(workspace: string): OpenClawConfig {
   };
 }
 
-function createConfig(overrides?: Partial<VoiceCallConfig["realtime"]>): VoiceCallConfig {
+function buildInstructions(
+  workspace: string,
+  context: Partial<VoiceCallConfig["realtime"]["agentContext"]> = {},
+  consultPolicy?: VoiceCallConfig["realtime"]["consultPolicy"],
+) {
   const config = createVoiceCallBaseConfig();
-  config.realtime = {
-    ...config.realtime,
-    ...overrides,
-    agentContext: {
-      ...config.realtime.agentContext,
-      ...overrides?.agentContext,
-      files: overrides?.agentContext?.files ?? config.realtime.agentContext.files,
-    },
-  };
-  return config;
+  config.realtime.agentContext = { ...config.realtime.agentContext, ...context };
+  if (consultPolicy) {
+    config.realtime.consultPolicy = consultPolicy;
+  }
+  return buildRealtimeVoiceInstructions({
+    baseInstructions: "Base voice instructions.",
+    config,
+    coreConfig: createCoreConfig(workspace),
+    agentId: "voice",
+  });
 }
 
 describe("buildRealtimeVoiceInstructions", () => {
   it("propagates a present modern composer's rejection without legacy fallback", async () => {
     const rejection = new Error("modern context rejected");
     host.rejection = rejection;
-    await expect(
-      buildRealtimeVoiceInstructions({
-        baseInstructions: "Base voice instructions.",
-        config: createConfig(),
-        coreConfig: {},
-        agentId: "voice",
-      }),
-    ).rejects.toBe(rejection);
+    await expect(buildInstructions(tempDirs.make("openclaw-voice-context-"))).rejects.toBe(
+      rejection,
+    );
   });
 
-  it("injects bounded identity and workspace context", async () => {
-    const workspaceDir = tempDirs.make("openclaw-voice-context-");
-    await writeFile(path.join(workspaceDir, "SOUL.md"), "Stay quick, direct, and warm.\n");
-    await writeFile(path.join(workspaceDir, "IDENTITY.md"), "Name: Claw Voice\nVibe: snappy\n");
-    await writeFile(path.join(workspaceDir, "SECRET.md"), "do not include\n");
-
-    const coreConfig = createCoreConfig(workspaceDir);
-
-    const instructions = await buildRealtimeVoiceInstructions({
-      baseInstructions: "Base voice instructions.",
-      config: createConfig({
-        consultPolicy: "substantive",
-        agentContext: {
+  it.each([true, false])(
+    "preserves identity, selected files and workspace containment (modern host: %s)",
+    async (modern) => {
+      host.modernAvailable = modern;
+      const parentDir = tempDirs.make("openclaw-voice-context-");
+      const workspace = path.join(parentDir, "workspace");
+      await mkdir(workspace);
+      await writeFile(path.join(parentDir, "OUTSIDE.md"), "OUTSIDE_CONTEXT");
+      await writeFile(path.join(workspace, "SOUL.md"), "Stay quick, direct, and warm.\n");
+      await writeFile(path.join(workspace, "IDENTITY.md"), "Name: Claw Voice\nVibe: snappy\n");
+      await writeFile(path.join(workspace, "VOICE.md"), "Custom voice preferences.");
+      const instructions = await buildInstructions(
+        workspace,
+        {
           enabled: true,
-          maxChars: 2000,
           includeIdentity: true,
           includeWorkspaceFiles: true,
-          files: ["SOUL.md", "IDENTITY.md", "../SECRET.md"],
+          maxChars: 2000,
+          files: ["VOICE.md", "SOUL.md", "IDENTITY.md", "../OUTSIDE.md", "missing.md"],
         },
-      }),
-      coreConfig,
-      agentId: "voice",
-    });
-
-    expect(instructions).toContain("Agent context: You speak for an OpenClaw agent");
-    expect(instructions.match(/Agent context:/g)).toHaveLength(1);
-    expect(instructions).toContain("Consult behavior:");
-    expect(instructions).toContain("Call openclaw_agent_consult before answering requests");
-    expect(instructions).toContain("- Name: Claw Voice");
-    expect(instructions).toContain("- Theme: bright");
-    expect(instructions).toContain("### SOUL.md");
-    expect(instructions).toContain("Stay quick, direct, and warm.");
-    expect(instructions).toContain("### IDENTITY.md");
-    expect(instructions).not.toContain("do not include");
-  });
+        "substantive",
+      );
+      expect(instructions).toContain("Consult behavior:");
+      expect(instructions).toContain("Call openclaw_agent_consult before answering requests");
+      expect(instructions).toContain("- Name: Claw Voice");
+      expect(instructions).toContain("- Theme: bright");
+      expect(instructions).toContain("### SOUL.md\nStay quick, direct, and warm.");
+      expect(instructions).toContain("### IDENTITY.md");
+      expect(instructions).not.toContain("OUTSIDE_CONTEXT");
+      if (modern) {
+        expect(instructions).toContain("Agent context: You speak for an OpenClaw agent");
+        expect(instructions.match(/Agent context:/g)).toHaveLength(1);
+      } else {
+        expect(instructions).toContain("OpenClaw agent voice context:");
+        expect(instructions).toContain("- Agent id: voice");
+        expect(instructions).toContain("### VOICE.md\nCustom voice preferences.");
+        expect(instructions.indexOf("### VOICE.md")).toBeLessThan(
+          instructions.indexOf("### SOUL.md"),
+        );
+        expect(instructions).not.toContain("missing.md");
+        expect(instructions).not.toContain("Agent context: You speak for an OpenClaw agent");
+      }
+    },
+  );
 
   it.each([
-    {
-      enabled: false,
-      includeIdentity: true,
-      includeWorkspaceFiles: true,
-      identity: false,
-      profile: false,
-    },
-    {
-      enabled: true,
-      includeIdentity: false,
-      includeWorkspaceFiles: false,
-      identity: false,
-      profile: false,
-    },
-    {
-      enabled: true,
-      includeIdentity: true,
-      includeWorkspaceFiles: false,
-      identity: true,
-      profile: false,
-    },
-    {
-      enabled: true,
-      includeIdentity: false,
-      includeWorkspaceFiles: true,
-      identity: false,
-      profile: true,
-    },
-  ])("honors optional context controls: %j", async (settings) => {
-    const workspaceDir = tempDirs.make("openclaw-voice-context-");
-    await writeFile(path.join(workspaceDir, "SOUL.md"), "Workspace persona.");
-    const instructions = await buildRealtimeVoiceInstructions({
-      baseInstructions: "Base voice instructions.",
-      config: createConfig({
-        agentContext: {
-          enabled: settings.enabled,
-          includeIdentity: settings.includeIdentity,
-          includeWorkspaceFiles: settings.includeWorkspaceFiles,
-          maxChars: 6000,
-          files: ["SOUL.md"],
-        },
-      }),
-      coreConfig: createCoreConfig(workspaceDir),
-      agentId: "voice",
-    });
-    expect(instructions).toMatch(/^Base voice instructions\.\n\nAgent context:/);
-    expect(instructions.match(/Agent context:/g)).toHaveLength(1);
-    expect(instructions.includes("Configured identity:")).toBe(settings.identity);
-    expect(instructions.includes("Workspace persona.")).toBe(settings.profile);
-  });
-});
-
-describe("published 2026.9.6 voice context", () => {
-  beforeEach(() => {
-    host.modernAvailable = false;
-  });
-
-  it("preserves identity, selected custom files and workspace containment", async () => {
-    const parentDir = tempDirs.make("openclaw-legacy-voice-context-");
-    const workspace = path.join(parentDir, "workspace");
-    await mkdir(workspace);
-    await writeFile(path.join(parentDir, "OUTSIDE.md"), "OUTSIDE_CONTEXT");
-    await writeFile(path.join(workspace, "VOICE.md"), "Custom voice preferences.");
+    { modern: true, enabled: false, includeIdentity: true, includeWorkspaceFiles: true },
+    { modern: true, enabled: true, includeIdentity: false, includeWorkspaceFiles: false },
+    { modern: true, enabled: true, includeIdentity: true, includeWorkspaceFiles: false },
+    { modern: true, enabled: true, includeIdentity: false, includeWorkspaceFiles: true },
+    { modern: false, enabled: false, includeIdentity: true, includeWorkspaceFiles: true },
+    { modern: false, enabled: true, includeIdentity: true, includeWorkspaceFiles: false },
+    { modern: false, enabled: true, includeIdentity: false, includeWorkspaceFiles: true },
+  ])("honors context controls: %j", async ({ modern, ...settings }) => {
+    host.modernAvailable = modern;
+    const workspace = tempDirs.make("openclaw-voice-controls-");
     await writeFile(path.join(workspace, "SOUL.md"), "Workspace persona.");
-    const instructions = await buildRealtimeVoiceInstructions({
-      baseInstructions: "Base voice instructions.",
-      config: createConfig({
-        consultPolicy: "substantive",
-        agentContext: {
-          enabled: true,
-          includeIdentity: true,
-          includeWorkspaceFiles: true,
-          maxChars: 2000,
-          files: ["VOICE.md", "SOUL.md", "../OUTSIDE.md", "missing.md"],
-        },
-      }),
-      coreConfig: createCoreConfig(workspace),
-      agentId: "voice",
+    const instructions = await buildInstructions(workspace, {
+      ...settings,
+      maxChars: 2000,
+      files: ["SOUL.md"],
     });
-    expect(instructions).toContain("Consult behavior:");
-    expect(instructions).toContain("OpenClaw agent voice context:");
-    expect(instructions).toContain("- Agent id: voice");
-    expect(instructions).toContain("- Name: Claw Voice");
-    expect(instructions).toContain("- Theme: bright");
-    expect(instructions).toContain("### VOICE.md\nCustom voice preferences.");
-    expect(instructions).toContain("### SOUL.md\nWorkspace persona.");
-    expect(instructions.indexOf("### VOICE.md")).toBeLessThan(instructions.indexOf("### SOUL.md"));
-    expect(instructions).not.toContain("OUTSIDE_CONTEXT");
-    expect(instructions).not.toContain("missing.md");
-    expect(instructions).not.toContain("Agent context: You speak for an OpenClaw agent");
-  });
-
-  it.each([
-    {
-      enabled: false,
-      includeIdentity: true,
-      includeWorkspaceFiles: true,
-      identity: false,
-      workspace: false,
-    },
-    {
-      enabled: true,
-      includeIdentity: true,
-      includeWorkspaceFiles: false,
-      identity: true,
-      workspace: false,
-    },
-    {
-      enabled: true,
-      includeIdentity: false,
-      includeWorkspaceFiles: true,
-      identity: false,
-      workspace: true,
-    },
-  ])("honors shipped context controls: %j", async (settings) => {
-    const workspace = tempDirs.make("openclaw-legacy-voice-controls-");
-    await writeFile(path.join(workspace, "SOUL.md"), "Legacy workspace persona.");
-    const instructions = await buildRealtimeVoiceInstructions({
-      baseInstructions: "Base voice instructions.",
-      config: createConfig({
-        agentContext: {
-          enabled: settings.enabled,
-          includeIdentity: settings.includeIdentity,
-          includeWorkspaceFiles: settings.includeWorkspaceFiles,
-          maxChars: 2000,
-          files: ["SOUL.md"],
-        },
-      }),
-      coreConfig: createCoreConfig(workspace),
-      agentId: "voice",
-    });
-    expect(instructions.includes("Configured identity:")).toBe(settings.identity);
-    expect(instructions.includes("Legacy workspace persona.")).toBe(settings.workspace);
-    expect(instructions.includes("OpenClaw agent voice context:")).toBe(settings.enabled);
-    if (!settings.enabled) {
-      expect(instructions).toBe("Base voice instructions.");
+    expect(instructions.includes("Configured identity:")).toBe(
+      settings.enabled && settings.includeIdentity,
+    );
+    expect(instructions.includes("Workspace persona.")).toBe(
+      settings.enabled && settings.includeWorkspaceFiles,
+    );
+    if (modern) {
+      expect(instructions).toMatch(/^Base voice instructions\.\n\nAgent context:/);
+      expect(instructions.match(/Agent context:/g)).toHaveLength(1);
+    } else {
+      expect(instructions.includes("OpenClaw agent voice context:")).toBe(settings.enabled);
+      if (!settings.enabled) {
+        expect(instructions).toBe("Base voice instructions.");
+      }
     }
   });
 
   it.each([200, 8])(
     "bounds the entire legacy capsule to %i characters, including its marker",
     async (maxChars) => {
+      host.modernAvailable = false;
       const workspace = tempDirs.make("openclaw-legacy-voice-budget-");
       await writeFile(path.join(workspace, "SOUL.md"), "Workspace persona. ".repeat(100));
-      const base = "Base voice instructions.";
-      const instructions = await buildRealtimeVoiceInstructions({
-        baseInstructions: base,
-        config: createConfig({
-          agentContext: {
-            enabled: true,
-            includeIdentity: true,
-            includeWorkspaceFiles: true,
-            maxChars,
-            files: ["SOUL.md"],
-          },
-        }),
-        coreConfig: createCoreConfig(workspace),
-        agentId: "voice",
+      const instructions = await buildInstructions(workspace, {
+        enabled: true,
+        includeIdentity: true,
+        includeWorkspaceFiles: true,
+        maxChars,
+        files: ["SOUL.md"],
       });
+      const base = "Base voice instructions.";
       expect(instructions.startsWith(`${base}\n\n`)).toBe(true);
       const capsule = instructions.slice(base.length + 2);
       expect(capsule.length).toBeGreaterThan(0);

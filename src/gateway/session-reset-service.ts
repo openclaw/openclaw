@@ -45,7 +45,7 @@ import { rebindCliSessionReseedReceiptsForReset } from "../config/sessions/cli-s
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import { resolveResetPreservedSelection } from "../config/sessions/reset-preserved-selection.js";
 import { createSessionDiffBaselineCaptureClaim } from "../config/sessions/session-diff-baseline-capture.js";
-import { sessionEntryForkedFromParent } from "../config/sessions/session-entry-lineage.js";
+import { preserveSessionLineage } from "../config/sessions/session-entry-lineage.js";
 import { projectPublicSessionEntry } from "../config/sessions/session-entry-projection.js";
 import {
   buildSessionCreationStamp,
@@ -375,7 +375,6 @@ export async function cleanupSessionBeforeMutation(params: {
   legacyKey?: string;
   canonicalKey?: string;
   reason: "session-reset" | "session-delete";
-  onAcpResetMeta?: (params: { sessionKey: string; meta: SessionAcpMeta }) => void;
   assertCurrent?: () => void;
 }) {
   const cleanupError = await ensureSessionRuntimeCleanup({
@@ -414,7 +413,6 @@ export async function cleanupSessionBeforeMutation(params: {
     agentId: params.target.agentId,
     fallbackSessionKeys: [params.canonicalKey, params.legacyKey, params.key],
     reason: params.reason,
-    onResetMeta: params.onAcpResetMeta,
     assertCurrent: params.assertCurrent,
   });
   params.assertCurrent?.();
@@ -552,7 +550,7 @@ export async function performGatewaySessionReset(params: {
     }
   | { ok: false; error: ReturnType<typeof errorShape> }
 > {
-  const resetTarget = resolveSessionResetTarget(getRuntimeConfig(), params);
+  const resetTarget = await resolveSessionResetTarget(getRuntimeConfig(), params);
   if (!resetTarget.ok) {
     return resetTarget;
   }
@@ -691,7 +689,7 @@ export async function performGatewaySessionReset(params: {
   let preparedResetSessionId: string | undefined;
   let preparedLifecycle: SessionLifecycle.PreparedGatewaySessionLifecycle | undefined;
   let lifecyclePreparationCommitted = false;
-  return await runExclusiveSessionLifecycleMutation({
+  return await runExclusiveSessionLifecycleMutation("reset", {
     scope: resetTarget.storePath,
     identities: resetLifecycleIdentities,
     // Mark the mutation first, then interrupt outside the identity lock. This
@@ -1197,7 +1195,7 @@ export async function performGatewaySessionReset(params: {
             queueDebounceMs: currentEntry?.queueDebounceMs,
             queueCap: currentEntry?.queueCap,
             queueDrop: currentEntry?.queueDrop,
-            spawnedBy: currentEntry?.spawnedBy,
+            ...preserveSessionLineage(currentEntry),
             completionOwnerSessionKey: currentEntry?.completionOwnerSessionKey,
             inheritedToolPolicyVersion: currentEntry?.inheritedToolPolicyVersion,
             inheritedToolAllow: currentEntry?.inheritedToolAllow,
@@ -1219,14 +1217,7 @@ export async function performGatewaySessionReset(params: {
               : (preparedLifecycle?.worktree ?? currentEntry?.worktree),
             repositoryWorkspaceId:
               preparedLifecycle?.repositoryWorkspaceId ?? currentEntry?.repositoryWorkspaceId,
-            parentSessionKey: currentEntry?.parentSessionKey,
-            parentSessionId: currentEntry?.parentSessionId,
             ...creationStamp,
-            forkSource: currentEntry?.forkSource,
-            forkedFromParent: sessionEntryForkedFromParent(currentEntry) ? true : undefined,
-            spawnDepth: currentEntry?.spawnDepth,
-            subagentRole: currentEntry?.subagentRole,
-            subagentControlScope: currentEntry?.subagentControlScope,
             label: currentEntry?.label,
             autoLabel: currentEntry?.autoLabel,
             icon: currentEntry?.icon,
@@ -1273,7 +1264,7 @@ export async function performGatewaySessionReset(params: {
           }
           return nextEntry;
         },
-        afterEntryMutation: (mutation) => {
+        afterEntryMutation: async (mutation) => {
           if (resetSkipped) {
             return;
           }
@@ -1372,7 +1363,7 @@ export async function performGatewaySessionReset(params: {
             sessionKey: target.canonicalKey ?? params.key,
           });
           if (createdNewEntry) {
-            recordSessionCreated(cfg, {
+            await recordSessionCreated(cfg, {
               sessionKey: target.canonicalKey ?? params.key,
               agentId,
               entry: mutation.nextEntry,

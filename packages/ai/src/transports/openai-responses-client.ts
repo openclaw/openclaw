@@ -34,6 +34,7 @@ import {
   OpenAIResponsesWebSocketPreDispatchError,
   OpenAIResponsesWebSocketPostDispatchError,
   OpenAIResponsesWebSocketSafeRetryError,
+  responsesServiceTierObserver,
   type OpenAIResponsesOptions,
 } from "./openai-responses-contracts.js";
 import {
@@ -372,6 +373,7 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
         let continuationBaseline: ResponsesContinuationRequest | undefined;
         let dispatchedPreviousResponseId: string | undefined;
         let contextUsageEligible = true;
+        let requestedTier: unknown;
         const createSseStream = async (
           initialRequest = (continuationClaim?.request ?? params) as typeof params,
           initialAttemptKind: NonNullable<ResponsesStreamParams["initialAttemptKind"]> = "initial",
@@ -391,6 +393,7 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
               suppressOpenAIResponsesCompaction(output, model, responsesOptions, checkpoint),
             canRetryStream: () => output.content.length === 0,
             wrapStream: ({ stream: rawResponseStream, response, attempt }) => {
+              requestedTier = attempt.request.service_tier;
               contextUsageEligible &&= attempt.kind === "initial";
               dispatchedPreviousResponseId = attempt.request.previous_response_id;
               continuationBaseline = attempt.request.previous_response_id
@@ -460,6 +463,7 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
               },
             });
             finishWebSocket = websocket.finish;
+            requestedTier = websocket.request.service_tier;
             websocketBaseline = websocket.fullRequest;
             recordResponsesInputReplay(output, websocket.inputReplay);
             contextUsageEligible &&= websocket.inputReplay === undefined;
@@ -560,6 +564,8 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
                   transport === "websocket" ? websocketBaseline : continuationBaseline,
                 ),
               ...config.pricingOptions?.(responsesOptions, model),
+              onServiceTier: (responseTier) =>
+                responsesServiceTierObserver.observe(options, requestedTier, responseTier),
               firstEventTimeoutMs:
                 getFirstStreamEventTimeoutMs(options) ?? config.firstEventTimeoutMs,
               abortFirstEventStream: firstEvent.abort,

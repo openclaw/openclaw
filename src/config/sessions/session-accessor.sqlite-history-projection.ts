@@ -1,6 +1,6 @@
-import type { DatabaseSync } from "node:sqlite";
 import { sql, type RawBuilder } from "kysely";
 import {
+  createSqliteQueryCache,
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   prepareSqliteQuerySync,
@@ -132,23 +132,19 @@ function selectVisibleHistoryBoundaries(
 
 type HistoryCountParameters = { sessionId: string; boundaryActivePosition: number };
 
-const historyCountReaders = new WeakMap<
-  DatabaseSync,
-  Map<
-    HistoryBoundaryQueryShape,
-    (params: HistoryCountParameters) => { event_count: number } | undefined
-  >
->();
+const historyCountReaders = createSqliteQueryCache(
+  () =>
+    new Map<
+      HistoryBoundaryQueryShape,
+      (params: HistoryCountParameters) => { event_count: number } | undefined
+    >(),
+);
 
 function getHistoryCountReader(
   database: CurrentTranscriptProjection["database"],
   shape: HistoryBoundaryQueryShape,
 ) {
-  let readers = historyCountReaders.get(database.db);
-  if (!readers) {
-    readers = new Map();
-    historyCountReaders.set(database.db, readers);
-  }
+  const readers = historyCountReaders(database.db);
   let read = readers.get(shape);
   if (!read) {
     // Retain compilation only; each snapshot supplies its current session and reset bound.

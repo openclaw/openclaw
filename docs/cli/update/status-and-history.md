@@ -181,6 +181,12 @@ update view, and the `openclaw status` update line use the detailed report,
 including on success. The report shows recorded facts; an absent verification
 fact means that check has not been observed.
 
+If recovery verifies that the Gateway is still serving after a failed update,
+the terminal and saved Markdown guidance name that version and direct you to fix
+the update failure before retrying `openclaw update`. The update remains failed;
+serving health does not grant permission to restart or roll back. Restart-safety
+and migrated-state constraints remain visible separately.
+
 An unsuccessful identity check is reported as a version or build mismatch only
 when the saved observed and expected values disagree. Missing identity evidence
 is reported as unavailable, including old runs whose updater saved only

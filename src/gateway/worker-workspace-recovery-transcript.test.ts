@@ -238,8 +238,8 @@ describe("worker workspace recovery transcript reporting", () => {
           ownerEpoch: active.activeOwnerEpoch,
         },
       });
-      placements.markWorkspaceResultPending(claim);
-      placements.handoffWorkspaceResultRecovery(claim);
+      await placements.markWorkspaceResultPending(claim);
+      await placements.handoffWorkspaceResultRecovery(claim);
       const { reportFailure } = await createHandlers(REQUEST);
       harness.reportWorkspaceResultRecoveryFailure.mockImplementation(({ error }) =>
         reportFailure(error),
@@ -254,7 +254,7 @@ describe("worker workspace recovery transcript reporting", () => {
         environmentId: active.environmentId,
         turnClaim: { claimId: claim.claimId, runId: claim.runId },
       });
-      expect(placements.listPendingWorkspaceResults()).toHaveLength(1);
+      expect(await placements.listPendingWorkspaceResultsAsync()).toHaveLength(1);
       expect(harness.environments.destroy).not.toHaveBeenCalled();
       expect(await readRecoveryEvents(REQUEST)).toMatchObject([
         {
@@ -269,7 +269,7 @@ describe("worker workspace recovery transcript reporting", () => {
       await harness.service.reconcile();
 
       expect(placements.get(active.sessionId)).toMatchObject({ state: "active", turnClaim: null });
-      expect(placements.listPendingWorkspaceResults()).toEqual([]);
+      expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
       expect(await readRecoveryEvents(REQUEST)).toMatchObject([
         { customType: WORKSPACE_RECOVERY_FAILURE_TRANSCRIPT_TYPE, display: true },
       ]);

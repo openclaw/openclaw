@@ -256,7 +256,7 @@ describe("worker turn launcher terminal results", () => {
             ok: true,
             result: { ackedSeq: 0 },
           });
-          expect(placements.listPendingWorkspaceResults()).toHaveLength(0);
+          expect(await placements.listPendingWorkspaceResultsAsync()).toHaveLength(0);
           await expect(
             service.pushLiveEvent(identity, {
               ...finishing,
@@ -277,7 +277,7 @@ describe("worker turn launcher terminal results", () => {
               event: { kind: "lifecycle", payload: { phase: "start", startedAt: 1 } },
             }),
           ).resolves.toEqual({ ok: true, result: { ackedSeq: 2 } });
-          expect(placements.listPendingWorkspaceResults()).toHaveLength(1);
+          expect(await placements.listPendingWorkspaceResultsAsync()).toHaveLength(1);
           return {
             stdout: JSON.stringify({
               status: "failed",
@@ -324,12 +324,12 @@ describe("worker turn launcher terminal results", () => {
         destroy: vi.fn(async () => environment),
       };
       const reconcileActivePlacement = vi.fn(async () => {
-        const [pending] = placements.listPendingWorkspaceResults();
+        const [pending] = await placements.listPendingWorkspaceResultsAsync();
         if (!pending) {
           throw new Error("expected pending workspace result");
         }
         expect(pending).toMatchObject({ sessionId: SESSION_ID, runId });
-        placements.failWorkspaceResultAndReleaseTurn(pending, reconciliationError);
+        await placements.failWorkspaceResultAndReleaseTurn(pending, reconciliationError);
       });
       const provider = createWorkerSessionTurnPlacementProvider({
         environments,
@@ -424,7 +424,7 @@ describe("worker turn launcher terminal results", () => {
             },
           });
           expect(placements.get(SESSION_ID)).toMatchObject({ state: "active", turnClaim: null });
-          expect(placements.listPendingWorkspaceResults()).toHaveLength(0);
+          expect(await placements.listPendingWorkspaceResultsAsync()).toHaveLength(0);
           expect(environments.destroy).not.toHaveBeenCalled();
           if (providerFailure) {
             expect(launchedModels).toEqual(["gpt-test", "gpt-test-next"]);
@@ -461,7 +461,7 @@ describe("worker turn launcher terminal results", () => {
           state: reconciliationFails ? "failed" : "active",
           turnClaim: null,
         });
-        expect(placements.listPendingWorkspaceResults()).toHaveLength(0);
+        expect(await placements.listPendingWorkspaceResultsAsync()).toHaveLength(0);
         expect(environments.destroy).not.toHaveBeenCalled();
         await expect(
           service.pushLiveEvent(identity!, {
@@ -497,18 +497,18 @@ describe("worker turn launcher terminal results", () => {
       "workspace-transfer-failed: gateway TLS fingerprint mismatch",
     );
     const targetRecovery = vi.fn(async () => {
-      const [pending] = placements.listPendingWorkspaceResults();
+      const [pending] = await placements.listPendingWorkspaceResultsAsync();
       if (!pending) {
         throw new Error("expected pending workspace result");
       }
-      placements.failWorkspaceResultAndReleaseTurn(pending, tunnelFailure);
+      await placements.failWorkspaceResultAndReleaseTurn(pending, tunnelFailure);
     });
     const stopCleanup = vi.fn(async () => ({
       ...LOCAL_PLACEMENT,
       sessionId: SESSION_ID,
       sessionKey: SESSION_KEY,
     }));
-    const waitForClaim = placements.waitForTurnClaimRelease.bind(placements);
+    const waitForClaim = placements.waitForTurnClaimRelease;
     vi.spyOn(placements, "waitForTurnClaimRelease").mockImplementation((sessionId, options) => {
       const pending = waitForClaim(sessionId, { ...options, signal: claimWaitCleanup.signal });
       claimWaitEntered.resolve();
@@ -627,7 +627,7 @@ describe("worker turn launcher terminal results", () => {
 
     expect(reconcileActivePlacement).toHaveBeenCalledWith(ENVIRONMENT_ID);
     expect(placements.get(SESSION_ID)).toMatchObject({ state: "failed", turnClaim: null });
-    expect(placements.listPendingWorkspaceResults()).toHaveLength(0);
+    expect(await placements.listPendingWorkspaceResultsAsync()).toHaveLength(0);
     expect(destroy).not.toHaveBeenCalled();
   });
 
@@ -786,7 +786,7 @@ describe("worker turn launcher terminal results", () => {
       .catch((error: unknown) => error);
     await transferEntered.promise;
     expect(placements.get(SESSION_ID)?.state).toBe("draining");
-    expect(placements.listPendingWorkspaceResults()).toHaveLength(1);
+    expect(await placements.listPendingWorkspaceResultsAsync()).toHaveLength(1);
     const moving = dispatch.move(request).catch((error: unknown) => error);
     try {
       await barrierEntered.promise;
@@ -831,7 +831,7 @@ describe("worker turn launcher terminal results", () => {
 
     expect(reconcileActivePlacement).toHaveBeenCalledWith(ENVIRONMENT_ID);
     expect(placements.get(SESSION_ID)).toMatchObject({ state: "draining", turnClaim: null });
-    expect(placements.listPendingWorkspaceResults()).toHaveLength(0);
+    expect(await placements.listPendingWorkspaceResultsAsync()).toHaveLength(0);
     expect(tunnel.reconcileWorkspace).toHaveBeenCalledTimes(2);
     expect(harness.environments.startTunnel).toHaveBeenCalledOnce();
     expect(harness.reportWorkspaceResultRecoveryFailure).not.toHaveBeenCalled();

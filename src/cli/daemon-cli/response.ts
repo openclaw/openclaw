@@ -40,11 +40,6 @@ type DaemonActionResponse = {
   service?: ReturnType<typeof buildDaemonServiceSnapshot>;
 };
 
-function emitDaemonActionJson(payload: DaemonActionResponse) {
-  const rebind = currentGatewayServiceRebindReceipt();
-  defaultRuntime.writeJson({ ...payload, ...(rebind ? { rebind } : {}) });
-}
-
 function classifyDaemonHintText(text: string): DaemonHintKind {
   if (/\b(gateway|node) install\b/u.test(text) || text.startsWith("Service not installed. Run:")) {
     return "install";
@@ -85,44 +80,6 @@ export function buildDaemonServiceSnapshot(service: GatewayService, loaded: bool
 
 type DaemonEmit = (payload: Omit<DaemonActionResponse, "action">) => void;
 
-export function emitDaemonAlreadyRunning(params: {
-  serviceNoun: string;
-  service: GatewayService;
-  pid?: number;
-  warnings: string[];
-  emitMessage: DaemonEmit;
-}): void {
-  const message =
-    params.pid === undefined
-      ? `${params.serviceNoun} service already running.`
-      : `${params.serviceNoun} service already running (pid ${params.pid}).`;
-  params.emitMessage({
-    ok: true,
-    result: "already-running",
-    message,
-    service: buildDaemonServiceSnapshot(params.service, true),
-    warnings: params.warnings.length ? params.warnings : undefined,
-  });
-}
-
-export function emitDaemonScheduledRestart(params: {
-  emitMessage: DaemonEmit;
-  result: string;
-  message: string;
-  service: GatewayService;
-  loaded: boolean;
-  warnings: string[];
-}): true {
-  params.emitMessage({
-    ok: true,
-    result: params.result,
-    message: params.message,
-    service: buildDaemonServiceSnapshot(params.service, params.loaded),
-    warnings: params.warnings.length ? params.warnings : undefined,
-  });
-  return true;
-}
-
 export function createDaemonActionContext(params: {
   action: DaemonAction;
   json: boolean;
@@ -135,7 +92,7 @@ export function createDaemonActionContext(params: {
       return;
     }
     const definitionBackup = params.definitionBackup?.();
-    emitDaemonActionJson({
+    const payloadWithContext: DaemonActionResponse = {
       action: params.action,
       ...(definitionBackup ? { definitionBackup } : {}),
       ...payload,
@@ -145,7 +102,9 @@ export function createDaemonActionContext(params: {
           ? payload.hints.map((text) => ({ kind: classifyDaemonHintText(text), text }))
           : undefined),
       warnings: payload.warnings ?? (warnings.length ? warnings : undefined),
-    });
+    };
+    const rebind = currentGatewayServiceRebindReceipt();
+    defaultRuntime.writeJson({ ...payloadWithContext, ...(rebind ? { rebind } : {}) });
   };
   // Message-bearing successes opt into text; emit remains JSON-only.
   const emitMessage: DaemonEmit = (payload) => {

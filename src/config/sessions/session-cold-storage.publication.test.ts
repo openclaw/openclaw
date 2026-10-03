@@ -115,6 +115,7 @@ const result: SessionColdMutationResult = {
   sessionKey: "agent:main:committed-window",
 };
 const changes = vi.fn();
+const factChanges = vi.fn();
 let unsubscribe: () => void;
 
 beforeEach(() => {
@@ -123,7 +124,12 @@ beforeEach(() => {
   observed.native.mockImplementation(() => {
     throw new Error("Restore publication executed SQLite on the calling thread");
   });
-  unsubscribe = sessionChanges.subscribe(changes);
+  const unsubscribeChanges = sessionChanges.subscribe(changes);
+  const unsubscribeFacts = sessionChanges.subscribeFacts(factChanges);
+  unsubscribe = () => {
+    unsubscribeChanges();
+    unsubscribeFacts();
+  };
 });
 afterEach(() => {
   unsubscribe();
@@ -155,44 +161,42 @@ it("publishes the committed key exactly once after the worker settles, without h
     storePath: preparation.target.path,
     sessionKey: "agent:main:committed-window",
   });
+  expect(factChanges).toHaveBeenCalledExactlyOnceWith({
+    storePath: preparation.target.path,
+    sessionKey: "agent:main:committed-window",
+    facts: { kind: "unchanged" },
+  });
 });
 
-it.each(["refused", "rejected", "cleanup incomplete"])(
-  "does not publish when restoration is %s",
+it.each(["refused", "rejected", "cleanup incomplete", "database", "caller", "request"])(
+  "does not publish after restoration loses completion or authority: %s",
   async (outcome) => {
-    if (outcome === "cleanup incomplete") {
-      observed.worker.mockResolvedValue([{ result, cleanupIncomplete: true }]);
-    } else {
-      observed.worker.mockRejectedValue(
-        outcome === "refused"
-          ? new SqliteReclamationRequestRefusedError("restore refused")
-          : new Error("restore rejected"),
-      );
-    }
-    await expect(restore()).rejects.toThrow(
-      outcome === "cleanup incomplete" ? /cleanup is incomplete/ : `restore ${outcome}`,
-    );
-    expect(changes).not.toHaveBeenCalled();
-  },
-);
-
-it.each(["database", "caller", "request"])(
-  "does not publish a receipt after its %s authority retires",
-  async (authority) => {
     observed.worker.mockImplementation(async () => {
-      if (authority === "database") {
+      if (outcome === "refused") {
+        throw new SqliteReclamationRequestRefusedError("restore refused");
+      }
+      if (outcome === "rejected") {
+        throw new Error("restore rejected");
+      }
+      if (outcome === "database") {
         observed.claimCurrent = false;
-      } else {
-        observed[authority === "caller" ? "caller" : "request"].mockImplementation(() => {
+      } else if (outcome === "caller" || outcome === "request") {
+        observed[outcome].mockImplementation(() => {
           throw new Error("restore authority retired");
         });
       }
-      return [{ result }];
+      return [{ result, ...(outcome === "cleanup incomplete" ? { cleanupIncomplete: true } : {}) }];
     });
-    if (authority === "database") {
+    if (outcome === "database") {
       await restore();
     } else {
-      await expect(restore()).rejects.toThrow("restore authority retired");
+      await expect(restore()).rejects.toThrow(
+        outcome === "cleanup incomplete"
+          ? /cleanup is incomplete/
+          : outcome === "caller" || outcome === "request"
+            ? "restore authority retired"
+            : `restore ${outcome}`,
+      );
     }
     expect(changes).not.toHaveBeenCalled();
   },

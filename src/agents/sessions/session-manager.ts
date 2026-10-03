@@ -337,14 +337,8 @@ export class SessionManager extends SessionManagerBranching {
         this: SessionManager,
         rewrittenEntryIds: ReadonlyMap<string, string>,
       ): Generator<SessionPersistenceStep, void, void> {
-        const publication = yield* sessionPersistenceStep(
-          () => prepared,
-          async () => {
-            const snapshot = SessionManager.inMemory(prepared.cwd);
-            Object.assign(snapshot, structuredClone(prepared.captureTranscriptView()));
-            return snapshot;
-          },
-        );
+        const publication = SessionManager.inMemory(prepared.cwd);
+        Object.assign(publication, structuredClone(prepared.captureTranscriptView()));
         const entries = publication.fileEntries
           .slice(initialEntryCount)
           .filter((entry) => entry.type !== "session");

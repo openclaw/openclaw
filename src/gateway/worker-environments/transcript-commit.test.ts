@@ -37,7 +37,7 @@ import {
 } from "../../sessions/transcript-events.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
-import { closeOpenClawStateDatabaseByPath } from "../../state/openclaw-state-db-cache.js";
+import { closeOpenClawStateDatabaseByPathAsync } from "../../state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { prepareAgentRunUserTurn } from "../agent-turn/agent-run-user-turn.js";
 import type { AgentTurnContext } from "../agent-turn/types.js";
@@ -45,8 +45,9 @@ import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import {
   createWorkerTranscriptCommitStore,
   type WorkerTranscriptCommitStore,
-} from "./transcript-commit-store.js";
+} from "./transcript-commit-ledger.js";
 import { createWorkerTranscriptCommitter } from "./transcript-commit.js";
+import { createInterruptedCommitter } from "./transcript-commit.test-support.js";
 
 type WorkerTranscriptCommitter = ReturnType<typeof createWorkerTranscriptCommitter>;
 
@@ -181,23 +182,6 @@ describe("worker transcript commit application", () => {
   let ledgerStore: WorkerTranscriptCommitStore;
   let unsubscribe: (() => void) | undefined;
 
-  function createInterruptedCommitter(message: string) {
-    let interruptCompletion = true;
-    return createWorkerTranscriptCommitter({
-      getConfig: () => cfg,
-      store: {
-        ...ledgerStore,
-        complete: (input) => {
-          if (interruptCompletion) {
-            interruptCompletion = false;
-            throw new Error(message);
-          }
-          return ledgerStore.complete(input);
-        },
-      },
-    });
-  }
-
   beforeEach(async () => {
     root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "openclaw-worker-turn-"));
     vi.stubEnv("OPENCLAW_STATE_DIR", root);
@@ -244,7 +228,7 @@ describe("worker transcript commit application", () => {
     try {
       await waitForSessionTranscriptIndexReconcilesInStateDir(root);
       await closeOpenClawAgentDatabasesAsync(root);
-      closeOpenClawStateDatabaseByPath(stateDatabasePath);
+      await closeOpenClawStateDatabaseByPathAsync(stateDatabasePath);
       await fs.rm(root, { recursive: true, force: true });
     } finally {
       vi.unstubAllEnvs();
@@ -410,6 +394,54 @@ describe("worker transcript commit application", () => {
       }),
     ]);
     expect(reopened.getLeafId()).toBe(outcome.result.newLeafId);
+  });
+
+  it("commits through an alias of the admitted transcript database", async () => {
+    const aliasRoot = `${root}-alias`;
+    await fs.symlink(root, aliasRoot, process.platform === "win32" ? "junction" : "dir");
+    try {
+      const aliasStorePath = path.join(aliasRoot, path.relative(root, storePath));
+      const aliasTarget = await resolveSessionTranscriptRuntimeTarget({
+        agentId: "main",
+        sessionId: SESSION_ID,
+        sessionKey: SESSION_KEY,
+        storePath: aliasStorePath,
+      });
+      expect(aliasTarget.storePath).toBe(aliasStorePath);
+
+      const outcome = await committer.commit({
+        ...ADMITTED_OWNER,
+        sessionTarget: {
+          ...aliasTarget,
+          expectedLifecycleRevision: "worker-original-revision",
+        },
+        request: createRequest({
+          messages: [
+            {
+              role: "user",
+              content: [{ type: "text", text: "Persist through the admitted owner" }],
+              timestamp: 100,
+            },
+          ],
+        }),
+      });
+
+      expect(outcome.ok).toBe(true);
+      if (!outcome.ok) {
+        throw new Error(`expected aliased transcript commit, received ${outcome.reason}`);
+      }
+      expect((await SessionManager.openAsync(sessionTarget)).getEntries()).toEqual([
+        expect.objectContaining({
+          id: outcome.result.newLeafId,
+          message: expect.objectContaining({
+            role: "user",
+            content: [{ type: "text", text: "Persist through the admitted owner" }],
+          }),
+        }),
+      ]);
+    } finally {
+      await fs.rm(aliasRoot, { force: true });
+    }
   });
 
   it("commits a non-default agent's global session", async () => {
@@ -673,7 +705,11 @@ describe("worker transcript commit application", () => {
   });
 
   it("recovers an interrupted terminal write after later transcript activity", async () => {
-    const interruptedCommitter = createInterruptedCommitter("simulated commit-result interruption");
+    const interruptedCommitter = createInterruptedCommitter(
+      () => cfg,
+      ledgerStore,
+      "simulated commit-result interruption",
+    );
     const request = createRequest();
 
     await expect(interruptedCommitter.commit({ ...ADMITTED_OWNER, request })).rejects.toThrow(
@@ -714,6 +750,8 @@ describe("worker transcript commit application", () => {
       "Expected the fixture's persisted base message",
     );
     const interruptedCommitter = createInterruptedCommitter(
+      () => cfg,
+      ledgerStore,
       "simulated off-branch terminal interruption",
     );
     const request = createRequest({
@@ -763,19 +801,27 @@ describe("worker transcript commit application", () => {
       logging: { redactPatterns: ["^user$", "^assistant$", "^toolResult$"] },
     };
 
-    let authorityChecks = 0;
+    let recovered = false;
+    const begin = ledgerStore.begin.bind(ledgerStore);
+    const beginSpy = vi.spyOn(ledgerStore, "begin").mockImplementationOnce(async (...args) => {
+      const result = await begin(...args);
+      recovered = result.kind === "recover";
+      return result;
+    });
     await expect(
       committer.commit({
         identity: IDENTITY,
         sessionTarget,
         request,
         assertCurrent: () => {
-          if (++authorityChecks === 2) {
+          if (recovered) {
             throw new Error("claim closed before pending batch recovery");
           }
         },
       }),
     ).rejects.toThrow("claim closed before pending batch recovery");
+    expect(recovered).toBe(true);
+    beginSpy.mockRestore();
 
     const replay = await committer.commit({ ...ADMITTED_OWNER, request });
 
@@ -810,6 +856,8 @@ describe("worker transcript commit application", () => {
       "Expected the fixture's persisted base message",
     );
     const interruptedCommitter = createInterruptedCommitter(
+      () => cfg,
+      ledgerStore,
       "simulated ambiguous terminal interruption",
     );
     const request = createRequest({ baseLeafId });

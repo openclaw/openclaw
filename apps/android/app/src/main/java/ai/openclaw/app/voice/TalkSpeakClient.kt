@@ -5,6 +5,10 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.encodeToJsonElement
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.put
 
 /** Decoded talk.speak audio bytes plus provider metadata needed for Android playback. */
 internal data class TalkSpeakAudio(
@@ -51,7 +55,13 @@ internal class TalkSpeakClient(
       try {
         performRequest(
           method = "talk.speak",
-          paramsJson = json.encodeToString(TalkSpeakRequest.from(text = text, directive = directive)),
+          paramsJson =
+            json.encodeToString(
+              buildJsonObject {
+                put("text", text)
+                json.encodeToJsonElement(directive ?: TalkDirective()).jsonObject.forEach { (name, value) -> put(name, value) }
+              },
+            ),
           timeoutMs = 45_000,
         )
       } catch (err: CancellationException) {
@@ -111,47 +121,6 @@ internal class TalkSpeakClient(
     requestDetailed?.let { return it(method, paramsJson, timeoutMs) }
     val activeSession = session ?: throw IllegalStateException("session missing")
     return activeSession.requestDetailed(method = method, paramsJson = paramsJson, timeoutMs = timeoutMs)
-  }
-}
-
-@Serializable
-internal data class TalkSpeakRequest(
-  val text: String,
-  val voiceId: String? = null,
-  val modelId: String? = null,
-  val outputFormat: String? = null,
-  val speed: Double? = null,
-  val rateWpm: Int? = null,
-  val stability: Double? = null,
-  val similarity: Double? = null,
-  val style: Double? = null,
-  val speakerBoost: Boolean? = null,
-  val seed: Long? = null,
-  val normalize: String? = null,
-  val language: String? = null,
-  val latencyTier: Int? = null,
-) {
-  companion object {
-    fun from(
-      text: String,
-      directive: TalkDirective?,
-    ): TalkSpeakRequest =
-      TalkSpeakRequest(
-        text = text,
-        voiceId = directive?.voiceId,
-        modelId = directive?.modelId,
-        outputFormat = directive?.outputFormat,
-        speed = directive?.speed,
-        rateWpm = directive?.rateWpm,
-        stability = directive?.stability,
-        similarity = directive?.similarity,
-        style = directive?.style,
-        speakerBoost = directive?.speakerBoost,
-        seed = directive?.seed,
-        normalize = directive?.normalize,
-        language = directive?.language,
-        latencyTier = directive?.latencyTier,
-      )
   }
 }
 

@@ -4,7 +4,6 @@ import {
 } from "../../../infra/agent-events.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-contract.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
-import { clearGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../../../process/gateway-work-admission.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
@@ -22,6 +21,7 @@ import {
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import { shouldSuppressSubagentRecoverySessionEffects } from "./subagent-recovery-state.js";
 import { resolveKilledSubagentTaskEndedAt } from "./subagent-registry-completion.js";
+import { retireSubagentGatewayBinding } from "./subagent-registry-execution-cleanup.js";
 import {
   persistSubagentSessionTiming,
   safeRemoveAttachmentsDir,
@@ -62,7 +62,7 @@ class SubagentRunManager extends SubagentLaunchManager {
       return;
     }
     this.options.clearPendingLifecycleError(runId);
-    clearGatewayContextResolver(entry);
+    retireSubagentGatewayBinding(entry);
     if (shouldRemoveSubagentAttachments(entry)) {
       void safeRemoveAttachmentsDir(entry);
     }
@@ -353,9 +353,7 @@ class SubagentRunManager extends SubagentLaunchManager {
               entry.cleanupHandled = true;
               entry.cleanupCompletedAt = existingKillReconciliation
                 ? (entry.cleanupCompletedAt ?? endedAt)
-                : wasKilledLifecycle
-                  ? endedAt
-                  : now;
+                : now;
               entry.suppressAnnounceReason = "killed";
               entry.pauseReason = undefined;
               entry.killIntent = undefined;

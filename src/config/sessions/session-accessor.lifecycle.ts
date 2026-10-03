@@ -1,4 +1,5 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { isInternalSessionEffectsKey } from "./internal-session-key.js";
 import {
   clearPluginHostCleanupTarget,
   hasPluginHostCleanupTarget,
@@ -7,10 +8,11 @@ import {
   shouldSkipPluginHostCleanupStore,
   type PluginHostSessionCleanupStoreParams,
 } from "./plugin-host-cleanup.js";
-import { listSessionEntriesCore, patchSessionEntryCore } from "./session-accessor.entry.js";
-import { applySessionEntryBatchProjection } from "./session-accessor.sqlite-batch-projection.js";
-import "./session-accessor.sqlite-lifecycle.js";
-import "./session-accessor.sqlite-projection.js";
+import { patchSessionEntryCore } from "./session-accessor.entry.js";
+import {
+  applySessionEntryCanonicalReplacements,
+  type SessionEntryCanonicalReplacement,
+} from "./session-accessor.sqlite-replacement-projection.js";
 import type {
   SessionPatchProjectionSnapshot,
   SessionPatchProjectionTarget,
@@ -19,11 +21,11 @@ import type {
   SessionPatchProjectionOperation,
   SessionPatchProjectionResult,
 } from "./session-accessor.types.js";
+import { readSessionEntrySummariesInWorker } from "./session-entry-read-runtime.js";
 import {
   resolveProjectionExistingEntry,
   SessionLabelOwnerIndex,
 } from "./session-entry-selection.js";
-import type { InternalSessionEntry as SessionEntry } from "./types.js";
 export { cleanupSessionLifecycleArtifactsCore } from "./session-accessor.sqlite-artifact-cleanup.js";
 export {
   deleteSessionEntryLifecycle,
@@ -46,19 +48,20 @@ export async function applySessionPatchProjections<
   sessionKeys?: readonly string[];
   storePath: string;
 }): Promise<SessionPatchProjectionResult<TFailure>[]> {
-  return await applySessionEntryBatchProjection({
+  return await applySessionEntryCanonicalReplacements({
     agentId: params.agentId,
     sessionKeys: params.sessionKeys,
     storePath: params.storePath,
     skipMaintenance: true,
-    update: async (workingStore) => {
+    update: async (entries) => {
+      const workingStore = Object.fromEntries(
+        entries.flatMap(({ entry, sessionKey }) =>
+          isInternalSessionEffectsKey(sessionKey) ? [] : [[sessionKey, entry] as const],
+        ),
+      );
       const snapshot = { store: workingStore };
       const labelOwners = new SessionLabelOwnerIndex(workingStore);
-      const mutations: Array<{
-        entry: SessionEntry;
-        previousSessionKeys?: readonly string[];
-        sessionKey: string;
-      }> = [];
+      const replacements: SessionEntryCanonicalReplacement[] = [];
       const results: SessionPatchProjectionResult<TFailure>[] = [];
       for (const operation of params.operations) {
         try {
@@ -85,9 +88,9 @@ export async function applySessionPatchProjections<
           const previousSessionKeys = candidateKeys.filter(
             (sessionKey) => sessionKey !== target.primaryKey && workingStore[sessionKey],
           );
-          mutations.push({
+          replacements.push({
             entry: projected.entry,
-            ...(previousSessionKeys.length > 0 ? { previousSessionKeys } : {}),
+            previousSessionKeys,
             sessionKey: target.primaryKey,
           });
           const cloned = labelOwners.replaceEntry(
@@ -103,7 +106,7 @@ export async function applySessionPatchProjections<
           results.push(operation.onError(error));
         }
       }
-      return { mutations, result: results };
+      return { replacements, result: results };
     },
   });
 }
@@ -164,20 +167,15 @@ export async function cleanupPluginHostSessionStore(
   }
   const now = Date.now();
   let cleared = 0;
-  // Select metadata without yielding; saved prompts are reserved from plugin slots.
-  // Check only selected writes; the patch rereads full entries and rechecks authority at commit.
-  for (const { entry, sessionKey } of listSessionEntriesCore({
+  for (const { entry, sessionKey } of await readSessionEntrySummariesInWorker({
     agentId: params.agentId,
     storePath: params.storePath,
-    projection: "list",
+    cleanupSession: params.sessionKey,
   })) {
     if (isLockedHarnessSessionOwnedByPlugin(entry, params.preserveLockedHarnessIds)) {
       continue;
     }
-    if (
-      !matchesPluginHostCleanupSession(sessionKey, entry, params.sessionKey) ||
-      !hasPluginHostCleanupTarget(entry, params)
-    ) {
+    if (!hasPluginHostCleanupTarget(entry, params)) {
       continue;
     }
     if (params.shouldCleanup && !params.shouldCleanup()) {
@@ -189,7 +187,10 @@ export async function cleanupPluginHostSessionStore(
         if (isLockedHarnessSessionOwnedByPlugin(currentEntry, params.preserveLockedHarnessIds)) {
           return null;
         }
-        if (!hasPluginHostCleanupTarget(currentEntry, params)) {
+        if (
+          !matchesPluginHostCleanupSession(sessionKey, currentEntry, params.sessionKey) ||
+          !hasPluginHostCleanupTarget(currentEntry, params)
+        ) {
           return null;
         }
         clearPluginHostCleanupTarget(currentEntry, params);

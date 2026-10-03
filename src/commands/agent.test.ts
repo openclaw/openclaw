@@ -55,7 +55,6 @@ import { emitAgentEvent, onAgentEvent, resetAgentEventsForTest } from "../infra/
 import { buildOutboundBaseSessionKey } from "../infra/outbound/base-session-key.js";
 import { withTempHomeCore as withTempHomeBase } from "../plugin-sdk/test-helpers/temp-home.js";
 import { loadEnabledClaudeBundleCommands } from "../plugins/bundle-commands.js";
-import { resolveProviderPolicySurface } from "../plugins/provider-public-artifacts.js";
 import type { PluginProviderRegistration } from "../plugins/registry.test-fixtures.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -87,6 +86,7 @@ import {
 } from "./agent-session.test-support.js";
 import { agentCommand, agentCommandFromIngress } from "./agent.js";
 import { registerAgentReplyPolicyTests } from "./agent.reply-policy.test-support.js";
+import { registerAgentThinkingTests } from "./agent.thinking.test-support.js";
 import { createThrowingTestRuntime } from "./test-runtime-config-helpers.js";
 
 const configIoMocks = vi.hoisted(() => ({
@@ -1683,101 +1683,7 @@ describe("agentCommand", () => {
     });
   });
 
-  it("validates an unconfigured model against manifest thinking capabilities without live discovery", async () => {
-    await withTempHome(async (home) => {
-      mockConfig(home, path.join(home, "sessions.json"), { models: {} });
-      vi.mocked(loadManifestModelCatalog).mockReturnValue([
-        {
-          provider: "reasoning-test",
-          id: "catalog-max",
-          name: "Catalog reasoning model",
-          api: "openai-completions",
-          reasoning: true,
-          compat: { supportedReasoningEfforts: ["max"] },
-        },
-      ]);
-
-      await agentCommand(
-        {
-          message: "ping",
-          to: "+1222",
-          model: "reasoning-test/catalog-max",
-          thinking: "max",
-        },
-        runtime,
-      );
-
-      expect(getLastEmbeddedCall()?.thinkLevel).toBe("max");
-      expect(readPreparedModelCatalog).not.toHaveBeenCalled();
-    });
-  });
-
-  it.each(["off", "max"] as const)(
-    "validates native %s against observed capabilities despite manifest reasoning",
-    async (thinking) => {
-      await withTempHome(async (home) => {
-        mockConfig(home, path.join(home, "sessions.json"), {
-          model: { primary: "openai/account-reasoner" },
-          models: { "openai/account-reasoner": {} },
-        });
-        const registry = createTestRegistry();
-        registry.providers.push({
-          pluginId: "openai",
-          source: "test",
-          provider: {
-            id: "openai",
-            label: "OpenAI",
-            auth: [],
-            resolveThinkingProfile: expectDefined(
-              resolveProviderPolicySurface("openai")?.resolveThinkingProfile,
-              "OpenAI thinking policy",
-            ),
-          },
-        });
-        setActivePluginRegistry(registry);
-        vi.mocked(loadManifestModelCatalog).mockReturnValue([
-          {
-            provider: "openai",
-            id: "account-reasoner",
-            name: "Catalog reasoning model",
-            api: "openai-chatgpt-responses",
-            reasoning: true,
-            compat: { supportedReasoningEfforts: ["none", "high", "max"] },
-          },
-        ]);
-        vi.mocked(resolveEffectiveAgentRuntime).mockReturnValue("codex");
-        vi.mocked(loadProviderScopedThinkingCatalog).mockResolvedValue([
-          {
-            provider: "openai",
-            id: "account-reasoner",
-            name: "Native reasoning model",
-            nativeRuntime: "codex",
-            reasoning: true,
-            compat: { supportedReasoningEfforts: ["high"] },
-          },
-        ]);
-
-        await expect(
-          agentCommand(
-            { message: "ping", to: "+1222", model: "openai/account-reasoner", thinking },
-            runtime,
-          ),
-        ).rejects.toThrow(
-          `Thinking level "${thinking}" is not supported for openai/account-reasoner.`,
-        );
-
-        expect(loadProviderScopedThinkingCatalog).toHaveBeenCalledWith(
-          expect.objectContaining({
-            provider: "openai",
-            model: "account-reasoner",
-            agentRuntime: "codex",
-          }),
-        );
-        expect(runEmbeddedAgent).not.toHaveBeenCalled();
-        expect(readPreparedModelCatalog).not.toHaveBeenCalled();
-      });
-    },
-  );
+  registerAgentThinkingTests({ withTempHome, mockConfig, getLastEmbeddedCall, runtime });
 
   it("bypasses ACP sessions for one-shot model runs", async () => {
     await withTempHome(async (home) => {

@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -16,6 +16,50 @@ import {
 const BUILT_NATIVE_HOST_PATH = path.resolve("dist/extensions/browser/native-host-entry.js");
 const fixture = useExtensionInstallFixture();
 const nativeHostFixture = useNativeHostLaunchFixture();
+const origin = "chrome-extension://kcdjddhmeafeomebliikmbpblkmkfoig/";
+const nonce = Buffer.alloc(16, 7).toString("base64url");
+
+function nativeFrame(request: unknown): Buffer {
+  const payload = Buffer.from(JSON.stringify(request));
+  const frame = Buffer.alloc(payload.length + 4);
+  if (os.endianness() === "LE") {
+    frame.writeUInt32LE(payload.length);
+  } else {
+    frame.writeUInt32BE(payload.length);
+  }
+  payload.copy(frame, 4);
+  return frame;
+}
+
+function nativeResponse(child: SpawnSyncReturns<Buffer>): unknown {
+  expect(child.status, child.stderr.toString("utf8")).toBe(0);
+  const length =
+    os.endianness() === "LE" ? child.stdout.readUInt32LE() : child.stdout.readUInt32BE();
+  expect(child.stdout).toHaveLength(length + 4);
+  return JSON.parse(child.stdout.subarray(4).toString("utf8"));
+}
+
+function nativeArgs(
+  manifest: string,
+  launcher: string,
+  expectedOrigins: string[],
+  caller: string,
+  ...extraArgs: string[]
+) {
+  return [
+    path.resolve("openclaw.mjs"),
+    "browser",
+    "extension",
+    "native-host",
+    "--manifest",
+    manifest,
+    "--launcher",
+    launcher,
+    ...expectedOrigins.flatMap((expected) => ["--expected-origin", expected]),
+    ...extraArgs,
+    caller,
+  ];
+}
 
 // POSIX launcher/CLI proof. The Windows PE/ACL/registry lane needs a real Windows host.
 describe.skipIf(process.platform === "win32")("native host registration", () => {
@@ -24,31 +68,16 @@ describe.skipIf(process.platform === "win32")("native host registration", () => 
     const configPath = path.join(value.root, "malformed-config.json");
     const original = "{ deliberately invalid config";
     await fs.writeFile(configPath, original, { mode: 0o600 });
-    const payload = Buffer.from(JSON.stringify({ v: 1, op: "bootstrap", nonce: "!" }));
-    const frame = Buffer.alloc(payload.length + 4);
-    if (os.endianness() === "LE") {
-      frame.writeUInt32LE(payload.length);
-    } else {
-      frame.writeUInt32BE(payload.length);
-    }
-    payload.copy(frame, 4);
     const child = spawnSync(
       process.execPath,
-      [
-        path.resolve("openclaw.mjs"),
-        "browser",
-        "extension",
-        "native-host",
-        "--manifest",
+      nativeArgs(
         path.join(value.root, "not-read-before-framing.json"),
-        "--launcher",
         path.join(value.root, "not-read-before-framing-host"),
-        "--expected-origin",
-        "chrome-extension://kcdjddhmeafeomebliikmbpblkmkfoig/",
-        "chrome-extension://kcdjddhmeafeomebliikmbpblkmkfoig/",
-      ],
+        [origin],
+        origin,
+      ),
       {
-        input: frame,
+        input: nativeFrame({ v: 1, op: "bootstrap", nonce: "!" }),
         env: {
           HOME: value.homeDir,
           OPENCLAW_STATE_DIR: value.stateDir,
@@ -57,11 +86,7 @@ describe.skipIf(process.platform === "win32")("native host registration", () => 
         timeout: 20_000,
       },
     );
-    expect(child.status, child.stderr.toString("utf8")).toBe(0);
-    const length =
-      os.endianness() === "LE" ? child.stdout.readUInt32LE() : child.stdout.readUInt32BE();
-    expect(child.stdout).toHaveLength(length + 4);
-    expect(JSON.parse(child.stdout.subarray(4).toString("utf8"))).toMatchObject({
+    expect(nativeResponse(child)).toMatchObject({
       ok: false,
       code: "invalid_request",
     });
@@ -77,7 +102,6 @@ describe.skipIf(process.platform === "win32")("native host registration", () => 
       const launcher = path.join(directory, "host");
       const manifest = path.join(directory, "manifest.json");
       const config = path.join(value.root, "invalid-config.json");
-      const origin = "chrome-extension://kcdjddhmeafeomebliikmbpblkmkfoig/";
       await fs.writeFile(launcher, "fixture owned launcher", { mode: 0o700 });
       await fs.writeFile(
         manifest,
@@ -92,34 +116,18 @@ describe.skipIf(process.platform === "win32")("native host registration", () => 
       );
       await fs.writeFile(config, "{ invalid config", { mode: 0o600 });
       const before = (await fs.readdir(value.homeDir, { recursive: true })).toSorted();
-      const payload = Buffer.from(
-        JSON.stringify({
-          v: 1,
-          op,
-          nonce: Buffer.alloc(16, 7).toString("base64url"),
-          ...(op === "ensure_relay" ? { relayPort: 19031 } : {}),
-        }),
-      );
-      const frame = Buffer.alloc(payload.length + 4);
-      if (os.endianness() === "LE") {
-        frame.writeUInt32LE(payload.length);
-      } else {
-        frame.writeUInt32BE(payload.length);
-      }
-      payload.copy(frame, 4);
-      const args = [
-        path.resolve("openclaw.mjs"),
-        "browser",
-        "extension",
-        "native-host",
-        "--manifest",
+      const frame = nativeFrame({
+        v: 1,
+        op,
+        nonce,
+        ...(op === "ensure_relay" ? { relayPort: 19031 } : {}),
+      });
+      const args = nativeArgs(
         manifest,
-        "--launcher",
         launcher,
-        "--expected-origin",
-        origin,
+        [origin],
         "chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/",
-      ];
+      );
       const invoke = () =>
         spawnSync(process.execPath, args, {
           input: frame,
@@ -133,28 +141,18 @@ describe.skipIf(process.platform === "win32")("native host registration", () => 
           },
         });
       const denied = invoke();
-      expect(denied.status, denied.stderr.toString("utf8")).toBe(0);
-      expect(JSON.parse(denied.stdout.subarray(4).toString("utf8"))).toEqual({
+      const refusal = {
         v: 1,
         ok: false,
         code: "origin_forbidden",
-      });
-      expect(denied.stdout).toHaveLength(
-        4 +
-          Buffer.byteLength(
-            JSON.stringify({
-              v: 1,
-              ok: false,
-              code: "origin_forbidden",
-            }),
-          ),
-      );
+      };
+      expect(nativeResponse(denied)).toEqual(refusal);
+      expect(denied.stdout).toHaveLength(4 + Buffer.byteLength(JSON.stringify(refusal)));
       // An admitted origin cannot bypass a changed/unsafe manifest or launcher.
       args[args.length - 1] = origin;
       await fs.chmod(launcher, 0o777);
       const unsafe = invoke();
-      expect(unsafe.status, unsafe.stderr.toString("utf8")).toBe(0);
-      expect(JSON.parse(unsafe.stdout.subarray(4).toString("utf8"))).toEqual({
+      expect(nativeResponse(unsafe)).toEqual({
         v: 1,
         ok: false,
         code: "manifest_invalid",
@@ -185,7 +183,13 @@ describe.skipIf(process.platform === "win32")("native host registration", () => 
       },
     );
     expect(child.status).toBe(1);
-    expect(child.stderr.toString("utf8")).toContain("Invalid config at");
+    const stderr = child.stderr.toString("utf8");
+    expect(stderr).toContain("[openclaw] The CLI command failed.");
+    expect(stderr).toContain(`Invalid config at ${config}:`);
+    expect(stderr).toContain(
+      "- <root>: JSON5 parse failed: SyntaxError: JSON5: invalid character 'c' at 1:11",
+    );
+    expect(stderr).toContain("[openclaw] For help, run `openclaw doctor`.");
     expect(await fs.readFile(config, "utf8")).toBe("{ invalid config");
   });
 
@@ -244,31 +248,14 @@ describe.skipIf(process.platform === "win32")("native host registration", () => 
         path: string;
       };
 
-      const nonce = Buffer.alloc(16, 7).toString("base64url");
-      const requestBody = Buffer.from(JSON.stringify({ v: 1, op: "bootstrap", nonce }));
-      const requestFrame = Buffer.alloc(requestBody.length + 4);
-      if (os.endianness() === "LE") {
-        requestFrame.writeUInt32LE(requestBody.length);
-      } else {
-        requestFrame.writeUInt32BE(requestBody.length);
-      }
-      requestBody.copy(requestFrame, 4);
-      const cliArgs = [
-        path.resolve("openclaw.mjs"),
-        "browser",
-        "extension",
-        "native-host",
-        "--manifest",
+      const cliArgs = nativeArgs(
         registration?.manifestPath ?? "",
-        "--launcher",
         manifest.path,
-        ...status.registrations
-          .find((candidate) => candidate.product === "chromium")!
-          .extensionIds.flatMap((id) => ["--expected-origin", `chrome-extension://${id}/`]),
+        registration!.extensionIds.map((id) => `chrome-extension://${id}/`),
+        `chrome-extension://${extensionId}/`,
         "--browser-profile",
         "e2e",
-        `chrome-extension://${extensionId}/`,
-      ];
+      );
       // Documented ordinary repair must retain the canonical setup's saved profile.
       await installChromeExtensionBootstrap({
         bundledDir: value.bundledDir,
@@ -297,7 +284,7 @@ describe.skipIf(process.platform === "win32")("native host registration", () => 
         entryMode === "launcher" ? manifest.path : process.execPath,
         entryMode === "launcher" ? [`chrome-extension://${extensionId}/`] : cliArgs,
         {
-          input: requestFrame,
+          input: nativeFrame({ v: 1, op: "bootstrap", nonce }),
           env: {
             HOME: value.homeDir,
             TMPDIR: os.tmpdir(),
@@ -308,13 +295,9 @@ describe.skipIf(process.platform === "win32")("native host registration", () => 
           timeout: 20_000,
         },
       );
-      expect(host.status, host.stderr.toString("utf8")).toBe(0);
       await expect(fs.stat(gatewayStatePath)).rejects.toMatchObject({ code: "ENOENT" });
       expect(await fs.readFile(configPath)).toEqual(configBefore);
-      const frameLength =
-        os.endianness() === "LE" ? host.stdout.readUInt32LE() : host.stdout.readUInt32BE();
-      expect(host.stdout).toHaveLength(frameLength + 4);
-      expect(JSON.parse(host.stdout.subarray(4).toString("utf8"))).toEqual({
+      expect(nativeResponse(host)).toEqual({
         v: 1,
         ok: true,
         nonce,

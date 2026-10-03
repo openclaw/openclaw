@@ -8,6 +8,9 @@ import {
   type McpAppViewLease,
 } from "../agents/mcp-ui-resource.js";
 import { hasErrnoCode } from "../infra/errno.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import { logDebug } from "../logger.js";
+import { retainGatewayDeviceRevocation } from "./device-revocation.js";
 import { requireMcpAppInteraction, resolveMcpAppRequesterId } from "./mcp-app-operations.js";
 import { retainSessionScopedRead } from "./server-methods/session-scoped-read.js";
 import { resolveLocalSessionWorkspaceRoot } from "./server-methods/sessions-files.js";
@@ -154,14 +157,10 @@ export async function readMcpAppHostFile(
       throw new Error("File is missing, unsafe, or too large");
     }
     const writable = result.readOnly !== true;
-    let content: { text: string } | { blob: string };
-    if (representation === "text") {
-      content = {
-        text: new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(result.buffer),
-      };
-    } else {
-      content = { blob: result.buffer.toString("base64") };
-    }
+    const content =
+      representation === "text"
+        ? { text: new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(result.buffer) }
+        : { blob: result.buffer.toString("base64") };
     if (writable) {
       writeAdmissions.add(view);
     }
@@ -304,12 +303,12 @@ export async function subscribeMcpAppHostFile(
       notifying = true;
       try {
         if (!isCurrent()) {
-          close();
+          close("view, session, requester, or connection authority changed");
           return;
         }
         await requireMcpAppInteraction(view);
         if (!isCurrent()) {
-          close();
+          close("authority changed while checking App interaction");
           return;
         }
         options.context.broadcastToConnIds(
@@ -317,8 +316,8 @@ export async function subscribeMcpAppHostFile(
           { viewId: view.viewId, uri },
           new Set([connId]),
         );
-      } catch {
-        close();
+      } catch (error) {
+        close(error);
       } finally {
         notifying = false;
       }
@@ -354,35 +353,48 @@ export async function subscribeMcpAppHostFile(
             if (!statError) {
               rearm(currentStats);
             } else if (!hasErrnoCode(statError, "ENOENT")) {
-              close();
+              close(statError);
             }
           });
         } else {
-          close();
+          close(error);
         }
       }
     };
-    const close = () => {
+    const close = (reason: unknown = "subscription ended") => {
       if (closed) {
         return;
       }
       closed = true;
+      logDebug(
+        `mcp-app: file subscription closed view=${view.viewId}: ${formatErrorMessage(reason)}`,
+      );
+      releaseAuthority?.();
       watcher.close();
       unwatchFile(filePath, rearm);
-      client.connectionSignal?.removeEventListener("abort", close);
+      client.connectionSignal?.removeEventListener("abort", onDisconnect);
       if (watchers.get(connId) === close) {
         watchers.delete(connId);
       }
       view.disposeCallbacks?.delete(close);
     };
-    let watcher = arm();
-    client.connectionSignal?.addEventListener("abort", close, { once: true });
+    const onDisconnect = () => close("connection closed");
+    // The subscription outlives its RPC; keep that request's revocation capture live.
+    const releaseAuthority = retainGatewayDeviceRevocation(options.hasCurrentClientAuthority);
+    let watcher: ReturnType<typeof watch>;
+    try {
+      watcher = arm();
+    } catch (error) {
+      releaseAuthority?.();
+      throw error;
+    }
+    client.connectionSignal?.addEventListener("abort", onDisconnect, { once: true });
     watchers.set(connId, close);
     subscriptions.set(view, watchers);
     view.disposeCallbacks ??= new Set();
     view.disposeCallbacks.add(close);
     if (!isCurrent()) {
-      close();
+      close("authority changed while installing the subscription");
     }
     return {};
   });

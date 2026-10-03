@@ -67,7 +67,22 @@ function receivePage(
       queued.remainingReaders--;
       signal?.throwIfAborted();
       // Dispatch closes the group; the final receiver owns the original after earlier clones finish.
-      return queued.remainingReaders === 0 ? page : structuredClone(page);
+      if (queued.remainingReaders === 0) {
+        return page;
+      }
+      if (page.kind === "rpc" && page.page.encodedResponse) {
+        // Wire bytes are immutable; each reader still owns its mutable page metadata.
+        const { messages, ...response } = page.page.encodedResponse;
+        const copy = structuredClone({
+          ...page,
+          page: { ...page.page, encodedResponse: response },
+        });
+        return {
+          ...copy,
+          page: { ...copy.page, encodedResponse: { ...copy.page.encodedResponse, messages } },
+        };
+      }
+      return structuredClone(page);
     },
     (error: unknown) => {
       queued.remainingReaders--;
@@ -235,6 +250,7 @@ function captureHistoryRequest(request: SessionHistoryWorkerRequest): SessionHis
       kind: "rpc",
       params: {
         encodeResponse: params.encodeResponse,
+        compactionMetrics: params.compactionMetrics?.map((metric) => ({ ...metric })),
         entry: capturedEntry,
         provider: params.provider,
         sessionId: params.sessionId,

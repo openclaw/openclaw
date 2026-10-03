@@ -14,7 +14,7 @@ import {
 import { readWorkerProjectSetupRecipe, readWorkerProjectSnapshot } from "./project-preparation.js";
 import type { WorkerProviderLifecycleOptions } from "./provider-lifecycle.types.js";
 import { prepareRepositoryWorkerProjectSource } from "./repository-project-admission.js";
-import type { RepositoryWorkerProjectSnapshot } from "./repository-project-source.js";
+import type { RepositoryWorkerProjectSnapshot } from "./repository-project-source.schema.js";
 import { deriveEnvironmentIntent } from "./service-contract.js";
 import { requireInheritedWorkerProfileAuthorization } from "./service-validation.js";
 import type { WorkerEnvironmentRecord } from "./store.js";

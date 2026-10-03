@@ -18,8 +18,10 @@ import { cancelChatStreamRenderFrame } from "./chat-state-render.ts";
 import { resolveChatAttachmentLimits } from "./components/chat-attachment-admission.ts";
 import { ChatAttachmentReadLifecycle } from "./components/chat-attachment-reads.ts";
 import { releaseChatMediaResourceSubscriber } from "./components/chat-message-media.ts";
-import { clearSessionWorkspacePreviews } from "./components/chat-session-workspace-state.ts";
-import { clearSessionWorkspaceTimers } from "./components/chat-session-workspace.ts";
+import {
+  clearSessionWorkspacePreviews,
+  clearWorkspaceTimer,
+} from "./components/chat-session-workspace-state.ts";
 import { reviewPrivateComposerDraft } from "./components/private-composer-recovery-dialog.ts";
 import {
   captureChatComposerOwner,
@@ -68,10 +70,6 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
     );
     this.composerPersistence = new ChatComposerPersistence(() => this.stateValue);
     host.addController(this);
-  }
-
-  get state(): TState | undefined {
-    return this.stateValue;
   }
 
   get attachmentReads(): ChatAttachmentReadLifecycle {
@@ -603,7 +601,7 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
         state.sidebarContent = null;
       }
       clearSessionWorkspacePreviews(state);
-      clearSessionWorkspaceTimers(state);
+      clearWorkspaceTimer(state.sessionWorkspaceState);
       stopChatRealtimeTalk(state);
       state.resetToolStream?.();
     }

@@ -74,6 +74,7 @@ function createCurrentEntryRead(
       entry = current
         ? {
             sessionId: current.sessionId,
+            previousSessionId: current.previousSessionId,
             ...(current.archivedAt === undefined ? {} : { archivedAt: current.archivedAt }),
             ...(current.repositoryWorkspaceId === undefined
               ? {}

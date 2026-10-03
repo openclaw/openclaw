@@ -165,6 +165,7 @@ export function resolveReasoningOnlyRetryInstruction(params: {
   return joinAssistantTexts(params.attempt.assistantTexts).length === 0 &&
     assistant &&
     assistant.stopReason !== "error" &&
+    !assistant.openclawDelivery?.tts?.text?.trim() &&
     Array.isArray(assistant.content) &&
     assistant.content.length > 0 &&
     assessLastAssistantMessage(assistant) !== "valid"

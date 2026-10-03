@@ -288,6 +288,28 @@ test.each([
   expect(write).not.toHaveBeenCalled();
 });
 
+test.each(["constructor", "__proto__"])(
+  "send-keys writes literal %s before the cursor key mode is known",
+  async (key) => {
+    const session = createSession();
+    session.cursorKeyMode = "unknown";
+    const write = vi.fn<NonNullable<ProcessSession["stdin"]>["write"]>((_data, callback) =>
+      callback?.(),
+    );
+    session.stdin = { write, end: vi.fn() };
+
+    const result = await createProcessTool().execute("literal-key", {
+      action: "send-keys",
+      sessionId: session.id,
+      keys: [key],
+    });
+
+    expect(result.details).toMatchObject({ status: "running", sessionId: session.id });
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(write).toHaveBeenCalledWith(Buffer.from(key), expect.any(Function));
+  },
+);
+
 test("a retained old snapshot cannot consume a successor poll delivery", async () => {
   const h = pollFixture("old-output\n");
   h.guard();

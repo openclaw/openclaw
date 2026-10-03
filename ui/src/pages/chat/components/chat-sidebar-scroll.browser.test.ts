@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import "../../../styles.css";
 import "../../../styles/chat.ts";
 import "../../../styles/chat/side-panel.css";
-import type { SidebarContent } from "./chat-sidebar.ts";
+import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 import "./chat-files-panel.ts";
 import "./chat-detail-panel.ts";
 

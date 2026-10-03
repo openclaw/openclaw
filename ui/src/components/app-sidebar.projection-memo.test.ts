@@ -134,7 +134,7 @@ describe("sidebar projection memo", () => {
         sidebar.teamOnlineExpanded = false;
       },
       () => {
-        sidebar.sidebarMenus.closeSessionSortMenu();
+        sidebar.sidebarMenus.closePositionedMenu("sessionSort");
         sidebar.requestUpdate();
       },
     ]) {

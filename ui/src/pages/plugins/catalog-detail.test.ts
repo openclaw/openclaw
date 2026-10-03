@@ -1,64 +1,49 @@
 import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PluginDiscoveryDetailResult } from "../../lib/plugins/index.ts";
-import { renderPluginCatalogDetail } from "./catalog-detail.ts";
+import { renderPluginCatalogDetail, type PluginCatalogDetailProps } from "./catalog-detail.ts";
 import { createDiscoveryDetail, createPlugin } from "./plugins-page.test-support.ts";
 
 afterEach(() => document.body.replaceChildren());
 
+function mount(
+  result: PluginDiscoveryDetailResult,
+  overrides: Partial<PluginCatalogDetailProps> = {},
+) {
+  const container = document.createElement("div");
+  render(
+    renderPluginCatalogDetail({
+      connected: true,
+      result,
+      error: null,
+      backHref: "/plugins",
+      onBack: vi.fn(),
+      onRetry: vi.fn(),
+      canInstall: true,
+      installBlockedReason: null,
+      onInstall: vi.fn(),
+      iconUrls: {},
+      ...overrides,
+    }),
+    container,
+  );
+  return container;
+}
+
 describe("catalog README", () => {
   it("keeps long README tails and wires fenced-code controls", () => {
     const tail = "README_TAIL";
-    const result = {
-      plugin: {
-        id: "ch_demo",
-        catalog: {
-          name: "Demo",
-          packageName: "demo",
-          family: "code-plugin",
-          official: false,
-          categories: [],
-          publishedToClawHub: true,
-        },
-        local: {
-          present: false,
-          installed: false,
-          enabled: false,
-          state: "not-installed",
-          action: "install",
-        },
-      },
-      detail: {
-        origin: "clawhub",
-        packageName: "demo",
-        topics: [],
-        readme: `\`\`\`bash\necho demo\n\`\`\`\n${"x".repeat(150_000)}${tail}`,
-        configuration: [],
-        mcpServers: [],
-        skills: [],
-        versions: [],
-      },
-    } satisfies PluginDiscoveryDetailResult;
-    const container = document.createElement("div");
-
-    render(
-      renderPluginCatalogDetail({
-        connected: true,
-        result,
-        error: null,
-        backHref: "/plugins",
-        onBack: () => undefined,
-        onRetry: () => undefined,
-        canInstall: true,
-        installBlockedReason: null,
-        onInstall: () => undefined,
-        iconUrls: {},
-      }),
-      container,
+    const result = createDiscoveryDetail(
+      createPlugin({ id: "demo", name: "Demo", installed: false, state: "not-installed" }),
     );
+    result.detail.readme = `\`\`\`bash\necho demo\n\`\`\`\n${"x".repeat(150_000)}${tail}`;
+    const container = mount(result);
 
     expect(container.querySelector(".code-block-copy")).not.toBeNull();
     expect(container.textContent).toContain(tail);
+    expect(
+      container.querySelector(".plugin-catalog-detail__readme-section > h2")?.textContent,
+    ).toBe("README");
   });
 });
 
@@ -67,23 +52,7 @@ describe("renderPluginCatalogDetail", () => {
     const imageUrl = "https://example.com/icon.png";
     const result = createDiscoveryDetail(createPlugin({ origin: "official" }));
     result.plugin.catalog.imageUrl = imageUrl;
-    const container = document.createElement("div");
-
-    render(
-      renderPluginCatalogDetail({
-        connected: true,
-        result,
-        error: null,
-        backHref: "/plugins",
-        onBack: vi.fn(),
-        onRetry: vi.fn(),
-        canInstall: true,
-        installBlockedReason: null,
-        onInstall: vi.fn(),
-        iconUrls: { [imageUrl]: "blob:package-icon" },
-      }),
-      container,
-    );
+    const container = mount(result, { iconUrls: { [imageUrl]: "blob:package-icon" } });
 
     expect(
       container.querySelector(".plugin-catalog-detail__icon .plugins-tile--white"),
@@ -91,51 +60,13 @@ describe("renderPluginCatalogDetail", () => {
   });
 
   it("does not invent a ClawHub link for an unproven local package", () => {
-    const result = {
-      plugin: {
-        id: "local_ZGVtbw",
-        catalog: {
-          name: "Demo",
-          packageName: "demo",
-          official: false,
-          categories: [],
-        },
-        local: {
-          present: true,
-          installed: true,
-          enabled: false,
-          state: "disabled",
-          pluginId: "demo",
-          action: "manage",
-        },
-      },
-      detail: {
-        origin: "local",
-        packageName: "demo",
-        topics: [],
-        configuration: [],
-        mcpServers: [],
-        skills: [],
-        versions: [],
-      },
-    } satisfies PluginDiscoveryDetailResult;
-    const container = document.createElement("div");
-
-    render(
-      renderPluginCatalogDetail({
-        connected: true,
-        result,
-        error: null,
-        backHref: "/plugins",
-        onBack: () => undefined,
-        onRetry: () => undefined,
-        canInstall: false,
-        installBlockedReason: null,
-        onInstall: () => undefined,
-        iconUrls: {},
-      }),
-      container,
-    );
+    const result = createDiscoveryDetail(createPlugin({ id: "demo", name: "Demo" }));
+    result.plugin.id = "local_ZGVtbw";
+    result.plugin.catalog.packageName = "demo";
+    result.plugin.local.pluginId = "demo";
+    result.plugin.local.action = "manage";
+    result.detail.origin = "local";
+    const container = mount(result, { canInstall: false });
 
     expect(container.querySelector('a[href^="https://clawhub.ai/"]')).toBeNull();
   });
@@ -154,24 +85,7 @@ it.each([
     result.plugin.local.action = installed ? "manage" : "install";
     const onInstall = vi.fn();
     const onAskPlugin = vi.fn();
-    const container = document.createElement("div");
-    render(
-      renderPluginCatalogDetail({
-        connected: true,
-        result,
-        error: null,
-        backHref: "/plugins",
-        onBack: vi.fn(),
-        onRetry: vi.fn(),
-        canInstall,
-        busy,
-        installBlockedReason: null,
-        onInstall,
-        onAskPlugin,
-        iconUrls: {},
-      }),
-      container,
-    );
+    const container = mount(result, { canInstall, busy, onInstall, onAskPlugin });
     document.body.append(container);
     await container.querySelector("openclaw-plugin-install-action")?.updateComplete;
     const actions = container.querySelector(".plugin-catalog-detail__actions")!;
@@ -205,27 +119,12 @@ it.each([false, true])(
     result.detail.channels = ["messaging-channel"];
     result.detail.skills = mixed ? [{ name: "video-guide" }] : [];
     result.detail.mcpServers = mixed ? ["media-server"] : [];
-    const container = document.createElement("div");
-    render(
-      renderPluginCatalogDetail({
-        connected: true,
-        result,
-        error: null,
-        backHref: "/plugins",
-        onBack: vi.fn(),
-        onRetry: vi.fn(),
-        canInstall: true,
-        installBlockedReason: null,
-        onInstall: vi.fn(),
-        iconUrls: {},
-      }),
-      container,
-    );
+    const container = mount(result);
     const sections = [...container.querySelectorAll(".plugin-capabilities")];
     expect(container.querySelector(".plugin-capabilities button")).toBeNull();
     expect(sections.map((section) => section.querySelector("h2")?.textContent)).toEqual([
       "Capabilities3",
-      ...(mixed ? ["Skills1", "Tools1", "MCP servers1"] : []),
+      ...(mixed ? ["Skills1", "Tools1", "MCP Server1"] : []),
     ]);
     expect(
       sections.flatMap((section) =>

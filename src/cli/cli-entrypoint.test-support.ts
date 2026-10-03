@@ -121,6 +121,18 @@ export const stateDirGatewayFixtureEntrypoint = {
   distWorkerPath: "cli/state-dir-gateway-check.server-fixture.test-support.js",
 } as const;
 
+export const localStateOwnerFixtureEntrypoint = {
+  currentModuleUrl: import.meta.url,
+  sourceWorkerName: "local-state-owner.child.test-support",
+  distWorkerPath: "cli/local-state-owner.child.test-support.js",
+} as const;
+
+export const adminStateOwnerFixtureEntrypoint = {
+  currentModuleUrl: import.meta.url,
+  sourceWorkerName: "admin-state-owner.child.test-support",
+  distWorkerPath: "cli/admin-state-owner.child.test-support.js",
+} as const;
+
 export const updateFinalizationOutputEntrypoint = {
   currentModuleUrl: import.meta.url,
   sourceWorkerName: "update-finalization-output.test-support",

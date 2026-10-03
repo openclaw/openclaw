@@ -1,4 +1,8 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import type { ControlUiSessionPullRequest } from "./control-ui-contract.js";
 import { gitHubPublicApi } from "./github-public-api.js";
 import { isGitHubPublicationSuperseded } from "./github-publication-relevance.js";
@@ -32,9 +36,14 @@ beforeEach(() => {
   vi.spyOn(gitHubPublicApi, "resolveGitHubApiCredentialScope").mockReturnValue({
     token: "synthetic-test-token",
     cacheScope: "fixture",
+    apiBaseUrl: "https://api.github.com",
   });
 });
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+  clearRuntimeConfigSnapshot();
+});
 
 function requestUrl(input: RequestInfo | URL): string {
   return typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
@@ -42,7 +51,7 @@ function requestUrl(input: RequestInfo | URL): string {
 
 function responses(publishedTree = "4".repeat(40), compared: unknown = comparison) {
   return vi.fn(
-    async (input: RequestInfo | URL) =>
+    async (input: RequestInfo | URL, _init?: RequestInit) =>
       new Response(
         JSON.stringify(
           requestUrl(input).includes("/compare/")
@@ -54,6 +63,42 @@ function responses(publishedTree = "4".repeat(40), compared: unknown = compariso
   );
 }
 const current = () => {};
+
+it.each(["github.com", "ghe.example.test"])(
+  "reads publication history at the recorded %s host on an Enterprise Gateway",
+  async (host) => {
+    vi.mocked(gitHubPublicApi.resolveGitHubApiCredentialScope).mockRestore();
+    vi.stubEnv("GH_TOKEN", "synthetic-unrelated-public-token");
+    vi.stubEnv("GITHUB_TOKEN", "");
+    setRuntimeConfigSnapshot({
+      gateway: {
+        github: { host: "ghe.example.test", apiBaseUrl: "https://ghe.example.test/api/v3" },
+        controlUi: {
+          github: { host: "ghe.example.test", token: "synthetic-enterprise-history-token" },
+        },
+      },
+    });
+    const fetchImpl = responses(tree);
+    expect(
+      await isGitHubPublicationSuperseded(
+        snapshot,
+        [{ ...pr, url: `https://${host}/owner/repo/pull/1` }],
+        {
+          fetchImpl,
+          assertCurrent: current,
+        },
+      ),
+    ).toBe(true);
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    const [url, init] = fetchImpl.mock.calls[0]!;
+    expect(url).toBe(
+      `${host === "github.com" ? "https://api.github.com" : "https://ghe.example.test/api/v3"}/repos/owner/repo/git/commits/${head}`,
+    );
+    expect(new Headers(init?.headers).get("Authorization")).toBe(
+      host === "github.com" ? null : "Bearer synthetic-enterprise-history-token",
+    );
+  },
+);
 
 it.each(["open", "draft", "merged"] as const)(
   "recognizes a failed committed snapshot in %s PR history",

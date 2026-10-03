@@ -110,24 +110,11 @@ type ExtractedAssistantOutput = {
 const NATIVE_ANTHROPIC_TOOL_USE_ID_RE = /^toolu_[A-Za-z0-9_]+$/;
 const ANTHROPIC_TOOL_USE_ID_MAX_LENGTH = 64;
 
-function isNativeAnthropicToolUseId(id: string): boolean {
-  return id.length <= ANTHROPIC_TOOL_USE_ID_MAX_LENGTH && NATIVE_ANTHROPIC_TOOL_USE_ID_RE.test(id);
-}
-
 export function adaptAnthropicToolCallIds(events: StreamEvent[]): StreamEvent[] {
-  const adaptedIds = new Map<string, string>();
-  const adaptId = (id: string) => {
-    if (isNativeAnthropicToolUseId(id)) {
-      return id;
-    }
-    const existing = adaptedIds.get(id);
-    if (existing) {
-      return existing;
-    }
-    const adapted = `toolu${createHash("sha256").update(id).digest("hex").slice(0, 35)}`;
-    adaptedIds.set(id, adapted);
-    return adapted;
-  };
+  const adaptId = (id: string) =>
+    id.length <= ANTHROPIC_TOOL_USE_ID_MAX_LENGTH && NATIVE_ANTHROPIC_TOOL_USE_ID_RE.test(id)
+      ? id
+      : `toolu${createHash("sha256").update(id).digest("hex").slice(0, 35)}`;
   const adaptItem = (item: Record<string, unknown>) => {
     if (
       (item.type === "function_call" || item.type === "custom_tool_call") &&

@@ -265,6 +265,8 @@ export type ControlUiHost = {
     registerPage: (page: ControlUiPage) => ControlUiDisposer;
     registerNavigation: (item: ControlUiNavigationItem) => ControlUiDisposer;
     registerPanel: (panel: ControlUiPanel) => ControlUiDisposer;
+    /** Open an owned registered panel beside the supplied or currently selected session. */
+    openPanel: (id: string, session?: BoardGetParams) => void;
     registerAction: (action: ControlUiAction) => ControlUiDisposer;
     registerAccessory: (accessory: ControlUiAccessory) => ControlUiDisposer;
     registerWidget: (widget: ControlUiWidget) => ControlUiDisposer;

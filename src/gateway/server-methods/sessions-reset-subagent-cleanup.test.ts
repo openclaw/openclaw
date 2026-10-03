@@ -1,4 +1,5 @@
 import path from "node:path";
+import type { WorkerOptions } from "node:worker_threads";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -34,25 +35,74 @@ import {
   replaceSessionEntrySync,
 } from "../../config/sessions/session-accessor.js";
 import * as sessionLifecycleOwner from "../../config/sessions/session-accessor.sqlite-lifecycle.js";
-import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import {
-  closeOpenClawAgentDatabasesForTest,
-  openOpenClawAgentDatabase,
-} from "../../state/openclaw-agent-db.js";
+import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
+import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import type { callGateway } from "../call.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { performGatewaySessionReset } from "../session-reset-service.js";
 import { sessionDeleteHandlers } from "./sessions-delete.js";
 import { sessionMutationHandlers } from "./sessions-mutations.js";
+
+const writeFault = vi.hoisted(() => new Int32Array(new SharedArrayBuffer(4)));
+vi.mock("node:worker_threads", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:worker_threads")>();
+  // TEMP triggers belong on the admitted writer connection, including an already warm worker.
+  const preload = `
+    import { DatabaseSync } from "node:sqlite";
+    import { workerData } from "node:worker_threads";
+    const fault = new Int32Array(workerData.resetCleanupFault);
+    const installed = new WeakSet();
+    const prepare = DatabaseSync.prototype.prepare;
+    DatabaseSync.prototype.prepare = function(sql) {
+      const registry = sql.startsWith('insert into "subagent_runs"');
+      const reset = sql.startsWith('update "session_nodes"') || sql.startsWith('insert into "session_nodes"');
+      if ((registry || reset) && !installed.has(this)) {
+        this.function('reset_cleanup_fault', () => Atomics.load(fault, 0));
+        this.exec(registry
+          ? "CREATE TEMP TRIGGER reject_revocation BEFORE UPDATE ON main.subagent_runs " +
+            "WHEN reset_cleanup_fault() = 1 AND NEW.run_id = 'reset-cleanup-run' " +
+            "AND json_extract(NEW.payload_json, '$.execution.suppressSessionEffects') = 1 " +
+            "BEGIN SELECT RAISE(ABORT, 'revocation write rejected'); END"
+          : "CREATE TEMP TRIGGER reject_reset BEFORE UPDATE ON main.session_nodes " +
+            "WHEN reset_cleanup_fault() = 2 AND NEW.session_key = 'agent:main:subagent:reset-cleanup' " +
+            "AND json_extract(NEW.entry_json, '$.lifecycleRevision') != json_extract(OLD.entry_json, '$.lifecycleRevision') " +
+            "BEGIN SELECT RAISE(ABORT, 'reset store rejected'); END");
+        installed.add(this);
+      }
+      return prepare.call(this, sql);
+    };
+  `;
+  return {
+    ...actual,
+    Worker: class extends actual.Worker {
+      constructor(filename: string | URL, options?: WorkerOptions) {
+        super(
+          filename,
+          String(filename).includes("sqlite-store.worker")
+            ? {
+                ...options,
+                workerData: { ...options?.workerData, resetCleanupFault: writeFault.buffer },
+                execArgv: [
+                  ...(options?.execArgv ?? []),
+                  "--import",
+                  `data:text/javascript,${encodeURIComponent(preload)}`,
+                ],
+              }
+            : options,
+        );
+      }
+    },
+  };
+});
 
 const registryGateway = vi.hoisted(() => vi.fn<typeof callGateway>());
 vi.mock("../server-recovery-runtime-context.js", async (importOriginal) => ({
@@ -144,6 +194,7 @@ async function registerCollector(id: string, childSessionKey = key, agentId = "m
 }
 
 afterEach(async () => {
+  Atomics.store(writeFault, 0, 0);
   // Preserve failures from the accepted prefix before imports can retire their entries.
   try {
     await settleSubagentRegistryPersistenceWork();
@@ -188,6 +239,7 @@ test.each(["unchanged", "reset", "reset-reopen", "reopen-reset-reopen"])(
 
 async function reopen() {
   await resetSubagentRegistryForTests({ persist: false });
+  await cleanupSessionStateForTest({ stateDir });
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
   await initSubagentRegistry();
@@ -205,19 +257,8 @@ async function expectResultRetained() {
   ).resolves.toMatchObject({ runId, status: "failed", result: "launch failed" });
 }
 
-function agentDatabase() {
-  const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId: "main" });
-  return openOpenClawAgentDatabase({
-    agentId: "main",
-    path: resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" }).path,
-  });
-}
-
 test("a real registry write failure blocks reset publication and leaves cleanup retryable", async () => {
-  const database = openOpenClawStateDatabase();
-  database.db.exec(`CREATE TRIGGER reject_revocation BEFORE UPDATE ON subagent_runs
-    WHEN json_extract(NEW.payload_json, '$.execution.suppressSessionEffects') = 1
-    BEGIN SELECT RAISE(ABORT, 'revocation write rejected'); END`);
+  Atomics.store(writeFault, 0, 1);
   const before = loadSessionEntry({ sessionKey: key });
   await expect(request("sessions.reset", { key })).rejects.toThrow("revocation write rejected");
   expect(loadSessionEntry({ sessionKey: key })).toEqual(before);
@@ -225,7 +266,7 @@ test("a real registry write failure blocks reset publication and leaves cleanup 
   expect(loadSubagentRegistryFromSqlite().get(runId)?.execution.suppressSessionEffects).not.toBe(
     true,
   );
-  database.db.exec("DROP TRIGGER reject_revocation");
+  Atomics.store(writeFault, 0, 0);
   await reopen();
   await testing.sweepOnceForTests();
   expect(loadSessionEntry({ sessionKey: key })).toBeUndefined();
@@ -234,11 +275,10 @@ test("a real registry write failure blocks reset publication and leaves cleanup 
 });
 
 test("durable revocation survives reset-store failure and reopen without reviving deletion", async () => {
-  agentDatabase().db.exec(`CREATE TEMP TRIGGER reject_reset BEFORE UPDATE ON session_nodes
-    WHEN json_extract(NEW.entry_json, '$.lifecycleRevision') != json_extract(OLD.entry_json, '$.lifecycleRevision')
-    BEGIN SELECT RAISE(ABORT, 'reset store rejected'); END`);
+  Atomics.store(writeFault, 0, 2);
   const before = loadSessionEntry({ sessionKey: key });
   await expect(request("sessions.reset", { key })).rejects.toThrow("reset store rejected");
+  Atomics.store(writeFault, 0, 0);
   expect(loadSubagentRegistryFromSqlite().get(runId)?.execution.suppressSessionEffects).toBe(true);
   await reopen();
   await testing.sweepOnceForTests();

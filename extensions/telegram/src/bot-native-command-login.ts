@@ -29,12 +29,9 @@ import { buildTelegramRoutingTarget } from "./bot/helpers.js";
 
 const activeTelegramProviderLoginFlows = createProviderLoginFlowRegistry();
 
-type TelegramLoginDeviceCode = {
-  title: string;
-  code: string;
-  expiresInMinutes?: number;
-  message?: string;
-};
+type TelegramLoginDeviceCode = Parameters<
+  NonNullable<Parameters<typeof runProviderChannelLoginFlow>[0]["sendDeviceCode"]>
+>[0];
 
 // Telegram's inline-code entity provides the tap-to-copy affordance needed for
 // short-lived device codes; plain text and literal backticks do not.
@@ -70,21 +67,14 @@ export async function executeTelegramLoginCommand(params: {
   currentProvider?: string;
 }): Promise<boolean> {
   const { dispatch } = params;
-  const sendLoginMessage = async (text: string) => {
-    await withTelegramApiErrorLogging({
-      operation: "sendMessage",
-      runtime: dispatch.runtime,
-      fn: () => dispatch.bot.api.sendMessage(dispatch.chatId, text, dispatch.threadParams ?? {}),
-    });
-  };
-  const sendLoginDeviceCode = async (deviceCode: TelegramLoginDeviceCode) => {
+  const sendLoginMessage = async (text: string, parseMode?: "HTML") => {
     await withTelegramApiErrorLogging({
       operation: "sendMessage",
       runtime: dispatch.runtime,
       fn: () =>
-        dispatch.bot.api.sendMessage(dispatch.chatId, formatTelegramLoginDeviceCode(deviceCode), {
+        dispatch.bot.api.sendMessage(dispatch.chatId, text, {
           ...dispatch.threadParams,
-          parse_mode: "HTML",
+          ...(parseMode ? { parse_mode: parseMode } : {}),
         }),
     });
   };
@@ -224,7 +214,7 @@ export async function executeTelegramLoginCommand(params: {
         },
         sendDeviceCode: async (deviceCode) => {
           flowSignal.throwIfAborted();
-          await sendLoginDeviceCode(deviceCode);
+          await sendLoginMessage(formatTelegramLoginDeviceCode(deviceCode), "HTML");
           flowSignal.throwIfAborted();
           signInActionWasDelivered = true;
           signInActionDelivered.resolve();

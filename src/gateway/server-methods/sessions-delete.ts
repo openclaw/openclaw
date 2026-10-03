@@ -30,11 +30,8 @@ import { removeSessionWorktree } from "../../sessions/session-worktree-lifecycle
 import { resolvePluginSessionOwnershipError } from "../session-plugin-ownership.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
 import { invalidSessionRequest } from "../session-request-error.js";
-import {
-  loadGatewaySessionEntryReadOnly,
-  loadSessionEntry,
-  resolveGatewaySessionStoreTarget,
-} from "../session-utils.js";
+import { resolveGatewaySessionStoreTargetInWorker } from "../session-utils-store-worker.js";
+import { loadGatewaySessionEntryReadOnly, loadSessionEntry } from "../session-utils.js";
 import { prepareSessionWorkerPlacementRetirement } from "../worker-environments/session-placement-lifecycle.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import {
@@ -78,7 +75,15 @@ export async function deleteGatewaySession({
     return requestedAgent;
   }
   const requestedAgentId = requestedAgent.agentId;
-  const target = resolveGatewaySessionStoreTarget({ cfg, key, agentId: requestedAgentId });
+  const target = await resolveGatewaySessionStoreTargetInWorker({
+    cfg,
+    key,
+    agentId: requestedAgentId,
+    assertActive: () => {
+      assertCallerCurrent?.();
+      sessionMutationAuthorization?.assertCurrent();
+    },
+  });
   const { storePath } = target;
   const compatibilityDefaultAgentId = tryResolveAgentOperationAgentId(cfg);
   const persistedStoreOwner = resolvePersistedSessionStoreOwnerForKey(cfg, key);
@@ -222,7 +227,7 @@ export async function deleteGatewaySession({
         );
       }
       // Reclaim may wait for an earlier placement operation that needs this mutex.
-      return await runExclusiveSessionLifecycleMutation({
+      return await runExclusiveSessionLifecycleMutation("delete", {
         scope: storePath,
         identities: deleteLifecycleIdentities,
         prepare: async () => drain?.handoffToMutation(),

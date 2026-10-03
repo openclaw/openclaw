@@ -15,143 +15,112 @@ import {
 } from "./server.test-harness.js";
 
 const { startMockServer } = createMockServerTestHarness();
+const oldPrompt =
+  'qa a2a message-tool mirror check. sessionKey="agent:orion:main". exact marker: `QA-A2A-OLD`';
+const nextPrompt = "New request. Reply with exact marker: `QA-NEXT-USER-OK`";
+
+function expectTextOnly(response: unknown, text: string) {
+  expect(outputText(response)).toBe(text);
+  expect(outputItems(response).some((item) => item.type === "function_call")).toBe(false);
+}
 
 describe("mock OpenAI A2A scenarios", () => {
-  it("plans sessions_send for the A2A message-tool mirror proof scenario", async () => {
-    const server = await startMockServer();
-    const prompt =
-      'qa a2a message-tool mirror check. sessionKey="agent:qa:a2a-target". exact marker: `QA-A2A-MIRROR-OK`';
-
-    const toolPlan = await expectOpenAiNonStreamingResponsesJson(server, {
-      tools: [{ type: "function", name: "sessions_send" }],
-      input: [makeUserInput(prompt)],
-    });
-
-    const args = outputToolArgs(toolPlan);
-    expect(outputItem(toolPlan).type).toBe("function_call");
-    expect(outputItem(toolPlan).name).toBe("sessions_send");
-    expect(args).toMatchObject({
+  it.each([
+    {
       sessionKey: "agent:qa:a2a-target",
-      timeoutSeconds: 0,
-    });
-    expect(String(args.message)).toContain("qa group visible reply tool check");
-    expect(String(args.message)).toContain("QA-A2A-MIRROR-OK");
-
-    expect(await getJson(server, "/debug/last-request")).toMatchObject({
-      plannedToolName: "sessions_send",
-      plannedToolArgs: { sessionKey: "agent:qa:a2a-target", timeoutSeconds: 0 },
-    });
-
-    const final = await expectOpenAiNonStreamingResponsesJson(server, {
-      tools: [{ type: "function", name: "sessions_send" }],
-      input: [
-        makeUserInput(prompt),
-        makeToolOutputWithCallId(
-          "call_mock_sessions_send_fixture",
-          JSON.stringify({ status: "accepted", delivery: { mode: "announce" } }),
-        ),
-      ],
-    });
-    expect(outputText(final)).toBe("");
-    expect(outputItems(final).some((item) => item.type === "function_call")).toBe(false);
-
-    const targetToolPlan = await expectOpenAiNonStreamingResponsesJson(server, {
-      tools: [
-        { type: "function", name: "sessions_send" },
-        { type: "function", name: "message" },
-      ],
-      input: [
-        makeUserInput(prompt),
-        makeUserInput(
-          "qa group visible reply tool check. Use the visible room reply path. exact marker: `QA-A2A-MIRROR-OK`",
-        ),
-      ],
-    });
-
-    expect(outputItem(targetToolPlan).type).toBe("function_call");
-    expect(outputItem(targetToolPlan).name).toBe("message");
-    expect(outputToolArgs(targetToolPlan)).toMatchObject({
-      action: "send",
-      message: "QA-A2A-MIRROR-OK",
-    });
-  });
-
-  it("keeps the A2A denial fixture empty during finalization", async () => {
-    const server = await startMockServer();
-    const kickoff = makeUserInput(
-      'qa a2a message-tool mirror check. sessionKey="agent:orion:main". exact marker: `QA-A2A-DENIED-OK`',
-    );
-    const tools = [{ type: "function", name: "sessions_send" }];
-    const toolPlan = await expectOpenAiNonStreamingResponsesJson(server, {
-      tools,
-      input: [kickoff],
-    });
-    const toolCall = outputToolCall(toolPlan, "sessions_send");
-    const input: unknown[] = [
-      kickoff,
-      toolCall,
-      makeToolOutputWithCallId(
-        outputToolCallId(toolCall, "call_a2a_denied"),
-        JSON.stringify({
-          status: "forbidden",
-          error:
-            "Agent-to-agent messaging is disabled. Set tools.agentToAgent.enabled=true to allow cross-agent sends.",
+      marker: "QA-A2A-MIRROR-OK",
+      receipt: { status: "accepted", delivery: { mode: "announce" } },
+    },
+    {
+      sessionKey: "agent:orion:main",
+      marker: "QA-A2A-DENIED-OK",
+      receipt: {
+        status: "forbidden",
+        error:
+          "Agent-to-agent messaging is disabled. Set tools.agentToAgent.enabled=true to allow cross-agent sends.",
+      },
+    },
+  ])(
+    "keeps $receipt.status sends empty through finalization",
+    async ({ sessionKey, marker, receipt }) => {
+      const server = await startMockServer();
+      const kickoff = makeUserInput(
+        `qa a2a message-tool mirror check. sessionKey="${sessionKey}". exact marker: \`${marker}\``,
+      );
+      const tools = [{ type: "function", name: "sessions_send" }];
+      const plan = await expectOpenAiNonStreamingResponsesJson(server, { tools, input: [kickoff] });
+      const call = outputToolCall(plan, "sessions_send");
+      expect(outputItem(plan)).toMatchObject({ type: "function_call", name: "sessions_send" });
+      const args = outputToolArgs(plan);
+      expect(args).toMatchObject({ sessionKey, timeoutSeconds: 0 });
+      expect(String(args.message)).toContain("qa group visible reply tool check");
+      expect(String(args.message)).toContain(marker);
+      expect(await getJson(server, "/debug/last-request")).toMatchObject({
+        plannedToolName: "sessions_send",
+        plannedToolArgs: { sessionKey, timeoutSeconds: 0 },
+      });
+      const input: unknown[] = [
+        kickoff,
+        call,
+        makeToolOutputWithCallId(outputToolCallId(call, "call_a2a"), JSON.stringify(receipt)),
+      ];
+      const response = await expectOpenAiNonStreamingResponsesJson(server, { tools, input });
+      expectTextOnly(response, "");
+      expectTextOnly(
+        await expectOpenAiNonStreamingResponsesJson(server, {
+          tools: [],
+          input: [
+            ...input,
+            ...outputItems(response),
+            makeUserInput(
+              `${QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION} If a tool failed, say so; never claim completion or success.`,
+            ),
+          ],
         }),
-      ),
-    ];
-    let response = await expectOpenAiNonStreamingResponsesJson(server, { tools, input });
-    expect(outputText(response)).toBe("");
+        "",
+      );
 
-    input.push(
-      ...outputItems(response),
-      makeUserInput(
-        `${QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION} If a tool failed, say so; never claim completion or success.`,
-      ),
-    );
-    response = await expectOpenAiNonStreamingResponsesJson(server, { tools: [], input });
-    expect(outputText(response)).toBe("");
-    expect(outputItems(response).some((item) => item.type === "function_call")).toBe(false);
-  });
+      const target = await expectOpenAiNonStreamingResponsesJson(server, {
+        tools: [...tools, { type: "function", name: "message" }],
+        input: [
+          kickoff,
+          makeUserInput(
+            `qa group visible reply tool check. Use the visible room reply path. exact marker: \`${marker}\``,
+          ),
+        ],
+      });
+      expect(outputItem(target)).toMatchObject({ type: "function_call", name: "message" });
+      expect(outputToolArgs(target)).toMatchObject({ action: "send", message: marker });
+    },
+  );
 
-  it("does not revive an earlier A2A fixture during a later user turn finalization", async () => {
-    const server = await startMockServer();
-    const response = await expectOpenAiNonStreamingResponsesJson(server, {
-      tools: [],
+  it.each([
+    {
+      history: "earlier turn",
       input: [
-        makeUserInput(
-          'qa a2a message-tool mirror check. sessionKey="agent:orion:main". exact marker: `QA-A2A-OLD`',
-        ),
+        makeUserInput(oldPrompt),
         makeToolOutputWithCallId("call_a2a_old", JSON.stringify({ status: "forbidden" })),
-        makeUserInput("New request. Reply with exact marker: `QA-NEXT-USER-OK`"),
-        makeUserInput(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION),
+        makeUserInput(nextPrompt),
       ],
-    });
-    expect(outputText(response)).toBe("QA-NEXT-USER-OK");
-    expect(outputItems(response).some((item) => item.type === "function_call")).toBe(false);
-  });
-
-  it("does not revive projected A2A history during the current request's finalization", async () => {
-    const server = await startMockServer();
-    const response = await expectOpenAiNonStreamingResponsesJson(server, {
-      tools: [],
+    },
+    {
+      history: "projected conversation",
       input: [
         makeUserInput(
-          [
-            "<conversation_context>",
-            "[user]",
-            'qa a2a message-tool mirror check. sessionKey="agent:orion:main". exact marker: `QA-A2A-OLD`',
-            "</conversation_context>",
-            "",
-            "Current user request:",
-            "New request. Reply with exact marker: `QA-NEXT-USER-OK`",
-          ].join("\n"),
+          `<conversation_context>\n[user]\n${oldPrompt}\n</conversation_context>\n\nCurrent user request:\n${nextPrompt}`,
         ),
         { type: "function_call", name: "read", call_id: "call_current", arguments: "{}" },
         makeToolOutputWithCallId("call_current", JSON.stringify({ ok: true })),
-        makeUserInput(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION),
       ],
-    });
-    expect(outputText(response)).toBe("QA-NEXT-USER-OK");
-    expect(outputItems(response).some((item) => item.type === "function_call")).toBe(false);
+    },
+  ])("does not revive $history during current finalization", async ({ input }) => {
+    const server = await startMockServer();
+    expectTextOnly(
+      await expectOpenAiNonStreamingResponsesJson(server, {
+        tools: [],
+        input: [...input, makeUserInput(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION)],
+      }),
+      "QA-NEXT-USER-OK",
+    );
   });
 });

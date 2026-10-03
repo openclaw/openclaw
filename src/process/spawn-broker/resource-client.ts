@@ -1,4 +1,4 @@
-import { connect, type Socket } from "node:net";
+import { connect } from "node:net";
 import type { MessagePort } from "node:worker_threads";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -21,7 +21,6 @@ export function attachBrokerNativeResource(
 ) {
   const initialized = createDeferredCore();
   void initialized.promise.catch(() => {});
-  let socket: Socket | undefined;
   let transport: ReturnType<typeof createBrokerResourceSocket> | undefined;
   let retryTimer: NodeJS.Timeout | undefined;
   let closeSequence = 0;
@@ -100,7 +99,6 @@ export function attachBrokerNativeResource(
       return;
     }
     const candidate = connect(attachment.endpoint);
-    socket = candidate;
     let connected = false;
     let connectionError: Error | undefined;
     candidate.once("error", (error) => {
@@ -194,7 +192,6 @@ export function attachBrokerNativeResource(
       clearTimeout(retryTimer);
       clearTimeout(startupTimer);
       transport?.close();
-      socket?.destroy();
     },
   };
 }

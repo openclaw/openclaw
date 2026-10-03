@@ -1,7 +1,7 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { resolvePathPrefixSync } from "@openclaw/fs-safe/advanced";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { listAgentIds, tryResolveSoleAgentId } from "../../agents/agent-scope-config.js";
 import {
@@ -265,7 +265,7 @@ function writeLedger(params: {
     status: "complete",
   };
   const reportJson = JSON.stringify(report);
-  const identityHash = createHash("sha256").update(JSON.stringify(params.identity)).digest("hex");
+  const identityHash = sha256Hex(JSON.stringify(params.identity));
   const runId = `${SOURCE_KEY}:${identityHash.slice(0, 24)}`;
   params.beforePersistentApply?.();
   runOpenClawStateWriteTransaction(

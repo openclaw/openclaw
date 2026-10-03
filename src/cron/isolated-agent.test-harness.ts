@@ -17,7 +17,7 @@ export async function withTempCronHome<T>(fn: (home: string) => Promise<T>): Pro
 
 export async function writeSessionStore(
   home: string,
-  session: { lastProvider: string; lastTo: string; lastChannel?: string },
+  session: Pick<SessionEntry, "delivery">,
 ): Promise<string> {
   return writeSessionStoreEntries(home, {
     "agent:main:main": {

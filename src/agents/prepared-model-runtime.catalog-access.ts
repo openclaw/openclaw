@@ -82,6 +82,10 @@ export async function createFullModelCatalogAccess(
     assertBuildCurrent,
   );
   assertBuildCurrent();
+  const accountCatalog = createPreparedAccountCatalogAccess(
+    params.isCurrent,
+    params.retirementSignal,
+  );
   const readUsage = createPreparedRuntimeAuthProfileUsageReader(
     params.agentFacts.input.agentDir,
     params.agentFacts.input.inheritedAuthDir,
@@ -386,6 +390,9 @@ export async function createFullModelCatalogAccess(
       const inventory = providerIds
         ? mergePreparedModelCatalogInventory(retained, acquired, scope, normalizeProvider)
         : acquired;
+      accountCatalog.reconcileAuth(discoveredAuth.authStore, (provider) =>
+        scope.has(normalizeProvider(provider)),
+      );
       setCatalogAuth(inventory.catalog, auth);
       return {
         inventory,
@@ -499,6 +506,11 @@ export async function createFullModelCatalogAccess(
           }
         : latestInventory;
       if (nextInventory) {
+        if (nativeAuth) {
+          accountCatalog.reconcileAuth(nativeAuth.authStore, (provider) =>
+            nativeScope.has(normalizeProvider(provider)),
+          );
+        }
         setCatalogAuth(nextInventory.catalog, catalogAuth);
       }
       if (completed) {
@@ -635,7 +647,7 @@ export async function createFullModelCatalogAccess(
     return promise;
   };
   return {
-    accountCatalog: createPreparedAccountCatalogAccess(params.isCurrent, params.retirementSignal),
+    accountCatalog,
     initialAuth: currentAuth,
     isCurrent: params.isCurrent,
     withRefreshStatus: attempt.withRefreshStatus,
@@ -656,6 +668,11 @@ export async function createFullModelCatalogAccess(
         previous,
         refreshed,
         (provider) => scope.has(normalizeProvider(provider)),
+      );
+      accountCatalog.reconcileAuth(
+        refreshed.authStore,
+        (provider) => scope.has(normalizeProvider(provider)),
+        profileIds,
       );
       return { authStore, authModes: Object.freeze(authModes) };
     },

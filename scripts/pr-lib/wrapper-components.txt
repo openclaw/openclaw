@@ -25,6 +25,7 @@ packages/gateway-protocol/src/schema/failover-reason.ts
 packages/gateway-protocol/src/schema/plugin-declared-surface-groups.ts
 packages/gateway-protocol/src/schema/presence.ts
 packages/gateway-protocol/src/schema/primitives.ts
+packages/gateway-protocol/src/schema/session-placement-state.ts
 packages/gateway-protocol/src/schema/since.ts
 packages/gateway-protocol/src/schema/user-profile-constants.ts
 packages/gateway-protocol/src/schema/worker-admission.ts
@@ -52,7 +53,6 @@ packages/memory-host-sdk/src/host/embedding-vector.ts
 packages/memory-host-sdk/src/host/error-utils.ts
 packages/memory-host-sdk/src/host/memory-schema-base.ts
 packages/memory-host-sdk/src/host/memory-schema-fts.ts
-packages/memory-host-sdk/src/host/memory-schema-migration.ts
 packages/memory-host-sdk/src/host/memory-schema-provenance.ts
 packages/memory-host-sdk/src/host/memory-schema-recall.ts
 packages/memory-host-sdk/src/host/memory-schema-storage-migration.ts
@@ -158,6 +158,7 @@ scripts/lib/plain-gh.sh
 scripts/lib/record-shared.mjs
 scripts/lib/release-changelog.mjs
 scripts/lib/repo-root.mjs
+scripts/lib/test-runtime.mts
 scripts/lib/test-selector-source-facts.mts
 scripts/lib/test-source-term-matcher.mts
 scripts/lib/tsdown-declaration-boundary.mts
@@ -197,6 +198,7 @@ scripts/watch-pr-ci.mts
 scripts/windows-cmd-helpers.mjs
 src/acp/event-ledger-bytes.ts
 src/agents/agent-bundle-mcp-names.ts
+src/agents/agent-create-error.ts
 src/agents/agent-dir-registry.ts
 src/agents/agent-roster.ts
 src/agents/agent-run-terminal-receipt.ts
@@ -210,6 +212,8 @@ src/agents/configured-provider-fallback.ts
 src/agents/configured-provider-model.ts
 src/agents/defaults.ts
 src/agents/glob-pattern.ts
+src/agents/github-host-runtime.ts
+src/agents/github-host.ts
 src/agents/internal-runtime-context.ts
 src/agents/mcp-oauth-store-error.ts
 src/agents/model-auth-policy.ts
@@ -386,6 +390,7 @@ src/commands/doctor/shared/legacy-tool-name-migration.ts
 src/commands/doctor/shared/legacy-tool-policy-scopes.ts
 src/commands/doctor/shared/legacy-tools-by-sender.ts
 src/commands/doctor/shared/legacy-web-tools-migrate.ts
+src/commands/doctor/shared/legacy-webhook-pins.ts
 src/compat/legacy-names.ts
 src/config/agent-dirs.ts
 src/config/agent-limits.ts
@@ -519,6 +524,7 @@ src/config/sessions/archive-compression.ts
 src/config/sessions/artifacts.ts
 src/config/sessions/auth-profile-override-provenance.ts
 src/config/sessions/conversation-link.ts
+src/config/sessions/goals-operations.types.ts
 src/config/sessions/migration-required.ts
 src/config/sessions/model-override-provenance.ts
 src/config/sessions/paths.ts
@@ -536,9 +542,16 @@ src/config/sessions/session-entry-snapshots.ts
 src/config/sessions/session-entry-state-format.ts
 src/config/sessions/session-history-worker-errors.ts
 src/config/sessions/session-incognito-actor.ts
+src/config/sessions/session-incognito-compute-contract.ts
+src/config/sessions/session-incognito-compute.ts
+src/config/sessions/session-incognito-lifecycle-contract.ts
+src/config/sessions/session-incognito-lifecycle.ts
+src/config/sessions/cli-session-binding.ts
 src/config/sessions/session-incognito-side-data-contract.ts
 src/config/sessions/session-incognito-transcript-contract.ts
 src/config/sessions/session-model-context-projection.ts
+src/config/sessions/session-mutation-conflict-error.ts
+src/config/sessions/session-pending-input-custody-error.ts
 src/config/sessions/session-sqlite-target-paths.ts
 src/config/sessions/session-sqlite-target.ts
 src/config/sessions/session-store-config.ts
@@ -633,8 +646,22 @@ src/gateway/github-repository-publication-snapshot.ts
 src/gateway/operator-scopes.ts
 src/gateway/security-path.ts
 src/gateway/server-methods/workspace-fs.ts
+src/gateway/worker-environments/placement-record.ts
+src/gateway/worker-environments/placement-row-codec.ts
+src/gateway/worker-environments/placement-state.ts
+src/gateway/worker-environments/placement-turn-authority.ts
+src/gateway/worker-environments/placement-workspace-journal.ts
 src/gateway/worker-environments/placement-workspace-journal.types.ts
+src/gateway/worker-environments/placement-workspace-result-owner.ts
+src/gateway/worker-environments/placement-workspace-result-store.ts
+src/gateway/worker-environments/placement-workspace-result.ts
 src/gateway/worker-environments/session-attachment.ts
+src/gateway/worker-environments/state.ts
+src/gateway/worker-environments/store-commit-authority.ts
+src/gateway/worker-environments/store-native-publication.ts
+src/gateway/worker-environments/store-projection.ts
+src/gateway/worker-environments/store-validation.ts
+src/gateway/worker-environments/workspace-accepted-publication.ts
 src/gateway/worker-environments/workspace-actual-manifest.ts
 src/gateway/worker-environments/workspace-git-input.ts
 src/gateway/worker-environments/workspace-hash-memo.ts
@@ -646,10 +673,15 @@ src/gateway/worker-environments/workspace-manifest-computation.runtime.ts
 src/gateway/worker-environments/workspace-manifest-overlay.ts
 src/gateway/worker-environments/workspace-manifest-worker.ts
 src/gateway/worker-environments/workspace-manifest.ts
+src/gateway/worker-environments/workspace-path-ancestors.ts
 src/gateway/worker-environments/workspace-path-exclusions.ts
+src/gateway/worker-environments/workspace-reconcile-apply.ts
+src/gateway/worker-environments/workspace-reconcile-core.ts
 src/gateway/worker-environments/workspace-reconcile-derived-paths.ts
 src/gateway/worker-environments/workspace-reconcile-fs.ts
 src/gateway/worker-environments/workspace-reconcile-preflight.ts
+src/gateway/worker-environments/workspace-reconcile-recovery.ts
+src/gateway/worker-environments/workspace-reconcile.ts
 src/gateway/worker-environments/workspace-result-git.ts
 src/gateway/worker-environments/workspace-result-inventory.runtime.ts
 src/gateway/worker-environments/workspace-result-inventory.ts
@@ -713,6 +745,7 @@ src/infra/dotenv-global-core.ts
 src/infra/dotenv-global.ts
 src/infra/dotenv.ts
 src/infra/ed25519-signature.ts
+src/infra/env-log.runtime.ts
 src/infra/env.ts
 src/infra/errno.ts
 src/infra/error-graph-internal.ts
@@ -746,6 +779,7 @@ src/infra/gateway-owner-lease.read.ts
 src/infra/gateway-owner-lease.ts
 src/infra/gateway-lock-payload.ts
 src/infra/gateway-state-owner-directory.ts
+src/infra/gateway-state-owner-record.ts
 src/infra/gateway-state-owner.ts
 src/infra/gateway-process-argv.ts
 src/infra/gateway-scheduler.ts
@@ -811,6 +845,9 @@ src/infra/openclaw-exec-env.ts
 src/infra/openclaw-process-census.ts
 src/infra/openclaw-root.fs.runtime.ts
 src/infra/openclaw-root.ts
+src/infra/package-update-activation-immutable.ts
+src/infra/package-update-activation-paths.ts
+src/infra/package-update-activation-schema.ts
 src/infra/path-case.ts
 src/infra/path-existence.ts
 src/infra/path-guards.ts
@@ -853,6 +890,7 @@ src/infra/sqlite-index-schema.ts
 src/infra/sqlite-integrity-worker-error.ts
 src/infra/sqlite-integrity-worker.ts
 src/infra/sqlite-integrity.ts
+src/infra/sqlite-jsonl-budget.ts
 src/infra/sqlite-live-snapshot.ts
 src/infra/sqlite-lifecycle-errors.ts
 src/infra/sqlite-maintenance-cache.ts
@@ -877,6 +915,7 @@ src/infra/sqlite-recovery-files.ts
 src/infra/sqlite-runtime-version.ts
 src/infra/sqlite-schema-contract-assembly.ts
 src/infra/sqlite-schema-contract.ts
+src/infra/sqlite-schema-ensure.ts
 src/infra/sqlite-schema-facts.ts
 src/infra/sqlite-schema-header.ts
 src/infra/sqlite-schema-issues.ts
@@ -934,6 +973,7 @@ src/infra/update-doctor-result.ts
 src/infra/update-failure-facts.ts
 src/infra/update-failure-public-codes.ts
 src/infra/update-failure-public-identifiers.ts
+src/infra/update-immutable-install-schema.ts
 src/infra/update-managed-service-handoff-boot.ts
 src/infra/update-managed-service-handoff-cancellation.ts
 src/infra/update-managed-service-handoff-children.ts
@@ -1066,6 +1106,8 @@ src/plugins/compat/plugin-sdk-subpath-records.ts
 src/plugins/compat/registry-records.ts
 src/plugins/compat/registry.ts
 src/plugins/compat/session-persistence-records.ts
+src/plugins/compat/watched-sessions.ts
+src/plugins/compat/workspace-mutation-guard.ts
 src/plugins/config-activation-shared.ts
 src/plugins/config-contract-matches.ts
 src/plugins/config-normalization-shared.ts
@@ -1169,6 +1211,7 @@ src/plugins/plugin-cache-artifacts.ts
 src/plugins/plugin-cache-files.ts
 src/plugins/plugin-cache-sdk.ts
 src/plugins/plugin-cache.ts
+src/plugins/plugin-catalog-source.ts
 src/plugins/plugin-config-trust.ts
 src/plugins/plugin-control-plane-context.ts
 src/plugins/plugin-generation-artifact.ts
@@ -1184,7 +1227,7 @@ src/plugins/plugin-instance-module-loader.ts
 src/plugins/plugin-instance-owned-values.ts
 src/plugins/plugin-instance-scope.ts
 src/plugins/plugin-instance-settlement.ts
-src/plugins/plugin-instance-value-views.ts
+src/plugins/plugin-instance-bindings.ts
 src/plugins/plugin-instance.ts
 src/plugins/plugin-lifecycle-trace.ts
 src/plugins/plugin-metadata-contributions.ts
@@ -1205,6 +1248,7 @@ src/plugins/plugin-native-admission.ts
 src/plugins/plugin-native-module-loader.ts
 src/plugins/plugin-native-namespace.ts
 src/plugins/plugin-native-reference.ts
+src/plugins/plugin-native-resolution.ts
 src/plugins/plugin-package-metadata-capture.ts
 src/plugins/plugin-peer-link.ts
 src/plugins/plugin-policy-id.ts
@@ -1358,8 +1402,11 @@ src/sessions/session-diff-revisions.ts
 src/sessions/session-diff.runtime.ts
 src/sessions/session-key-utils.ts
 src/sessions/session-row-changes.ts
+src/sessions/session-state-events.ambient-read.ts
+src/sessions/session-state-events.prune.ts
 src/sessions/transcript-events.ts
 src/sessions/user-turn-transcript-admission.ts
+src/secrets/store/secret-store-validation-error.ts
 src/shared/assistant-error-format.ts
 src/shared/async-work-scope.ts
 src/shared/avatar-limits.ts
@@ -1393,6 +1440,7 @@ src/shared/store-writer-queue.ts
 src/shared/update-outcome.ts
 src/skills/discovery/agent-filter.ts
 src/skills/discovery/filter.ts
+src/skills/skill-library-error.ts
 src/skills/lifecycle/upload-store-error.ts
 src/state/agent-creation-claim.ts
 src/state/agent-database-admission.ts
@@ -1400,6 +1448,7 @@ src/state/agent-database-startup.ts
 src/state/agent-deletion-cleanup.ts
 src/state/agent-deletion-discovery.ts
 src/state/agent-deletion-journal-history.ts
+src/state/agent-deletion-journal-recovery.kernel.ts
 src/state/agent-deletion-journal-recovery.ts
 src/state/agent-deletion-journal.read.ts
 src/state/agent-deletion-journal.ts
@@ -1544,7 +1593,6 @@ src/state/openclaw-state-lease.ts
 src/state/openclaw-state-maintenance-context.ts
 src/state/openclaw-state-ownership.ts
 src/state/openclaw-state-ownership-worker.ts
-src/state/openclaw-state-read-error.ts
 src/state/openclaw-state-read-operation.ts
 src/state/openclaw-state-read-request.ts
 src/state/openclaw-state-read-scope.ts
@@ -1573,6 +1621,7 @@ src/utils.ts
 src/utils/boolean.ts
 src/utils/delivery-context.read.ts
 src/utils/fetch-timeout.ts
+src/utils/github-login.ts
 src/utils/parse-json-compat.ts
 src/utils/run-with-concurrency.ts
 src/utils/shell-argv.ts

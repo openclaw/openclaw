@@ -60,34 +60,6 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 describe("native service runtime pin persistence", () => {
-  it.each(["gateway", "node"] as const)(
-    "refuses pin-unaware %s rewrites before changing the native definition",
-    async (kind) => {
-      await withOpenClawTestState({ label: "pin-native-unplanned" }, async (state) => {
-        const service = kind === "gateway" ? resolveGatewayService() : resolveNodeService();
-        const scope = { kind, env: state.env };
-        const pin = { runtime: "node" as const, path: "/runtime/node" };
-        await service.stage({
-          env: state.env,
-          stdout: process.stdout,
-          programArguments: [pin.path, "/app/openclaw.mjs", kind],
-          runtimePinUpdate: { expected: readDaemonRuntimePin(scope, null), pin },
-        });
-        const previous = native.command;
-        const replacement = {
-          env: state.env,
-          stdout: process.stdout,
-          programArguments: [pin.path, "/updated/openclaw.mjs", kind],
-        };
-        await expect(service.install(replacement)).rejects.toThrow(/explicit runtime intent/);
-        await expect(service.stage(replacement)).rejects.toThrow(/explicit runtime intent/);
-        expect(native.install).not.toHaveBeenCalled();
-        expect(native.stage).toHaveBeenCalledOnce();
-        expect(native.command).toBe(previous);
-        expect(readDaemonRuntimePin(scope, native.command).pin).toEqual(pin);
-      });
-    },
-  );
   it("keeps pin-unaware default writes read-only for runtime metadata", async () => {
     await withOpenClawTestState({ label: "pin-native-default" }, async (state) => {
       const service = resolveGatewayService();
@@ -107,7 +79,7 @@ describe("native service runtime pin persistence", () => {
     });
   });
   it.each(["gateway", "node"] as const)(
-    "commits %s staged definitions, preserves intent on reinstall, and removes it on uninstall",
+    "requires explicit %s runtime intent for rewrites and removes the pin on uninstall",
     async (kind) => {
       await withOpenClawTestState({ label: "pin-native" }, async (state) => {
         const service = kind === "gateway" ? resolveGatewayService() : resolveNodeService();
@@ -120,6 +92,17 @@ describe("native service runtime pin persistence", () => {
           runtimePinUpdate: { expected: readDaemonRuntimePin(scope, null), pin },
         };
         await service.stage(args);
+        const previous = native.command;
+        const replacement = {
+          env: state.env,
+          stdout: process.stdout,
+          programArguments: [pin.path, "/updated/openclaw.mjs", kind],
+        };
+        await expect(service.install(replacement)).rejects.toThrow(/explicit runtime intent/);
+        await expect(service.stage(replacement)).rejects.toThrow(/explicit runtime intent/);
+        expect(native.install).not.toHaveBeenCalled();
+        expect(native.stage).toHaveBeenCalledOnce();
+        expect(native.command).toBe(previous);
         expect(readDaemonRuntimePin(scope, native.command).pin).toEqual(pin);
         const expected = readDaemonRuntimePin(scope, native.command);
         await service.install({

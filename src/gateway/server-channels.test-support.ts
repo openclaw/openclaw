@@ -1,10 +1,17 @@
+import type { ChannelGatewayAdapterV2 } from "../channels/plugins/types.adapters.js";
 import type {
   ChannelAccountSnapshot,
   ChannelId,
   ChannelPlugin,
 } from "../channels/plugins/types.public.js";
+import { createSubsystemLogger, runtimeForLogger } from "../logging/subsystem.js";
+import { createEmptyPluginRegistry, type PluginRegistry } from "../plugins/registry.js";
+import { requireActivePluginChannelRegistry } from "../plugins/runtime.js";
+import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { evaluateChannelHealth } from "./channel-health-policy.js";
+import { createChannelManager } from "./server-channels.js";
 
 export type TestAccount = {
   enabled?: boolean;
@@ -29,8 +36,8 @@ export function createTestPlugin(params?: {
   id?: ChannelId;
   order?: number;
   account?: TestAccount;
-  startAccount?: NonNullable<ChannelPlugin<TestAccount>["gateway"]>["startAccount"];
-  stopAccount?: NonNullable<ChannelPlugin<TestAccount>["gateway"]>["stopAccount"];
+  startAccount?: ChannelGatewayAdapterV2<TestAccount>["startAccount"];
+  stopAccount?: ChannelGatewayAdapterV2<TestAccount>["stopAccount"];
   listAccountIds?: ChannelPlugin<TestAccount>["config"]["listAccountIds"];
   includeDescribeAccount?: boolean;
   describeAccount?: ChannelPlugin<TestAccount>["config"]["describeAccount"];
@@ -40,7 +47,7 @@ export function createTestPlugin(params?: {
   disabledReason?: ChannelPlugin<TestAccount>["config"]["disabledReason"];
   unconfiguredReason?: ChannelPlugin<TestAccount>["config"]["unconfiguredReason"];
   unlinkedReason?: ChannelPlugin<TestAccount>["config"]["unlinkedReason"];
-}): ChannelPlugin<TestAccount> {
+}): ChannelPlugin<TestAccount, unknown, unknown, 2> {
   const id = params?.id ?? "discord";
   const account = params?.account ?? { enabled: true, configured: true };
   const includeDescribeAccount = params?.includeDescribeAccount !== false;
@@ -63,7 +70,7 @@ export function createTestPlugin(params?: {
         configured: resolved.configured !== false,
       }));
   }
-  const gateway: NonNullable<ChannelPlugin<TestAccount>["gateway"]> = {};
+  const gateway: ChannelGatewayAdapterV2<TestAccount> = { apiVersion: 2 };
   if (params?.startAccount) {
     gateway.startAccount = params.startAccount;
   }
@@ -84,4 +91,60 @@ export function createTestPlugin(params?: {
     config,
     gateway,
   };
+}
+
+export function waitForAbort(signal: AbortSignal): Promise<void> {
+  return new Promise<void>((resolve) => {
+    signal.addEventListener("abort", () => resolve(), { once: true });
+  });
+}
+
+export async function flushMicrotasks(times = 8): Promise<void> {
+  for (let i = 0; i < times; i += 1) {
+    await Promise.resolve();
+  }
+}
+
+export function createTestChannelRegistry(
+  ...plugins: Array<
+    | ChannelPlugin<TestAccount, unknown, unknown, 1 | 2>
+    | {
+        plugin: ChannelPlugin<TestAccount, unknown, unknown, 1 | 2>;
+        origin: string;
+        resolveChannelRuntime?: () => PluginRuntime["channel"];
+      }
+  >
+) {
+  const registry = createEmptyPluginRegistry();
+  for (const candidate of plugins) {
+    const plugin = "plugin" in candidate ? candidate.plugin : candidate;
+    registry.channels.push({
+      pluginId: plugin.id,
+      ...("origin" in candidate ? { origin: candidate.origin as never } : {}),
+      ...(typeof candidate === "object" && "resolveChannelRuntime" in candidate
+        ? { resolveChannelRuntime: candidate.resolveChannelRuntime }
+        : {}),
+      source: "test",
+      plugin,
+    } as PluginRegistry["channels"][number]);
+  }
+  return registry;
+}
+
+export function createTestChannelManager(
+  options: Partial<
+    Omit<Parameters<typeof createChannelManager>[0], "channelLogs" | "channelRuntimeEnvs">
+  > & { channelIds?: ChannelId[] } = {},
+) {
+  const { channelIds = ["discord"], ...overrides } = options;
+  const log = createSubsystemLogger("gateway/server-channels-test");
+  const manager = createChannelManager({
+    scheduler: createTestGatewayScheduler(),
+    getRuntimeConfig: () => ({}),
+    getPluginRegistry: requireActivePluginChannelRegistry,
+    channelLogs: Object.fromEntries(channelIds.map((id) => [id, log.child(id)])),
+    channelRuntimeEnvs: Object.fromEntries(channelIds.map((id) => [id, runtimeForLogger(log)])),
+    ...overrides,
+  });
+  return manager;
 }

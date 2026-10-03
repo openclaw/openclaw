@@ -140,7 +140,6 @@ function chromeFiletimeToUnixSeconds(value: number | bigint): number | undefined
   return seconds > 0 && seconds <= 9_999_999_999 ? seconds : undefined;
 }
 
-/** Map Chrome SameSite storage values to Playwright's cookie contract. */
 function mapChromeSameSite(
   value: number | bigint,
   secure: boolean,

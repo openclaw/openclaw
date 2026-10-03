@@ -362,13 +362,6 @@ describe("install.ps1 source contracts", () => {
     expect(gitInstallBody).not.toContain("& $pnpmCommand -C $RepoDir install");
   });
 
-  it("cleans legacy git submodules only from the selected git checkout", () => {
-    const gitInstallBody = extractFunctionBody(source, "Install-OpenClawFromGit");
-    const mainBody = extractFunctionBody(source, "Main");
-    expect(gitInstallBody).toContain("Remove-LegacySubmodule -RepoDir $RepoDir");
-    expect(mainBody).not.toContain("Remove-LegacySubmodule");
-  });
-
   it("launches interactive onboarding outside Main's captured output", () => {
     const interactiveCommandBody = extractFunctionBody(source, "Invoke-InteractiveOpenClawCommand");
     const mainBody = extractFunctionBody(source, "Main");

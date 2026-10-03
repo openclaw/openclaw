@@ -7,6 +7,9 @@ const TEXT_EDITOR_TOOL_NAMES = ["str_replace_editor", "str_replace_based_edit_to
 
 describe("tool detail kinds", () => {
   it.each([
+    ["tool_call", { id: "client:client:exec", args: { command: "pwd" } }, "command"],
+    ["tool_call", { id: "openclaw:core:read", args: { path: "file.ts" } }, "read"],
+    ["tool_call", { id: "web_search", args: { query: "OpenClaw" } }, "generic"],
     ["exec", undefined, "command"],
     ["Read", { path: "file.ts" }, "read"],
     ["read_file", { path: "file.ts" }, "read"],

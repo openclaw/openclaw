@@ -9,6 +9,7 @@ import { t } from "../../../i18n/index.ts";
 import type { ChatItem, ChatReplyTarget, MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { describeToolGroup, readPreparedActivity } from "../../../lib/chat/tool-call-grouping.ts";
 import { extractToolCardsCached, resolveToolCardOutcome } from "../../../lib/chat/tool-cards.ts";
+import { resolveToolDisplay } from "../../../lib/chat/tool-display.ts";
 import { formatDurationCompact } from "../../../lib/format-duration.ts";
 import { renderChatAvatar } from "../chat-avatar.ts";
 import { renderGroupedMessage } from "./chat-message-bubble.ts";
@@ -21,7 +22,7 @@ import {
   resolveGroupReplyLine,
 } from "./chat-reply-attribution.ts";
 import type { ReplyPreviewLookup } from "./chat-reply-preview.types.ts";
-import type { SidebarContent } from "./chat-sidebar.ts";
+import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 import { syncToolDisclosureOverflow } from "./chat-tool-cards.ts";
 import { renderToolOutcomeSummary } from "./chat-tool-outcome-summary.ts";
 import { renderChatWorkingIndicator } from "./chat-working-indicator.ts";
@@ -236,13 +237,14 @@ export function renderWorkGroupSummary(
   const activity = prepared.flatMap((entry) => entry.activity);
   for (const [index, card] of fallback.entries()) {
     const outcome = resolveToolCardOutcome(card, false);
+    const display = resolveToolDisplay(card);
     activity.push({
       itemId: `work-summary-raw:${index}`,
       toolCallId: card.callId,
       kind: "tool",
       phase: "end",
-      title: card.name,
-      name: card.name,
+      title: display.name,
+      name: display.name,
       status: outcome === "succeeded" ? "completed" : outcome === "unknown" ? undefined : outcome,
     });
   }
