@@ -26,10 +26,11 @@ import type {
   PendingInputRead,
   PendingInputSnapshot,
 } from "./session-pending-input-operations.types.js";
+import { readPendingInputSourceInDatabase } from "./session-pending-input-source.kernel.js";
 
-export function readPendingInputStage(
+function readPendingInputStage(
   database: OpenClawAgentDatabase,
-  input: PendingInputRead,
+  input: Extract<PendingInputRead, { kind: "stage" }>,
 ): PendingInputSnapshot {
   if (readSessionEntryRow(database, input.sessionKey)?.entry.sessionId !== input.sessionId) {
     return { kind: "stage", current: false };
@@ -66,6 +67,12 @@ export function readPendingInputStage(
         ? { messageId: committed.messageId, message: parseSessionPendingInputMessage(messageJson) }
         : undefined,
   };
+}
+
+export function readPendingInput(database: OpenClawAgentDatabase, input: PendingInputRead) {
+  return input.kind === "stage"
+    ? readPendingInputStage(database, input)
+    : readPendingInputSourceInDatabase(database, input);
 }
 
 /** Incognito uses this same kernel in its process-held owner until the actor cutover. */

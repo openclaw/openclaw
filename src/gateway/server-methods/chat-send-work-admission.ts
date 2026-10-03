@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { hasPendingFollowupQueueWork } from "../../auto-reply/reply/queue/state.js";
 import { replyRunRegistry } from "../../auto-reply/reply/reply-run-registry.js";
 import type { SessionTranscriptTurnMutation } from "../../config/sessions/goals-operations.types.js";
@@ -11,13 +12,82 @@ import {
 } from "../../sessions/session-lifecycle-admission.js";
 import type { registerChatAbortController } from "../chat-abort.js";
 import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "../operator-role-policy.js";
+import { PENDING_CHAT_SEND_DEDUPE_PREFIX } from "../server-shared.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { captureGatewayClientUploadCommitGuard } from "../upload-policy.js";
 import { formatForLog } from "../ws-log.js";
+import { readPreRegisteredRun } from "./chat-abort-authorization.js";
+import {
+  prepareChatSendRetryComparison,
+  respondChatSendAdmissionError,
+  respondChatSendRetry,
+  type ChatSendPreAdmissionParams,
+} from "./chat-send-pre-admission.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
-import type { PreparedChatSendSession } from "./chat-send-session.js";
+import { loadCurrentChatSendSession, type PreparedChatSendSession } from "./chat-send-session.js";
 import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
 import type { GatewayRequestContext, GatewayRequestHandlerOptions } from "./types.js";
+
+/** Preparation returns facts; the caller consumes current retry ownership before reserving. */
+export function prepareChatSendAdmissionRetry(params: ChatSendPreAdmissionParams) {
+  try {
+    return prepareChatSendRetryComparison(params)?.catch((error: unknown) => ({ error }));
+  } catch (error) {
+    return { error };
+  }
+}
+
+export function consumeChatSendAdmissionRetry(
+  params: ChatSendPreAdmissionParams,
+  prepared: Awaited<ReturnType<typeof prepareChatSendAdmissionRetry>>,
+) {
+  try {
+    if (prepared && "error" in prepared) {
+      throw prepared.error;
+    }
+    const pending = readPreRegisteredRun({
+      key: params.session.pendingChatSendKey,
+      entry: params.context.dedupe.get(params.session.pendingChatSendKey),
+      keyPrefix: PENDING_CHAT_SEND_DEDUPE_PREFIX,
+    });
+    if (pending?.payload.goalFingerprint) {
+      params.respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "Run ID is reserved by a Goal request; use a new ID.",
+        ),
+      );
+      return false;
+    }
+    return !params.request.goalOperation && respondChatSendRetry(params, prepared)
+      ? false
+      : prepared;
+  } catch (error) {
+    if (error instanceof SessionMutationAuthorizationChangedError) {
+      throw error;
+    }
+    respondChatSendAdmissionError(error, params.respond);
+    return false;
+  }
+}
+
+/** Reload after an actual worker wait in the consuming admission frame. */
+export function prepareCurrentChatSendRetry(
+  params: ChatSendPreAdmissionParams & { session: PreparedChatSendSession },
+  ownPendingAttemptId: string,
+) {
+  const session = loadCurrentChatSendSession(params.session);
+  const comparison = prepareChatSendRetryComparison(
+    { ...params, session: { ...params.session, entry: session.entry } },
+    ownPendingAttemptId,
+  );
+  return {
+    comparison,
+    readSession: () => (comparison ? loadCurrentChatSendSession(params.session) : session),
+  };
+}
 
 /** New input is checked only after the chat owner has reconciled prior receipts. */
 export function admitChatSendUploads({

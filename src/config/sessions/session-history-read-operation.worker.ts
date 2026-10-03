@@ -17,7 +17,8 @@ type DurableHistoryReadOperationRequest = Extract<
       | "session-preview"
       | "model-context"
       | "transcript-watermark"
-      | "session-pending-input-receipts";
+      | "session-pending-input-receipts"
+      | "session-pending-input-source";
   }
 >;
 
@@ -43,6 +44,7 @@ export function isSessionHistoryReadOperation(
     case "model-context":
     case "transcript-watermark":
     case "session-pending-input-receipts":
+    case "session-pending-input-source":
       return true;
     default:
       return false;
@@ -50,11 +52,41 @@ export function isSessionHistoryReadOperation(
 }
 
 /** Load dependencies before the owner enters its synchronous, admitted read scope. */
+export function prepareSessionHistoryReadOperation<
+  Request extends SessionHistoryReadOperationRequest,
+>(
+  request: Request,
+  retainedDatabase?: OpenClawAgentReadOnlyDatabase,
+): Promise<() => SessionTranscriptWorkerValues[Request["kind"]]>;
 export async function prepareSessionHistoryReadOperation(
   request: SessionHistoryReadOperationRequest,
   retainedDatabase?: OpenClawAgentReadOnlyDatabase,
 ): Promise<() => SessionTranscriptWorkerValues[SessionHistoryReadOperationRequest["kind"]]> {
   switch (request.kind) {
+    case "session-pending-input-source": {
+      const [
+        { withOpenClawAgentDatabaseReadOnly },
+        { assertCapturedSessionEntryReadSource },
+        { readPendingInputSourceInDatabase },
+      ] = await Promise.all([
+        import("../../state/openclaw-agent-db-readonly.js"),
+        import("./session-accessor.sqlite-exact-read.js"),
+        import("./session-pending-input-source.kernel.js"),
+      ]);
+      return () => {
+        const read = withOpenClawAgentDatabaseReadOnly(
+          (database) => {
+            assertCapturedSessionEntryReadSource(request.source, database);
+            return readPendingInputSourceInDatabase(database, request.input);
+          },
+          { ...request.database, env: request.env },
+        );
+        return {
+          kind: request.kind,
+          snapshot: read.found ? read.value : { kind: "source", current: false },
+        };
+      };
+    }
     case "transcript-match": {
       const [{ findTranscriptEventMatchingInDatabase }, { withOpenClawAgentDatabaseReadOnly }] =
         await Promise.all([

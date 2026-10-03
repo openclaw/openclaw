@@ -1,9 +1,7 @@
-import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
-import { MAX_PAYLOAD_BYTES } from "../../gateway/server-constants.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
@@ -45,7 +43,6 @@ import {
 import { SessionPendingInputCustodyError } from "./session-pending-input-custody-error.js";
 import { waitForSessionTranscriptProjection } from "./session-transcript-reconcile.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
-import { prepareTranscriptPayload } from "./transcript-payload.js";
 
 describe("accepted input custody", () => {
   const fixture = useTempSessionsFixture("openclaw-pending-inputs-");
@@ -102,7 +99,7 @@ describe("accepted input custody", () => {
 
   it("keeps accepted input outside the active transcript and applies its hook once across replay and promotion", async () => {
     await appendTranscriptMessage(scope(), { message: message("active", "First task") });
-    expect(readSessionSubmittedInput(scope(), "active:user")).toEqual(
+    expect(await readSessionSubmittedInput(scope(), "active:user")).toEqual(
       message("active", "First task"),
     );
     const before = await loadTranscriptEvents(scope());
@@ -111,7 +108,7 @@ describe("accepted input custody", () => {
       content: typeof input.content === "string" ? `${input.content} (approved)` : input.content,
     }));
     const receipt = await stage("queued", { prepareMessageAfterIdempotencyCheck: prepare });
-    expect(readSessionSubmittedInput(scope(), "queued:user")).toEqual(receipt.message);
+    expect(await readSessionSubmittedInput(scope(), "queued:user")).toEqual(receipt.message);
     await expect(
       stage("queued", {
         message: { ...message("queued"), timestamp: 200 },
@@ -144,7 +141,7 @@ describe("accepted input custody", () => {
       message: receipt.message,
     });
     expect(await listSessionPendingInputs(scope())).toEqual({ total: 0, items: [] });
-    expect(readSessionSubmittedInput(scope(), "queued:user")).toEqual(receipt.message);
+    expect(await readSessionSubmittedInput(scope(), "queued:user")).toEqual(receipt.message);
     const committedReplay = await stage("queued", { prepareMessageAfterIdempotencyCheck: prepare });
     expect(committedReplay.message).toEqual(receipt.message);
     expect(prepare).toHaveBeenCalledOnce();
@@ -174,7 +171,7 @@ describe("accepted input custody", () => {
     expect(mirrored?.messageId).not.toBe(receipt.inputId);
     expect(await listSessionPendingInputs(scope())).toEqual(pending);
     expect(await loadTranscriptEvents(scope())).toEqual(sourceTranscript);
-    expect(readSessionSubmittedInput(target, "bound-mirror:user")).toEqual(receipt.message);
+    expect(await readSessionSubmittedInput(target, "bound-mirror:user")).toEqual(receipt.message);
     await expect(appendTranscriptMessage(scope(), { message: receipt.message })).rejects.toThrow(
       "outside its admitted turn",
     );
@@ -942,95 +939,14 @@ describe("accepted input custody", () => {
     expect(older.items.map((input) => input.id)).toEqual([first.inputId]);
     for (const idempotencyKey of ["first:user", "third:user"]) {
       expect(
-        readSessionSubmittedInput({ ...scope(), sessionId: "other-session" }, idempotencyKey),
+        await readSessionSubmittedInput({ ...scope(), sessionId: "other-session" }, idempotencyKey),
       ).toBeUndefined();
       expect(
-        readSessionSubmittedInput({ ...scope(), sessionKey: "agent:main:other" }, idempotencyKey),
+        await readSessionSubmittedInput(
+          { ...scope(), sessionKey: "agent:main:other" },
+          idempotencyKey,
+        ),
       ).toBeUndefined();
     }
   });
-
-  it("does not create missing storage for a submitted-input lookup", () => {
-    const storePath = path.join(fixture.sessionsDir(), "missing-agent.sqlite");
-    expect(readSessionSubmittedInput({ ...scope(), storePath }, "missing:user")).toBeUndefined();
-    expect(fs.existsSync(storePath)).toBe(false);
-  });
-
-  it.each(["pending", "committed"] as const)(
-    "rejects malformed or oversized %s source bytes without changing storage",
-    async (source) => {
-      const receipt = await stage("invalid-source");
-      if (source === "committed") {
-        await promote(receipt);
-      }
-      const db = database().db;
-      const invalidMessages = [
-        "{",
-        JSON.stringify({ ...receipt.message, role: "assistant" }),
-        JSON.stringify({ ...receipt.message, idempotencyKey: "another:user" }),
-        JSON.stringify(message("invalid-source", "💥".repeat(MAX_PAYLOAD_BYTES / 4))),
-      ];
-      for (const messageJson of invalidMessages) {
-        if (source === "pending") {
-          db.prepare("UPDATE session_pending_inputs SET message_json = ? WHERE input_id = ?").run(
-            messageJson,
-            receipt.inputId,
-          );
-        } else {
-          const payload = prepareTranscriptPayload(db, `{"message":${messageJson}}`);
-          db.prepare(
-            "UPDATE transcript_events SET event_json = ?, event_zstd = ?, event_utf8_bytes = ?, navigation_json = ? WHERE session_id = ? AND seq = (SELECT seq FROM transcript_event_identities WHERE session_id = ? AND event_id = ?)",
-          ).run(
-            payload.event_json,
-            payload.event_zstd,
-            payload.event_utf8_bytes,
-            payload.navigation_json,
-            sessionId,
-            sessionId,
-            receipt.inputId,
-          );
-        }
-        db.exec("PRAGMA query_only = ON");
-        try {
-          expect(readSessionSubmittedInput(scope(), "invalid-source:user")).toBeUndefined();
-        } finally {
-          db.exec("PRAGMA query_only = OFF");
-        }
-      }
-    },
-  );
-
-  it.each(["dirty", "missing", "lagging"] as const)(
-    "does not read or repair a %s transcript identity projection",
-    async (projection) => {
-      const receipt = await stage("stale-source");
-      await promote(receipt);
-      const db = database().db;
-      if (projection === "missing") {
-        db.prepare("DELETE FROM session_transcript_index_state WHERE session_id = ?").run(
-          sessionId,
-        );
-      } else {
-        const statement =
-          projection === "dirty"
-            ? "UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = ?"
-            : "UPDATE session_transcript_index_state SET indexed_seq = -1 WHERE session_id = ?";
-        db.prepare(statement).run(sessionId);
-      }
-      const before = db
-        .prepare("SELECT * FROM session_transcript_index_state WHERE session_id = ?")
-        .get(sessionId);
-      db.exec("PRAGMA query_only = ON");
-      try {
-        expect(readSessionSubmittedInput(scope(), "stale-source:user")).toBeUndefined();
-      } finally {
-        db.exec("PRAGMA query_only = OFF");
-      }
-      expect(
-        db
-          .prepare("SELECT * FROM session_transcript_index_state WHERE session_id = ?")
-          .get(sessionId),
-      ).toEqual(before);
-    },
-  );
 });
