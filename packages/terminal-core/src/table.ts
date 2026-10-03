@@ -73,6 +73,7 @@ const ESC = "\u001b";
 const C1_CSI = "\u009b";
 const BEL = "\u0007";
 const SGR_CONTROL_CHARS_REGEX = new RegExp(String.raw`[\u0000-\u001f\u007f]`, "g");
+// oxlint-disable-next-line eslint/no-control-regex -- OSC 8 delimiters are terminal control characters.
 const OSC8_SEQUENCE_RE = /^(?:\u001b\]|\u009d)8;([^;]*);([\s\S]*)(?:\u001b\\|\u0007|\u009c)$/u;
 
 type AnsiToken = { kind: "ansi" | "char"; value: string; width: number };

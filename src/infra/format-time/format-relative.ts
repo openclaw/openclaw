@@ -70,8 +70,9 @@ export function formatRelativeTimestamp(
   if (unit === "second") {
     return isPast ? "just now" : "in <1m";
   }
+  const relative = isPast ? `${value}${unit[0]} ago` : `in ${value}${unit[0]}`;
   if (unit !== "day" || !options?.dateFallback || value <= 7) {
-    return isPast ? `${value}${unit[0]} ago` : `in ${value}${unit[0]}`;
+    return relative;
   }
 
   try {
@@ -81,6 +82,6 @@ export function formatRelativeTimestamp(
       ...(options.timezone ? { timeZone: options.timezone } : {}),
     }).format(new Date(timestampMs));
   } catch {
-    return `${value}d ago`;
+    return relative;
   }
 }
