@@ -1259,6 +1259,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
             );
             return cancelCompaction(
               "Compaction safeguard finalized summary failed quality checks and corrective generation failed.",
+              attemptError,
             );
           }
           throw attemptError;

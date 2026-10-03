@@ -15,7 +15,14 @@ import { compactEmbeddedAgentSession } from "./compact.queued.js";
 
 // Real queued compaction, native delegate, AgentSession, and SQLite transcript; only the
 // provider is a local OpenAI-compatible endpoint whose summary requests stall, fail, or answer.
-type SummaryMode = "stall" | "provider-timeout" | "bare-408" | "server-error" | "error" | "ok";
+type SummaryMode =
+  | "stall"
+  | "provider-timeout"
+  | "bare-408"
+  | "bare-410"
+  | "server-error"
+  | "error"
+  | "ok";
 type SessionTarget = { agentId: string; sessionId: string; sessionKey: string; storePath: string };
 type Fixture = { state: OpenClawTestState; config: OpenClawConfig; target: SessionTarget };
 
@@ -46,6 +53,11 @@ beforeAll(async () => {
       }
       if (mode === "bare-408") {
         res.writeHead(408);
+        res.end();
+        return;
+      }
+      if (mode === "bare-410") {
+        res.writeHead(410);
         res.end();
         return;
       }
@@ -312,6 +324,8 @@ describe("automatic compaction summary failure", () => {
     { failure: "a non-timeout summary error", mode: "error", trigger: "budget", stop: false },
     // Wrapped summary text reads "…failed: 500 Internal Server Error"; it is not a timeout.
     { failure: "a fast 500 summary error", mode: "server-error", trigger: "budget", stop: false },
+    // Failover classifies a bodyless 410 as "timeout", but no summary deadline expired.
+    { failure: "a bodyless 410 summary error", mode: "bare-410", trigger: "budget", stop: false },
   ] as const)("keeps $failure as a failed compaction", async ({ mode, trigger, stop }) => {
     await withSession(async (fixture) => {
       appendToolTurns(fixture, 0, 8);

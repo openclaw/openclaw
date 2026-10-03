@@ -30,7 +30,13 @@ export class SummaryProviderError extends CompactionError {
     readonly response: AssistantMessage,
   ) {
     super("summarization_failed", message);
+    this.name = "SummaryProviderError";
   }
+}
+
+/** Recognizes the error by name: duplicated module copies break `instanceof`. */
+export function isSummaryProviderError(error: unknown): error is SummaryProviderError {
+  return error instanceof Error && error.name === "SummaryProviderError" && "response" in error;
 }
 
 /** A length stop with no visible summary is deterministic for an unchanged request. */

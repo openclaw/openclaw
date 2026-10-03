@@ -2,7 +2,7 @@ import {
   preserveCompactionReplayWindow,
   resolveCompactionReplayEligibility,
 } from "@openclaw/ai/transports";
-import { SummaryProviderError } from "../../../packages/agent-core/src/harness/types.js";
+import { isSummaryProviderError } from "../../../packages/agent-core/src/harness/types.js";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import { captureOwnedTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
 import type { ContextEngineSessionTarget } from "../../context-engine/types.js";
@@ -16,6 +16,7 @@ import {
 } from "../../logging/diagnostic-run-activity.js";
 import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import { extractErrorHttpStatus } from "../../shared/assistant-error-format.js";
 import {
   consumeCompactionSafeguardCancellation,
   getCompactionSafeguardRuntime,
@@ -29,8 +30,6 @@ import {
 } from "../agent-settings.js";
 import { toToolDefinitions } from "../agent-tool-definition-adapter.js";
 import { pickFallbackThinkingLevel } from "../embedded-agent-helpers.js";
-import { classifyAssistantFailoverReason } from "../embedded-agent-helpers/assistant-message-failures.js";
-import { resolveFailoverReasonFromError } from "../failover-error.js";
 import { registerProviderStreamForModel } from "../provider-stream.js";
 import { resolveAgentRunSessionTarget } from "../run-session-target.js";
 import { guardSessionManager } from "../session-tool-result-guard-wrapper.js";
@@ -484,9 +483,11 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
         // A timeout after generation is persistence; recovery would discard a real summary.
         let summaryReady = false;
         if (!serverResult) {
+          let summarySignal: AbortSignal | undefined;
           const compactClient = (summaryOutputPolicy: "none" | "deterministic" | undefined) =>
             compactWithSafetyTimeout(
-              async (_signal, resetTimeout) => {
+              async (signal, resetTimeout) => {
+                summarySignal = signal;
                 resetCompactionTimeout = resetTimeout;
                 setCompactionSafeguardCancellation(compactionSessionManager, undefined);
                 const requestState =
@@ -533,21 +534,18 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
                 safeguardCancellation: getCompactionSafeguardRuntime(sessionManager)?.cancellation,
                 abortSignal: params.abortSignal,
               });
-              // Classify the structured failure, not display text: wrapped summary text turns
-              // a fast 500 into "timeout", and safeguard reasons mention "guard".
+              // Only an actual summary timeout qualifies: the summary watchdog fired (the
+              // caller is still live, so its composed signal aborted on the deadline), or the
+              // provider answered 408/504. Failover's broader "timeout" class also covers
+              // fast 5xx, 410, and DNS failures, which keep their owners' outcomes.
               let providerFailure: unknown = failure.error;
-              while (
-                providerFailure instanceof Error &&
-                !(providerFailure instanceof SummaryProviderError)
-              ) {
+              while (providerFailure instanceof Error && !isSummaryProviderError(providerFailure)) {
                 providerFailure = providerFailure.cause;
               }
-              const failureReason =
-                providerFailure instanceof SummaryProviderError
-                  ? classifyAssistantFailoverReason(providerFailure.response, { provider })
-                  : resolveFailoverReasonFromError(failure.error, provider);
-              // Other summary failures are fast and keep their owners' outcomes.
-              if (failureReason !== "timeout") {
+              const providerStatus = isSummaryProviderError(providerFailure)
+                ? extractErrorHttpStatus(providerFailure.response.errorMessage?.trim() ?? "")?.code
+                : undefined;
+              if (!summarySignal?.aborted && providerStatus !== 408 && providerStatus !== 504) {
                 throw error;
               }
               // The timed-out request consumed the delegated window too. Rearm it
