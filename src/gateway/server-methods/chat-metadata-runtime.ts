@@ -14,7 +14,10 @@ import { getSkillsSnapshotVersion } from "../../skills/runtime/refresh-state.js"
 import { assertAgentDatabaseAdmitted } from "../../state/agent-database-admission.js";
 import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
 import { listUserProfileAuthLinks } from "../../state/user-model-accounts.js";
-import { resolveChatAccountSelection } from "./chat-account-selection.js";
+import {
+  prepareChatAccountSelection,
+  resolveChatAccountSelection,
+} from "./chat-account-selection.js";
 import type {
   ChatMetadataReadParams,
   ChatMetadataResult,
@@ -79,6 +82,7 @@ function readPreparedChatMetadata(
   projection: PreparedChatMetadataProjection,
   readParams: ChatMetadataReadParams,
   config: OpenClawConfig,
+  readAccountSelection?: Awaited<ReturnType<typeof prepareChatAccountSelection>>,
 ): ChatMetadataResult {
   readParams.draftAccountSelection?.assertCurrent();
   const { agent } = projection;
@@ -88,11 +92,12 @@ function readPreparedChatMetadata(
       ...projection.read(),
       ...(agent.commands !== undefined ? { commands: agent.commands } : {}),
       swarmEnabled: agent.swarmEnabled,
-      accountSelection: resolveChatAccountSelection({
-        authStore: agent.authStore,
-        sessionEntry: readParams.sessionEntry,
-        requesterProfileId: readParams.requesterProfileId,
-      }),
+      accountSelection:
+        readAccountSelection?.() ??
+        resolveChatAccountSelection({
+          authStore: agent.authStore,
+          sessionEntry: readParams.sessionEntry,
+        }),
     },
     config,
   );
@@ -553,6 +558,11 @@ export function createGatewayChatMetadataRuntime(params: {
         // Existing sessions use their saved selection, never a viewer's newer default.
         !readParams.sessionKey && !readParams.sessionEntry,
       );
+      const readAccountSelection = await prepareChatAccountSelection({
+        authStore: agent.authStore,
+        sessionEntry,
+        requesterProfileId: draft?.owner ?? readParams.requesterProfileId,
+      });
       return {
         isCurrent: projection.isCurrent,
         read: () =>
@@ -564,6 +574,7 @@ export function createGatewayChatMetadataRuntime(params: {
               requesterProfileId: draft?.owner ?? readParams.requesterProfileId,
             },
             deps.getConfig(),
+            readAccountSelection,
           ),
       };
     });
@@ -582,6 +593,7 @@ export function createGatewayChatMetadataRuntime(params: {
     const assemble = (
       neutral: PreparedChatMetadataProjection,
       session: PreparedChatMetadataProjection,
+      readAccountSelection?: Awaited<ReturnType<typeof prepareChatAccountSelection>>,
     ): ChatStartupProjectionResult => ({
       // History consumes stable catalogs only; live readiness stays inside the current-read fence.
       ...(readParams.readPolicy === "ready"
@@ -594,6 +606,7 @@ export function createGatewayChatMetadataRuntime(params: {
                 requesterProfileId: readParams.readRequesterProfileId?.(),
               },
               deps.getConfig(),
+              readAccountSelection,
             ),
           }),
       sessionModelCatalog: session.modelCatalog,
@@ -618,9 +631,14 @@ export function createGatewayChatMetadataRuntime(params: {
             readParams.readRequesterProfileId?.(),
           )
         : readNeutral;
+      const readAccountSelection = await prepareChatAccountSelection({
+        authStore: agent.authStore,
+        sessionEntry: readParams.sessionEntry,
+        readRequesterProfileId: readParams.readRequesterProfileId,
+      });
       return {
         isCurrent: () => readNeutral.isCurrent() && readSession.isCurrent(),
-        read: () => assemble(readNeutral, readSession),
+        read: () => assemble(readNeutral, readSession, readAccountSelection),
       };
     };
     if (readParams.readPolicy !== "ready" && hasSessionContext) {

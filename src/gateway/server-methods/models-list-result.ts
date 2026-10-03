@@ -59,7 +59,7 @@ import { normalizeAgentId } from "../../routing/session-key.js";
 import { loadDeferredCatalog, readPreparedCatalog } from "../server-model-catalog-auth.js";
 import { resolveGatewayModelThinkingProfile } from "../session-utils-model.js";
 import { projectWorkerPlacementAgentRuntime } from "../worker-environments/placement-session-runtime.js";
-import { resolveChatAccountSelection } from "./chat-account-selection.js";
+import { prepareChatAccountSelection } from "./chat-account-selection.js";
 import type { ChatMetadataReadParams, ChatMetadataSessionEntry } from "./chat-metadata-contract.js";
 import { resolveSessionCatalogProfiles } from "./chat-metadata-session-projection.js";
 import {
@@ -491,16 +491,17 @@ export async function prepareModelsListResult(
     ...(defaultModels ? { defaultModels } : {}),
     ...(publicProviderOutcomes?.length ? { providerOutcomes: publicProviderOutcomes } : {}),
   };
-  const accountSelection =
+  const readAccountSelection =
     view === "provider-config" || (!scope && !params.requesterProfileId)
       ? undefined
-      : resolveChatAccountSelection({
+      : await prepareChatAccountSelection({
           authStore: projector.authStore,
           sessionEntry,
           requesterProfileId:
             draft?.owner ?? scope?.requesterProfileId ?? params.requesterProfileId,
         });
   const readOutcomeProjection = () => {
+    const accountSelection = readAccountSelection?.();
     const pendingProviders = projector.snapshot.pendingProviders?.filter(
       (provider) =>
         (!providerFilter || normalizeProvider(provider) === providerFilter) &&

@@ -410,8 +410,8 @@ describe("gateway lifetime sidecars", () => {
     expect(oauth.stop).toHaveBeenCalledOnce();
     expect(context.githubOAuthService).toBeUndefined();
     expect(context.modelAccountConnectService).toBeUndefined();
-    expect(() =>
+    await expect(
       modelAccounts?.status({ owner: "profile-1", assertCurrent: () => {} }, "stale-flow"),
-    ).toThrow("current authorized connection");
+    ).rejects.toThrow("current authorized connection");
   });
 });

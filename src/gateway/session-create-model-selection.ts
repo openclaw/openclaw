@@ -25,7 +25,7 @@ import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { isUserModelAuthProfileId } from "../state/user-model-account-id.js";
 import { isUserModelAuthProfileOwner } from "../state/user-model-accounts.js";
 import type { ModelAccountConnectAction } from "./model-account-authority.js";
-import { ModelAccountConnectAuthorityError } from "./model-account-connect.js";
+import { ModelAccountConnectAuthorityError } from "./model-account-connect-errors.js";
 import {
   prepareSessionPatchModelSelection,
   resolveSessionPatchModelSelection,

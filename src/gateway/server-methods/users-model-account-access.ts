@@ -10,9 +10,10 @@ import { ensureProfileIdForEmail } from "../../state/user-profile-email.js";
 import { UserProfileNotFoundError } from "../../state/user-profiles-schema.js";
 import type {
   ModelAccountConnectAction,
+  ModelAccountRole,
   UserModelAccountSelection,
 } from "../model-account-authority.js";
-import { ModelAccountConnectAuthorityError } from "../model-account-connect.js";
+import { ModelAccountConnectAuthorityError } from "../model-account-connect-errors.js";
 import { resolveOperatorRolePolicyForProfile } from "../operator-role-policy.js";
 import { SESSION_READ_SCOPE, SESSION_WRITE_SCOPE, WRITE_SCOPE } from "../operator-scopes.js";
 import { isGatewayClientProfilePending } from "./gateway-client-identity.js";
@@ -91,13 +92,17 @@ export async function prepareUserModelAccountAction(
     throw new UserProfileNotFoundError(ownerReference);
   }
   const owner = ownerIdentity.profileId;
-  const assertCurrent = () => {
+  const assertCurrent = (roles?: readonly ModelAccountRole[]) => {
     assertConnectionCurrent();
     if (!actorIdentity.isCurrent() || !ownerIdentity.isCurrent()) {
       throw new ModelAccountConnectAuthorityError();
     }
     const scope = actor === owner ? requiredScope : "operator.admin";
-    const role = resolveOperatorRolePolicyForProfile(actor, context.getRuntimeConfig());
+    const assignment = roles?.find((entry) => entry.profileId === actor);
+    if (roles && !assignment) {
+      throw new ModelAccountConnectAuthorityError();
+    }
+    const role = resolveOperatorRolePolicyForProfile(actor, context.getRuntimeConfig(), assignment);
     const grants = [client?.connect.scopes ?? [], ...(role ? [role.scopes] : [])];
     if (
       !grants.every((allowedScopes) =>
@@ -108,7 +113,7 @@ export async function prepareUserModelAccountAction(
     }
   };
   assertCurrent();
-  return { owner, assertCurrent };
+  return { owner, actorProfileId: actor, assertCurrent };
 }
 
 /** Preview and commit share the same self-owned selection; scope follows the requested action. */

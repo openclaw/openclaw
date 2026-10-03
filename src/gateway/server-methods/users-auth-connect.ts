@@ -18,7 +18,7 @@ import type { ModelAccountConnectAction } from "../model-account-authority.js";
 import {
   ModelAccountConnectAuthorityError,
   ModelAccountConnectInputError,
-} from "../model-account-connect.js";
+} from "../model-account-connect-errors.js";
 import type {
   GatewayRequestContext,
   GatewayRequestHandler,
@@ -50,7 +50,9 @@ function connectHandler<P extends { profileId?: string }>(
       if (!service) {
         throw new Error("Model-account service is not running.");
       }
-      options.respond(true, await run(service, action, options.params));
+      const result = await run(service, action, options.params);
+      action.assertCurrent();
+      options.respond(true, result);
     },
     (error) =>
       error instanceof ModelAccountConnectAuthorityError

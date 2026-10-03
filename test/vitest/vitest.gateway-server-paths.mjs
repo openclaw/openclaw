@@ -100,6 +100,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/mention-inbox.compat.test.ts",
   "src/gateway/mention-inbox.sharing-target.test.ts",
   "src/gateway/mention-inbox.test.ts",
+  "src/gateway/model-account-connect.worker.test.ts",
   "src/gateway/node-claude-skill-runtime.test.ts",
   "src/gateway/node-invoke-plugin-policy.private-transport.test.ts",
   "src/gateway/node-invoke-plugin-policy.test.ts",

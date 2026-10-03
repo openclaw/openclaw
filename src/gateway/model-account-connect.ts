@@ -19,19 +19,26 @@ import {
   resolvePersonalAccountAuthMethod,
 } from "../plugins/personal-account-auth.js";
 import { runProviderPluginAuthMethodUnpersisted } from "../plugins/provider-auth-method.js";
+import { runOutsideAsyncWorkScope } from "../shared/async-work-scope.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import { isUserModelAuthProfileId } from "../state/user-model-account-id.js";
 import {
   clearUserProfileAuthLink,
   connectUserModelAccount,
-  isUserModelAuthProfileOwner,
   listUserModelAccounts,
   listUserProfileAuthLinks,
   readUserModelAccountSummary,
-  readUserModelAuthProfile,
+  readSelectedUserModelAccount,
   setUserProfileAuthLink,
-} from "../state/user-model-accounts.js";
+} from "../state/user-model-account-operations.js";
+import { captureUserProfileModelAccountLinksAuthority } from "../state/user-profile-events.js";
 import { sanitizeWizardStepForClient, WizardSession } from "../wizard/session.js";
-import type { ModelAccountConnectAction } from "./model-account-authority.js";
+import type { ModelAccountConnectAction, ModelAccountRole } from "./model-account-authority.js";
+import {
+  ModelAccountConnectAuthorityError,
+  ModelAccountConnectInputError,
+} from "./model-account-connect-errors.js";
 
 type TerminalResult =
   | Exclude<UsersAuthConnectStatusResult, { status: "pending" | "connected" }>
@@ -45,20 +52,13 @@ type ConnectOperation = {
   answerAction?: ModelAccountConnectAction;
   timeout: NodeJS.Timeout;
   session?: WizardSession;
+  settlement?: Promise<void>;
   terminal?: TerminalResult;
 };
 
 const CONNECT_TTL_MS = 15 * 60 * 1_000;
 const MAX_ACTIVE_CONNECTS = 8;
 const MAX_RETAINED_CONNECTS = 64;
-
-export class ModelAccountConnectAuthorityError extends Error {
-  constructor() {
-    super("This account action requires a current authorized connection; reconnect and try again.");
-  }
-}
-
-export class ModelAccountConnectInputError extends Error {}
 
 function matchesLiteralCredential(
   credential: AuthProfileCredential,
@@ -74,8 +74,15 @@ function matchesLiteralCredential(
         credential.token === existing.token;
 }
 
-function resolveOwnedAccountProvider(owner: string, authProfileId: string): string {
-  const account = readUserModelAccountSummary({ profileId: owner, authProfileId });
+async function resolveOwnedAccountProvider(
+  owner: string,
+  authProfileId: string,
+  context: OpenClawStateWorkerContext,
+): Promise<string> {
+  const account = await readUserModelAccountSummary(
+    { profileId: owner, authProfileId },
+    { context },
+  );
   if (!account) {
     throw new ModelAccountConnectInputError(
       "Select an account from your personal account list, or add it first.",
@@ -84,13 +91,14 @@ function resolveOwnedAccountProvider(owner: string, authProfileId: string): stri
   return account.provider;
 }
 
-function resolveLinkableAuthProfileProvider(
+async function resolveLinkableAuthProfileProvider(
   cfg: OpenClawConfig,
   owner: string,
   authProfileId: string,
-): string | undefined {
+  context: OpenClawStateWorkerContext,
+): Promise<string | undefined> {
   if (isUserModelAuthProfileId(authProfileId)) {
-    return resolveOwnedAccountProvider(owner, authProfileId);
+    return resolveOwnedAccountProvider(owner, authProfileId, context);
   }
   // Stored credentials and config-only routes (e.g. aws-sdk) remain linkable;
   // the caller cannot claim a provider the selected profile does not satisfy.
@@ -107,9 +115,19 @@ export function createModelAccountConnectService(options: {
 }) {
   const operations = new Map<string, ConnectOperation>();
   let stopped = false;
+  const pendingWrites = new Set<Promise<unknown>>();
+  let writeTail: Promise<unknown> = Promise.resolve();
+  const retainWrite = <T>(write: () => Promise<T>): Promise<T> => {
+    const pending = runOutsideAsyncWorkScope(() => writeTail.then(write));
+    writeTail = pending.catch(() => {});
+    pendingWrites.add(pending);
+    void pending.finally(() => pendingWrites.delete(pending)).catch(() => {});
+    return pending;
+  };
 
   const finish = (operation: ConnectOperation, result: TerminalResult): TerminalResult => {
-    if (operation.terminal) {
+    // An acknowledged commit wins over cancellation that raced its worker reply.
+    if (operation.terminal && result.status !== "connected") {
       return operation.terminal;
     }
     // Revoke before aborting provider I/O. A late callback must never regain
@@ -119,7 +137,7 @@ export function createModelAccountConnectService(options: {
     operation.session?.cancel();
     return result;
   };
-  const snapshot = (operation: ConnectOperation) => {
+  const snapshot = (operation: ConnectOperation, roles?: readonly ModelAccountRole[]) => {
     if (operation.terminal) {
       return operation.terminal;
     }
@@ -127,8 +145,8 @@ export function createModelAccountConnectService(options: {
       return finish(operation, { status: "expired" });
     }
     try {
-      operation.action.assertCurrent();
-      operation.answerAction?.assertCurrent();
+      operation.action.assertCurrent(roles);
+      operation.answerAction?.assertCurrent(roles);
     } catch {
       return finish(operation, { status: "failed", reason: "authority" });
     }
@@ -140,15 +158,19 @@ export function createModelAccountConnectService(options: {
     }
     action.assertCurrent();
   };
-  const assertLive = (operation: ConnectOperation) => {
-    if (stopped || operations.get(operation.id) !== operation || snapshot(operation)) {
+  const assertLive = (operation: ConnectOperation, roles?: readonly ModelAccountRole[]) => {
+    if (
+      (stopped && !operation.settlement) ||
+      operations.get(operation.id) !== operation ||
+      snapshot(operation, roles)
+    ) {
       throw new ModelAccountConnectAuthorityError();
     }
   };
-  const projectResult = (
+  const projectResult = async (
     action: ModelAccountConnectAction,
     operation: ConnectOperation,
-  ): UsersAuthConnectStatusResult => {
+  ): Promise<UsersAuthConnectStatusResult> => {
     const result = snapshot(operation);
     if (!result) {
       const step = operation.session?.getCurrentStep();
@@ -159,69 +181,134 @@ export function createModelAccountConnectService(options: {
     }
     // Replays retain the committed account, but never replay an obsolete default link.
     assertRunning(action);
-    return { ...result, links: listUserProfileAuthLinks(operation.owner) };
+    const links = await listUserProfileAuthLinks(operation.owner);
+    assertRunning(action);
+    return { ...result, links };
   };
   const findOperation = (action: ModelAccountConnectAction, connectId: string) => {
     assertRunning(action);
     const operation = operations.get(connectId);
     return operation?.owner === action.owner ? operation : undefined;
   };
-  const supersede = (owner: string, provider: string) => {
-    for (const operation of operations.values()) {
+  const supersede = (
+    owner: string,
+    provider: string,
+    previous: Iterable<ConnectOperation> = operations.values(),
+  ) => {
+    for (const operation of previous) {
       if (operation.owner === owner && operation.provider === provider) {
         finish(operation, { status: "cancelled" });
       }
     }
   };
-  const setLink = (action: ModelAccountConnectAction, provider: string, authProfileId: string) => {
-    const links = setUserProfileAuthLink({
-      profileId: action.owner,
-      provider,
-      authProfileId,
-      assertCurrent: () => assertRunning(action),
-    });
-    supersede(action.owner, provider);
+  const setLink = async (
+    action: ModelAccountConnectAction,
+    provider: string,
+    authProfileId: string,
+    context: OpenClawStateWorkerContext,
+    previous: readonly ConnectOperation[],
+  ) => {
+    action.assertCurrent();
+    const links = await setUserProfileAuthLink(
+      {
+        profileId: action.owner,
+        provider,
+        authProfileId,
+        authorityProfileIds: action.actorProfileId ? [action.actorProfileId] : [],
+        assertCurrent: action.assertCurrent,
+      },
+      { context },
+    );
+    supersede(action.owner, provider, previous);
     options.onChanged?.();
+    action.assertCurrent();
     return { links };
+  };
+  const beginClose = () => {
+    stopped = true;
+    for (const operation of operations.values()) {
+      if (operation.settlement) {
+        operation.session?.cancel();
+      } else {
+        finish(operation, { status: "cancelled" });
+      }
+    }
   };
 
   return {
-    listLinks(action: ModelAccountConnectAction): UsersListAuthLinksResult {
+    async listLinks(action: ModelAccountConnectAction): Promise<UsersListAuthLinksResult> {
       assertRunning(action);
-      return { links: listUserProfileAuthLinks(action.owner) };
-    },
-    link(action: ModelAccountConnectAction, authProfileId: string): UsersLinkAuthProfileResult {
+      const links = await listUserProfileAuthLinks(action.owner);
       assertRunning(action);
-      const provider = resolveLinkableAuthProfileProvider(
-        options.getConfig(),
-        action.owner,
-        authProfileId,
-      );
-      if (!provider) {
-        throw new ModelAccountConnectInputError(
-          `unknown auth profile "${authProfileId}"; sign the account in first with "openclaw models auth login --provider <id> --profile-id ${authProfileId}", then link it`,
-        );
-      }
-      return setLink(action, provider, authProfileId);
-    },
-    unlink(action: ModelAccountConnectAction, provider: string): UsersUnlinkAuthProfileResult {
-      assertRunning(action);
-      const links = clearUserProfileAuthLink({
-        profileId: action.owner,
-        provider,
-        assertCurrent: () => assertRunning(action),
-      });
-      supersede(action.owner, provider);
-      options.onChanged?.();
       return { links };
     },
-    list(action: ModelAccountConnectAction, cursor?: string): UsersListModelAccountsResult {
+    async link(
+      action: ModelAccountConnectAction,
+      authProfileId: string,
+    ): Promise<UsersLinkAuthProfileResult> {
       assertRunning(action);
-      return {
-        profileId: action.owner,
-        ...listUserModelAccounts({ profileId: action.owner, cursor }),
-        links: listUserProfileAuthLinks(action.owner),
-      };
+      const context = captureOpenClawStateWorkerContext();
+      const previous = [...operations.values()];
+      return retainWrite(async () => {
+        const provider = await resolveLinkableAuthProfileProvider(
+          options.getConfig(),
+          action.owner,
+          authProfileId,
+          context,
+        );
+        if (!provider) {
+          throw new ModelAccountConnectInputError(
+            `unknown auth profile "${authProfileId}"; sign the account in first with "openclaw models auth login --provider <id> --profile-id ${authProfileId}", then link it`,
+          );
+        }
+        return setLink(action, provider, authProfileId, context, previous);
+      });
+    },
+    async unlink(
+      action: ModelAccountConnectAction,
+      provider: string,
+    ): Promise<UsersUnlinkAuthProfileResult> {
+      assertRunning(action);
+      const context = captureOpenClawStateWorkerContext();
+      const previous = [...operations.values()];
+      return retainWrite(async () => {
+        const links = await clearUserProfileAuthLink(
+          {
+            profileId: action.owner,
+            provider,
+            authorityProfileIds: action.actorProfileId ? [action.actorProfileId] : [],
+            assertCurrent: action.assertCurrent,
+          },
+          { context },
+        );
+        supersede(action.owner, provider, previous);
+        options.onChanged?.();
+        action.assertCurrent();
+        return { links };
+      });
+    },
+    async list(
+      action: ModelAccountConnectAction,
+      cursor?: string,
+    ): Promise<UsersListModelAccountsResult> {
+      assertRunning(action);
+      const context = captureOpenClawStateWorkerContext();
+      const linksCurrent = captureUserProfileModelAccountLinksAuthority(
+        context.admission,
+        action.owner,
+      );
+      const accounts = await listUserModelAccounts(
+        { profileId: action.owner, cursor },
+        { context },
+      );
+      const links = await listUserProfileAuthLinks(action.owner, { context });
+      assertRunning(action);
+      if (!linksCurrent()) {
+        throw new Error(
+          "Personal account selection changed while listing accounts; retry the request.",
+        );
+      }
+      return { profileId: action.owner, ...accounts, links };
     },
     catalog(action: ModelAccountConnectAction): UsersAuthConnectCatalogResult {
       assertRunning(action);
@@ -247,16 +334,17 @@ export function createModelAccountConnectService(options: {
       assertRunning(action);
       return { providers: [...providers.values()] };
     },
-    select(
+    async select(
       action: ModelAccountConnectAction,
       authProfileId: string,
-    ): UsersSelectModelAccountResult {
+    ): Promise<UsersSelectModelAccountResult> {
       assertRunning(action);
-      return setLink(
-        action,
-        resolveOwnedAccountProvider(action.owner, authProfileId),
-        authProfileId,
-      );
+      const context = captureOpenClawStateWorkerContext();
+      const previous = [...operations.values()];
+      return retainWrite(async () => {
+        const provider = await resolveOwnedAccountProvider(action.owner, authProfileId, context);
+        return setLink(action, provider, authProfileId, context, previous);
+      });
     },
     async start(
       action: ModelAccountConnectAction,
@@ -264,6 +352,7 @@ export function createModelAccountConnectService(options: {
       methodId: string,
     ): Promise<UsersAuthConnectStartResult> {
       assertRunning(action);
+      const context = captureOpenClawStateWorkerContext();
       for (const operation of operations.values()) {
         snapshot(operation);
       }
@@ -321,24 +410,16 @@ export function createModelAccountConnectService(options: {
           assertLive(operation);
           // Reconnect may reuse only this person's selected private registration.
           // Shared gateway profiles never enter a personal provider login context.
-          const selectedProfileId = listUserProfileAuthLinks(operation.owner).find(
-            (link) => link.provider === provider,
-          )?.authProfileId;
-          const selectedCredential =
-            selectedProfileId &&
-            isUserModelAuthProfileOwner({
-              profileId: operation.owner,
-              authProfileId: selectedProfileId,
-            })
-              ? readUserModelAuthProfile(selectedProfileId)?.credential
-              : undefined;
+          const selected = await readSelectedUserModelAccount(operation.owner, provider, {
+            context,
+          });
+          assertLive(operation);
           const result = await runProviderPluginAuthMethodUnpersisted({
             config: {},
             env: {},
-            existingProfiles:
-              selectedProfileId && selectedCredential?.provider === provider
-                ? [{ profileId: selectedProfileId, credential: selectedCredential }]
-                : [],
+            existingProfiles: selected
+              ? [{ profileId: selected.id, credential: selected.credential }]
+              : [],
             method,
             prompter,
             signal,
@@ -368,18 +449,31 @@ export function createModelAccountConnectService(options: {
           // The private store repeats this guard inside its synchronous commit.
           // Config patches, shared profile IDs, and global defaults are not applied.
           failure = "unavailable";
-          const connected = connectUserModelAccount({
-            ownerProfileId: operation.owner,
-            credential: profile.credential,
-            matchesCredential: (existing) =>
-              (method.matchesPersonalAccount ?? matchesLiteralCredential)(
-                profile.credential,
-                existing,
-              ),
-            assertCurrent: () => assertLive(operation),
+          operation.settlement = retainWrite(async () => {
+            const connected = await connectUserModelAccount(
+              {
+                ownerProfileId: operation.owner,
+                credential: profile.credential,
+                matchesCredential: (existing) =>
+                  (method.matchesPersonalAccount ?? matchesLiteralCredential)(
+                    profile.credential,
+                    existing,
+                  ),
+                authorityProfileIds: [
+                  ...new Set(
+                    [operation.action, operation.answerAction].flatMap((current) =>
+                      current?.actorProfileId ? [current.actorProfileId] : [],
+                    ),
+                  ),
+                ],
+                assertCurrent: (roles) => assertLive(operation, roles),
+              },
+              { context },
+            );
+            finish(operation, { status: "connected", authProfileId: connected.authProfileId });
+            options.onChanged?.();
           });
-          finish(operation, { status: "connected", authProfileId: connected.authProfileId });
-          options.onChanged?.();
+          await operation.settlement;
         } catch {
           snapshot(operation);
           finish(operation, { status: "failed", reason: failure });
@@ -387,7 +481,10 @@ export function createModelAccountConnectService(options: {
       });
       return { connectId: id, expiresAtMs: operation.expiresAtMs };
     },
-    status(action: ModelAccountConnectAction, connectId: string): UsersAuthConnectStatusResult {
+    async status(
+      action: ModelAccountConnectAction,
+      connectId: string,
+    ): Promise<UsersAuthConnectStatusResult> {
       const operation = findOperation(action, connectId);
       return operation ? projectResult(action, operation) : { status: "expired" };
     },
@@ -408,7 +505,7 @@ export function createModelAccountConnectService(options: {
       if (!operation.session || step?.id !== stepId || step.type === "progress") {
         // A browser callback can retire the displayed prompt before its answer
         // arrives. Ignore that value without cancelling the advancing sign-in.
-        const result = projectResult(action, operation);
+        const result = await projectResult(action, operation);
         return result.status === "pending"
           ? { ...result, error: "This step has changed. Follow the current sign-in instructions." }
           : result;
@@ -421,7 +518,7 @@ export function createModelAccountConnectService(options: {
       // its continuation may commit before this await returns.
       const error = await operation.session.answer(stepId, value);
       assertRunning(action);
-      const result = projectResult(action, operation);
+      const result = await projectResult(action, operation);
       if (error && result.status === "pending" && result.step?.id === stepId) {
         return {
           ...result,
@@ -430,7 +527,10 @@ export function createModelAccountConnectService(options: {
       }
       return result;
     },
-    cancel(action: ModelAccountConnectAction, connectId: string): UsersAuthConnectStatusResult {
+    async cancel(
+      action: ModelAccountConnectAction,
+      connectId: string,
+    ): Promise<UsersAuthConnectStatusResult> {
       const operation = findOperation(action, connectId);
       if (!operation) {
         return { status: "expired" };
@@ -440,13 +540,12 @@ export function createModelAccountConnectService(options: {
       return projectResult(action, operation);
     },
     supersede,
+    beginClose,
     async stop(): Promise<void> {
-      stopped = true;
-      for (const operation of operations.values()) {
-        finish(operation, { status: "cancelled" });
-      }
-      // Provider cancellation owns its callback/poll cleanup. An uncooperative
-      // remote request cannot keep the Gateway alive or retain commit authority.
+      beginClose();
+      // Provider I/O may ignore cancellation; only accepted persistence retains
+      // settlement ownership and must finish before the state workers close.
+      await Promise.allSettled(pendingWrites);
       operations.clear();
     },
   };

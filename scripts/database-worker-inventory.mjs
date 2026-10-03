@@ -710,6 +710,22 @@ const reviewedOperations = new Map([
       },
     ],
   ],
+  [
+    "src/state/user-model-accounts.ts",
+    [
+      {
+        tier: "W",
+        operations: [
+          "listUserModelAccounts",
+          "connectUserModelAccount",
+          "setUserProfileAuthLink",
+          "clearUserProfileAuthLink",
+        ],
+        evidence:
+          "Gateway account service and summary callers use user-model-account-operations.ts; these kernels execute only through userProfiles.modelAccount operations in user-profiles.worker.ts. Shared credential/OAuth kernels and the live account pin guard retain T1.",
+      },
+    ],
+  ],
 ]);
 const workerModules = new Set([
   "src/skills/library/import.kernel.ts", // Upload commands execute only in the shared-state writer.
