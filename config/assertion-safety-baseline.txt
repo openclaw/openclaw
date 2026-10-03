@@ -2375,12 +2375,11 @@ src/infra/state-migrations.shared-auth-store.ts	1
 src/infra/state-migrations.state-dir.ts	1
 src/infra/state-migrations.tui-last-session.ts	2
 src/infra/state-migrations.update-check.ts	2
-src/infra/state-migrations.workspace-setup-store.ts	2
+src/infra/state-migrations.workspace-setup-store.ts	1
 src/infra/state-migrations.workspace-setup.ts	1
 src/infra/system-presence.ts	1
 src/infra/tailscale.ts	4
 src/infra/tmp-openclaw-dir.ts	3
-src/infra/unhandled-rejections.ts	2
 src/infra/update-check-package-target.ts	2
 src/infra/update-global.ts	3
 src/infra/update-package-manager.ts	1
