@@ -124,7 +124,10 @@ private struct ChatSidebarIdentityCard: View {
             .padding(.vertical, 3)
             .contentShape(RoundedRectangle(cornerRadius: 6))
         }
-        .menuStyle(.borderlessButton)
+        // Native borderless menus discard custom label layout and can expose
+        // a photo's intrinsic size. Keep the avatar's 28-point SwiftUI bounds.
+        .menuStyle(.button)
+        .buttonStyle(.plain)
         .menuIndicator(.hidden)
         .background(self.hovered ? Color.primary.opacity(0.06) : .clear, in: RoundedRectangle(cornerRadius: 6))
         .onHover { self.hovered = $0 }

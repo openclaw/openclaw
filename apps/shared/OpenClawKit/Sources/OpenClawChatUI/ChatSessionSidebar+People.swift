@@ -99,7 +99,7 @@ struct ChatSidebarPersonAvatar: View {
     let size: CGFloat
 
     var body: some View {
-        Group {
+        ZStack {
             if let image {
                 Image(nsImage: image).resizable().scaledToFill()
             } else {
