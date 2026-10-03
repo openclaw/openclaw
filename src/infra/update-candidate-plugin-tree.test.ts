@@ -442,6 +442,7 @@ it("copies a linked workspace dependency without reading or changing Git update 
   let abandoned = "";
   let rollback = "";
   const sdkLink = "../../../../packages/plugin-sdk";
+  const required = "store.openclaw-update-00000000-0000-4000-8000-000000000011.tmp";
   const f = await fixture(false, async (source) => {
     const workspace = path.join(path.dirname(source), "workspace");
     dependency = path.join(workspace, "extensions", "a2a");
@@ -475,8 +476,14 @@ it("copies a linked workspace dependency without reading or changing Git update 
     await fs.writeFile(path.join(rollback, "previous", "keep.txt"), "rollback bytes");
     await fs.mkdir(path.join(dependency, "ordinary.tmp"));
     await fs.writeFile(path.join(dependency, "ordinary.tmp", "asset.txt"), "plugin asset");
+    await fs.mkdir(path.join(source, required));
+    await fs.writeFile(path.join(source, required, "required.txt"), "explicit dependency");
+    await fs.symlink(path.join(required, "required.txt"), path.join(source, "required.txt"));
   });
   await f.copy();
+  expect(await fs.readFile(path.join(f.destination, "required.txt"), "utf8")).toBe(
+    "explicit dependency",
+  );
   const copied = path.join(f.destination, "node_modules", "workspace-dependency");
   expect(await fs.readFile(path.join(copied, "data.txt"), "utf8")).toBe("live dependency");
   expect(await fs.readFile(path.join(copied, "ordinary.tmp", "asset.txt"), "utf8")).toBe(
@@ -509,16 +516,3 @@ it.each(["ordinary.tmp", "node_modules.openclaw-update-operator.tmp"])(
     ).rejects.toThrow("Cannot privately copy plugin dependency");
   },
 );
-
-it("retains explicitly linked inputs inside a Git transaction namespace", async () => {
-  const name = "store.openclaw-update-00000000-0000-4000-8000-000000000011.tmp";
-  const f = await fixture(false, async (source) => {
-    await fs.mkdir(path.join(source, name));
-    await fs.writeFile(path.join(source, name, "required.txt"), "explicit dependency");
-    await fs.symlink(path.join(name, "required.txt"), path.join(source, "required.txt"));
-  });
-  await f.copy();
-  expect(await fs.readFile(path.join(f.destination, "required.txt"), "utf8")).toBe(
-    "explicit dependency",
-  );
-});
