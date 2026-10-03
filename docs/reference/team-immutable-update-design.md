@@ -65,9 +65,12 @@ outcomes print the exact independent recovery command.
 
 Activation remains disabled for slice-1 adoptions until the operator repeats
 adoption with `--enable-activation`. Gateway `update.run` still directs operators
-to the root CLI outside the Gateway service cgroup. For the first native
-activation, that CLI must come from the prepared slice-2 capable generation;
-the installed slice-1 driver can prepare but cannot activate it. The immutable
+to the root CLI outside the Gateway service cgroup. The serving Gateway must
+support committed suspension handoff: the existing deployment owner must first
+activate one bridge release containing this capability. A candidate-side CLI
+cannot retrofit it into an older running Gateway. After that bridge is healthy,
+enable adoption and prove a native cutover to a different reviewed generation
+before retiring the old controller. The immutable
 `--drain-timeout` flag independently selects the drain budget, such as 30 seconds,
 while `--timeout` retains canary/readiness phase budgets. Healthy recovery never
 uses the drain budget. Gateway RPC privilege handoff is
@@ -79,6 +82,28 @@ or optional NOCOW rewrite runs during activation. General incompatible database 
 generation collection, deployment adoption/proof, and private-controller
 retirement remain separate work. The broader proposed contracts below describe
 those remaining boundaries, not completed production deployment.
+
+At final native stop preparation, the suspension owner validates the original
+lease and all write custody, then the live host commits one-way shutdown before
+acknowledging the handoff. Resume and expiry cannot reopen admission after that
+transfer. The old arm-only contract remains available to existing callers, but
+the immutable updater never falls back to it. An unknown reply retains recovery;
+the host may already be stopping. If host shutdown wins the race with native
+dispatch, only an inactive service with no pending job and an empty cgroup counts
+as stopped; a replacement process is preserved for explicit recovery.
+Before host commitment, the existing control record durably enters its stop
+phase. The stable launcher reads that record without replaying journals and
+blocks a supervisor replacement from entering Gateway code during stop or
+pointer publication. Startup resumes only in an owner-authorized phase; no
+temporary systemd policy override is needed.
+
+Explicit v1-to-v2 enablement can reconcile a bridge selected by the existing
+deployment owner. Adoption preserves stable root, releases, runtime, and service
+bindings, verifies the sealed predecessor and serving bridge, and retains the
+predecessor without inventing an activation-success receipt. It also upgrades
+only the exact packaged v1 launcher, backing up its bytes before atomic
+replacement. Custom launchers and external pointer drift after enablement remain
+refused.
 
 ## Problem and performance boundary
 

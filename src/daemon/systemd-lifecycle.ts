@@ -58,6 +58,7 @@ async function runSystemdServiceAction(
       assertCurrent: params.assertCurrent,
       beforeMutation: params.beforeMutation,
       beforeEffect: params.beforeEffect,
+      prepareEffect: params.prepareEffect,
       warn:
         params.warn ??
         ((message) => {

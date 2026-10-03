@@ -135,10 +135,13 @@ function fixture(
     }
   };
   const warn = vi.fn((message: string) => events.push(`warning:${message}`));
-  const stop = vi.fn(async () => {
-    events.push("stop");
-    return "stopped";
-  });
+  const stop = vi.fn(
+    async ({ prepareEffect }: { prepareEffect: (beforeCommit: () => void) => Promise<void> }) => {
+      await prepareEffect(() => {});
+      events.push("stop");
+      return "stopped";
+    },
+  );
   mocks.call.mockImplementation(async (request: CallGatewayCliOptions) => {
     // The real client swallows hello observer errors before checking dispatch authority.
     try {
@@ -169,7 +172,7 @@ function fixture(
       events.push("handoff");
       const observed = observations.at(-1);
       return {
-        status: "armed",
+        status: "committed",
         suspensionId: "resident-suspension",
         expiresAtMs: observed?.status !== "busy" ? observed?.expiresAtMs : undefined,
       };
@@ -353,14 +356,14 @@ it.each(["ready", "draining"] as const)(
           params: {
             suspensionId: "resident-suspension",
             target: { pid: 42, processInstanceId: "resident-instance" },
+            commit: true,
           },
         }),
       );
       expect(f.events.indexOf("handoff")).toBeLessThan(f.events.indexOf("stop"));
-    } else {
-      expect(f.events).not.toContain("handoff");
     }
     await expect(running).resolves.toBe("stopped");
+    expect(f.events.indexOf("handoff")).toBeLessThan(f.events.indexOf("stop"));
     expect(f.events[1]).toBe(`observe:${phase}`);
     expect(f.stop).toHaveBeenCalledOnce();
   },
@@ -409,8 +412,8 @@ it.each(["busy", "expired", "unknown-custody", "held-custody", "unavailable"] as
   },
 );
 
-it.each(["refused", "foreign", "expired", "stop-failed"] as const)(
-  "releases its immutable suspension when the interruption is %s",
+it.each(["refused", "legacy", "foreign", "mismatched-expiry", "stop-failed"] as const)(
+  "releases its reversible suspension when native handoff is %s",
   async (failure) => {
     const f = fixture({ observations: [draining("embedded-run", "1 active turn")] });
     const call = expectDefined(mocks.call.getMockImplementation(), "Missing Gateway fixture");
@@ -419,11 +422,11 @@ it.each(["refused", "foreign", "expired", "stop-failed"] as const)(
         if (failure === "refused") {
           throw new Error("handoff refused");
         }
-        if (failure === "foreign" || failure === "expired") {
+        if (failure === "legacy" || failure === "foreign" || failure === "mismatched-expiry") {
           return {
-            status: "armed",
+            status: failure === "legacy" ? "armed" : "committed",
             suspensionId: failure === "foreign" ? "foreign" : "resident-suspension",
-            expiresAtMs: failure === "expired" ? Date.now() - 1 : Date.now() + 120_000,
+            expiresAtMs: failure === "mismatched-expiry" ? Date.now() - 1 : Date.now() + 120_000,
           };
         }
       }
@@ -438,7 +441,8 @@ it.each(["refused", "foreign", "expired", "stop-failed"] as const)(
     ).catch((error: unknown) => error);
     await vi.advanceTimersByTimeAsync(f.params.timeoutMs);
     expect(await outcome).toBeInstanceOf(Error);
-    expect(f.stop).toHaveBeenCalledTimes(failure === "stop-failed" ? 1 : 0);
+    expect(f.stop).toHaveBeenCalledOnce();
+    expect(f.events).not.toContain("stop");
     expect(f.events.at(-1)).toBe("resume");
   },
 );

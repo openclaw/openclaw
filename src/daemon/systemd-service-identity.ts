@@ -217,6 +217,7 @@ export async function activateSystemdServiceIdentity(params: {
   assertCurrent?: () => void;
   beforeMutation?: () => Promise<void>;
   beforeEffect?: () => void;
+  prepareEffect?: () => Promise<void>;
   warn: (message: string) => void;
 }): Promise<void> {
   let authorityFailure: { error: unknown } | undefined;
@@ -243,8 +244,10 @@ export async function activateSystemdServiceIdentity(params: {
       assertCurrent();
       await inspectIdentity(broker, identity, identity.bus, deadline, identity);
       assertCurrent();
+      await params.prepareEffect?.();
+      assertCurrent();
       const reset = method === "ResetFailedUnit";
-      params.beforeEffect?.();
+      let effectFailure: { error: unknown } | undefined;
       try {
         await broker.query(
           [
@@ -260,10 +263,21 @@ export async function activateSystemdServiceIdentity(params: {
           reset ? [] : ["o"],
           deadline,
           assertCurrent,
+          () => {
+            try {
+              params.beforeEffect?.();
+            } catch (error) {
+              effectFailure = { error };
+              throw error;
+            }
+          },
         );
       } catch (error) {
         if (authorityFailure) {
           throw authorityFailure.error;
+        }
+        if (effectFailure) {
+          throw effectFailure.error;
         }
         assertCurrent();
         const refusal = findServiceOwnershipRefusal(error);

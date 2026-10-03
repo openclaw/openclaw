@@ -85,6 +85,8 @@ export type GatewayServiceControlArgs = {
   preserveAutoStart?: boolean;
   /** Original live caller fence, rechecked at native mutation boundaries. */
   assertCurrent?: () => void;
+  /** Complete owner handoff after native inspection, before dispatch. */
+  prepareEffect?: () => Promise<void>;
   /** State that intentionally changes after this native effect; checked only before dispatch. */
   beforeEffect?: () => void;
   /** Native identity captured before stopping; activation must revalidate it. */

@@ -69,7 +69,7 @@ async function readImmutableService(
       "--system",
       "show",
       service.unit,
-      "--property=Id,LoadState,ActiveState,SubState,MainPID,ControlGroup,TasksCurrent,KillMode,DynamicUser,RootDirectory,RootImage",
+      "--property=Id,LoadState,ActiveState,SubState,MainPID,ControlGroup,TasksCurrent,KillMode,DynamicUser,RootDirectory,RootImage,Job",
     ],
     undefined,
     5_000,
@@ -314,7 +314,8 @@ export async function inspectImmutableActivationService(params: {
     }
   } else if (
     !params.allowStopped ||
-    !["inactive", "failed"].includes(properties.activestate ?? "")
+    !["inactive", "failed"].includes(properties.activestate ?? "") ||
+    !/^(?:0|)$/.test(properties.job ?? "missing")
   ) {
     throw new Error("The immutable Gateway is neither running nor fully stopped.");
   } else if (controlGroup && !cgroupEmpty(controlGroup)) {
@@ -383,6 +384,7 @@ type ImmutableServiceAction = {
   stdout: NodeJS.WritableStream;
   timeoutMs?: number;
   beforeEffect?: () => void;
+  prepareEffect?: () => Promise<void>;
 };
 
 async function controlImmutableService(params: ImmutableServiceAction, action: "start" | "stop") {
@@ -420,30 +422,67 @@ async function controlImmutableService(params: ImmutableServiceAction, action: "
             "Immutable start requires a stopped service; stop requires the observed process.",
           );
         }
-        await control({
-          stdout: params.stdout,
-          env: expected.state.env,
-          systemdIdentity: expected.identity,
-          beforeMutation,
-          assertCurrent,
-          beforeEffect: () => {
-            assertCurrent();
-            params.beforeEffect?.();
-            if (expected.pid === null && expected.controlGroup) {
-              assertImmutableServiceStoppedCurrent(expected);
-            }
-            if (expected.pid !== null) {
-              assertOutsideService(expected.controlGroup);
-              assertImmutableServiceProcessCurrent(expected);
-            }
-          },
-        });
+        let dispatchRefusal: { error: unknown } | undefined;
+        try {
+          await control({
+            stdout: params.stdout,
+            env: expected.state.env,
+            systemdIdentity: expected.identity,
+            beforeMutation,
+            assertCurrent,
+            prepareEffect: params.prepareEffect,
+            beforeEffect: () => {
+              try {
+                assertCurrent();
+                params.beforeEffect?.();
+                if (expected.pid === null && expected.controlGroup) {
+                  assertImmutableServiceStoppedCurrent(expected);
+                }
+                if (expected.pid !== null) {
+                  assertOutsideService(expected.controlGroup);
+                  assertImmutableServiceProcessCurrent(expected);
+                }
+              } catch (error) {
+                dispatchRefusal = { error };
+                throw error;
+              }
+            },
+          });
+        } catch (error) {
+          // Reconcile only a known refusal before dispatch. A lost native reply
+          // may still accept a delayed stop and must retain explicit recovery.
+          if (action !== "stop" || dispatchRefusal?.error !== error) {
+            throw error;
+          }
+          const current = await inspectImmutableActivationService({
+            descriptor,
+            generationPath: descriptor.current.path,
+            allowStopped: true,
+            allowStarting: true,
+            assertCurrent,
+          });
+          assertCurrent();
+          if (
+            current.phase !== "stopped" ||
+            current.definitionDigest !== expected.definitionDigest
+          ) {
+            throw error;
+          }
+          assertImmutableServiceStoppedCurrent(expected);
+          params.beforeEffect?.();
+          return;
+        }
         assertCurrent();
         if (action === "stop") {
           const deadline = performance.now() + (params.timeoutMs ?? 360_000);
           while (true) {
             const result = await execSystemctl(
-              ["--system", "show", descriptor.service.unit, "--property=Id,ActiveState,MainPID"],
+              [
+                "--system",
+                "show",
+                descriptor.service.unit,
+                "--property=Id,ActiveState,MainPID,Job",
+              ],
               undefined,
               5_000,
             );
@@ -456,6 +495,7 @@ async function controlImmutableService(params: ImmutableServiceAction, action: "
               current.id === descriptor.service.unit &&
               ["inactive", "failed"].includes(current.activestate ?? "") &&
               current.mainpid === "0" &&
+              /^(?:0|)$/.test(current.job ?? "missing") &&
               empty &&
               String(getProcessStartTime(expected.pid!)) !== expected.processStartTicks
             ) {

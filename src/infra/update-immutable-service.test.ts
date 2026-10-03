@@ -131,6 +131,7 @@ describe("immutable activation service", () => {
   let currentRuntime: string;
   let populated: boolean;
   let cgroupReads: number;
+  let pendingJob: number;
   let stopEffect: (() => void) | undefined;
   const controlGroup = "/system.slice/example.service";
   const pid = 43210;
@@ -156,6 +157,7 @@ describe("immutable activation service", () => {
     currentRuntime = node;
     populated = true;
     cgroupReads = 0;
+    pendingJob = 0;
     stopEffect = undefined;
     const sourcePath = path.join(root, "example.service");
     await fs.writeFile(sourcePath, "[Service]\nUser=openclaw\nProtectSystem=strict\n");
@@ -179,7 +181,7 @@ describe("immutable activation service", () => {
       code: 0,
       termination: "exit",
       stderr: "",
-      stdout: `Id=example.service\nLoadState=loaded\nActiveState=${activating ? "activating" : alive ? "active" : "inactive"}\nSubState=${alive ? "running" : "dead"}\nMainPID=${alive ? currentPid : 0}\nControlGroup=${controlGroup}\nTasksCurrent=${populated ? 1 : 0}\nKillMode=control-group\nDynamicUser=no\nRootDirectory=\nRootImage=\n`,
+      stdout: `Id=example.service\nLoadState=loaded\nActiveState=${activating ? "activating" : alive ? "active" : "inactive"}\nSubState=${alive ? "running" : "dead"}\nMainPID=${alive ? currentPid : 0}\nControlGroup=${controlGroup}\nTasksCurrent=${populated ? 1 : 0}\nKillMode=control-group\nDynamicUser=no\nRootDirectory=\nRootImage=\nJob=${pendingJob}\n`,
     }));
     const read = fsSync.readFileSync;
     vi.spyOn(fsSync, "readFileSync").mockImplementation((file, ...args) => {
@@ -230,6 +232,7 @@ describe("immutable activation service", () => {
     vi.spyOn(identity, "captureSystemdServiceIdentity").mockResolvedValue(native);
     vi.spyOn(lifecycle, "stopSystemdService").mockImplementation(async (args) => {
       await args.beforeMutation?.();
+      await args.prepareEffect?.();
       stopEffect?.();
       args.beforeEffect?.();
       args.assertCurrent?.();
@@ -275,6 +278,55 @@ describe("immutable activation service", () => {
     });
     expect(observed.definitionDigest).toMatch(/^[a-f0-9]{64}$/u);
     expect(() => assertImmutableServiceProcessCurrent(observed)).not.toThrow();
+  });
+
+  it.each(["stopped", "auto-restart", "queued job", "replacement"] as const)(
+    "reconciles a host that becomes %s after committing shutdown before native dispatch",
+    async (outcome) => {
+      const expected = await inspect();
+      const stopping = stopImmutableService({
+        descriptor,
+        expected,
+        assertCurrent,
+        stdout: new PassThrough(),
+        prepareEffect: async () => {
+          alive = false;
+          populated = false;
+          if (outcome === "auto-restart") {
+            activating = true;
+          } else if (outcome === "queued job") {
+            pendingJob = 7;
+          } else if (outcome === "replacement") {
+            alive = true;
+            populated = true;
+            currentPid++;
+            ticks++;
+          }
+        },
+      });
+      if (outcome === "stopped") {
+        await expect(stopping).resolves.toBeUndefined();
+      } else {
+        await expect(stopping).rejects.toThrow();
+      }
+      expect(alive).toBe(outcome === "replacement");
+      expect(populated).toBe(outcome === "replacement");
+    },
+  );
+
+  it("retains an uncertain native stop even when the service is observed stopped", async () => {
+    const expected = await inspect();
+    const failure = new Error("native stop reply was lost");
+    vi.mocked(lifecycle.stopSystemdService).mockImplementationOnce(async (args) => {
+      await args.beforeMutation?.();
+      args.beforeEffect?.();
+      alive = false;
+      populated = false;
+      throw failure;
+    });
+    await expect(
+      stopImmutableService({ descriptor, expected, assertCurrent, stdout: new PassThrough() }),
+    ).rejects.toBe(failure);
   });
 
   it.each(["current", "physical"])(

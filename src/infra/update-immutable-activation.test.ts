@@ -222,10 +222,16 @@ describe.skipIf(process.platform !== "linux")("immutable activation orchestratio
     mocks.drain.mockImplementation(async ({ assertCurrent: check }, stop) => {
       check();
       events.push(`drain:${selectedSha()}`);
-      return stop();
+      return stop({
+        prepareEffect: async (beforeCommit: () => void) => {
+          check();
+          beforeCommit();
+        },
+      });
     });
-    mocks.stop.mockImplementation(async ({ assertCurrent: check, expected }) => {
+    mocks.stop.mockImplementation(async ({ assertCurrent: check, expected, prepareEffect }) => {
       check();
+      await prepareEffect?.();
       if (!nativeOperationActive) {
         throw new Error("synthetic stop outside service lease");
       }
@@ -467,6 +473,114 @@ describe.skipIf(process.platform !== "linux")("immutable activation orchestratio
     });
     expect(mocks.stop).toHaveBeenCalledOnce();
   });
+
+  it.each(["throws", "failed", "still-starting", "unverified"] as const)(
+    "settles a stopped candidate recovery retry that %s through the candidate owner",
+    async (outcome) => {
+      let executorActive = true;
+      mocks.owner.mockImplementationOnce(async (_root, run) => {
+        const assertCurrent = () => {
+          if (!executorActive) {
+            throw new Error("synthetic executor ended before candidate start");
+          }
+        };
+        return run(assertCurrent, { assertCurrent });
+      });
+      await expect(
+        activateImmutableUpdate({
+          root,
+          expectedPrepared: candidate,
+          onReceipt: (line) => {
+            if (line === "immutable:starting") {
+              executorActive = false;
+              throw new Error("synthetic updater crash");
+            }
+          },
+        }),
+      ).rejects.toThrow("synthetic executor ended before candidate start");
+      expect(selectedSha()).toBe(candidateSha);
+      expect(serving).toBeNull();
+      expect(read().activation?.operation?.phase).toBe("starting");
+      expect(mocks.start).not.toHaveBeenCalled();
+
+      outcomes = outcome === "throws" ? ["failed"] : ["failed", outcome];
+      if (outcome === "throws") {
+        mocks.start.mockImplementationOnce(async ({ assertCurrent: check, beforeEffect }) => {
+          check();
+          beforeEffect?.();
+          throw new Error("synthetic recovery start failed");
+        });
+      }
+      const result = await recoverImmutableUpdate({ root });
+      const rolledBack = outcome === "throws" || outcome === "failed";
+      expect(result.status).toBe(rolledBack ? "rolled-back" : "pending");
+      expect(selectedSha()).toBe(rolledBack ? previousSha : candidateSha);
+      expect(result.installation.currentSha).toBe(selectedSha());
+      expect(mocks.start.mock.calls.map(([params]) => params.descriptor.current.sha)).toEqual(
+        rolledBack ? [candidateSha, previousSha] : [candidateSha],
+      );
+      expect(mocks.stop.mock.calls.map(([params]) => params.descriptor.current.sha)).toEqual(
+        outcome === "failed" ? [previousSha, candidateSha] : [previousSha],
+      );
+      expect(read().activation?.operation).toMatchObject({ candidate: { sha: candidateSha } });
+      if (rolledBack) {
+        expect(read().activation?.operation).toMatchObject({
+          phase: "rolled-back",
+          failure:
+            outcome === "throws" ? "candidate-start-failed" : "candidate-verification-failed",
+        });
+      }
+      expect(read().activation?.lastResult?.outcome).toBe(rolledBack ? "rolled-back" : undefined);
+    },
+  );
+
+  it.each(["native inspection", "handoff dispatch"] as const)(
+    "preserves the serving predecessor when protected state changes during %s",
+    async (window) => {
+      const originalServing = serving;
+      let changed = false;
+      let hostCommitted = false;
+      mocks.unchanged.mockImplementation((_snapshot, { assertCurrent: check }) => {
+        check();
+        if (changed) {
+          throw new Error("protected state changed before host commitment");
+        }
+      });
+      mocks.drain.mockImplementation(async ({ assertCurrent: check }, stop) => {
+        check();
+        return stop({
+          prepareEffect: async (beforeCommit?: () => void) => {
+            beforeCommit?.();
+            await Promise.resolve();
+            if (window === "handoff dispatch") {
+              changed = true;
+            }
+            beforeCommit?.();
+            hostCommitted = true;
+            serving = null;
+          },
+        });
+      });
+      mocks.stop.mockImplementationOnce(async ({ prepareEffect, beforeEffect }) => {
+        await Promise.resolve();
+        if (window === "native inspection") {
+          changed = true;
+        }
+        await prepareEffect();
+        beforeEffect();
+        events.push("unexpected-native-stop");
+      });
+      await expect(activateImmutableUpdate({ root, expectedPrepared: candidate })).rejects.toThrow(
+        "protected state changed",
+      );
+      expect(hostCommitted).toBe(false);
+      expect(serving).toEqual(originalServing);
+      expect(selectedSha()).toBe(previousSha);
+      expect(events).not.toContain("unexpected-native-stop");
+      expect(read().activation?.operation).toMatchObject({ phase: "stopping" });
+      expect(mocks.start).not.toHaveBeenCalled();
+    },
+  );
 
   it.each(["capture", "rehearsal"] as const)(
     "refuses a foreign config write during rollback %s without accepting a new baseline",

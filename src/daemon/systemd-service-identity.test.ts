@@ -68,41 +68,44 @@ beforeEach(() => {
   afterReset = undefined;
   resetFailure = undefined;
   native.open.mockResolvedValue({ query: native.query, close: native.close, verify: () => {} });
-  native.query.mockImplementation(async (args, _signatures, _deadline, assertCurrent) => {
-    assertCurrent?.();
-    const method = args[4];
-    if (!method) {
-      throw new Error("Missing synthetic native method");
-    }
-    if (method === "GetId") {
-      return [[current.busId]];
-    }
-    if (method === "GetNameOwner") {
-      return [[current.managerOwner]];
-    }
-    if (method === "GetConnectionUnixUser") {
-      return [[current.managerUid]];
-    }
-    if (method === "GetUnit" || method === "LoadUnit") {
-      return [["/org/freedesktop/systemd1/unit/openclaw_2eservice"]];
-    }
-    if (args[0] === "get-property") {
-      return method === "Id" ? [current.unitName, current.unitPath] : [current.serviceUser];
-    }
-    if (["ResetFailedUnit", "StartUnit", "StopUnit", "RestartUnit"].includes(method)) {
-      expect(args[1]).toBe(original.managerOwner);
-      effects.push(method);
-      if (method === "ResetFailedUnit") {
-        afterReset?.();
-        if (resetFailure) {
-          throw resetFailure;
-        }
-        return [];
+  native.query.mockImplementation(
+    async (args, _signatures, _deadline, assertCurrent, beforeDispatch) => {
+      assertCurrent?.();
+      const method = args[4];
+      if (!method) {
+        throw new Error("Missing synthetic native method");
       }
-      return [["/org/freedesktop/systemd1/job/7"]];
-    }
-    throw new Error(`Unexpected synthetic native query: ${method}`);
-  });
+      if (method === "GetId") {
+        return [[current.busId]];
+      }
+      if (method === "GetNameOwner") {
+        return [[current.managerOwner]];
+      }
+      if (method === "GetConnectionUnixUser") {
+        return [[current.managerUid]];
+      }
+      if (method === "GetUnit" || method === "LoadUnit") {
+        return [["/org/freedesktop/systemd1/unit/openclaw_2eservice"]];
+      }
+      if (args[0] === "get-property") {
+        return method === "Id" ? [current.unitName, current.unitPath] : [current.serviceUser];
+      }
+      if (["ResetFailedUnit", "StartUnit", "StopUnit", "RestartUnit"].includes(method)) {
+        expect(args[1]).toBe(original.managerOwner);
+        beforeDispatch?.();
+        effects.push(method);
+        if (method === "ResetFailedUnit") {
+          afterReset?.();
+          if (resetFailure) {
+            throw resetFailure;
+          }
+          return [];
+        }
+        return [["/org/freedesktop/systemd1/job/7"]];
+      }
+      throw new Error(`Unexpected synthetic native query: ${method}`);
+    },
+  );
 });
 afterEach(() => {
   vi.restoreAllMocks();
@@ -318,4 +321,21 @@ it("checks effect-specific process facts after native inspection without requiri
     }),
   ).rejects.toThrow("process replaced");
   expect(effects).toEqual([]);
+});
+
+it("does not downgrade a final effect guard refusal from reset-failed into a start", async () => {
+  const denied = new Error("original stopped-service custody ended");
+  const warn = vi.fn();
+  await expect(
+    startSystemdService({
+      stdout: new PassThrough(),
+      systemdIdentity: original,
+      warn,
+      beforeEffect: () => {
+        throw denied;
+      },
+    }),
+  ).rejects.toBe(denied);
+  expect(effects).toEqual([]);
+  expect(warn).not.toHaveBeenCalled();
 });

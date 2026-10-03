@@ -32,7 +32,7 @@ export async function withGatewayMaintenanceDrain<T>(
     assertCurrent: () => void;
     warn: (message: string) => void;
   },
-  stop: () => Promise<T>,
+  stop: (guard: { prepareEffect: (beforeCommit: () => void) => Promise<void> }) => Promise<T>,
 ): Promise<T> {
   const deadline = performance.now() + (params.timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS);
   const explicitDrain = params.drainPolicy === "interrupt-after-drain";
@@ -59,8 +59,33 @@ export async function withGatewayMaintenanceDrain<T>(
       }
     }
     assertResidentCurrent();
-    // The native stop owner rechecks the service PID and authority before mutation.
-    const result = await stop();
+    const result = await stop({
+      prepareEffect: async (beforeCommit) => {
+        assertResidentCurrent();
+        beforeCommit();
+        if (!explicitDrain) {
+          return;
+        }
+        const original = assertDrainLease();
+        const handoff = await call<GatewaySuspendHandoffResult>(
+          "gateway.suspend.handoff",
+          { suspensionId, target: processTarget, commit: true },
+          beforeCommit,
+        );
+        assertResidentCurrent();
+        if (
+          handoff.status !== "committed" ||
+          handoff.suspensionId !== suspensionId ||
+          handoff.expiresAtMs !== original.expiresAtMs
+        ) {
+          throw new GatewayServiceStopUnsafeError(
+            "Gateway maintenance stop requires committed shutdown support in the serving Gateway. Update it through its existing installation owner before enabling native immutable activation.",
+          );
+        }
+        // The host now owns one-way shutdown. Resume and lease expiry cannot
+        // reopen admission while the native stop waits for dispatch.
+      },
+    });
     stopped = true;
     return result;
   };
@@ -127,7 +152,11 @@ export async function withGatewayMaintenanceDrain<T>(
     assertResidentCurrent();
     return usage.status === "busy" && allListenersOwnedByRuntimePid(usage.listeners, pid);
   };
-  const call = async <R>(method: string, args?: unknown): Promise<R> => {
+  const call = async <R>(
+    method: string,
+    args?: unknown,
+    beforeDispatch?: () => void,
+  ): Promise<R> => {
     assertResidentCurrent();
     if (!connection?.target) {
       throw observationFailure
@@ -157,6 +186,7 @@ export async function withGatewayMaintenanceDrain<T>(
           assertResidentCurrent();
         }
         bootId = observedBootId;
+        beforeDispatch?.();
       },
     });
     assertResidentCurrent();
@@ -271,21 +301,6 @@ export async function withGatewayMaintenanceDrain<T>(
       if (performance.now() >= deadline) {
         if (explicitDrain) {
           assertDrainLease();
-          const handoff = await call<GatewaySuspendHandoffResult>("gateway.suspend.handoff", {
-            suspensionId,
-            target: processTarget,
-          });
-          const lease = assertDrainLease();
-          if (
-            handoff.status !== "armed" ||
-            handoff.suspensionId !== suspensionId ||
-            handoff.expiresAtMs !== lease.expiresAtMs ||
-            handoff.expiresAtMs <= Date.now()
-          ) {
-            throw new GatewayServiceStopUnsafeError(
-              "Gateway maintenance stop refused: interruption handoff was not armed for the current suspension lease.",
-            );
-          }
         }
         const custody = observationFailure ? undefined : lastObservation?.writeCustody;
         const held = custody?.filter(({ count }) => count > 0);

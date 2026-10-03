@@ -229,6 +229,13 @@ completes immediately when ready; after its budget,
 the native suspension owner can interrupt ordinary work while preserving
 unresolved write custody. For a 30-second drain, use `--drain-timeout 30`.
 The flag is rejected on mutable installations.
+After native service inspection, the updater asks the Gateway to commit shutdown
+under the original suspension. An expired or resumed suspension refuses that
+handoff. Once committed, the host owns one-way shutdown; resume and lease expiry
+cannot reopen admission while native stop waits for dispatch.
+The stable launcher reads the same activation record before starting a Gateway.
+Stop and pointer-publication phases block supervisor replacements from admitting
+work; the native owner explicitly authorizes startup after publication.
 
 When enabled, the native updater drains through the Gateway suspension owner,
 stops the old service, publishes `current` under a fenced activation record,
@@ -268,14 +275,15 @@ root installation owner to run the CLI outside the Gateway service cgroup; it
 does not elevate chat requests. `update repair` directs immutable recovery to
 `update recover`.
 
-For the first native activation, use the preparation-only installed CLI to
-prepare the slice-2 capable release, then invoke adoption and activation from
-that sealed candidate's CLI. A slice-1 installed CLI can prepare it but cannot
-activate it:
+The serving Gateway must support committed suspension handoff. A new CLI cannot
+add that capability to an older running process. For the first native activation,
+have the existing installation owner prepare and activate one bridge release
+containing this feature. Keep its adoption preparation-only during that bridge.
+After the bridge is healthy and the previous updater has settled and stopped
+scheduling, enable native activation from the serving release:
 
 ```bash
-sudo /usr/bin/node /opt/example/current/dist/index.js update --sha <candidate-sha>
-sudo /usr/bin/node /opt/example/releases/<candidate-sha>/dist/index.js update adopt-immutable \
+sudo /usr/bin/node /opt/example/current/dist/index.js update adopt-immutable \
   --root /opt/example \
   --service example.service \
   --account openclaw \
@@ -299,11 +307,19 @@ edits or restarts the service. Omit
 `--enable-activation` to adopt for preparation only. To enable an earlier
 preparation-only adoption, rerun the original adoption command with the flag;
 the installation and service identities must still match.
+For a preparation-only adoption whose existing owner activated the bridge,
+explicit enablement reconciles the selected generation after verifying both
+sealed generations and the live bridge process. It retains the predecessor and
+preserves all other installation bindings. The exact packaged v1 launcher is
+backed up and upgraded atomically; a custom or modified launcher is preserved and
+refused. An already-enabled record never accepts an external pointer change.
 
-Run activation from that prepared CLI as root, outside the service cgroup:
+Prepare and activate the next reviewed generation as root, outside the service
+cgroup. It must differ from the bridge release to exercise a native cutover:
 
 ```bash
-sudo /usr/bin/node /opt/example/releases/<candidate-sha>/dist/index.js update --sha <candidate-sha> --drain-timeout 30
+sudo /usr/bin/node /opt/example/current/dist/index.js update --sha <candidate-sha> --no-restart
+sudo /usr/bin/node /opt/example/current/dist/index.js update --sha <candidate-sha> --drain-timeout 30
 sudo /usr/bin/node /opt/example/current/dist/index.js update recover --root /opt/example
 ```
 
@@ -326,6 +342,14 @@ and receipt lines without mixing prose into stdout. Recovery also accepts
 `--drain-timeout`; it applies only if an unhealthy service must be stopped.
 Healthy recovery never drains or restarts the serving process. Preserve the record and
 retained releases while recovery is pending.
+If recovery retries a stopped candidate and confirms another startup failure,
+it uses the same protected predecessor rollback as activation. A candidate still
+starting or an inconclusive probe remains pending.
+If the updater is interrupted after shutdown commits, the Gateway still completes
+its shutdown. Keep the independent recovery command available: recovery observes
+whether the supervisor restarted the predecessor or the service is stopped
+before taking another action. A lost handoff reply never authorizes a blind
+native stop or a fallback to the older reversible handoff.
 
 After an updater crash, recovery can repair a hot SQLite rollback journal in
 the installation control or its native executor lease. It first validates a

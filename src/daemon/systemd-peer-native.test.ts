@@ -18,12 +18,15 @@ const kernel = vi.hoisted(() => {
     startTime: number | null;
     alive: boolean;
     closes: number;
+    calls: number;
+    onCall?: () => void;
   } = {
     uid: 1000,
     pid: 1234,
     startTime: 100,
     alive: true,
     closes: 0,
+    calls: 0,
   };
   return state;
 });
@@ -64,7 +67,11 @@ vi.mock("node:module", async (importOriginal) => {
                       if (name === "sd_bus_close_unref") {
                         kernel.closes++;
                       }
-                      return name === "sd_bus_is_ready" ? 1 : 0;
+                      if (name === "sd_bus_call") {
+                        kernel.calls++;
+                        kernel.onCall?.();
+                      }
+                      return name === "sd_bus_is_ready" || name === "sd_bus_message_at_end" ? 1 : 0;
                     };
                     return Object.assign(call, {
                       async: (...args: unknown[]) => {
@@ -84,7 +91,15 @@ vi.mock("node:module", async (importOriginal) => {
 });
 
 beforeEach(() => {
-  Object.assign(kernel, { uid: 1000, pid: 1234, startTime: 100, alive: true, closes: 0 });
+  Object.assign(kernel, {
+    uid: 1000,
+    pid: 1234,
+    startTime: 100,
+    alive: true,
+    closes: 0,
+    calls: 0,
+    onCall: undefined,
+  });
 });
 afterEach(() => vi.restoreAllMocks());
 
@@ -164,4 +179,60 @@ it("checks inherited update authority before loading or opening a native transpo
     ),
   ).rejects.toSatisfy(isAuthorityRevocation);
   expect(transportFailure).toSatisfy(isAuthorityRevocation);
+});
+
+const resetFailed = [
+  "call",
+  ":1.42",
+  "/org/freedesktop/systemd1",
+  "org.freedesktop.systemd1.Manager",
+  "ResetFailedUnit",
+  "s",
+  "fixture.service",
+];
+
+it("checks effect custody inside the native queue immediately before dispatch", async () => {
+  const peer = await openSystemdBroker(address, performance.now() + 1000);
+  let current = true;
+  const failure = new Error("effect custody expired while queued");
+  try {
+    const queued = peer.query(
+      resetFailed,
+      [],
+      performance.now() + 1000,
+      () => {},
+      () => {
+        if (!current) {
+          throw failure;
+        }
+      },
+    );
+    current = false;
+    await expect(queued).rejects.toBe(failure);
+    expect(kernel.calls).toBe(0);
+  } finally {
+    await peer.close();
+  }
+});
+
+it("does not require effect custody after the native call intentionally ends it", async () => {
+  const peer = await openSystemdBroker(address, performance.now() + 1000);
+  let current = true;
+  kernel.onCall = () => {
+    current = false;
+  };
+  const guard = vi.fn(() => {
+    if (!current) {
+      throw new Error("effect already happened");
+    }
+  });
+  try {
+    await expect(
+      peer.query(resetFailed, [], performance.now() + 1000, () => {}, guard),
+    ).resolves.toEqual([]);
+    expect(guard).toHaveBeenCalledOnce();
+    expect(kernel.calls).toBe(1);
+  } finally {
+    await peer.close();
+  }
 });

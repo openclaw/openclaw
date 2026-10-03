@@ -355,10 +355,10 @@ function activationOwner(
         state: service.state,
         timeoutMs: options.drainTimeoutMs ?? resolveGatewayRestartDeferralTimeoutMs(),
         drainPolicy: "interrupt-after-drain",
-        assertCurrent: () => assertService(service),
+        assertCurrent,
         warn: () => options.onReceipt?.("immutable:drain-warning"),
       },
-      async () => {
+      async ({ prepareEffect }) => {
         verifyProtection(service);
         if (!service.pid || !service.processStartTicks || !service.controlGroup) {
           throw new Error("Immutable stop requires current process custody.");
@@ -371,10 +371,17 @@ function activationOwner(
             controlGroup: service.controlGroup,
           },
         });
+        const assertProtected = () =>
+          assertImmutableProtectionUnchanged(operation().protection, {
+            env: service.state.env,
+            assertCurrent,
+          });
         await stopImmutableService({
           descriptor: record.descriptor,
           expected: service,
           assertCurrent,
+          prepareEffect: () => prepareEffect(assertProtected),
+          beforeEffect: assertProtected,
           stdout: process.stderr,
           timeoutMs: options.timeoutMs,
         });
@@ -429,6 +436,39 @@ function activationOwner(
     }
     return complete("rolled-back", observed, false);
   };
+  const startAndVerifyCandidate = async (): Promise<ImmutableActivationResult> => {
+    try {
+      await start(false);
+      save({ phase: "verifying" });
+      const observed = await observe();
+      if (observed.outcome === "verified" && observed.service) {
+        return complete("succeeded", observed, true);
+      }
+      if (observed.outcome === "failed") {
+        save({ failure: "candidate-verification-failed" });
+        return await rollback();
+      }
+      return pending(
+        observed.outcome === "still-starting"
+          ? "candidate-still-starting"
+          : "candidate-verification-pending",
+      );
+    } catch (error) {
+      assertCurrent();
+      // A failed start whose effect is definitely stopped is a real startup failure.
+      // Uncertain publication, observation or custody stays with explicit recovery.
+      if (operation().phase === "starting") {
+        const service = await inspect(true);
+        assertService(service);
+        if (service.phase === "stopped") {
+          save({ failure: "candidate-start-failed" });
+          return rollback();
+        }
+      }
+      save({ failure: "activation-interrupted" });
+      throw error;
+    }
+  };
   return {
     async activate(): Promise<ImmutableActivationResult> {
       try {
@@ -442,36 +482,9 @@ function activationOwner(
         });
         save({ phase: "publishing" });
         record = publishImmutablePointer(record, "candidate", assertStopped);
-        await start(false);
-        save({ phase: "verifying" });
-        const observed = await observe();
-        if (observed.outcome === "verified" && observed.service) {
-          return complete("succeeded", observed, true);
-        }
-        if (observed.outcome === "failed") {
-          save({ failure: "candidate-verification-failed" });
-          return await rollback();
-        }
-        return pending(
-          observed.outcome === "still-starting"
-            ? "candidate-still-starting"
-            : "candidate-verification-pending",
-        );
+        return startAndVerifyCandidate();
       } catch (error) {
         assertCurrent();
-        // A failed start whose effect is definitely stopped is a real startup failure.
-        // Uncertain publication, observation or custody stays with explicit recovery.
-        if (
-          operation().phase === "starting" &&
-          record.descriptor.current.sha === operation().candidate.sha
-        ) {
-          const service = await inspect(true);
-          assertService(service);
-          if (service.phase === "stopped") {
-            save({ failure: "candidate-start-failed" });
-            return rollback();
-          }
-        }
         save({ failure: "activation-interrupted" });
         throw error;
       }
@@ -502,14 +515,13 @@ function activationOwner(
           save({ phase: "rollback-publishing" });
           record = publishImmutablePointer(record, "previous", assertStopped);
         }
-        await start(record.descriptor.current.sha === op.previous.sha);
+        if (record.descriptor.current.sha === op.candidate.sha) {
+          return startAndVerifyCandidate();
+        }
+        await start(true);
         const after = await observe();
         if (after.outcome === "verified" && after.service) {
-          return complete(
-            record.descriptor.current.sha === op.candidate.sha ? "succeeded" : "rolled-back",
-            after,
-            true,
-          );
+          return complete("rolled-back", after, true);
         }
         return pending("recovery-verification-pending");
       }
