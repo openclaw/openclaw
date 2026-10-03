@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { symlink } from "node:fs/promises";
 import path from "node:path";
+import { StatementSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { createFixtureLifetime } from "../../../test/helpers/fixture-lifetime.js";
 import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
@@ -26,11 +27,14 @@ import {
   openOpenClawStateDatabase,
   recordOpenClawStateDatabaseOpenFailure,
   registerOpenClawStateDatabaseLifecycleListener,
+  runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
 import { claimOpenClawStateOwnership } from "../../state/openclaw-state-ownership-operations.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { completeWorkerNodeSetupForTest } from "./node-enrollment.test-support.js";
 import { createWorkerEnvironmentStore, type WorkerEnvironmentStore } from "./store.js";
+import { createWorkerEnvironmentStoreKernel } from "./store.kernel.js";
 
 const delivery = vi.hoisted(() => ({
   afterTransition: undefined as (() => Promise<void>) | undefined,
@@ -495,6 +499,103 @@ it.each(["create", "close"] as const)(
     }
   },
 );
+
+it("touches the current attachment with one guarded write and no preliminary row read", () => {
+  const database = openOpenClawStateDatabase({
+    env: { OPENCLAW_STATE_DIR: tempDirs.make("worker-attachment-touch-sql-") },
+  });
+  let nowMs = 1_000;
+  const kernel = createWorkerEnvironmentStoreKernel(database, () => nowMs);
+  const write = <T>(operation: () => T) =>
+    runOpenClawStateWriteTransaction(operation, { database });
+  const { attachment } = write(() =>
+    kernel.createSessionAttachmentIntent({
+      environmentId: "touch-environment",
+      providerId: "provider",
+      profileId: "profile",
+      profileSnapshot: { settings: {} },
+      provisionOperationId: "touch-provision",
+      sessionId: "touch-session",
+      sessionKey: "agent:main:touch-session",
+      agentId: "main",
+    }),
+  );
+  const sql = observeMainThreadSql();
+  try {
+    sql.calibrate();
+    for (const at of [2_000, 2_000]) {
+      nowMs = at;
+      sql.clear();
+      write(() => kernel.touchSessionAttachment(attachment));
+      const attachmentStatements = sql.calls
+        .flatMap((call) => call.mock.contexts)
+        .filter((context): context is StatementSync => context instanceof StatementSync)
+        .map((statement) => statement.sourceSQL)
+        .filter((statement) => statement.includes('"worker_environment_session_attachments"'));
+      expect(attachmentStatements).toHaveLength(1);
+      expect(attachmentStatements[0]).toMatch(/^update /i);
+      expect(kernel.getSessionAttachmentRecord(attachment.sessionId)).toEqual({
+        ...attachment,
+        lastUsedAtMs: at,
+      });
+    }
+  } finally {
+    sql.restore();
+  }
+});
+
+it("rejects stale, replaced, missing, closed, and revoked attachment touches", async () => {
+  const database = openOpenClawStateDatabase({
+    env: { OPENCLAW_STATE_DIR: tempDirs.make("worker-attachment-touch-guards-") },
+  });
+  let nowMs = 1_000;
+  const store = await createWorkerEnvironmentStore({ database, now: () => nowMs });
+  const intent = {
+    environmentId: "original-environment",
+    providerId: "provider",
+    profileId: "profile",
+    profileSnapshot: { settings: {} },
+    provisionOperationId: "original-provision",
+    sessionId: "guarded-session",
+    sessionKey: "agent:main:guarded-session",
+    agentId: "main",
+  };
+  const { attachment } = await store.createSessionAttachmentIntent(intent, () => {});
+  nowMs = 2_000;
+  for (const record of [
+    { ...attachment, generation: attachment.generation + 1 },
+    { ...attachment, environmentId: "other-environment" },
+    { ...attachment, sessionId: "missing-session" },
+  ]) {
+    await expect(store.touchSessionAttachment(record, () => {})).rejects.toThrow(
+      "Conversation environment attachment is no longer current",
+    );
+    expect(store.getSessionAttachmentRecord(attachment.sessionId)).toEqual(attachment);
+  }
+  await expect(
+    store.touchSessionAttachment(attachment, () => {
+      throw new Error("caller revoked");
+    }),
+  ).rejects.toThrow("caller revoked");
+  expect(store.getSessionAttachmentRecord(attachment.sessionId)).toEqual(attachment);
+  await store.transition({ environmentId: intent.environmentId, from: "requested", to: "failed" });
+  const { attachment: replacement } = await store.createSessionAttachmentIntent(
+    { ...intent, environmentId: "replacement-environment", provisionOperationId: "replacement" },
+    () => {},
+  );
+  nowMs = 3_000;
+  await expect(store.touchSessionAttachment(attachment, () => {})).rejects.toThrow(
+    "Conversation environment attachment is no longer current",
+  );
+  expect(store.getSessionAttachmentRecord(attachment.sessionId)).toEqual(replacement);
+  const closed = await store.closeSessionAttachment(replacement.sessionId);
+  nowMs = 4_000;
+  await expect(store.touchSessionAttachment(replacement, () => {})).rejects.toThrow(
+    "Conversation environment attachment is no longer current",
+  );
+  expect(store.getSessionAttachmentRecord(attachment.sessionId)).toEqual(closed);
+  await store.close();
+});
 
 it("rechecks idle-cleanup activity after a pending attachment touch publishes", async () => {
   const database = openOpenClawStateDatabase({
