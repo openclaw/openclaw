@@ -4,6 +4,66 @@ import OpenClawProtocol
 import Testing
 @testable import OpenClawChatUI
 
+private actor ArchiveUndoQueryTransport: OpenClawChatSidebarTransport {
+    struct Pending: Sendable {
+        let request: OpenClawChatGatewayRequest
+        let reply: CheckedContinuation<Data, any Error>
+    }
+
+    private var pending: Pending?
+    private var waiting: CheckedContinuation<Pending, Never>?
+    private(set) var requestCount = 0
+
+    func acquireSidebarRequest() async throws -> @Sendable (OpenClawChatGatewayRequest) async throws -> Data {
+        { try await self.send($0) }
+    }
+
+    private func send(_ request: OpenClawChatGatewayRequest) async throws -> Data {
+        self.requestCount += 1
+        return try await withCheckedThrowingContinuation { reply in
+            let call = Pending(request: request, reply: reply)
+            if let waiting = self.waiting {
+                self.waiting = nil
+                waiting.resume(returning: call)
+            } else { self.pending = call }
+        }
+    }
+
+    func next() async -> Pending {
+        if let pending = self.pending {
+            self.pending = nil
+            return pending
+        }
+        return await withCheckedContinuation { self.waiting = $0 }
+    }
+
+    func loadSidebarAgentAvatar(_: String) async -> Data? {
+        nil
+    }
+
+    func requestHistory(sessionKey _: String) async throws -> OpenClawChatHistoryPayload {
+        throw CancellationError()
+    }
+
+    func requestHealth(timeoutMs _: Int) async throws -> Bool {
+        true
+    }
+
+    nonisolated func events() -> AsyncStream<OpenClawChatTransportEvent> {
+        AsyncStream { $0.finish() }
+    }
+
+    func sendMessage(
+        sessionKey _: String,
+        message _: String,
+        thinking _: String,
+        idempotencyKey _: String,
+        attachments _: [OpenClawChatAttachmentPayload]) async throws -> OpenClawChatSendResponse
+    {
+        throw CancellationError()
+    }
+}
+
 @MainActor
 struct ChatSessionSidebarArchiveUndoTests {
     private func row(_ key: String = "thread", pinned: Bool = true) throws -> OpenClawChatSessionEntry {
@@ -34,8 +94,11 @@ struct ChatSessionSidebarArchiveUndoTests {
 
     private func acknowledgement(_ row: OpenClawChatSessionEntry, archived: Bool) throws -> Data {
         var entry: [String: Any] = ["sessionId": row.sessionId!, "updatedAt": archived ? 20 : 30]
-        if archived { entry["archivedAt"] = 20 }
-        else if row.pinned == true { entry["pinnedAt"] = 30 }
+        if archived {
+            entry["archivedAt"] = 20
+        } else if row.pinned == true {
+            entry["pinnedAt"] = 30
+        }
         return try JSONSerialization.data(withJSONObject: ["ok": true, "key": row.key, "entry": entry])
     }
 
@@ -45,6 +108,116 @@ struct ChatSessionSidebarArchiveUndoTests {
             return
         }
         await batch.undoArchive(receipt, owner: owner)
+    }
+
+    private func page(_ rows: [OpenClawChatSessionEntry]) throws -> Data {
+        struct Page: Encodable {
+            let sessions: [OpenClawChatSessionEntry]
+            let hasMore = false
+        }
+        return try JSONEncoder().encode(Page(sessions: rows))
+    }
+
+    private func load(
+        _ owner: OpenClawChatSessionSidebarData,
+        transport: ArchiveUndoQueryTransport,
+        rows: [OpenClawChatSessionEntry]) async throws
+    {
+        let response = try self.page(rows)
+        let task = Task { await owner.load() }
+        let call = await transport.next()
+        #expect(call.request.method == "sessions.list")
+        call.reply.resume(returning: response)
+        await task.value
+    }
+
+    @Test(arguments: [false, true], [false, true])
+    func `undo immediately restores active query membership after archive refresh`(
+        multiple: Bool, delayedRefresh: Bool) async throws
+    {
+        let batch = ChatSessionSidebarBatch()
+        let rows = try (0..<(multiple ? 3 : 1)).map { try self.row("thread-\($0)", pinned: false) }
+        let owner = OpenClawChatSessionSidebarData()
+        let transport = ArchiveUndoQueryTransport()
+        owner.configureQueries(transport: transport, query: .init(agentID: "research"))
+        try await self.load(owner, transport: transport, rows: rows)
+        #expect(owner.rows.map(\.sessionId) == rows.map(\.sessionId))
+        let failedKey = multiple ? rows.last?.key : nil
+        let connection = try self.connection { request in
+            if request.method == "sessions.patch" {
+                let row = try #require(rows.first { $0.key == request.params["key"]?.value as? String })
+                let archived = request.params["archived"]?.value as? Bool == true
+                if !archived, row.key == failedKey {
+                    throw NSError(domain: "Gateway", code: 1, userInfo: [NSLocalizedDescriptionKey: "Restore failed"])
+                }
+                return try self.acknowledgement(row, archived: archived)
+            }
+            let params = try #require(JSONSerialization
+                .jsonObject(with: JSONEncoder().encode(request.params)) as? [String: Any])
+            let targets = try #require(params["targets"] as? [[String: String]])
+            let patch = try #require(params["patch"] as? [String: Bool])
+            return try JSONSerialization.data(withJSONObject: ["outcomes": targets.map { target -> [String: Any] in
+                let key = target["key"]!
+                return patch["archived"] == false && key == failedKey ?
+                    ["key": key, "ok": false, "error": ["message": "Restore failed"]] :
+                    ["key": key, "ok": true]
+            }])
+        }
+        if multiple {
+            #expect(await batch.run(.archived(true), rows: rows, mainKey: "main", connection: connection) == rows)
+        } else {
+            #expect(await batch.archive(rows[0], mainKey: "main", connection: connection, owner: owner) != nil)
+        }
+        // The archive-triggered Active refresh evicts membership while the owner retains row facts.
+        try await self.load(owner, transport: transport, rows: [])
+        #expect(owner.rows.isEmpty)
+        var staleTask: Task<Void, Never>?
+        var stale: ArchiveUndoQueryTransport.Pending?
+        if delayedRefresh {
+            staleTask = Task { await owner.load() }
+            stale = await transport.next()
+        }
+        let countBeforeUndo = await transport.requestCount
+        await self.undo(batch, owner: owner)
+        let expected = rows.filter { $0.key != failedKey }.map(\.sessionId)
+        #expect(Set(owner.rows(at: Date(timeIntervalSince1970: 100)).map(\.sessionId)) == Set(expected))
+        #expect(await transport.requestCount == countBeforeUndo)
+        if let stale {
+            try stale.reply.resume(returning: self.page([]))
+            await staleTask?.value
+            #expect(Set(owner.rows(at: Date(timeIntervalSince1970: 100)).map(\.sessionId)) == Set(expected))
+        }
+        // A read started after the restore receipt can authoritatively omit the row again.
+        try await self.load(owner, transport: transport, rows: [])
+        #expect(owner.rows(at: Date(timeIntervalSince1970: 100)).isEmpty)
+        for row in rows where row.key != failedKey {
+            #expect(owner.row(key: row.key, agentID: row.agentId)?.isArchived == false)
+        }
+        if let failedKey {
+            let failed = try #require(rows.first { $0.key == failedKey })
+            #expect(batch.errors[OpenClawChatSessionSidebarData.identity(failed)] == "Restore failed")
+        }
+    }
+
+    @Test func `undo after agent navigation restores facts without admitting a foreign row`() async throws {
+        let batch = ChatSessionSidebarBatch()
+        let row = try self.row(pinned: false)
+        var other = try self.row("other", pinned: false)
+        other.key = "agent:other:thread"
+        other.agentId = "other"
+        let owner = OpenClawChatSessionSidebarData()
+        let transport = ArchiveUndoQueryTransport()
+        owner.configureQueries(transport: transport, query: .init(agentID: "research"))
+        try await self.load(owner, transport: transport, rows: [row])
+        let connection = try self.connection { request in
+            try self.acknowledgement(row, archived: request.params["archived"]?.value as? Bool == true)
+        }
+        #expect(await batch.archive(row, mainKey: "main", connection: connection, owner: owner) != nil)
+        owner.setQuery(.init(agentID: "other"))
+        try await self.load(owner, transport: transport, rows: [other])
+        await self.undo(batch, owner: owner)
+        #expect(owner.row(key: row.key, agentID: "research")?.isArchived == false)
+        #expect(owner.rows(at: Date(timeIntervalSince1970: 100)) == [other])
     }
 
     @Test(arguments: [false, true], [false, true])
@@ -85,7 +258,9 @@ struct ChatSessionSidebarArchiveUndoTests {
         let batch = ChatSessionSidebarBatch()
         let row = try self.row()
         let owner = OpenClawChatSessionSidebarData()
-        owner.receive([row], read: owner.beginRead())
+        let transport = ArchiveUndoQueryTransport()
+        owner.configureQueries(transport: transport, query: .init(agentID: "research"))
+        try await self.load(owner, transport: transport, rows: [row])
         let connection = try self.connection { request in
             if request.params["archived"]?
                 .value as? Bool == true { return try self.acknowledgement(row, archived: true) }
@@ -99,9 +274,10 @@ struct ChatSessionSidebarArchiveUndoTests {
         var replacement = row
         replacement.sessionId = "replacement"
         replacement.updatedAt = 40
-        owner.receive([replacement], read: owner.beginRead())
+        try await self.load(owner, transport: transport, rows: [replacement])
         await self.undo(batch, owner: owner)
         #expect(owner.row(key: row.key, agentID: "research") == replacement)
+        #expect(owner.rows(at: Date(timeIntervalSince1970: 100)) == [replacement])
         #expect(batch.errors[OpenClawChatSessionSidebarData.identity(row)] == "Session changed before patch.")
         #expect(batch.archiveUndo == nil)
     }
@@ -112,11 +288,11 @@ struct ChatSessionSidebarArchiveUndoTests {
         var current = true
         var fail = true
         var calls = 0
-        let connection = try self.connection(current: { current }) { _ in
+        let connection = try self.connection(current: { current }, request: { _ in
             calls += 1
             if fail { throw URLError(.cannotConnectToHost) }
             return try self.acknowledgement(row, archived: true)
-        }
+        })
         #expect(await batch.archive(row, mainKey: "main", connection: connection, owner: nil) == nil)
         #expect(batch.archiveUndo == nil)
         fail = false
@@ -127,24 +303,36 @@ struct ChatSessionSidebarArchiveUndoTests {
         #expect(batch.notices == ["The Gateway changed. Archive Undo is no longer available."])
     }
 
-    @Test func `batch undo restores successful captures and repins only successful restores`() async throws {
+    @Test func `batch undo restores successful captures with their pins atomically`() async throws {
         let batch = ChatSessionSidebarBatch()
         let rows = try [self.row("one"), self.row("two"), self.row("three", pinned: false)]
-        var targets: [[String]] = []
+        var restoredKeys: Set<String> = []
         let connection = try self.connection { request in
+            if request.method == "sessions.patch" {
+                let row = try #require(rows.first { $0.key == request.params["key"]?.value as? String })
+                restoredKeys.insert(row.key)
+                #expect(request.params["agentId"]?.value as? String == "research")
+                #expect(request.params["expectedSessionId"]?.value as? String == row.sessionId)
+                #expect(request.params["archived"]?.value as? Bool == false)
+                #expect(request.params["pinned"]?.value as? Bool == (row.pinned == true ? true : nil))
+                if row.key == rows[2].key {
+                    throw NSError(
+                        domain: "Gateway", code: 1, userInfo: [NSLocalizedDescriptionKey: "Changed \(row.key)"])
+                }
+                return try self.acknowledgement(row, archived: false)
+            }
             let params = try #require(JSONSerialization
                 .jsonObject(with: JSONEncoder().encode(request.params)) as? [String: Any])
             let captured = try #require(params["targets"] as? [[String: String]])
             let keys = captured.compactMap { $0["key"] }
-            targets.append(keys)
-            if targets.count == 1 { batch.reset(clearConnection: false) }
+            #expect(keys == rows.map(\.key))
+            batch.reset(clearConnection: false)
             for target in captured {
                 #expect(target["agentId"] == "research")
                 #expect(target["expectedSessionId"] == rows.first { $0.key == target["key"] }?.sessionId)
             }
-            let failed = targets.count == 1 ? rows[1].key : targets.count == 2 ? rows[2].key : ""
             return try JSONSerialization.data(withJSONObject: ["outcomes": keys.map { key -> [String: Any] in
-                key == failed ? ["key": key, "ok": false, "error": ["message": "Changed \(key)"]] : [
+                key == rows[1].key ? ["key": key, "ok": false, "error": ["message": "Changed \(key)"]] : [
                     "key": key,
                     "ok": true,
                 ]
@@ -157,7 +345,7 @@ struct ChatSessionSidebarArchiveUndoTests {
         #expect(batch.archiveUndo?.rows == [rows[0], rows[2]])
         batch.reset(clearConnection: false)
         await self.undo(batch, owner: nil)
-        #expect(targets == [rows.map(\.key), [rows[0].key, rows[2].key], [rows[0].key]])
+        #expect(restoredKeys == Set([rows[0].key, rows[2].key]))
         #expect(batch.errors[OpenClawChatSessionSidebarData.identity(rows[2])] == "Changed \(rows[2].key)")
     }
 
@@ -189,21 +377,32 @@ struct ChatSessionSidebarArchiveUndoTests {
         #expect(batch.archiveUndo == nil)
     }
 
-    @Test(arguments: [("archive", "archive"), ("restore", "restore"), ("repin", "repin"), ("restore", "repin")])
-    func `query navigation preserves failures from earlier chunks and phases`(
-        failurePhase: String, navigationPhase: String) async throws
-    {
+    @Test(arguments: ["archive", "restore"])
+    func `query navigation preserves earlier archive and restore failures`(failurePhase: String) async throws {
         let batch = ChatSessionSidebarBatch()
         let rows = try (0..<205).map { try self.row("thread-\($0)") }
         var calls: [String: Int] = [:]
         let connection = try self.connection { request in
+            let phase = request.method == "sessions.patch" ? "restore" : "archive"
+            calls[phase, default: 0] += 1
+            if phase == "archive", failurePhase == "archive", calls[phase] == 2 {
+                batch.reset(clearConnection: false)
+            }
+            if phase == "restore" {
+                let row = try #require(rows.first { $0.key == request.params["key"]?.value as? String })
+                if failurePhase == "restore", row.key == rows[0].key {
+                    throw NSError(
+                        domain: "Gateway", code: 1, userInfo: [NSLocalizedDescriptionKey: "Changed captured thread"])
+                }
+                if row.key == rows.last?.key {
+                    #expect(batch.errors[OpenClawChatSessionSidebarData.identity(rows[0])] == "Changed captured thread")
+                    batch.reset(clearConnection: false)
+                }
+                return try self.acknowledgement(row, archived: false)
+            }
             let params = try #require(JSONSerialization
                 .jsonObject(with: JSONEncoder().encode(request.params)) as? [String: Any])
-            let patch = try #require(params["patch"] as? [String: Bool])
             let targets = try #require(params["targets"] as? [[String: String]])
-            let phase = patch["pinned"] == true ? "repin" : patch["archived"] == true ? "archive" : "restore"
-            calls[phase, default: 0] += 1
-            if phase == navigationPhase, calls[phase] == 2 { batch.reset(clearConnection: false) }
             return try JSONSerialization.data(withJSONObject: ["outcomes": targets.map { target -> [String: Any] in
                 let key = target["key"]!
                 return phase == failurePhase && key == rows[0].key ?
@@ -259,16 +458,16 @@ struct ChatSessionSidebarArchiveUndoTests {
         var oldReply: CheckedContinuation<Data, any Error>?
         var newReply: CheckedContinuation<Data, any Error>?
         var started: CheckedContinuation<Void, Never>?
-        let old = try self.connection(current: { generation == 0 }) { _ in
+        let old = try self.connection(current: { generation == 0 }, request: { _ in
             try await withCheckedThrowingContinuation { oldReply = $0
                 started?.resume()
             }
-        }
-        let current = try self.connection(current: { generation == 1 }) { _ in
+        })
+        let current = try self.connection(current: { generation == 1 }, request: { _ in
             try await withCheckedThrowingContinuation { newReply = $0
                 started?.resume()
             }
-        }
+        })
         var oldTask: Task<ChatSidebarArchiveReceipt?, Never>?
         await withCheckedContinuation { started = $0
             oldTask = Task { await batch.archive(row, mainKey: "main", connection: old, owner: nil) }
@@ -331,35 +530,34 @@ struct ChatSessionSidebarArchiveUndoTests {
             .errors[OpenClawChatSessionSidebarData.identity(second)] == (secondFails ? "Second operation failed" : nil))
     }
 
-    @Test(arguments: ["restore", "repin"])
-    func `successful undo preserves a concurrent single archive failure`(failurePhase: String) async throws {
+    @Test func `successful undo preserves a concurrent single archive failure`() async throws {
         let batch = ChatSessionSidebarBatch()
         let single = try self.row("single"), rows = try [self.row("one"), self.row("two")]
         var singleReply: CheckedContinuation<Data, any Error>?
         var undoReply: CheckedContinuation<Data, any Error>?
         var started: CheckedContinuation<Void, Never>?
-        var undoResponse = Data()
         let connection = try self.connection { request in
             if request.method == "sessions.patch" {
-                return try await withCheckedThrowingContinuation { singleReply = $0
-                    started?.resume()
+                let key = try #require(request.params["key"]?.value as? String)
+                if key == single.key {
+                    return try await withCheckedThrowingContinuation { singleReply = $0
+                        started?.resume()
+                    }
                 }
+                if key == rows[0].key {
+                    return try await withCheckedThrowingContinuation { undoReply = $0
+                        started?.resume()
+                    }
+                }
+                let row = try #require(rows.first { $0.key == key })
+                return try self.acknowledgement(row, archived: false)
             }
             let params = try #require(JSONSerialization
                 .jsonObject(with: JSONEncoder().encode(request.params)) as? [String: Any])
             let targets = try #require(params["targets"] as? [[String: String]])
-            let patch = try #require(params["patch"] as? [String: Bool])
-            let phase = patch["pinned"] == true ? "repin" : patch["archived"] == true ? "archive" : "restore"
-            let response = try JSONSerialization.data(withJSONObject: ["outcomes": targets.map {
+            return try JSONSerialization.data(withJSONObject: ["outcomes": targets.map {
                 ["key": $0["key"]!, "ok": true] as [String: Any]
             }])
-            if phase == failurePhase {
-                undoResponse = response
-                return try await withCheckedThrowingContinuation { undoReply = $0
-                    started?.resume()
-                }
-            }
-            return response
         }
         var singleTask: Task<ChatSidebarArchiveReceipt?, Never>?
         await withCheckedContinuation { started = $0
@@ -374,7 +572,7 @@ struct ChatSessionSidebarArchiveUndoTests {
             domain: "Gateway", code: 1, userInfo: [NSLocalizedDescriptionKey: "Single archive failed"]))
         _ = await singleTask?.value
         #expect(batch.errors[OpenClawChatSessionSidebarData.identity(single)] == "Single archive failed")
-        undoReply?.resume(returning: undoResponse)
+        try undoReply?.resume(returning: self.acknowledgement(rows[0], archived: false))
         await undoTask?.value
         #expect(batch.errors[OpenClawChatSessionSidebarData.identity(single)] == "Single archive failed")
     }
@@ -416,15 +614,18 @@ struct ChatSessionSidebarArchiveUndoTests {
                     started?.resume()
                 }
             }
+            if request.method == "sessions.patch" {
+                let row = try #require(rows.first { $0.key == request.params["key"]?.value as? String })
+                if row.key == rows[0].key {
+                    throw NSError(domain: "Gateway", code: 1, userInfo: [NSLocalizedDescriptionKey: "Restore failed"])
+                }
+                return try self.acknowledgement(row, archived: false)
+            }
             let params = try #require(JSONSerialization
                 .jsonObject(with: JSONEncoder().encode(request.params)) as? [String: Any])
             let targets = try #require(params["targets"] as? [[String: String]])
-            let patch = try #require(params["patch"] as? [String: Bool])
-            return try JSONSerialization.data(withJSONObject: ["outcomes": targets.map { target -> [String: Any] in
-                let key = target["key"]!
-                return patch["archived"] == false && key == rows[0].key ?
-                    ["key": key, "ok": false, "error": ["message": "Restore failed"]] :
-                    ["key": key, "ok": true]
+            return try JSONSerialization.data(withJSONObject: ["outcomes": targets.map {
+                ["key": $0["key"]!, "ok": true] as [String: Any]
             }])
         }
         _ = await batch.run(.archived(true), rows: rows, mainKey: "main", connection: connection)

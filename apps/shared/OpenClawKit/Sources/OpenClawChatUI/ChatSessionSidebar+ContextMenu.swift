@@ -36,7 +36,8 @@ extension ChatSessionSidebar {
             rename: {
                 self.renameText = session.label ?? session.displayName ?? ""
                 self.sessionPendingRename = session
-            }, delete: { self.sessionPendingDeletion = session },
+            },
+            delete: { self.sessionPendingDeletion = session },
             archive: { Task { await self.archiveSidebarSession(session) } },
             archiving: self.batch.isArchiving(session),
             present: { self.menuPresentation = $0 })

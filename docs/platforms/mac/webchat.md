@@ -199,6 +199,7 @@ Older Gateway UIs keep their existing conversation behavior without these extras
 Archiving from the sidebar offers **Undo** for six seconds; hovering or focusing
 the notice pauses that countdown. Undo restores the captured thread and its
 previous pin state, including successful threads from a partial batch archive.
+Restored threads return to the Active list when the Gateway confirms the restore.
 It remains available while you change conversations, filters, or agents, and
 leaves the current conversation selected. Reconnecting retires the action; if a
 thread was replaced before Undo, the failure stays visible.

@@ -294,7 +294,9 @@ final class ChatSessionSidebarBatch {
             self.finishArchive(row, token: token)
         } }
         let successful = await self.patch(
-            action == .archived(true) ? pending.map(\.0) : rows, fields: action.patch, connection: connection,
+            action == .archived(true) ? pending.map(\.0) : rows,
+            fields: action.patch,
+            connection: connection,
             current: action == .archived(true) ? connection.isCurrent : nil)
         if action == .archived(true) { self.offerArchiveUndo(successful, connection: connection) }
         return successful
@@ -313,11 +315,11 @@ final class ChatSessionSidebarBatch {
             return false
         }
         do {
-            let current: Groups = try await connection.read("sessions.groups.list")
+            let current: OpenClawChatSessionGroupsResponse = try await connection.read("sessions.groups.list")
             guard self.scope == scope else { return false }
             if !current.groups.contains(where: { $0.name == name }) {
                 // ui/src/components/session-organizer-catalog.ts:32 leaves sectionOrder untouched.
-                let _: Groups = try await connection.read("sessions.groups.put", [
+                let _: OpenClawChatSessionGroupsMutationResponse = try await connection.read("sessions.groups.put", [
                     "names": .init(current.groups.map(\.name) + [name]),
                 ])
                 guard self.scope == scope else { return false }
@@ -331,7 +333,8 @@ final class ChatSessionSidebarBatch {
     }
 
     func patch(
-        _ rows: [OpenClawChatSessionEntry], fields: [String: AnyCodable],
+        _ rows: [OpenClawChatSessionEntry],
+        fields: [String: AnyCodable],
         connection: OpenClawSessionMenuConnection,
         current: (() -> Bool)? = nil) async -> [OpenClawChatSessionEntry]
     {
@@ -355,8 +358,7 @@ final class ChatSessionSidebarBatch {
                     throw CocoaError(.coderReadCorrupt)
                 }
                 for (row, outcome) in zip(chunk, response.outcomes) {
-                    if outcome.ok { successful.append(row) }
-                    else {
+                    if outcome.ok { successful.append(row) } else {
                         errors[OpenClawChatSessionSidebarData.identity(row)] = outcome.error?
                             .message ?? String(localized: "The thread operation failed.")
                     }

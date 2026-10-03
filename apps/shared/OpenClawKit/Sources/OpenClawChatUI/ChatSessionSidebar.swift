@@ -332,7 +332,7 @@ struct ChatSessionSidebar: View {
         section: String = "",
         previewRequest: ChatSessionSidebarPreviews.Request) -> some View
     {
-        ForEach(nodes) { node in
+        ForEach(nodes, id: \.sidebarID) { node in
             self.treeRow(node, isChild: false, now: now, ownership: ownership, previewRequest: previewRequest)
                 .modifier(ChatSidebarSectionInteraction(
                     sidebar: self,

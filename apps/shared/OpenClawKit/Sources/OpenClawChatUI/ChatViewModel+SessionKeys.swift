@@ -314,7 +314,7 @@ extension OpenClawChatViewModel {
         let existingIndex = self.sessionIndexForModelState(sessionKey: sessionKey)
         var updated = existingIndex.map { self.sessions[$0] }
             ?? self.sidebarData?.row(key: sessionKey, agentID: self.currentSessionSnapshot().deliveryAgentID)
-            ?? OpenClawChatSessionEntry.placeholder(key: sessionKey)
+            ?? OpenClawChatSessionEntry(key: sessionKey)
         if self.sidebarData != nil { updated.agentId = updated.agentId ?? agentID }
         // Thinking metadata follows model identity; stale options must not survive a model change.
         let preservesThinkingMetadata =

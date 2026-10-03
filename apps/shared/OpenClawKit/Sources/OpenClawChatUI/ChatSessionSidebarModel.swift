@@ -240,8 +240,8 @@ public enum ChatSessionSidebarModel {
                 membership: childMembership,
                 options: viewOptions,
                 allowedAgentIDs: allowedAgentIDs,
-                now: now) : visible.flatMap { self.tree(from: [$0]) }
-            let byKey = Dictionary(nodes.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+                now: now) : visible.flatMap { self.tree(from: [$0], identity: identity) }
+            let byKey = Dictionary(nodes.map { (identity($0.session), $0) }, uniquingKeysWith: { first, _ in first })
             let groupRows = nodes.map { node in
                 var row = node.session
                 row.childSessions = nil // Group projected roots without rebuilding their child links.
@@ -253,8 +253,9 @@ public enum ChatSessionSidebarModel {
                 options: viewOptions,
                 peopleAvailable: owners.map { $0.count >= 2 } ?? true,
                 selfOwnerID: selfOwnerID,
-                sectionOrder: sectionOrder).map {
-                Section(id: $0.id, title: $0.title, nodes: $0.nodes.compactMap { byKey[$0.id] })
+                sectionOrder: sectionOrder,
+                identity: identity).map {
+                Section(id: $0.id, title: $0.title, nodes: $0.nodes.compactMap { byKey[identity($0.session)] })
             }
             #else
             return self.groupedSections(
@@ -263,7 +264,8 @@ public enum ChatSessionSidebarModel {
                 options: viewOptions,
                 peopleAvailable: owners.map { $0.count >= 2 } ?? true,
                 selfOwnerID: selfOwnerID,
-                sectionOrder: sectionOrder)
+                sectionOrder: sectionOrder,
+                identity: identity)
             #endif
         }
         // Pin state owns first placement. Group sections then preserve the
@@ -771,8 +773,11 @@ public enum ChatSessionSidebarModel {
                 (selectedAgentID == nil && entry.agentId == nil &&
                     OpenClawChatSessionKey.agentID(from: entry.key) == nil) ||
                 OpenClawChatViewModel.matchesCurrentSessionKey(
-                    incoming: entry.key, agentId: entry.agentId, current: currentSessionKey,
-                    mainSessionKey: mainSessionKey, activeAgentId: selectedAgentID,
+                    incoming: entry.key,
+                    agentId: entry.agentId,
+                    current: currentSessionKey,
+                    mainSessionKey: mainSessionKey,
+                    activeAgentId: selectedAgentID,
                     sessionRoutingContract: sessionRoutingContract))
         }
         let normalizedCurrent = currentSessionKey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -781,8 +786,11 @@ public enum ChatSessionSidebarModel {
         // ui/src/components/app-sidebar-agent-session-rows.ts:123 gives Home its main key before filtering.
         let selectedIsMain = if viewOptions != nil {
             OpenClawChatViewModel.matchesCurrentSessionKey(
-                incoming: mainSessionKey, agentId: selectedAgentID, current: currentSessionKey,
-                mainSessionKey: mainSessionKey, activeAgentId: selectedAgentID,
+                incoming: mainSessionKey,
+                agentId: selectedAgentID,
+                current: currentSessionKey,
+                mainSessionKey: mainSessionKey,
+                activeAgentId: selectedAgentID,
                 sessionRoutingContract: sessionRoutingContract)
         } else {
             normalizedCurrent == "main" ||
@@ -821,7 +829,7 @@ public enum ChatSessionSidebarModel {
         {
             // Sessions can lag behind a fresh switch/new-session; keep the
             // active row selectable instead of showing an empty selection.
-            var placeholder = OpenClawChatSessionEntry.placeholder(key: selectedSessionKey)
+            var placeholder = OpenClawChatSessionEntry(key: selectedSessionKey)
             if viewOptions != nil { placeholder.agentId = selectedAgentID }
             entries.append(placeholder)
         }

@@ -376,6 +376,7 @@ struct ChatSessionSidebarBatchTests {
             }
             if request.method.hasPrefix("sessions.groups.") {
                 return try JSONSerialization.data(withJSONObject: [
+                    "ok": true,
                     "groups": groupNames.enumerated().map { ["name": $0.element, "position": $0.offset] },
                     "sectionOrder": ["category:Research", "catalog:external", "category:Ops"],
                 ])
@@ -428,7 +429,7 @@ struct ChatSessionSidebarBatchTests {
         let connection = try self.connection { request in
             methods.append(request.method)
             if request.method == retireAfter { batch.reset() }
-            return Data(#"{"groups":[{"name":"Research","position":0}]}"#.utf8)
+            return Data(#"{"ok":true,"groups":[{"name":"Research","position":0}]}"#.utf8)
         }
         #expect(await batch.run(.newGroup("Launch"), rows: rows, mainKey: "main", connection: connection).isEmpty)
         #expect(methods == (retireAfter == "sessions.groups.list" ?
@@ -442,7 +443,7 @@ struct ChatSessionSidebarBatchTests {
         let connection = try self.connection { request in
             methods.append(request.method)
             if request.method == "sessions.groups.put" { throw URLError(.networkConnectionLost) }
-            return Data(#"{"groups":[{"name":"Research","position":0}]}"#.utf8)
+            return Data(#"{"ok":true,"groups":[{"name":"Research","position":0}]}"#.utf8)
         }
         let batch = ChatSessionSidebarBatch()
         #expect(await batch.run(.newGroup("Launch"), rows: rows, mainKey: "main", connection: connection).isEmpty)
@@ -456,7 +457,7 @@ struct ChatSessionSidebarBatchTests {
         let connection = try self.connection { request in
             methods.append(request.method)
             if request.method == "sessions.groups.list" {
-                return Data(#"{"groups":[{"name":"Research","position":0}]}"#.utf8)
+                return Data(#"{"ok":true,"groups":[{"name":"Research","position":0}]}"#.utf8)
             }
             let targets = try #require(self.params(request)["targets"] as? [[String: Any]])
             return try JSONSerialization.data(withJSONObject: [

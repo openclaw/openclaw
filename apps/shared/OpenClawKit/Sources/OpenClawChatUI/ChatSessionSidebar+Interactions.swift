@@ -111,8 +111,11 @@ extension ChatSessionSidebar {
                         .disabled(self.batch.busy)
                 }
             }
-            if !self.batch.pendingArchives.isEmpty { ProgressView(String(localized: "Archiving…")).controlSize(.small) }
-            else if self.batch.busy { ProgressView().controlSize(.small) }
+            if !self.batch.pendingArchives.isEmpty {
+                ProgressView(String(localized: "Archiving…")).controlSize(.small)
+            } else if self.batch.busy {
+                ProgressView().controlSize(.small)
+            }
             if !self.batch.errors.isEmpty {
                 Text(String(localized: "Some thread operations failed. See the affected rows and try again."))
                     .foregroundStyle(OpenClawChatTheme.danger)
@@ -231,13 +234,13 @@ extension ChatSessionSidebar {
             return
         }
         self.batch.pendingDelete = []
-        self.interact(refreshAcrossQueries: action == .archived(true), { connection in
+        self.interact(refreshAcrossQueries: action == .archived(true)) { connection in
             let successful = await self.batch.run(action, rows: rows, mainKey: mainKey, connection: connection)
             if action == .archived(true), successful.contains(where: self.isCurrentArchiveTarget) {
                 self.viewModel.switchSession(to: self.viewModel.selectedAgentMainSessionKey)
             }
             return successful
-        }) { successful in
+        } apply: { successful in
             if case .newGroup = action { self.groupRefreshNonce += 1 }
             if action == .delete { for row in successful {
                 owner?.remove(row)

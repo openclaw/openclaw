@@ -292,7 +292,10 @@ struct ChatSidebarPersonCard: View {
 
     var sessionRows: [OpenClawChatSessionEntry] {
         // ui/src/components/person-activity-card.ts:46 reads loaded roster pages, not the conversation's first page.
-        self.viewModel.sidebarData?.result?.sessions ?? self.viewModel.sessions
+        if let owner = self.viewModel.sidebarData, let state = owner.queryState, state.page != nil {
+            return owner.project(state.pageIDs)
+        }
+        return self.viewModel.sessions
     }
 
     var body: some View {

@@ -64,7 +64,9 @@ extension ChatSessionSidebarBatch {
     }
 
     func archive(
-        _ row: OpenClawChatSessionEntry, mainKey: String, connection: OpenClawSessionMenuConnection,
+        _ row: OpenClawChatSessionEntry,
+        mainKey: String,
+        connection: OpenClawSessionMenuConnection,
         owner: OpenClawChatSessionSidebarData?) async -> ChatSidebarArchiveReceipt?
     {
         guard ChatSessionSidebarEligibility.canArchive(row, mainSessionKey: mainKey),
@@ -72,13 +74,20 @@ extension ChatSessionSidebarBatch {
         defer { self.finishArchive(row, token: token) }
         self.errors = [:]
         self.notices = []
-        guard await self.patchArchive(row, archived: true, connection: connection, owner: owner) else { return nil }
+        guard await self.patchArchive(
+            row,
+            archived: true,
+            connection: connection,
+            owner: owner) else { return nil }
         return self.offerArchiveUndo([row], connection: connection)
     }
 
     private func patchArchive(
-        _ row: OpenClawChatSessionEntry, archived: Bool, pinned: Bool? = nil,
-        connection: OpenClawSessionMenuConnection, owner: OpenClawChatSessionSidebarData?) async -> Bool
+        _ row: OpenClawChatSessionEntry,
+        archived: Bool,
+        pinned: Bool? = nil,
+        connection: OpenClawSessionMenuConnection,
+        owner: OpenClawChatSessionSidebarData?) async -> Bool
     {
         guard ChatPayloadDecoding.trimmedNonEmptyString(row.sessionId) != nil,
               Self.allows(.archived(archived), rows: [row], connection: connection, method: "sessions.patch")
@@ -102,7 +111,7 @@ extension ChatSessionSidebarBatch {
             confirmed.agentID = OpenClawChatSessionKey.agentID(from: row.key) ?? row.agentId
             guard confirmed.matches(row) else { throw CocoaError(.coderReadCorrupt) }
             receipt = confirmed
-            if pinned != nil { owner?.confirmFields(confirmed, target: row, field: .pinned) }
+            if pinned != nil { owner?.confirmFields(confirmed, target: row, fields: [.pinned]) }
             return true
         } catch {
             if connection.isCurrent() {
@@ -127,18 +136,18 @@ extension ChatSessionSidebarBatch {
         }
         // ui/src/components/session-organizer-operations.runtime.ts:202,238: captured
         // identities outlive navigation; only successful restores regain their previous pins.
-        if receipt.rows.count == 1, let row = receipt.rows.first {
+        _ = await ChatSessionBatchMutationRunner.run(
+            keys: receipt.rows.map(OpenClawChatSessionSidebarData.identity))
+        { @MainActor identity in
+            guard let row = receipt.rows.first(where: { OpenClawChatSessionSidebarData.identity($0) == identity })
+            else { return }
+            // Each ACK carries authoritative fields; restore and repin commit together even in a batch.
             _ = await self.patchArchive(
-                row, archived: false, pinned: row.pinned == true ? true : nil, connection: connection, owner: owner)
-        } else {
-            let restored = await self.patch(
-                receipt.rows, fields: ["archived": .init(false)], connection: connection, current: connection.isCurrent)
-            guard connection.isCurrent() else { return }
-            let pinned = restored.filter { $0.pinned == true }
-            if !pinned.isEmpty {
-                _ = await self.patch(
-                    pinned, fields: ["pinned": .init(true)], connection: connection, current: connection.isCurrent)
-            }
+                row,
+                archived: false,
+                pinned: row.pinned == true ? true : nil,
+                connection: connection,
+                owner: owner)
         }
     }
 }
@@ -170,7 +179,9 @@ extension ChatSessionSidebar {
             return
         }
         let receipt = await self.batch.archive(
-            row, mainKey: self.viewModel.selectedAgentMainSessionKey, connection: connection,
+            row,
+            mainKey: self.viewModel.selectedAgentMainSessionKey,
+            connection: connection,
             owner: self.viewModel.sidebarData)
         guard connection.isCurrent() else { return }
         if receipt != nil, self.isCurrentArchiveTarget(row) {
