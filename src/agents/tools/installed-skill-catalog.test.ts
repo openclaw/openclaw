@@ -56,6 +56,8 @@ describe("installed skill catalog", () => {
   it.each([
     [["deploy", "Deploy"], "Deploy", "Deploy"],
     [["Deploy", "deploy"], "deploy", "deploy"],
+    [["Deploy", "deploy"], "Deploy", "Deploy"],
+    [["deploy", "Deploy"], "deploy", "deploy"],
     [["deploy"], "DEPLOY", "deploy"],
   ] as const)(
     "preserves exact identity with catalog %j and query %s",

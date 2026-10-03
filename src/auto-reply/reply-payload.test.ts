@@ -40,6 +40,7 @@ describe("pairing QR reply channel data", () => {
 describe("reply payload terminal content", () => {
   it.each([
     ["text", { text: "answer" }, true],
+    ["media", { mediaUrl: "file:///tmp/answer.png" }, true],
     ["reasoning", { text: "thinking", isReasoning: true }, false],
     ["commentary", { text: "working", isCommentary: true }, false],
     ["status", { text: "compacting", isStatusNotice: true }, false],
@@ -66,6 +67,14 @@ describe("reply payload terminal content", () => {
       {
         mediaUrl: "file:///tmp/answer.mp3",
         ttsSupplement: { spokenText: "answer" },
+      },
+      false,
+    ],
+    [
+      "TTS supplement",
+      {
+        mediaUrl: "file:///tmp/answer.mp3",
+        ttsSupplement: { spokenText: "answer", visibleTextAlreadyDelivered: true },
       },
       false,
     ],

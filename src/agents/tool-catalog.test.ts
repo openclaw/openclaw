@@ -75,6 +75,31 @@ describe("tool-catalog", () => {
     },
   );
 
+  it.each([
+    {
+      profile: "minimal",
+      allowed: ["presence", "session_status", "gateway"],
+      denied: ["exec", "message"],
+    },
+    { profile: "coding", allowed: ["read", "exec", "bundle-mcp"], denied: ["browser", "message"] },
+    {
+      profile: "messaging",
+      allowed: ["message", "bundle-mcp"],
+      denied: ["exec", "process", "write"],
+    },
+  ] as const)("keeps the $profile capability boundary", ({ profile, allowed, denied }) => {
+    const policy = requireCoreToolProfilePolicy(profile);
+    if (profile === "minimal") {
+      expect(policy.allow).toEqual(["presence", "session_status", "gateway"]);
+    }
+    for (const tool of allowed) {
+      expect(isToolAllowedByPolicies(tool, [policy]), tool).toBe(true);
+    }
+    for (const tool of [...denied, "tts", "openclaw"]) {
+      expect(isToolAllowedByPolicies(tool, [policy]), tool).toBe(false);
+    }
+  });
+
   it("full profile uses wildcard to grant all tools (#76507)", () => {
     const policy = requireCoreToolProfilePolicy("full");
     expect(policy.allow).toEqual(["*"]);

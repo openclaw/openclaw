@@ -189,9 +189,11 @@ describe("agents_wait", () => {
     expect(registryEvents.listeners.size).toBe(0);
   });
 
-  it("parks without reading until a registry mutation wakes it", async () => {
+  it("parks without reading and resolves a replacement by its stable collector id", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    const runId = "collector-run";
     const entry = collectorRun("local-wake", "agent:main:main");
+    entry.swarmRunId = runId;
     records.set(entry.runId, entry);
     const controller = new AbortController();
     const tool = createMainSessionWaitTool();
@@ -206,7 +208,7 @@ describe("agents_wait", () => {
     );
     let result: unknown;
     const waiting = tool
-      .execute("call", { ids: [entry.runId], timeoutSeconds: 1 }, controller.signal)
+      .execute("call", { ids: [runId], timeoutSeconds: 1 }, controller.signal)
       .then((value) => {
         result = value.details;
       });
@@ -215,12 +217,20 @@ describe("agents_wait", () => {
       const initialReads = reads.mock.calls.length;
       await vi.advanceTimersByTimeAsync(750);
       expect(reads).toHaveBeenCalledTimes(initialReads);
-      entry.collectorCompletion = { status: "done" };
+      const replacement = collectorRun("replacement", "agent:main:main", { status: "done" });
+      replacement.swarmRunId = runId;
+      records.delete(entry.runId);
+      records.set(replacement.runId, replacement);
       for (const listener of registryEvents.listeners) {
         listener();
       }
       await vi.advanceTimersByTimeAsync(0);
-      expect(result).toMatchObject({ completed: [{ runId: entry.runId }], pending: [] });
+      expect(result).toMatchObject({
+        completed: [
+          { runId, result: "result-replacement", sessionKey: replacement.childSessionKey },
+        ],
+        pending: [],
+      });
       expect(registryEvents.listeners.size).toBe(0);
       expect(vi.getTimerCount()).toBe(0);
     } finally {

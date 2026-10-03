@@ -307,6 +307,24 @@ describe("resolveTextChunkLimit", () => {
       expected: 777,
     },
     {
+      name: "uses default account override when requested",
+      cfg: {
+        channels: {
+          telegram: {
+            textChunkLimit: 2000,
+            accounts: {
+              default: { textChunkLimit: 1234 },
+              primary: { textChunkLimit: 777 },
+            },
+          },
+        },
+      },
+      provider: "telegram" as const,
+      accountId: "default",
+      options: undefined,
+      expected: 1234,
+    },
+    {
       name: "ignores retired webchat textChunkLimit channel config",
       cfg: {
         channels: {

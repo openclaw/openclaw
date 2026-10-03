@@ -621,13 +621,13 @@ describe("createComputerTool node resolution", () => {
     },
   );
 
-  it("resolves and executes on a capable Windows node", async () => {
-    const nodeId = "windows-1";
+  it.each(["windows", "linux"])("resolves and executes on a capable %s node", async (platform) => {
+    const nodeId = `${platform}-1`;
     listNodesMock.mockResolvedValue([
       {
         nodeId,
-        displayName: "Windows desktop",
-        platform: "windows",
+        displayName: `${platform} desktop`,
+        platform,
         connected: true,
         commands: ["computer.act", "screen.snapshot"],
       },
