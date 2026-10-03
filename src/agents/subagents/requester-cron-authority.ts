@@ -9,7 +9,6 @@ import {
   getAgentRunContext,
   getAgentRunLifecycleGeneration,
 } from "../../infra/agent-run-registry.js";
-import type { InputProvenance } from "../../sessions/input-provenance.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import {
   assertAdmittedRunOperatorAuthority,
@@ -34,9 +33,19 @@ import {
   isSameSubagentRunOwner,
 } from "./registry/subagent-run-generation.js";
 import {
+  detachRequesterAuthorityWave,
+  holdRequesterAuthorityTurn,
+  settleRequesterAuthorityWave,
+  type RequesterAuthorityWaveReceipt,
+  matchesRequesterAuthorityAdmissionTarget,
+  type RequesterAdmissionTarget,
   isRequesterAuthorityCohortCurrent,
   isRequesterAuthorityCohortWave,
+  isRequesterAuthoritySessionCurrent,
+  isRequesterAuthorityWaveReplayCurrent,
   listOwedRequesterAuthorityMembers,
+  isPausedAuthorityMember,
+  retireRequesterAuthorityCohort,
 } from "./requester-cron-authority-cohort.js";
 
 type RequesterCronAuthority = {
@@ -51,7 +60,10 @@ type RequesterCronAuthority = {
   lifecycleGeneration: string;
   sessionLifecycleRevision?: string;
   admittedRunId?: string;
+  admittedWaves?: Map<string, RequesterAuthorityWaveReceipt>;
   runScopeBound?: true;
+  scopedTurns?: number;
+  retired?: true;
   active: boolean;
 } & (
   | {
@@ -95,6 +107,12 @@ const state = resolveGlobalSingleton<RequesterCronAuthorityState>(
   },
 );
 
+function unbind(authority: RequesterCronAuthority, entry: SubagentRunRecord): void {
+  if (state.byEntry.get(getSubagentRunRuntimeKey(entry)) === authority) {
+    state.byEntry.delete(getSubagentRunRuntimeKey(entry));
+  }
+}
+
 function discard(authority: RequesterCronAuthority): void {
   authority.active = false;
   const releaseOperatorAuthority = authority.releaseOperatorAuthority;
@@ -108,9 +126,7 @@ function discard(authority: RequesterCronAuthority): void {
   // weak entry binding retires with its row or an explicitly captured successor.
   if (authority.kind === "yield" && !authority.operatorAuthority) {
     for (const entry of authority.batch) {
-      if (state.byEntry.get(getSubagentRunRuntimeKey(entry)) === authority) {
-        state.byEntry.delete(getSubagentRunRuntimeKey(entry));
-      }
+      unbind(authority, entry);
     }
   }
   const session = state.bySession.get(authority.requesterSessionKey);
@@ -123,7 +139,21 @@ function discard(authority: RequesterCronAuthority): void {
   }
 }
 
-function isCurrent(authority: RequesterCronAuthority): boolean {
+/** Cohort completion waits for admitted scoped turns; revocation still discards at once. */
+function retire(authority: RequesterCronAuthority): void {
+  if (authority.kind !== "yield") {
+    discard(authority);
+    return;
+  }
+  retireRequesterAuthorityCohort(
+    authority,
+    state.byEntry,
+    () => isCurrent(authority, false),
+    () => discard(authority),
+  );
+}
+
+function isCurrent(authority: RequesterCronAuthority, cohort = true): boolean {
   try {
     authority.operatorAuthority?.assertCurrent();
   } catch {
@@ -141,20 +171,11 @@ function isCurrent(authority: RequesterCronAuthority): boolean {
   if (authority.kind === "followup") {
     return authority.isFollowupCurrent() && authority.requesterOwner?.isCurrent() === true;
   }
-  let session: PreparedSessionMutationFacts["target"];
-  try {
-    session = authority.sessionFacts.readCurrent(getRuntimeConfig()).target;
-  } catch {
+  if (!isRequesterAuthoritySessionCurrent(authority)) {
     return false;
   }
-  if (
-    session?.entry.sessionId !== authority.requesterSessionId ||
-    session.entry.lifecycleRevision !== authority.sessionLifecycleRevision ||
-    session.entry.archivedAt !== undefined
-  ) {
-    return false;
-  }
-  if (authority.runScopeBound) {
+  // An admitted run scope owns its turn; later cohort membership no longer applies.
+  if (authority.runScopeBound || !cohort) {
     return true;
   }
   return isRequesterAuthorityCohortCurrent(
@@ -426,44 +447,29 @@ export function revokeRequesterCronAuthorityBatch(
   for (const entry of batch) {
     const authority = state.byEntry.get(getSubagentRunRuntimeKey(entry));
     if (authority?.kind === "yield" && authority.rearmGeneration === rearmGeneration) {
-      if (
-        isSameSubagentRunOwner(authority.runs.get(entry.runId), entry) &&
-        entry.pauseReason === "sessions_yield" &&
-        entry.requesterSettleWake?.rearmGeneration === rearmGeneration &&
-        isCurrent(authority)
-      ) {
+      if (isPausedAuthorityMember(authority, entry, rearmGeneration) && isCurrent(authority)) {
         continue;
       }
+      settleRequesterAuthorityWave(authority, batch);
       // A settled wave releases only its members while detached waves still owe delivery.
-      const owed = listOwedRequesterAuthorityMembers(authority, batch);
-      if (owed.length > 0) {
-        for (const settled of authority.batch) {
-          const key = getSubagentRunRuntimeKey(settled);
-          // Settled operator rows keep their binding so a later retry fails closed.
-          if (
-            !owed.includes(settled) &&
-            !authority.operatorAuthority &&
-            state.byEntry.get(key) === authority
-          ) {
-            state.byEntry.delete(key);
-          }
-        }
-        authority.batch = owed;
-        if (isCurrent(authority)) {
-          continue;
-        }
+      if (detachRequesterAuthorityWave(authority, batch, state.byEntry) && isCurrent(authority)) {
+        continue;
       }
-      discard(authority);
+      retire(authority);
     }
   }
 }
 
+// A pause or detached wave's turn gets its own scope; the cohort keeps its later waves.
+type ScopedDispatch = { scope?: CronCreatorAuthorityCapability; released?: true };
 type RequesterCronAuthorityDispatch = {
   authority: RequesterCronAuthority;
   runId: string;
   isCurrent: () => boolean;
   consumed: boolean;
-  pause?: { entry: SubagentRunRecord; scope?: CronCreatorAuthorityCapability; released?: true };
+  replayOnly?: boolean;
+  pause?: ScopedDispatch & { entry: SubagentRunRecord };
+  wave?: ScopedDispatch & { batch: readonly SubagentRunRecord[] };
 };
 const activeDispatch = new AsyncLocalStorage<RequesterCronAuthorityDispatch>();
 
@@ -481,6 +487,8 @@ export async function withRequesterCronAuthority<T>(
 ): Promise<T> {
   const authority = params.batch[0] && state.byEntry.get(getSubagentRunRuntimeKey(params.batch[0]));
   const child = params.batch.length === 1 ? params.batch[0] : undefined;
+  const replayOnly =
+    authority?.kind === "yield" && isRequesterAuthorityWaveReplayCurrent(authority, params);
   const pause: RequesterCronAuthorityDispatch["pause"] =
     child?.pauseReason === "sessions_yield" && child.requesterSettleWake?.pauseNotice
       ? { entry: child }
@@ -493,32 +501,42 @@ export async function withRequesterCronAuthority<T>(
     authority.requesterAgentId !== params.requesterAgentId ||
     authority.rearmGeneration === undefined ||
     authority.rearmGeneration !== params.rearmGeneration ||
-    !(pause
-      ? authority.batch.some((entry) => isSameSubagentRunOwner(entry, pause.entry))
-      : isRequesterAuthorityCohortWave(authority.batch, params.batch))
+    (!replayOnly &&
+      !(pause
+        ? authority.batch.some((entry) => isSameSubagentRunOwner(entry, pause.entry))
+        : isRequesterAuthorityCohortWave(authority.batch, params.batch)))
   ) {
     if (authority?.operatorAuthority) {
       throw new Error("Requester operator authority does not own this continuation");
     }
     return await run();
   }
+  const wave: RequesterCronAuthorityDispatch["wave"] = !pause ? { batch: params.batch } : undefined;
+  const scoped = pause ?? wave;
   const current = () => {
+    if (replayOnly) {
+      return isRequesterAuthorityWaveReplayCurrent(authority, params);
+    }
+    if (scoped?.scope) {
+      // An admitted scoped turn keeps operator and session revocation, not other waves' state.
+      const { active, signal } = scoped.scope;
+      return !scoped.released && active && !signal.aborted && isCurrent(authority, false);
+    }
     const pausedEntry = pause && authority.runs.get(pause.entry.runId);
     return (
       isCurrent(authority) &&
-      (pause
-        ? !pause.released &&
-          (pause.scope
-            ? pause.scope.active && !pause.scope.signal.aborted
-            : isSameSubagentRunOwner(pausedEntry, pause.entry) &&
+      (scoped
+        ? !scoped.released &&
+          params.isCurrent() &&
+          (!pause ||
+            (isSameSubagentRunOwner(pausedEntry, pause.entry) &&
               pausedEntry?.pauseReason === "sessions_yield" &&
-              Boolean(pausedEntry.requesterSettleWake?.pauseNotice) &&
-              params.isCurrent())
+              Boolean(pausedEntry.requesterSettleWake?.pauseNotice)))
         : authority.runScopeBound === true || params.isCurrent())
     );
   };
   if (!current()) {
-    discard(authority);
+    retire(authority);
     if (authority.operatorAuthority) {
       throw new Error("Requester operator authority is no longer current");
     }
@@ -529,7 +547,9 @@ export async function withRequesterCronAuthority<T>(
     runId: params.runId,
     isCurrent: current,
     consumed: false,
+    replayOnly,
     pause,
+    wave,
   };
   try {
     if (!authority.operatorAuthority) {
@@ -556,7 +576,7 @@ export async function withRequesterCronAuthority<T>(
     // The committed settlement owner retires this cohort. A returned delivery
     // failure can still need a retry, just like a thrown transport error.
     if (!isCurrent(authority)) {
-      discard(authority);
+      retire(authority);
     }
   }
 }
@@ -614,44 +634,17 @@ export function captureRequesterFollowupAuthority(params: {
   };
 }
 
-type RequesterAdmissionTarget = {
-  runId: string;
-  sessionKey: string | undefined;
-  sessionId: string | undefined;
-  inputProvenance: InputProvenance | undefined;
-};
-
-function matchesAdmissionTarget(
-  dispatch: RequesterCronAuthorityDispatch,
-  params: RequesterAdmissionTarget,
-): boolean {
-  const { authority } = dispatch;
-  return (
-    dispatch.runId === params.runId &&
-    authority.requesterSessionKey === params.sessionKey &&
-    authority.requesterSessionId === params.sessionId &&
-    params.inputProvenance?.kind === "inter_session" &&
-    (authority.kind === "yield"
-      ? params.inputProvenance.sourceTool === "subagent_settle" &&
-        authority.batch.some(
-          (entry) => entry.childSessionKey === params.inputProvenance?.sourceSessionKey,
-        )
-      : params.inputProvenance.sourceTool === "subagent_announce" &&
-        params.inputProvenance.sourceSessionKey === authority.sourceSessionKey)
-  );
-}
-
 export function captureRequesterCronAuthorityAdmissionAssertion(params: RequesterAdmissionTarget) {
   const dispatch = activeDispatch.getStore();
   if (!dispatch || dispatch.consumed || dispatch.authority.kind !== "yield") {
     return undefined;
   }
-  if (!matchesAdmissionTarget(dispatch, params)) {
+  if (!matchesRequesterAuthorityAdmissionTarget(dispatch, params)) {
     throw new Error("Requester authority does not own this continuation");
   }
   // Storage can invoke the pre-commit guard outside this dispatch's async context.
   return () => {
-    if (!dispatch.consumed && !dispatch.isCurrent()) {
+    if (dispatch.replayOnly || (!dispatch.consumed && !dispatch.isCurrent())) {
       throw new Error("Requester authority is no longer current");
     }
   };
@@ -672,8 +665,9 @@ export function consumeRequesterCronAuthorityAdmission(params: RequesterAdmissio
   if (
     !dispatch ||
     dispatch.consumed ||
+    dispatch.replayOnly ||
     dispatch.authority.admittedRunId !== undefined ||
-    !matchesAdmissionTarget(dispatch, params) ||
+    !matchesRequesterAuthorityAdmissionTarget(dispatch, params) ||
     !dispatch.isCurrent()
   ) {
     return undefined;
@@ -682,7 +676,14 @@ export function consumeRequesterCronAuthorityAdmission(params: RequesterAdmissio
   if (!dispatch.authority.managementEntitlement) {
     return undefined;
   }
-  if (!dispatch.pause) {
+  // A pause or detached wave owns only its turn; the cohort stays admissible for later waves.
+  const scoped = dispatch.pause ?? dispatch.wave;
+  if (
+    !scoped ||
+    (dispatch.wave &&
+      dispatch.authority.kind === "yield" &&
+      listOwedRequesterAuthorityMembers(dispatch.authority, dispatch.wave.batch).length === 0)
+  ) {
     dispatch.authority.admittedRunId = params.runId;
   }
   return {
@@ -691,12 +692,10 @@ export function consumeRequesterCronAuthorityAdmission(params: RequesterAdmissio
     managementEntitlement: dispatch.authority.managementEntitlement,
     requesterOwner: dispatch.authority.requesterOwner,
     isCurrent: dispatch.isCurrent,
-    ...(dispatch.pause
+    ...(scoped
       ? {
           release: () => {
-            if (dispatch.pause) {
-              dispatch.pause.released = true;
-            }
+            scoped.released = true;
           },
         }
       : dispatch.authority.kind === "followup"
@@ -705,7 +704,7 @@ export function consumeRequesterCronAuthorityAdmission(params: RequesterAdmissio
     bindRunScope: (scope) => {
       if (
         dispatch.authority.runScopeBound ||
-        dispatch.pause?.scope ||
+        scoped?.scope ||
         !dispatch.isCurrent() ||
         scope.runId !== params.runId ||
         scope.isCurrent !== dispatch.isCurrent ||
@@ -717,23 +716,30 @@ export function consumeRequesterCronAuthorityAdmission(params: RequesterAdmissio
       ) {
         throw new Error("Requester automation authority no longer owns this run scope");
       }
+      const { authority } = dispatch;
+      if (scoped) {
+        scoped.scope = scope;
+        holdRequesterAuthorityTurn(authority, scope.signal, () => retire(authority));
+      }
+      // Admission owns a pause turn even after notice consumption; final custody stays with
+      // the cohort. A detached wave's turn owns its members while later waves keep theirs.
       if (dispatch.pause) {
-        // Admission owns this turn even after notice consumption; final custody stays with the cohort.
-        dispatch.pause.scope = scope;
+        return;
+      }
+      if (dispatch.wave && authority.kind === "yield") {
+        if (authority.operatorAuthority) {
+          (authority.admittedWaves ??= new Map()).set(scope.runId, { batch: dispatch.wave.batch });
+        }
+        if (!detachRequesterAuthorityWave(authority, dispatch.wave.batch, state.byEntry)) {
+          // The final wave retires admission custody, not already-admitted turns.
+          retire(authority);
+        }
         return;
       }
       // Queue acceptance can retire the child outbox before the parent finishes.
       // Its fresh run scope now owns the entitlement and all per-operation grants.
-      dispatch.authority.runScopeBound = true;
-      if (dispatch.authority.kind === "yield") {
-        for (const entry of dispatch.authority.batch) {
-          if (state.byEntry.get(getSubagentRunRuntimeKey(entry)) === dispatch.authority) {
-            state.byEntry.delete(getSubagentRunRuntimeKey(entry));
-          }
-        }
-        dispatch.authority.batch = [];
-      }
-      scope.signal.addEventListener("abort", () => discard(dispatch.authority), { once: true });
+      authority.runScopeBound = true;
+      scope.signal.addEventListener("abort", () => retire(authority), { once: true });
     },
   };
 }

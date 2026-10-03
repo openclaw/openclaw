@@ -21,6 +21,7 @@ import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import { listSessionPendingInputs } from "../config/sessions/session-accessor.pending-inputs.js";
 import { registerAgentRunContext } from "../infra/agent-run-registry.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { mergeProfiles } from "../state/user-profile-writes.worker.js";
 import { dispatchGatewayRequestInProcessRaw } from "./server-in-process-dispatch.js";
 import { dispatchGatewayMethodInProcess } from "./server-plugin-in-process-dispatch.js";
 import { createOperatorClient } from "./server-plugin-in-process-dispatch.test-support.js";
@@ -408,6 +409,326 @@ describe("requester pause authority at the Gateway effect", () => {
             runs,
             context: captureOpenClawStateWorkerContext(),
           },
+        );
+      }
+    },
+  );
+
+  it.for([
+    "allowed",
+    "sibling replay",
+    "sibling replay cache missing",
+    "sibling replay revoked",
+    "final replay",
+    "late retirement",
+    "late retirement revoked",
+    "operator revoked",
+    "retired delivery claim",
+  ] as const)(
+    "admits each detached completion wave under the cohort's operator (%s between waves)",
+    async (outcome) => {
+      await prepareGatewayReplyRuntimeForTest();
+      const { markRequesterTurnYielded, settleRequesterAfterSessionSpawns } =
+        await import("../agents/subagents/registry/subagent-registry.js");
+      const context = kernel.gatewayRequestContext;
+      const id = randomUUID();
+      const parent = `agent:main:split-authority:${id}`;
+      const parentId = `split-parent-${id}`;
+      const originalRunId = `split-original-${id}`;
+      const pauseRunId = `split-pause-${id}`;
+      const siblingRunId = `split-sibling-${id}`;
+      const resumedRunId = `split-resumed-${id}`;
+      const client = createOperatorClient({
+        profileName: `split-${id}`,
+        scopes: ["operator.admin"],
+      });
+      client.internal = { controlUiAdmin: true };
+      const operatorProfileId = client.authenticatedUserProfile!.profileId;
+      await sessionAccessor.upsertSessionEntryCore(
+        { agentId: "main", sessionKey: parent },
+        {
+          sessionId: parentId,
+          updatedAt: Date.now(),
+          lifecycleRevision: "original",
+          createdActor: { type: "human", source: "profile", id: operatorProfileId },
+        },
+      );
+      const makeChild = (name: string): SubagentRunRecord => ({
+        runId: `${name}-${id}`,
+        childSessionKey: `agent:main:subagent:${name}-${id}`,
+        requesterSessionKey: parent,
+        requesterAgentId: "main",
+        requesterDisplayKey: parent,
+        requesterTurnRunId: originalRunId,
+        task: `Finish the ${name} task`,
+        cleanup: "keep",
+        createdAt: Date.now(),
+        execution: { status: "running", startedAt: Date.now() },
+        completion: { required: true },
+        delivery: { status: "pending" },
+        expectsCompletionMessage: true,
+      });
+      const waiting = makeChild("waiting");
+      const sibling = makeChild("sibling");
+      const current = (entry: SubagentRunRecord) =>
+        expectDefined(runs.get(entry.runId), "published requester child");
+      const mutate = (entry: SubagentRunRecord, update: (draft: SubagentRunRecord) => void) =>
+        mutateSubagentRuns(
+          [entry.runId],
+          (rows) => {
+            const next = structuredClone(expectDefined(rows.get(entry.runId), "admitted child"));
+            update(next);
+            return { value: undefined, postimages: new Map([[next.runId, next]]) };
+          },
+          { runs, context: captureOpenClawStateWorkerContext() },
+        );
+      await mutateSubagentRuns(
+        [waiting.runId, sibling.runId],
+        () => ({
+          value: undefined,
+          postimages: new Map([
+            [waiting.runId, waiting],
+            [sibling.runId, sibling],
+          ]),
+        }),
+        { runs, context: captureOpenClawStateWorkerContext() },
+      );
+      const admitted: Array<{ runId: string; profileId?: string; cronCurrent?: boolean }> = [];
+      agentCommandMock.mockImplementation(async (input) => {
+        const opts = input as AgentCommandGatewayIngressOpts;
+        const runId = expectDefined(opts.runId, "Gateway run ID");
+        registerAgentRunContext(runId, {
+          agentId: "main",
+          sessionKey: parent,
+          sessionId: parentId,
+        });
+        const admission = prepareAgentCommandExecutionIdentity({
+          opts,
+          prepared: {
+            cfg: context.getRuntimeConfig(),
+            runId,
+            sessionAgentId: "main",
+            sessionId: parentId,
+            sessionKey: parent,
+          },
+          ingress: { kind: "gateway-client", boundary: "agent", state: "present" },
+          lifecycleGeneration: expectDefined(opts.lifecycleGeneration, "Gateway generation"),
+        });
+        try {
+          const caller = expectDefined(
+            createAdmittedGatewayToolCallerIdentity({
+              admittedRunContext: await admission.admit("embedded"),
+              agentId: "main",
+              sessionKey: parent,
+            }),
+            "Gateway admitted caller",
+          );
+          await withGatewayToolCallerIdentity(caller, async () => {
+            const recorder = expectDefined(opts.userTurnTranscriptRecorder, "Gateway recorder");
+            expect(await recorder.persistApproved()).toMatchObject({ appended: true });
+            if (runId === originalRunId) {
+              expect(
+                await markRequesterTurnYielded({
+                  requesterSessionKey: parent,
+                  requesterAgentId: "main",
+                  requesterTurnRunId: runId,
+                }),
+              ).toBe(2);
+              expect(
+                await settleRequesterAfterSessionSpawns({
+                  requesterSessionKey: parent,
+                  requesterAgentId: "main",
+                  requesterTurnRunId: runId,
+                  requesterYielded: true,
+                  acceptedSessionSpawns: [waiting, sibling].map((entry) => ({
+                    runId: entry.runId,
+                    childSessionKey: entry.childSessionKey,
+                    expectsCompletionMessage: true,
+                  })),
+                }),
+              ).toBe(true);
+              return;
+            }
+            admitted.push({
+              runId,
+              profileId: caller.operatorAuthority?.profileId,
+              cronCurrent: opts.cronCreatorAuthorityCapability?.isCurrent?.(),
+            });
+            if (runId === resumedRunId && outcome.startsWith("late retirement")) {
+              // Settlement of an earlier wave can race final-wave scope binding.
+              revokeRequesterCronAuthorityBatch([current(sibling)], 1);
+              revokeRequesterCronAuthorityBatch([current(sibling)], 1);
+              expect(opts.cronCreatorAuthorityCapability?.isCurrent?.()).toBe(true);
+              caller.operatorAuthority?.assertCurrent();
+              if (outcome === "late retirement revoked") {
+                const successor = createOperatorClient({
+                  profileName: `late-successor-${id}`,
+                  scopes: ["operator.read"],
+                });
+                mergeProfiles(operatorProfileId, successor.authenticatedUserProfile!.profileId);
+                expect(opts.cronCreatorAuthorityCapability?.isCurrent?.()).toBe(false);
+                expect(() => caller.operatorAuthority?.assertCurrent()).toThrow();
+              }
+            }
+            if (runId === pauseRunId) {
+              await mutate(waiting, (draft) => {
+                expect(consumeSubagentPauseNotice(draft)).toBe(true);
+              });
+              revokeRequesterCronAuthorityBatch([current(waiting)], 1);
+            }
+          });
+        } finally {
+          await admission.finish();
+        }
+        return {
+          payloads: [{ text: "Requester handled the wave", mediaUrl: null }],
+          meta: { durationMs: 1 },
+        };
+      });
+      const dispatch = (runId: string, entry: SubagentRunRecord, isCurrent = () => true) =>
+        withRequesterCronAuthority(
+          {
+            requesterSessionKey: parent,
+            requesterSessionId: parentId,
+            requesterAgentId: "main",
+            batch: [current(entry)],
+            rearmGeneration: 1,
+            runId,
+            isCurrent,
+          },
+          () =>
+            dispatchGatewayMethodInProcess(
+              "agent",
+              {
+                sessionKey: parent,
+                message: `Result from ${entry.runId}`,
+                idempotencyKey: runId,
+                deliver: false,
+                inputProvenance: {
+                  kind: "inter_session",
+                  sourceTool: "subagent_settle",
+                  sourceSessionKey: entry.childSessionKey,
+                },
+              },
+              { expectFinal: true, resolveGatewayContext: () => context },
+            ),
+        );
+      const transcript = { agentId: "main", sessionKey: parent, sessionId: parentId };
+      try {
+        expect(
+          await dispatchGatewayRequestInProcessRaw(
+            "agent",
+            {
+              sessionKey: parent,
+              message: "Spawn two children and yield",
+              idempotencyKey: originalRunId,
+              deliver: false,
+            },
+            { client, context, expectFinal: true },
+          ),
+        ).toMatchObject({ ok: true });
+        await mutate(waiting, (draft) => {
+          draft.pauseReason = "sessions_yield";
+          draft.execution = { status: "terminal", endedAt: Date.now() };
+          draft.requesterSettleWake!.pauseNotice = { acknowledgment: "Need direction." };
+        });
+        await dispatch(pauseRunId, waiting);
+        expect(current(waiting).requesterSettleWake?.batchRunIds).toEqual([waiting.runId]);
+
+        // The sibling's own wave transition lists only the sibling before dispatch.
+        await mutate(sibling, (draft) => {
+          draft.execution = { status: "terminal", endedAt: Date.now(), outcome: { status: "ok" } };
+          draft.requesterSettleWake!.batchRunIds = [sibling.runId];
+        });
+        await dispatch(siblingRunId, sibling);
+        if (outcome.startsWith("sibling replay")) {
+          const admittedCount = admitted.length;
+          if (outcome === "sibling replay cache missing") {
+            for (const key of context.dedupe.keys()) {
+              if (key.includes(siblingRunId)) {
+                context.dedupe.delete(key);
+              }
+            }
+          }
+          if (outcome === "sibling replay revoked") {
+            const successor = createOperatorClient({
+              profileName: `replay-successor-${id}`,
+              scopes: ["operator.read"],
+            });
+            mergeProfiles(operatorProfileId, successor.authenticatedUserProfile!.profileId);
+          }
+          if (outcome === "sibling replay") {
+            expect(await dispatch(siblingRunId, sibling)).toMatchObject({ runId: siblingRunId });
+          } else {
+            await expect(dispatch(siblingRunId, sibling)).rejects.toThrow("Requester");
+          }
+          expect(admitted).toHaveLength(admittedCount);
+          expect(
+            (
+              await listSessionPendingInputs({
+                agentId: "main",
+                sessionKey: parent,
+                sessionId: parentId,
+              })
+            ).total,
+          ).toBe(0);
+        }
+        await mutate(sibling, (draft) => {
+          draft.requesterSettleWake = undefined;
+        });
+        revokeRequesterCronAuthorityBatch([current(sibling)], 1);
+        if (outcome === "operator revoked") {
+          const successor = createOperatorClient({
+            profileName: `split-successor-${id}`,
+            scopes: ["operator.read"],
+          });
+          mergeProfiles(operatorProfileId, successor.authenticatedUserProfile!.profileId);
+        }
+
+        await mutate(waiting, (draft) => {
+          draft.pauseReason = undefined;
+          draft.execution = { status: "terminal", endedAt: Date.now(), outcome: { status: "ok" } };
+        });
+        const before = sessionAccessor.loadTranscriptEventsSync(transcript);
+        const executionModule = await import("./agent-turn/agent-run-execution-phase.js");
+        const execution = vi.spyOn(executionModule, "startAgentRunExecution");
+        const resumed = dispatch(resumedRunId, waiting, () => outcome !== "retired delivery claim");
+        const expected = { profileId: operatorProfileId, cronCurrent: true };
+        if (
+          !["operator revoked", "sibling replay revoked", "retired delivery claim"].includes(
+            outcome,
+          )
+        ) {
+          await resumed;
+          if (outcome === "final replay") {
+            expect(await dispatch(resumedRunId, waiting)).toMatchObject({ runId: resumedRunId });
+          }
+          expect(execution).toHaveBeenCalledOnce();
+          expect(admitted).toEqual([
+            { runId: pauseRunId, ...expected },
+            { runId: siblingRunId, ...expected },
+            { runId: resumedRunId, ...expected },
+          ]);
+        } else {
+          await expect(resumed).rejects.toThrow("Requester operator authority");
+          expect(execution).not.toHaveBeenCalled();
+          expect(admitted.map((entry) => entry.runId)).toEqual([pauseRunId, siblingRunId]);
+          expect(sessionAccessor.loadTranscriptEventsSync(transcript)).toEqual(before);
+          expect(context.dedupe.has(`agent:${resumedRunId}`)).toBe(false);
+        }
+        expect((await listSessionPendingInputs(transcript)).total).toBe(0);
+      } finally {
+        revokeRequesterCronAuthority(parent);
+        await mutateSubagentRuns(
+          [waiting.runId, sibling.runId],
+          () => ({
+            value: undefined,
+            postimages: new Map([
+              [waiting.runId, null],
+              [sibling.runId, null],
+            ]),
+          }),
+          { runs, context: captureOpenClawStateWorkerContext() },
         );
       }
     },

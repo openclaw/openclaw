@@ -40,6 +40,10 @@ import { createRequesterInitialTransferFixture } from "./registry/subagent-regis
 import type { SubagentRunRecord } from "./registry/subagent-registry.types.js";
 import { isSameSubagentRunOwner } from "./registry/subagent-run-generation.js";
 import {
+  retireRequesterAuthorityCohort,
+  settleRequesterAuthorityWave,
+} from "./requester-cron-authority-cohort.js";
+import {
   consumeRequesterCronAuthorityAdmission,
   prepareRequesterCronAuthority,
   replaceRequesterCronAuthorityEntry,
@@ -495,6 +499,64 @@ describe("requester cron authority lifetime", () => {
     });
     revokeRequesterCronAuthorityBatch(resumed, 1);
     await expect(dispatch(resumed, async () => {})).rejects.toThrow("Requester operator authority");
+  });
+
+  it("keeps an admitted wave's turn when another wave's member is cancelled", async () => {
+    const operator = createAdmittedRunOperatorAuthority({
+      profileId: "split-turn-requester",
+      scopes: ["operator.read"],
+      assertCurrent: () => {},
+    });
+    const batch = createBatch("split-turn-owner", 2);
+    await inAdminRun(
+      "split-turn-owner",
+      async () => expect(await mark(batch)).toBe(2),
+      undefined,
+      undefined,
+      undefined,
+      operator,
+    );
+    expect(await settle(batch)).toBe(true);
+    await updateBatch(batch, ([paused]) => {
+      paused!.pauseReason = "sessions_yield";
+      paused!.requesterSettleWake!.pauseNotice = { acknowledgment: "Need a continuation." };
+    });
+    await dispatch([batch[0]!], async () => {}, "pause-turn");
+    await updateBatch(batch, ([paused]) => expect(consumeSubagentPauseNotice(paused!)).toBe(true));
+    revokeRequesterCronAuthorityBatch([batch[0]!], 1);
+    await updateBatch(batch, ([, sibling]) => {
+      sibling!.requesterSettleWake!.batchRunIds = [sibling!.runId];
+    });
+
+    let admission: ReturnType<typeof consume>;
+    await dispatch(
+      [batch[1]!],
+      async () => {
+        admission = consume([batch[1]!], "sibling-turn");
+        const scope = createCronCreatorAuthorityCapability(
+          "sibling-turn",
+          { kind: "unknown" },
+          admission!.managementEntitlement,
+          admission!.isCurrent,
+        )!;
+        admission!.bindRunScope(scope);
+        await runWithCronCreatorAuthorityCapability(scope, async () => {
+          // The waiting child is cancelled while the sibling's admitted turn runs.
+          await updateBatch(batch, ([waiting]) => {
+            waiting!.requesterSettleWake = undefined;
+          });
+          revokeRequesterCronAuthorityBatch([batch[0]!], 1);
+          expect(admission!.isCurrent()).toBe(true);
+          expect(readOperatorToolGatewayAuthority()?.operatorRunAuthority).toBe(operator);
+        });
+      },
+      "sibling-turn",
+    );
+    // The retired cohort is released once its last admitted turn ends.
+    expect(admission!.isCurrent()).toBe(false);
+    await expect(dispatch([batch[1]!], async () => {})).rejects.toThrow(
+      "Requester operator authority",
+    );
   });
 
   it.each([
@@ -955,4 +1017,37 @@ describe("requester cron authority lifetime", () => {
       await dispatch(batch, async () => expect(consume(batch)).toBeUndefined());
     },
   );
+  it("retains an unsettled admitted-wave receipt after all scoped turns end", async () => {
+    const batch = createBatch("unsettled-wave-member");
+    const cohort = {
+      batch,
+      runs: new Map(batch.map((entry) => [entry.runId, entry])),
+      scopedTurns: 0,
+      operatorAuthority: {},
+      admittedWaves: new Map([["accepted-wave", { batch }]]),
+    };
+    const discard = vi.fn();
+    const bindings = new WeakMap<object, unknown>();
+    retireRequesterAuthorityCohort(cohort, bindings, () => true, discard);
+    expect(discard).not.toHaveBeenCalled();
+    expect(cohort).toHaveProperty("retired", true);
+    settleRequesterAuthorityWave(cohort, batch);
+    retireRequesterAuthorityCohort(cohort, bindings, () => true, discard);
+    expect(discard).toHaveBeenCalledOnce();
+  });
+
+  it("revokes a retired cohort immediately even with unsettled admitted receipts", () => {
+    const batch = createBatch("revoked-unsettled-wave");
+    const cohort = {
+      batch,
+      runs: new Map(batch.map((entry) => [entry.runId, entry])),
+      retired: true as const,
+      scopedTurns: 1,
+      operatorAuthority: {},
+      admittedWaves: new Map([["accepted-wave", { batch }]]),
+    };
+    const discard = vi.fn();
+    retireRequesterAuthorityCohort(cohort, new WeakMap(), () => false, discard);
+    expect(discard).toHaveBeenCalledOnce();
+  });
 });
