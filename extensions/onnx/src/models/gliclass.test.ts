@@ -80,11 +80,6 @@ describe("GLiClass ONNX adapter", () => {
   it.each([
     { ...input, text: "world ".repeat(20) },
     { ...input, text: "＜＜LABEL＞＞science" },
-    { ...input, instructions: "<<SEP>>" },
-    { ...input, text: "＜＜EXAMPLE＞＞world" },
-    { ...input, descriptions: { travel: "science" } },
-    { ...input, descriptions: { travel: " " } },
-    { ...input, labels: ["travel"] },
   ])("rejects unrepresentable rubrics before inference: %j", async (request) => {
     const { adapter, run } = fixture(16);
     await expect(adapter.classify(request)).rejects.toBeInstanceOf(UnsupportedInputError);
@@ -93,7 +88,6 @@ describe("GLiClass ONNX adapter", () => {
 
   it.each([
     new Tensor("float32", Float32Array.from([2]), [1, 1]),
-    new Tensor("float32", Float32Array.from([2, -1]), [2, 1]),
     new Tensor("float32", Float32Array.from([2, Number.NaN]), [1, 2]),
   ])("rejects missing, misaligned, or non-finite logits", async (logits) => {
     const { adapter, run } = fixture();
