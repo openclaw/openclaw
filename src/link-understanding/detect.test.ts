@@ -49,4 +49,90 @@ describe("extractLinksFromMessage", () => {
       [],
     );
   });
+
+  it.each([
+    ["a comma mid-sentence", "see https://example.com/a, then tell me", "https://example.com/a"],
+    ["a period", "Check https://example.com/a.", "https://example.com/a"],
+    ["an exclamation mark", "wow https://example.com/a!", "https://example.com/a"],
+    ["a colon", "link: https://example.com/a:", "https://example.com/a"],
+    ["double quotes", 'open "https://example.com/a" now', "https://example.com/a"],
+    ["unbalanced parentheses", "(see https://example.com/a)", "https://example.com/a"],
+    ["stacked punctuation", "see https://example.com/a).", "https://example.com/a"],
+    ["an ellipsis", "https://example.com/a…", "https://example.com/a"],
+  ])("trims %s from a bare link", (_name, message, expected) => {
+    expect(extractLinksFromMessage(message)).toStrictEqual([expected]);
+  });
+
+  it("dedupes a link once its trailing punctuation is trimmed", () => {
+    const links = extractLinksFromMessage("https://example.com/a https://example.com/a,");
+    expect(links).toStrictEqual(["https://example.com/a"]);
+  });
+
+  it("keeps URL suffixes that are meaningful", () => {
+    expect(extractLinksFromMessage("https://en.wikipedia.org/wiki/Foo_(bar)")).toStrictEqual([
+      "https://en.wikipedia.org/wiki/Foo_(bar)",
+    ]);
+    expect(extractLinksFromMessage("https://example.com/page/")).toStrictEqual([
+      "https://example.com/page/",
+    ]);
+    expect(extractLinksFromMessage("https://example.com/search?q=foo")).toStrictEqual([
+      "https://example.com/search?q=foo",
+    ]);
+    expect(extractLinksFromMessage("https://example.com/a(b)_c.")).toStrictEqual([
+      "https://example.com/a(b)_c",
+    ]);
+  });
+
+  it("trims only path-region prose punctuation and keeps the query verbatim", () => {
+    // Query commas and periods inside the URL survive untouched; the trim
+    // applies when prose punctuation ends the bare token before a query or
+    // fragment delimiter begins.
+    expect(extractLinksFromMessage("see https://example.com/search?q=a,b then go")).toStrictEqual([
+      "https://example.com/search?q=a,b",
+    ]);
+    expect(extractLinksFromMessage("https://example.com/search?q=a,b")).toStrictEqual([
+      "https://example.com/search?q=a,b",
+    ]);
+  });
+
+  it("preserves authored terminal values inside query and fragment", () => {
+    // From a query or fragment delimiter onward the token is treated as the
+    // authored value: a terminal comma, period, or even a bare "?" survives
+    // verbatim, because rewriting it can change the fetched page. Accepted
+    // tradeoff: sentence punctuation directly after a queried URL is kept.
+    expect(extractLinksFromMessage("https://example.com/x?ids=1,2,")).toStrictEqual([
+      "https://example.com/x?ids=1,2,",
+    ]);
+    expect(extractLinksFromMessage("end https://example.com/a?b=1.")).toStrictEqual([
+      "https://example.com/a?b=1.",
+    ]);
+    expect(extractLinksFromMessage("section https://example.com/page#intro.")).toStrictEqual([
+      "https://example.com/page#intro.",
+    ]);
+    expect(extractLinksFromMessage("https://example.com/a?")).toStrictEqual([
+      "https://example.com/a?",
+    ]);
+    expect(
+      extractLinksFromMessage("look at https://example.com/search?q=a,b, and more"),
+    ).toStrictEqual(["https://example.com/search?q=a,b,"]);
+  });
+
+  it("preserves authored terminal closers inside query and fragment", () => {
+    // A terminal closer after a delimiter is part of the authored value that the
+    // URL parser keeps, so it reaches the guarded fetch whole. Accepted tradeoff:
+    // a parenthesis wrapped around a queried link survives, and that URL may 404
+    // the way it already does on main.
+    expect(extractLinksFromMessage("https://example.com/search?q=foo)")).toStrictEqual([
+      "https://example.com/search?q=foo)",
+    ]);
+    expect(extractLinksFromMessage("https://example.com/page#intro)")).toStrictEqual([
+      "https://example.com/page#intro)",
+    ]);
+    expect(extractLinksFromMessage("(link https://example.com/a?q=1)")).toStrictEqual([
+      "https://example.com/a?q=1)",
+    ]);
+    expect(extractLinksFromMessage("see https://en.wikipedia.org/wiki/Foo_(bar)")).toStrictEqual([
+      "https://en.wikipedia.org/wiki/Foo_(bar)",
+    ]);
+  });
 });
