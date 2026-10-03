@@ -20,7 +20,6 @@ import {
 
 const hoisted = vi.hoisted(() => ({
   loginWeb: vi.fn(async () => {}),
-  hasWebCredsSync: vi.fn(() => false),
   readWebAuthState: vi.fn(async (): Promise<"linked" | "not-linked" | "unstable"> => "not-linked"),
   readWebAuthExistsForDecision: vi.fn(
     async (): Promise<{ outcome: "stable"; exists: boolean } | { outcome: "unstable" }> => ({
@@ -36,14 +35,6 @@ const hoisted = vi.hoisted(() => ({
 vi.mock("./login.js", () => ({
   loginWeb: hoisted.loginWeb,
 }));
-
-vi.mock("./creds-files.js", async () => {
-  const actual = await vi.importActual<typeof import("./creds-files.js")>("./creds-files.js");
-  return {
-    ...actual,
-    hasWebCredsSync: hoisted.hasWebCredsSync,
-  };
-});
 
 vi.mock("./accounts.js", async () => {
   const actual = await vi.importActual<typeof import("./accounts.js")>("./accounts.js");
@@ -121,7 +112,7 @@ function createSeparatePhoneHarness(params: { selectValues: string[]; textValues
 }
 
 async function runSeparatePhoneFlow(params: { selectValues: string[]; textValues?: string[] }) {
-  hoisted.hasWebCredsSync.mockReturnValue(true);
+  hoisted.readWebAuthState.mockResolvedValue("linked");
   const harness = createSeparatePhoneHarness({
     selectValues: params.selectValues,
     textValues: params.textValues,
@@ -135,8 +126,6 @@ async function runSeparatePhoneFlow(params: { selectValues: string[]; textValues
 describe("whatsapp setup wizard", () => {
   beforeEach(() => {
     hoisted.loginWeb.mockReset();
-    hoisted.hasWebCredsSync.mockReset();
-    hoisted.hasWebCredsSync.mockReturnValue(false);
     hoisted.readWebAuthState.mockReset();
     hoisted.readWebAuthState.mockResolvedValue("not-linked");
     hoisted.readWebAuthExistsForDecision.mockReset();
@@ -168,7 +157,6 @@ describe("whatsapp setup wizard", () => {
   });
 
   it("skips interactive linking when the client defers device linking", async () => {
-    hoisted.hasWebCredsSync.mockReturnValue(true);
     const harness = createSeparatePhoneHarness({
       selectValues: ["separate", "disabled"],
     });
@@ -207,7 +195,7 @@ describe("whatsapp setup wizard", () => {
   });
 
   it("throws a user-facing error instead of crashing when personal-phone input is undefined", async () => {
-    hoisted.hasWebCredsSync.mockReturnValue(true);
+    hoisted.readWebAuthState.mockResolvedValue("linked");
     const harness = createWhatsAppPersonalPhoneHarness(createQueuedWizardPrompter);
     harness.text.mockResolvedValueOnce(undefined as never);
 
@@ -257,7 +245,7 @@ describe("whatsapp setup wizard", () => {
   });
 
   it("writes default-account DM config into accounts.default for multi-account setups", async () => {
-    hoisted.hasWebCredsSync.mockReturnValue(true);
+    hoisted.readWebAuthState.mockResolvedValue("linked");
     const harness = createSeparatePhoneHarness({
       selectValues: ["separate", "open"],
     });
@@ -285,7 +273,7 @@ describe("whatsapp setup wizard", () => {
   });
 
   it("updates an existing mixed-case default-account key during setup", async () => {
-    hoisted.hasWebCredsSync.mockReturnValue(true);
+    hoisted.readWebAuthState.mockResolvedValue("linked");
     const harness = createSeparatePhoneHarness({
       selectValues: ["separate", "open"],
     });

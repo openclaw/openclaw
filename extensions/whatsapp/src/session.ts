@@ -1,8 +1,10 @@
 import type { Agent } from "node:https";
+import { Browsers } from "baileys";
 import type {
   GroupMetadata,
   SignalDataTypeMap,
   SignalKeyStore,
+  WABrowserDescription,
   WAMessageKey,
   proto,
 } from "baileys";
@@ -43,7 +45,7 @@ export { newConnectionId } from "./reconnect.js";
 
 export {
   getWebAuthAgeMs,
-  logoutWeb,
+  prepareWebAuthForLogin,
   readWebAuthExistsForDecision,
   readWebSelfId,
   WHATSAPP_AUTH_UNSTABLE_CODE,
@@ -60,6 +62,8 @@ const LOGGED_OUT_STATUS = 401;
 const WHATSAPP_WEBSOCKET_PROXY_TARGET = "https://mmg.whatsapp.net/";
 const CREDS_FLUSH_TIMEOUT_MESSAGE =
   "Queued WhatsApp creds save did not finish before auth bootstrap; skipping repair and continuing with primary creds.";
+const WHATSAPP_BROWSER: WABrowserDescription = ["openclaw", "cli", VERSION];
+export const WHATSAPP_PHONE_CODE_BROWSER = Browsers.macOS("Chrome");
 const OPENCLAW_WHATSAPP_WEB_SOCKET_URL_ENV = "OPENCLAW_WHATSAPP_WEB_SOCKET_URL";
 
 async function rejectUnsafeWebCredsPath(authDir: string): Promise<void> {
@@ -69,7 +73,6 @@ async function rejectUnsafeWebCredsPath(authDir: string): Promise<void> {
 async function safeSaveCreds(params: {
   authDir: string;
   saveCreds: () => Promise<void> | void;
-  logger: ReturnType<typeof getChildLogger>;
   beforeCredentialPersistence?: () => Promise<void>;
 }): Promise<void> {
   let backup: { content: string; filePath: string } | undefined;
@@ -105,14 +108,7 @@ async function safeSaveCreds(params: {
   }
 
   await params.beforeCredentialPersistence?.();
-  try {
-    await Promise.resolve(params.saveCreds());
-  } catch (err) {
-    params.logger.warn({ error: String(err) }, "failed saving WhatsApp creds");
-    if (params.beforeCredentialPersistence) {
-      throw err;
-    }
-  }
+  await Promise.resolve(params.saveCreds());
 }
 
 function abortSocketAfterCredentialPersistenceFailure(
@@ -180,6 +176,8 @@ export async function createWaSocket(
     getMessage?: (key: WAMessageKey) => Promise<proto.IMessage | undefined>;
     cachedGroupMetadata?: (jid: string) => Promise<GroupMetadata | undefined>;
     waWebSocketUrl?: string | URL;
+    qrTimeoutMs?: number;
+    browser?: WABrowserDescription;
   } & WhatsAppSocketTimingOptions = {},
 ): Promise<ReturnType<typeof makeWASocket>> {
   return await createWaSocketInternal(printQr, verbose, opts, "normal");
@@ -231,11 +229,19 @@ async function createWaSocketInternal(
   };
   const socketRef: { current?: ReturnType<typeof makeWASocket> } = {};
   let pendingSocketAbort: { error: unknown } | undefined;
+  // Login observes persistence failures; ordinary sockets keep warning-only saves.
+  const observesCredentialPersistence = Boolean(
+    opts.beforeCredentialPersistence ||
+    opts.onCredentialPersistenceError ||
+    opts.onCredentialPersistenceTask,
+  );
   const reportCredentialPersistenceError = (error: unknown) => {
-    if (socketRef.current) {
-      abortSocketAfterCredentialPersistenceFailure(socketRef.current, error);
-    } else {
-      pendingSocketAbort = { error };
+    if (observesCredentialPersistence) {
+      if (socketRef.current) {
+        abortSocketAfterCredentialPersistenceFailure(socketRef.current, error);
+      } else {
+        pendingSocketAbort = { error };
+      }
     }
     opts.onCredentialPersistenceError?.(error);
   };
@@ -249,12 +255,15 @@ async function createWaSocketInternal(
       }
     : state.keys;
   const cachedSignalKeys = makeCacheableSignalKeyStore(persistedSignalKeys, logger);
-  const signalKeys: SignalKeyStore = opts.beforeCredentialPersistence
+  // Interactive login observes Baileys' deferred writes even when no setup
+  // authority guard is needed; otherwise a socket can open before persistence fails.
+  const signalKeys: SignalKeyStore = observesCredentialPersistence
     ? {
         ...cachedSignalKeys,
         get<T extends keyof SignalDataTypeMap>(type: T, ids: string[]) {
           const task = Promise.resolve(cachedSignalKeys.get(type, ids));
           opts.onCredentialPersistenceTask?.(task);
+          void task.then(undefined, reportCredentialPersistenceError);
           return task;
         },
         set(data) {
@@ -271,7 +280,7 @@ async function createWaSocketInternal(
         },
       }
     : cachedSignalKeys;
-  const makeSignalRepository = opts.onCredentialPersistenceTask
+  const makeSignalRepository = observesCredentialPersistence
     ? (...args: Parameters<typeof createBaileysSignalRepository>) => {
         const repository = createBaileysSignalRepository(...args);
         const storeLidPnMappings = repository.lidMapping.storeLIDPNMappings.bind(
@@ -301,7 +310,7 @@ async function createWaSocketInternal(
     version,
     logger,
     printQRInTerminal: false,
-    browser: ["openclaw", "cli", VERSION],
+    browser: opts.browser ?? WHATSAPP_BROWSER,
     syncFullHistory: false,
     fireInitQueries: receiveMode !== "directory",
     markOnlineOnConnect: false,
@@ -311,6 +320,7 @@ async function createWaSocketInternal(
     fetchAgent,
     ...(makeSignalRepository ? { makeSignalRepository } : {}),
     ...(waWebSocketUrl ? { waWebSocketUrl } : {}),
+    ...(opts.qrTimeoutMs === undefined ? {} : { qrTimeout: opts.qrTimeoutMs }),
     ...(opts.getMessage ? { getMessage: opts.getMessage } : {}),
     ...(opts.cachedGroupMetadata ? { cachedGroupMetadata: opts.cachedGroupMetadata } : {}),
   });
@@ -345,7 +355,6 @@ async function createWaSocketInternal(
         safeSaveCreds({
           authDir,
           saveCreds,
-          logger: sessionLogger,
           beforeCredentialPersistence: opts.beforeCredentialPersistence,
         }),
       (err) => {

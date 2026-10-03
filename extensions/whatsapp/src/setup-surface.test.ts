@@ -24,7 +24,6 @@ import {
 } from "./setup-test-helpers.js";
 
 const hoisted = vi.hoisted(() => ({
-  hasWebCredsSync: vi.fn(() => false),
   loginModuleState: { loaded: false },
   loginWeb: vi.fn(async () => {}),
   readWebAuthState: vi.fn<(authDir: string) => Promise<"linked" | "not-linked" | "unstable">>(
@@ -40,14 +39,6 @@ const hoisted = vi.hoisted(() => ({
 vi.mock("./login.js", () => {
   hoisted.loginModuleState.loaded = true;
   return { loginWeb: hoisted.loginWeb };
-});
-
-vi.mock("./creds-files.js", async () => {
-  const actual = await vi.importActual<typeof import("./creds-files.js")>("./creds-files.js");
-  return {
-    ...actual,
-    hasWebCredsSync: hoisted.hasWebCredsSync,
-  };
 });
 
 vi.mock("./accounts.js", async () => {
@@ -110,8 +101,6 @@ function expectFinalizeResult(result: Awaited<ReturnType<typeof runFinalizeWithH
 
 describe("whatsapp setup wizard", () => {
   beforeEach(() => {
-    hoisted.hasWebCredsSync.mockReset();
-    hoisted.hasWebCredsSync.mockReturnValue(false);
     hoisted.loginWeb.mockReset().mockImplementation(async (...args: unknown[]) => {
       const loginOptions = args[4] as
         | { beforeCredentialPersistence?: () => Promise<void> }
@@ -352,7 +341,7 @@ describe("whatsapp setup wizard", () => {
   });
 
   it("skips relink note when already linked and relink is declined", async () => {
-    hoisted.hasWebCredsSync.mockReturnValue(true);
+    hoisted.readWebAuthState.mockResolvedValue("linked");
     const harness = createSeparatePhoneHarness({
       selectValues: ["separate", "disabled"],
     });
@@ -363,6 +352,16 @@ describe("whatsapp setup wizard", () => {
 
     expect(hoisted.loginWeb).not.toHaveBeenCalled();
     expectNoWhatsAppLoginFollowup(harness);
+  });
+
+  it("does not report unstable auth as linked during setup finalization", async () => {
+    hoisted.readWebAuthState.mockResolvedValue("unstable");
+    const harness = createSeparatePhoneHarness({ selectValues: ["separate", "disabled"] });
+
+    await runFinalizeWithHarness({ harness });
+
+    expectWhatsAppLoginFollowup(harness);
+    expect(harness.confirm).toHaveBeenCalledWith(expect.objectContaining({ initialValue: true }));
   });
 
   it("shows follow-up login command note when not linked and linking is skipped", async () => {

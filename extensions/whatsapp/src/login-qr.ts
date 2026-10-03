@@ -13,16 +13,13 @@ import {
 } from "openclaw/plugin-sdk/runtime-env";
 import { resolveWhatsAppAccount } from "./accounts.js";
 import { getActiveWebListener } from "./active-listener.js";
-import {
-  closeWaSocket,
-  waitForWhatsAppLoginResult,
-  WHATSAPP_LOGGED_OUT_QR_MESSAGE,
-} from "./connection-controller.js";
+import { closeWaSocket, WHATSAPP_LOGGED_OUT_QR_MESSAGE } from "./connection-controller.js";
+import { waitForWhatsAppLoginResult } from "./login-result.js";
 import { renderQrPngDataUrl } from "./qr-image.js";
 import {
   createWaSocket,
   formatError,
-  logoutWeb,
+  prepareWebAuthForLogin,
   readWebAuthExistsForDecision,
   readWebSelfId,
   WHATSAPP_AUTH_UNSTABLE_CODE,
@@ -287,6 +284,34 @@ export async function startWebLoginWithQr(
   const cfg = getRuntimeConfig();
   const account = resolveWhatsAppAccount({ cfg, accountId: opts.accountId });
   const socketTiming = resolveWhatsAppSocketTiming();
+  let preparation: Awaited<ReturnType<typeof prepareWebAuthForLogin>>;
+  try {
+    preparation = await prepareWebAuthForLogin({
+      authDir: account.authDir,
+      isLegacyAuthDir: account.isLegacyAuthDir,
+      mode: opts.force ? "clear-existing" : "preserve-linked",
+      runtime,
+      ...(opts.beforeCredentialPersistence
+        ? { beforeCredentialPersistence: opts.beforeCredentialPersistence }
+        : {}),
+    });
+  } catch (err) {
+    return {
+      message: `WhatsApp login failed: ${formatError(err)}`,
+    };
+  }
+  if (preparation === "unstable") {
+    return {
+      code: WHATSAPP_AUTH_UNSTABLE_CODE,
+      message: "WhatsApp auth state is still stabilizing. Retry login in a moment.",
+    };
+  }
+  if (preparation === "not-cleared") {
+    return {
+      message:
+        "WhatsApp login failed: existing auth could not be cleared. Remove or fix the configured WhatsApp auth directory, then retry login.",
+    };
+  }
   const authState = await readWebAuthExistsForDecision(account.authDir);
   if (authState.outcome === "unstable") {
     return {
@@ -301,27 +326,6 @@ export async function startWebLoginWithQr(
       message: `WhatsApp is already linked (${who}). Say “relink” if you want a fresh QR.`,
     };
   }
-  if (authState.exists && opts.force) {
-    try {
-      const cleared = await logoutWeb({
-        authDir: account.authDir,
-        isLegacyAuthDir: account.isLegacyAuthDir,
-        runtime,
-        beforeCredentialPersistence: opts.beforeCredentialPersistence,
-      });
-      if (!cleared) {
-        return {
-          message:
-            "WhatsApp login failed: existing auth could not be cleared. Remove or fix the configured WhatsApp auth directory, then retry login.",
-        };
-      }
-    } catch (err) {
-      return {
-        message: `WhatsApp login failed: ${formatError(err)}`,
-      };
-    }
-  }
-
   const existing = activeLogins.get(account.accountId);
   if (
     !opts.force &&

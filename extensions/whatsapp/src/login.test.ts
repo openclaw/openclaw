@@ -1,50 +1,42 @@
-// Whatsapp tests cover login plugin behavior.
-import { EventEmitter } from "node:events";
-import { resetLogger, setLoggerOverride, success } from "openclaw/plugin-sdk/runtime-env";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { success } from "openclaw/plugin-sdk/runtime-env";
+import { describe, expect, it, vi } from "vitest";
 import { restoreCredsFromBackupIfNeeded } from "./auth-store.js";
-import { loginWeb } from "./login.js";
+import { loginWeb, loginWebWithPhoneCode } from "./login.js";
+import {
+  setupWebLoginTest,
+  createPhoneCodeSocket,
+  resolveSocketAfterImmediateQr,
+  flushImmediate,
+} from "./login.test-helpers.js";
+import { normalizeWhatsAppPairingPhoneNumber } from "./phone-code.js";
 import { createWaSocket, type waitForWaConnection } from "./session.js";
 
 vi.mock("./session.js", async () => {
-  const actual = await vi.importActual<typeof import("./session.js")>("./session.js");
-  const ev = new EventEmitter();
-  const sock = {
-    ev,
-    ws: { close: vi.fn() },
-    sendPresenceUpdate: vi.fn(),
-    sendMessage: vi.fn(),
-  };
-  return {
-    ...actual,
-    createWaSocket: vi.fn().mockResolvedValue(sock),
-    waitForWaConnection: vi.fn().mockResolvedValue(undefined),
-    readWebAuthExistsForDecision: vi.fn(async () => ({
-      outcome: "stable" as const,
-      exists: true,
-    })),
-  };
+  const { createMockWebLoginSession } = await import("./login.test-helpers.js");
+  return await createMockWebLoginSession();
 });
 
 vi.mock("./auth-store.js", async () => {
-  const actual = await vi.importActual<typeof import("./auth-store.js")>("./auth-store.js");
-  return {
-    ...actual,
-    restoreCredsFromBackupIfNeeded: vi.fn(async () => false),
-  };
+  const { createMockWebLoginAuthStore } = await import("./login.test-helpers.js");
+  return await createMockWebLoginAuthStore();
 });
 
-describe("web login", () => {
-  beforeEach(() => {
-    vi.useFakeTimers();
-    vi.clearAllMocks();
-  });
+type PersistenceTestMode = "qr" | "phone-code";
 
-  afterEach(() => {
-    vi.useRealTimers();
-    resetLogger();
-    setLoggerOverride(null);
-  });
+function startPersistenceTestLogin(
+  mode: PersistenceTestMode,
+  waiter: typeof waitForWaConnection,
+): Promise<void> {
+  if (mode === "qr") {
+    return loginWeb(false, waiter);
+  }
+  const sock = createPhoneCodeSocket("12345678");
+  vi.mocked(createWaSocket).mockImplementationOnce(resolveSocketAfterImmediateQr(sock));
+  return loginWebWithPhoneCode(false, "+15551234567", waiter);
+}
+
+describe("web login", () => {
+  setupWebLoginTest();
 
   it("loginWeb waits for connection and closes", async () => {
     const sock = await (
@@ -75,61 +67,85 @@ describe("web login", () => {
     consoleLog.mockRestore();
   });
 
-  it("rejects a delayed credential write failure even when old auth is still readable", async () => {
-    const persistenceError = new Error("credential write failed");
-    const waiter: typeof waitForWaConnection = vi.fn(() => new Promise<void>(() => {}));
-    const pendingLogin = loginWeb(false, waiter, undefined, undefined, {
-      beforeCredentialPersistence: async () => {},
-    });
-    for (let index = 0; index < 5; index += 1) {
+  it.each(["qr", "phone-code"] as const)(
+    "rejects a delayed %s credential write failure even when old auth is still readable",
+    async (mode) => {
+      const persistenceError = new Error("credential write failed");
+      const waiter: typeof waitForWaConnection = vi.fn(() => new Promise<void>(() => {}));
+      const pendingLogin = startPersistenceTestLogin(mode, waiter);
+      for (let index = 0; index < 5; index += 1) {
+        await Promise.resolve();
+      }
+      expect(vi.mocked(createWaSocket)).toHaveBeenCalled();
+      const socketOptions = vi.mocked(createWaSocket).mock.calls.at(-1)?.[2] as
+        | { onCredentialPersistenceError?: (error: unknown) => void }
+        | undefined;
+
+      socketOptions?.onCredentialPersistenceError?.(persistenceError);
+
+      await expect(pendingLogin).rejects.toBe(persistenceError);
+    },
+  );
+
+  it.each(["qr", "phone-code"] as const)(
+    "waits for %s post-open key persistence before reporting login success",
+    async (mode) => {
+      let releaseKeyRead = () => {};
+      let releaseKeyWrite = () => {};
+      const keyRead = new Promise<void>((resolve) => {
+        releaseKeyRead = resolve;
+      });
+      const keyWrite = new Promise<void>((resolve) => {
+        releaseKeyWrite = resolve;
+      });
+      const waiter: typeof waitForWaConnection = vi.fn().mockResolvedValue(undefined);
+      const pendingLogin = startPersistenceTestLogin(mode, waiter);
+      for (let index = 0; index < 5; index += 1) {
+        await Promise.resolve();
+      }
+      expect(vi.mocked(createWaSocket)).toHaveBeenCalled();
+      const socketOptions = vi.mocked(createWaSocket).mock.calls.at(-1)?.[2] as
+        | { onCredentialPersistenceTask?: (task: Promise<unknown>) => void }
+        | undefined;
+      socketOptions?.onCredentialPersistenceTask?.(keyRead);
+      void keyRead.then(() => socketOptions?.onCredentialPersistenceTask?.(keyWrite));
+      await flushImmediate();
+      let settled = false;
+      void pendingLogin.then(() => {
+        settled = true;
+      });
       await Promise.resolve();
-    }
-    expect(vi.mocked(createWaSocket)).toHaveBeenCalled();
-    const socketOptions = vi.mocked(createWaSocket).mock.calls.at(-1)?.[2] as
-      | { onCredentialPersistenceError?: (error: unknown) => void }
-      | undefined;
+      expect(settled).toBe(false);
 
-    socketOptions?.onCredentialPersistenceError?.(persistenceError);
+      releaseKeyRead();
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(settled).toBe(false);
 
-    await expect(pendingLogin).rejects.toBe(persistenceError);
+      releaseKeyWrite();
+      await expect(pendingLogin).resolves.toBeUndefined();
+    },
+  );
+
+  it.each([
+    ["+1 (213) 373-4253", "12133734253"],
+    ["12133734253", "12133734253"],
+    ["+39 06 6982", "39066982"],
+  ])("normalizes phone-code login number %s for Baileys", (input, expected) => {
+    expect(normalizeWhatsAppPairingPhoneNumber(input)).toBe(expected);
   });
 
-  it("waits for Baileys post-open key persistence before reporting login success", async () => {
-    let releaseKeyRead = () => {};
-    let releaseKeyWrite = () => {};
-    const keyRead = new Promise<void>((resolve) => {
-      releaseKeyRead = resolve;
-    });
-    const keyWrite = new Promise<void>((resolve) => {
-      releaseKeyWrite = resolve;
-    });
-    const waiter: typeof waitForWaConnection = vi.fn().mockResolvedValue(undefined);
-    const pendingLogin = loginWeb(false, waiter, undefined, undefined, {
-      beforeCredentialPersistence: async () => {},
-    });
-    for (let index = 0; index < 5; index += 1) {
-      await Promise.resolve();
-    }
-    expect(vi.mocked(createWaSocket)).toHaveBeenCalled();
-    const socketOptions = vi.mocked(createWaSocket).mock.calls.at(-1)?.[2] as
-      | { onCredentialPersistenceTask?: (task: Promise<unknown>) => void }
-      | undefined;
-    socketOptions?.onCredentialPersistenceTask?.(keyRead);
-    void keyRead.then(() => socketOptions?.onCredentialPersistenceTask?.(keyWrite));
-    await vi.advanceTimersByTimeAsync(0);
-    let settled = false;
-    void pendingLogin.then(() => {
-      settled = true;
-    });
-    await Promise.resolve();
-    expect(settled).toBe(false);
-
-    releaseKeyRead();
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(settled).toBe(false);
-
-    releaseKeyWrite();
-    await expect(pendingLogin).resolves.toBeUndefined();
+  it.each([
+    "abc123456",
+    "+1 213 c373 4253",
+    "+1 213 373 4253 ext 89",
+    "+44 (0) 20 7946 0958",
+    "+44 0 20 7946 0958",
+    "+1 23",
+    "+1234567890123456",
+  ])("rejects non-canonical phone-code login number %s", (input) => {
+    expect(() => normalizeWhatsAppPairingPhoneNumber(input)).toThrow(
+      "requires an international phone number",
+    );
   });
 });
