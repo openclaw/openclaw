@@ -436,17 +436,16 @@ function parsePatchText(input: string): Hunk[] {
   return hunks;
 }
 
-function checkPatchBoundaries(lines: string[]): string[] {
-  const first = lines[0];
-  const last = lines.at(-1);
-  if (
-    lines.length >= 4 &&
+function checkPatchBoundaries(inputLines: string[]): string[] {
+  const first = inputLines[0];
+  const last = inputLines.at(-1);
+  const lines =
+    inputLines.length >= 4 &&
     last &&
     (first === "<<EOF" || first === "<<'EOF'" || first === '<<"EOF"') &&
     last.endsWith("EOF")
-  ) {
-    lines = lines.slice(1, -1);
-  }
+      ? inputLines.slice(1, -1)
+      : inputLines;
   if (lines[0]?.trim() !== BEGIN_PATCH_MARKER) {
     throw new Error("The first line of the patch must be '*** Begin Patch'");
   }

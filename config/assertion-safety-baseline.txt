@@ -1328,7 +1328,7 @@ src/agents/compaction-usage.ts	1
 src/agents/compaction.ts	4
 src/agents/content-blocks.ts	1
 src/agents/context-cache.ts	1
-src/agents/context-runtime-state.ts	4
+src/agents/context-runtime-state.ts	1
 src/agents/cron-creator-authority-context.ts	1
 src/agents/custom-api-registry.ts	2
 src/agents/delegation-capability.ts	1

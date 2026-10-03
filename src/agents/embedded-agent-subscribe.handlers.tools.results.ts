@@ -414,9 +414,7 @@ function queuePendingToolMedia(
   }
 }
 
-function readExecApprovalPendingDetails(
-  result: unknown,
-): ExecApprovalPendingReplyParams | null {
+function readExecApprovalPendingDetails(result: unknown): ExecApprovalPendingReplyParams | null {
   const outer = asOptionalObjectRecord(result);
   const details = readRecordField(outer?.details) ?? outer;
   if (details?.status !== "approval-pending") {

@@ -401,6 +401,8 @@ const rootEntries = [
   "src/gateway/plugin-channel-reload-targets.ts!",
   // Published-update bridges import lifecycle facts from this stable dist entry.
   "src/agents/provider-runtime-lifecycle.ts!",
+  // July and later Gateways retain this lazy entry across in-place updates.
+  "src/agents/models-config.runtime.ts!",
   // Shipped compatibility facade for statusCommand and getStatusSummary.
   "src/commands/status.ts!",
   "src/cli/daemon-cli.ts!",
