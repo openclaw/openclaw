@@ -308,31 +308,30 @@ export async function prepareAgentCommandExecution(
     sessionKey,
     sessionEntry: sessionEntryRaw,
   });
-  if (
-    sessionEntryRaw &&
+  const sessionStableReplyMode = resolveSessionStableReplyMode({
+    cfg,
+    ctx: { CommandAuthorized: false },
+    sessionEntry: sessionEntryRaw,
+    sessionAgentId,
+    sessionKey,
+  });
+  commandOpts = {
+    ...commandOpts,
+    // Seed the same reusable policy before the first row and on later completion turns.
+    cliSessionBindingFacts: commandOpts.cliSessionBindingFacts ?? {
+      sourceReplyDeliveryMode: sessionStableReplyMode,
+    },
+    ...(sessionEntryRaw &&
     isSyntheticSourceReplyTurn({
       inputProvenance: commandOpts.inputProvenance,
       isHeartbeat: commandOpts.bootstrapContextRunKind === "heartbeat",
     })
-  ) {
-    const sessionStableReplyMode = resolveSessionStableReplyMode({
-      cfg,
-      ctx: { CommandAuthorized: false },
-      sessionEntry: sessionEntryRaw,
-      sessionAgentId,
-      sessionKey,
-    });
-    commandOpts = {
-      ...commandOpts,
-      // A direct Gateway wake has no inbound dispatcher to apply reply policy.
-      // Bind the effective run and its delivery to the same existing policy owner,
-      // without letting explicit turn overrides change reusable CLI bindings.
-      sourceReplyDeliveryMode: commandOpts.sourceReplyDeliveryMode ?? sessionStableReplyMode,
-      cliSessionBindingFacts: commandOpts.cliSessionBindingFacts ?? {
-        sourceReplyDeliveryMode: sessionStableReplyMode,
-      },
-    };
-  }
+      ? {
+          // Direct Gateway wakes have no inbound dispatcher to apply effective reply policy.
+          sourceReplyDeliveryMode: commandOpts.sourceReplyDeliveryMode ?? sessionStableReplyMode,
+        }
+      : {}),
+  };
   const thinkingLevelsHint = formatThinkingLevels(
     configuredModel.provider,
     configuredModel.model,

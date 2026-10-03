@@ -121,6 +121,15 @@ plugin code registered with `api.registerCliBackend(...)`.
 4. Parses output (JSON or plain text) and returns the final text.
 5. Persists session ids per backend so follow-ups reuse the same CLI session.
 
+Direct agent calls and child-completion updates share the same session reply policy.
+A completion turn's delivery override does not by itself start a fresh CLI session;
+authentication, workspace, and tool compatibility checks still apply.
+Each turn receives delivery instructions for its current mode and available tools,
+while the stored user message and reusable system prompt remain unchanged.
+
+Existing sessions that stored the implicit automatic policy also retain continuity.
+OpenClaw records the current policy when the next turn completes.
+
 ## Timeouts and long-running work
 
 CLI backends have two independent limits:
