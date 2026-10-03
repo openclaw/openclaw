@@ -264,6 +264,13 @@ describe("tlon core", () => {
     });
   });
 
+  it("resolves club targets without promoting them to ships", () => {
+    expect(resolveTlonOutboundTarget("club:0v3.q4n5m")).toEqual({
+      ok: true,
+      to: "0v3.q4n5m",
+    });
+  });
+
   it("returns a helpful error for invalid targets", () => {
     const resolved = resolveTlonOutboundTarget("group:bad-target");
     expect(resolved.ok).toBe(false);

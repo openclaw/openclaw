@@ -21,6 +21,20 @@ import {
 
 type TlonApprovalApi = Pick<UrbitSSEClient, "poke" | "scry">;
 
+function canReplayApprovedMessage(approval: PendingApproval): boolean {
+  if (approval.type !== "dm" || !approval.originalMessage) {
+    return true;
+  }
+  const recordedSender = approval.originalMessage.authenticatedSenderShip;
+  if (typeof recordedSender !== "string") {
+    return false;
+  }
+  const authenticatedSender = normalizeShip(recordedSender);
+  return (
+    authenticatedSender.length > 0 && authenticatedSender === normalizeShip(approval.requestingShip)
+  );
+}
+
 export function createTlonApprovalRuntime(params: {
   api: TlonApprovalApi;
   runtime: RuntimeEnv;
@@ -244,14 +258,23 @@ export function createTlonApprovalRuntime(params: {
     }
 
     if (parsed.action === "approve") {
+      let approvalConfirmationSuffix = "";
       switch (approval.type) {
         case "dm":
           await addToDmAllowlist(approval.requestingShip);
-          if (approval.originalMessage) {
+          if (approval.originalMessage && canReplayApprovedMessage(approval)) {
             runtime.log?.(
               `[tlon] Processing original message from ${approval.requestingShip} after approval`,
             );
             await processApprovedMessage(approval);
+          } else if (approval.originalMessage) {
+            const hasRecordedSender =
+              typeof approval.originalMessage.authenticatedSenderShip === "string";
+            runtime.log?.(
+              `[tlon] Skipping DM replay for ${approval.requestingShip}: authenticated sender provenance ${hasRecordedSender ? "does not match the approved ship" : "is unavailable"}; a fresh DM is required`,
+            );
+            approvalConfirmationSuffix =
+              " Stored message content was not replayed because its sender could not be authenticated. Ask the approved ship to send a fresh DM.";
           }
           break;
         case "channel":
@@ -300,7 +323,9 @@ export function createTlonApprovalRuntime(params: {
           break;
       }
 
-      await sendOwnerNotification(formatApprovalConfirmation(approval, "approve"));
+      await sendOwnerNotification(
+        `${formatApprovalConfirmation(approval, "approve")}${approvalConfirmationSuffix}`,
+      );
     } else if (parsed.action === "block") {
       await blockShip(approval.requestingShip);
       await sendOwnerNotification(formatApprovalConfirmation(approval, "block"));

@@ -67,7 +67,9 @@ DM the bot or @ mention it in a group channel.
 
 ## Inbound durability
 
-OpenClaw persists accepted Tlon DM and group-chat events before agent dispatch. Pending or retryable turns survive a Gateway restart, and work remains serialized per group channel or direct peer. Stable Urbit message IDs also suppress a redelivered event while its queue record or retained completion record exists.
+OpenClaw persists accepted Tlon DM and group-channel events before agent dispatch. Pending or retryable turns survive a Gateway restart, and work remains serialized per group channel or direct peer. Stable Urbit message IDs also suppress a redelivered event while its queue record or retained completion record exists.
+
+Here, group channels are configured `chat/~host/channel` nests from Tlon's channels feed. Club or group-DM events from the chat feed continue to arrive automatically and use the club ID as the trusted conversation identity. Tlon does not bind the event's claimed author to the authenticated Urbit sender, so OpenClaw labels that author as unverified and never grants owner, approval, allowlist, or command authority from the claim. Identity-sensitive actions require an authenticated direct message.
 
 Delivery is at least once across the queue-to-agent boundary: a crash during handoff can replay a turn. Agent actions that produce external side effects should therefore remain idempotent where practical.
 
@@ -192,7 +194,11 @@ always auto-accepted, and channel messages always pass authorization. The owner 
 be in `dmAllowlist`, `defaultAuthorizedShips`, or `groupInviteAllowlist`.
 
 When `ownerShip` is set, unauthorized requests do not just get dropped — they queue a pending
-approval and DM the owner:
+approval and DM the owner. Approving a pending DM created by an older OpenClaw version still adds
+that ship to the allowlist, but does not replay stored message content that lacks authenticated sender
+provenance; the newly approved ship must send a fresh DM. Group-channel approvals are unaffected.
+
+Approval requests look like this:
 
 - DM requests from ships not on `dmAllowlist`
 - Mentions in channels where the sender fails authorization

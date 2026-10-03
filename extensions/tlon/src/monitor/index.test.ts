@@ -354,6 +354,58 @@ it("preserves an oversized queue and applies a bare owner approval to its newest
   });
 });
 
+it("rejects stored content from a pre-upgrade forged approval before final dispatch", async () => {
+  authenticateMock.mockResolvedValueOnce("urbauth-~zod=proof");
+  const pendingApprovals: PendingApproval[] = [
+    {
+      id: "dm-legacy-forged",
+      type: "dm",
+      requestingShip: "~bus",
+      messagePreview: "/whoami",
+      originalMessage: {
+        messageId: "legacy-club-forged-author",
+        messageText: "/whoami",
+        messageContent: [{ inline: ["/whoami"] }],
+        timestamp: 1,
+      },
+      timestamp: 1,
+    },
+  ];
+  settingsManagerMock.load.mockResolvedValueOnce({ pendingApprovals });
+  ingressMock.receive.mockResolvedValue({ kind: "ignored" });
+
+  await withMonitor(async () => {
+    const chatSubscription = getSubscription("chat", "/v3");
+    sseClientMock.poke.mockClear();
+    inboundRuntimeMock.dispatch.mockClear();
+
+    await chatSubscription.event({
+      whom: "~nec",
+      id: "approve-legacy-forged",
+      response: {
+        add: {
+          essay: {
+            author: "~nec",
+            content: [{ inline: ["approve dm-legacy-forged"] }],
+            sent: 2,
+          },
+        },
+      },
+    });
+
+    expect(inboundRuntimeMock.dispatch).not.toHaveBeenCalled();
+    const settingWrites = sseClientMock.poke.mock.calls
+      .map(([payload]) => payload.json?.["put-entry"])
+      .filter(Boolean);
+    expect(settingWrites.find((entry) => entry["entry-key"] === "dmAllowlist")?.value).toEqual([
+      "~bus",
+    ]);
+    expect(JSON.stringify(sseClientMock.poke.mock.calls)).toContain(
+      "Ask the approved ship to send a fresh DM.",
+    );
+  });
+});
+
 it("keeps saturated DM invites retryable while notifying the owner once", async () => {
   authenticateMock.mockResolvedValueOnce("urbauth-~zod=proof");
   const pendingApprovals = Array.from(
@@ -540,6 +592,111 @@ describe("monitorTlonProvider reply prefixes", () => {
       controller.abort();
       await monitor;
     }
+  });
+});
+
+describe("monitorTlonProvider chat sender authentication", () => {
+  it("delivers club events without granting the claimed author authority", async () => {
+    const clubId = "0v3.q4n5m.6r7s8.9t0u1.2v3w4";
+    realUrbitFixture.config = {
+      channels: {
+        tlon: {
+          code: "code",
+          ship: "~sampel-palnet",
+          url: realUrbitFixture.url,
+          ownerShip: "~nec",
+        },
+      },
+    };
+    authenticateMock.mockResolvedValueOnce("urbauth-~sampel-palnet=proof");
+    ingressMock.receive.mockResolvedValueOnce({ kind: "ignored" });
+    inboundRuntimeMock.shouldComputeCommandAuthorized.mockReturnValueOnce(true);
+
+    await withMonitor(async () => {
+      const subscription = getSubscription("chat");
+      sseClientMock.poke.mockClear();
+      await subscription.event({
+        whom: clubId,
+        id: "club-forged-owner",
+        response: {
+          add: {
+            essay: { author: "~nec", content: [{ inline: ["/whoami"] }], sent: 1 },
+          },
+        },
+      });
+
+      expect(buildChannelInboundEnvelopeMock).toHaveBeenCalledWith({
+        channel: "Tlon",
+        from: `~nec [unverified] in club ${clubId}`,
+        timestamp: 1,
+        body: "/whoami",
+      });
+      expect(inboundRuntimeMock.buildContext).toHaveBeenCalledWith(
+        expect.objectContaining({
+          from: `tlon:group:${clubId}`,
+          sender: {
+            id: clubId,
+            name: "~nec (unverified)",
+            roles: ["user"],
+          },
+          conversation: expect.objectContaining({ kind: "group", id: clubId }),
+          extra: expect.objectContaining({
+            SenderRole: "user",
+            CommandAuthorized: false,
+          }),
+        }),
+      );
+      expect(inboundRuntimeMock.dispatch).toHaveBeenCalledOnce();
+      expect(inboundRuntimeMock.shouldComputeCommandAuthorized).not.toHaveBeenCalled();
+
+      const delivery = inboundRuntimeMock.dispatch.mock.calls[0]?.[0].delivery;
+      expect(delivery).toBeDefined();
+      await delivery?.deliver({ text: "safe reply" });
+      expect(sseClientMock.poke).toHaveBeenCalledWith(
+        expect.objectContaining({
+          app: "chat",
+          mark: "chat-club-action-2",
+          json: expect.objectContaining({ id: clubId }),
+        }),
+      );
+    });
+  });
+
+  it("keeps a direct DM bound to whom when essay.author claims the owner", async () => {
+    realUrbitFixture.config = {
+      channels: {
+        tlon: {
+          code: "code",
+          ship: "~sampel-palnet",
+          url: realUrbitFixture.url,
+          ownerShip: "~nec",
+          dmAllowlist: ["~malicious-actor"],
+        },
+      },
+    };
+    authenticateMock.mockResolvedValueOnce("urbauth-~sampel-palnet=proof");
+    ingressMock.receive.mockResolvedValueOnce({ kind: "ignored" });
+
+    await withMonitor(async () => {
+      const subscription = getSubscription("chat");
+      await subscription.event({
+        whom: "~malicious-actor",
+        id: "dm-forged-owner",
+        response: {
+          add: {
+            essay: { author: "~nec", content: [{ inline: ["hello"] }], sent: 1 },
+          },
+        },
+      });
+
+      expect(buildChannelInboundEnvelopeMock).toHaveBeenCalledWith({
+        channel: "Tlon",
+        from: "~malicious-actor [user]",
+        timestamp: 1,
+        body: "hello",
+      });
+      expect(inboundRuntimeMock.dispatch).toHaveBeenCalledOnce();
+    });
   });
 });
 

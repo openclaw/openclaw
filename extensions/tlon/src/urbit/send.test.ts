@@ -80,6 +80,49 @@ describe("sendDm", () => {
     });
     expect(result.receipt.threadId).toBe("~nec/general");
   });
+
+  it("sends club replies through the authenticated club conversation", async () => {
+    const { sendClubMessage } = await import("./send.js");
+    vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
+    const poke = vi.fn(async () => ({}));
+
+    const result = await sendClubMessage({
+      api: { poke },
+      fromShip: "~zod",
+      clubId: "0v3.q4n5m",
+      text: "hello club",
+    });
+
+    expect(poke).toHaveBeenCalledWith({
+      app: "chat",
+      mark: "chat-club-action-2",
+      json: {
+        id: "0v3.q4n5m",
+        diff: {
+          uid: "0v4",
+          delta: {
+            writ: {
+              id: "~zod/mocked-ud",
+              delta: {
+                add: {
+                  essay: {
+                    content: [{ inline: ["hello club"] }],
+                    author: "~zod",
+                    sent: 1_700_000_000_000,
+                    kind: "/chat",
+                    meta: null,
+                    blob: null,
+                  },
+                  time: null,
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+    expect(result.receipt.threadId).toBe("0v3.q4n5m");
+  });
 });
 
 describe("buildMediaStory", () => {

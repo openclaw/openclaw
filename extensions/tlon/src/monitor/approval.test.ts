@@ -9,15 +9,29 @@ vi.mock("node:crypto", () => ({
   randomBytes: cryptoMocks.randomBytes,
 }));
 
+let createAuthenticatedDmApproval: typeof import("./approval.js").createAuthenticatedDmApproval;
 let createPendingApproval: typeof import("./approval.js").createPendingApproval;
 let formatApprovalRequest: typeof import("./approval.js").formatApprovalRequest;
 
 beforeAll(async () => {
-  ({ createPendingApproval, formatApprovalRequest } = await import("./approval.js"));
+  ({ createAuthenticatedDmApproval, createPendingApproval, formatApprovalRequest } =
+    await import("./approval.js"));
 });
 
 beforeEach(() => {
   cryptoMocks.randomBytes.mockReset();
+});
+
+it("records authenticated DM provenance on replayable approvals", () => {
+  cryptoMocks.randomBytes.mockReturnValue(Buffer.from("aabbcc", "hex"));
+  const approval = createAuthenticatedDmApproval("~bus", {
+    messageId: "message-1",
+    messageText: "hello",
+    messageContent: [],
+    timestamp: 1,
+  });
+
+  expect(approval.originalMessage?.authenticatedSenderShip).toBe("~bus");
 });
 
 describe("createPendingApproval ID", () => {

@@ -12,6 +12,7 @@ import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeNullableString as nonEmptyString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getTlonRuntime } from "../runtime.js";
 import { UrbitAuthError, UrbitHttpError } from "../urbit/errors.js";
+import { extractAuthenticatedDmPartnerShip, extractClubId } from "./identity.js";
 
 const TLON_INGRESS_PAYLOAD_VERSION = 1;
 const TLON_INGRESS_POLL_INTERVAL_MS = 1_000;
@@ -62,7 +63,14 @@ function inspectChannelsEvent(event: unknown): { eventId: string; laneKey: strin
   return eventId ? { eventId, laneKey: `group:${nest}` } : null;
 }
 
-function inspectChatEvent(event: unknown): { eventId: string; laneKey: string } | null {
+type TlonIngressInspectionContext =
+  | { phase: "admission" }
+  | { phase: "claim"; claimedLaneKey: string | undefined };
+
+function inspectChatEvent(
+  event: unknown,
+  _context: TlonIngressInspectionContext,
+): { eventId: string; laneKey: string } | null {
   const envelope = isRecord(event) ? event : null;
   const response = isRecord(envelope?.response) ? envelope.response : null;
   const add = isRecord(response?.add) ? response.add : null;
@@ -71,18 +79,22 @@ function inspectChatEvent(event: unknown): { eventId: string; laneKey: string } 
   if (!essay || !eventId) {
     return null;
   }
-  const whom = isRecord(envelope?.whom) ? nonEmptyString(envelope.whom.ship) : null;
-  const peer = nonEmptyString(envelope?.whom) ?? whom ?? nonEmptyString(essay.author);
-  return { eventId, laneKey: peer ? `direct:${peer}` : `event:${eventId}` };
+  const peer = extractAuthenticatedDmPartnerShip(envelope?.whom);
+  if (peer) {
+    return { eventId, laneKey: `direct:${peer}` };
+  }
+  const clubId = extractClubId(envelope?.whom);
+  return clubId ? { eventId, laneKey: `club:${clubId}` } : null;
 }
 
 function inspectTlonIngressEvent(
   source: TlonIngressSource,
   event: unknown,
+  context: TlonIngressInspectionContext,
 ): { eventId: string; laneKey: string } | null {
   // Urbit SSE ids belong to a disposable HTTP channel. The message id inside
   // each firehose envelope survives resubscription and preserves the retired guard key.
-  return source === "channels" ? inspectChannelsEvent(event) : inspectChatEvent(event);
+  return source === "channels" ? inspectChannelsEvent(event) : inspectChatEvent(event, context);
 }
 
 function decodeTlonIngressPayload(
@@ -164,7 +176,7 @@ export function createTlonIngressMonitor(options: {
         getTlonRuntime().state.openChannelIngressQueue<TlonIngressPayload>({
           accountId: options.accountId,
         })),
-    inspect: (raw) => inspectTlonIngressEvent(raw.source, raw.event),
+    inspect: (raw, context) => inspectTlonIngressEvent(raw.source, raw.event, context),
     payload: {
       version: TLON_INGRESS_PAYLOAD_VERSION,
       serialize: (raw, { receivedAt }) => ({
@@ -194,6 +206,34 @@ export function createTlonIngressMonitor(options: {
     // The Tlon firehose has always surfaced a failed append to its awaited callback.
     appendRetryDelaysMs: [0],
     drain: {
+      deriveLaneKey: (record) => {
+        const payload = record.payload;
+        if (
+          payload.version !== TLON_INGRESS_PAYLOAD_VERSION ||
+          (payload.source !== "channels" && payload.source !== "chat") ||
+          typeof payload.rawEvent !== "string"
+        ) {
+          return record.laneKey;
+        }
+        try {
+          return inspectTlonIngressEvent(payload.source, JSON.parse(payload.rawEvent), {
+            phase: "admission",
+          })?.laneKey;
+        } catch {
+          // Preserve the stored lane; claim-time decoding will dead-letter invalid JSON.
+          return record.laneKey;
+        }
+      },
+      reconcileStoredLaneKey: (_record, storedLaneKey, derivedLaneKey) => {
+        if (!storedLaneKey.startsWith("direct:")) {
+          return false;
+        }
+        if (derivedLaneKey.startsWith("club:")) {
+          return true;
+        }
+        const storedPeer = extractAuthenticatedDmPartnerShip(storedLaneKey.slice("direct:".length));
+        return derivedLaneKey === `direct:${storedPeer}`;
+      },
       resolveNonRetryableFailure: resolveTlonIngressNonRetryableFailure,
       ...(options.adoptionStallTimeoutMs === undefined
         ? {}

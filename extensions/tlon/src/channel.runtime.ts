@@ -18,7 +18,12 @@ import {
   ssrfPolicyFromDangerouslyAllowPrivateNetwork,
 } from "./urbit/context.js";
 import { urbitFetch } from "./urbit/fetch.js";
-import { buildMediaStory, sendDmWithStory, sendGroupMessageWithStory } from "./urbit/send.js";
+import {
+  buildMediaStory,
+  sendClubMessageWithStory,
+  sendDmWithStory,
+  sendGroupMessageWithStory,
+} from "./urbit/send.js";
 import { markdownToStory } from "./urbit/story.js";
 import { uploadImageFromUrl } from "./urbit/upload.js";
 export { tlonSetupWizard } from "./setup-surface.js";
@@ -158,6 +163,15 @@ async function sendTlonOutbound(params: ChannelOutboundContext, kind: "text" | "
       api,
       fromShip,
       toShip: parsed.ship,
+      story,
+      kind,
+    });
+  }
+  if (parsed.kind === "club") {
+    return await sendClubMessageWithStory({
+      api,
+      fromShip,
+      clubId: parsed.clubId,
       story,
       kind,
     });

@@ -33,6 +33,7 @@ describe("tlon target classification", () => {
     expect(
       tlonPlugin.messaging?.inferTargetChatType?.({ to: "chat/~sampel-palnet/operators" }),
     ).toBe("group");
+    expect(tlonPlugin.messaging?.inferTargetChatType?.({ to: "0v3.q4n5m" })).toBe("group");
   });
 });
 

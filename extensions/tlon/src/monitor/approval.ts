@@ -26,6 +26,18 @@ export function createPendingApproval(
   };
 }
 
+export function createAuthenticatedDmApproval(
+  requestingShip: string,
+  originalMessage: Omit<NonNullable<PendingApproval["originalMessage"]>, "authenticatedSenderShip">,
+): PendingApproval {
+  return createPendingApproval({
+    type: "dm",
+    requestingShip,
+    messagePreview: sliceUtf16Safe(originalMessage.messageText, 0, 100),
+    originalMessage: { ...originalMessage, authenticatedSenderShip: requestingShip },
+  });
+}
+
 function truncate(text: string, maxLength: number): string {
   if (text.length <= maxLength) {
     return text;

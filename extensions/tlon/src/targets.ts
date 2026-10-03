@@ -1,9 +1,11 @@
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 type TlonTarget =
   | { kind: "dm"; ship: string }
+  | { kind: "club"; clubId: string }
   | { kind: "group"; nest: string; hostShip: string; channelName: string };
 
 const SHIP_RE = /^~?[a-z-]+$/i;
+const CLUB_RE = /^0v[0-9a-z]+(?:\.[0-9a-z]+)*$/i;
 const NEST_RE = /^chat\/([^/]+)\/([^/]+)$/i;
 
 export function normalizeShip(raw: string): string {
@@ -45,6 +47,12 @@ export function parseTlonTarget(raw?: string | null): TlonTarget | null {
     return { kind: "dm", ship: normalizeShip(expectDefined(dmPrefix[1], "DM ship capture")) };
   }
 
+  const clubPrefix = withoutPrefix.match(/^club[/:](.+)$/i);
+  if (clubPrefix) {
+    const clubId = expectDefined(clubPrefix[1], "club id capture").trim();
+    return CLUB_RE.test(clubId) ? { kind: "club", clubId } : null;
+  }
+
   const groupPrefix = withoutPrefix.match(/^(group|room)[/:](.+)$/i);
   if (groupPrefix) {
     const groupTarget = expectDefined(groupPrefix[2], "group target capture").trim();
@@ -72,6 +80,10 @@ export function parseTlonTarget(raw?: string | null): TlonTarget | null {
     return makeGroupTarget(parsed);
   }
 
+  if (CLUB_RE.test(withoutPrefix)) {
+    return { kind: "club", clubId: withoutPrefix };
+  }
+
   if (SHIP_RE.test(withoutPrefix)) {
     return { kind: "dm", ship: normalizeShip(withoutPrefix) };
   }
@@ -90,9 +102,9 @@ export function resolveTlonOutboundTarget(to?: string | null) {
   if (parsed.kind === "dm") {
     return { ok: true as const, to: parsed.ship };
   }
-  return { ok: true as const, to: parsed.nest };
+  return { ok: true as const, to: parsed.kind === "club" ? parsed.clubId : parsed.nest };
 }
 
 export function formatTargetHint(): string {
-  return "dm/~sampel-palnet | ~sampel-palnet | chat/~host-ship/channel | group:~host-ship/channel";
+  return "dm/~sampel-palnet | ~sampel-palnet | club:0v... | chat/~host-ship/channel | group:~host-ship/channel";
 }

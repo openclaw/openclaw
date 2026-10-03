@@ -17,6 +17,14 @@ type SendStoryParams = {
   kind?: MessageReceiptPartKind;
 };
 
+type SendClubStoryParams = {
+  api: TlonPokeApi;
+  fromShip: string;
+  clubId: string;
+  story: Story;
+  kind?: MessageReceiptPartKind;
+};
+
 function createTlonSendReceipt(params: {
   messageId: string;
   conversationId: string;
@@ -80,6 +88,60 @@ export async function sendDmWithStory({
     channel: "tlon",
     messageId: id,
     receipt: createTlonSendReceipt({ messageId: id, conversationId: toShip, kind }),
+  };
+}
+
+export async function sendClubMessage({
+  text,
+  ...params
+}: Omit<SendClubStoryParams, "story" | "kind"> & { text: string }) {
+  return sendClubMessageWithStory({ ...params, story: markdownToStory(text), kind: "text" });
+}
+
+export async function sendClubMessageWithStory({
+  api,
+  fromShip,
+  clubId,
+  story,
+  kind = "unknown",
+}: SendClubStoryParams) {
+  const sentAt = Date.now();
+  const idUd = scot("ud", da.fromUnix(sentAt));
+  const id = `${fromShip}/${idUd}`;
+
+  await api.poke({
+    app: "chat",
+    mark: "chat-club-action-2",
+    json: {
+      id: clubId,
+      diff: {
+        uid: "0v4",
+        delta: {
+          writ: {
+            id,
+            delta: {
+              add: {
+                essay: {
+                  content: story,
+                  author: fromShip,
+                  sent: sentAt,
+                  kind: "/chat",
+                  meta: null,
+                  blob: null,
+                },
+                time: null,
+              },
+            },
+          },
+        },
+      },
+    },
+  });
+
+  return {
+    channel: "tlon",
+    messageId: id,
+    receipt: createTlonSendReceipt({ messageId: id, conversationId: clubId, kind }),
   };
 }
 

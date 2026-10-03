@@ -18,6 +18,8 @@ export type PendingApproval = {
     messageText: string;
     messageContent: unknown;
     timestamp: number;
+    /** Authenticated DM peer recorded at admission; absent on legacy approvals. */
+    authenticatedSenderShip?: string;
     parentId?: string;
     isThreadReply?: boolean;
   };

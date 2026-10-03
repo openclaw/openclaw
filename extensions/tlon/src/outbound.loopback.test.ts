@@ -12,6 +12,7 @@ if (!textSender) {
 }
 const targets = [
   { name: "DM", to: "~nec", threadId: undefined },
+  { name: "club", to: "0v3.q4n5m", threadId: undefined },
   { name: "group", to: "chat/~nec/general", threadId: undefined },
   { name: "thread", to: "chat/~nec/general", threadId: "1700000000000" },
 ];
@@ -233,20 +234,44 @@ describe("tlon outbound loopback", () => {
               mark: "chat-dm-action",
               json: { ship: "~nec", diff: { delta: { add: { memo } } } },
             }
-          : {
-              app: "channels",
-              mark: "channel-action-1",
-              json: {
-                channel: {
-                  nest: "chat/~nec/general",
-                  action: {
-                    post: threadId
-                      ? { reply: { id: "1.700.000.000.000", action: { add: memo } } }
-                      : { add: memo },
+          : name === "club"
+            ? {
+                app: "chat",
+                mark: "chat-club-action-2",
+                json: {
+                  id: "0v3.q4n5m",
+                  diff: {
+                    uid: "0v4",
+                    delta: {
+                      writ: {
+                        delta: {
+                          add: {
+                            essay: {
+                              content: memo.content,
+                              author: memo.author,
+                              kind: "/chat",
+                            },
+                          },
+                        },
+                      },
+                    },
+                  },
+                },
+              }
+            : {
+                app: "channels",
+                mark: "channel-action-1",
+                json: {
+                  channel: {
+                    nest: "chat/~nec/general",
+                    action: {
+                      post: threadId
+                        ? { reply: { id: "1.700.000.000.000", action: { add: memo } } }
+                        : { add: memo },
+                    },
                   },
                 },
               },
-            },
       ]);
       controller.abort(new Error("authority closed after poke acceptance"));
       response.writeHead(204);
