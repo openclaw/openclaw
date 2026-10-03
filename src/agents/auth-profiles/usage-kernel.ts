@@ -7,7 +7,11 @@ import { pruneAuthProfileStoreReferences } from "./runtime-snapshot-owner.js";
 import { readAuthProfileJsonCellText, writeAuthProfileJsonCell } from "./sqlite-json.js";
 import { prepareAuthProfileStateMutation } from "./store-mutation.js";
 import { AuthProfileStoreUnreadableError } from "./store-unreadable-error.js";
-import type { AuthProfileUsageInput, AuthProfileUsageReceipt } from "./store.worker-contract.js";
+import {
+  createAuthProfileUsageReceipt,
+  type AuthProfileUsageInput,
+  type AuthProfileUsageReceipt,
+} from "./store.worker-contract.js";
 import { reduceAuthProfileFailure } from "./usage-reduction.js";
 import { resetAuthProfileFailureState } from "./usage-state.js";
 
@@ -27,9 +31,6 @@ export function recordAuthProfileUsageInDatabase(
   };
   const credentialText = readAuthProfileJsonCellText(database, "store", databaseKind);
   const credentials = parseCell(credentialText);
-  if (!isDeepStrictEqual(credentials, input.expectedCredentials)) {
-    throw new Error("Auth credentials changed during usage preparation");
-  }
   const existingState = parseCell(readAuthProfileJsonCellText(database, "state", databaseKind));
   const loaded = mergePersistedAuthProfileState(credentials, () => existingState);
   if (!loaded && credentialText !== undefined) {
@@ -39,18 +40,14 @@ export function recordAuthProfileUsageInDatabase(
   const store = input.scopedSharedStore
     ? mergeAuthProfileStores(input.scopedSharedStore, local)
     : local;
-  const receipt: AuthProfileUsageReceipt = {
-    store,
-    result: undefined,
-    publication: {
-      credentialsChanged: false,
-      profileSetChanged: false,
-      stateChanged: false,
-      selectionChanged: false,
-      profileIds: [],
-    },
-  };
+  const receipt = createAuthProfileUsageReceipt(store);
   const profile = store.profiles[input.profileId];
+  if (!profile) {
+    return receipt;
+  }
+  if (!isDeepStrictEqual(credentials, input.expectedCredentials)) {
+    throw new Error("Auth credentials changed during usage preparation");
+  }
   const previous = store.usageStats?.[input.profileId];
   const now = Date.now();
   const canonicalProvider = (provider: string) => {

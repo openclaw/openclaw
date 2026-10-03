@@ -27,6 +27,20 @@ export type AuthProfileUsageReceipt = {
   };
 };
 
+export function createAuthProfileUsageReceipt(store: AuthProfileStore): AuthProfileUsageReceipt {
+  return {
+    store,
+    result: undefined,
+    publication: {
+      credentialsChanged: false,
+      profileSetChanged: false,
+      stateChanged: false,
+      selectionChanged: false,
+      profileIds: [],
+    },
+  };
+}
+
 export type AuthProfileUsageResult =
   | { ok: true; receipt: AuthProfileUsageReceipt }
   | { ok: false; error: OpenClawStateWorkerErrorPayload };

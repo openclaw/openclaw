@@ -38,7 +38,7 @@ afterEach(() => {
 });
 
 async function fixture(state: OpenClawTestState, owner: Owner = "shared") {
-  const config = { agents: { list: [{ id: "main", default: true }, { id: "voice" }] } };
+  const config = { agents: { entries: { main: {}, voice: {} } } };
   await state.writeConfig(config);
   setRuntimeConfigSnapshot(config, config);
   writeConfigMachineState(

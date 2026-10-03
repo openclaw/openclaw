@@ -31,7 +31,6 @@ import { shouldUseMainOwnerForLocalOAuthCredential } from "./ownership.js";
 import {
   resolveSharedAuthStoreOwnership,
   resolveSharedAuthStoreOwnershipAsync,
-  resolveSharedAuthStorePath,
 } from "./path-resolve.js";
 import { mergeAuthProfileStores } from "./persisted.js";
 import { authProfileRuntimeMode } from "./runtime-scope.js";
@@ -47,13 +46,17 @@ import {
 } from "./sqlite-read.js";
 import { resolveAuthProfileDatabaseOwnerId, resolveAuthProfileDatabasePath } from "./sqlite.js";
 import { getScopedAuthProfileEnv, resolveRuntimeAuthProfileAgentDir } from "./store.js";
-import type {
-  AuthProfileUsageInput,
-  AuthProfileUsageReceipt,
-  AuthProfileUsageResult,
+import {
+  createAuthProfileUsageReceipt,
+  type AuthProfileUsageInput,
+  type AuthProfileUsageReceipt,
+  type AuthProfileUsageResult,
 } from "./store.worker-contract.js";
 import type { AuthProfileRowRead, AuthProfileStore } from "./types.js";
-import { reserveAuthProfileUsagePreparation } from "./usage-lifecycle.js";
+import {
+  reserveAuthProfileUsagePreparation,
+  reserveAuthProfileUsageWrite,
+} from "./usage-lifecycle.js";
 import type { PersonalAuthProfileUsageReduction } from "./usage-reduction.js";
 
 /** Capture every possible physical owner before choosing inherited ownership asynchronously. */
@@ -76,17 +79,7 @@ export async function withAuthProfileUsage<T>(
     return consume({
       observed,
       inherited: false,
-      record: async () => ({
-        store: observed,
-        result: undefined,
-        publication: {
-          credentialsChanged: false,
-          profileSetChanged: false,
-          stateChanged: false,
-          selectionChanged: false,
-          profileIds: [],
-        },
-      }),
+      record: async () => createAuthProfileUsageReceipt(observed),
     });
   }
   const scopedSharedStore = mode && structuredClone(mode.sharedStore);
@@ -100,6 +93,10 @@ export async function withAuthProfileUsage<T>(
   const executions = new Map<
     string,
     Result<ReturnType<typeof captureOpenClawAgentDatabaseExecution>, unknown>
+  >();
+  const writers = new Map<
+    string,
+    ReturnType<typeof reserveAuthProfileUsageWrite<AuthProfileUsageReceipt | null>>
   >();
   const credentialToken = (databasePath: string) =>
     getRuntimeAuthProfileStoreCredentialMutationToken(undefined, profileId, {
@@ -137,6 +134,14 @@ export async function withAuthProfileUsage<T>(
       } catch (error) {
         executions.set(databasePath, { ok: false, error });
       }
+      writers.set(
+        databasePath,
+        reserveAuthProfileUsageWrite({
+          path: databasePath,
+          agentId: resolveAuthProfileDatabaseOwnerId(path.dirname(databasePath)),
+          env,
+        }),
+      );
     }
     preparation = reserveAuthProfileUsagePreparation(
       [
@@ -144,9 +149,18 @@ export async function withAuthProfileUsage<T>(
         ...[...readers.keys()].map((pathname) => readDatabasePathIdentitySync(pathname)),
       ].flatMap((identity) => [identity.key, `path:${identity.canonicalPath}`]),
     );
+    const capturedOwnership = resolveSharedAuthStoreOwnershipAsync(context).then(
+      (value) => ({ ok: true, value }) as const,
+      (error: unknown) => ({ ok: false, error }) as const,
+    );
     await preparation.ready;
-    const ownership = await resolveSharedAuthStoreOwnershipAsync(context);
-    const sharedPath = resolveSharedAuthStorePath(env);
+    const ownershipResult = await capturedOwnership;
+    if (!ownershipResult.ok) {
+      throw ownershipResult.error;
+    }
+    const ownership = ownershipResult.value;
+    const sharedPath =
+      ownership.location === "state-db" ? context.admission.databasePath : legacyPath;
     const main = Boolean(mode) || !selectedDir || localPath === sharedPath;
     const read = (databasePath: string) =>
       databasePath === context.admission.databasePath
@@ -176,6 +190,11 @@ export async function withAuthProfileUsage<T>(
             })
           : Boolean(sharedProfile)));
     const databasePath = useShared ? sharedPath : localPath!;
+    for (const [candidate, writer] of writers) {
+      if (candidate !== databasePath) {
+        writer.release();
+      }
+    }
     const selected = (useShared ? shared : local) ?? { version: AUTH_STORE_VERSION, profiles: {} };
     const observed = scopedSharedStore
       ? mergeAuthProfileStores(scopedSharedStore, selected)
@@ -192,7 +211,15 @@ export async function withAuthProfileUsage<T>(
       agentDir: useShared ? undefined : selectedDir,
       env,
     });
-    const assertCurrent = () => {
+    const credentialOwnerChanged = () =>
+      [...new Set([...(mode ? [] : [sharedPath]), ...(localPath ? [localPath] : [])])].some(
+        (sourcePath) => {
+          const previous = credentialTokens.get(sourcePath)!;
+          const current = credentialToken(sourcePath);
+          return current.revision !== previous.revision || current.known !== previous.known;
+        },
+      );
+    const assertOwnerCurrent = () => {
       context.admission.assertCurrent();
       context.maintenanceScope?.assertAdmission();
       for (const sourcePath of new Set([
@@ -200,11 +227,6 @@ export async function withAuthProfileUsage<T>(
         ...(localPath ? [localPath] : []),
       ])) {
         readers.get(sourcePath)?.assertCurrent();
-        const previous = credentialTokens.get(sourcePath)!;
-        const current = credentialToken(sourcePath);
-        if (current.revision !== previous.revision || current.known !== previous.known) {
-          throw new Error("Auth profile credential owner changed during usage preparation");
-        }
       }
       const execution = executions.get(databasePath);
       if (execution) {
@@ -214,7 +236,7 @@ export async function withAuthProfileUsage<T>(
         execution.value.assertCurrent();
       }
       if (resolveSharedAuthStoreOwnership(env) !== ownership) {
-        throw new Error("Auth profile shared owner changed before usage admission");
+        throw new Error("Auth profile shared owner changed before write admission");
       }
       assertAuthProfileMigrationStateAtDatabasePath(databasePath);
       assertAuthProfileMigrationCandidates({
@@ -223,7 +245,13 @@ export async function withAuthProfileUsage<T>(
         hasCredentials: () => Object.keys(selected.profiles).length > 0,
       });
     };
-    assertCurrent();
+    const assertCurrent = () => {
+      assertOwnerCurrent();
+      if (credentialOwnerChanged()) {
+        throw new Error("Auth profile credential owner changed during usage preparation");
+      }
+    };
+    assertOwnerCurrent();
     const providerAliases = resolveProviderAuthAliasMap({ env });
     let recordingStarted = false;
     const operation = consume({
@@ -231,6 +259,26 @@ export async function withAuthProfileUsage<T>(
       inherited,
       async record(reduction, providerKey) {
         recordingStarted = true;
+        const reconcileRemovedProfile = async (): Promise<AuthProfileUsageReceipt | undefined> => {
+          assertOwnerCurrent();
+          if (!credentialOwnerChanged()) {
+            return undefined;
+          }
+          const currentRows = await read(databasePath);
+          assertOwnerCurrent();
+          const current = loadPersistedAuthProfileStoreFromRows(currentRows, databasePath) ?? {
+            version: AUTH_STORE_VERSION,
+            profiles: {},
+          };
+          const fresh = scopedSharedStore
+            ? mergeAuthProfileStores(scopedSharedStore, current)
+            : current;
+          if (fresh.profiles[profileId]) {
+            throw new Error("Auth profile credential owner changed during usage preparation");
+          }
+          // A preceding removal settles without dispatching a write or publishing stale rows.
+          return createAuthProfileUsageReceipt(fresh);
+        };
         const input: AuthProfileUsageInput = structuredClone({
           profileId,
           reduction,
@@ -271,6 +319,10 @@ export async function withAuthProfileUsage<T>(
         };
         try {
           if (databasePath === context.admission.databasePath) {
+            const removed = await reconcileRemovedProfile();
+            if (removed) {
+              return removed;
+            }
             return await runOpenClawStateWorkerOperation(
               context,
               async (scope) =>
@@ -296,7 +348,11 @@ export async function withAuthProfileUsage<T>(
             throw captured.error;
           }
           const execution = captured.value;
-          {
+          return await writers.get(databasePath)!.run(async () => {
+            const removed = await reconcileRemovedProfile();
+            if (removed) {
+              return removed;
+            }
             const client = await openOpenClawAgentSqliteWorkerStore<InlineAuthFailureOperations>(
               target,
               { execution },
@@ -337,7 +393,7 @@ export async function withAuthProfileUsage<T>(
               throw executionResult.error;
             }
             return executionResult.value;
-          }
+          });
         } catch (error) {
           const outcomeUnknown = hasSqliteWorkerOutcomeUnknown(error);
           if (receipt || outcomeUnknown) {
@@ -384,6 +440,9 @@ export async function withAuthProfileUsage<T>(
     // Provider probes plan outside the preparation FIFO; ready writes retain their position.
     if (!recordingStarted) {
       preparation.release();
+      for (const writer of writers.values()) {
+        writer.release();
+      }
     }
     return await operation;
   };
@@ -395,6 +454,7 @@ export async function withAuthProfileUsage<T>(
   }
   try {
     const released = await Promise.allSettled([
+      ...[...writers.values()].map((writer) => writer.dispose()),
       ...[...readers.values()].map((reader) => reader.dispose()),
       ...[...executions.values()].flatMap((execution) =>
         execution.ok ? [execution.value.release()] : [],
