@@ -188,6 +188,67 @@ describe("resolveSystemRunApprovalRuntimeContext", () => {
       },
     },
     {
+      name: "falls back to explicit runtime params when the plan omits identity fields",
+      params: {
+        plan: {
+          argv: ["jq", "--version"],
+          commandText: "jq --version",
+          commandPreview: "jq --version",
+        },
+        cwd: "/tmp",
+        agentId: "main",
+        sessionKey: "agent:main:dashboard:ce0d99b7",
+      },
+      expected: {
+        ok: true,
+        plan: {
+          argv: ["jq", "--version"],
+          cwd: null,
+          commandText: "jq --version",
+          commandPreview: "jq --version",
+          agentId: null,
+          sessionKey: null,
+        },
+        argv: ["jq", "--version"],
+        cwd: "/tmp",
+        agentId: "main",
+        sessionKey: "agent:main:dashboard:ce0d99b7",
+        commandText: "jq --version",
+      },
+    },
+    {
+      name: "prefers plan identity fields over explicit runtime params",
+      params: {
+        plan: {
+          argv: ["jq", "--version"],
+          cwd: "/plan-cwd",
+          commandText: "jq --version",
+          commandPreview: "jq --version",
+          agentId: "plan-agent",
+          sessionKey: "agent:plan-agent:plan",
+        },
+        cwd: "/params-cwd",
+        agentId: "params-agent",
+        sessionKey: "agent:params-agent:params",
+      },
+      expected: {
+        ok: true,
+        plan: {
+          argv: ["jq", "--version"],
+          cwd: "/plan-cwd",
+          commandText: "jq --version",
+          commandPreview: "jq --version",
+          agentId: "plan-agent",
+          sessionKey: "agent:plan-agent:plan",
+        },
+        argv: ["jq", "--version"],
+        cwd: "/plan-cwd",
+        agentId: "plan-agent",
+        sessionKey: "agent:plan-agent:plan",
+        commandText: "jq --version",
+      },
+    },
+    {
       name: "falls back to command/rawCommand validation without a plan",
       params: {
         command: ["bash", "-lc", "jq --version"],
