@@ -129,7 +129,6 @@ export function createCrabboxWorkerProvider(
   let defaultCandidate: string | undefined;
   const resolveBinary = async (explicit?: string, signal?: AbortSignal): Promise<string> => {
     signal?.throwIfAborted();
-    providerAbort.signal.throwIfAborted();
     const candidate =
       explicit ??
       (defaultCandidate ??= resolveCrabboxBinary({
@@ -138,15 +137,20 @@ export function createCrabboxWorkerProvider(
         pathEnv: dependencies.pathEnv ?? process.env.PATH,
         platform: dependencies.platform,
       }));
+    // Completed acquisition remains usable by lease cleanup after provider disposal.
     let resolution = binaries.get(candidate);
     if (!resolution) {
+      providerAbort.signal.throwIfAborted();
       // Acquisition belongs to the provider; cancelling one waiter cannot cancel discovery.
       resolution = ensureManagedCrabboxBinary({
         binary: candidate,
         runCommand,
         signal: providerAbort.signal,
       })
-        .then(({ binary }) => binary)
+        .then(({ binary }) => {
+          providerAbort.signal.throwIfAborted();
+          return binary;
+        })
         .catch((error: unknown) => {
           binaries.delete(candidate);
           throw error;
@@ -168,7 +172,6 @@ export function createCrabboxWorkerProvider(
           ])
         : await resolution;
       signal?.throwIfAborted();
-      providerAbort.signal.throwIfAborted();
       return binary;
     } finally {
       if (onAbort) {
