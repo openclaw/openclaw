@@ -142,9 +142,12 @@ export async function prepareGatewayNodeConnect(
   // Same-host silent pairing trusts the local user; SSH proves machine ownership,
   // and an admin-minted setup code records consent. Stored local provenance alone
   // cannot authorize a later remote/browser connection or override the local opt-out.
+  const isLocalApprovalCurrent = () =>
+    !context.handler.isClosed() &&
+    getRuntimeConfig().gateway?.nodes?.pairing?.autoApproveLocal !== false;
   const approveLocalSurface =
     deviceApprovedVia === "silent" &&
-    getRuntimeConfig().gateway?.nodes?.pairing?.autoApproveLocal !== false &&
+    isLocalApprovalCurrent() &&
     (state.pairingLocality === "direct_local" ||
       state.pairingLocality === "shared_secret_loopback_local") &&
     !context.hasProxyHeaders &&
@@ -162,6 +165,8 @@ export async function prepareGatewayNodeConnect(
     const surfaceRequestId = reconciliation.pendingPairing.request.requestId;
     const approvedSurface = await approveNodePairing(surfaceRequestId, {
       callerScopes: [ADMIN_SCOPE, PAIRING_SCOPE, WRITE_SCOPE],
+      initialOnly: true,
+      isApprovalCurrent: approveLocalSurface ? isLocalApprovalCurrent : undefined,
     });
     if (approvedSurface && "node" in approvedSurface) {
       logGateway.info(

@@ -86,9 +86,12 @@ export const nodePairingOperations = {
           throw new Error("node pairing requires a paired device");
         }
         requestDevicePairingMutationAdmission({ kind: "node-surface", nodeId });
+        // A connect snapshot can become stale before this transaction: upgrades
+        // remain interactive even when that connect thought this was the first surface.
+        const request = { ...req, nodeId, silent: req.silent && !device.nodeSurface };
         const existing = device.pendingNodeSurface;
-        if (existing && samePendingApprovalSurface(existing, { ...req, nodeId })) {
-          const refreshed = refreshPendingNodeSurface(existing, req, nowMs);
+        if (existing && samePendingApprovalSurface(existing, request)) {
+          const refreshed = refreshPendingNodeSurface(existing, request, nowMs);
           device.pendingNodeSurface = refreshed;
           return {
             value: {
@@ -99,7 +102,7 @@ export const nodePairingOperations = {
             persist: true,
           };
         }
-        const replacement = buildPendingNodeSurface({ req: { ...req, nodeId }, nowMs });
+        const replacement = buildPendingNodeSurface({ req: request, nowMs });
         device.pendingNodeSurface = replacement;
         const superseded = existing ? [{ requestId: existing.requestId, nodeId }] : [];
         return {
@@ -142,7 +145,12 @@ export const nodePairingOperations = {
   ),
   "node.approve": devicePairingMutation(
     (
-      input: { requestId: string; callerScopes?: readonly string[]; nowMs: number },
+      input: {
+        requestId: string;
+        callerScopes?: readonly string[];
+        initialOnly?: boolean;
+        nowMs: number;
+      },
       { database },
     ) => {
       const { requestId, callerScopes, nowMs } = input;
@@ -151,7 +159,8 @@ export const nodePairingOperations = {
           (entry) => entry.pendingNodeSurface?.requestId === requestId,
         );
         const pending = device?.pendingNodeSurface;
-        if (!device || !pending) {
+        // Initial auto-approval cannot widen a surface approved by a concurrent connect.
+        if (!device || !pending || (input.initialOnly && device.nodeSurface)) {
           return { value: null, persist: false };
         }
         requestDevicePairingMutationAdmission({

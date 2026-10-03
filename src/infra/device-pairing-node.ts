@@ -211,17 +211,32 @@ export async function reusePendingNodePairingForReconnect(
 
 export async function approveNodePairing(
   requestId: string,
-  options: { callerScopes?: readonly string[] },
+  options: {
+    callerScopes?: readonly string[];
+    initialOnly?: boolean;
+    isApprovalCurrent?: () => boolean;
+  },
   baseDir?: string,
 ): Promise<ApproveNodePairingResult> {
   return await executeDevicePairingMutation(
     {
       type: "node.approve",
-      input: { requestId, callerScopes: options.callerScopes, nowMs: Date.now() },
+      input: {
+        requestId,
+        callerScopes: options.callerScopes,
+        initialOnly: options.initialOnly,
+        nowMs: Date.now(),
+      },
     },
     {
       baseDir,
       onAuthorityRefused: () => null,
+      // Automatic grants must retain their policy authority through lock and worker waits.
+      assertCurrent: () => {
+        if (options.isApprovalCurrent?.() === false) {
+          throw new DevicePairingAuthorityRefusedError("node approval policy changed");
+        }
+      },
       admit: (facts) => {
         if (
           !isRecord(facts) ||

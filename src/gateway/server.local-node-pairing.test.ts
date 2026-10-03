@@ -1,11 +1,15 @@
-import { afterAll, beforeAll, describe, expect, test } from "vitest";
+import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import type { ConnectParams } from "../../packages/gateway-protocol/src/index.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { writeConfigFile } from "../config/config.js";
+import { getRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { approveDevicePairing } from "../infra/device-pairing-approval.js";
+import { withDevicePairingLock } from "../infra/device-pairing-lock.js";
+import * as nodePairing from "../infra/device-pairing-node.js";
 import { listNodePairing, rejectNodePairing } from "../infra/device-pairing-node.js";
 import { revokeDeviceToken } from "../infra/device-pairing-tokens.js";
 import {
@@ -118,6 +122,57 @@ describe("same-machine native node device pairing", () => {
     return loaded;
   }
 
+  test("keeps the initial surface pending when local approval is disabled while queued", async () => {
+    const loaded = loadDeviceIdentity("local-native-queued-opt-out");
+    const locked = createDeferred();
+    const release = createDeferred();
+    const queued = createDeferred();
+    const approve = nodePairing.approveNodePairing;
+    let lockWork: Promise<void> | undefined;
+    let approvalWork: ReturnType<typeof approve> | undefined;
+    const approval = vi
+      .spyOn(nodePairing, "approveNodePairing")
+      .mockImplementation(async (...args) => {
+        lockWork = withDevicePairingLock(async () => {
+          locked.resolve();
+          await release.promise;
+        });
+        await locked.promise;
+        approvalWork = approve(...args);
+        queued.resolve();
+        return await approvalWork;
+      });
+    const connecting = connect(loaded.identityPath, "node", undefined, MAC_CLIENT, MAC_SURFACE);
+    try {
+      await awaitGateBeforeSettlement(
+        queued.promise,
+        connecting,
+        "expected queued surface approval",
+      );
+      const current = getRuntimeConfigSnapshot();
+      if (!current) {
+        throw new Error("expected active Gateway config");
+      }
+      setRuntimeConfigSnapshot({
+        ...current,
+        gateway: {
+          ...current.gateway,
+          nodes: { ...current.gateway?.nodes, pairing: { autoApproveLocal: false } },
+        },
+      });
+      release.resolve();
+      expect(await connecting).toMatchObject({ ok: true });
+      expect(approval).toHaveBeenCalledOnce();
+      const paired = await getPairedDevice(loaded.identity.deviceId);
+      expect(paired?.nodeSurface).toBeUndefined();
+      expect(paired?.pendingNodeSurface?.commands).toContain("computer.act");
+    } finally {
+      release.resolve();
+      await Promise.allSettled([connecting, lockWork, approvalWork]);
+      approval.mockRestore();
+    }
+  });
+
   test("honors the local opt-out and approves a rejected initial surface when re-enabled", async () => {
     const loaded = await seedSilentNode("local-native-rejected-surface");
     await writeConfigFile({ gateway: { nodes: { pairing: { autoApproveLocal: false } } } });
@@ -161,6 +216,36 @@ describe("same-machine native node device pairing", () => {
     expect(paired?.pendingNodeSurface).toMatchObject({
       commands: expect.arrayContaining(["system.which"]),
     });
+  });
+
+  test("keeps a concurrent initial approval from silently widening the surface", async () => {
+    const loaded = loadDeviceIdentity("local-native-concurrent-initial-surface");
+    const begin = nodePairing.beginNodePairingConnect;
+    const snapshot = vi
+      .spyOn(nodePairing, "beginNodePairingConnect")
+      .mockImplementationOnce(async (...args) => {
+        const initial = await begin(...args);
+        const request = await nodePairing.requestNodePairing({
+          nodeId: loaded.identity.deviceId,
+          caps: ["screen"],
+          commands: ["screen.snapshot"],
+        });
+        await nodePairing.approveNodePairing(request.request.requestId, {
+          callerScopes: ["operator.pairing", "operator.write"],
+        });
+        return initial;
+      });
+    try {
+      expect(
+        await connect(loaded.identityPath, "node", undefined, MAC_CLIENT, MAC_SURFACE),
+      ).toMatchObject({ ok: true });
+      const paired = await getPairedDevice(loaded.identity.deviceId);
+      expect(paired?.nodeSurface?.commands).toEqual(["screen.snapshot"]);
+      expect(paired?.pendingNodeSurface?.commands).toContain("computer.act");
+      expect(paired?.pendingNodeSurface?.silent).toBe(false);
+    } finally {
+      snapshot.mockRestore();
+    }
   });
 
   test("preserves command denies and their capability filtering during local approval", async () => {
