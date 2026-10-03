@@ -19,6 +19,8 @@ import {
   compareWorkerBundlePaths,
   hashWorkerBundleManifest,
   WORKER_BUNDLE_ARTIFACT_MODE,
+  WORKER_BUNDLE_ARTIFACT_PATHS,
+  WORKER_BUNDLE_CHUNK_PATH_PATTERN,
   type WorkerBundleHashEntry,
 } from "../../shared/worker-bundle-hash.js";
 import { VERSION } from "../../version.js";
@@ -31,6 +33,8 @@ const NPM_SHA512_INTEGRITY_PATTERN = /^sha512-[A-Za-z0-9+/]{86}==$/u;
 const BUNDLE_TARBALL_NAME_PATTERN = /^([a-f0-9]{64})\.tgz$/u;
 const BUNDLE_STAGING_NAME_PATTERN = /^\.staging-[A-Za-z0-9_-]+$/u;
 const BUNDLE_TEMP_NAME_PATTERN = /^[a-f0-9]{64}\.tgz\.[0-9]+\.[0-9a-f-]{36}\.tmp$/u;
+const PACKAGED_BUNDLE_NAME_PATTERN = /^([a-f0-9]{64})\.tar\.gz$/u;
+const PACKAGED_BUNDLE_DIRECTORY = "dist/worker-artifacts";
 type WorkerBundleArtifact = ExpectedWorkerBuild & {
   install: "bundle";
   tarballBytes: number;
@@ -409,12 +413,20 @@ async function prepareWorkerBundle(
   options: WorkerBundleProducerOptions,
 ): Promise<WorkerBundleArtifact> {
   const packageRoot = resolvePackageRoot(options.packageRoot);
-  const cacheDir = resolveBundleCacheDir(options.cacheDir);
   const openclawVersion = (options.openclawVersion ?? VERSION).trim();
   if (!openclawVersion) {
     throw new Error("Worker bundle requires a non-empty OpenClaw version");
   }
   const protocolFeatures = normalizeProtocolFeatures(options.protocolFeatures ?? []);
+  const packaged = await resolvePackagedWorkerBundle({
+    packageRoot,
+    openclawVersion,
+    protocolFeatures,
+  });
+  if (packaged) {
+    return packaged;
+  }
+  const cacheDir = resolveBundleCacheDir(options.cacheDir);
   await fs.mkdir(cacheDir, { recursive: true });
   const stagingRoot = await fs.mkdtemp(path.join(cacheDir, ".staging-"));
   try {
@@ -439,6 +451,69 @@ async function prepareWorkerBundle(
   } finally {
     await fs.rm(stagingRoot, { recursive: true, force: true });
   }
+}
+
+async function resolvePackagedWorkerBundle(params: {
+  packageRoot: string;
+  openclawVersion: string;
+  protocolFeatures: string[];
+}): Promise<WorkerBundleArtifact | null> {
+  try {
+    await fs.access(path.join(params.packageRoot, "dist/worker"));
+    return null;
+  } catch (error) {
+    if (!isRecord(error) || error.code !== "ENOENT") {
+      throw error;
+    }
+  }
+
+  const archiveDirectory = path.join(params.packageRoot, PACKAGED_BUNDLE_DIRECTORY);
+  let entries: Dirent[];
+  try {
+    entries = await fs.readdir(archiveDirectory, { withFileTypes: true });
+  } catch (error) {
+    if (isRecord(error) && error.code === "ENOENT") {
+      return null;
+    }
+    throw error;
+  }
+  if (entries.length !== 1 || !entries[0]!.isFile()) {
+    throw new Error("Packaged worker bundle must contain exactly one regular archive");
+  }
+  const match = PACKAGED_BUNDLE_NAME_PATTERN.exec(entries[0]!.name);
+  if (!match) {
+    throw new Error("Packaged worker bundle archive name is invalid");
+  }
+  const tarballPath = path.join(archiveDirectory, entries[0]!.name);
+  const manifest = await readWorkerBundleArchiveManifest(
+    tarballPath,
+    DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS,
+  );
+  const paths = new Set(manifest.map((entry) => entry.path));
+  const requiredPaths = new Set<string>(WORKER_BUNDLE_ARTIFACT_PATHS);
+  if (
+    WORKER_BUNDLE_ARTIFACT_PATHS.some((artifactPath) => !paths.has(artifactPath)) ||
+    manifest.some(
+      (entry) =>
+        !requiredPaths.has(entry.path) && !WORKER_BUNDLE_CHUNK_PATH_PATTERN.test(entry.path),
+    )
+  ) {
+    throw new Error("Packaged worker bundle archive does not match the worker artifact contract");
+  }
+  const bundleHash = hashWorkerBundleManifest(manifest);
+  if (bundleHash !== match[1]) {
+    throw new Error("Packaged worker bundle archive name does not match its manifest hash");
+  }
+  await using handle = await fs.open(tarballPath, "r");
+  return {
+    install: "bundle",
+    bundleHash,
+    openclawVersion: params.openclawVersion,
+    protocolFeatures: params.protocolFeatures,
+    tarballBytes: (await handle.stat()).size,
+    tarballSha256: (await sha256File(handle)).digest,
+    tarballPath,
+  };
 }
 
 /** Creates a process-lifecycle bundle producer that scans the running build at most once. */
