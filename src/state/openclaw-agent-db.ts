@@ -46,6 +46,7 @@ import {
   registerAgentDeletionDatabaseCleanup,
 } from "./agent-deletion-cleanup.js";
 import { readAgentDeletionJournal } from "./agent-deletion-journal.js";
+import { assertCanonicalSessionValidationSchema } from "./openclaw-agent-canonical-validation-schema.js";
 import { createOpenClawAgentDatabaseAdmissionOwner } from "./openclaw-agent-db-admission.js";
 import type {
   OpenClawAgentDatabase,
@@ -269,6 +270,7 @@ function* openOpenClawAgentDatabaseSteps(
     });
     ensureOpenClawAgentSchema(db, agentId, pathname);
     admitSqliteSchema(db);
+    assertCanonicalSessionValidationSchema(db);
     registerOpenClawAgentDatabaseIdentity(db);
     const database = { agentId, db, path: pathname, walMaintenance };
     cache.incognito.add(database);
@@ -474,6 +476,7 @@ function* openOpenClawAgentDatabaseSteps(
     assertCurrent({ db, path: pathname });
     ensureOpenClawAgentDatabasePermissions(pathname, databaseOptions);
     admitSqliteSchema(db);
+    assertCanonicalSessionValidationSchema(db);
     const database = { agentId, db, path: pathname, walMaintenance };
     openedDatabase = database;
     if (hasAgentDatabaseMaintenanceAuthority()) {
