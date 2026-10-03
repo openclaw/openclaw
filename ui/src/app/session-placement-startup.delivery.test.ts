@@ -107,6 +107,11 @@ describe("application placement delivery recovery", () => {
         expect(chatSubmissions.readInitial(input.recovery.sessionKey, client)?.pendingRunId).toBe(
           sends[1]?.[1]?.idempotencyKey,
         );
+        // Even though Retry rotates the rejected send's message id, the
+        // accepted message keeps the original prompt timestamp.
+        expect(
+          chatSubmissions.readInitial(input.recovery.sessionKey, client)?.message?.timestamp,
+        ).toBe(input.createdAt);
       } finally {
         startup.dispose();
       }

@@ -179,6 +179,7 @@ export function resolveWorkingProgress(
   queue: ChatQueueItem[],
   streamSegments: Array<{ ts: number; runId?: string }>,
   toolMessages: unknown[],
+  placementTurnId: string | null = null,
 ): WorkingProgress {
   const visibleSends = queue.filter(shouldRenderQueuedSendInThread);
   const pendingSends = visibleSends.filter((item) => !isQueuedSendInlineState(item));
@@ -211,11 +212,18 @@ export function resolveWorkingProgress(
     compatibleCached?.startedAt,
     streamStartedAt,
     // Recovery rows cannot identify work, but matching durable timing survives reconnects.
+    // A retried placement keeps its original message time, so the live attempt start
+    // (streamStartedAt) is authoritative for its in-flight initial turn only; an
+    // ordinary send keeps counting the acknowledgment wait from its message time.
     ...visibleSends
       .filter((item) =>
-        explicitRunId
-          ? (item.sendRunId ?? item.pendingRunId) === explicitRunId
-          : item === queuedProgress,
+        item.id === placementTurnId &&
+        streamStartedAt !== null &&
+        (item.sendState === "sending" || item.sendState === "submitting")
+          ? false
+          : explicitRunId
+            ? (item.sendRunId ?? item.pendingRunId) === explicitRunId
+            : item === queuedProgress,
       )
       // Send performance fields use performance.now(); the elapsed timer renders against Date.now().
       .map((item) => item.createdAt),

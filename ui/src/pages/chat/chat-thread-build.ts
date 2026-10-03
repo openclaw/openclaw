@@ -143,6 +143,7 @@ export function buildChatItems(
       queuedSends,
       segments,
       tools,
+      props.initialTurnId ?? null,
     ));
   // Retention and live status share the same explicit or inferred run ownership.
   const activeCommentaryRunId =
