@@ -864,6 +864,7 @@ export function writePackedBundledPluginActivationConfig(homeDir: string): void 
         },
         plugins: {
           enabled: true,
+          allow: ["telegram"],
           entries: {
             telegram: {
               enabled: true,
