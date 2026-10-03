@@ -66,6 +66,7 @@ export function evaluateWorkflowExpression(
       | "schedule";
     failed?: boolean;
     env?: Record<string, string>;
+    secrets?: Record<string, string>;
     frozenTarget?: boolean;
     fileHashes?: Record<string, string>;
     headRepository?: string;
@@ -205,6 +206,7 @@ export function evaluateWorkflowExpression(
       use_github_hosted_runners: context.useGithubHostedRunners ?? false,
     },
     env: context.env ?? {},
+    secrets: context.secrets ?? {},
     matrix: context.matrix ?? {},
     runner: { environment: context.runnerEnvironment ?? "" },
     steps: {
