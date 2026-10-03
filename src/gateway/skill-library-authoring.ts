@@ -47,11 +47,11 @@ export function invalidateSkillAuthoringForOtherRequester(
 }
 
 /** Only ordinary attributed human ingress may mint a namespace; actions remain normal tool policy. */
-export function prepareGatewaySkillAuthoring(
+export async function prepareGatewaySkillAuthoring(
   options: SkillLibraryRequestOwner,
   sessionKey: string,
   isHumanTurn: boolean,
-): SkillLibraryAuthoringCapability | undefined {
+): Promise<SkillLibraryAuthoringCapability | undefined> {
   const client = options.client;
   if (
     !isHumanTurn ||
@@ -67,7 +67,7 @@ export function prepareGatewaySkillAuthoring(
     return undefined;
   }
   const authority = libraryAuthority(options);
-  const library = resolveSkillLibraryPresentation(authority);
+  const library = await resolveSkillLibraryPresentation(authority);
   if (!library.profileId || library.defaultTarget === "unavailable") {
     return undefined;
   }

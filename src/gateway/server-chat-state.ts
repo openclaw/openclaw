@@ -158,7 +158,7 @@ function clearPendingLiveTextFlushes(record: ChatRunRecord): void {
   delete record.pendingTextFlushes;
 }
 
-export type ChatRunRegistry = {
+type ChatRunRegistry = {
   add: (sessionId: string, entry: ChatRunRegistration) => void;
   peek: (sessionId: string) => ChatRunEntry | undefined;
   shift: (sessionId: string) => ChatRunEntry | undefined;

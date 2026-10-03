@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { getSubagentRegistryPublicationRevision } from "../agents/subagents/registry/subagent-registry-publication.js";
 import { createSubagentSessionListReadIndex } from "../agents/subagents/registry/subagent-registry-read-index.js";
 import type { SubagentSessionListReadView } from "../agents/subagents/registry/subagent-registry-state.js";
@@ -174,7 +175,7 @@ export function createSessionRowProjectionContext(subagents: SubagentSessionList
             current,
             referenced,
           );
-          if (!records.sameParents(row.parents, parents)) {
+          if (!isDeepStrictEqual(row.parents, parents)) {
             put({ ...row, parents });
           }
         }

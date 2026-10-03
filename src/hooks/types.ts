@@ -21,10 +21,6 @@ export type OpenClawHookMetadata = RequirementsMetadata & {
   install?: HookInstallSpec[];
 };
 
-export type HookInvocationPolicy = {
-  enabled: boolean;
-};
-
 export type ParsedHookFrontmatter = Record<string, string>;
 
 export type Hook = {
@@ -43,7 +39,7 @@ export type HookEntry = {
   hook: Hook;
   frontmatter: ParsedHookFrontmatter;
   metadata?: OpenClawHookMetadata;
-  invocation?: HookInvocationPolicy;
+  invocation?: { enabled: boolean };
 };
 
 export type HookPolicyEntry = Pick<HookEntry, "metadata"> & {

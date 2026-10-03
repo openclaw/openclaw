@@ -190,11 +190,7 @@ describe("persistPluginInstall enablement", () => {
       plugins: [{ id: "plain" }],
       diagnostics: [],
     });
-    applyExclusiveSlotSelectionMock.mockReturnValue({
-      config: enabledConfig,
-      warnings: [],
-      changed: false,
-    });
+    applyExclusiveSlotSelectionMock.mockReturnValue(enabledConfig);
 
     const next = await persistPluginInstall({
       snapshot: installSnapshot(baseConfig),

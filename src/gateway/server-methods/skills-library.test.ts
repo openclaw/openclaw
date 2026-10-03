@@ -368,7 +368,7 @@ describe("read-only session skill library projection", () => {
       content,
       expectedRevision: null,
     });
-    const pins = seedSkillLibrarySelection(actor(alice.id));
+    const pins = await seedSkillLibrarySelection(actor(alice.id));
     const key = "agent:main:library-session";
     await upsertSessionEntryCore(
       { agentId: "main", sessionKey: key },

@@ -583,8 +583,8 @@ test("patch timing covers preparation and lifecycle finalization before cleanup"
     const runMutation = sessionLifecycle.runExclusiveSessionLifecycleMutation;
     const lifecycle = vi
       .spyOn(sessionLifecycle, "runExclusiveSessionLifecycleMutation")
-      .mockImplementation((params) =>
-        runMutation({
+      .mockImplementation((operation, params) =>
+        runMutation(operation, {
           ...params,
           prepare: async (owner) => {
             await params.prepare?.(owner);

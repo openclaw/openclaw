@@ -25,9 +25,8 @@ import {
   BASE_GATEWAY_BENCH_CONFIG,
   buildGatewayBenchChildArgs,
   createGatewayBenchEnv,
-  parseFlagValue,
   parsePositiveInt,
-  validateCliArgs,
+  parseCliArgs,
   waitForInitialProbe,
   writeGatewayBenchConfig,
 } from "./lib/gateway-bench-runtime.ts";
@@ -46,8 +45,8 @@ const valueFlags = new Set([
   "--reconnect-cycles",
   "--agent-turns",
 ]);
-validateCliArgs(argv, { booleanFlags: new Set(), valueFlags });
-const outputArg = parseFlagValue(argv, "--output");
+const flags = parseCliArgs(argv, { booleanFlags: new Set(), valueFlags });
+const outputArg = flags.get("--output")?.[0];
 if (!outputArg) {
   throw new Error("--output <new artifact directory> is required");
 }
@@ -55,12 +54,12 @@ const output = path.resolve(outputArg);
 if (existsSync(output)) {
   throw new Error(`Artifact directory already exists: ${output}`);
 }
-const entry = path.resolve(parseFlagValue(argv, "--entry") ?? "dist/entry.js");
+const entry = path.resolve(flags.get("--entry")?.[0] ?? "dist/entry.js");
 if (!existsSync(entry)) {
   throw new Error(`Build the dist Gateway on the validation host first: ${entry}`);
 }
 const positive = (flag: string, fallback: number) =>
-  parsePositiveInt(parseFlagValue(argv, flag), fallback, flag);
+  parsePositiveInt(flags.get(flag)?.[0], fallback, flag);
 const options = {
   minutes: positive("--minutes", 30),
   sampleSeconds: positive("--sample-seconds", 60),
@@ -70,9 +69,7 @@ const options = {
   reconnectCycles: positive("--reconnect-cycles", 10),
   agentTurns: positive("--agent-turns", 10),
 };
-const snapshotMinutes = (parseFlagValue(argv, "--snapshot-minutes") ?? "5,30")
-  .split(",")
-  .map(Number);
+const snapshotMinutes = (flags.get("--snapshot-minutes")?.[0] ?? "5,30").split(",").map(Number);
 if (snapshotMinutes.some((value) => !Number.isFinite(value) || value <= 0)) {
   throw new Error("--snapshot-minutes must contain positive minute offsets separated by commas");
 }

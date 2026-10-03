@@ -227,26 +227,19 @@ async function sendPreparedWebPushNotifications(params: {
     return [];
   }
 
-  const results = await Promise.allSettled(
+  const mapped: WebPushSendResult[] = await Promise.all(
     subscriptions.map((subscription) =>
       sendPreparedWebPushNotification(
         webPush,
         subscription,
         params.payload,
         params.deliveryOptions,
-      ),
+      ).catch((reason: unknown) => ({
+        ok: false,
+        subscriptionId: subscription.subscriptionId,
+        error: reason instanceof Error ? reason.message : "unknown error",
+      })),
     ),
-  );
-
-  const mapped = results.map((r, i) =>
-    r.status === "fulfilled"
-      ? r.value
-      : {
-          ok: false,
-          subscriptionId: expectDefined(subscriptions[i], "subscriptions entry at i")
-            .subscriptionId,
-          error: r.reason instanceof Error ? r.reason.message : "unknown error",
-        },
   );
 
   // Clean up expired subscriptions (HTTP 410 Gone or 404 Not Found) per Web Push spec.

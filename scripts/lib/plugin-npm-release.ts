@@ -547,14 +547,7 @@ export async function collectPluginReleasePlan(params?: {
             plugins: allPublishable,
             selection: params.selection,
           })
-        : gitRangeSelection
-          ? gitRangeSelection.authorityChanged
-            ? allPublishable
-            : resolveChangedPublishablePluginPackages({
-                plugins: allPublishable,
-                changedExtensionIds: gitRangeSelection.changedExtensionIds,
-              })
-          : allPublishable;
+        : allPublishable;
 
   const explicitPublishSelection =
     params?.selectionMode !== undefined || (params?.selection?.length ?? 0) > 0;

@@ -314,19 +314,6 @@ function execTimedTransactionStep(params: {
   }
 }
 
-function beginTransaction(
-  db: DatabaseSync,
-  options: SqliteTransactionOptions | undefined,
-  mode: SqliteTransactionMode,
-): void {
-  execTimedTransactionStep({
-    db,
-    options,
-    sql: mode === "immediate" ? "BEGIN IMMEDIATE" : "BEGIN",
-    step: "begin",
-  });
-}
-
 function commitImmediateTransaction(
   db: DatabaseSync,
   options: SqliteTransactionOptions | undefined,
@@ -418,7 +405,12 @@ function runSqliteTransactionSync<T>(
     }
   }
 
-  beginTransaction(db, options, mode);
+  execTimedTransactionStep({
+    db,
+    options,
+    sql: mode === "immediate" ? "BEGIN IMMEDIATE" : "BEGIN",
+    step: "begin",
+  });
   const transactionStartedAt = Date.now();
   let commitStarted = false;
   try {

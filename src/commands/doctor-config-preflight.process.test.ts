@@ -563,12 +563,9 @@ describe("Doctor repair followed by gateway readiness", () => {
         observe: false,
       });
       const repairedRaw = fs.readFileSync(${JSON.stringify(configPath)}, "utf8");
-      const expectedStartupConfig = JSON.parse(repairedRaw);
-      expectedStartupConfig.meta.migrations.webhookListeners = true;
-      const expectedStartupRaw = JSON.stringify(expectedStartupConfig, null, 2) + "\\n";
       const result = await runStartupConfigPreflight({ gateway: true, observe: false });
-      if (fs.readFileSync(${JSON.stringify(configPath)}, "utf8") !== expectedStartupRaw) {
-        throw new Error("Startup changed config beyond webhook migration completion.");
+      if (fs.readFileSync(${JSON.stringify(configPath)}, "utf8") !== repairedRaw) {
+        throw new Error("Startup changed config after Doctor repair.");
       }
       const config = JSON.parse(fs.readFileSync(${JSON.stringify(configPath)}, "utf8"));
       const repairedDatabase = new DatabaseSync(${JSON.stringify(databasePath)}, { readOnly: true });

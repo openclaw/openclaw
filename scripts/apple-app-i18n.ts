@@ -410,7 +410,6 @@ export function selectInfoPlistTranslation(
 export function infoPlistTranslationCandidates(
   artifact: NativeTranslationArtifact | undefined,
   sourceId: string,
-  _source: string,
 ): string[] {
   const translated = artifact?.translations[sourceId];
   return typeof translated === "string" ? [translated] : [];
@@ -440,7 +439,7 @@ function renderInfoPlistStrings(
     if (!sourceId) {
       throw new Error(`missing native InfoPlist source id for ${sourcePath}:${key}`);
     }
-    const candidates = infoPlistTranslationCandidates(artifact, sourceId, source);
+    const candidates = infoPlistTranslationCandidates(artifact, sourceId);
     const value = selectInfoPlistTranslation(source, candidates, existing.get(key));
     return [
       `/* OpenClaw source: ${JSON.stringify(source)} */`,

@@ -126,7 +126,7 @@ describe("diagnostic Gateway readiness", () => {
 
       expect(result).toMatchObject({
         healthy: false,
-        waitOutcome: "timeout",
+        waitOutcome: authElapsedMs < 60_000 ? "still-starting" : "timeout",
         elapsedMs: Math.max(0, 60_000 - authElapsedMs),
       });
       expect(monotonicClock.nowMs).toBe(Math.max(60_000, authElapsedMs));
@@ -424,7 +424,7 @@ describe("diagnostic Gateway readiness", () => {
 
       if (state === "starting") {
         expect(result).toMatchObject({
-          waitOutcome: "timeout",
+          waitOutcome: "still-starting",
           elapsedMs: 1_250,
           runtime: { status: "running", pid: 8000 },
         });

@@ -148,7 +148,7 @@ describe("manual library resources through embedded and host-bound reads", () =>
         files: supporting,
         expectedRevision: null,
       });
-      const pins = changeSkillLibrarySelection(alice, [], {
+      const pins = await changeSkillLibrarySelection(alice, [], {
         action: "attach",
         sessionKey: "agent:main:manual",
         skillId: saved.entry.skillId,

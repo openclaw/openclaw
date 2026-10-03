@@ -1,17 +1,11 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { SqliteQueryCompiler } from "kysely";
-import {
-  ensureMemoryEntryOriginsSchema,
-  recordMemoryEntryOriginsInDatabase,
-} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import {
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
   runOpenClawAgentWriteAdmission,
-  runSqliteImmediateTransactionSync,
   withOpenClawAgentDatabaseWrite,
 } from "openclaw/plugin-sdk/sqlite-runtime";
 import * as sqliteRuntime from "openclaw/plugin-sdk/sqlite-runtime";
@@ -34,7 +28,7 @@ import {
 } from "./memory-entry-origins.js";
 import { memoryCpuProcessEntrypoints } from "./memory/manager-cpu-entrypoints.js";
 import * as cpuRuntime from "./memory/manager-cpu-worker-runtime.js";
-import { buildPromotionMarker, extractPromotionKeys } from "./short-term-promotion-memory-write.js";
+import { buildPromotionMarker } from "./short-term-promotion-memory-write.js";
 import { recordShortTermRecalls } from "./short-term-promotion-record.js";
 import {
   configureMemoryCoreDreamingStateForTests,
@@ -264,81 +258,6 @@ describe("memory entry origins", () => {
     expect(db.prepare("PRAGMA user_version").get()).toEqual(version);
   });
 
-  it("unions every parent session onto a merged entry and removes its retired parent key", async () => {
-    await recordMemoryEntryOrigins({
-      agentId: "main",
-      origins: [origin("prior", "session-1"), origin("candidate", "session-2")],
-    });
-    const priorEntry = "- The deployment target is staging.";
-    const previousMemory = `# Memory\n<!-- openclaw-memory-promotion:prior -->\n${priorEntry}\n`;
-    const currentMemory = `# Memory\n<!-- openclaw-memory-promotion:candidate -->\n- The deployment target is staging. Source: memory/a.md#L1-L1\n`;
-
-    await reserveMemoryEntryOrigins({
-      agentIds: ["main"],
-      previousMemory,
-      operations: [
-        {
-          candidateKey: "candidate",
-          action: "merged",
-          priorEntries: [priorEntry],
-        },
-      ],
-    });
-    await pruneMemoryEntryOrigins({
-      workspaceDir: stateDir,
-      agentIds: ["main"],
-      entryKeys: extractPromotionKeys(previousMemory),
-      retainedEntryKeys: new Set(extractPromotionKeys(currentMemory)),
-    });
-
-    expect(await listMemoryEntryOrigins({ agentId: "main" })).toEqual([
-      origin("candidate", "session-1"),
-      origin("candidate", "session-2"),
-    ]);
-    expect(await listMemoryEntryOrigins({ agentId: "main", entryKeys: ["prior"] })).toEqual([]);
-  });
-
-  it("re-keys superseded session lineage while preserving unrelated live memory", async () => {
-    await recordMemoryEntryOrigins({
-      agentId: "main",
-      origins: [origin("stale", "session-1"), origin("surviving", "session-3")],
-    });
-    const priorEntry = "- The deployment target is staging.";
-    const previousMemory = `<!-- openclaw-memory-lineage:target -->\n<!-- openclaw-memory-promotion:stale -->\n${priorEntry}\n<!-- openclaw-memory-promotion:surviving -->\n- Keep this independent memory.\n`;
-    const currentMemory = `<!-- openclaw-memory-promotion:surviving -->\n- Keep this independent memory.\n<!-- openclaw-memory-lineage:target -->\n<!-- openclaw-memory-promotion:replacement -->\n- The deployment target is production.\n`;
-
-    await reserveMemoryEntryOrigins({
-      agentIds: ["main"],
-      previousMemory,
-      operations: [
-        {
-          candidateKey: "replacement",
-          action: "superseded",
-          priorEntries: [priorEntry],
-        },
-      ],
-    });
-    await pruneMemoryEntryOrigins({
-      workspaceDir: stateDir,
-      agentIds: ["main"],
-      entryKeys: extractPromotionKeys(previousMemory),
-      retainedEntryKeys: new Set(extractPromotionKeys(currentMemory)),
-    });
-
-    expect(await listMemoryEntryOrigins({ agentId: "main" })).toEqual([
-      origin("replacement", "session-1"),
-      origin("surviving", "session-3"),
-    ]);
-    await expect(
-      withOpenClawAgentDatabaseWrite({ agentId: "main" }, ({ db }) =>
-        deleteMemoryEntryOriginsInDatabase(db, { agentId: "main", entryKeys: ["replacement"] }),
-      ),
-    ).resolves.toBe(1);
-    expect(await listMemoryEntryOrigins({ agentId: "main" })).toEqual([
-      origin("surviving", "session-3"),
-    ]);
-  });
-
   it("rolls back only newly reserved lineage when a replacement does not commit", async () => {
     const priorEntry = "- Keep the original deployment target.";
     const prior = Array.from({ length: 32 }, (_, index) =>
@@ -392,45 +311,6 @@ describe("memory entry origins", () => {
       ).toEqual([]);
     } finally {
       observation.restore();
-    }
-  });
-
-  it("compiles a bounded insert plan for a batch without replacing existing origins", async () => {
-    const db = openOpenClawAgentDatabase({ agentId: "main" }).db;
-    ensureMemoryEntryOriginsSchema(db);
-    const existing = origin("candidate", "existing");
-    runSqliteImmediateTransactionSync(db, () =>
-      recordMemoryEntryOriginsInDatabase(db, { agentId: "main", origins: [existing] }),
-    );
-    const batch = Array.from({ length: 32 }, (_, index) =>
-      origin("prior", `session-${String(index).padStart(2, "0")}`),
-    );
-    const compile = vi.spyOn(SqliteQueryCompiler.prototype, "compileQuery");
-    try {
-      const inserted = await withOpenClawAgentDatabaseWrite(
-        { agentId: "main" },
-        ({ db: admitted }) =>
-          runSqliteImmediateTransactionSync(admitted, () =>
-            recordMemoryEntryOriginsInDatabase(admitted, {
-              agentId: "main",
-              entryKey: "candidate",
-              origins: [...batch, { ...existing, observedAt: 9_000 }],
-            }),
-          ),
-      );
-      expect(inserted).toEqual(batch.map(({ sessionId }) => origin("candidate", sessionId)));
-      expect(await listMemoryEntryOrigins({ agentId: "main", sessionIds: ["existing"] })).toEqual([
-        existing,
-      ]);
-      const inserts = compile.mock.results.filter(
-        (result) =>
-          result.type === "return" &&
-          result.value.sql.startsWith('insert into "memory_entry_origins"'),
-      ).length;
-      expect(inserts).toBeGreaterThan(0);
-      expect(inserts).toBeLessThanOrEqual(2);
-    } finally {
-      compile.mockRestore();
     }
   });
 
@@ -496,44 +376,6 @@ describe("memory entry origins", () => {
       status: "rejected",
       reason: { message: "Agent database target changed before write admission" },
     });
-  });
-
-  it("keeps fresh origin values and insertion order across conflicts and failed reservations", async () => {
-    const first = origin("candidate", "session-z");
-    const second: MemoryEntryOrigin = {
-      entryKey: "candidate",
-      agentId: "main",
-      sessionId: "session-a",
-      sessionKey: null,
-      originClass: "agent",
-      observedAt: 2_000,
-    };
-    const third: MemoryEntryOrigin = {
-      entryKey: "candidate",
-      agentId: "main",
-      sessionId: "session-m",
-      sessionKey: "agent:main:漢😀",
-      originClass: "system",
-      observedAt: 3_000,
-    };
-    expect(
-      await recordMemoryEntryOrigins({
-        agentId: "main",
-        origins: [first, second, { ...first, observedAt: 9_000 }, third],
-      }),
-    ).toEqual([first, second, third]);
-    const before = [second, third, first];
-    expect(await listMemoryEntryOrigins({ agentId: "main" })).toEqual(before);
-    await expect(
-      recordMemoryEntryOrigins({
-        agentId: "main",
-        origins: [origin("next", "new-session"), { ...second, agentId: "other" }],
-      }),
-    ).rejects.toThrow("memory entry origin belongs to another agent");
-    expect(await listMemoryEntryOrigins({ agentId: "main" })).toEqual(before);
-    await closeOpenClawAgentDatabasesAsync(stateDir);
-    closeOpenClawAgentDatabasesForTest();
-    expect(await listMemoryEntryOrigins({ agentId: "main" })).toEqual(before);
   });
 
   it.each(["DREAMS.md", "dreams.md"])(

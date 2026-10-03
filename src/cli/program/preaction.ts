@@ -201,11 +201,10 @@ export function registerPreActionHooks(program: Command, programVersion: string)
       if (!shouldBootstrap) {
         return;
       }
-      beforeStatePreparation = (snapshot, committedWrite) =>
+      beforeStatePreparation = (snapshot) =>
         recheckGatewayRunBootstrap({
           opts,
           runtime: defaultRuntime,
-          committedWrite,
           ...(snapshot ? { snapshot } : {}),
         });
     }

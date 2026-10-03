@@ -3,7 +3,6 @@
  * Merges persisted stores, runtime snapshots, inherited main-agent OAuth
  * profiles, and external CLI overlays while keeping save paths local.
  */
-import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
@@ -69,6 +68,7 @@ import {
   type AuthProfileReadOwner,
   type LoadAuthProfileStoreOptions,
 } from "./runtime-read.js";
+import { assertPersonalAuthProfileRuntime, authProfileRuntimeMode } from "./runtime-scope.js";
 import {
   captureRuntimeAuthProfileLegacyCandidates,
   pruneAuthProfileStoreReferences,
@@ -148,12 +148,6 @@ type SaveAuthProfileStoreOptions = {
   sharedStoreWrite?: boolean;
   syncExternalCli?: boolean;
 };
-
-type AuthProfileRuntimeMode =
-  | { kind: "env-only" }
-  | { kind: "agent-dir"; agentDir: string; sharedStore?: AuthProfileStore; env: NodeJS.ProcessEnv };
-
-const authProfileRuntimeMode = new AsyncLocalStorage<AuthProfileRuntimeMode>();
 
 /** Run a bounded operation without persisted or external CLI auth profiles. */
 export function withEnvOnlyAuthProfileStore<T>(run: () => T): T {
@@ -1071,11 +1065,7 @@ export function createAuthProfileStoreRuntime(
     const agentDir = resolveRuntimeAuthProfileAgentDir(params.agentDir);
     try {
       if (params.profileId && isUserModelAuthProfileId(params.profileId)) {
-        if (authProfileRuntimeMode.getStore()) {
-          throw new Error(
-            "Personal model accounts are unavailable in an isolated auth-store scope.",
-          );
-        }
+        assertPersonalAuthProfileRuntime();
         return updatePersonalAuthProfileStore({
           profileId: params.profileId,
           updater: params.updater,

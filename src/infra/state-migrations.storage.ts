@@ -34,27 +34,16 @@ function archiveLegacyFileSource(params: {
   }
 }
 
-function hardenLegacyImportSource(params: {
-  sourcePath: string;
-  label: string;
-  warnings: string[];
-}): boolean {
-  try {
-    fs.chmodSync(params.sourcePath, 0o600);
-    return true;
-  } catch (err) {
-    params.warnings.push(`Failed securing ${params.label} legacy source: ${String(err)}`);
-    return false;
-  }
-}
-
 export function archiveLegacyImportSource(params: {
   sourcePath: string;
   label: string;
   changes: string[];
   warnings: string[];
 }): LegacyArchiveResolution | null {
-  if (!hardenLegacyImportSource(params)) {
+  try {
+    fs.chmodSync(params.sourcePath, 0o600);
+  } catch (err) {
+    params.warnings.push(`Failed securing ${params.label} legacy source: ${String(err)}`);
     return null;
   }
   const resolution = archiveLegacyFileSource({

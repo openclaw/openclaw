@@ -266,30 +266,15 @@ function extractLogBindingPrefix(numericArgs: unknown[]): {
   return { args: numericArgs };
 }
 
-function findLogTraceContext(
-  bindings: Record<string, unknown> | undefined,
-  numericArgs: readonly unknown[],
-): DiagnosticTraceContext | undefined {
-  const fromBindings = extractTraceContext(bindings);
-  if (fromBindings) {
-    return fromBindings;
-  }
-  for (const arg of numericArgs) {
-    const fromArg = extractTraceContext(arg);
-    if (fromArg) {
-      return fromArg;
-    }
-  }
-  return undefined;
-}
-
 function resolveLogTraceContext(
   bindings: Record<string, unknown> | undefined,
   numericArgs: readonly unknown[],
 ): { trace?: DiagnosticTraceContext; trustedTraceContext: boolean } {
-  const explicitTrace = findLogTraceContext(bindings, numericArgs);
-  if (explicitTrace) {
-    return { trace: explicitTrace, trustedTraceContext: false };
+  for (const value of [bindings, ...numericArgs]) {
+    const trace = extractTraceContext(value);
+    if (trace) {
+      return { trace, trustedTraceContext: false };
+    }
   }
   const activeTrace = getActiveDiagnosticTraceContext();
   return activeTrace

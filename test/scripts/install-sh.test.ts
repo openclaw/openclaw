@@ -413,7 +413,6 @@ NODE
         [[ "$1" == "$repo" && "$2" == "main" ]] || return 1
         GIT_REF_KIND=moving
       }
-      cleanup_legacy_submodules() { :; }
       run_pnpm() { :; }
       ensure_user_local_bin_on_path() {
         mkdir -p "$HOME/.local/bin"
@@ -533,7 +532,6 @@ NODE
         [[ "$1" == "$target" && "$2" == "main" ]] || return 1
         GIT_REF_KIND=moving
       }
-      cleanup_legacy_submodules() { [[ "$1" == "$target" ]]; }
       ensure_pnpm() { [[ "$1" == "$target" ]]; }
       run_pnpm() {
         [[ "$1" == "-C" && "$2" == "$target" ]] || return 1
@@ -619,7 +617,7 @@ NODE
       ui_success() { printf 'success:%s\\n' "$*"; }
       run_quiet_step() { printf 'step:%s|%s\\n' "$1" "\${*:2}"; }
       apk() { :; }
-      node_is_supported() { return 0; }
+      node_binary_is_supported() { return 0; }
       finish_linux_node_install() { printf 'finish-linux-node\\n'; }
       install_node
     `);
@@ -714,7 +712,7 @@ NODE
           printf '%s\\n' "$NODE_FAKE_VERSION"
         fi
       }
-      activate_supported_node_on_path() { :; }
+      promote_supported_node_binary() { :; }
       finish_linux_node_install() { printf 'finish-linux-node\\n'; }
       install_node
     `);
@@ -757,7 +755,7 @@ NODE
           printf '%s\\n' "$NODE_FAKE_VERSION"
         fi
       }
-      activate_supported_node_on_path() { :; }
+      promote_supported_node_binary() { :; }
       install_node
     `);
 
@@ -885,7 +883,7 @@ NODE
           printf 'v24.0.0\\n'
         fi
       }
-      activate_supported_node_on_path() { :; }
+      promote_supported_node_binary() { :; }
       if install_node; then
         echo "install_node returned success"
       fi
@@ -924,7 +922,7 @@ NODE
           printf 'v24.0.0\\n'
         fi
       }
-      activate_supported_node_on_path() { :; }
+      promote_supported_node_binary() { :; }
       if install_node; then
         echo "install_node returned success"
       fi
@@ -1247,7 +1245,7 @@ EOF
       ui_stage() { :; }
       load_nvm_for_node_detection() { :; }
       check_node() { return 0; }
-      activate_supported_node_on_path() { :; }
+      promote_supported_node_binary() { :; }
       ensure_default_node_active_shell() { return 0; }
       check_git() { return 0; }
       fix_npm_permissions() { :; }
@@ -1437,7 +1435,7 @@ EOF
         check_existing_openclaw() { return 1; }
         load_nvm_for_node_detection() { :; }
         check_node() { return 0; }
-        activate_supported_node_on_path() { :; }
+        promote_supported_node_binary() { :; }
         ensure_default_node_active_shell() { return 0; }
         npm() { return 1; }
         install_openclaw_from_git() {
@@ -1573,7 +1571,7 @@ EOF
       check_existing_openclaw() { return 0; }
       load_nvm_for_node_detection() { :; }
       check_node() { return 0; }
-      activate_supported_node_on_path() { :; }
+      promote_supported_node_binary() { :; }
       ensure_default_node_active_shell() { return 0; }
       npm() { return 1; }
       install_openclaw_from_git() {
@@ -1631,7 +1629,7 @@ EOF
       check_existing_openclaw() { return 0; }
       load_nvm_for_node_detection() { :; }
       check_node() { return 0; }
-      activate_supported_node_on_path() { :; }
+      promote_supported_node_binary() { :; }
       ensure_default_node_active_shell() { return 0; }
       npm() { return 1; }
       install_openclaw_from_git() {
@@ -1663,7 +1661,7 @@ EOF
       bootstrap_gum_temp() { :; }; print_installer_banner() { :; }; print_gum_status() { :; }
       detect_os_or_die() { OS=linux; }; detect_openclaw_checkout() { return 1; }; show_install_plan() { :; }
       check_existing_openclaw() { return 0; }; load_nvm_for_node_detection() { :; }; check_node() { return 0; }
-      activate_supported_node_on_path() { :; }; ensure_default_node_active_shell() { return 0; }
+      promote_supported_node_binary() { :; }; ensure_default_node_active_shell() { return 0; }
       check_git() { return 0; }; fix_npm_permissions() { :; }
       prepare_git_wrapper_backup_for_npm() { :; }
       install_openclaw() { mkdir -p "$HOME/.local/bin"; printf '#!/bin/sh\nif [ "$1" = doctor ]; then exit 9; fi\nexit 0\n' > "$HOME/.local/bin/openclaw"; chmod +x "$HOME/.local/bin/openclaw"; }
@@ -1802,7 +1800,7 @@ EOF
           check_existing_openclaw() { [[ "$SCENARIO_UPGRADE" == 1 ]]; }
           load_nvm_for_node_detection() { :; }
           check_node() { return 0; }
-          activate_supported_node_on_path() { :; }
+          promote_supported_node_binary() { :; }
           ensure_default_node_active_shell() { return 0; }
           npm() { return 1; }
           install_openclaw_from_git() { printf 'event:installed\\n'; }
@@ -1921,7 +1919,7 @@ EOF
       bootstrap_gum_temp() { :; }; print_installer_banner() { :; }; print_gum_status() { :; }
       detect_os_or_die() { OS=linux; }; detect_openclaw_checkout() { return 1; }; show_install_plan() { :; }
       check_existing_openclaw() { return 0; }; load_nvm_for_node_detection() { :; }; check_node() { return 0; }
-      activate_supported_node_on_path() { :; }; ensure_default_node_active_shell() { return 0; }
+      promote_supported_node_binary() { :; }; ensure_default_node_active_shell() { return 0; }
       npm() { if [[ "$1" == list ]]; then return 0; fi; if [[ "$1" == uninstall ]]; then printf 'old-owner-removed\n'; rm -f "$HOME/npm-owner/status"; fi; }
       install_openclaw_from_git() { return 7; }
       main
@@ -2483,7 +2481,7 @@ EOF
         node_bin() { printf '%s/node' "$FIXTURE_ROOT"; }
         npm_bin() { printf '%s/npm' "$FIXTURE_ROOT"; }
         set +e
-        ${installer === "install.sh" ? "node_is_supported" : "linked_node_is_usable"}
+        ${installer === "install.sh" ? "node_binary_is_supported node" : "linked_node_is_usable"}
         printf 'verdict=%s\\n' "$?"
       `,
         {
@@ -2571,7 +2569,7 @@ EOF
       HOME=${JSON.stringify(home)}
       PATH=${JSON.stringify(`${oldBin}:${installedBin}:/usr/bin:/bin`)}
       ui_info() { :; }
-      activate_supported_node_on_path
+      promote_supported_node_binary
       printf 'first=%s\\n' "$(sed -n '1p' "$HOME/.bashrc")"
       HOME=${JSON.stringify(home)} PATH=${JSON.stringify(`${oldBin}:${installedBin}:/usr/bin:/bin`)} bash -c 'source_rc() { . "$HOME/.bashrc"; }; source_rc; printf "node=%s\\n" "$(command -v node)"'
     `);
@@ -3523,7 +3521,7 @@ describe("install.sh macOS Homebrew Node behavior", () => {
         fi
         return 0
       }
-      node_is_supported() { return 1; }
+      node_binary_is_supported() { return 1; }
       if ensure_macos_default_node_active; then
         echo "ensure returned success"
       else

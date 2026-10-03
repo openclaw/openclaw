@@ -18,10 +18,14 @@ import { SessionMetadataUnavailableError } from "../../state/session-metadata-un
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import { readSessionActivitySummary } from "./activity-summary.js";
 import { resolveSessionLifecycleTimestampsWithHeader } from "./lifecycle-timestamps.js";
+import { matchesPluginHostCleanupSession } from "./plugin-host-cleanup.js";
 import { hasPendingSessionTranscriptArchives } from "./session-accessor.sqlite-archive-store-kernel.js";
 import { readSessionCreationSnapshotInDatabase } from "./session-accessor.sqlite-creation-read.js";
 import { readExactSessionEntryCandidatesInDatabase } from "./session-accessor.sqlite-entry-cache.js";
-import { readSelectedSessionEntriesInDatabase } from "./session-accessor.sqlite-entry-list.read.js";
+import {
+  listSessionEntriesReadOnly,
+  readSelectedSessionEntriesInDatabase,
+} from "./session-accessor.sqlite-entry-list.read.js";
 import {
   readSessionEntryByIdInDatabase,
   readSessionEntryRow,
@@ -63,6 +67,7 @@ import {
   type SessionDiagnosticTextWorkerInput,
   type SessionEntryCurrentWorkerInput,
   type SessionEntryCurrentWorkerResult,
+  type SessionEntryListWorkerInput,
   type SessionExactEntriesWorkerInput,
   type SessionExactEntriesWorkerResult,
   type SessionRowDatabaseFacts,
@@ -149,6 +154,50 @@ export async function readSessionEntryWorkerRequest(
     return { kind: "session-entry-read", entry: undefined, source, readError };
   }
   return { kind: "session-entry-read", entry: read.value, source };
+}
+
+/** Cleanup selects identity columns before materializing metadata in the same worker snapshot. */
+export function readSessionEntryList(request: SessionEntryListWorkerInput) {
+  const scope = {
+    ...request.scope,
+    env: cloneEnvWithPlatformSemantics(request.scope.env ?? process.env),
+  };
+  if (scope.cleanupSession === undefined) {
+    return listSessionEntriesReadOnly(scope, { continuation: request.continuation });
+  }
+  const result = withOpenClawAgentDatabaseReadOnly(
+    (database) =>
+      readWithCanonicalSessionReaderContinuation(database, request.continuation, () =>
+        withSqlitePostCommitPublications(database.db, () =>
+          runSqliteDeferredTransactionSync(database.db, () => {
+            const identities = executeSqliteQuerySync(
+              database.db,
+              getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(database.db)
+                .selectFrom("session_nodes")
+                .select(["session_key as sessionKey", "current_session_id as sessionId"])
+                .orderBy("session_key"),
+            ).rows;
+            const keys = identities
+              .filter((row) =>
+                matchesPluginHostCleanupSession(row.sessionKey, row, scope.cleanupSession),
+              )
+              .map((row) => row.sessionKey);
+            const entries = new Map(
+              readSelectedSessionEntriesInDatabase(database, keys).map((entry) => [
+                entry.sessionKey,
+                entry,
+              ]),
+            );
+            return keys.flatMap((key) => {
+              const entry = entries.get(key);
+              return entry ? [entry] : [];
+            });
+          }),
+        ),
+      ),
+    { ...request.database, env: scope.env },
+  );
+  return result.found ? result.value : [];
 }
 
 /** Canonical entry currency reuses parsed facts only at the same native connection revision. */
@@ -496,13 +545,14 @@ export function readSessionRowDatabaseFacts(
             if (!selected.ok) {
               throw selected.error;
             }
+            const boardKeys = readBoardSessionKeys(database, request.sessionKeys);
             return {
               kind: "session-row-facts" as const,
               rows: selected.value.map(({ sessionKey, entry }) => {
                 const facts: SessionRowDatabaseFacts = {
                   sessionKey,
                   entry,
-                  hasBoard: readBoardSessionKeys(database, sessionKey).length > 0,
+                  hasBoard: boardKeys.has(sessionKey),
                 };
                 if (readSessionActivitySummary(entry)) {
                   facts.activitySummaryWatermark = readSessionTranscriptWatermarkInDatabase(

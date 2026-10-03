@@ -96,7 +96,7 @@ export async function runAgentResetPhase(params: {
   params.assertAdmissionCurrent?.();
   let resetResult: Awaited<ReturnType<typeof performGatewaySessionReset>>;
   try {
-    const creation = prepareSkillLibrarySessionCreation(
+    const creation = await prepareSkillLibrarySessionCreation(
       params.client,
       params.context.getRuntimeConfig,
       resolveAgentRunSessionCreation(params.client),

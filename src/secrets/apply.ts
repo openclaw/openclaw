@@ -158,9 +158,7 @@ function applyProviderPlanMutations(params: {
   upserts: Record<string, SecretProviderConfig> | undefined;
   deletes: string[] | undefined;
 }): boolean {
-  const currentProviders = isRecord(params.config.secrets?.providers)
-    ? structuredClone(params.config.secrets?.providers)
-    : {};
+  const currentProviders = params.config.secrets?.providers ?? {};
   let changed = false;
 
   for (const providerAlias of params.deletes ?? []) {
@@ -424,13 +422,8 @@ function scrubAuthStoresForProviderTargets(params: {
     if (!parsed || !isRecord(parsed.profiles)) {
       continue;
     }
-    const nextStore = structuredClone(parsed);
-    const profiles = nextStore.profiles;
-    if (!isRecord(profiles)) {
-      continue;
-    }
     let mutated = false;
-    for (const profile of iterateAuthProfileCredentials(profiles)) {
+    for (const profile of iterateAuthProfileCredentials(parsed.profiles)) {
       const provider = normalizeProviderId(profile.provider);
       if (!params.providerTargets.has(provider)) {
         continue;
@@ -459,7 +452,7 @@ function scrubAuthStoresForProviderTargets(params: {
       }
     }
     if (mutated) {
-      params.authStoreByPath.set(authStorePath, nextStore);
+      params.authStoreByPath.set(authStorePath, parsed);
       params.authStoreTargetByPath.set(authStorePath, target);
       params.changedFiles.add(authStorePath);
     }
@@ -494,7 +487,7 @@ function resolveAuthStoreForTarget(params: {
   const authStorePath = authStoreTarget.path;
   const existing = params.authStoreByPath.get(authStorePath);
   const loaded = existing ?? loadPersistedAuthProfileStore(authStoreTarget.agentDir);
-  const next: Record<string, unknown> = isRecord(loaded) ? structuredClone(loaded) : {};
+  const next: Record<string, unknown> = isRecord(loaded) ? loaded : {};
   const profiles = isRecord(next.profiles) ? next.profiles : {};
   if (typeof next.version !== "number" || !Number.isFinite(next.version)) {
     next.version = AUTH_STORE_VERSION;
@@ -669,7 +662,7 @@ async function validateProjectedSecretsState(params: {
         const override = authStoreLookup.get(storePath);
         if (override) {
           return (
-            coercePersistedAuthProfileStore(structuredClone(override)) ?? {
+            coercePersistedAuthProfileStore(override) ?? {
               version: AUTH_STORE_VERSION,
               profiles: {},
             }

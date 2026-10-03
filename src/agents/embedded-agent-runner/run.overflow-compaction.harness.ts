@@ -36,6 +36,7 @@ import type {
 } from "../prepared-model-runtime.types.js";
 import type { AgentRuntimePlan } from "../runtime-plan/types.js";
 import { makeAttemptResult, makeMockRuntimePlan } from "./run.overflow-compaction.fixture.js";
+import { createRunWorkspaceMock } from "./run.workspace-ownership.test-support.js";
 import type { RunEmbeddedAgentInternalParams } from "./run/internal-params.js";
 import type { buildEmbeddedRunPayloads } from "./run/payloads.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
@@ -839,16 +840,7 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
     };
   });
 
-  vi.doMock("../workspace-run.js", () => ({
-    resolveRunWorkspaceDir: vi.fn((params: { workspaceDir: string; agentId?: string }) => ({
-      workspaceDir: params.workspaceDir,
-      usedFallback: false,
-      isCanonicalWorkspace: false,
-      fallbackReason: undefined,
-      agentId: params.agentId ?? "main",
-    })),
-    redactRunIdentifier: vi.fn((value?: string) => value ?? ""),
-  }));
+  vi.doMock("../workspace-run.js", createRunWorkspaceMock);
 
   vi.doMock("../embedded-agent-helpers.js", async () => ({
     ...(await vi.importActual<typeof import("../embedded-agent-helpers.js")>(

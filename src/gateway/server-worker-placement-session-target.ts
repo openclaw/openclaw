@@ -1,4 +1,5 @@
 import type { managedWorktrees } from "../agents/worktrees/service.js";
+import type { ManagedWorktreeRecord } from "../agents/worktrees/types.js";
 import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
 import { createSessionEntryRevisionGuard } from "../config/sessions/session-accessor.sqlite-entry-revision.js";
 import { createSessionTranscriptOwnerPredicate } from "../config/sessions/session-accessor.sqlite-transcript-write-guard.js";
@@ -28,6 +29,16 @@ import { createWorkerWorkspaceConflictTranscriptHandlers } from "./worker-worksp
 export class WorkerDispatchTargetChangedError extends Error {
   readonly code = "invalid_state";
 }
+
+export type WorkerPlacementSessionRuntime = {
+  managedWorktrees: {
+    findLiveByOwner: (
+      ...args: Parameters<typeof managedWorktrees.findLiveByOwner>
+    ) => Pick<ManagedWorktreeRecord, "id" | "ownerId" | "path"> | undefined;
+  };
+  resolveCanonicalSessionEntryFromStoreKeys: typeof sessionUtils.resolveCanonicalSessionEntryFromStoreKeys;
+  resolveGatewaySessionStoreTargetWithStore: typeof sessionUtils.resolveGatewaySessionStoreTargetWithStore;
+};
 
 export function createWorkerWorkspaceRecoveryPreparer(options: {
   loadSessionRuntime: () => Promise<WorkerPlacementSessionRuntime>;
@@ -142,16 +153,12 @@ export function createWorkerWorkspaceRecoveryPreparer(options: {
   };
 }
 
-type WorkerPlacementSessionRuntime = {
-  resolveWorkerPlacementExecutionMode: typeof placementSessionRuntime.resolveWorkerPlacementExecutionMode;
-  managedWorktrees: typeof managedWorktrees;
-  resolveWorkerPlacementSessionRuntime: typeof placementSessionRuntime.resolveWorkerPlacementSessionRuntime;
-  resolveCanonicalSessionEntryFromStoreKeys: typeof sessionUtils.resolveCanonicalSessionEntryFromStoreKeys;
-  resolveGatewaySessionStoreTargetWithStore: typeof sessionUtils.resolveGatewaySessionStoreTargetWithStore;
-};
-
 export async function runWorkerPlacementSessionBarrier<T>(params: {
-  sessionRuntime: WorkerPlacementSessionRuntime;
+  sessionRuntime: WorkerPlacementSessionRuntime &
+    Pick<
+      typeof placementSessionRuntime,
+      "resolveWorkerPlacementExecutionMode" | "resolveWorkerPlacementSessionRuntime"
+    >;
   getConfig: () => OpenClawConfig;
   sessionId: string;
   sessionKey: string;
@@ -169,7 +176,8 @@ export async function runWorkerPlacementSessionBarrier<T>(params: {
     clone: false,
     exactRead: true,
   });
-  return await runExclusiveSessionLifecycleMutation({
+  const operation = params.action === "activation" ? "placement-activate" : "placement-recover";
+  return await runExclusiveSessionLifecycleMutation(operation, {
     scope: target.storePath,
     identities: [params.sessionKey, target.canonicalKey, ...target.storeKeys, params.sessionId],
     signal: params.signal,
@@ -215,51 +223,14 @@ export async function runWorkerPlacementSessionBarrier<T>(params: {
   });
 }
 
-type SessionEntryShape = {
-  sessionId?: string;
-  lifecycleRevision?: string;
-  archivedAt?: number;
-  worktree?: { id?: string };
-  repositoryWorkspaceId?: string;
-};
-
-type SessionTargetShape<Store> = {
-  storePath: string;
-  canonicalKey: string;
-  agentId: string;
-  store: Store;
-  storeKeys: string[];
-};
-
 /** Keep canonical session identity and its durable workspace owner in one lifecycle fence. */
-export async function resolveWorkerPlacementSessionTarget<
-  Entry extends SessionEntryShape,
-  Store extends Record<string, Entry>,
-  Target extends SessionTargetShape<Store>,
-  Worktree extends { id: string; ownerId?: string; path: string },
->(params: {
-  sessionRuntime: {
-    resolveGatewaySessionStoreTargetWithStore: (input: {
-      cfg: OpenClawConfig;
-      key: string;
-      agentId: string;
-      preserveQualifiedAddress: true;
-      clone: false;
-      exactRead: true;
-    }) => Target;
-    resolveCanonicalSessionEntryFromStoreKeys: (
-      store: Store,
-      storeKeys: string[],
-    ) => Entry | undefined;
-    managedWorktrees: {
-      findLiveByOwner: (ownerKind: "session", ownerId: string) => Worktree | undefined;
-    };
-  };
+export async function resolveWorkerPlacementSessionTarget(params: {
+  sessionRuntime: WorkerPlacementSessionRuntime;
   config: OpenClawConfig;
   sessionId: string;
   sessionKey: string;
   agentId: string;
-  expectedTarget?: Target;
+  expectedTarget?: ReturnType<typeof sessionUtils.resolveGatewaySessionStoreTargetWithStore>;
   errorMessage: string;
 }) {
   const initialTarget = params.sessionRuntime.resolveGatewaySessionStoreTargetWithStore({

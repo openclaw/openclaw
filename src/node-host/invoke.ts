@@ -90,11 +90,9 @@ type NodeHostPrivateInvokeRuntime = NodeHostInvokeRuntime & {
   workerComputer?: NodeWorkerComputer;
 };
 
-const execHostEnforced =
+const preferMacAppExecHost =
+  process.platform === "darwin" &&
   normalizeLowercaseStringOrEmpty(process.env.OPENCLAW_NODE_EXEC_HOST ?? "") === "app";
-const execHostFallbackAllowed =
-  normalizeLowercaseStringOrEmpty(process.env.OPENCLAW_NODE_EXEC_FALLBACK ?? "") !== "0";
-const preferMacAppExecHost = process.platform === "darwin" && execHostEnforced;
 
 type SystemWhichParams = {
   bins: string[];
@@ -658,8 +656,6 @@ async function dispatchInvoke(
     params,
     skillBins,
     signal: runtime.signal,
-    execHostEnforced,
-    execHostFallbackAllowed,
     runCommand,
     sendNodeEvent: (event, payload) => sendNodeEvent(client, event, payload),
     sendInvokeResult: response.send,

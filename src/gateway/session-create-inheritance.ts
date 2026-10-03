@@ -18,10 +18,8 @@ import { readResidentUserProfileId } from "../state/user-profile-list.js";
 import type { CreateGatewaySessionParams } from "./session-create-service.types.js";
 import { resolvePluginSessionOwnershipError } from "./session-plugin-ownership.js";
 import { invalidSessionRequest } from "./session-request-error.js";
-import {
-  loadGatewaySessionEntryReadOnly,
-  resolveGatewaySessionStoreTarget,
-} from "./session-utils.js";
+import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-worker.js";
+import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
 
 type SessionCreation = NonNullable<CreateGatewaySessionParams["creation"]> &
   Pick<SessionEntry, "inheritedGitContributorProfileIds">;
@@ -60,10 +58,11 @@ export async function prepareSessionCreateParent(input: {
   agentId?: string;
   assertCurrent?: () => void;
 }) {
-  const target = resolveGatewaySessionStoreTarget({
+  const target = await resolveGatewaySessionStoreTargetInWorker({
     cfg: input.params.cfg,
     key: input.key,
     ...(input.agentId ? { agentId: input.agentId } : {}),
+    assertActive: input.assertCurrent,
   });
   if (input.params.creation?.via === "spawn") {
     await waitForSessionParticipantRecording({

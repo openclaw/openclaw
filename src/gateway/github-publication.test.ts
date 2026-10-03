@@ -1,6 +1,6 @@
 import os from "node:os";
 import { describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import {
   loadTranscriptEvents,
   upsertSessionEntryCore,
@@ -540,9 +540,13 @@ describe("Gateway GitHub publication", () => {
     });
   });
 
-  it("singleflights concurrent coordinators before any Git or GitHub mutation", async () => {
+  it("singleflights concurrent coordinators before any Git or GitHub mutation", async ({
+    signal,
+  }) => {
+    const repositoryEntered = createDeferred();
     const { promise: repositoryReady, resolve: releaseRepository } = createDeferred();
     mocks.resolveRepository.mockImplementationOnce(async () => {
+      repositoryEntered.resolve();
       await repositoryReady;
       return {
         checkoutRoot: "/repo/worktree",
@@ -562,15 +566,20 @@ describe("Gateway GitHub publication", () => {
       title: "Publish once",
     };
 
-    const firstResult = first.requestForSession(request);
-    const secondResult = second.requestForSession(request);
-    await vi.waitFor(() => expect(mocks.resolveRepository).toHaveBeenCalledOnce());
-    releaseRepository?.();
+    const requests = [first.requestForSession(request), second.requestForSession(request)];
+    try {
+      await withinTest(Promise.race([repositoryEntered.promise, ...requests]), signal);
+      expect(mocks.resolveRepository).toHaveBeenCalledOnce();
+    } finally {
+      releaseRepository();
+      await Promise.allSettled(requests);
+    }
 
-    await expect(Promise.all([firstResult, secondResult])).resolves.toEqual([
+    await expect(Promise.all(requests)).resolves.toEqual([
       expect.objectContaining({ status: "published" }),
       expect.objectContaining({ status: "published" }),
     ]);
+    expect(mocks.resolveRepository).toHaveBeenCalledOnce();
     expect(commands.filter((argv) => argv.includes("commit-tree"))).toHaveLength(1);
     const fetchIndex = commands.findIndex((argv) => argv.includes("fetch"));
     const commitIndex = commands.findIndex((argv) => argv.includes("commit-tree"));

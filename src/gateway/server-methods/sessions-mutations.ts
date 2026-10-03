@@ -430,7 +430,7 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
           );
         }
       };
-      const assignment = await runExclusiveSessionLifecycleMutation({
+      const assignment = await runExclusiveSessionLifecycleMutation("assign-owner", {
         scope: target.storePath,
         identities: [target.storeKey, expectedSessionId],
         run: () =>

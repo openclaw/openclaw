@@ -538,11 +538,23 @@ describe("tsdown config", () => {
         import { pathToFileURL } from "node:url";
         const [root, entriesJson] = process.argv.slice(1);
         const modules = {};
+        const historicalListeners = {
+          feishu: { port: 3000, host: "127.0.0.1" },
+          msteams: { port: 3978, preserveAuthoredActivation: true },
+          "nextcloud-talk": { port: 8788, host: "0.0.0.0" },
+          telegram: { port: 8787, host: "127.0.0.1" },
+        };
         for (const name of JSON.parse(entriesJson)) {
           const mod = await import(pathToFileURL(path.join(root, name + ".js")).href);
+          const listener = historicalListeners[name];
           assert.deepEqual(Object.keys(mod).sort(), name === "clickclack"
             ? ["normalizeCompatibilityConfig"]
-            : ["legacyConfigRules", "normalizeCompatibilityConfig"]);
+            : [...(listener ? ["historicalWebhookListener"] : []), "legacyConfigRules", "normalizeCompatibilityConfig"]);
+          if (listener) {
+            assert.deepEqual(mod.historicalWebhookListener, {
+              channelId: name, preserveAuthoredActivation: undefined, ...listener,
+            });
+          }
           modules[name] = mod;
         }
         const cfg = { channels: { discord: { dm: { enabled: true, policy: "allowlist", allowFrom: ["123"] }, accounts: { work: { dm: { policy: "disabled", allowFrom: ["456"] } } } } }, plugins: { allow: [] } };

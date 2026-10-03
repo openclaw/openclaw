@@ -20,9 +20,13 @@ openclaw gateway restart
 openclaw gateway uninstall
 ```
 
-`gateway stop` remains available when plugin configuration needs Doctor migration.
-It still validates core configuration and refuses configuration written by a newer
-OpenClaw binary. Start and restart continue to validate plugin configuration.
+`gateway stop`, `gateway uninstall`, and `gateway restart` remain available when
+configuration is invalid or needs Doctor migration, including configuration written
+by a newer OpenClaw version. They control the recorded service and report config
+problems as warnings with `openclaw doctor --fix` guidance. Stop and uninstall do
+not rewrite configuration. Restart preserves the installed service definition when
+config needs repair; its health check still reports whether the Gateway came back.
+`gateway start` continues to validate configuration before starting the Gateway.
 
 On Windows, Scheduled Task stop and restart first ask the verified Gateway to drain
 and exit. Older or unresponsive Gateways fall back to termination of the captured
