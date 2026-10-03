@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
+  createSqliteQueryCache,
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   prepareSqliteQueryTakeFirstSync,
@@ -62,22 +63,16 @@ function createTranscriptContextVersionQuery(database: Pick<OpenClawAgentDatabas
   );
 }
 
-const transcriptContextVersionQueries = new WeakMap<
-  OpenClawAgentDatabase["db"],
-  ReturnType<typeof createTranscriptContextVersionQuery>
->();
+const transcriptContextVersionQuery = createSqliteQueryCache((db) =>
+  createTranscriptContextVersionQuery({ db }),
+);
 
 export function readTranscriptContextVersionInTransaction(
   database: Pick<OpenClawAgentDatabase, "db">,
   sessionId: string,
 ) {
   const cold = readSessionColdTranscript(database.db, sessionId);
-  let query = transcriptContextVersionQueries.get(database.db);
-  if (!query) {
-    query = createTranscriptContextVersionQuery(database);
-    transcriptContextVersionQueries.set(database.db, query);
-  }
-  const version = query(sessionId)!;
+  const version = transcriptContextVersionQuery(database.db)(sessionId)!;
   return cold ? { ...version, rawSeq: cold.last_seq } : version;
 }
 
@@ -303,21 +298,15 @@ function createTranscriptMutationStateQuery(database: Pick<OpenClawAgentDatabase
 }
 
 // Only compilation is retained; writer transactions must see their latest mutation fences.
-const transcriptMutationStateQueries = new WeakMap<
-  OpenClawAgentDatabase["db"],
-  ReturnType<typeof createTranscriptMutationStateQuery>
->();
+const transcriptMutationStateQuery = createSqliteQueryCache((db) =>
+  createTranscriptMutationStateQuery({ db }),
+);
 
 export function readTranscriptMutationStateInTransaction(
   database: OpenClawAgentDatabase,
   sessionId: string,
 ): { observedAt: number | null; updatedAt: number | null } {
-  let query = transcriptMutationStateQueries.get(database.db);
-  if (!query) {
-    query = createTranscriptMutationStateQuery(database);
-    transcriptMutationStateQueries.set(database.db, query);
-  }
-  const row = query(sessionId);
+  const row = transcriptMutationStateQuery(database.db)(sessionId);
   return {
     observedAt: row?.transcript_observed_at ?? null,
     updatedAt: row?.transcript_updated_at ?? null,

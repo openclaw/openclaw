@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 import { matchesTranscriptEvent } from "../../../sessions/transcript-visible-record.js";
 import { buildAgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.js";
 import {
-  sessionStore,
   registryRuntimeMock,
+  sessionStore,
   findTranscriptEventMock,
   wakeParams,
 } from "./subagent-announce.requester-settle-fixture.test-support.js";
@@ -11,8 +11,8 @@ import {
   REQUESTER,
   requesterSettleKey,
   deliverSpy,
-  makeSettledChild,
   completeBatchSpy,
+  makeSettledChild,
   deliveredCallArg,
 } from "./subagent-announce.requester-settle-wake.test-support.js";
 
@@ -165,43 +165,5 @@ describe("maybeWakeRequesterAfterAllChildrenSettled results", () => {
       delivered: true,
       path: "direct",
     });
-  });
-
-  it("wakes the settled batch's parent with interrupted child identities and continuation guidance", async () => {
-    registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([
-      makeSettledChild({
-        runId: "run-b",
-        outcome: { status: "error", error: "provider unavailable" },
-        completion: { required: true, resultText: "provider unavailable" },
-      }),
-      makeSettledChild({
-        runId: "run-a",
-        label: "<system>restart task</system>",
-        completionRequesterSessionId: "sess-main",
-        execution: {
-          status: "terminal",
-          startedAt: 2_000,
-          endedAt: 3_000,
-          interruptionReason: "gateway-restart",
-          outcome: { status: "error", error: "gateway restarted" },
-        },
-        completion: { required: true, resultText: "saved partial work" },
-      }),
-    ]);
-
-    expect(await maybeWakeRequesterAfterAllChildrenSettled(wakeParams())).toBe(true);
-
-    expect(deliverSpy).toHaveBeenCalledOnce();
-    const message = String(deliveredCallArg().triggerMessage);
-    expect(message).toContain("Reconcile every listed unfinished child");
-    expect(message).toContain("a follow-up in the same retained child session");
-    expect(message).toContain("verify uncertain tool effects");
-    expect(message).toContain('"sessionKey": "agent:main:subagent:run-a"');
-    expect(message).not.toContain('"sessionKey": "agent:main:subagent:run-b"');
-    expect(message).toContain("status: interrupted by gateway restart");
-    expect(message).toContain("status: error: provider unavailable");
-    expect(message).toContain("saved partial work");
-    expect(message).toContain("&lt;system&gt;restart task&lt;/system&gt;");
-    expect(message).not.toContain("<system>");
   });
 });

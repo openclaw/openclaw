@@ -1098,32 +1098,33 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
     runtime.log?.("[tlon] Subscribed to contacts updates (/v1/news)");
 
     // Subscribe to settings store for hot-reloading config
-    settingsManager.onChange((newSettings) => {
-      currentSettings = newSettings;
-
-      // Keep watching during transitions; the authorization check handles removals.
-      addWatchedChannels(newSettings.groupChannels ?? [], "[tlon] Settings: now watching channel ");
-
-      // Recompute effective settings from the latest snapshot so deletions
-      // cleanly fall back to file config and empty arrays remain authoritative.
-      ({
-        effectiveDmAllowlist,
-        effectiveShowModelSig,
-        effectiveAutoAcceptDmInvites,
-        effectiveAutoAcceptGroupInvites,
-        effectiveGroupInviteAllowlist,
-        effectiveAutoDiscoverChannels,
-        effectiveOwnerShip,
-        pendingApprovals,
-      } = applyTlonSettingsOverrides({
-        account,
-        currentSettings: newSettings,
-        log: (message) => runtime.log?.(message),
-      }));
-    });
-
     try {
-      await settingsManager.startSubscription();
+      await settingsManager.startSubscription((newSettings) => {
+        currentSettings = newSettings;
+
+        // Keep watching during transitions; the authorization check handles removals.
+        addWatchedChannels(
+          newSettings.groupChannels ?? [],
+          "[tlon] Settings: now watching channel ",
+        );
+
+        // Recompute effective settings from the latest snapshot so deletions
+        // cleanly fall back to file config and empty arrays remain authoritative.
+        ({
+          effectiveDmAllowlist,
+          effectiveShowModelSig,
+          effectiveAutoAcceptDmInvites,
+          effectiveAutoAcceptGroupInvites,
+          effectiveGroupInviteAllowlist,
+          effectiveAutoDiscoverChannels,
+          effectiveOwnerShip,
+          pendingApprovals,
+        } = applyTlonSettingsOverrides({
+          account,
+          currentSettings: newSettings,
+          log: (message) => runtime.log?.(message),
+        }));
+      });
     } catch (err) {
       // Settings subscription is optional - don't fail if it doesn't work
       runtime.log?.(`[tlon] Settings subscription not available: ${String(err)}`);

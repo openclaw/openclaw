@@ -92,6 +92,7 @@ export function resolveIncompleteTurnPayloadText(params: {
   const thinkingOnlyTerminal =
     params.payloadCount !== 0 &&
     !assistantState.visibleText.length &&
+    !assistant?.openclawDelivery?.tts?.text?.trim() &&
     !hasTerminalOutput &&
     Boolean(assistant && hasOnlyAssistantReasoningContent(assistant));
 

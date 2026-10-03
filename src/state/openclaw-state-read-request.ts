@@ -11,6 +11,7 @@ export function captureCommand(command: OpenClawStateReadCommand): OpenClawState
     command.type === "secrets.execEnvironment" ||
     command.type === "secrets.value" ||
     command.type === "sessionState.versions" ||
+    command.type === "sessionState.ambientTargets" ||
     command.type === "sessionState.events" ||
     command.type === "operatorApprovals.history" ||
     command.type === "diagnostic.latest" ||
@@ -211,6 +212,7 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
     command.type === "secrets.execEnvironment" ||
     command.type === "secrets.value" ||
     command.type === "sessionState.versions" ||
+    command.type === "sessionState.ambientTargets" ||
     command.type === "sessionState.events" ||
     command.type === "workers.placementProjection" ||
     command.type === "workers.placementPendingResults" ||

@@ -1,3 +1,4 @@
+import { registerListener } from "../../../src/shared/listeners.js";
 import { webKitHostWindow } from "./native-webkit-bridge.ts";
 
 export type NativeGateway = {
@@ -63,10 +64,7 @@ function createNativeGatewaysCapability(): NativeGatewaysCapability | null {
     get snapshot() {
       return snapshot;
     },
-    subscribe(listener) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
+    subscribe: (listener) => registerListener(listeners, listener),
     select: (id) => post({ type: "select", id }),
     openWindow: (id) => post({ type: "open-window", id }),
     setPrimary: (id) => post({ type: "set-primary", id }),

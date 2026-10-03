@@ -11,7 +11,7 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   buildCodexOpenClawPromptContext,
-  buildCodexWatchedSessionsContext,
+  prepareCodexWatchedSessionsContext,
   readMirroredSessionHistoryMessages,
   renderCodexSkillsInstructions,
 } from "./attempt-context.js";
@@ -199,11 +199,15 @@ export async function prepareCodexAttemptContext(
     }),
     agentWorkspaceDeveloperInstructions,
   );
-  const watchedSessionsContext = buildCodexWatchedSessionsContext({
+  const watchedSessionsContext = await prepareCodexWatchedSessionsContext({
     attempt: runtimeParams,
     dynamicTools: toolBridge.availableSpecs,
     sessionKey: contextSessionKey,
     sandboxed: sandbox?.enabled === true,
+    assertCurrent: () => {
+      connection.runAbortController.signal.throwIfAborted();
+      connection.assertCurrent();
+    },
   });
   const buildOpenClawPromptContext = (includeWorkspaceReferences: boolean) =>
     buildCodexOpenClawPromptContext({

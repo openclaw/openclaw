@@ -270,7 +270,7 @@ describe("monitorTlonProvider bot-owned thread mention policy", () => {
         throw new Error("post unavailable");
       }
       if (row.revokeDuringLookup) {
-        settingsManagerMock.onChange.mock.calls[0]?.[0]({
+        settingsManagerMock.startSubscription.mock.calls[0]?.[0]({
           channelRules: { [channelNest]: { mode: "restricted", allowedShips: [] } },
         });
       }
@@ -338,7 +338,7 @@ describe("monitorTlonProvider bot-owned thread mention policy", () => {
       if (row.pauseAt) {
         await paused.promise;
         expect(inboundRuntimeMock.dispatch).not.toHaveBeenCalled();
-        settingsManagerMock.onChange.mock.calls[0]?.[0]({
+        settingsManagerMock.startSubscription.mock.calls[0]?.[0]({
           channelRules: {
             [channelNest]: {
               mode: row.lateAllowedShips === undefined ? "open" : "restricted",

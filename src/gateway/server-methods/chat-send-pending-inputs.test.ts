@@ -4,6 +4,8 @@ import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayClientInfo } from "../../../packages/gateway-protocol/src/client-info.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { buildAgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
 import { registerAgentSessionLoopTestLifecycle } from "../../agents/sessions/agent-session-loop-correctness.test-support.js";
 import type { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import { replyRunRegistry } from "../../auto-reply/reply/reply-run-registry.js";
@@ -30,11 +32,11 @@ import {
   type UserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
-import { ensureSessionPendingInputsSchema } from "../../state/openclaw-agent-pending-inputs-schema.js";
 import { setDisplayName } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { createMentionInbox } from "../mention-inbox.js";
+import { refusePendingInputCommit } from "../pending-input-commit.test-support.js";
 import { dispatchInboundMessageMock, installGatewayTestHooks } from "../test-helpers.js";
 import { getTestPluginRegistry } from "../test-helpers.plugin-registry.js";
 import { createWorkerSessionPlacementStore } from "../worker-environments/placement-store.js";
@@ -45,6 +47,45 @@ registerAgentSessionLoopTestLifecycle();
 const createBrowserFollowupFixture = useBrowserFollowupFixture();
 
 describe("ordinary chat input admission", () => {
+  it("acknowledges staged chat input and joins its terminal disposition without host pending-input writes", async () => {
+    const fixture = await createBrowserFollowupFixture();
+    let pendingAtAck: ReturnType<typeof listSessionPendingInputs> | undefined;
+    const sql = observeHostDataSql();
+    try {
+      const ack = await fixture.send(
+        vi.fn<RespondFn>((ok) => {
+          if (ok) {
+            pendingAtAck = listSessionPendingInputs(fixture.scope);
+          }
+        }),
+      );
+      expect(ack.mock.calls[0]?.[0]).toBe(true);
+      expect(await pendingAtAck).toMatchObject({
+        items: [{ state: "queued", runId: fixture.params.idempotencyKey }],
+      });
+      const recorder = await fixture.dispatchedRecorder;
+      await recorder.completeProcessingAsync?.(
+        buildAgentRunTerminalOutcome({ status: "error", stopReason: "rpc" }),
+      );
+      recorder.finishPendingInput?.("cancelled");
+      expect(() => recorder.withPendingInput?.(() => {})).toThrow("ownership ended");
+      await fixture.finishDispatch();
+      // Submitted-input comparison retains its read owner until the separate read cutover.
+      const writes = sql.queries.filter((query) =>
+        /\b(?:insert\s+into|update|delete\s+from)\s+["`]?session_(?:pending_inputs|input_completions)\b/i.test(
+          query,
+        ),
+      );
+      expect(writes).toEqual([]);
+    } finally {
+      sql.restore();
+      await fixture.cleanup();
+    }
+    expect(await listSessionPendingInputs(fixture.scope)).toMatchObject({
+      items: [{ state: "cancelled", runId: fixture.params.idempotencyKey }],
+    });
+  });
+
   async function createMentionFixture(
     options: { active?: boolean; preserveContent?: boolean } = {},
   ) {
@@ -416,13 +457,12 @@ describe("ordinary chat input admission", () => {
 
   it("retries a failed custody write with the same request identity without acknowledging lost input", async () => {
     const fixture = await createBrowserFollowupFixture();
-    const database = openOpenClawAgentDatabase(
-      toDatabaseOptions(resolveSqliteScope(fixture.scope)),
-    ).db;
-    ensureSessionPendingInputsSchema(database);
-    database.exec(
-      "CREATE TRIGGER reject_browser_custody BEFORE INSERT ON session_pending_inputs BEGIN SELECT RAISE(ABORT, 'custody unavailable'); END",
-    );
+    const refusal = refusePendingInputCommit({
+      operation: "stage",
+      message: "custody unavailable",
+      sessionId: fixture.scope.sessionId,
+      runId: fixture.params.idempotencyKey,
+    });
     try {
       const rejected = await fixture.send();
       expect(rejected).toHaveBeenCalledWith(
@@ -440,7 +480,7 @@ describe("ordinary chat input admission", () => {
         identities: [fixture.scope.sessionKey, fixture.scope.sessionId],
       });
 
-      database.exec("DROP TRIGGER reject_browser_custody");
+      refusal.mockRestore();
       const retried = await fixture.send();
       expect(retried).toHaveBeenCalledWith(
         true,
@@ -454,7 +494,7 @@ describe("ordinary chat input admission", () => {
       });
       expect(loadTranscriptEventsSync(fixture.scope)).toEqual(fixture.activeTranscript);
     } finally {
-      database.exec("DROP TRIGGER IF EXISTS reject_browser_custody");
+      refusal.mockRestore();
       await fixture.cleanup();
     }
   });

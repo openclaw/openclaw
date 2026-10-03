@@ -202,31 +202,25 @@ export function rollbackSecretStoreEntryWriteInDatabase(
       ({ db: sqlite }) => {
         admit("transaction");
         const db = getNodeSqliteKysely<SecretStoreDatabase>(sqlite);
-        const query =
-          params.previous === undefined
-            ? db
-                .updateTable("secret_store_entries")
-                .set({ deleted_at_ms: now, updated_at_ms: now })
-                .where("scope_kind", "=", scopeKind)
-                .where("scope_id", "=", scopeId)
-                .where("name", "=", params.name)
-                .where("updated_by", "=", params.expectedUpdatedBy)
-                .where("deleted_at_ms", "is", null)
-            : db
-                .updateTable("secret_store_entries")
-                .set({
+        const query = db
+          .updateTable("secret_store_entries")
+          .set(
+            params.previous === undefined
+              ? { deleted_at_ms: now, updated_at_ms: now }
+              : {
                   value: params.previous.value,
                   kind: params.previous.kind,
                   allowed_hosts: params.previous.allowedHosts,
                   updated_at_ms: now,
                   updated_by: params.previous.updatedBy,
                   deleted_at_ms: null,
-                })
-                .where("scope_kind", "=", scopeKind)
-                .where("scope_id", "=", scopeId)
-                .where("name", "=", params.name)
-                .where("updated_by", "=", params.expectedUpdatedBy)
-                .where("deleted_at_ms", "is", null);
+                },
+          )
+          .where("scope_kind", "=", scopeKind)
+          .where("scope_id", "=", scopeId)
+          .where("name", "=", params.name)
+          .where("updated_by", "=", params.expectedUpdatedBy)
+          .where("deleted_at_ms", "is", null);
         const result = executeSqliteQuerySync(sqlite, query);
         admit("commit");
         return Number(result.numAffectedRows ?? 0n) === 1;

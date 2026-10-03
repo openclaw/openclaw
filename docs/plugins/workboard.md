@@ -235,6 +235,14 @@ edited, or written, then resumes after the local interaction finishes. A
 reconnect always performs a canonical reload. There is no routine full-card
 poll, and **Refresh** remains available as manual recovery.
 
+The Gateway shares one immutable `workboard.cards.list` payload per normalized
+board filter at each store revision, including concurrent reads. Card and board
+writes invalidate it before the next read; the existing change service also
+invalidates it when it observes a commit from another SQLite connection.
+Each response still includes all board summaries, so a change to another board
+invalidates the payload too. Claim tokens remain redacted, and the RPC response
+shape is unchanged.
+
 When more than one board exists, the toolbar includes a **Board** filter backed
 by persisted board metadata rather than only the currently visible cards. Empty
 and archived boards therefore remain selectable. Cards without an explicit

@@ -206,7 +206,7 @@ behavior; it does not adopt durable hydration's lower-memory streaming contract.
 Actor loss returns `INCOGNITO_SESSION_ENDED` rather than empty history.
 
 Production incognito remains host-owned until P7. P5b adds usage/projection
-composition, Memory reads, and public SDK Codex history. P5a changes no schema,
+composition; P5c adds Memory reads and SDK Codex history. P5a changes no schema,
 retention, settlement owner, update behavior, or operator configuration, and
 retires no T1 sites before activation.
 
@@ -227,6 +227,27 @@ projection chunks; releasing a borrow still joins its cleanup. Actor loss return
 These routes remain inactive until P7. Production incognito stays host-owned;
 schemas, retention, durability, update behavior, and operator configuration are
 unchanged, and no T1 sites are retired. P5c adds Memory and Codex history adapters.
+
+### Incognito Memory and Codex history (P5c, inactive)
+
+Memory entry projection and reset-recall reads can use the captured actor's
+existing history FIFO. The actor selects Memory input records or reset navigation
+inside a synchronous snapshot. Memory keeps its existing text, provenance,
+redaction, and reset-cutoff projection; the caller never reopens the sentinel.
+
+The bundled Codex plugin accepts an owner-bound asynchronous context reader
+through its existing SDK subpath. Actor reads require a complete captured session
+target, validate the transcript after asynchronous consumption, and recheck live
+authority before disclosure. Full native context is materialized before crossing
+the worker boundary, so this route allocates a complete detached snapshot rather
+than preserving the native iterator's lazy payload reads. Existing evidence
+validation, ordering, and image sanitization remain plugin-owned.
+
+Both adapters retain accepted computation until settlement and preserve
+`INCOGNITO_SESSION_ENDED` on actor loss. They remain inactive until P7; the
+released synchronous SDK helper and production host routing stay unchanged.
+This stage changes no schema, retention, durability, update behavior, operator
+configuration, or memory cap and retires no T1 sites.
 
 ### Existing worker flows
 
@@ -637,6 +658,15 @@ retain their existing owner. Schemas, quotas, retention, publication security ch
 and update behavior are unchanged.
 
 ## Carry facts, publish after commit
+
+Watched-session prompt preparation reads ambient targets through the shared-state
+reader and exact title entries through the session reader. It captures both stores
+before yielding, retains the session reader through disclosure revalidation, and
+rechecks the caller and watches after loading titles. Live turns, compaction, and
+bundled harnesses await the same preparation. The released synchronous SDK helper
+remains deprecated compatibility; the async path never falls back to host SQL.
+Sorted rows, the twenty-row cap, title truncation, prompt bytes, and update behavior
+are unchanged.
 
 Personal model-account success and failover-failure bookkeeping use typed reductions
 in the existing `authProfiles` shared-state worker. The host captures the physical
@@ -1190,8 +1220,24 @@ an aborted but registered owner retains the right to finish cancelled. Confirmed
 commit receipts update the returned page even if ordinary result delivery fails,
 and accepted work settles before database custody is released. Process-held
 incognito reads retain their existing owner until the separate actor cutover;
-stage, finish, append, and submitted-input recovery remain separate work. This
+submitted-input recovery remains separate work. This
 changes no schema, retention, durability, configuration, or update behavior.
+
+Pending-input staging, processing completion, and terminal disposition use the
+same agent executor. The host captures the physical source before awaiting
+preparation, applies message hooks outside the transaction, and publishes custody
+only after native commit acknowledgment within the writer FIFO. The worker
+compares the staging snapshot and exact run, request, session, and lifecycle
+identities; transaction and commit grants recheck the live host owner. Lost
+responses reconcile native receipts, and uncertain outcomes never replay.
+Finishing immediately revokes execution while the same owner protects history
+custody until its disposition settles. Recorder and database cleanup owners join
+accepted work before releasing their resources. Source receipts stay distinct
+from collected transcript messages, and processing completion remains distinct
+from transcript consumption. Incognito keeps its process-held owner, and the
+released synchronous recorder completion callback retains its native SDK
+contract; internal callers await its asynchronous companion. Schemas, stored
+bytes, retention, and update behavior are unchanged.
 
 A missing resident row gets a bounded worker sharing read before history treats
 it as absent. This preserves refusal for durable entries marked incognito, which

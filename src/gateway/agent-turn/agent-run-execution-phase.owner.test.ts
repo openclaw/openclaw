@@ -62,7 +62,13 @@ vi.mock("./agent-run-dispatch.js", () => ({
   dispatchAgentRunFromGateway,
 }));
 
-function createExecution(options: { aborted?: boolean; assertContextCurrent?: () => void } = {}) {
+function createExecution(
+  options: {
+    aborted?: boolean;
+    assertContextCurrent?: () => void;
+    pendingInputSettlement?: () => Promise<void>;
+  } = {},
+) {
   const abortCleanup = vi.fn();
   const gatewayRelease = vi.fn();
   const callerRelease = vi.fn();
@@ -101,6 +107,9 @@ function createExecution(options: { aborted?: boolean; assertContextCurrent?: ()
         },
         unpersistedOffloadedRefs: [],
         userTurn: {
+          recorder: options.pendingInputSettlement
+            ? { waitForPendingInputSettlement: options.pendingInputSettlement }
+            : undefined,
           execApprovalFollowupHandoffClaimId: "claim",
           message: "continue",
           senderIsOwner: false,
@@ -129,6 +138,7 @@ function createExecution(options: { aborted?: boolean; assertContextCurrent?: ()
       canUseInternalRuntimeHandoff: false,
       client: null,
       context: {
+        getSessionEventSubscriberConnIds: () => new Set(),
         dedupe: new Map(),
         deps: {},
         logGateway: { error: vi.fn(), warn: vi.fn() },
@@ -741,8 +751,8 @@ describe("startAgentRunExecution Gateway ownership", () => {
     expect(dispatch?.ingressOpts.workspaceDir).toBe("/workspace/A");
     expect(execution.runtimeRelease).not.toHaveBeenCalled();
 
-    dispatch?.cleanupAbortController();
-    dispatch?.cleanupAbortController();
+    await dispatch?.cleanupAbortController();
+    await dispatch?.cleanupAbortController();
     expect(execution.callerRelease).not.toHaveBeenCalled();
     resolveCleanupObserved();
     await expect(borrowedAfterCleanup).resolves.toBeUndefined();
@@ -764,7 +774,13 @@ describe("startAgentRunExecution Gateway ownership", () => {
   ] as const)(
     "settles an undispatched $ending followup only after cleanup (registration: $registration)",
     async ({ ending, registration }) => {
+      const settlementEntered = createDeferred();
+      const finishSettlement = createDeferred();
       const execution = createExecution({
+        pendingInputSettlement: async () => {
+          settlementEntered.resolve();
+          await finishSettlement.promise;
+        },
         aborted: ending === "aborted",
         ...(ending === "failed"
           ? {
@@ -774,6 +790,7 @@ describe("startAgentRunExecution Gateway ownership", () => {
             }
           : {}),
       });
+      execution.params.agentDedupeKeys = [`agent:${execution.params.runId}`];
       const owner = bindFollowupCompletion(execution);
       const entry = execution.params.prepared.activeRunAbort.entry!;
       const successor =
@@ -828,12 +845,20 @@ describe("startAgentRunExecution Gateway ownership", () => {
       try {
         await Promise.race([recoveryEntered.promise, completion]);
         expect(dispatchAgentRunFromGateway).not.toHaveBeenCalled();
-        expect(execution.params.io.emitFinal).toHaveBeenCalledOnce();
+        expect(execution.params.io.emitFinal).not.toHaveBeenCalled();
+        expect(execution.params.context.dedupe.size).toBe(0);
         expect(finishExecution).not.toHaveBeenCalled();
         expect(replyObserved).not.toHaveBeenCalled();
         expect(execution.abortCleanup).not.toHaveBeenCalled();
         releaseRecovery.resolve();
+        await Promise.race([settlementEntered.promise, completion]);
+        expect(execution.params.io.emitFinal).not.toHaveBeenCalled();
+        expect(execution.params.context.dedupe.size).toBe(0);
+        expect(execution.abortCleanup).not.toHaveBeenCalled();
+        finishSettlement.resolve();
         await Promise.race([disposalEntered.promise, completion]);
+        expect(execution.params.io.emitFinal).toHaveBeenCalledOnce();
+        expect(execution.params.context.dedupe.size).toBe(1);
         expect(execution.abortCleanup).toHaveBeenCalledOnce();
         expect(execution.gatewayRelease).toHaveBeenCalledOnce();
         expect(execution.runtimeRelease).toHaveBeenCalledOnce();
@@ -862,6 +887,7 @@ describe("startAgentRunExecution Gateway ownership", () => {
         }
       } finally {
         releaseRecovery.resolve();
+        finishSettlement.resolve();
         finishDisposal.resolve();
         await completion.catch(() => {});
         owner.close();

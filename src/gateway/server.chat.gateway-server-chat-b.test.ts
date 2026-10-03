@@ -2515,8 +2515,7 @@ describe("gateway server chat", () => {
   });
 
   test("chat.send retains durably admitted media when later setup throws before the ACK", async () => {
-    const { storePath } = openDirectChatSession();
-    try {
+    await withDirectChatSession(async (_sessionDir, storePath) => {
       await writeStoredMainSession({
         modelProvider: "test-provider",
         model: "vision-model",
@@ -2567,6 +2566,7 @@ describe("gateway server chat", () => {
           error: expect.anything(),
         },
       ]);
+      await getDirectChatSessionWorkRelease();
       const pending = await listSessionPendingInputs({
         agentId: "main",
         sessionKey: "agent:main:main",
@@ -2589,9 +2589,7 @@ describe("gateway server chat", () => {
       expect(remaining.filter((name) => !inboundBaseline.has(name))).toEqual([
         path.basename(retainedPath),
       ]);
-    } finally {
-      await resetDirectChatSession();
-    }
+    });
   });
 
   test("chat.abort cancels chat.send while lifecycle admission waits", async () => {
@@ -4322,21 +4320,20 @@ describe("gateway server chat", () => {
       expect(context.chatQueuedTurns.has("idem-queued-followup")).toBe(false);
 
       turnAdoptionLifecycle?.onSettled?.();
+      await getDirectChatSessionWorkRelease();
       expect(context.chatQueuedTurns.has("idem-queued-followup")).toBe(false);
       expect(isSessionWorkAdmissionActive(storePath, ["agent:main:main", "sess-main"])).toBe(false);
-      await waitForFast(() => {
-        expect(context.removeChatRun).toHaveBeenCalledTimes(2);
-        expect(context.removeChatRun).toHaveBeenCalledWith(
-          "idem-queued-followup",
-          "idem-queued-followup",
-          "agent:main:main",
-        );
-        expect(context.removeChatRun).toHaveBeenCalledWith(
-          "queued-followup-agent-run",
-          "queued-followup-agent-run",
-          "agent:main:main",
-        );
-      }, FAST_WAIT_OPTS);
+      expect(context.removeChatRun).toHaveBeenCalledTimes(2);
+      expect(context.removeChatRun).toHaveBeenCalledWith(
+        "idem-queued-followup",
+        "idem-queued-followup",
+        "agent:main:main",
+      );
+      expect(context.removeChatRun).toHaveBeenCalledWith(
+        "queued-followup-agent-run",
+        "queued-followup-agent-run",
+        "agent:main:main",
+      );
 
       let failedDispatchLifecycle: GetReplyOptions["turnAdoptionLifecycle"];
       dispatchInboundMessageMock.mockImplementationOnce(async (args: unknown) => {
@@ -4378,6 +4375,7 @@ describe("gateway server chat", () => {
       });
       expect(context.chatQueuedTurns.has("idem-queued-followup-post-error")).toBe(true);
       failedDispatchLifecycle?.onSettled?.();
+      await getDirectChatSessionWorkRelease();
       expect(context.chatQueuedTurns.has("idem-queued-followup-post-error")).toBe(false);
     });
   });

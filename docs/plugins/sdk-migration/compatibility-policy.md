@@ -131,6 +131,24 @@ next Plugin SDK major, migration of supported published official harness readers
 and explicit breaking-release approval. This preserves installed harnesses
 across host upgrades without extending the private subpath into a public SDK.
 
+### Watched-session harness context
+
+`buildWatchedSessionsHarnessContext` from
+`openclaw/plugin-sdk/agent-harness-runtime` is deprecated as of October 3, 2026.
+Await `prepareWatchedSessionsHarnessContext` from the same subpath, passing the
+same prompt inputs and a required `assertCurrent` callback bound to the current
+host capability and attempt cancellation. The callback must throw when that
+authority is no longer current; preparation checks it before reads and again
+before disclosing the prepared context.
+
+The awaited helper reads watched-session and session-entry facts in the existing
+database workers. It preserves prompt bytes, ordering, limits, tool availability,
+and visibility gates, and never falls back to caller-thread database reads.
+Bundled harnesses use the awaited helper. The released synchronous helper keeps
+its `string | undefined` result and behavior until the next Plugin SDK major and
+explicit breaking-release approval. JSDoc and the compatibility registry record
+the deprecation; no runtime warning, schema migration, or update change is needed.
+
 ### Harness attempt result migration
 
 In OpenClaw 2026.8.1, `EmbeddedRunAttemptResult` from

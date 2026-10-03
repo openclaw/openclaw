@@ -174,37 +174,57 @@ describe("subagent registry context cleanup", () => {
     },
   );
 
-  it("logs serializable, redacted context cleanup failures with a masked session and reason", async () => {
-    vi.mocked(getRuntimeConfig).mockReturnValue({});
-    vi.mocked(loadAgentRuntimePluginRegistryHandle).mockImplementation(() => {
-      throw new Error("cleanup failed: Authorization: Bearer synthetic-cleanup-token");
-    });
-    const warn = vi.fn();
-    const cleanup = createSubagentRegistryContextCleanup({
-      isEndedHookOwnerCurrent: () => true,
-      warn,
-    });
+  it.each(["context engine", "ended hook"] as const)(
+    "handles plugin runtime loader failure at the %s boundary",
+    async (boundary) => {
+      const error = new Error("cleanup failed: Authorization: Bearer synthetic-cleanup-token");
+      vi.mocked(getRuntimeConfig).mockReturnValue({});
+      vi.mocked(loadAgentRuntimePluginRegistryHandle).mockImplementation(() => {
+        throw error;
+      });
+      const warn = vi.fn();
+      const cleanup = createSubagentRegistryContextCleanup({
+        isEndedHookOwnerCurrent: () => true,
+        warn,
+      });
 
-    await cleanup.notifyContextEngineSubagentEnded({
-      childSessionKey: "agent:main:subagent:private-session",
-      reason: "swept",
-    });
-
-    expect(warn).toHaveBeenCalledExactlyOnceWith(
-      "context-engine onSubagentEnded failed (best-effort)",
-      {
-        error: { name: "Error", message: expect.stringContaining("cleanup failed") },
-        childSessionKey: "agent:main:…",
+      if (boundary === "ended hook") {
+        const persist = vi.spyOn(registryPersistence, "mutateSubagentRuns");
+        const entry = createSubagentRunRecord({ runId: "run-ended", endedAt: 4_000 });
+        try {
+          await expect(cleanup.emitSubagentEndedHookForRun({ entry })).resolves.toBeUndefined();
+          expect(warn).toHaveBeenCalledWith("subagent_ended hook failed (best-effort)", {
+            phase: "plugin-runtime",
+            err: error,
+          });
+          expect(entry.endedHookEmittedAt).toBeUndefined();
+          expect(persist).not.toHaveBeenCalled();
+        } finally {
+          persist.mockRestore();
+        }
+        return;
+      }
+      await cleanup.notifyContextEngineSubagentEnded({
+        childSessionKey: "agent:main:subagent:private-session",
         reason: "swept",
-      },
-    );
-    const serialized = JSON.stringify(warn.mock.calls);
-    expect(serialized).toContain("cleanup failed");
-    expect(serialized).not.toContain("synthetic-cleanup-token");
-    expect(serialized).not.toContain("private-session");
-  });
+      });
 
-  it("preserves collector attachments when ownership changes during internal-effects cleanup", async () => {
+      expect(warn).toHaveBeenCalledExactlyOnceWith(
+        "context-engine onSubagentEnded failed (best-effort)",
+        {
+          error: { name: "Error", message: expect.stringContaining("cleanup failed") },
+          childSessionKey: "agent:main:…",
+          reason: "swept",
+        },
+      );
+      const serialized = JSON.stringify(warn.mock.calls);
+      expect(serialized).toContain("cleanup failed");
+      expect(serialized).not.toContain("synthetic-cleanup-token");
+      expect(serialized).not.toContain("private-session");
+    },
+  );
+
+  it("preserves collector attachments when the registered owner is absent", async () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-collector-cleanup-"));
     const attachmentId = "2d4a8398-4d5a-4c20-9c16-0a5f6627cf92";
     const entry = createSubagentRunRecord({
@@ -222,18 +242,12 @@ describe("subagent registry context cleanup", () => {
     await fs.mkdir(attachmentDir, { recursive: true });
     const sentinel = path.join(attachmentDir, "owned.txt");
     await fs.writeFile(sentinel, "successor attachment");
-    const gate = createDeferred();
-    vi.mocked(removeInternalSessionEffectsSession).mockReturnValueOnce(gate.promise);
-    let current = true;
     const cleanup = createSubagentRegistryContextCleanup({
-      isEndedHookOwnerCurrent: () => current,
+      isEndedHookOwnerCurrent: () => true,
       warn: vi.fn(),
     });
-    const pending = cleanup.cleanupCollectorLaunchResources(entry, { isCurrent: () => current });
-    current = false;
-    gate.resolve();
-
-    await expect(pending).resolves.toBe(false);
+    await expect(cleanup.cleanupCollectorLaunchResources(entry)).resolves.toBe(false);
+    expect(removeInternalSessionEffectsSession).not.toHaveBeenCalled();
     await expect(fs.readFile(sentinel, "utf8")).resolves.toBe("successor attachment");
   });
 
@@ -328,30 +342,5 @@ describe("subagent registry context cleanup", () => {
       await engine?.dispose?.().catch(() => {});
       await resources.release();
     }
-  });
-
-  it("completes ended-hook cleanup when the plugin runtime loader rejects", async () => {
-    const error = new Error("plugin runtime import failed");
-    vi.mocked(getRuntimeConfig).mockReturnValue({});
-    vi.mocked(loadAgentRuntimePluginRegistryHandle).mockImplementation(() => {
-      throw error;
-    });
-    const warn = vi.fn();
-    const persist = vi.spyOn(registryPersistence, "mutateSubagentRuns");
-    const cleanup = createSubagentRegistryContextCleanup({
-      isEndedHookOwnerCurrent: () => true,
-      warn,
-    });
-    const entry = createSubagentRunRecord({ runId: "run-ended", endedAt: 4_000 });
-
-    await expect(cleanup.emitSubagentEndedHookForRun({ entry })).resolves.toBeUndefined();
-
-    expect(warn).toHaveBeenCalledWith("subagent_ended hook failed (best-effort)", {
-      phase: "plugin-runtime",
-      err: error,
-    });
-    expect(entry.endedHookEmittedAt).toBeUndefined();
-    expect(persist).not.toHaveBeenCalled();
-    persist.mockRestore();
   });
 });
