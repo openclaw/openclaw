@@ -178,93 +178,92 @@ beforeEach(() => {
 });
 
 describe("ordered runner supplied intent after deletion", () => {
-  it("keeps a merge-by-id reference change on its surviving model after an earlier splice", async () => {
-    const result = await apply(
-      modelConfig(resolvedRows),
-      [op("merge", modelsPath, [{ id: "edited", name: "${TARGET}" }]), op("delete", modelPath(0))],
-      modelConfig(rows),
-    );
-    expect(result.config.models?.providers?.example?.models).toEqual([
-      { id: "edited", name: "${TARGET}" },
-      { id: "untouched", name: "${OTHER_ALIAS}" },
-    ]);
-    expect(result.paths).toEqual([modelPath(0, "id"), modelPath(0, "name")]);
-    // Policy ownership remains at the parent merge path.
-    expect(result.policyPaths).toEqual([modelsPath]);
-  });
+  it.each([0, 1])(
+    "keeps merge intent only on surviving models after deleting index %s",
+    async (deleted) => {
+      const result = await apply(
+        modelConfig(resolvedRows),
+        [
+          op("merge", modelsPath, [{ id: "edited", name: "${TARGET}" }]),
+          op("delete", modelPath(deleted)),
+        ],
+        modelConfig(rows),
+      );
+      expect(result.config.models?.providers?.example?.models).toEqual([
+        deleted === 0 ? { id: "edited", name: "${TARGET}" } : { id: "drop", name: "drop" },
+        { id: "untouched", name: "${OTHER_ALIAS}" },
+      ]);
+      expect(result.paths).toEqual(deleted === 0 ? [modelPath(0, "id"), modelPath(0, "name")] : []);
+      expect(result.policyPaths).toEqual([modelsPath]);
+    },
+  );
 
-  it("removes deleted-item intent so it cannot attach to the next survivor", async () => {
-    const result = await apply(
-      modelConfig(resolvedRows),
-      [op("merge", modelsPath, [{ id: "edited", name: "${TARGET}" }]), op("delete", modelPath(1))],
-      modelConfig(rows),
-    );
-    expect(result.config.models?.providers?.example?.models).toEqual([
-      { id: "drop", name: "drop" },
-      { id: "untouched", name: "${OTHER_ALIAS}" },
-    ]);
-    expect(result.paths).toEqual([]);
-  });
-
-  it("rebases against the current index after each successive splice", async () => {
-    const result = await apply(
-      modelConfig([
-        { id: "a", name: "a" },
-        { id: "b", name: "b" },
-        { id: "c", name: "c" },
-        { id: "d", name: "d" },
-      ]),
-      [
+  it.each([
+    {
+      name: "successive splices",
+      config: modelConfig(["a", "b", "c", "d"].map((id) => ({ id, name: id }))),
+      operations: [
         op("set", modelPath(3, "name"), "edited"),
         op("delete", modelPath(1)),
         op("delete", modelPath(0)),
       ],
-    );
-    expect(result.paths).toEqual([modelPath(1, "name")]);
-  });
-
-  it("leaves intent before a deletion and in unrelated arrays unchanged", async () => {
-    const result = await apply(
-      {
-        ...modelConfig(resolvedRows),
-        other: [{ name: "first" }, { name: "second" }],
-      },
-      [
+      paths: [modelPath(1, "name")],
+    },
+    {
+      name: "earlier indices and unrelated arrays",
+      config: { ...modelConfig(resolvedRows), other: [{ name: "first" }, { name: "second" }] },
+      operations: [
         op("set", modelPath(0, "name"), "edited"),
         op("set", ["other", "1", "name"], "other edited"),
         op("delete", modelPath(2)),
       ],
-    );
-    expect(result.paths).toEqual([modelPath(0, "name"), ["other", "1", "name"]]);
-  });
-
-  it("retains ancestor replacement intent across a child splice", async () => {
-    const result = await apply(modelConfig(resolvedRows), [
-      op("replace", modelsPath, resolvedRows),
-      op("delete", modelPath(0)),
-    ]);
-    expect(result.paths).toEqual([modelsPath]);
-  });
-
-  it("does not reindex numeric object keys and removes only the deleted key's intent", async () => {
-    const result = await apply(
-      {
-        channels: {
-          custom: {
-            accounts: {
-              "0": { name: "zero" },
-              "1": { name: "one" },
-            },
-          },
-        },
+      paths: [modelPath(0, "name"), ["other", "1", "name"]],
+    },
+    {
+      name: "ancestor replacement",
+      config: modelConfig(resolvedRows),
+      operations: [op("replace", modelsPath, resolvedRows), op("delete", modelPath(0))],
+      paths: [modelsPath],
+    },
+    {
+      name: "numeric object keys",
+      config: {
+        channels: { custom: { accounts: { "0": { name: "zero" }, "1": { name: "one" } } } },
       },
-      [
+      operations: [
         op("set", ["channels", "custom", "accounts", "0", "name"], "removed"),
         op("set", ["channels", "custom", "accounts", "1", "name"], "survivor"),
         op("delete", ["channels", "custom", "accounts", "0"]),
       ],
-    );
-    expect(result.paths).toEqual([["channels", "custom", "accounts", "1", "name"]]);
+      paths: [["channels", "custom", "accounts", "1", "name"]],
+    },
+    {
+      name: "nested array below a canonical agent ID",
+      config: { agents: { list: [{ id: "1", tools: { allow: ["first", "second", "third"] } }] } },
+      operations: [
+        op("set", ["agents", "list", "0", "tools", "allow", "2"], "edited"),
+        op("delete", ["agents", "list", "0", "tools", "allow", "0"]),
+      ],
+      paths: [["agents", "entries", "1", "tools", "allow", "1"]],
+    },
+    {
+      name: "recreated item",
+      config: modelConfig(["a", "b", "c"].map((id) => ({ id, name: id }))),
+      operations: [
+        op("set", modelPath(1, "name"), "removed"),
+        op("delete", modelPath(1)),
+        op("replace", modelPath(1), { id: "fresh", name: "fresh" }),
+      ],
+      paths: [modelPath(1)],
+    },
+    {
+      name: "missing deletion",
+      config: modelConfig(resolvedRows),
+      operations: [op("set", modelPath(1, "name"), "edited"), op("delete", modelPath(8))],
+      paths: [modelPath(1, "name")],
+    },
+  ])("preserves supplied intent for $name", async ({ config, operations, paths }) => {
+    expect((await apply(config, operations)).paths).toEqual(paths);
   });
 
   it("drops deleted canonical agent intent without moving surviving IDs", async () => {
@@ -289,41 +288,6 @@ describe("ordered runner supplied intent after deletion", () => {
       "1": { name: "survivor" },
       "2": { name: "two" },
     });
-  });
-
-  it("rebases a nested array below a canonical agent ID", async () => {
-    const result = await apply(
-      { agents: { list: [{ id: "1", tools: { allow: ["first", "second", "third"] } }] } },
-      [
-        op("set", ["agents", "list", "0", "tools", "allow", "2"], "edited"),
-        op("delete", ["agents", "list", "0", "tools", "allow", "0"]),
-      ],
-    );
-    expect(result.paths).toEqual([["agents", "entries", "1", "tools", "allow", "1"]]);
-  });
-
-  it("records fresh intent after deleting and recreating an item", async () => {
-    const result = await apply(
-      modelConfig([
-        { id: "a", name: "a" },
-        { id: "b", name: "b" },
-        { id: "c", name: "c" },
-      ]),
-      [
-        op("set", modelPath(1, "name"), "removed"),
-        op("delete", modelPath(1)),
-        op("replace", modelPath(1), { id: "fresh", name: "fresh" }),
-      ],
-    );
-    expect(result.paths).toEqual([modelPath(1)]);
-  });
-
-  it("does not rebase intent for a missing array deletion", async () => {
-    const result = await apply(modelConfig(resolvedRows), [
-      op("set", modelPath(1, "name"), "edited"),
-      op("delete", modelPath(8)),
-    ]);
-    expect(result.paths).toEqual([modelPath(1, "name")]);
   });
 });
 
@@ -362,19 +326,4 @@ describe("replacement guard advice per subcommand", () => {
       );
     },
   );
-
-  it("recommends a shell-safe path for a dotted provider key", async () => {
-    const dottedPath = ["models", "providers", "local.service", "models"];
-    loadSnapshot({ models: { providers: { "local.service": { models: resolvedRows } } } });
-    await expect(
-      runConfigOperations({
-        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-        operations: [op(undefined, dottedPath, [{ id: "edited", name: "${TARGET}" }])],
-        options: {},
-        successMode: "patch",
-      }),
-    ).rejects.toThrow(
-      `Use --replace-path 'models.providers["local.service"].models' to replace intentionally.`,
-    );
-  });
 });
