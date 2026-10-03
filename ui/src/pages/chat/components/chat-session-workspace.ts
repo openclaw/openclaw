@@ -58,10 +58,7 @@ function formatMarkdownCodeSpan(value: string): string {
   // Markdown finds block boundaries before inline spans, so filenames must
   // stay on one logical line even when the Gateway returns hostile metadata.
   const singleLineValue = value.replace(/\r/g, "\\r").replace(/\n/g, "\\n");
-  const hasBoundarySpaces = singleLineValue.startsWith(" ") && singleLineValue.endsWith(" ");
-  return formatInlineCodeSpan(
-    hasBoundarySpaces && !/^ +$/.test(singleLineValue) ? ` ${singleLineValue} ` : singleLineValue,
-  );
+  return formatInlineCodeSpan(singleLineValue);
 }
 
 function formatFileUpdatedAt(updatedAtMs: number | undefined): string | null {

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { formatInlineCodeSpan } from "../../../src/shared/markdown-code.js";
 import { htmlFragment, withControlUiBasePath } from "./markdown.test-support.ts";
 import { toSanitizedMarkdownHtml } from "./markdown.ts";
 
@@ -17,6 +18,16 @@ describe("toSanitizedMarkdownHtml", () => {
     expect(html).toBe(
       '&lt;script&gt;alert(1)&lt;/script&gt;\n\n<p>x</p>\n<p><a href="https://example.com" rel="noreferrer noopener" target="_blank">ok</a></p>\n',
     );
+  });
+
+  it("keeps tool-authored edge spaces through the renderer", () => {
+    // CommonMark strips one space from each end of code-span content, so the
+    // shared formatter's padding is only useful if the real renderer leaves the
+    // authored spaces intact. The boundary-backtick form needs both guards.
+    const spaceGuard = htmlFragment(toSanitizedMarkdownHtml(formatInlineCodeSpan(" 1 ")));
+    expect(spaceGuard.querySelector("code")?.textContent).toBe(" 1 ");
+    const backtickGuard = htmlFragment(toSanitizedMarkdownHtml(formatInlineCodeSpan(" `code` ")));
+    expect(backtickGuard.querySelector("code")?.textContent).toBe(" `code` ");
   });
 
   it("does not stamp presentation classes on links whose href contains 'tail'", () => {
