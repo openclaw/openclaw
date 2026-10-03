@@ -247,7 +247,7 @@ class YouTubeVideoCard extends OpenClawLitElement {
                     class="preview"
                     type="button"
                     aria-label=${t("chat.youtube.play", { title })}
-                    @click=${this.startPlayback}
+                    @click=${() => this.startPlayback()}
                   >
                     ${this.previewContents(video, true)}
                   </button>`
