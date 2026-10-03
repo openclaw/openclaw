@@ -562,6 +562,17 @@ owners, so a nested scope cannot close an executor retained by its parent.
 
 ## Carry facts, publish after commit
 
+Sandbox-browser workspace reservations, activity/port upserts, and browser row
+removal use the existing shared-state writer. Exact-generation retirement shares
+that queue and validates the inspected allocation inside its transaction. Each command captures its database
+and input before yielding; the worker rereads the current row and preserves its
+creation and image fields. Removal shares the writer FIFO so an earlier queued
+activity update cannot restore a removed row. Browser allocation awaits the
+reservation, and transaction/commit grants retain the live workspace assertion.
+That assertion still performs the existing synchronous session and worktree
+authority reads; those other owners remain separate migration work. Schemas,
+stored bytes, retention, and update behavior are unchanged.
+
 Workspace snapshots and conditional alias registration, first-writer setup merges,
 and exact expired-state deletion use the shared-state writer. Read-only snapshots
 retain the existing reader. The host captures the physical database and filesystem
