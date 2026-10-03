@@ -84,11 +84,6 @@ import {
 import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
-// ui.prefs is the cross-device Control UI preference surface documented in docs/web/control-ui.md.
-// Leaf preferences are LWW so independent tabs/devices do not CAS-conflict on the whole config;
-// every other path keeps strict document CAS.
-const HASHLESS_PATCH_LWW_PATH_PREFIXES = ["ui.prefs"] as const;
-
 let configSchemaResponseCache: {
   pluginRegistryVersion: number;
   response: ConfigSchemaResponse;
@@ -112,25 +107,14 @@ function requireConfigBaseHash(
     return true;
   }
   const snapshotHash = resolveConfigSnapshotHash(snapshot);
-  if (!snapshotHash) {
-    respond(
-      false,
-      undefined,
-      errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        "config base hash unavailable; re-run config.get and retry",
-      ),
-    );
-    return false;
-  }
   const baseHash = resolveBaseHashParam(params);
-  if (!baseHash) {
+  if (!snapshotHash || !baseHash) {
     respond(
       false,
       undefined,
       errorShape(
         ErrorCodes.INVALID_REQUEST,
-        "config base hash required; re-run config.get and retry",
+        `config base hash ${snapshotHash ? "required" : "unavailable"}; re-run config.get and retry`,
       ),
     );
     return false;
@@ -755,30 +739,20 @@ async function commitGatewayConfigWriteOrRespond(
 }
 
 function isHashlessPatchLwwPath(path: string): boolean {
-  return HASHLESS_PATCH_LWW_PATH_PREFIXES.some(
-    (prefix) => path === prefix || path.startsWith(`${prefix}.`),
-  );
+  return path === "ui.prefs" || path.startsWith("ui.prefs.");
 }
 
-// Hash-free LWW is a per-leaf protocol. Container replacement or deletion requires document CAS
-// so a stale client cannot wipe preference keys added by a concurrent writer.
+// ui.prefs alone permits hash-free leaf writes. Container replacement or deletion requires
+// document CAS so a stale client cannot wipe preferences added by a concurrent writer.
 function hasHashlessPatchLwwStructure(patch: unknown): boolean {
-  return HASHLESS_PATCH_LWW_PATH_PREFIXES.every((prefix) => {
-    let node = patch;
-    for (const segment of prefix.split(".")) {
-      if (!isPlainObject(node)) {
-        return false;
-      }
-      if (!Object.hasOwn(node, segment)) {
-        return true;
-      }
-      node = node[segment];
-      if (!isPlainObject(node)) {
-        return false;
-      }
-    }
+  if (!isPlainObject(patch)) {
+    return false;
+  }
+  if (!Object.hasOwn(patch, "ui")) {
     return true;
-  });
+  }
+  const ui = patch.ui;
+  return isPlainObject(ui) && (!Object.hasOwn(ui, "prefs") || isPlainObject(ui.prefs));
 }
 
 function diffConfigLeafPaths(prev: unknown, next: unknown, prefix = ""): string[] {

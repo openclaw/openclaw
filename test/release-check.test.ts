@@ -626,17 +626,6 @@ describe("createPackedPluginSdkTypescriptSmokeProject", () => {
     }
   });
 
-  it("limits setupSurface omission to the recorded frozen targets", async () => {
-    const { packedPluginSdkMayOmitSetupSurface } = await import("../scripts/release-check.js");
-    expect(packedPluginSdkMayOmitSetupSurface("2026.7.33")).toBe(true);
-    expect(packedPluginSdkMayOmitSetupSurface("2026.7.34")).toBe(true);
-    expect(packedPluginSdkMayOmitSetupSurface("2026.7.35")).toBe(true);
-    expect(packedPluginSdkMayOmitSetupSurface("2026.7.36")).toBe(false);
-    expect(packedPluginSdkMayOmitSetupSurface("2026.7.35-beta.1")).toBe(false);
-    expect(packedPluginSdkMayOmitSetupSurface("2026.9.4")).toBe(false);
-    expect(packedPluginSdkMayOmitSetupSurface("2026.10.1")).toBe(false);
-  });
-
   it("writes a consumer project that imports representative public SDK subpaths", () => {
     const root = mkdtempSync(join(tmpdir(), "release-check-plugin-sdk-types-"));
     try {

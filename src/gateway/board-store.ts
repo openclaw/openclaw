@@ -16,7 +16,7 @@ export function captureGatewaySessionStoreScope(sessionKey: string, explicitAgen
   return { agentId, storePath, sessionKey: canonicalKey };
 }
 
-export function resolveGatewaySessionDatabase(
+function resolveGatewaySessionDatabase(
   sessionKey: string,
   explicitAgentId?: string,
 ): {

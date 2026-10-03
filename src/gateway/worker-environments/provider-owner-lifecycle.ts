@@ -1,12 +1,11 @@
 import { isDeepStrictEqual } from "node:util";
 import type { SecretRef } from "../../config/types.secrets.js";
-import {
-  WorkerProviderError,
-  type WorkerProfile,
-  type WorkerProvider,
-} from "../../plugins/types.js";
+import { WorkerProviderError, type WorkerProvider } from "../../plugins/types.js";
 import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider-identity.js";
-import { hasForcedWorkerEnvironmentAbandonment } from "./environment-errors.js";
+import {
+  hasForcedWorkerEnvironmentAbandonment,
+  workerEnvironmentServiceError as serviceError,
+} from "./environment-errors.js";
 import { FORCED_WORKER_ABANDONMENT_ERROR } from "./placement-record.js";
 import type {
   WorkerEnvironmentAbandonment,
@@ -15,6 +14,7 @@ import type {
 import {
   requireProviderOperationTimeoutMs,
   requireWorkerAllocation,
+  requireWorkerProfile,
   resolveWorkerLeaseTransportError,
 } from "./service-validation.js";
 import type {
@@ -32,34 +32,21 @@ export function createWorkerProviderOwnerLifecycle(
     WorkerProviderLifecycleOptions,
     | "store"
     | "tunnelManager"
-    | "serviceError"
     | "callProvider"
     | "providerCallTimeoutMs"
     | "resolveSshIdentity"
     | "placementStore"
     | "move"
-    | "inState"
     | "retireNodeEnrollment"
     | "saveError"
     | "withLock"
     | "isStopping"
   > & {
     providerFor: (providerId: string) => WorkerProvider;
-    requireWorkerProfile: (value: unknown) => WorkerProfile;
     onOwnerStopped?: (environmentId: string) => void;
   },
 ) {
-  const {
-    store,
-    serviceError,
-    move,
-    inState,
-    callProvider,
-    saveError,
-    withLock,
-    providerFor,
-    requireWorkerProfile,
-  } = options;
+  const { store, move, callProvider, saveError, withLock, providerFor } = options;
   const tunnels = options.tunnelManager;
 
   const lifecycleLease = (record: WorkerEnvironmentRecord, leaseId: string) => ({
@@ -197,7 +184,7 @@ export function createWorkerProviderOwnerLifecycle(
   const beginDrain = async (record: WorkerEnvironmentRecord) => {
     const failurePatch =
       record.teardownTerminalState === "failed" ? { lastError: record.lastError } : undefined;
-    return inState(record, "bootstrapping", "ready", "attached", "idle")
+    return ["bootstrapping", "ready", "attached", "idle"].includes(record.state)
       ? move(record, "draining", failurePatch)
       : record;
   };
@@ -385,7 +372,7 @@ export function createWorkerProviderOwnerLifecycle(
         throw serviceError("environment_not_found", `Unknown worker environment: ${environmentId}`);
       }
       if (
-        inState(record, "destroyed", "failed", "orphaned") &&
+        ["destroyed", "failed", "orphaned"].includes(record.state) &&
         (!abandonment ||
           record.state === "destroyed" ||
           (record.state === "failed" && !record.leaseId))

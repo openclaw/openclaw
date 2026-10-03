@@ -39,6 +39,7 @@ export const runtimeProcessEntrypoints = {
   identityFile: runtimeProcessEntrypoint("agents/identity-file.worker"),
   workspaceSkills: runtimeProcessEntrypoint("worker/skills-worker-entry"),
   boardStore: runtimeProcessEntrypoint("boards/sqlite-board-store.worker"),
+  progressCardStore: runtimeProcessEntrypoint("session-cards/progress-card-store.worker"),
   sessionSharingStore: runtimeProcessEntrypoint("config/sessions/session-sharing-store.worker"),
   heartbeatOutcomeStore: runtimeProcessEntrypoint("infra/heartbeat-outcome-store.worker"),
   acpParentStreamStore: runtimeProcessEntrypoint(

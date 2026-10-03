@@ -204,6 +204,9 @@ describe("agentCommand compaction transcript rotation", () => {
       pluginsEnabled: false,
       userTurnTranscriptRecorder: { message: { __openclaw: { senderIsOwner: true } } },
     });
+    expect(state.normalizeProviderModelIdWithRuntimeMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({ provider: "tui-pty-mock" }),
+    );
     expect(state.loadManifestModelCatalogMock).not.toHaveBeenCalled();
   });
 

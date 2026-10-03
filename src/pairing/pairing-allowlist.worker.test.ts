@@ -74,10 +74,22 @@ it("returns no permission without creating a missing store and still validates k
 it.each(["__proto__", "constructor"])(
   "preserves the native refusal for inherited account key %s",
   async (accountId) => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", root);
     expect(() => readChannelAllowFromStoreSync("demo", env, accountId)).toThrow(TypeError);
     await expect(readChannelAllowFromStore("demo", env, accountId)).rejects.toBeInstanceOf(
       TypeError,
     );
+    const ingress = await resolveStableChannelIngressPolicy({
+      channelId: "demo",
+      accountId,
+      subject: { stableId: "first" },
+      conversation: { kind: "direct", id: "first" },
+      dmPolicy: "pairing",
+      useDefaultPairingStore: true,
+    });
+    expect(ingress.senderAccess.allowed).toBe(false);
+    expect(ingress.senderAccess.effectiveAllowFrom).toEqual([]);
+    expect(ingress.ingress.admission).not.toBe("dispatch");
     const missing = path.join(root, `missing-${accountId}`);
     await expect(
       readChannelAllowFromStore("demo", { ...env, OPENCLAW_STATE_DIR: missing }, accountId),
