@@ -12,6 +12,7 @@ import { renderQrPngDataUrl } from "../../media/qr-image.js";
 import { renderQrTerminal } from "../../media/qr-terminal.js";
 import { trimTextPreservingCode } from "../../shared/text/text-projection.js";
 import { stripInlineDirectiveTagsForDelivery } from "../../utils/directive-tags.js";
+import { stripEnvelopeFromMessage } from "../chat-sanitize.js";
 import { isSuppressedControlReplyText } from "../control-reply-text.js";
 import {
   buildManagedMediaFailureBlock,
@@ -95,9 +96,15 @@ export function sanitizeAssistantDisplayText(
   if (!value) {
     return undefined;
   }
-  const stripped = stripInlineDirectiveTagsForDelivery(value);
+  const withoutEnvelope = stripEnvelopeFromMessage(value);
+  const normalized = typeof withoutEnvelope === "string" ? withoutEnvelope : value;
+  const stripped = stripInlineDirectiveTagsForDelivery(normalized);
   const visible = trimTextPreservingCode(stripped.text);
-  return visible ? (options?.preserveBoundaries && !stripped.changed ? value : visible) : undefined;
+  return visible
+    ? options?.preserveBoundaries && !stripped.changed
+      ? normalized
+      : visible
+    : undefined;
 }
 
 export function prepareAssistantDisplayText(
@@ -107,10 +114,12 @@ export function prepareAssistantDisplayText(
   if (!value) {
     return undefined;
   }
-  return value.trim()
+  const withoutEnvelope = stripEnvelopeFromMessage(value);
+  const normalized = typeof withoutEnvelope === "string" ? withoutEnvelope : value;
+  return normalized.trim()
     ? options?.preserveBoundaries
-      ? value
-      : trimTextPreservingCode(value)
+      ? normalized
+      : trimTextPreservingCode(normalized)
     : undefined;
 }
 
