@@ -2,6 +2,7 @@ import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
 } from "../../packages/gateway-protocol/src/client-info.js";
+import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withCurrentDevicePairingSnapshot } from "../infra/device-pairing-worker.js";
 import { hasEffectivePairedDeviceRole, type PairedDevice } from "../infra/device-pairing.js";
@@ -83,7 +84,9 @@ function resolveCurrentWebPushTarget(params: {
         params.profile?.githubLogin ?? null,
       )
     : undefined;
-  if (cfg.gateway?.roles && !rolePolicy) {
+  // The owner resolves to an undefined policy, which is its exemption from named roles rather
+  // than an unbound profile; every other missing or unassigned identity stays excluded here.
+  if (cfg.gateway?.roles && !rolePolicy && userProfileId !== GATEWAY_OWNER_PROFILE_ID) {
     return null;
   }
   const scopesAllowed = (requestedScopes: readonly string[]) =>
