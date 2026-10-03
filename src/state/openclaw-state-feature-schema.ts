@@ -11,15 +11,11 @@ import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 export function createOpenClawStateSchemaEnsurer(params: {
   table: string;
   endMarker?: string;
-  includeEndMarker?: boolean;
-  errorMessage?: string;
   operationLabel: string;
 }): (options?: OpenClawStateDatabaseOptions) => void {
   const schema = extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, params.table, {
     endMarker: params.endMarker ?? "\n) STRICT;\n",
-    includeEndMarker: params.includeEndMarker,
-    errorMessage:
-      params.errorMessage ?? `Canonical state schema markers are missing for ${params.table}`,
+    errorMessage: `Canonical state schema markers are missing for ${params.table}`,
   });
   const ensuredDatabases = new WeakSet<DatabaseSync>();
   return (options = {}) => {
