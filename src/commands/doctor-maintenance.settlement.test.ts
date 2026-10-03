@@ -222,7 +222,7 @@ it("releases its acquired process owner without deferring a one-shot authority r
   });
   await expect(begin(assertCurrent)).rejects.toBe(refused);
   expect(boundary.release).toHaveBeenCalledOnce();
-  expect(boundary.ownerAssert).not.toHaveBeenCalled();
+  expect(boundary.ownerAssert).toHaveBeenCalledOnce();
   expect(boundary.restart).not.toHaveBeenCalled();
   expect(boundary.stop).toHaveBeenCalledOnce();
 });
