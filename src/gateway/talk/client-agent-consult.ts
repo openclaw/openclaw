@@ -73,6 +73,9 @@ function createTalkClientAgentRuntime(params: {
   bindOperationalRunInstance?: (instance: OperationalRunInstanceRef) => void;
 }) {
   const agentRuntime = createPluginRuntime().agent;
+  // Model fallback retries a consult under the same runId; its completion claim binds one
+  // operational instance, so every attempt of a run must reuse it (#161885).
+  const operationalRunInstances = new Map<string, OperationalRunInstanceRef>();
   const runEmbeddedAgent: typeof agentRuntime.runEmbeddedAgent = async (runParams) => {
     runParams.abortSignal?.throwIfAborted();
     const execution = await loadTalkAgentExecution();
@@ -81,7 +84,11 @@ function createTalkClientAgentRuntime(params: {
     if (!agentId || !sessionId || !sessionKey || !storePath) {
       throw new Error("Talk consult requires its prepared transcript target");
     }
-    const operationalRunInstance = execution.createOperationalRunInstanceRef(runParams.runId);
+    let operationalRunInstance = operationalRunInstances.get(runParams.runId);
+    if (!operationalRunInstance) {
+      operationalRunInstance = execution.createOperationalRunInstanceRef(runParams.runId);
+      operationalRunInstances.set(runParams.runId, operationalRunInstance);
+    }
     params.assertCurrent?.();
     params.bindOperationalRunInstance?.(operationalRunInstance);
     const preparedRunAdmission = execution.prepareAgentRunAdmission({
