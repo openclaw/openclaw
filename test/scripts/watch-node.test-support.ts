@@ -40,7 +40,7 @@ afterEach(() => {
 });
 
 export function runWatch(params: WatchFixture): Promise<WatchExit> {
-  const admission = createDeferred<void>();
+  const admission = createDeferred();
   ready = admission.promise;
   const run = (async () => {
     vi.resetModules();

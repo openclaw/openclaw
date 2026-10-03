@@ -1613,6 +1613,8 @@ const runQaReportFromSource = (deps: RunNodeDeps, script: QaReportScript) => {
 };
 
 function createRunNodeDeps(params: RunNodeMainParams) {
+  const postbuild: NonNullable<RunNodeMainParams["runRuntimePostBuild"]> =
+    params.runRuntimePostBuild ?? runRuntimePostBuild;
   const cwd = params.cwd ?? process.cwd();
   const distRoot = path.join(cwd, "dist");
   const args = params.args ?? process.argv.slice(2);
@@ -1637,7 +1639,7 @@ function createRunNodeDeps(params: RunNodeMainParams) {
     args,
     env,
     platform: process.platform,
-    runRuntimePostBuild: params.runRuntimePostBuild ?? runRuntimePostBuild,
+    runRuntimePostBuild: postbuild,
     cancellation: new AbortController(),
     distRoot,
     distEntry: path.join(distRoot, "/entry.js"),
