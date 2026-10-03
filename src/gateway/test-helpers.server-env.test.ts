@@ -63,6 +63,13 @@ describe("Gateway test environment lifecycle", () => {
   it("owns an explicit E2E listener across startup and a rejected close", async () => {
     const configPath = process.env.OPENCLAW_CONFIG_PATH;
     assert(configPath);
+    setTestEnvValue("PATH", process.env.PATH ?? "");
+    deleteTestEnvValue("OPENCLAW_PATH_BOOTSTRAPPED");
+    const envBeforeServer = {
+      PATH: process.env.PATH,
+      OPENCLAW_GATEWAY_PORT: process.env.OPENCLAW_GATEWAY_PORT,
+      OPENCLAW_PATH_BOOTSTRAPPED: process.env.OPENCLAW_PATH_BOOTSTRAPPED,
+    };
     const serverModule = await import("./server.js");
     const start = serverModule.startGatewayServer;
     const entered = createDeferred<number>();
@@ -101,6 +108,8 @@ describe("Gateway test environment lifecycle", () => {
       release.resolve();
       const started = await acquisition;
       await started.server.startupSettled;
+      expect(process.env.OPENCLAW_GATEWAY_PORT).toBe(String(started.port));
+      expect(process.env.OPENCLAW_PATH_BOOTSTRAPPED).toBe("1");
       const response = await fetch(`http://127.0.0.1:${port}/healthz`);
       await response.text();
       expect(response.ok).toBe(true);
@@ -119,6 +128,11 @@ describe("Gateway test environment lifecycle", () => {
       await started.server.close();
       closed = true;
       expect(await tryListen(competitor, port)).toBeUndefined();
+      expect({
+        PATH: process.env.PATH,
+        OPENCLAW_GATEWAY_PORT: process.env.OPENCLAW_GATEWAY_PORT,
+        OPENCLAW_PATH_BOOTSTRAPPED: process.env.OPENCLAW_PATH_BOOTSTRAPPED,
+      }).toEqual(envBeforeServer);
     } finally {
       release.resolve();
       const started = await acquisition.catch(() => undefined);
@@ -134,63 +148,24 @@ describe("Gateway test environment lifecycle", () => {
     }
   });
 
-  it.each(["ordinary", "retained"] as const)(
-    "releases an unadopted listener after %s startup failure",
-    async (outcome) => {
+  it.each([
+    { adopted: false, retained: false },
+    { adopted: false, retained: true },
+    { adopted: true, retained: false },
+    { adopted: true, retained: true },
+  ])(
+    "keeps startup listener custody (adopted: $adopted, retained: $retained)",
+    async ({ adopted, retained }) => {
       const stateDir = process.env.OPENCLAW_STATE_DIR;
       assert(stateDir);
-      const configPath = path.join(stateDir, "pre-adoption.json");
+      const configPath = path.join(stateDir, "failed-startup.json");
       const previousConfig = process.env.OPENCLAW_CONFIG_PATH;
       const previousPort = process.env.OPENCLAW_GATEWAY_PORT;
-      const startupFailure = new Error("synthetic pre-adoption startup failure");
-      const cleanupFailure = new Error("synthetic kernel cleanup failure");
-      const failure =
-        outcome === "retained"
-          ? new GatewayStartupCleanupError(startupFailure, cleanupFailure)
-          : startupFailure;
-      let port: number | undefined;
-      const startup = vi
-        .spyOn(await import("./server.js"), "startGatewayServer")
-        .mockImplementation(async (selectedPort) => {
-          port = selectedPort;
-          process.env.OPENCLAW_GATEWAY_PORT = String(selectedPort);
-          throw failure;
-        });
-      const competitor = createServer();
-      try {
-        await expect(
-          startGatewayWithClient({
-            cfg: {},
-            configPath,
-            token: "pre-adoption-token",
-          }),
-        ).rejects.toBe(failure);
-        assert(port !== undefined);
-        expect(await tryListen(competitor, port)).toBeUndefined();
-        if (outcome === "retained") {
-          expect(process.env.OPENCLAW_CONFIG_PATH).toBe(configPath);
-          expect(process.env.OPENCLAW_GATEWAY_PORT).toBe(String(port));
-        } else {
-          expect(process.env.OPENCLAW_CONFIG_PATH).toBe(previousConfig);
-          expect(process.env.OPENCLAW_GATEWAY_PORT).toBe(previousPort);
-        }
-      } finally {
-        startup.mockRestore();
-        await closeListener(competitor);
-      }
-    },
-  );
-
-  it.each(["joined", "rejected"] as const)(
-    "keeps adopted-listener custody with %s startup cleanup",
-    async (cleanup) => {
-      const stateDir = process.env.OPENCLAW_STATE_DIR;
-      assert(stateDir);
-      const configPath = path.join(stateDir, "adopted-startup.json");
-      const previousConfig = process.env.OPENCLAW_CONFIG_PATH;
-      const previousPort = process.env.OPENCLAW_GATEWAY_PORT;
-      const failure = new Error("synthetic post-adoption startup failure");
+      const failure = new Error("synthetic startup failure");
       const cleanupFailure = new Error("synthetic required cleanup failure");
+      const unadoptedFailure = retained
+        ? new GatewayStartupCleanupError(failure, cleanupFailure)
+        : failure;
       const serverModule = await import("./server.js");
       const start = serverModule.startGatewayServer;
       let ownedServer: Awaited<ReturnType<typeof start>> | undefined;
@@ -199,35 +174,42 @@ describe("Gateway test environment lifecycle", () => {
         .spyOn(serverModule, "startGatewayServer")
         .mockImplementation(async (selectedPort, options) => {
           port = selectedPort;
+          if (!adopted) {
+            process.env.OPENCLAW_GATEWAY_PORT = String(selectedPort);
+            throw unadoptedFailure;
+          }
           ownedServer = await start(selectedPort, options);
           await ownedServer.startupSettled;
           const server = ownedServer;
           return rethrowGatewayStartupError(failure, async () => {
-            if (cleanup === "rejected") {
+            if (retained) {
               throw cleanupFailure;
             }
             await server.close();
           });
         });
       const competitor = createServer();
-      const token = "adopted-startup-token";
+      const token = "failed-startup-token";
       try {
         const error: unknown = await startGatewayWithClient({
-          cfg: { gateway: { auth: { mode: "token", token } } },
+          cfg: adopted ? { gateway: { auth: { mode: "token", token } } } : {},
           configPath,
           token,
         }).catch((reason: unknown) => reason);
         assert(port !== undefined);
         const collision = await tryListen(competitor, port);
-        if (cleanup === "rejected") {
+        if (adopted && retained) {
           expect(error).toBeInstanceOf(GatewayStartupCleanupError);
           expect(error).toHaveProperty("errors", [failure, cleanupFailure]);
           expect(collision?.code).toBe("EADDRINUSE");
+        } else {
+          expect(error).toBe(adopted ? failure : unadoptedFailure);
+          expect(collision).toBeUndefined();
+        }
+        if (retained) {
           expect(process.env.OPENCLAW_CONFIG_PATH).toBe(configPath);
           expect(process.env.OPENCLAW_GATEWAY_PORT).toBe(String(port));
         } else {
-          expect(error).toBe(failure);
-          expect(collision).toBeUndefined();
           expect(process.env.OPENCLAW_CONFIG_PATH).toBe(previousConfig);
           expect(process.env.OPENCLAW_GATEWAY_PORT).toBe(previousPort);
         }
@@ -243,6 +225,8 @@ describe("Gateway test environment lifecycle", () => {
     "joins %s client cleanup before rejecting acquisition",
     async (failureMode) => {
       await withGatewayServer(async ({ port }) => {
+        expect(process.env.OPENCLAW_GATEWAY_PORT).toBe(String(port));
+        expect(process.env.OPENCLAW_PATH_BOOTSTRAPPED).toBe("1");
         // oxlint-disable-next-line typescript/unbound-method -- Each call binds the acquired client.
         const { start, stopAndWait } = GatewayClient.prototype;
         const startError = new Error("client start failed after allocating its socket");
@@ -302,13 +286,6 @@ describe("Gateway test environment lifecycle", () => {
       });
     },
   );
-
-  it("records the process-wide startup environment", async () => {
-    await withGatewayServer(async ({ port }) => {
-      expect(process.env.OPENCLAW_GATEWAY_PORT).toBe(String(port));
-      expect(process.env.OPENCLAW_PATH_BOOTSTRAPPED).toBe("1");
-    });
-  });
 
   it("restores startup-owned environment before the next test", () => {
     expect({
@@ -401,42 +378,4 @@ describe("Gateway test environment lifecycle", () => {
       }
     },
   );
-
-  it("restores startup-owned environment when a direct E2E server closes", async () => {
-    const stateDir = process.env.OPENCLAW_STATE_DIR;
-    if (!stateDir) {
-      throw new Error("OPENCLAW_STATE_DIR is required");
-    }
-    setTestEnvValue("PATH", process.env.PATH ?? "");
-    deleteTestEnvValue("OPENCLAW_PATH_BOOTSTRAPPED");
-    const envBeforeServer = {
-      PATH: process.env.PATH,
-      OPENCLAW_GATEWAY_PORT: process.env.OPENCLAW_GATEWAY_PORT,
-      OPENCLAW_PATH_BOOTSTRAPPED: process.env.OPENCLAW_PATH_BOOTSTRAPPED,
-    };
-    const token = "test-gateway-token-1234567890";
-    for (const attempt of ["first", "second"]) {
-      const started = await startGatewayWithClient({
-        cfg: { gateway: { auth: { mode: "token", token } } },
-        configPath: path.join(stateDir, "openclaw.json"),
-        token,
-      });
-
-      try {
-        expect(process.env.OPENCLAW_GATEWAY_PORT).toBe(String(started.port));
-        expect(process.env.OPENCLAW_PATH_BOOTSTRAPPED).toBe("1");
-      } finally {
-        await disconnectGatewayClient(started.client).catch(() => undefined);
-        await started.server.close({
-          reason: `${attempt} direct E2E environment proof complete`,
-        });
-      }
-
-      expect({
-        PATH: process.env.PATH,
-        OPENCLAW_GATEWAY_PORT: process.env.OPENCLAW_GATEWAY_PORT,
-        OPENCLAW_PATH_BOOTSTRAPPED: process.env.OPENCLAW_PATH_BOOTSTRAPPED,
-      }).toEqual(envBeforeServer);
-    }
-  });
 });
