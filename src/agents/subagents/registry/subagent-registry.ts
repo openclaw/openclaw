@@ -74,6 +74,7 @@ import {
 export { SubagentSessionCleanupRevocationChangedError } from "./subagent-registry-lifecycle.js";
 export type { SubagentRunRecord } from "./subagent-registry.types.js";
 const log = createSubsystemLogger("agents/subagent-registry");
+const warn = (message: string, meta?: Record<string, unknown>) => log.warn(message, meta);
 
 const resumeRetryTimers = new Set<ReturnType<typeof setTimeout>>();
 let activeGatewayContextResolver: GatewayContextResolver | undefined;
@@ -112,7 +113,7 @@ const completionRuntime = createSubagentRegistryCompletionRuntime({
   completeSubagentRun: (params) => completeSubagentRun(params),
   scheduleSweep: scheduleSubagentRegistrySweep,
   resumeRun: (runId) => resumeSubagentRun(runId),
-  warn: (message, meta) => log.warn(message, meta),
+  warn,
 });
 const pendingLifecycle = completionRuntime.pendingLifecycle;
 const clearPendingLifecycleError = pendingLifecycle.clearError;
@@ -121,7 +122,7 @@ const clearPendingLifecycleTimeout = pendingLifecycle.clearTimeout;
 const contextCleanup = createSubagentRegistryContextCleanup({
   isEndedHookOwnerCurrent: (runId, entry): boolean =>
     subagentLifecycleController.isEndedHookOwnerCurrent(runId, entry),
-  warn: (message, meta) => log.warn(message, meta),
+  warn,
 });
 
 const subagentLifecycleController = new SubagentLifecycleController({
@@ -154,7 +155,7 @@ const subagentLifecycleController = new SubagentLifecycleController({
           await import("../announce/subagent-announce.requester-settle-wake.js")
         ).maybeWakeRequesterAfterAllChildrenSettled(args)
       : false,
-  warn: (message, meta) => log.warn(message, meta),
+  warn,
 });
 
 const {
@@ -178,6 +179,16 @@ registerSystemEventStoreOwner(
   Symbol.for("openclaw.subagentNotifications"),
   suspendReplacedNotificationsInBackground,
 );
+
+/** A drain refusal retries only while the same unfinished owner still holds the row. */
+function retainsRetryAfterDrain(runId: string, entry: SubagentRunRecord): boolean {
+  const current = subagentRuns.get(runId);
+  return (
+    isGatewayRestartDraining() &&
+    isSameSubagentRunOwner(current, entry) &&
+    typeof current?.cleanupCompletedAt !== "number"
+  );
+}
 
 function scheduleSubagentDeliveryResumeRetry(
   runId: string,
@@ -216,11 +227,7 @@ function scheduleSubagentDeliveryResumeRetry(
         resumedRuns.delete(resumeKey);
         return;
       }
-      if (
-        isGatewayRestartDraining() &&
-        isSameSubagentRunOwner(subagentRuns.get(runId), scheduledEntry) &&
-        typeof subagentRuns.get(runId)?.cleanupCompletedAt !== "number"
-      ) {
+      if (retainsRetryAfterDrain(runId, scheduledEntry)) {
         scheduleSubagentDeliveryResumeRetry(
           runId,
           scheduledEntry,
@@ -260,11 +267,7 @@ function finalizeResumedAnnounceGiveUpInBackground(
     } catch {
       return;
     }
-    if (
-      isGatewayRestartDraining() &&
-      isSameSubagentRunOwner(subagentRuns.get(runId), entry) &&
-      typeof subagentRuns.get(runId)?.cleanupCompletedAt !== "number"
-    ) {
+    if (retainsRetryAfterDrain(runId, entry)) {
       scheduleSubagentDeliveryResumeRetry(
         runId,
         entry,
@@ -483,7 +486,7 @@ const subagentRestorer = createSubagentRegistryRestorer({
   settleFailedQueuedSubagentLaunch: (runId, error) =>
     subagentRunManager.settleFailedQueuedSubagentLaunch(runId, error),
   completeCollectorLaunchCleanup: (runId) => publicApi.completeCollectorLaunchCleanup(runId),
-  warn: (message, meta) => log.warn(message, meta),
+  warn,
 });
 
 function retireSupersededSubagentRun(runId: string, expected: SubagentRunRecord): Promise<void> {
@@ -563,7 +566,7 @@ const subagentSweeper = createSubagentRegistrySweeper({
   retireSupersededRun: retireSupersededSubagentRun,
   getRunsForChildSession: getSubagentRunsForChildSession,
   getRunsForCollectorGroup: getSubagentRunsForCollectorGroup,
-  warn: (message, meta) => log.warn(message, meta),
+  warn,
 });
 
 const subagentListener = createSubagentRegistryListener({
@@ -573,7 +576,7 @@ const subagentListener = createSubagentRegistryListener({
   resumeRequesterSettleWake,
   refreshFrozenResultFromSession,
   completeSubagentRunWithRecovery: completionRuntime.completeSubagentRunWithRecovery,
-  warn: (message, meta) => log.warn(message, meta),
+  warn,
 });
 
 const subagentRunManager = createSubagentRunManager({

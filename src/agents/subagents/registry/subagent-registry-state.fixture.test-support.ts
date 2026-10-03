@@ -3,14 +3,12 @@ import type { DB as OpenClawStateKyselyDatabase } from "../../../state/openclaw-
 import { runOpenClawStateWriteTransaction } from "../../../state/openclaw-state-db.js";
 import { publishSubagentRunsAfterAtomicStore } from "./subagent-registry-state.js";
 import { bindSubagentRunRecord } from "./subagent-registry.store.codec.js";
-import {
-  writeSubagentRunValuesInDatabase,
-  type BoundSubagentRunRecord,
-} from "./subagent-registry.store.kernel.js";
+import { writeSubagentRunValuesInDatabase } from "./subagent-registry.store.kernel.js";
+import type { SubagentRunSqliteRow } from "./subagent-registry.store.row.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 function writeSubagentRunValues(
-  values: readonly BoundSubagentRunRecord[],
+  values: readonly SubagentRunSqliteRow[],
   deleteRunIds?: readonly string[],
   retainedRunIds?: readonly string[],
 ): void {
@@ -52,7 +50,7 @@ export function saveSubagentRegistryChangesToSqlite(
   changedRunIds: readonly string[],
 ): void {
   const runIds = [...new Set(changedRunIds.map((runId) => runId.trim()).filter(Boolean))];
-  const values: BoundSubagentRunRecord[] = [];
+  const values: SubagentRunSqliteRow[] = [];
   const deleteRunIds: string[] = [];
   for (const runId of runIds) {
     const entry = runs.get(runId);

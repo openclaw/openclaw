@@ -39,10 +39,6 @@ const subagentKillRuntimeLoader = createLazyImportLoader(
   () => import("./subagent-control.runtime.js"),
 );
 
-function formatKillPersistenceError(error: unknown): string {
-  return formatErrorMessage(error instanceof SubagentRegistryWriteError ? error.cause : error);
-}
-
 async function markSubagentRunTerminatedBestEffort(
   params: Parameters<typeof markSubagentRunTerminated>[0],
 ): Promise<number> {
@@ -199,7 +195,9 @@ export async function mutateSubagentRunForKill(
       return {
         failure: {
           killed: false,
-          error: `Failed to persist subagent kill intent: ${formatKillPersistenceError(error)}`,
+          error: `Failed to persist subagent kill intent: ${formatErrorMessage(
+            error instanceof SubagentRegistryWriteError ? error.cause : error,
+          )}`,
         },
       };
     }
@@ -267,6 +265,26 @@ export async function mutateSubagentRunForKill(
       return cancellationFailure(error, true);
     }
   };
+  const recordDeclinedPreparation = async () => {
+    const declined = declineRevokedCancellation();
+    if (declined) {
+      preparationResult = await declined;
+    }
+    return declined !== undefined;
+  };
+  const drainPrepareReads = async () => {
+    for (
+      let pending = params.cancellationControl.prepareRead?.();
+      pending;
+      pending = params.cancellationControl.prepareRead?.()
+    ) {
+      await pending;
+    }
+  };
+  const isKilledTarget = (target: SubagentKillTargetState) =>
+    target.state === "terminal" &&
+    target.task.status === "cancelled" &&
+    target.task.error === SUBAGENT_KILL_TASK_ERROR;
   const ownsKillIntent = (
     current: SubagentRunRecord | undefined,
     claim: NonNullable<typeof killClaim>,
@@ -330,22 +348,9 @@ export async function mutateSubagentRunForKill(
     scope: resolved.storePath,
     identities: [childSessionKey, sessionId],
     prepare: async () => {
-      for (
-        let pending = params.cancellationControl.prepareRead?.();
-        pending;
-        pending = params.cancellationControl.prepareRead?.()
-      ) {
-        await pending;
-      }
-      if (!isCurrent()) {
+      await drainPrepareReads();
+      if (!isCurrent() || (await recordDeclinedPreparation())) {
         return;
-      }
-      {
-        const declined = declineRevokedCancellation();
-        if (declined) {
-          preparationResult = await declined;
-          return;
-        }
       }
       // Admissions can release scheduler capacity synchronously when interrupted.
       await params.refreshDescendants();
@@ -364,15 +369,8 @@ export async function mutateSubagentRunForKill(
         stopAcceptance.accepted ||=
           !alreadyAborted && execution?.controller.signal.aborted === true;
       }
-      if (!isCurrent()) {
+      if (!isCurrent() || (await recordDeclinedPreparation())) {
         return;
-      }
-      {
-        const declined = declineRevokedCancellation();
-        if (declined) {
-          preparationResult = await declined;
-          return;
-        }
       }
       const beforeInterruption = currentEntry();
       if (!beforeInterruption) {
@@ -402,12 +400,8 @@ export async function mutateSubagentRunForKill(
           }
         }
       }
-      {
-        const declined = declineRevokedCancellation();
-        if (declined) {
-          preparationResult = await declined;
-          return;
-        }
+      if (await recordDeclinedPreparation()) {
+        return;
       }
       assertState();
       if (!killOwnerCurrent()) {
@@ -467,13 +461,7 @@ export async function mutateSubagentRunForKill(
       }
       let readFailure: { error: unknown } | undefined;
       try {
-        for (
-          let pending = params.cancellationControl.prepareRead?.();
-          pending;
-          pending = params.cancellationControl.prepareRead?.()
-        ) {
-          await pending;
-        }
+        await drainPrepareReads();
       } catch (error) {
         if (hasSqliteWorkerOutcomeUnknown(error)) {
           throw error;
@@ -499,10 +487,7 @@ export async function mutateSubagentRunForKill(
       }
       const targetStateAfterRuntimeLoad = targetState();
       if (targetStateAfterRuntimeLoad) {
-        const killedTarget =
-          targetStateAfterRuntimeLoad.state === "terminal" &&
-          targetStateAfterRuntimeLoad.task.status === "cancelled" &&
-          targetStateAfterRuntimeLoad.task.error === SUBAGENT_KILL_TASK_ERROR;
+        const killedTarget = isKilledTarget(targetStateAfterRuntimeLoad);
         const claimedCurrentKill = killClaim !== undefined && killOwnerCurrent();
         if (killedTarget && (!killClaim || claimedCurrentKill)) {
           await markKilledBestEffort();
@@ -674,10 +659,7 @@ export async function mutateSubagentRunForKill(
         }
         const settledTarget = targetState();
         if (settledTarget) {
-          const killedTarget =
-            settledTarget.state === "terminal" &&
-            settledTarget.task.status === "cancelled" &&
-            settledTarget.task.error === SUBAGENT_KILL_TASK_ERROR;
+          const killedTarget = isKilledTarget(settledTarget);
           if (killedTarget) {
             await markKilledBestEffort();
           } else {
