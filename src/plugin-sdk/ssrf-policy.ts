@@ -181,15 +181,10 @@ export function isHttpsUrlAllowedByHostnameSuffixAllowlist(
   url: string,
   allowlist: readonly string[],
 ): boolean {
-  try {
-    const parsed = new URL(url);
-    if (parsed.protocol !== "https:") {
-      return false;
-    }
-    return isHostnameAllowedBySuffixAllowlist(parsed.hostname, allowlist);
-  } catch {
-    return false;
-  }
+  const parsed = URL.parse(url);
+  return (
+    parsed?.protocol === "https:" && isHostnameAllowedBySuffixAllowlist(parsed.hostname, allowlist)
+  );
 }
 
 /**
