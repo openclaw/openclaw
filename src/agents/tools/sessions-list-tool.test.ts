@@ -241,6 +241,34 @@ describe("sessions-list-tool", () => {
     expect(details.sessions?.[0]?.childSessions).toEqual(["agent:main:subagent:visible-child"]);
   });
 
+  it("returns canonical session colors for readback", async () => {
+    mocks.gatewayCall.mockResolvedValue({
+      path: "/tmp/sessions.json",
+      sessions: [
+        {
+          key: "agent:main:main",
+          kind: "main",
+          classification: "main",
+          channel: "webchat",
+          archived: false,
+          pinned: false,
+          color: "blue",
+        },
+      ],
+    });
+
+    const result = await createSessionsListTool({ config: VALID_CONFIG }).execute(
+      "color-readback",
+      {},
+    );
+
+    expect(getSessionsListDetails(result).sessions?.[0]).toMatchObject({
+      key: "agent:main:main",
+      color: "blue",
+    });
+    expect(Value.Check(createSessionsListTool().outputSchema!, result.details)).toBe(true);
+  });
+
   it("keeps channel discovery but omits delivery routing metadata", async () => {
     mocks.gatewayCall.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string };
