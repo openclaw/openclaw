@@ -47,7 +47,7 @@ function renderComment({ changes, pullRequest, approval }) {
     lines.push(
       "This maintainer PR changes sensitive security components.",
       "",
-      "### This comment is informational because the PR author has Maintain or Admin access. No secops approval is required.",
+      "**This comment is informational because the PR author has Maintain or Admin access. No secops approval is required.**",
       "",
       `- Current SHA: ${code(pullRequest.head.sha)}`,
       `- Maintainer: @${sanitizeGuardDisplayValue(approval.login)}`,
