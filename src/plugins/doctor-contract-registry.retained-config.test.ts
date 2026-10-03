@@ -17,6 +17,7 @@ vi.mock("./public-surface-loader.js", () => ({
   loadBundledPluginPublicArtifactModuleFromCandidatesSync: retainedConfigDoctorMock,
 }));
 let doctor: typeof import("./doctor-contract-registry.js");
+let migrationResources: typeof import("./doctor-migration-resources.js");
 function makeTempDir() {
   return tempDirs.make("openclaw-retained-config-doctor-");
 }
@@ -24,6 +25,7 @@ function makeTempDir() {
 beforeAll(async () => {
   vi.resetModules();
   doctor = await import("./doctor-contract-registry.js");
+  migrationResources = await import("./doctor-migration-resources.js");
 });
 beforeEach(() => {
   resetRegistryJitiMocks();
@@ -188,7 +190,7 @@ describe("retained plugin state checks", () => {
           diagnostics: [],
         },
       };
-      const check = doctor.assertPluginStateRetention(params);
+      const check = migrationResources.assertPluginStateRetention(params);
       if (refuses) {
         await expect(check).rejects.toThrow("Install OpenClaw 2026.9.7");
       } else {

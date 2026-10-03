@@ -31,7 +31,7 @@ import {
   type UpdateAdmissionVerdict,
 } from "../../infra/update-run-schema.js";
 import { redactSupportDiagnosticLine } from "../../logging/diagnostic-support-redaction.js";
-import { assertPluginStateRetention } from "../../plugins/doctor-contract-registry.js";
+import { assertPluginStateRetention } from "../../plugins/doctor-migration-resources.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "../../plugins/installed-plugin-index-record-reader.js";
 import { resolveLegacyInstalledPluginIndexStorePath } from "../../plugins/installed-plugin-index-store-path.js";
 import { defaultRuntime } from "../../runtime.js";
