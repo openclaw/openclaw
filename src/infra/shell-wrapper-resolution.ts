@@ -87,13 +87,14 @@ type ShellWrapperCommand = {
 };
 
 function resolveShellWrapperCandidate(
-  argv: string[],
+  inputArgv: string[],
   inspectEnv = false,
 ): {
   argv: string[];
   token0: string;
   hasEnvManipulation: boolean;
 } | null {
+  let argv = inputArgv;
   let hasEnvManipulation = false;
   for (let depth = 0; depth <= MAX_DISPATCH_WRAPPER_DEPTH; depth++) {
     const token0 = argv[0]?.trim();

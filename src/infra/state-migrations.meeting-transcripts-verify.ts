@@ -39,11 +39,16 @@ export async function verifyImportedMeetingTranscriptSnapshots(params: {
           .orderBy("sequence", "asc")
           .limit(LEGACY_UTTERANCE_INSERT_CHUNK_SIZE)
           .offset(start),
-      ).rows.map((row) => ({
-        ...utteranceFromRow({ ...row, metadata_json: null }),
+      ).rows.map((row) => {
+        const utterance: Omit<ReturnType<typeof utteranceFromRow>, "metadata"> & {
+          metadata?: unknown;
+        } = utteranceFromRow({ ...row, metadata_json: null });
         // Verify the exact legacy metadata, including values the runtime reader filters out.
-        ...(row.metadata_json ? { metadata: JSON.parse(row.metadata_json) as unknown } : {}),
-      }));
+        if (row.metadata_json) {
+          utterance.metadata = JSON.parse(row.metadata_json) as unknown;
+        }
+        return utterance;
+      });
       if (stableStringify(actual) !== stableStringify(expected)) {
         throw new Error(`meeting transcript import verification failed: ${snapshot.relativeDir}`);
       }

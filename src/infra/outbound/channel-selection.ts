@@ -68,9 +68,9 @@ function listConfiguredOfficialExternalRepairHints(
 function formatMissingOfficialExternalChannelsMessage(
   hints: readonly OfficialExternalPluginRepairHint[],
 ): string {
-  const [hint] = hints;
-  if (hints.length === 1 && hint) {
-    return `Configured official external channel ${hint.label} is missing its plugin. ${hint.repairHint}`;
+  const [onlyHint] = hints;
+  if (hints.length === 1 && onlyHint) {
+    return `Configured official external channel ${onlyHint.label} is missing its plugin. ${onlyHint.repairHint}`;
   }
   const labels = hints.map((hint) => hint.label).join(", ");
   const installCommands = hints.map((hint) => hint.installCommand).join("; ");
