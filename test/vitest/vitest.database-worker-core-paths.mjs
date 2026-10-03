@@ -460,6 +460,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/tools/sessions-send-tool.queue-authority.test.ts",
   "src/agents/sessions/agent-session-code-mode-source.test.ts",
   "src/agents/sessions/agent-session-compaction.admission.test.ts",
+  "src/agents/sessions/agent-session-compaction.safeguard-budget.test.ts",
   "src/agents/sessions/agent-session-compaction.test.ts",
   "src/agents/sessions/agent-session-runtime-projection.test.ts",
   "src/agents/sessions/agent-session.reclamation-admission.test.ts",
