@@ -656,12 +656,12 @@ export async function setupWizardCommand(
       if (
         normalizedOpts.nonInteractive &&
         (normalizedOpts.mode ?? "local") !== "remote" &&
-        !applyNonInteractiveGatewayConfig({
+        !(await applyNonInteractiveGatewayConfig({
           nextConfig: setupBaseConfig,
           opts: normalizedOpts,
           runtime,
           defaultPort: resolveGatewayPort(setupBaseConfig),
-        })
+        }))
       ) {
         return;
       }

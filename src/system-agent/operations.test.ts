@@ -476,8 +476,8 @@ describe("system agent operations", () => {
       id: "MEMORY_SEARCH_REMOTE_API_KEY",
       secret: "embed-owner-key-7f3c9a1d",
     };
-    const storedEntries = () =>
-      listSecretStoreEntries({ scope: { kind: "team" } }).map((entry) => entry.name);
+    const storedEntries = async () =>
+      (await listSecretStoreEntries({ scope: { kind: "team" } })).map((entry) => entry.name);
     const readStored = (name: string) => readSecretStoreValue({ scope: { kind: "team" }, name });
     const mintedName = expect.stringMatching(/^MEMORY_SEARCH_REMOTE_API_KEY_[0-9A-F]{16}$/);
 
@@ -490,7 +490,7 @@ describe("system agent operations", () => {
       });
 
       expect(result.applied).toBe(true);
-      const [name] = storedEntries();
+      const [name] = await storedEntries();
       expect(name).toEqual(mintedName);
       expect(runConfigSet).toHaveBeenCalledWith({
         path: operation.path,
@@ -514,7 +514,7 @@ describe("system agent operations", () => {
         }),
       ).rejects.toThrow("no longer active");
 
-      expect(storedEntries()).toEqual([]);
+      expect(await storedEntries()).toEqual([]);
       expect(runConfigSet).not.toHaveBeenCalled();
     });
 

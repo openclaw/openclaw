@@ -1,17 +1,17 @@
 // Team secret store write transactions: batch upserts, kind inheritance,
 // CAS repair writes, and owner-checked rollback.
-import { randomUUID } from "node:crypto";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
-import { ensureSecretStoreSchema } from "../../state/openclaw-state-db-schema-additive.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
 import {
+  openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../../state/openclaw-state-db.js";
+import { classifyHiddenGitHubStoreName } from "./secret-store-hidden-github.js";
 import { isMissingSecretStoreTableError } from "./secret-store-sqlite.js";
 import { SecretStoreValidationError } from "./secret-store-validation-error.js";
 import {
@@ -32,7 +32,7 @@ export type SecretStoreWriteParams = SecretStoreWriteEntry & {
   database?: OpenClawStateDatabaseOptions;
 };
 
-type SecretStoreWriteSnapshot = {
+export type SecretStoreWriteSnapshot = {
   value: string;
   kind: SecretStoreKind;
   allowedHosts: string | null;
@@ -58,14 +58,15 @@ export type SecretStoreBatchWriteParams = {
   database?: OpenClawStateDatabaseOptions;
 };
 
-type SecretStoreWriteResult = {
+export type SecretStoreWriteResult = {
   kind: SecretStoreKind;
   previous: SecretStoreWriteSnapshot | undefined;
 };
 
-function writeSecretStoreEntriesInternal(
-  params: SecretStoreBatchWriteParams,
+export function writeSecretStoreEntriesInDatabase(
+  params: SecretStoreBatchWriteParams & { now: number },
   capturePrevious: boolean,
+  admit: (stage: "transaction" | "commit") => void,
 ): SecretStoreWriteResult[] {
   const inheritExistingKind = params.inheritExistingKind === true;
   for (const entry of params.entries) {
@@ -75,10 +76,10 @@ function writeSecretStoreEntriesInternal(
     }
   }
   const { scopeKind, scopeId } = normalizeScope(params.scope);
-  const now = Date.now();
+  const { now } = params;
   return runOpenClawStateWriteTransaction(
     ({ db: sqlite }) => {
-      ensureSecretStoreSchema(sqlite);
+      admit("transaction");
       const db = getNodeSqliteKysely<SecretStoreDatabase>(sqlite);
       const resolved = params.entries.map((entry) => {
         const repair = entry.expectedValue !== undefined;
@@ -162,6 +163,7 @@ function writeSecretStoreEntriesInternal(
             ),
         );
       }
+      admit("commit");
       return resolved.map(({ previous, kind }) => ({
         kind,
         previous:
@@ -181,56 +183,24 @@ function writeSecretStoreEntriesInternal(
   );
 }
 
-function writeSecretStoreEntryInternal(
-  params: SecretStoreWriteParams,
-  capturePrevious: boolean,
-): SecretStoreWriteResult {
-  const [result] = writeSecretStoreEntriesInternal(
-    {
-      scope: params.scope,
-      entries: [
-        {
-          name: params.name,
-          value: params.value,
-          kind: params.kind,
-          valueSource: params.valueSource,
-          allowedHosts: params.allowedHosts,
-          ...(params.expectedValue !== undefined ? { expectedValue: params.expectedValue } : {}),
-        },
-      ],
-      inheritExistingKind: params.inheritExistingKind,
-      updatedBy: params.updatedBy,
-      database: params.database,
-    },
-    capturePrevious,
-  );
-  if (!result) {
-    throw new Error("Secret store write returned no entry result.");
-  }
-  return result;
-}
-
-export function writeSecretStoreEntry(params: SecretStoreWriteParams): SecretStoreKind {
-  return writeSecretStoreEntryInternal(params, false).kind;
-}
-
-export function writeSecretStoreEntries(params: SecretStoreBatchWriteParams): SecretStoreKind[] {
-  return writeSecretStoreEntriesInternal(params, false).map((result) => result.kind);
-}
-
-function rollbackSecretStoreEntryWrite(params: {
-  scope: SecretStoreScope;
-  name: string;
-  expectedUpdatedBy: string;
-  previous: SecretStoreWriteSnapshot | undefined;
-  database?: OpenClawStateDatabaseOptions;
-}): boolean {
+export function rollbackSecretStoreEntryWriteInDatabase(
+  params: {
+    scope: SecretStoreScope;
+    name: string;
+    expectedUpdatedBy: string;
+    previous: SecretStoreWriteSnapshot | undefined;
+    now: number;
+    database?: OpenClawStateDatabaseOptions;
+  },
+  admit: (stage: "transaction" | "commit") => void,
+): boolean {
   assertSecretStoreMutationName(params.name);
   const { scopeKind, scopeId } = normalizeScope(params.scope);
-  const now = Date.now();
+  const { now } = params;
   try {
     return runOpenClawStateWriteTransaction(
       ({ db: sqlite }) => {
+        admit("transaction");
         const db = getNodeSqliteKysely<SecretStoreDatabase>(sqlite);
         const query =
           params.previous === undefined
@@ -258,6 +228,7 @@ function rollbackSecretStoreEntryWrite(params: {
                 .where("updated_by", "=", params.expectedUpdatedBy)
                 .where("deleted_at_ms", "is", null);
         const result = executeSqliteQuerySync(sqlite, query);
+        admit("commit");
         return Number(result.numAffectedRows ?? 0n) === 1;
       },
       params.database,
@@ -271,26 +242,47 @@ function rollbackSecretStoreEntryWrite(params: {
   }
 }
 
-/** Writes one entry and returns owner-checked compensation for that exact write. */
-export function writeSecretStoreEntryWithRollback(params: SecretStoreWriteParams): {
-  rollback: () => boolean;
-} {
-  const writer = `${params.updatedBy ?? "secret-store"}:${randomUUID()}`;
-  const { previous } = writeSecretStoreEntryInternal({ ...params, updatedBy: writer }, true);
-  let rollbackResult: boolean | undefined;
-  return {
-    rollback: () => {
-      if (rollbackResult !== undefined) {
-        return rollbackResult;
-      }
-      rollbackResult = rollbackSecretStoreEntryWrite({
-        scope: params.scope,
-        name: params.name,
-        expectedUpdatedBy: writer,
-        previous,
-        ...(params.database !== undefined ? { database: params.database } : {}),
-      });
-      return rollbackResult;
-    },
-  };
+export function deleteSecretStoreEntryInDatabase(
+  params: {
+    scope: SecretStoreScope;
+    name: string;
+    now: number;
+    database?: OpenClawStateDatabaseOptions;
+  },
+  admit: (stage: "transaction" | "commit") => void,
+): void {
+  assertSecretStoreMutationName(params.name);
+  const { scopeKind, scopeId } = normalizeScope(params.scope);
+  const state = openOpenClawStateDatabase(params.database);
+  const { now } = params;
+  try {
+    runOpenClawStateWriteTransaction(
+      ({ db: sqlite }) => {
+        admit("transaction");
+        const db = getNodeSqliteKysely<SecretStoreDatabase>(sqlite);
+        const query =
+          classifyHiddenGitHubStoreName(params.name) === "setup"
+            ? db
+                .deleteFrom("secret_store_entries")
+                .where("scope_kind", "=", scopeKind)
+                .where("scope_id", "=", scopeId)
+                .where("name", "=", params.name)
+            : db
+                .updateTable("secret_store_entries")
+                .set({ deleted_at_ms: now, updated_at_ms: now })
+                .where("scope_kind", "=", scopeKind)
+                .where("scope_id", "=", scopeId)
+                .where("name", "=", params.name)
+                .where("deleted_at_ms", "is", null);
+        executeSqliteQuerySync(sqlite, query);
+        admit("commit");
+      },
+      { ...params.database, database: state },
+      { operationLabel: "secrets.store.delete" },
+    );
+  } catch (error) {
+    if (!isMissingSecretStoreTableError(error)) {
+      throw error;
+    }
+  }
 }
