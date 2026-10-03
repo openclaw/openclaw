@@ -62,6 +62,56 @@ describe("chat realtime actions", () => {
     vi.unstubAllGlobals();
   });
 
+  it("tracks delegated work independently from the live microphone state", async () => {
+    const state = createState();
+    await state.toggleRealtimeTalk();
+    const session = inspectSession(state);
+    const baseEvent = {
+      sessionId: "voice-1",
+      seq: 1,
+      timestamp: new Date().toISOString(),
+      mode: "realtime" as const,
+      transport: "webrtc" as const,
+      brain: "agent-consult" as const,
+    };
+
+    session.callbacks.onStatus?.("listening");
+    session.callbacks.onTalkEvent?.({
+      ...baseEvent,
+      id: "consult-start",
+      type: "tool.call",
+      turnId: "turn-1",
+      callId: "consult-1",
+      payload: { name: "openclaw_agent_consult" },
+    });
+    expect(state.realtimeTalkStatus).toBe("listening");
+    expect(state.realtimeTalkWorking).toBe(true);
+
+    session.callbacks.onTalkEvent?.({
+      ...baseEvent,
+      id: "other-result",
+      seq: 2,
+      type: "tool.result",
+      turnId: "turn-1",
+      callId: "other-call",
+      payload: {},
+      final: true,
+    });
+    expect(state.realtimeTalkWorking).toBe(true);
+
+    session.callbacks.onTalkEvent?.({
+      ...baseEvent,
+      id: "consult-result",
+      seq: 3,
+      type: "tool.result",
+      turnId: "turn-1",
+      callId: "consult-1",
+      payload: {},
+      final: true,
+    });
+    expect(state.realtimeTalkWorking).toBe(false);
+  });
+
   it.each([false, true])(
     "changes only audio while retaining captions and effective microphone (default recovery: %s)",
     async (useSystemDefault) => {

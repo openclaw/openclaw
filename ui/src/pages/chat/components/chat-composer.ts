@@ -597,6 +597,7 @@ export function renderChatComposer(props: ChatComposerProps) {
     submissionLabel: goalComposer.submissionLabel,
     sending: props.sending,
     voiceActive: props.realtimeTalkActive,
+    voiceWorking: props.realtimeTalkWorking || showAbortableUi,
     voiceStatus: props.realtimeTalkStatus,
     voiceDetail: props.realtimeTalkDetail,
     voiceInputLevel: props.realtimeTalkInputLevel,

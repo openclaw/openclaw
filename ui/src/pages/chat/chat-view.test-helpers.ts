@@ -164,6 +164,7 @@ export function createChatProps(overrides: Partial<ChatProps> = {}): ChatProps {
     modelSwitching: false,
     queue: [],
     realtimeTalkActive: false,
+    realtimeTalkWorking: false,
     realtimeTalkStatus: "idle",
     realtimeTalkDetail: null,
     connected: true,

@@ -183,6 +183,7 @@ export function createTalkRealtimeRelaySession(
     consultRunner.runPrompt,
     () => getActiveRelay() !== undefined,
     (signal) => confirmationReadiness.wait(signal),
+    { relaySessionId, harness, emit },
   );
   const runControl = createTalkRealtimeRunControlOwner({
     controlSource: params.controlSource,

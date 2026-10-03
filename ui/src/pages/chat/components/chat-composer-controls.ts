@@ -38,6 +38,7 @@ export type ChatRunControlsProps = Omit<
   suggestionComposer?: boolean;
   submissionLabel?: string;
   voiceActive?: boolean;
+  voiceWorking?: boolean;
   voiceStatus?: RealtimeTalkStatus;
   voiceDetail?: string | null;
   voiceInputLevel?: RealtimeTalkLevelSignal;
@@ -638,6 +639,21 @@ export function renderChatPrimaryActions(props: ChatRunControlsProps) {
               </openclaw-tooltip>
               ${props.microphonePicker}
             </span>
+            ${
+              props.voiceWorking
+                ? html`
+                    <span
+                      class="agent-chat__voice-work-status"
+                      role="status"
+                      aria-live="polite"
+                      aria-atomic="true"
+                    >
+                      <span class="btn__spinner" aria-hidden="true"></span>
+                      ${t("chat.voice.working")}
+                    </span>
+                  `
+                : nothing
+            }
             ${
               voiceErrored || props.voiceStatus === "connecting"
                 ? nothing

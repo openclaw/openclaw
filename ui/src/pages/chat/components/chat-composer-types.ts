@@ -137,6 +137,7 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
     sourceMessageId?: string | null;
   } | null;
   realtimeTalkActive?: boolean;
+  realtimeTalkWorking?: boolean;
   realtimeTalkStatus?: RealtimeTalkStatus;
   realtimeTalkDetail?: string | null;
   realtimeTalkInputNotice?: string | null;

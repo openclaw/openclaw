@@ -699,6 +699,28 @@
   display: inline-flex;
 }
 
+.agent-chat__voice-work-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 26px;
+  padding: 0 9px;
+  flex: 0 0 auto;
+  border: 1px solid color-mix(in srgb, var(--accent) 32%, var(--border));
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--accent) 9%, transparent);
+  color: var(--text-strong);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.agent-chat__voice-work-status .btn__spinner {
+  width: 12px;
+  height: 12px;
+  border-width: 1.5px;
+}
+
 /* The chevron owns the leading slot of the microphone control while remaining
    out of the resting composer until approach. The host and trigger both
    collapse to zero: hiding only the trigger leaves an invisible gap beside the
