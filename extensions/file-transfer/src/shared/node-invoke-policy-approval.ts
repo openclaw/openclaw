@@ -142,6 +142,6 @@ export async function requestApproval(input: {
     persist: approvalDecision === "allow-always",
     followSymlinks: decision.followSymlinks ?? false,
     maxBytes: decision.maxBytes,
-    pendingReapprovalSelector: decision.pendingReapprovalSelector,
+    pendingReapprovalSelector: decision.ok ? undefined : decision.pendingReapprovalSelector,
   };
 }

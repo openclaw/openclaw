@@ -24,7 +24,7 @@ export function createBuzzReplayDispatchQueue(params: {
   let pendingHead = 0;
   let active = 0;
   let closed = false;
-  const drained = createDeferred<void>();
+  const drained = createDeferred();
 
   const settleDrained = () => {
     if (closed && active === 0) {

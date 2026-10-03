@@ -112,7 +112,7 @@ export async function createBuzzQaRelayDriver(params: {
   }
 
   let observerReady = false;
-  const readiness = createDeferred<void>();
+  const readiness = createDeferred();
   const observerReadyTimeout = setTimeout(() => {
     readiness.reject(new Error("Timed out waiting for the Buzz QA message observer."));
   }, OBSERVER_READY_TIMEOUT_MS);

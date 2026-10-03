@@ -169,13 +169,20 @@ export async function fetchThreadHistory(
       return [];
     }
 
-    const dataRecord = asRecord(data);
-    const replyValue = dataRecord?.replies;
-    const replies = Array.isArray(data)
-      ? data
-      : Array.isArray(replyValue)
-        ? replyValue
-        : Object.values(asRecord(replyValue) ?? dataRecord ?? {});
+    let replies: unknown[] = [];
+    if (Array.isArray(data)) {
+      replies = data;
+    } else {
+      const dataRecord = asRecord(data);
+      const replyValue = dataRecord?.replies;
+      if (Array.isArray(replyValue)) {
+        replies = replyValue;
+      } else if (typeof replyValue === "object" && replyValue) {
+        replies = Object.values(replyValue as Record<string, unknown>);
+      } else if (dataRecord) {
+        replies = Object.values(dataRecord);
+      }
+    }
 
     const messages = replies
       .map((item) => {

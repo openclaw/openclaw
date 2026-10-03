@@ -166,11 +166,10 @@ export async function verifyGoogleChatRequest(params: {
         };
       }
       return { ok: true };
-    } else {
-      const certs = await fetchChatCerts();
-      await verifyClient.verifySignedJwtWithCertsAsync(bearer, certs, audience, [CHAT_ISSUER]);
-      return { ok: true };
     }
+    const certs = await fetchChatCerts();
+    await verifyClient.verifySignedJwtWithCertsAsync(bearer, certs, audience, [CHAT_ISSUER]);
+    return { ok: true };
   } catch (err) {
     return { ok: false, reason: err instanceof Error ? err.message : "invalid token" };
   }
