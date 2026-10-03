@@ -159,8 +159,6 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["worktrees.remove", "worktrees", "operator.admin", "2026.7", CONTROL_PLANE_WRITE],
   ["worktrees.restore", "worktrees", "operator.admin", "2026.7", CONTROL_PLANE_WRITE],
   ["worktrees.gc", "worktrees", "operator.admin", "2026.7", CONTROL_PLANE_WRITE],
-  ["worktrees.recoverRemoval", "worktrees", "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
-  ["worktrees.retireSnapshot", "worktrees", "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
   ["agents.list", "agents", "operator.read", "<=2026.7"],
   ["agents.create", "agents", "operator.admin", "<=2026.7"],
   ["agents.update", "agents", "operator.admin", "<=2026.7"],
@@ -698,4 +696,6 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["mcp.app.subscribeResource", "mcp-app", "operator.read", "2026.9"],
   ["mcp.app.unsubscribeResource", "mcp-app", "operator.read", "2026.9"],
   ["mcp.app.openFile", "mcp-app", "operator.read", "2026.9"],
+  ["worktrees.recoverRemoval", "worktrees", "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
+  ["worktrees.retireSnapshot", "worktrees", "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];
