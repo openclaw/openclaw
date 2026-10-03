@@ -41,18 +41,24 @@ export function renderPluginOfficialBadge(): TemplateResult {
   >`;
 }
 
-export function renderPluginAuthor(author: string | undefined): TemplateResult | typeof nothing {
+export function renderPluginAuthor(
+  author: string | undefined,
+  options: { linked?: boolean } = {},
+): TemplateResult | typeof nothing {
   if (!author) {
     return nothing;
   }
   const handle = author.replace(/^@+/, "");
-  return html`<a
-    class="plugin-card-author plugin-card-author--linked"
-    href=${`https://clawhub.ai/${encodeURIComponent(handle)}`}
-    target="_blank"
-    rel="noopener noreferrer"
-    >${`@${handle}`}</a
-  >`;
+  const label = `@${handle}`;
+  return options.linked
+    ? html`<a
+        class="plugin-card-author plugin-card-author--linked"
+        href=${`https://clawhub.ai/${encodeURIComponent(handle)}`}
+        target="_blank"
+        rel="noopener noreferrer"
+        >${label}</a
+      >`
+    : html`<span class="plugin-card-author">${label}</span>`;
 }
 
 export function renderPluginCardSummary(summary: string): TemplateResult {

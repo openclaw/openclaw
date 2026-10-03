@@ -91,6 +91,8 @@ export async function importNostrProfile(params: NostrProfileRequest) {
     ...result,
     data: result.data && {
       ...result.data,
+      ok: result.data.ok,
+      saved: result.data.saved,
       imported: isNostrProfile(result.data.imported) ? result.data.imported : undefined,
       merged: isNostrProfile(result.data.merged) ? result.data.merged : undefined,
     },

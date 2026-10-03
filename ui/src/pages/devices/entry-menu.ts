@@ -35,7 +35,7 @@ export function renderDeviceEntryMenu(
   const actions = [
     {
       value: "desktop",
-      label: "openDesktop",
+      labelKey: "devices.inventory.openDesktop",
       visible: entry.desktopEnvironment,
       pairing: false,
       run: () =>
@@ -43,35 +43,35 @@ export function renderDeviceEntryMenu(
     },
     {
       value: "approve",
-      label: "approve",
+      labelKey: "devices.inventory.approve",
       visible: entry.pendingRequestId,
       pairing: true,
       run: () => entry.pendingRequestId && props.onNodeApprove(entry.pendingRequestId),
     },
     {
       value: "reject",
-      label: "reject",
+      labelKey: "devices.inventory.reject",
       visible: entry.pendingRequestId,
       pairing: true,
       run: () => entry.pendingRequestId && props.onNodeReject(entry.pendingRequestId),
     },
     {
       value: "copy",
-      label: "copyDeviceId",
+      labelKey: "devices.inventory.copyDeviceId",
       visible: entry.deviceId,
       pairing: false,
       run: () => entry.deviceId && void copyDeviceId(entry.deviceId),
     },
     {
       value: "editAlias",
-      label: "editAlias",
+      labelKey: "devices.inventory.editAlias",
       visible: entry.onEditAlias,
       pairing: true,
       run: () => entry.onEditAlias?.(),
     },
     {
       value: "remove",
-      label: "removeAction",
+      labelKey: "devices.inventory.removeAction",
       visible: entry.onRemove,
       pairing: true,
       run: () => entry.onRemove?.(),
@@ -105,7 +105,7 @@ export function renderDeviceEntryMenu(
               ?disabled=${action.pairing && !props.canManagePairing}
               title=${action.pairing && !props.canManagePairing ? t("devices.readOnly.pairingRequired") : nothing}
               variant=${action.value === "remove" ? "danger" : nothing}
-              >${t(`devices.inventory.${action.label}`)}</wa-dropdown-item
+              >${t(action.labelKey)}</wa-dropdown-item
             >
           `,
         )}

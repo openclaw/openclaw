@@ -221,7 +221,7 @@ function renderCatalogCard(
             <h3>${plugin.catalog.name}</h3>
             ${plugin.catalog.official ? renderPluginOfficialBadge() : nothing}
           </div>
-          ${renderPluginAuthor(plugin.catalog.author)}
+          ${renderPluginAuthor(plugin.catalog.author, { linked: true })}
         </div>
       </div>
       <div class="plugin-catalog-card__action">
