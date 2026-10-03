@@ -1229,9 +1229,35 @@ owner at transaction and commit admission. Those host checks perform no SQL;
 an aborted but registered owner retains the right to finish cancelled. Confirmed
 commit receipts update the returned page even if ordinary result delivery fails,
 and accepted work settles before database custody is released. Process-held
-incognito reads retain their existing owner until the separate actor cutover;
-stage, finish, append, and submitted-input recovery remain separate work. This
+incognito reads retain their existing owner until the separate actor cutover. This
 changes no schema, retention, durability, configuration, or update behavior.
+
+Submitted-input comparison and inbound dedupe recovery use bounded source reads
+in the same history worker and pending-input operation family. The host captures
+the physical store before preparation yields. Reads preserve original collected
+source bytes and refuse stale transcript projections without rebuilding them.
+These bytes are comparison evidence, never replay authority. Chat admission
+prepares fresh evidence under its existing writer barrier; completion delivery
+rechecks its requester after the read. Inbound dedupe spends a recovered source
+only once, after checking the current host owner in the consuming callback.
+The completion SDK already returns a promise. Schemas, stored bytes, retention,
+and update behavior are unchanged.
+
+Pending-input staging, processing completion, and terminal disposition use the
+same agent executor. The host captures the physical source before awaiting
+preparation, applies message hooks outside the transaction, and publishes custody
+only after native commit acknowledgment within the writer FIFO. The worker
+compares the staging snapshot and exact run, request, session, and lifecycle
+identities; transaction and commit grants recheck the live host owner. Lost
+responses reconcile native receipts, and uncertain outcomes never replay.
+Finishing immediately revokes execution while the same owner protects history
+custody until its disposition settles. Recorder and database cleanup owners join
+accepted work before releasing their resources. Source receipts stay distinct
+from collected transcript messages, and processing completion remains distinct
+from transcript consumption. Incognito keeps its process-held owner, and the
+released synchronous recorder completion callback retains its native SDK
+contract; internal callers await its asynchronous companion. Schemas, stored
+bytes, retention, and update behavior are unchanged.
 
 A missing resident row gets a bounded worker sharing read before history treats
 it as absent. This preserves refusal for durable entries marked incognito, which

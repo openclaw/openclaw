@@ -115,7 +115,7 @@ export function activateCodexAttemptTurn(
   const remoteWorkspaceRoot = connection.appServer.remoteWorkspaceRoot;
   const readRemoteWorkspaceFile = createCodexRemoteWorkspaceFileReader(
     resourceState.client,
-    connection.assertCurrent,
+    connection.authority,
   );
   const prepareReplyMedia =
     hostPrepareReplyMedia && remoteWorkspaceRoot
@@ -343,6 +343,7 @@ export function activateCodexAttemptTurn(
     requestTimeoutMs: connection.appServer.requestTimeoutMs,
     signal: runAbortController.signal,
     assertActive: assertSteeringActive,
+    withCurrent: connection.withCurrent,
     prepareMessage: async (text, options, assertMessageCurrent) => {
       const attachmentNote = await connection.prepareInputAttachments({
         maxChars: Math.max(0, CODEX_TURN_START_TEXT_INPUT_MAX_CHARS - text.length - 2),
@@ -408,7 +409,11 @@ export function activateCodexAttemptTurn(
       const messages = activeProjector.buildSteeringTranscriptPrefix();
       if (params.sessionTarget && messages.length > 0) {
         await codexTranscriptMirrorRuntime.mirror({
-          assertCurrent: assertSteeringActive,
+          // Transcript SDK commit callback must remain synchronous.
+          assertCurrent: () => {
+            connection.assertLegacyCurrent();
+            assertSteeringActive();
+          },
           agentId: sessionAgentId,
           sessionKey: contextSessionKey,
           sessionId: params.sessionId,
@@ -598,27 +603,14 @@ export function activateCodexAttemptTurn(
       emitExecutionPhaseOnce("turn_accepted", { phase: "turn_accepted" });
       userInputBridgeRef.current = createCodexUserInputBridge({
         paramsForRun: params,
-        prepareResourceContext: async (request) => {
-          const serverName =
-            typeof request.snapshot.serverName === "string" ? request.snapshot.serverName : "";
-          const origin = activeProjector.getActiveMcpToolCall(serverName);
-          if (!origin || !params.sessionKey || !params.agentId) {
-            throw new Error("Native MCP form has no unambiguous live origin");
-          }
-          return await prepareCodexNativeMcpFormResourceContext({
+        prepareResourceContext: (request) =>
+          prepareCodexNativeMcpFormResourceContext({
             client: resourceState.client,
             threadId: resourceState.thread.threadId,
             attempt: params,
             request,
-            origin,
-            assertCurrent: () => {
-              params.hostCapabilities.assertActive();
-              if (activeProjector.getActiveMcpToolCall(serverName)?.id !== origin.id) {
-                throw new Error("Native MCP form origin expired");
-              }
-            },
-          });
-        },
+            readOrigin: (serverName) => activeProjector.getActiveMcpToolCall(serverName),
+          }),
         onOrdinaryResponse: (response) => activeProjector.recordUserInputResponse(response),
         threadId: resourceState.thread.threadId,
         turnId: activeTurnId,

@@ -269,7 +269,7 @@ async function handleChatSendWithOptions(
       userTurn,
     });
     const { ctx, isInternalTextSlashCommandTurn } = preparedUserTurn;
-    admitted.value.setPendingInputCleanup(() => {
+    admitted.value.setPendingInputCleanup(async () => {
       try {
         const pending =
           userTurnRecorder.getPendingInputMessage?.() &&
@@ -295,6 +295,7 @@ async function handleChatSendWithOptions(
             reason,
           });
         }
+        await userTurnRecorder.waitForPendingInputSettlement?.();
       } finally {
         void preparedUserTurn
           .discardUnreferencedMedia(userTurnRecorder.getPendingInputMessage?.())

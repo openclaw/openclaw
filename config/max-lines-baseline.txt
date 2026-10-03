@@ -34,7 +34,6 @@ extensions/codex/src/app-server/plugin-thread-config.test.ts
 extensions/codex/src/app-server/run-attempt.test.ts
 extensions/codex/src/app-server/runtime-artifact.ts
 extensions/codex/src/app-server/session-binding.test.ts
-extensions/codex/src/app-server/session-binding.ts
 extensions/codex/src/app-server/shared-client.test.ts
 extensions/codex/src/app-server/shared-client.ts
 extensions/codex/src/app-server/side-question.test.ts

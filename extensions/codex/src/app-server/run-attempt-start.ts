@@ -83,6 +83,7 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
     });
     const startupResult = await startCodexAttemptThread({
       assertCurrent: connection.assertCurrent,
+      authority: connection.authority,
       attemptClientFactory,
       bindingStore,
       runtime: connection.options.runtime,
@@ -161,7 +162,7 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
     await attemptTools.captureCronCreatorToolAllowlist();
     pluginAppServer = startupResult.pluginAppServer;
     toolBridge.setRemoteWorkspaceFileReader?.(
-      createCodexRemoteWorkspaceFileReader(startupResult.client, connection.assertCurrent),
+      createCodexRemoteWorkspaceFileReader(startupResult.client, connection.authority),
     );
     if (
       usesSupervisionConnection &&

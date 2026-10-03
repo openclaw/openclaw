@@ -69,10 +69,13 @@ export const readGatewayServiceState = async () => {
   override(
     "./daemon-cli/restart-health.ts",
     `${shared}
-export const waitForGatewayHealthyRestart = async () => ({
-  healthy: (await fs.readFile(statePath, 'utf8')) === 'running', staleGatewayPids: [],
-  runtime: { status: 'running' }, portUsage: { port: Number(process.env.OPENCLAW_GATEWAY_PORT), status: 'busy', listeners: [], hints: [] },
-});
+export const waitForGatewayHealthyRestart = async () => {
+  const healthy = (await fs.readFile(statePath, 'utf8')) === 'running';
+  return {
+    outcome: healthy ? 'ready' : 'failed', healthy, staleGatewayPids: [],
+    runtime: { status: 'running' }, portUsage: { port: Number(process.env.OPENCLAW_GATEWAY_PORT), status: 'busy', listeners: [], hints: [] },
+  };
+};
 `,
   );
   stubs.delete(sourceUrl("../plugins/plugin-lifecycle-lease.ts"));

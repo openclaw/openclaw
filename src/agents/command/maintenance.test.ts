@@ -196,6 +196,7 @@ describe("agent command foreground completion", () => {
         sessionId,
         sessionKey,
         allowModelOverride: true,
+        senderIsOwner: true,
         runContext: {
           messageChannel: "webchat",
           accountId: "primary",
@@ -220,6 +221,8 @@ describe("agent command foreground completion", () => {
         groupSpace: "space-42",
         senderIsOwner: false,
       });
+      // Only the flush audience inherits the command's trusted owner status.
+      expect(flushParameters?.followupRun.memoryAudienceSenderIsOwner).toBe(true);
       expect(state.deliverAgentCommandResultMock).toHaveBeenCalledWith(
         expect.objectContaining({
           payloads: [{ text: "Completed foreground answer." }],

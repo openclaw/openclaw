@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import * as sessionReads from "../../../config/sessions/session-entry-read-runtime.js";
+import { combineNativeSessionBindingAuthority } from "./binding-authority.js";
 import { createNativeSessionBindingLeases } from "./binding-leases.js";
 import {
   bindingTestOptions,
@@ -14,6 +16,7 @@ function createLeaseFixture() {
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.restoreAllMocks();
 });
 
 describe("native session binding leases", () => {
@@ -252,5 +255,106 @@ describe("native session binding leases", () => {
     }
     expect(await run).toEqual(new Error("native request failed"));
     expect(values.get("binding")).toEqual({ value: "original" });
+  });
+});
+
+describe("native binding lease settlement", () => {
+  it.each(["storage-cleanup", "canceled-after-admission", "canceled-during-run"] as const)(
+    "cleans the exact token after %s without borrowing revoked caller authority",
+    async (failureAt) => {
+      const { state, values } = createBindingTestState();
+      const owner = createNativeSessionBindingLeases(state, bindingTestOptions);
+      const key = "settlement";
+      values.set(key, { value: "native" });
+      const failure = new Error(failureAt);
+      let active = true;
+      const run = vi.fn(async () => {
+        active = false;
+        return "native-outcome";
+      });
+      const bind = state.withCurrent.bind(state);
+      state.withCurrent = (authority) => {
+        const store = bind(authority);
+        return {
+          ...store,
+          async compareAndApply(...args) {
+            const result = await store.compareAndApply(...args);
+            if (args[2].action === "set" && args[2].value.lease) {
+              if (failureAt === "storage-cleanup") {
+                throw failure;
+              }
+              if (failureAt === "canceled-after-admission") {
+                active = false;
+              }
+            }
+            return result;
+          },
+        };
+      };
+      await expect(
+        owner.withLease(key, run, {
+          prepareLease: prepareBindingTestLease,
+          authority: combineNativeSessionBindingAuthority(),
+          assertCurrent: () => {
+            if (!active) {
+              throw failure;
+            }
+          },
+        }),
+      ).rejects.toBe(failure);
+      expect(run).toHaveBeenCalledTimes(failureAt === "canceled-during-run" ? 1 : 0);
+      expect(values.get(key)).toEqual({ value: "native" });
+    },
+  );
+
+  it("returns an accepted outcome without a new post-effect lineage read", async () => {
+    const { state, values } = createBindingTestState();
+    const owner = createNativeSessionBindingLeases(state, bindingTestOptions);
+    const key = "accepted";
+    let accepted = false;
+    vi.spyOn(sessionReads, "withSessionEntriesFromStoresInWorker").mockImplementation(
+      async (_reads, consume) => {
+        if (accepted) {
+          throw new Error("lineage changed after native acceptance");
+        }
+        return consume([]);
+      },
+    );
+    await expect(
+      owner.withLease(
+        key,
+        async () => {
+          accepted = true;
+          return { accepted: true };
+        },
+        {
+          prepareLease: prepareBindingTestLease,
+          authority: combineNativeSessionBindingAuthority(),
+        },
+      ),
+    ).resolves.toEqual({ accepted: true });
+    expect(values.get(key)?.lease).toBeUndefined();
+  });
+
+  it("does not remove a successor token while settling a revoked caller", async () => {
+    const { state, values } = createBindingTestState();
+    const owner = createNativeSessionBindingLeases(state, bindingTestOptions);
+    const key = "replaced";
+    const successor = {
+      value: "successor",
+      lease: { token: "successor-token", expiresAt: Date.now() + 60_000 },
+    };
+    const failure = new Error("caller revoked");
+    await expect(
+      owner.withLease(
+        key,
+        async () => {
+          values.set(key, successor);
+          throw failure;
+        },
+        { prepareLease: prepareBindingTestLease },
+      ),
+    ).rejects.toBe(failure);
+    expect(values.get(key)).toEqual(successor);
   });
 });
