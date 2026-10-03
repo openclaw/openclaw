@@ -81,10 +81,10 @@ import {
   collectChannelStatus,
   noteChannelPrimer,
   resolveChannelSelectionNoteLines,
-  resolveChannelSetupSelectionContributions,
+  resolveChannelSetupSelectionOptions,
 } from "./channel-setup.status.js";
 
-describe("resolveChannelSetupSelectionContributions", () => {
+describe("resolveChannelSetupSelectionOptions", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     listChatChannels.mockReturnValue([
@@ -148,7 +148,7 @@ describe("resolveChannelSetupSelectionContributions", () => {
   });
 
   it("sorts channels alphabetically by picker label", () => {
-    const contributions = resolveChannelSetupSelectionContributions({
+    const options = resolveChannelSetupSelectionOptions({
       entries: (
         [
           ["zalo", "Zalo", "Zalo (Bot API)"],
@@ -163,7 +163,7 @@ describe("resolveChannelSetupSelectionContributions", () => {
       resolveDisabledHint: () => undefined,
     });
 
-    expect(contributions.map((contribution) => contribution.option.label)).toEqual([
+    expect(options.map((option) => option.label)).toEqual([
       "Discord (Bot API)",
       "iMessage (macOS app)",
       "Zalo (Bot API)",
@@ -171,7 +171,7 @@ describe("resolveChannelSetupSelectionContributions", () => {
   });
 
   it("sanitizes picker labels and hints before terminal rendering", () => {
-    const contributions = resolveChannelSetupSelectionContributions({
+    const options = resolveChannelSetupSelectionOptions({
       entries: [
         {
           id: "zalo",
@@ -185,7 +185,7 @@ describe("resolveChannelSetupSelectionContributions", () => {
       resolveDisabledHint: () => "disabled\u0007",
     });
 
-    expect(contributions[0]?.option).toEqual({
+    expect(options[0]).toEqual({
       value: "zalo",
       label: "Zalo\\nBot",
       hint: "configured\\nnow · disabled",
@@ -193,7 +193,7 @@ describe("resolveChannelSetupSelectionContributions", () => {
   });
 
   it("sanitizes the picker fallback label when metadata sanitizes to empty", () => {
-    const contributions = resolveChannelSetupSelectionContributions({
+    const options = resolveChannelSetupSelectionOptions({
       entries: [
         {
           id: "bad\u001B[31m\nid",
@@ -207,7 +207,7 @@ describe("resolveChannelSetupSelectionContributions", () => {
       resolveDisabledHint: () => undefined,
     });
 
-    expect(contributions[0]?.option).toEqual({
+    expect(options[0]).toEqual({
       value: "bad\u001B[31m\nid",
       label: "bad\\nid",
     });

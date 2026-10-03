@@ -14,7 +14,6 @@ export function createDoctorHealthContribution(params: {
   label: string;
   healthCheckIds?: readonly string[];
   healthChecks?: DoctorContributionHealthCheck | readonly DoctorContributionHealthCheck[];
-  hint?: string;
   required?: true;
   updateWork?: DoctorHealthContribution["updateWork"];
   run?: (ctx: DoctorHealthFlowContext) => Promise<void>;
@@ -26,14 +25,7 @@ export function createDoctorHealthContribution(params: {
   }
   return {
     id: params.id,
-    kind: "core",
-    surface: "health",
-    option: {
-      value: params.id,
-      label: params.label,
-      ...(params.hint ? { hint: params.hint } : {}),
-    },
-    source: "doctor",
+    label: params.label,
     healthChecks,
     healthCheckIds,
     ...(params.required ? { required: true as const } : {}),
@@ -42,7 +34,6 @@ export function createDoctorHealthContribution(params: {
       params.run ??
       ((ctx) =>
         runStructuredDoctorHealthContribution({
-          contributionId: params.id,
           ctx,
           checks: healthChecks,
         })),
@@ -57,44 +48,24 @@ function normalizeHealthChecks(
     return [];
   }
   const checks = Array.isArray(healthChecks) ? healthChecks : [healthChecks];
-  return checks.map((check) =>
-    normalizeContributionHealthCheck(check, contributionId, checks.length),
-  );
-}
-
-function normalizeContributionHealthCheck(
-  check: DoctorContributionHealthCheck,
-  contributionId: string,
-  count: number,
-): DoctorHealthCheck {
-  const id = check.id ?? (count === 1 ? deriveCoreHealthCheckId(contributionId) : undefined);
-  if (id === undefined) {
-    throw new Error(
-      `doctor contribution ${contributionId} must specify health check ids when it declares multiple healthChecks`,
-    );
-  }
-  const identity = {
-    id,
-    kind: check.kind ?? "core",
-    source: check.source ?? "doctor",
-  };
-  return { ...check, ...identity };
-}
-
-function deriveCoreHealthCheckId(contributionId: string): string {
-  return contributionId.startsWith("doctor:")
+  const defaultId = contributionId.startsWith("doctor:")
     ? `core/doctor/${contributionId.slice("doctor:".length)}`
     : `core/doctor/${contributionId}`;
+  return checks.map((check: DoctorContributionHealthCheck): DoctorHealthCheck => {
+    const id = check.id ?? (checks.length === 1 ? defaultId : undefined);
+    if (id === undefined) {
+      throw new Error(
+        `doctor contribution ${contributionId} must specify health check ids when it declares multiple healthChecks`,
+      );
+    }
+    return Object.assign({}, check, { id, kind: "core" as const, source: "doctor" });
+  });
 }
 
 async function runStructuredDoctorHealthContribution(params: {
-  contributionId: string;
   ctx: DoctorHealthFlowContext;
   checks: readonly DoctorHealthCheck[];
 }): Promise<void> {
-  if (params.checks.length === 0) {
-    throw new Error(`doctor contribution ${params.contributionId} has no structured health`);
-  }
   const { runDoctorHealthRepairs } = await import("./doctor-repair-flow.js");
   const workspaceDir = resolveDoctorWorkspaceDir(params.ctx.cfg, params.ctx.env);
   const dryRun = !params.ctx.prompter.shouldRepair;

@@ -52,7 +52,6 @@ export function createProviderAuthChecker(params: {
       agentDir: params.agentDir,
       workspaceDir: params.workspaceDir,
       env: params.env,
-      skipSetupProviderFallback: true,
       allowPreparedRuntimeAuth: true,
       syntheticAuthProviderRefs: runtimeAuthLookup.syntheticAuthProviderRefs,
       externalCliProviderIds: ["openai"],

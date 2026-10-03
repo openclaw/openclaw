@@ -324,84 +324,6 @@ export type EmbeddedAgentSubscribeContext = {
   clearDeferredBlockReplies: () => void;
 };
 
-/**
- * Minimal context type for tool execution handlers. Allows
- * tests provide only the fields they exercise
- * without needing the full `EmbeddedAgentSubscribeContext`.
- */
-type ToolHandlerParams = Pick<
-  SubscribeEmbeddedAgentSessionParams,
-  | "runId"
-  | "onBlockReplyFlush"
-  | "onAgentEvent"
-  | "onToolStreamBoundary"
-  | "onExecutionPhase"
-  | "onHeartbeatToolResponse"
-  | "onAgentToolResult"
-  | "observeToolTerminal"
-  | "onToolResult"
-  | "config"
-  | "messageChannel"
-  | "sessionKey"
-  | "currentChannelId"
-  | "currentMessagingTarget"
-  | "currentAccountId"
-  | "currentThreadId"
-  | "currentMessageId"
-  | "replyToMode"
-  | "hasRepliedRef"
-  | "sessionId"
-  | "agentId"
-  | "coreBuiltinToolNames"
-  | "replaySafeToolNames"
-  | "codeModeExecToolNames"
-  | "sideEffectToolOwners"
-  | "toolResultFormat"
-  | "toolProgressDetail"
-  | "sourceReplyDeliveryMode"
-  | "onDeliveredMessageToolOnlySourceReply"
->;
-
-type ToolHandlerState = Pick<
-  EmbeddedAgentSubscribeState,
-  | "toolMetaById"
-  | "toolMetas"
-  | "acceptedSessionSpawns"
-  | "toolSummaryById"
-  | "execLiveUpdateStateById"
-  | "liveEditDiffStateById"
-  | "itemActiveIds"
-  | "itemStartedCount"
-  | "itemCompletedCount"
-  | "lastToolError"
-  | "latestMcpAppChannelView"
-  | "latestMcpConnectAction"
-  | "pendingToolMediaUrls"
-  | "pendingToolMediaAttachments"
-  | "pendingToolMediaTrustByUrl"
-  | "toolAutoDeliveryMediaUrls"
-  | "pendingToolAudioAsVoice"
-  | "deterministicApprovalPromptPending"
-  | "hadDeterministicSideEffect"
-  | "replayState"
-  | "messagingToolSentTexts"
-  | "messagingToolSentTextsNormalized"
-  | "currentSourceMessagingToolSentTextsNormalized"
-  | "messagingToolSentMediaUrls"
-  | "messagingToolSourceReplyPayloads"
-  | "messageToolOnlySourceReplyDelivered"
-  | "sourceReplyDelivered"
-  | "sourceReplyDeliveryState"
-  | "turnToolsOnlySourceProgress"
-  | "lastToolTurnOnlySourceProgress"
-  | "messagingToolSentTargets"
-  | "heartbeatToolResponse"
-  | "successfulCronAdds"
-  | "deterministicApprovalPromptSent"
-  | "toolExecutionSinceLastBlockReply"
-  | "assistantMessageIndex"
->;
-
 export type ToolHandlerContext = Pick<
   EmbeddedAgentSubscribeContext,
   | "log"
@@ -415,7 +337,7 @@ export type ToolHandlerContext = Pick<
   | "emitToolOutput"
   | "trimMessagingToolSent"
 > & {
-  params: ToolHandlerParams;
-  state: ToolHandlerState;
+  params: Omit<SubscribeEmbeddedAgentSessionParams, "session">;
+  state: EmbeddedAgentSubscribeState;
   consumeToolSendReceipt?: (toolCallId: string) => unknown;
 };

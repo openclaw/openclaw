@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
+import { assertGatewayAgentsAdmitted } from "../../test/helpers/gateway-agent-admission.js";
 import { createOpenClawTestInstance } from "../../test/helpers/openclaw-test-instance.js";
 import { isLiveTestEnabled } from "../agents/live-test-helpers.js";
 import { mergeWorkspaceSetupState } from "../agents/workspace-state-store.js";
@@ -182,6 +183,7 @@ describeLive("session event wake through a live Gateway", () => {
           deviceIdentity,
           requestTimeoutMs: TURN_TIMEOUT_MS,
         });
+        await assertGatewayAgentsAdmitted(client, ["main"]);
         const created = await client.request<{ key: string }>("sessions.create", {
           agentId: "main",
           key: sessionKey,

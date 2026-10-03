@@ -589,7 +589,7 @@ describe("config io write", () => {
       io.loadConfig();
       expect(warn).toHaveBeenCalledTimes(1);
 
-      await io.writeConfigFile({});
+      await io.writeConfigFile({}, { allowConfigSizeDrop: true });
       await io.writeConfigFile(staleConfig);
       expect(warn).toHaveBeenCalledTimes(2);
     },

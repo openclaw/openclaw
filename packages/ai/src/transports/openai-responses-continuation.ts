@@ -519,25 +519,10 @@ function deleteHttpContinuationIfOwned(key: string, entry: HttpContinuationEntry
     return;
   }
   if (entry.kind === "ready") {
+    clearTimeout(entry.idleTimer);
     httpContinuationRetainedBytes -= entry.retainedBytes;
     readyHttpContinuationEntries.delete(key);
   }
-  httpContinuationEntries.delete(key);
-}
-
-// A serialized-content budget, not a measurement of JavaScript heap overhead.
-function estimateRetainedBytes(state: ResponsesContinuationState): number {
-  return Buffer.byteLength(JSON.stringify(state), "utf8");
-}
-
-// The caller synchronously verified this ready entry still owns its key.
-function removeReadyEntry(
-  key: string,
-  entry: Extract<HttpContinuationEntry, { kind: "ready" }>,
-): void {
-  clearTimeout(entry.idleTimer);
-  httpContinuationRetainedBytes -= entry.retainedBytes;
-  readyHttpContinuationEntries.delete(key);
   httpContinuationEntries.delete(key);
 }
 
@@ -555,7 +540,7 @@ function evictReadyEntriesForCapacity(pendingBytes: number): void {
       return;
     }
     const [oldestKey, oldestEntry] = oldest.value;
-    removeReadyEntry(oldestKey, oldestEntry);
+    deleteHttpContinuationIfOwned(oldestKey, oldestEntry);
   }
 }
 
@@ -593,7 +578,7 @@ export function claimOpenAIResponsesHttpContinuation(
     return undefined;
   }
   if (previous?.kind === "ready") {
-    removeReadyEntry(key, previous);
+    deleteHttpContinuationIfOwned(key, previous);
   }
   const claimed = { kind: "claimed", sessionId: params.sessionId, owner } as const;
   httpContinuationEntries.set(key, claimed);
@@ -624,7 +609,8 @@ export function claimOpenAIResponsesHttpContinuation(
           previous?.kind === "ready" &&
             dispatchedPreviousResponseId === previous.state.lastResponseId,
         );
-        const retainedBytes = estimateRetainedBytes(state);
+        // Serialized-content budget, not JavaScript heap overhead.
+        const retainedBytes = Buffer.byteLength(JSON.stringify(state), "utf8");
         // Serialization can invoke caller-owned toJSON/getters that clean up or
         // reclaim this session. Fence stale commits before eviction or mutation.
         if (httpContinuationEntries.get(key) !== claimed) {
@@ -664,11 +650,7 @@ export function claimOpenAIResponsesHttpContinuation(
 registerSessionResourceCleanup((sessionId, owner) => {
   for (const [key, entry] of httpContinuationEntries) {
     if ((!owner || entry.owner === owner) && (!sessionId || entry.sessionId === sessionId)) {
-      if (entry.kind === "ready") {
-        removeReadyEntry(key, entry);
-      } else {
-        httpContinuationEntries.delete(key);
-      }
+      deleteHttpContinuationIfOwned(key, entry);
     }
   }
 });

@@ -62,17 +62,14 @@ function codeUrl(url: string, packageRoot: string | null): string | undefined {
   if (/^node:[a-zA-Z0-9_./-]+$/.test(url)) {
     return url;
   }
-  if (!packageRoot || url.length > 2_048) {
+  // Path normalization can erase suffix segments containing parent traversals.
+  if (url.length > 2_048 || /[?#]/.test(url)) {
     return undefined;
   }
   let filename = url;
   if (url.startsWith("file:")) {
     try {
-      const parsed = new URL(url);
-      if (parsed.search || parsed.hash) {
-        return undefined;
-      }
-      filename = fileURLToPath(parsed);
+      filename = fileURLToPath(url);
     } catch {
       return undefined;
     }
@@ -80,8 +77,21 @@ function codeUrl(url: string, packageRoot: string | null): string | undefined {
   if (!path.isAbsolute(filename)) {
     return undefined;
   }
-  const relative = path.relative(packageRoot, filename).split(path.sep).join("/");
-  return /^(?:src|dist|node_modules)\/[a-zA-Z0-9_@./+-]+\.[cm]?js$/.test(relative) ||
+  const relative = packageRoot
+    ? path.relative(packageRoot, filename).split(path.sep).join("/")
+    : "";
+  // Ignore the installation's enclosing node_modules; classify only its contents.
+  const dependency = (
+    packageRoot && !relative.startsWith("..")
+      ? `/${relative}`
+      : path.normalize(filename).split(path.sep).join("/")
+  ).match(
+    /.*\/node_modules\/((?:@[a-zA-Z0-9_-][a-zA-Z0-9._-]*\/)?[a-zA-Z0-9_-][a-zA-Z0-9._-]*)\//,
+  )?.[1];
+  if (dependency) {
+    return `node_modules/${dependency}`;
+  }
+  return /^(?:src|dist)\/[a-zA-Z0-9_@./+-]+\.[cm]?js$/.test(relative) ||
     /^src\/[a-zA-Z0-9_@./+-]+\.ts$/.test(relative)
     ? `openclaw:${relative}`
     : undefined;
@@ -104,16 +114,20 @@ export function sanitizeDiagnosticProfileFrame(
   );
   const url = codeUrl(frame.url, packageRoot);
   const engine = frame.url === "" && ENGINE_NAMES.has(frame.functionName);
+  const attribution = url?.startsWith("node_modules/")
+    ? `[dep:${url.slice(13)}]`
+    : frame.scriptId === "0" && frame.url === "" && frame.lineNumber < 0 && !engine
+      ? "[native]"
+      : undefined;
   const safeName =
     engine ||
     (url !== undefined &&
       frame.functionName.length <= 256 &&
       /^(?:(?:(?:get|set) )?[$A-Z_a-z][$\w]*(?:\.[$A-Z_a-z][$\w]*)*)?$/.test(frame.functionName));
-  const redacted = !safeName || (!engine && !url);
   return {
-    redacted,
+    redacted: !safeName && !attribution,
     callFrame: {
-      functionName: safeName ? frame.functionName : "[redacted]",
+      functionName: attribution ?? (safeName ? frame.functionName : "[redacted]"),
       scriptId: frame.scriptId,
       url: url ?? "",
       lineNumber: frame.lineNumber,

@@ -19,6 +19,7 @@ import {
   providerRequiresCredential,
   readWebProviderEnvValue,
   resolveWebProviderConfig,
+  type WebProviderWithCredential,
 } from "../web/provider-runtime-shared.js";
 
 type WebFetchConfig = NonNullable<NonNullable<OpenClawConfig["tools"]>["web"]>["fetch"];
@@ -47,26 +48,13 @@ function resolveFetchConfig(config: OpenClawConfig | undefined): WebFetchConfig 
 }
 
 function hasEntryCredential(
-  provider: Pick<
-    PluginWebFetchProviderEntry,
-    | "envVars"
-    | "getConfiguredCredentialFallback"
-    | "getConfiguredCredentialValue"
-    | "requiresCredential"
-  >,
+  provider: WebProviderWithCredential,
   config: OpenClawConfig | undefined,
-  fetch: WebFetchConfig | undefined,
 ): boolean {
   return hasWebProviderEntryCredential({
     provider,
     config,
-    toolConfig: fetch as Record<string, unknown> | undefined,
-    resolveRawValue: ({ provider: currentProvider, config: currentConfig }) =>
-      currentProvider.getConfiguredCredentialValue?.(currentConfig),
-    resolveFallbackRawValue: ({ provider: currentProvider, config: currentConfig }) =>
-      currentProvider.getConfiguredCredentialFallback?.(currentConfig)?.value,
-    resolveEnvValue: ({ provider: currentProvider }) =>
-      readWebProviderEnvValue(currentProvider.envVars),
+    resolveEnvValue: () => readWebProviderEnvValue(provider.envVars),
   });
 }
 
@@ -82,7 +70,7 @@ export function isWebFetchProviderConfigured(params: {
   >;
   config?: OpenClawConfig;
 }): boolean {
-  return hasEntryCredential(params.provider, params.config, resolveFetchConfig(params.config));
+  return hasEntryCredential(params.provider, params.config);
 }
 
 /** Lists web_fetch providers available to runtime selection. */
@@ -107,9 +95,7 @@ function resolveAutoWebFetchProviderId(params: {
 
   for (const provider of params.providers) {
     if (!providerRequiresCredential(provider)) {
-      if (
-        !hasEntryCredential({ ...provider, requiresCredential: true }, params.config, params.fetch)
-      ) {
+      if (!hasEntryCredential({ ...provider, requiresCredential: true }, params.config)) {
         continue;
       }
       logVerbose(
@@ -117,7 +103,7 @@ function resolveAutoWebFetchProviderId(params: {
       );
       return provider.id;
     }
-    if (!hasEntryCredential(provider, params.config, params.fetch)) {
+    if (!hasEntryCredential(provider, params.config)) {
       continue;
     }
     logVerbose(
@@ -143,67 +129,40 @@ function resolveConfiguredWebFetchProviderId(params: {
   return params.providers.find((provider) => provider.id === raw)?.id;
 }
 
-function resolveWebFetchProviderCacheKey(
-  options: ResolveWebFetchDefinitionParams | undefined,
-): string {
-  return JSON.stringify([
-    getActivePluginRegistryVersion(),
-    options?.sandboxed === true,
-    options?.preferRuntimeProviders === true,
-  ]);
-}
-
-function resolveCachedWebFetchProviders(params: {
-  cacheKey: string;
-  config: OpenClawConfig;
-  configFingerprint: string;
-  load: () => PluginWebFetchProviderEntry[];
-}): PluginWebFetchProviderEntry[] {
-  const cached = webFetchProviderCache.get(params.config);
-  if (
-    cached?.cacheKey === params.cacheKey &&
-    cached.configFingerprint === params.configFingerprint
-  ) {
-    return cached.providers;
-  }
-  const loaded = params.load();
-  if (loaded.length > 0) {
-    webFetchProviderCache.set(params.config, {
-      cacheKey: params.cacheKey,
-      configFingerprint: params.configFingerprint,
-      providers: loaded,
-    });
-  }
-  return loaded;
-}
-
 function resolveWebFetchProvidersForOptions(
   options?: ResolveWebFetchDefinitionParams,
 ): PluginWebFetchProviderEntry[] {
-  const load = () =>
-    sortPluginEntriesForAutoDetect(
-      options?.sandboxed
-        ? resolvePluginWebFetchProviders({
-            config: options?.config,
-            sandboxed: true,
-          })
-        : options?.preferRuntimeProviders
-          ? resolveRuntimeWebFetchProviders({
-              config: options?.config,
-            })
-          : resolvePluginWebFetchProviders({
-              config: options?.config,
-            }),
-    );
-  if (options?.config) {
-    return resolveCachedWebFetchProviders({
-      config: options.config,
-      cacheKey: resolveWebFetchProviderCacheKey(options),
-      configFingerprint: resolveRuntimeConfigCacheKey(options.config),
-      load,
-    });
+  const config = options?.config;
+  const cacheKey = config
+    ? JSON.stringify([
+        getActivePluginRegistryVersion(),
+        options?.sandboxed === true,
+        options?.preferRuntimeProviders === true,
+      ])
+    : "";
+  const configFingerprint = config ? resolveRuntimeConfigCacheKey(config) : "";
+  const cached = config ? webFetchProviderCache.get(config) : undefined;
+  if (cached?.cacheKey === cacheKey && cached.configFingerprint === configFingerprint) {
+    return cached.providers;
   }
-  return load();
+  const providers = sortPluginEntriesForAutoDetect(
+    options?.sandboxed
+      ? resolvePluginWebFetchProviders({
+          config: options?.config,
+          sandboxed: true,
+        })
+      : options?.preferRuntimeProviders
+        ? resolveRuntimeWebFetchProviders({
+            config: options?.config,
+          })
+        : resolvePluginWebFetchProviders({
+            config: options?.config,
+          }),
+  );
+  if (config && providers.length > 0) {
+    webFetchProviderCache.set(config, { cacheKey, configFingerprint, providers });
+  }
+  return providers;
 }
 
 /** Resolves the executable web_fetch provider tool definition. */

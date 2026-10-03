@@ -26,7 +26,6 @@ export type ModelProviderAuthKind = "ok" | "expiring" | "expired" | "missing" | 
 
 type ModelProviderAuthSummary = {
   kind: ModelProviderAuthKind;
-  profileCount: number;
   expiryLabel?: string;
 };
 
@@ -338,7 +337,6 @@ export function buildModelProviderCards(input: ModelProviderCardsInput): ModelPr
     if (draft) {
       draft.card.auth = {
         kind: provider.status === "static" ? "api-key" : provider.status,
-        profileCount: provider.profiles.length,
         ...(provider.expiry?.label ? { expiryLabel: provider.expiry.label } : {}),
       };
     }
@@ -364,19 +362,10 @@ export function buildModelProviderCards(input: ModelProviderCardsInput): ModelPr
       continue;
     }
     const draft = ensureDraft(drafts, id, providerDisplayLabel(id));
-    const addition: ModelProviderLocalCost = {
-      totalCost: entry.totals.totalCost,
-      totalTokens: entry.totals.totalTokens,
-      messageCount: entry.count,
-    };
-    const current = draft.card.localCost;
-    draft.card.localCost = current
-      ? {
-          totalCost: current.totalCost + addition.totalCost,
-          totalTokens: current.totalTokens + addition.totalTokens,
-          messageCount: current.messageCount + addition.messageCount,
-        }
-      : addition;
+    const cost = (draft.card.localCost ??= { totalCost: 0, totalTokens: 0, messageCount: 0 });
+    cost.totalCost += entry.totals.totalCost;
+    cost.totalTokens += entry.totals.totalTokens;
+    cost.messageCount += entry.count;
   }
 
   return drafts

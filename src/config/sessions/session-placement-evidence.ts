@@ -60,16 +60,33 @@ export async function readPlacementSessionIdentityEvidence(
     readIncognito();
     return results;
   }
-  const { candidates, ...prepared } = prepareSessionStoreTargetInventory(
-    cfg,
-    disk.map(({ probe }) => probe.agentId),
-    env,
-  );
-  const inventoryRead = prepareSessionStoreTargetInventoryRead({ ...prepared, candidates });
-  const nativeReaders = retainOpenClawAgentDatabaseReadCandidates(
-    candidates.flatMap((candidate) => [candidate, { ...candidate, path: candidate.physicalPath }]),
-    env,
-  );
+  const prepareDisk = () => {
+    const { candidates, ...prepared } = prepareSessionStoreTargetInventory(
+      cfg,
+      disk.map(({ probe }) => probe.agentId),
+      env,
+    );
+    const inventoryRead = prepareSessionStoreTargetInventoryRead({ ...prepared, candidates });
+    const nativeReaders = retainOpenClawAgentDatabaseReadCandidates(
+      candidates.flatMap((candidate) => [
+        candidate,
+        { ...candidate, path: candidate.physicalPath },
+      ]),
+      env,
+    );
+    return { candidates, prepared, inventoryRead, nativeReaders };
+  };
+  let diskPreparation: ReturnType<typeof prepareDisk>;
+  try {
+    diskPreparation = prepareDisk();
+  } catch {
+    for (const { index } of disk) {
+      results[index] = { status: "unknown", reason: "read-failed" };
+    }
+    readIncognito();
+    return results;
+  }
+  const { candidates, prepared, inventoryRead, nativeReaders } = diskPreparation;
   const continuations: Array<{
     path: string;
     owner: NonNullable<ReturnType<typeof captureCanonicalSessionReaderContinuation>>;

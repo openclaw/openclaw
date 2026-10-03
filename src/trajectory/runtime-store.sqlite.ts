@@ -122,7 +122,7 @@ export function appendSqliteTrajectoryRuntimeEventsInTransaction(
         seq: seq++,
         run_id: event.runId ?? null,
         event_json: eventJson,
-        created_at: readTrajectoryEventTimestamp(event) ?? Date.now(),
+        created_at: parseDateStringTimestampMs(event.ts) ?? Date.now(),
       };
     });
     executeSqliteQuerySync(database.db, db.insertInto("trajectory_runtime_events").values(rows));
@@ -145,13 +145,6 @@ export function appendSqliteTrajectoryRuntimeEventsInTransaction(
 export async function loadSqliteTrajectoryRuntimeEvents(
   scope: SqliteTrajectoryRuntimeReadScope,
 ): Promise<TrajectoryEvent[]> {
-  return loadSqliteTrajectoryRuntimeEventsSync(scope);
-}
-
-/** Loads runtime trajectory events synchronously for CLI and export paths. */
-function loadSqliteTrajectoryRuntimeEventsSync(
-  scope: SqliteTrajectoryRuntimeReadScope,
-): TrajectoryEvent[] {
   return loadSqliteTrajectoryRuntimeEventRowsSync(scope).map((row) => row.event);
 }
 
@@ -171,6 +164,12 @@ export function loadSqliteTrajectoryRuntimeEventRowsSync(
           ? Math.max(0, Math.floor(scope.tailEvents))
           : undefined;
       const afterSeq = scope.afterSeq;
+      const events = db
+        .selectFrom("trajectory_runtime_events")
+        .where("session_id", "=", scope.sessionId)
+        .$if(afterSeq !== undefined && Number.isFinite(afterSeq), (query) =>
+          query.where("seq", ">", Math.floor(afterSeq!)),
+        );
       // Budget checks and payload reads must share one snapshot so a concurrent
       // writer cannot cross the budget between admission and materialization.
       return runSqliteDeferredTransactionSync(
@@ -186,13 +185,7 @@ export function loadSqliteTrajectoryRuntimeEventRowsSync(
             const countRow: { event_count: number | null } | undefined =
               executeSqliteQueryTakeFirstSync(
                 database.db,
-                db
-                  .selectFrom("trajectory_runtime_events")
-                  .select((eb) => [eb.fn.countAll<number>().as("event_count")])
-                  .where("session_id", "=", scope.sessionId)
-                  .$if(afterSeq !== undefined && Number.isFinite(afterSeq), (query) =>
-                    query.where("seq", ">", Math.floor(afterSeq!)),
-                  ),
+                events.select((eb) => [eb.fn.countAll<number>().as("event_count")]),
               );
             const eventCount = countRow?.event_count ?? 0;
             if (eventCount > eventLimit) {
@@ -209,26 +202,14 @@ export function loadSqliteTrajectoryRuntimeEventRowsSync(
           ) {
             assertSqliteJsonlReadBudget(
               database.db,
-              db
-                .selectFrom("trajectory_runtime_events")
-                .select("event_json")
-                .where("session_id", "=", scope.sessionId)
-                .$if(afterSeq !== undefined && Number.isFinite(afterSeq), (query) =>
-                  query.where("seq", ">", Math.floor(afterSeq!)),
-                )
-                .as("events"),
+              events.select("event_json").as("events"),
               Math.floor(scope.maxEventBytes),
               "Trajectory runtime store",
             );
           }
-          let query = db
-            .selectFrom("trajectory_runtime_events")
+          let query = events
             .select(["seq", "event_json"])
-            .where("session_id", "=", scope.sessionId)
             .orderBy("seq", tailEvents === undefined ? "asc" : "desc");
-          if (afterSeq !== undefined && Number.isFinite(afterSeq)) {
-            query = query.where("seq", ">", Math.floor(afterSeq));
-          }
           const normalizedMaxEvents =
             scope.maxEvents !== undefined && Number.isFinite(scope.maxEvents)
               ? Math.max(0, Math.floor(scope.maxEvents))
@@ -239,8 +220,8 @@ export function loadSqliteTrajectoryRuntimeEventRowsSync(
               : normalizedMaxEvents === undefined
                 ? tailEvents
                 : Math.min(tailEvents, normalizedMaxEvents);
-          if (maxEvents !== undefined && Number.isFinite(maxEvents)) {
-            query = query.limit(Math.max(0, Math.floor(maxEvents)));
+          if (maxEvents !== undefined) {
+            query = query.limit(maxEvents);
           }
           const rows = executeSqliteQuerySync(database.db, query).rows.map((row) => ({
             event: JSON.parse(row.event_json) as TrajectoryEvent,
@@ -431,8 +412,4 @@ function trimSqliteTrajectoryRuntimeWindow(
       .where("session_id", "=", sessionId)
       .where("seq", "<=", removeThroughSeq),
   );
-}
-
-function readTrajectoryEventTimestamp(event: TrajectoryEvent): number | undefined {
-  return parseDateStringTimestampMs(event.ts);
 }

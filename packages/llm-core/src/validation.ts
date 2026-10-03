@@ -1,4 +1,5 @@
 import { parseLocalSchemaRefPointer } from "@openclaw/normalization-core/json-schema";
+import { parseStrictFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { Compile } from "typebox/compile";
 import type { TLocalizedValidationError } from "typebox/error";
 import { Pointer } from "typebox/schema";
@@ -101,17 +102,6 @@ function isValidatorSchema(value: unknown): value is Tool["parameters"] {
   return isObjectBackedRecord(value);
 }
 
-const JSON_NUMBER_TOKEN_RE = /^[+-]?(?:(?:\d+\.?\d*)|(?:\.\d+))(?:e[+-]?\d+)?$/iu;
-
-function parseJsonNumberString(value: string): number | undefined {
-  const trimmed = value.trim();
-  if (!trimmed || !JSON_NUMBER_TOKEN_RE.test(trimmed)) {
-    return undefined;
-  }
-  const parsed = Number(trimmed);
-  return Number.isFinite(parsed) ? parsed : undefined;
-}
-
 function getSubSchemaValidator(
   schema: JsonSchemaObject,
   root?: JsonSchemaObject,
@@ -134,7 +124,7 @@ function coercePrimitiveByType(value: unknown, type: string): unknown {
         return 0;
       }
       if (typeof value === "string") {
-        const parsed = parseJsonNumberString(value);
+        const parsed = parseStrictFiniteNumber(value);
         if (parsed !== undefined && (type === "number" || Number.isSafeInteger(parsed))) {
           return parsed;
         }

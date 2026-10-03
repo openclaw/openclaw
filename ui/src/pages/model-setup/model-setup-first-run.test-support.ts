@@ -8,7 +8,8 @@ import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-c
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
-import { ModelSetupPage, type ModelSetupRouteData } from "./model-setup-page.ts";
+import type { ModelSetupRouteData } from "./first-run-setup.ts";
+import { ModelSetupPage } from "./model-setup-page.ts";
 import type { ModelSetupPageState } from "./state.ts";
 
 export const detection: SystemAgentSetupDetectResult = {

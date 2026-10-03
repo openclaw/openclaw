@@ -71,8 +71,8 @@ function fixture() {
     "quiescence",
     hash(workspaceDir, 64) + "." + nonce + ".json",
   );
-  const readLease = () =>
-    JSON.parse(fs.readFileSync(leasePath, "utf8")) as {
+  const readLease = (currentNonce = nonce) =>
+    JSON.parse(fs.readFileSync(leasePath.replace(nonce, currentNonce), "utf8")) as {
       nonce: string;
       sharedHost: boolean;
       processes: unknown[];
@@ -169,15 +169,55 @@ describe.runIf(process.platform === "linux")("native watchdog lifecycle", () => 
     expect(processIdentity.requireNodeWorkerProcessIdentity(lease.watchdog.pid)).toEqual(exact);
     await f.collect(1);
     expect(fs.existsSync(f.workspaceDir)).toBe(true);
-    const done = once(helper, "close");
     await f.command(release);
-    await done;
-    expect(spawned).toHaveBeenCalledTimes(controlSpawns);
-    expect(processIdentity.inspectNodeWorkerProcessIdentity(exact)).not.toBe("live");
     expect(f.runtime.quiescence.hasActiveWork()).toBe(false);
     expect(fs.existsSync(f.leasePath)).toBe(false);
+    const nextNonce = "b".repeat(32);
+    await f.command({ ...acquire, nonce: nextNonce });
+    expect(f.readLease(nextNonce).watchdog).toEqual(lease.watchdog);
+    for (const operation of [renew, release]) {
+      await expect(f.command(operation)).rejects.toThrow("no longer active");
+    }
+    await f.command({ ...renew, nonce: nextNonce });
+    await f.command({ ...release, nonce: nextNonce });
+    const cancelledNonce = "c".repeat(32);
+    const late = new AbortController();
+    const reused = vi
+      .spyOn(f.runtime.quiescence, "execute")
+      .mockImplementationOnce((context, signal) => {
+        const pending = execute(context, signal);
+        late.abort();
+        return pending;
+      });
+    await expect(
+      f.command({ ...acquire, nonce: cancelledNonce }, late.signal),
+    ).rejects.toMatchObject({ name: "AbortError" });
+    reused.mockRestore();
+    await f.command({ ...release, nonce: cancelledNonce });
+    await f.command({ ...acquire, nonce: nextNonce });
+    await f.command({ ...release, nonce: nextNonce });
+    expect(spawned).toHaveBeenCalledTimes(controlSpawns);
+    expect(processIdentity.inspectNodeWorkerProcessIdentity(exact)).toBe("live");
+    await f.runtime.quiescence.close();
+    expect(processIdentity.inspectNodeWorkerProcessIdentity(exact)).not.toBe("live");
     await f.collect(2);
     expect(fs.existsSync(f.workspaceDir)).toBe(false);
+  });
+
+  it("retires the idle helper before a different workspace generation acquires custody", async () => {
+    const f = fixture();
+    await f.command(acquire);
+    const first = processIdentity.requireNodeWorkerProcessIdentity(f.readLease().watchdog.pid);
+    await f.command(release);
+    const nextWorkspace = path.join(path.dirname(f.workspaceDir), "2");
+    fs.mkdirSync(nextWorkspace);
+    await f.runtime.exec({
+      ...f.input(acquire),
+      generation: 2,
+      argv: [NODE_WORKSPACE_QUIESCENCE_COMMAND, nextWorkspace],
+    });
+    expect(processIdentity.inspectNodeWorkerProcessIdentity(first)).not.toBe("live");
+    expect(f.runtime.quiescence.hasActiveWork()).toBe(true);
   });
 
   it("rejects nonce, namespace, root and incompatible input without borrowing or retiring the live helper", async () => {
@@ -333,8 +373,8 @@ process.on("message", (message) => {
   });
 
   it.each([false, true])(
-    "joins expiry IPC and actual child close before surrendering workspace custody (release race: %s)",
-    async (releaseRaces) => {
+    "settles expired controls before helper reuse and shutdown (renewal race: %s)",
+    async (renewalRaces) => {
       const f = fixture();
       const preload = path.join(path.dirname(f.workspaceDir), "expiry-clock.cjs");
       fs.writeFileSync(
@@ -342,10 +382,43 @@ process.on("message", (message) => {
         `const now = Date.now;
 let elapsed = 0;
 let deadline;
+const send = process.send.bind(process);
+const emit = process.emit.bind(process);
+let holdRetirement = false;
+let retirement;
+let holdRelease = false;
+let releaseControl;
+process.emit = (event, message, ...args) => {
+  if (holdRelease && event === "message" && message?.type === "workspace-quiescence-control" && message.action === "release") {
+    releaseControl = () => emit(event, message, ...args);
+    send({ type: "acceptance-release-held" });
+    return true;
+  }
+  if (holdRetirement && event === "message" && message?.type === "workspace-quiescence-retire") {
+    retirement = () => emit(event, message, ...args);
+    send({ type: "acceptance-retirement-held" });
+    return true;
+  }
+  return emit(event, message, ...args);
+};
+const replies = [];
+process.send = (message, ...args) => {
+  if (message?.type === "workspace-quiescence-result" && message.action === "renew") {
+    replies.push(() => send(message, ...args));
+    return send({ type: "acceptance-renewal-held" });
+  }
+  return send(message, ...args);
+};
 Date.now = () => now() + elapsed;
 global.setTimeout = (callback) => { deadline = callback; return { unref() {} }; };
 process.on("message", (message) => {
   if (message?.type === "acceptance-expire") { elapsed += 60_000; deadline(); }
+  if (message?.type === "acceptance-renewal-release") replies.shift()?.();
+  if (message?.type === "acceptance-release-hold") holdRelease = true;
+  if (message?.type === "acceptance-release-continue") { holdRelease = false; releaseControl?.(); }
+  if (message?.type === "acceptance-retirement-hold") holdRetirement = true;
+  if (message?.type === "acceptance-retirement-release") { holdRetirement = false; retirement?.(); }
+  if (message?.type === "acceptance-control-fence") send({ type: "acceptance-control-fenced" });
 });`,
       );
       const original = childProcess.spawn;
@@ -361,14 +434,99 @@ process.on("message", (message) => {
       const helper = spawned.mock.results.flatMap((result) =>
         result.type === "return" && result.value.pid === lease.watchdog.pid ? [result.value] : [],
       )[0]!;
-      const retired = once(helper, "message");
-      const closed = once(helper, "close");
-      helper.send({ type: "acceptance-expire" });
-      expect((await retired)[0]).toEqual({ type: "workspace-quiescence-retired", nonce });
-      expect(f.runtime.quiescence.hasActiveWork()).toBe(true);
-      const releasing = releaseRaces ? f.command(release) : Promise.resolve();
-      await closed;
-      await releasing;
+      if (!renewalRaces) {
+        const held = once(helper, "message");
+        helper.send({ type: "acceptance-release-hold" });
+        const releasing = f.command(release);
+        expect((await held)[0]).toEqual({ type: "acceptance-release-held" });
+        const stopped = once(helper, "close");
+        const outcomes = Promise.allSettled([releasing, f.runtime.quiescence.close()]);
+        try {
+          const retired = once(helper, "message");
+          helper.send({ type: "acceptance-expire" });
+          expect((await retired)[0]).toEqual({ type: "workspace-quiescence-retired", nonce });
+          expect(await outcomes).toEqual([
+            { status: "fulfilled", value: expect.objectContaining({ code: 0 }) },
+            { status: "fulfilled", value: undefined },
+          ]);
+        } finally {
+          if (helper.connected) {
+            helper.send({ type: "acceptance-release-continue" });
+          }
+          await stopped;
+        }
+        expect(helper.exitCode).toBe(0);
+      } else {
+        const fence = async () => {
+          const fenced = once(helper, "message");
+          helper.send({ type: "acceptance-control-fence" });
+          expect((await fenced)[0]).toEqual({ type: "acceptance-control-fenced" });
+        };
+        const held = once(helper, "message");
+        const renewal = expect(f.command(renew)).rejects.toThrow("lease expired during control");
+        expect((await held)[0]).toEqual({ type: "acceptance-renewal-held" });
+        const retired = once(helper, "message");
+        helper.send({ type: "acceptance-expire" });
+        expect((await retired)[0]).toEqual({ type: "workspace-quiescence-retired", nonce });
+        await renewal;
+        await f.command(release);
+        await f.command(acquire);
+        expect(f.readLease().watchdog).toEqual(lease.watchdog);
+        const currentHeld = once(helper, "message");
+        let settled = false;
+        const currentRenewal = f.command(renew).then(() => {
+          settled = true;
+        });
+        expect((await currentHeld)[0]).toEqual({ type: "acceptance-renewal-held" });
+        try {
+          const stale = once(helper, "message");
+          helper.send({ type: "acceptance-renewal-release" });
+          expect((await stale)[0]).toMatchObject({
+            type: "workspace-quiescence-result",
+            nonce,
+            action: "renew",
+          });
+          await fence();
+          expect(settled).toBe(false);
+        } finally {
+          helper.send({ type: "acceptance-renewal-release" });
+          await currentRenewal;
+        }
+        const idleExpiry = once(helper, "message");
+        helper.send({ type: "acceptance-expire" });
+        expect((await idleExpiry)[0]).toEqual({ type: "workspace-quiescence-retired", nonce });
+        await f.command(acquire);
+        expect(f.readLease().watchdog).toEqual(lease.watchdog);
+        const heldAgain = once(helper, "message");
+        const expiring = expect(f.command(renew)).rejects.toThrow("lease expired during control");
+        expect((await heldAgain)[0]).toEqual({ type: "acceptance-renewal-held" });
+        const retirementHeld = createDeferred();
+        helper.on("message", (message: unknown) => {
+          if (isRecord(message) && message.type === "acceptance-retirement-held") {
+            retirementHeld.resolve();
+          }
+        });
+        let closed = false;
+        const stopped = once(helper, "close");
+        const closing = f.runtime.quiescence.close().then(() => {
+          closed = true;
+        });
+        try {
+          helper.send({ type: "acceptance-retirement-hold" });
+          helper.send({ type: "acceptance-expire" });
+          await expiring;
+          await retirementHeld.promise;
+          await fence();
+          expect(closed).toBe(false);
+          expect(helper.exitCode).toBeNull();
+          expect(f.runtime.quiescence.hasActiveWork()).toBe(true);
+        } finally {
+          helper.send({ type: "acceptance-renewal-release" });
+          helper.send({ type: "acceptance-retirement-release" });
+          await Promise.all([closing, stopped]);
+        }
+        expect(closed).toBe(true);
+      }
       expect(f.runtime.quiescence.hasActiveWork()).toBe(false);
       expect(fs.existsSync(f.leasePath)).toBe(false);
       await f.collect(1);
@@ -419,8 +577,10 @@ it.runIf(process.platform === "linux").each(["retry", "close", "recovery-error"]
       preload,
       `const send = process.send.bind(process);
 let ready;
+let holding = true;
 process.send = (message, ...args) => {
-  if (message?.type === "workspace-quiescence-ready") {
+  if (holding && message?.type === "workspace-quiescence-result" && message.action === "acquire") {
+    holding = false;
     ready = () => send(message, ...args);
     return send({ type: "acceptance-ready-held" });
   }
@@ -504,17 +664,15 @@ process.on("message", (message) => {
         const nextNonce = "b".repeat(32);
         const recovering = vi.spyOn(getProcessSupervisor(), "spawn");
         const readyPublished = once(helper!, "message");
-        const retired = once(helper!, "close");
         helper!.send({ type: "acceptance-ready-release" });
         await readyPublished;
-        // Abandoned startup is settled by its retained helper, without a control child.
-        await retired;
-        expect(recovering).not.toHaveBeenCalled();
-        expect(processIdentity.inspectNodeWorkerProcessIdentity(exact)).not.toBe("live");
-        expect(fs.existsSync(f.leasePath)).toBe(false);
         await expect(f.command({ ...acquire, nonce: nextNonce })).resolves.toMatchObject({
           stdout: "quiesced " + nextNonce + "\n",
         });
+        expect(recovering).not.toHaveBeenCalled();
+        expect(processIdentity.inspectNodeWorkerProcessIdentity(exact)).toBe("live");
+        expect(f.readLease(nextNonce).watchdog.pid).toBe(exact.pid);
+        expect(fs.existsSync(f.leasePath)).toBe(false);
         await f.command({ ...release, nonce: nextNonce });
         await f.collect(2);
         expect(fs.existsSync(f.workspaceDir)).toBe(false);

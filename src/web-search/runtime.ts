@@ -28,6 +28,7 @@ import {
   providerRequiresCredential,
   readWebProviderEnvValue,
   resolveWebProviderConfig,
+  type WebProviderWithCredential,
 } from "../web/provider-runtime-shared.js";
 import { executeWebSearchCandidates } from "./runtime-execution.js";
 import type {
@@ -56,32 +57,17 @@ function resolveWebSearchRuntimeConfig(params?: {
 }
 
 function hasEntryCredential(
-  provider: Pick<
-    PluginWebSearchProviderEntry,
-    | "credentialPath"
-    | "id"
-    | "authProviderId"
-    | "envVars"
-    | "getConfiguredCredentialValue"
-    | "getConfiguredCredentialFallback"
-    | "requiresCredential"
-  >,
+  provider: WebProviderWithCredential,
   config: OpenClawConfig | undefined,
-  search: WebSearchConfig | undefined,
   agentDir?: string,
   authStore?: AuthProfileStore,
 ): boolean {
   return hasWebProviderEntryCredential({
     provider,
     config,
-    toolConfig: search as Record<string, unknown> | undefined,
-    resolveRawValue: ({ provider: currentProvider, config: currentConfig }) =>
-      currentProvider.getConfiguredCredentialValue?.(currentConfig),
-    resolveFallbackRawValue: ({ provider: currentProvider, config: currentConfig }) =>
-      currentProvider.getConfiguredCredentialFallback?.(currentConfig)?.value,
-    resolveEnvValue: ({ provider: currentProvider, configuredEnvVarId }) =>
+    resolveEnvValue: (configuredEnvVarId) =>
       (configuredEnvVarId ? readWebProviderEnvValue([configuredEnvVarId]) : undefined) ??
-      readWebProviderEnvValue(currentProvider.envVars),
+      readWebProviderEnvValue(provider.envVars),
     resolveProviderAuthValue: (providerId) =>
       hasAuthProfileForProvider({
         provider: providerId,
@@ -94,14 +80,13 @@ function hasEntryCredential(
 function hasImplicitProviderSelectionSignal(
   provider: Parameters<typeof hasEntryCredential>[0],
   config: OpenClawConfig | undefined,
-  search: WebSearchConfig | undefined,
   agentDir?: string,
   authStore?: AuthProfileStore,
 ): boolean {
   if (!providerRequiresCredential(provider)) {
     return false;
   }
-  return hasEntryCredential(provider, config, search, agentDir, authStore);
+  return hasEntryCredential(provider, config, agentDir, authStore);
 }
 
 /** Reports whether a web_search provider has usable configured credentials. */
@@ -122,13 +107,7 @@ export function isWebSearchProviderConfigured(params: {
   authStore?: AuthProfileStore;
 }): boolean {
   const config = resolveWebSearchRuntimeConfig({ config: params.config });
-  return hasEntryCredential(
-    params.provider,
-    config,
-    resolveSearchConfig(config),
-    params.agentDir,
-    params.authStore,
-  );
+  return hasEntryCredential(params.provider, config, params.agentDir, params.authStore);
 }
 
 /** Lists runtime web_search providers after applying runtime config snapshots. */
@@ -180,13 +159,7 @@ export function resolveWebSearchProviderId(params: {
   if (!raw) {
     for (const provider of providers) {
       if (
-        !hasImplicitProviderSelectionSignal(
-          provider,
-          config,
-          search,
-          params.agentDir,
-          params.authStore,
-        )
+        !hasImplicitProviderSelectionSignal(provider, config, params.agentDir, params.authStore)
       ) {
         continue;
       }
@@ -225,10 +198,7 @@ function resolveRuntimePreferredWebSearchProviderId(params: {
     return runtimeProviderId;
   }
   const provider = params.providers?.find((entry) => entry.id === runtimeProviderId);
-  if (
-    !provider ||
-    !hasImplicitProviderSelectionSignal(provider, params.config, params.search, params.agentDir)
-  ) {
+  if (!provider || !hasImplicitProviderSelectionSignal(provider, params.config, params.agentDir)) {
     return undefined;
   }
   // The secrets snapshot cannot see OAuth profiles. Let the credential-aware
@@ -312,7 +282,7 @@ function resolveWebSearchCandidates(
     runtimeWebSearch,
     providerId: options?.providerId,
     preferRuntimeProviders: options?.preferRuntimeProviders,
-  }).filter(Boolean);
+  });
   if (providers.length === 0) {
     return [];
   }
@@ -347,7 +317,7 @@ function resolveWebSearchCandidates(
   const fallbackProviders = explicitSelection
     ? providers
     : providers.filter((provider) =>
-        hasImplicitProviderSelectionSignal(provider, config, search, options?.agentDir),
+        hasImplicitProviderSelectionSignal(provider, config, options?.agentDir),
       );
 
   return [

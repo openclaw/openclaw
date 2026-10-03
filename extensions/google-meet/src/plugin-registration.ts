@@ -91,24 +91,14 @@ type GoogleMeetGatewayToolAction =
   | "test_speech"
   | "test_listen";
 
-function googleMeetGatewayMethodForToolAction(action: GoogleMeetGatewayToolAction): string {
-  switch (action) {
-    case "participation_context":
-      return "googlemeet.participationContext";
-    case "recover_current_tab":
-      return "googlemeet.recoverCurrentTab";
-    case "setup_status":
-      return "googlemeet.setup";
-    case "test_speech":
-      return "googlemeet.testSpeech";
-    case "test_listen":
-      return "googlemeet.testListen";
-    case "end_active_conference":
-      return "googlemeet.endActiveConference";
-    default:
-      return `googlemeet.${action}`;
-  }
-}
+const googleMeetGatewayMethods: Partial<Record<GoogleMeetGatewayToolAction, string>> = {
+  participation_context: "googlemeet.participationContext",
+  recover_current_tab: "googlemeet.recoverCurrentTab",
+  setup_status: "googlemeet.setup",
+  test_speech: "googlemeet.testSpeech",
+  test_listen: "googlemeet.testListen",
+  end_active_conference: "googlemeet.endActiveConference",
+};
 
 export function readGoogleMeetParticipationParams(raw: Record<string, unknown>): {
   sessionId: string;
@@ -185,16 +175,13 @@ export async function callGoogleMeetGatewayFromTool(params: {
   raw: Record<string, unknown>;
   runtime?: OpenClawPluginApi["runtime"];
 }): Promise<unknown> {
+  const method = googleMeetGatewayMethods[params.action] ?? `googlemeet.${params.action}`;
   try {
     if (params.runtime) {
-      return await params.runtime.gateway.request(
-        googleMeetGatewayMethodForToolAction(params.action),
-        params.raw,
-        {
-          timeoutMs: resolveGoogleMeetGatewayOperationTimeoutMs(params.config),
-          scopes: ["operator.admin"],
-        },
-      );
+      return await params.runtime.gateway.request(method, params.raw, {
+        timeoutMs: resolveGoogleMeetGatewayOperationTimeoutMs(params.config),
+        scopes: ["operator.admin"],
+      });
     }
     // Standalone agent workers connect as this bundled plugin, not as the
     // model session; its Gateway methods remain the only exposed actions.
@@ -202,7 +189,7 @@ export async function callGoogleMeetGatewayFromTool(params: {
       googleMeetToolDeps.callGatewayFromCli ??
       (await loadGoogleMeetGatewayRuntimeModule()).callGatewayFromCli;
     return await callGatewayFromCli(
-      googleMeetGatewayMethodForToolAction(params.action),
+      method,
       {
         json: true,
         timeout: String(resolveGoogleMeetGatewayOperationTimeoutMs(params.config)),

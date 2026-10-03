@@ -9,7 +9,11 @@ import { fileURLToPath } from "node:url";
 import { runCancelableCommand } from "../../../lib/cancelable-command.mts";
 import { toErrorObject } from "../../../lib/error-format.mts";
 import { hasUnjoinedWork, runManagedCommand } from "../../../lib/managed-child-process.mts";
-import { classifyReleaseTrain, parseReleaseVersion } from "../../../lib/release-version.mjs";
+import {
+  classifyReleaseTrain,
+  compareReleaseVersions,
+  parseReleaseVersion,
+} from "../../../lib/release-version.mjs";
 import {
   assertPublishedDriverReclaimed,
   inspectPublishedDriverSqlite,
@@ -155,6 +159,20 @@ function readJson(file) {
   return JSON.parse(fs.readFileSync(file, "utf8"));
 }
 
+async function relabelCandidate(from, to) {
+  const dir = path.join(runtime, "candidate-relabel");
+  fs.mkdirSync(dir, { recursive: true });
+  await run("candidate-relabel-extract", "tar", ["-xf", candidate, "-C", dir]);
+  for (const file of ["package/package.json", "package/dist/build-info.json"]) {
+    const target = path.join(dir, file);
+    fs.writeFileSync(target, `${JSON.stringify({ ...readJson(target), version: to }, null, 2)}\n`);
+  }
+  const relabeled = path.join(runtime, "openclaw-candidate-relabeled.tgz");
+  await run("candidate-relabel-pack", "tar", ["-czf", relabeled, "-C", dir, "package"]);
+  writeJson("candidate-relabel", { from, to, package: relabeled });
+  return relabeled;
+}
+
 async function freePort() {
   const server = net.createServer();
   await new Promise((resolve, reject) => {
@@ -220,7 +238,15 @@ process.exitCode = await runCancelableCommand(async (signal) => {
     }
     assert.equal(readJson(path.join(packageRoot, "package.json")).version, driverVersion);
     await run("candidate-build", "tar", ["-xOf", candidate, "package/dist/build-info.json"]);
-    const build = output("candidate-build");
+    let build = output("candidate-build");
+    let candidatePackage = candidate;
+    // Between a release and its forward-port, main lags npm latest. The cell proves
+    // the update mechanics, not the version label: relabel the candidate to the
+    // driver version so the future-version guard sees an upgrade, not a downgrade.
+    if (compareReleaseVersions(build.version, driverVersion) < 0) {
+      candidatePackage = await relabelCandidate(build.version, driverVersion);
+      build = { ...build, version: driverVersion, relabeledFrom: build.version };
+    }
     const driverBuild = legacySqlite
       ? readJson(path.join(packageRoot, "dist/build-info.json"))
       : undefined;
@@ -320,7 +346,7 @@ process.exitCode = await runCancelableCommand(async (signal) => {
       update = await run(
         "update",
         "openclaw",
-        ["update", "--tag", candidate, "--yes", "--json"],
+        ["update", "--tag", candidatePackage, "--yes", "--json"],
         true,
       );
       if (update.exitCode !== 0) {

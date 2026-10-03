@@ -100,22 +100,9 @@ export function resolveEffectiveCompactionMode(cfg?: OpenClawConfig): AgentCompa
   return compaction?.mode === "safeguard" ? "safeguard" : "default";
 }
 
-/**
- * Detect providers whose shared model runtime `isContextOverflow` Case 2 (silent overflow)
- * fires on a successful turn and triggers OpenClaw runtime's `_runAutoCompaction` from
- * inside `Session.prompt()`, collapsing `agent.state.messages` before the
- * provider call (openclaw#75799).
- *
- * True on any of: `zai-native` endpoint class, normalized provider id `zai`,
- * a `z-ai/` / `openrouter/z-ai/` model-id namespace prefix, or a bare `glm-`
- * model id (no namespace prefix) — the latter covers in-house gateways that
- * expose Zhipu's GLM family directly without a `z-ai/` qualifier. Intentionally
- * narrow: namespaced GLM ids that route through other providers (e.g.
- * `ollama/glm-*`, `opencode-go/glm-*`) are NOT included because their hosts
- * have their own overflow accounting and may not exhibit the z.ai silent-
- * overflow shape. Other providers documented as silently truncating are not
- * added without a reproducible repro.
- */
+// z.ai-style silent overflow can compact a successful turn before our provider call (#75799).
+// Bare GLM names cover relabeled gateways; other providers' namespaced GLM models
+// retain their own overflow accounting and must not receive this guard.
 export function isSilentOverflowProneModel(model: {
   provider?: string | null;
   modelId?: string | null;
@@ -125,31 +112,22 @@ export function isSilentOverflowProneModel(model: {
   if (provider === "zai") {
     return true;
   }
-  if (typeof model.baseUrl === "string" && model.baseUrl.length > 0) {
-    if (resolveProviderEndpoint(model.baseUrl).endpointClass === "zai-native") {
-      return true;
-    }
+  if (
+    typeof model.baseUrl === "string" &&
+    model.baseUrl.length > 0 &&
+    resolveProviderEndpoint(model.baseUrl).endpointClass === "zai-native"
+  ) {
+    return true;
   }
-  if (typeof model.modelId === "string" && model.modelId.length > 0) {
-    const normalized = model.modelId.toLowerCase();
-    if (
-      normalized.startsWith("z-ai/") ||
-      normalized.startsWith("openrouter/z-ai/") ||
-      normalized.startsWith("glm-")
-    ) {
-      return true;
-    }
-  }
-  return false;
+  const normalized = typeof model.modelId === "string" ? model.modelId.toLowerCase() : "";
+  return (
+    normalized.startsWith("z-ai/") ||
+    normalized.startsWith("openrouter/z-ai/") ||
+    normalized.startsWith("glm-")
+  );
 }
 
-/**
- * Apply the auto-compaction guard. Callers that reload a `DefaultResourceLoader`
- * MUST call this AGAIN after each `reload()` — `settingsManager.reload()`
- * rehydrates `compaction.enabled` from disk and silently restores OpenClaw runtime's
- * default-on behavior, undoing the guard. Mirrors the existing
- * `applyAgentCompactionSettingsFromConfig` re-call pattern at the same sites.
- */
+// Reapply after resource reload: settingsManager.reload() restores the disk setting.
 export function applyAgentAutoCompactionGuard(params: {
   settingsManager: AgentSettingsManagerLike;
   contextEngineInfo?: ContextEngineInfo;

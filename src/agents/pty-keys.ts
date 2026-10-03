@@ -131,7 +131,7 @@ export function hasCursorModeSensitiveKeys(request: KeyEncodingRequest): boolean
       if (hasAnyModifier(parsed.mods)) {
         return false;
       }
-      return normalizeLowercaseStringOrEmpty(parsed.base) in DECCKM_SS3_KEYS;
+      return Object.hasOwn(DECCKM_SS3_KEYS, normalizeLowercaseStringOrEmpty(parsed.base));
     }) ?? false
   );
 }

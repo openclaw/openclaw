@@ -299,7 +299,6 @@ export function retainSessionEntryKeyAbsence(params: {
     }
   };
   try {
-    assertSourceCurrent();
     assertCurrent();
     return { assertCurrent, release: source.claim.release };
   } catch (error) {
@@ -411,7 +410,9 @@ export type ExactSessionEntryBatchScope = Omit<
   onReadSource?: (source: SessionEntryReadSource) => void;
 };
 
-function groupExactSessionEntryReadRequests(scopes: readonly ExactSessionEntryBatchScope[]) {
+export function loadExactSessionEntryCandidatesReadOnlyBatch(
+  scopes: readonly ExactSessionEntryBatchScope[],
+): Array<Result<ExactSessionEntry[], unknown>> {
   const results: Array<Result<ExactSessionEntry[], unknown> | undefined> = [];
   const targetCache: SessionSqliteTargetResolutionCache = new Map();
   const groups = new Map<
@@ -450,13 +451,6 @@ function groupExactSessionEntryReadRequests(scopes: readonly ExactSessionEntryBa
       results[index] = err(error);
     }
   }
-  return { groups, results };
-}
-
-export function loadExactSessionEntryCandidatesReadOnlyBatch(
-  scopes: readonly ExactSessionEntryBatchScope[],
-): Array<Result<ExactSessionEntry[], unknown>> {
-  const { groups, results } = groupExactSessionEntryReadRequests(scopes);
   for (const group of groups.values()) {
     try {
       const read = withOpenClawAgentDatabaseReadOnly(

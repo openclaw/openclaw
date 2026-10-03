@@ -157,11 +157,7 @@ type AgentCleanupStepOutcome = "done" | "timeout" | { error: unknown };
 async function settleAgentCleanupStep(
   params: AgentCleanupStepParams,
 ): Promise<AgentCleanupStepOutcome> {
-  const timeoutMs = resolveAgentCleanupStepTimeoutMs({
-    step: params.step,
-    timeoutMs: params.timeoutMs,
-    env: params.env,
-  });
+  const timeoutMs = resolveAgentCleanupStepTimeoutMs(params);
   let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
   let timedOut = false;
   const cleanupPromise = Promise.resolve().then(params.cleanup);

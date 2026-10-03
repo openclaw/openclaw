@@ -171,7 +171,7 @@ export async function readTranscriptArchiveFinalInWorker(
       [plan.sessionId ?? plan.sessionKey],
       [],
     ).toReversed();
-    let result: TranscriptArchiveReadResult = {};
+    const result: TranscriptArchiveReadResult = {};
     for (const archive of archives) {
       if (
         plan.sessionId
@@ -195,11 +195,15 @@ export async function readTranscriptArchiveFinalInWorker(
       if (hashSessionArchiveBytes(row.archive_blob) !== row.archive_sha256) {
         throw new Error("Archived transcript bytes do not match their registered hash.");
       }
-      result = await findArchivedFinal(
+      await scanArchivedTranscript(
         row.archive_blob,
         row.encoding === "zstd",
         archive.sessionId,
-        plan.runId,
+        (event) => {
+          if (isVisibleAssistantResultEventForRun(event, plan.runId)) {
+            result.event = event;
+          }
+        },
       );
       if (result.event !== undefined) {
         break;
@@ -218,21 +222,6 @@ export async function readTranscriptArchiveFinalInWorker(
       database.close();
     }
   }
-}
-
-async function findArchivedFinal(
-  bytes: Uint8Array,
-  compressed: boolean,
-  sessionId: string,
-  runId: string,
-): Promise<TranscriptArchiveReadResult> {
-  const result: TranscriptArchiveReadResult = {};
-  await scanArchivedTranscript(bytes, compressed, sessionId, (event) => {
-    if (isVisibleAssistantResultEventForRun(event, runId)) {
-      result.event = event;
-    }
-  });
-  return result;
 }
 
 async function scanArchivedTranscript(
@@ -286,17 +275,12 @@ async function scanArchivedTranscript(
       );
     },
   });
-  if (compressed && createZstdDecompress) {
-    if (decodedBudget === undefined) {
-      await pipeline(input, createZstdDecompress.call(zlib), scan);
-    } else {
-      await pipeline(input, createZstdDecompress.call(zlib), bound, scan);
-    }
-  } else if (decodedBudget === undefined) {
-    await pipeline(input, scan);
-  } else {
-    await pipeline(input, bound, scan);
-  }
+  await pipeline([
+    input,
+    ...(compressed && createZstdDecompress ? [createZstdDecompress.call(zlib)] : []),
+    ...(decodedBudget === undefined ? [] : [bound]),
+    scan,
+  ]);
   if (!headerRead) {
     throw new Error("Archived transcript header does not match its registered session.");
   }

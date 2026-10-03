@@ -102,12 +102,8 @@ function emptyBoardSnapshot(sessionKey: string): BoardSnapshot {
 export class SqliteBoardStore implements BoardStore {
   constructor(private readonly options: SqliteBoardStoreOptions) {}
 
-  private resolve(target: BoardSessionTarget): ResolvedBoardSession {
-    return this.options.resolveSession(target);
-  }
-
   private assertTargetCurrent(target: BoardSessionTarget, resolved: ResolvedBoardSession): void {
-    const current = this.resolve(target);
+    const current = this.options.resolveSession(target);
     if (
       current.agentId !== resolved.agentId ||
       current.path !== resolved.path ||
@@ -148,7 +144,7 @@ export class SqliteBoardStore implements BoardStore {
     ) => Promise<BoardWriteOutcome<T>>,
     prepare?: () => Promise<void>,
   ): Promise<T> {
-    const resolved = this.resolve(target);
+    const resolved = this.options.resolveSession(target);
     const env = cloneEnvWithPlatformSemantics(this.options.env ?? process.env);
     env.OPENCLAW_STATE_DIR = resolveStateDir(env);
     const databaseOptions = {
@@ -259,20 +255,20 @@ export class SqliteBoardStore implements BoardStore {
   }
 
   async getSnapshot(target: BoardSessionTarget): Promise<BoardSnapshot> {
-    return this.readSnapshotWithHtmlViewMetadata(this.resolve(target)).snapshot;
+    return this.readSnapshotWithHtmlViewMetadata(this.options.resolveSession(target)).snapshot;
   }
 
   async getSnapshotWithHtmlViewMetadata(
     target: BoardSessionTarget,
   ): Promise<BoardSnapshotWithHtmlViewMetadata> {
-    return this.readSnapshotWithHtmlViewMetadata(this.resolve(target));
+    return this.readSnapshotWithHtmlViewMetadata(this.options.resolveSession(target));
   }
 
   private async consumeRead<T>(
     target: BoardSessionTarget,
     consume: (resolved: ResolvedBoardSession, env: NodeJS.ProcessEnv) => T,
   ): Promise<Awaited<T>> {
-    const resolved = this.resolve(target);
+    const resolved = this.options.resolveSession(target);
     const env = cloneEnvWithPlatformSemantics(this.options.env ?? process.env);
     env.OPENCLAW_STATE_DIR = resolveStateDir(env);
     const captured = {
@@ -432,7 +428,7 @@ export class SqliteBoardStore implements BoardStore {
     target: BoardSessionTarget,
     name: string,
   ): Promise<BoardWidgetMcpAppDocument | undefined> {
-    const document = this.readWidgetDocument(this.resolve(target), name, "mcp-app");
+    const document = this.readWidgetDocument(this.options.resolveSession(target), name, "mcp-app");
     return document && "descriptor" in document ? document : undefined;
   }
 }

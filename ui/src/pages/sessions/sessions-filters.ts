@@ -42,41 +42,6 @@ const SESSION_GROUP_MODE_LABELS = {
   date: "sessionsView.groupByDate",
 } as const satisfies Record<SessionsGroupBy, string>;
 
-function renderFilterToggle(params: {
-  name: string;
-  checked: boolean;
-  label: string;
-  title: string;
-  onChange: (checked: boolean) => void;
-}) {
-  const className = [
-    "session-filter-check",
-    "session-filter-toggle",
-    params.checked ? "session-filter-check--active" : "",
-  ]
-    .filter(Boolean)
-    .join(" ");
-  return html`
-    <openclaw-tooltip .content=${params.title}>
-      <label class=${className}>
-        <input
-          name=${params.name}
-          class="session-filter-check__input"
-          type="checkbox"
-          .checked=${params.checked}
-          @change=${(event: Event) => {
-            if (event.currentTarget instanceof HTMLInputElement) {
-              params.onChange(event.currentTarget.checked);
-            }
-          }}
-        />
-        <span class="session-filter-check__mark" aria-hidden="true">${icons.check}</span>
-        <span class="session-filter-check__label">${params.label}</span>
-      </label>
-    </openclaw-tooltip>
-  `;
-}
-
 export function renderSessionsAdvancedFilters(props: SessionsAdvancedFiltersProps) {
   // Archived timestamps are intentionally stale, so recency only applies to the active view.
   const filterInputs = [
@@ -154,14 +119,28 @@ export function renderSessionsAdvancedFilters(props: SessionsAdvancedFiltersProp
           role="group"
           aria-label=${t("sessionsView.sourceFilters")}
         >
-          ${sourceFilters.map(([key, label, tooltip]) =>
-            renderFilterToggle({
-              name: key,
-              checked: props[key],
-              label,
-              title: tooltip,
-              onChange: (checked) => updateFilter(key, checked),
-            }),
+          ${sourceFilters.map(
+            ([key, label, tooltip]) => html`
+              <openclaw-tooltip .content=${tooltip}>
+                <label
+                  class=${`session-filter-check session-filter-toggle${props[key] ? " session-filter-check--active" : ""}`}
+                >
+                  <input
+                    name=${key}
+                    class="session-filter-check__input"
+                    type="checkbox"
+                    .checked=${props[key]}
+                    @change=${(event: Event) => {
+                      if (event.currentTarget instanceof HTMLInputElement) {
+                        updateFilter(key, event.currentTarget.checked);
+                      }
+                    }}
+                  />
+                  <span class="session-filter-check__mark" aria-hidden="true">${icons.check}</span>
+                  <span class="session-filter-check__label">${label}</span>
+                </label>
+              </openclaw-tooltip>
+            `,
           )}
         </div>
         <label class="session-groupby">

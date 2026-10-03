@@ -51,7 +51,7 @@ class AppsPage extends OpenClawLightDomElement {
     if (!this.conversationError) {
       void ensureCustomElementDefined(
         "openclaw-chat-pane",
-        () => import("./app-conversation.ts"),
+        () => import("../chat/route-entry.ts"),
       ).catch((error: unknown) => {
         this.conversationError = formatUiError(error);
         this.requestUpdate();

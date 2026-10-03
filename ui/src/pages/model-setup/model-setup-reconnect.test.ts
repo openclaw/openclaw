@@ -8,7 +8,7 @@ import type { ApplicationContext, ApplicationGateway } from "../../app/context.t
 import { i18n } from "../../i18n/index.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
-import type { ModelSetupRouteData } from "./model-setup-page.ts";
+import type { ModelSetupRouteData } from "./first-run-setup.ts";
 import "./model-setup-page.ts";
 
 type TestModelSetupPage = HTMLElement & {

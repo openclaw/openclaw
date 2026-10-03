@@ -195,30 +195,20 @@ export function isChannelPluginFailureDiagnostic(diagnostic: PluginDiagnosticRec
   return diagnostic.level === "error" && diagnostic.code === "channel-setup-failure";
 }
 
-function formatCount(count: number, noun: string): string {
-  return `${count} ${noun}${count === 1 ? "" : "s"}`;
-}
-
 export function formatCompactPluginHealthLine(
   snapshot: StatusPluginHealthSnapshot,
 ): string | undefined {
-  const loadErrors = snapshot.plugins.filter((plugin) => plugin.status === "error").length;
-  const dependencyIssues = snapshot.plugins.filter(hasDependencyIssue).length;
-  const diagnosticErrors = countProblemDiagnostics(getReportableDiagnostics(snapshot)).errors;
-  const quarantines = snapshot.contextEngineQuarantines.length;
-  const runtimeToolQuarantines = snapshot.runtimeToolQuarantines?.length ?? 0;
-  const channelPluginFailures = snapshot.channelPluginFailures?.length ?? 0;
-
-  const parts = [
-    loadErrors > 0 ? formatCount(loadErrors, "plugin error") : null,
-    quarantines > 0 ? formatCount(quarantines, "context engine quarantine") : null,
-    runtimeToolQuarantines > 0
-      ? formatCount(runtimeToolQuarantines, "runtime tool quarantine")
-      : null,
-    channelPluginFailures > 0 ? formatCount(channelPluginFailures, "channel plugin failure") : null,
-    dependencyIssues > 0 ? formatCount(dependencyIssues, "dependency issue") : null,
-    diagnosticErrors > 0 ? formatCount(diagnosticErrors, "diagnostic error") : null,
-  ].filter((part): part is string => Boolean(part));
+  const counts: Array<[number, string]> = [
+    [snapshot.plugins.filter((plugin) => plugin.status === "error").length, "plugin error"],
+    [snapshot.contextEngineQuarantines.length, "context engine quarantine"],
+    [snapshot.runtimeToolQuarantines?.length ?? 0, "runtime tool quarantine"],
+    [snapshot.channelPluginFailures?.length ?? 0, "channel plugin failure"],
+    [snapshot.plugins.filter(hasDependencyIssue).length, "dependency issue"],
+    [countProblemDiagnostics(getReportableDiagnostics(snapshot)).errors, "diagnostic error"],
+  ];
+  const parts = counts
+    .filter(([count]) => count > 0)
+    .map(([count, noun]) => `${count} ${noun}${count === 1 ? "" : "s"}`);
 
   return parts.length === 0 ? undefined : `⚠️ Plugins: ${parts.join(" · ")}`;
 }

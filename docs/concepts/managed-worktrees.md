@@ -476,6 +476,25 @@ reset the index, reattach HEAD, or prune the registration.
 
 ## CLI
 
+`worktrees create` uses the authenticated Gateway that owns the selected local
+state directory when one is running. It requires `operator.admin`, preserves
+source profiles and repository setup, and never redirects a local repository to
+a configured remote Gateway. The command binds the request to that owner's
+incarnation and the captured repository directory. A changed owner, missing
+capability, authentication failure, or uncertain reply never triggers local
+creation. Upgrade an older Gateway or stop it through its service owner and retry
+offline. After an uncertain reply, inspect `worktrees list --json` and the source
+repository before retrying.
+
+Offline creation holds exclusive state-directory lifecycle ownership through Git
+work, database settlement, and cleanup, including interruption. A Gateway starting
+during that operation waits or reports ownership contention. Other worktree
+commands and older CLI/SDK versions retain their existing behavior; this does not
+exclude arbitrary direct writers or a different state root sharing external files.
+The updater and Doctor retain their existing owners and do not require this routing
+capability to upgrade an older installation. No schema or configuration migration
+is required.
+
 ```bash
 openclaw worktrees list [--json]
 openclaw worktrees create <repo-root> [--name <name>] [--base-ref <ref>] [--source-profile <name>]... [--json]

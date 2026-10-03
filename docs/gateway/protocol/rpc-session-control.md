@@ -17,6 +17,8 @@ Once session stores are admitted, authorization for direct session targets prepa
 
 `sessions.describe` and `sessions.get` are connection-bound observations. Disconnecting cancels further row-preparation retries, including preparation during authorization, after in-flight preparation settles. Reconnect and issue a new read to obtain a current result. Accepted session mutations retain their existing completion lifetime.
 
+Session list orders update incrementally as committed session metadata changes. Each request still applies current visibility, activity, and time filters before pagination. Archived sessions retain their list position when their display rows are released from memory.
+
 ## Session control
 
 - `sessions.catalog.list` lists external session catalogs. Pass `metadataOnly: true` when a client needs catalog IDs, labels, capabilities, and share-route metadata without enumerating hosts or sessions. This mode returns the normal catalog objects with `hosts: []`; it retains agent and catalog selection, skips row filtering/pagination, and emits no host progress events. Omit the flag for full listing, including the host availability needed for terminal selection. The Control UI uses metadata-only discovery for the new-session picker and hidden-source labels in Settings.

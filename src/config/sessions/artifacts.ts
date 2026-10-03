@@ -151,14 +151,6 @@ export function formatSessionArchiveTimestamp(nowMs = Date.now()): string {
   return timestampMsToIsoFileStamp(nowMs);
 }
 
-function restoreSessionArchiveTimestamp(raw: string): string {
-  const [datePart, timePart] = raw.split("T");
-  if (!datePart || !timePart) {
-    return raw;
-  }
-  return `${datePart}T${timePart.replace(/-/g, ":")}`;
-}
-
 export function parseSessionArchiveTimestamp(
   fileName: string,
   reason: SessionArchiveReason,
@@ -167,6 +159,8 @@ export function parseSessionArchiveTimestamp(
   if (!timestampRaw) {
     return null;
   }
-  const timestamp = Date.parse(restoreSessionArchiveTimestamp(timestampRaw));
+  const timestamp = Date.parse(
+    timestampRaw.slice(0, 11) + timestampRaw.slice(11).replace(/-/g, ":"),
+  );
   return Number.isNaN(timestamp) ? null : timestamp;
 }

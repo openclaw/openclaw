@@ -201,17 +201,6 @@ export type LatestTranscriptAssistantMessage = {
   message: unknown;
 };
 
-type SessionEntryBatchProjectionMutation = {
-  entry: SessionEntry;
-  previousSessionKeys?: readonly string[];
-  sessionKey: string;
-};
-
-export type SessionEntryBatchProjectionUpdate<T> = {
-  mutations?: Iterable<SessionEntryBatchProjectionMutation>;
-  result: T;
-};
-
 export type {
   ExactSessionEntry,
   LatestTranscriptAssistantText,

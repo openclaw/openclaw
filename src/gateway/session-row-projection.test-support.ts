@@ -14,6 +14,7 @@ import { readSessionRowModelFacts } from "./session-row-model-facts.js";
 import {
   create as createSessionRow,
   sort as sortSessionRows,
+  type SelectionChange,
 } from "./session-row-projection-record.js";
 import { createSessionRowProjection, type SessionRowProjection } from "./session-row-projection.js";
 import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
@@ -42,6 +43,7 @@ export function createSessionRowProjectionFixture(params: {
   const storePath = params.storePath ?? "";
   const rowContext = params.rowContext ?? buildSessionListRowMetadataContext({ now: Date.now() });
   const rows = new Map<string, Row>();
+  const selectionListeners = new Set<(change: SelectionChange) => void>();
   const store = { ...params.store };
   let revision = 0;
   let revisionToken = {};
@@ -82,6 +84,9 @@ export function createSessionRowProjectionFixture(params: {
     delete store[key];
     revision++;
     revisionToken = {};
+    for (const listener of selectionListeners) {
+      listener({ kind: "reset" });
+    }
     if (!entry || entry.incognito || isIncognitoSessionKey(key)) {
       rows.delete(id(fields));
       return;
@@ -153,6 +158,9 @@ export function createSessionRowProjectionFixture(params: {
     return sortSessionRows(selected, query.sortBy);
   };
   const projection: SessionRowProjection = {
+    onSelectionChange(listener) {
+      selectionListeners.add(listener);
+    },
     observeGeneration() {
       const observedRevision = revision;
       let active = true;
@@ -303,6 +311,10 @@ export function createSessionRowProjectionFixture(params: {
       revision++;
       revisionToken = {};
       rows.clear();
+      for (const listener of selectionListeners) {
+        listener({ kind: "reset" });
+      }
+      selectionListeners.clear();
     },
   };
   return Object.assign(projection, { setEntry });

@@ -26,6 +26,7 @@ describe("Codex desktop generation owner", () => {
     const reads: ReturnType<typeof deferred<string>>[] = [];
     const changed = vi.fn();
     const owner = createCodexDesktopGenerationOwner({
+      signal: new AbortController().signal,
       readFingerprint: () => {
         const read = deferred<string>();
         reads.push(read);
@@ -58,6 +59,7 @@ describe("Codex desktop generation owner", () => {
     const readFingerprint = vi.fn(async () => fingerprint);
     const changed = vi.fn();
     const owner = createCodexDesktopGenerationOwner({
+      signal: new AbortController().signal,
       readFingerprint,
       onGenerationChange: changed,
     });
@@ -84,6 +86,7 @@ describe("Codex desktop generation owner", () => {
       .mockRejectedValueOnce(new Error("transient update"))
       .mockResolvedValue("Y");
     const owner = createCodexDesktopGenerationOwner({
+      signal: new AbortController().signal,
       readFingerprint,
     });
     owner.markDirty();
@@ -143,6 +146,7 @@ describe("Codex desktop generation owner", () => {
       vi.useFakeTimers();
       let fingerprint = initialFingerprint;
       const owner = createCodexDesktopGenerationOwner({
+        signal: new AbortController().signal,
         readFingerprint: async () => fingerprint,
       });
       const initial = owner.refresh();

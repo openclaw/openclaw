@@ -157,16 +157,8 @@ function collectExtensionHintKeys(
     if (node.additionalProperties && typeof node.additionalProperties === "object") {
       collectSchemaKeys(node.additionalProperties, `${basePath}.*`);
     }
-    if (Array.isArray(node.items)) {
-      for (const item of node.items) {
-        if (item && typeof item === "object") {
-          collectSchemaKeys(item, `${basePath}[]`);
-        }
-      }
-      return;
-    }
-    if (node.items && typeof node.items === "object") {
-      collectSchemaKeys(node.items, `${basePath}[]`);
+    for (const item of Array.isArray(node.items) ? node.items : [node.items]) {
+      collectSchemaKeys(item, `${basePath}[]`);
     }
   };
 

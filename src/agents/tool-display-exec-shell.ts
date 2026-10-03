@@ -216,24 +216,6 @@ export function optionValue(words: string[], names: string[]): string | undefine
   return undefined;
 }
 
-/** Returns positional args after consuming options and their values. */
-export function positionalArgs(
-  words: string[],
-  from = 1,
-  optionsWithValue: string[] = [],
-): string[] {
-  return parseShellOptions(words, from, optionsWithValue).positional;
-}
-
-/** Returns the first positional arg after skipping options and configured option values. */
-export function firstPositional(
-  words: string[],
-  from = 1,
-  optionsWithValue: string[] = [],
-): string | undefined {
-  return positionalArgs(words, from, optionsWithValue)[0];
-}
-
 /** Removes leading `env` wrappers and VAR=value assignments from parsed words. */
 export function trimLeadingEnv(words: string[]): string[] {
   if (words.length === 0) {

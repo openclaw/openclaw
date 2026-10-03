@@ -35,17 +35,12 @@ const observations = resolveGlobalSet<HealthObservation>(
 const supersededObservation = new Error("Config health observation was superseded");
 
 function matchingObservations(next: HealthObservation): HealthObservation[] {
-  const matches: HealthObservation[] = [];
-  for (const current of observations) {
-    if (
+  return [...observations].filter(
+    (current) =>
       current.configPath === next.configPath &&
       (current.databasePath === next.databasePath ||
-        (next.identity() !== undefined && current.identity() === next.identity()))
-    ) {
-      matches.push(current);
-    }
-  }
-  return matches;
+        (next.identity() !== undefined && current.identity() === next.identity())),
+  );
 }
 
 function supersedeMatchingObservations(next: HealthObservation): void {

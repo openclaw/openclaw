@@ -200,11 +200,6 @@ function createRuntime(registry: ApiRegistry, transportHost?: Partial<AiTranspor
     trackDefaultHostSessions(defaultHostsBySession);
   }
   const resolveRuntimeHost = () => explicitHost ?? getDefaultAiTransportHost();
-  const runWithHost = <T>(host: ActiveAiTransportHost, operation: () => T): T => {
-    // A normal runtime uses its current embedding owner, even when invoked from
-    // another runtime's callback. Do not capture the default during construction.
-    return runWithAiTransportHost(host, operation);
-  };
   const startStream = (
     start: () => AssistantMessageEventStreamContract,
     sessionId?: string,
@@ -215,7 +210,7 @@ function createRuntime(registry: ApiRegistry, transportHost?: Partial<AiTranspor
       hosts.add(host);
       defaultHostsBySession.set(sessionId, hosts);
     }
-    const runWithStreamHost = <T>(operation: () => T): T => runWithHost(host, operation);
+    const runWithStreamHost = <T>(operation: () => T): T => runWithAiTransportHost(host, operation);
     const started = runWithStreamHost(start);
     const completion = getEventStreamCompletion(started);
     const bound = bindAssistantMessageEventStream(started, runWithStreamHost);
@@ -317,7 +312,7 @@ function createRuntime(registry: ApiRegistry, transportHost?: Partial<AiTranspor
     const errors: unknown[] = [];
     for (const host of hosts) {
       try {
-        runWithHost(host, () => cleanupRegisteredSessionResources(sessionId, host));
+        runWithAiTransportHost(host, () => cleanupRegisteredSessionResources(sessionId, host));
       } catch (error) {
         errors.push(error);
       }

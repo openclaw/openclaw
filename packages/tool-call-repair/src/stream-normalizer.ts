@@ -535,14 +535,11 @@ function resolvePartialProtectionCheck(params: {
     blockText = record.content;
   } else {
     const part = candidate.parts.find((entry) => entry.contentIndex === params.contentIndex);
-    const block = Array.isArray(record.content)
-      ? asOptionalObjectRecord(record.content[params.contentIndex])
-      : undefined;
-    if (!part || block?.type !== "text" || typeof block.text !== "string") {
+    if (!part) {
       return undefined;
     }
     blockStart = part.start;
-    blockText = block.text;
+    blockText = candidate.text.slice(part.start, part.end);
   }
   const incomingStart = params.authoritative ? 0 : blockText.length - params.incoming.length;
   if (
@@ -754,9 +751,8 @@ function projectedTextForEvent(
 }
 
 type PendingClassification =
-  | { kind: "complete" }
   | { kind: "false-positive" }
-  | { kind: "incomplete" }
+  | { kind: "pending" }
   | { kind: "stripped"; text: string }
   | { kind: "suppress"; suppressor: OverCapSuppressor }
   | { candidate: StandalonePlainTextToolCallCandidate; kind: "trim" };
@@ -907,10 +903,10 @@ function classifyPending(
   if (leading && leading.activeStart === undefined) {
     return pending.sequenceOverCap || pending.bufferBytes > MAX_PAYLOAD_BYTES
       ? { kind: "stripped", text: "" }
-      : { kind: "complete" };
+      : { kind: "pending" };
   }
   if (leading?.activeStart !== undefined) {
-    return !hasNamedCandidate && finalize ? { kind: "false-positive" } : { kind: "incomplete" };
+    return !hasNamedCandidate && finalize ? { kind: "false-positive" } : { kind: "pending" };
   }
   if (
     terminalScan.kind === "prefix" &&
@@ -920,7 +916,7 @@ function classifyPending(
     return { kind: "false-positive" };
   }
   if (terminalScan.kind === "prefix" && (!finalize || hasNamedCandidate)) {
-    return { kind: "incomplete" };
+    return { kind: "pending" };
   }
   return pending.sequenceOverCap
     ? { kind: "stripped", text: candidate.text }
@@ -1531,7 +1527,7 @@ export async function* normalizePlainTextToolCallStreamEvents(
             options.resolveProtectedRanges,
           );
           pending.nextScanChars = Math.max(pending.buffer.length + 1, pending.nextScanChars * 2);
-          if (classification.kind === "complete" || classification.kind === "incomplete") {
+          if (classification.kind === "pending") {
             break;
           }
           if (classification.kind === "trim") {

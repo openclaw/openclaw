@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { applyLoggingConfig, resetLogger } from "../logging/logger.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
+import * as runtimeStoreWriter from "./runtime-store-writer.js";
 import { createTrajectoryRuntimeRecorder, toTrajectoryToolDefinitions } from "./runtime.js";
 
 function arrayReturning(value: unknown): unknown[] {
@@ -43,13 +44,13 @@ describe("trajectory tool definition preparation", () => {
   it("rechecks changed schemas and current secret registrations after repeated projections", () => {
     const writes: string[] = [];
     const description = "trajectory-fixture-value";
+    vi.spyOn(runtimeStoreWriter, "createSqliteTrajectoryRuntimeSink").mockReturnValueOnce({
+      write: (_event, line) => writes.push(line),
+      flush: async () => {},
+      describeFlushState: () => undefined,
+    });
     const recorder = createTrajectoryRuntimeRecorder({
       sessionId: "tool-projection",
-      writer: {
-        filePath: "/unused/trajectory.jsonl",
-        write: (line) => writes.push(line),
-        flush: async () => undefined,
-      },
     });
     const record = (text: string) =>
       recorder?.recordEvent("context.compiled", {

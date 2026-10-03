@@ -1,6 +1,6 @@
 import { runInNewContext } from "node:vm";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { teamsMeetingTranscriptScript } from "./teams-meetings-page-scripts.js";
+import { teamsMeetingPageScripts } from "./teams-meetings-page-scripts.js";
 import { TEAMS_MEETINGS_PLATFORM_ADAPTER } from "./teams-meetings-platform-adapter.js";
 import {
   URL,
@@ -17,7 +17,7 @@ function transcriptReader(
   window: Record<string, unknown>,
   { currentUrl = URL, finalize = false } = {},
 ) {
-  return runInNewContext(`(${teamsMeetingTranscriptScript(URL, "session-1", finalize)})`, {
+  return runInNewContext(`(${teamsMeetingPageScripts.transcript(URL, "session-1", finalize)})`, {
     URL: globalThis.URL,
     clearTimeout,
     location: new globalThis.URL(currentUrl),

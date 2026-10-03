@@ -101,28 +101,6 @@ function resolveOpenAIRequestCapabilities(model: {
   }).capabilities;
 }
 
-function shouldApplyOpenAIAttributionHeaders(model: {
-  api?: unknown;
-  provider?: unknown;
-  baseUrl?: unknown;
-}): "openai" | undefined {
-  const attributionProvider = resolveOpenAIRequestCapabilities(model).attributionProvider;
-  return attributionProvider === "openai" ? attributionProvider : undefined;
-}
-
-function shouldUseCodexNativeTransport(model: {
-  api?: unknown;
-  provider?: unknown;
-  baseUrl?: unknown;
-  compat?: unknown;
-}): boolean {
-  const api = readStringValue(model.api);
-  if (api !== "openai-chatgpt-responses") {
-    return false;
-  }
-  return resolveOpenAIRequestCapabilities(model).endpointClass === "openai";
-}
-
 function shouldApplyOpenAIServiceTier(model: {
   api?: unknown;
   provider?: unknown;
@@ -189,34 +167,13 @@ function shouldApplyOpenAIReasoningCompatibility(model: {
   return resolveOpenAIRequestCapabilities(model).supportsOpenAIReasoningCompatPayload;
 }
 
-function shouldFlattenOpenAICompletionMessages(model: {
+function readOpenAICompletionsCompat(model: {
   api?: unknown;
   compat?: unknown;
-}): boolean {
-  const compat =
-    model.compat && typeof model.compat === "object"
-      ? (model.compat as { requiresStringContent?: unknown })
-      : undefined;
-  return model.api === "openai-completions" && compat?.requiresStringContent === true;
-}
-
-function shouldStripOpenAICompletionTools(model: { api?: unknown; compat?: unknown }): boolean {
-  const compat =
-    model.compat && typeof model.compat === "object"
-      ? (model.compat as { supportsTools?: unknown })
-      : undefined;
-  return model.api === "openai-completions" && compat?.supportsTools === false;
-}
-
-function shouldStripOpenAICompletionMessageKeys(model: {
-  api?: unknown;
-  compat?: unknown;
-}): boolean {
-  const compat =
-    model.compat && typeof model.compat === "object"
-      ? (model.compat as { strictMessageKeys?: unknown })
-      : undefined;
-  return model.api === "openai-completions" && compat?.strictMessageKeys === true;
+}): Record<string, unknown> | undefined {
+  return model.api === "openai-completions" && model.compat && typeof model.compat === "object"
+    ? (model.compat as Record<string, unknown>)
+    : undefined;
 }
 
 function resolveOpenAIThinkingPayloadEffort(params: {
@@ -359,7 +316,7 @@ export function createOpenAIReasoningCompatibilityWrapper(
 export function createOpenAIStringContentWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
-    if (!shouldFlattenOpenAICompletionMessages(model)) {
+    if (readOpenAICompletionsCompat(model)?.requiresStringContent !== true) {
       return underlying(model, context, options);
     }
     return streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
@@ -377,7 +334,7 @@ export function createOpenAICompletionsStrictMessageKeysWrapper(
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
-    if (!shouldStripOpenAICompletionMessageKeys(model)) {
+    if (readOpenAICompletionsCompat(model)?.strictMessageKeys !== true) {
       return underlying(model, context, options);
     }
     return streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
@@ -395,7 +352,7 @@ export function createOpenAICompletionsToolsCompatWrapper(
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
-    if (!shouldStripOpenAICompletionTools(model)) {
+    if (readOpenAICompletionsCompat(model)?.supportsTools !== false) {
       return underlying(model, context, options);
     }
     return streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
@@ -442,12 +399,8 @@ export function createOpenAIThinkingLevelWrapper(
         payloadObj.reasoning = { effort: reasoningEffort };
         return;
       }
-      if (
-        existingReasoning &&
-        typeof existingReasoning === "object" &&
-        !Array.isArray(existingReasoning)
-      ) {
-        (existingReasoning as Record<string, unknown>).effort = reasoningEffort;
+      if (isRecord(existingReasoning)) {
+        existingReasoning.effort = reasoningEffort;
         raiseMinimalReasoningForResponsesWebSearchPayload({ model, payloadObj });
       }
     });
@@ -732,12 +685,14 @@ export function createOpenAIAttributionHeadersWrapper(
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
-    const attributionProvider = shouldApplyOpenAIAttributionHeaders(model);
-    if (!attributionProvider) {
+    const capabilities = resolveOpenAIRequestCapabilities(model);
+    const attributionProvider = capabilities.attributionProvider;
+    if (attributionProvider !== "openai") {
       return underlying(model, context, options);
     }
     const shouldCreateCodexTransport =
-      shouldUseCodexNativeTransport(model) &&
+      readStringValue(model.api) === "openai-chatgpt-responses" &&
+      capabilities.endpointClass === "openai" &&
       (baseStreamFn === undefined || baseStreamFn === streamSimple);
     const streamFn = shouldCreateCodexTransport
       ? (opts?.codexNativeTransportStreamFn ?? createOpenAIResponsesTransportStreamFn())
@@ -757,4 +712,3 @@ export function createOpenAIAttributionHeadersWrapper(
     });
   };
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

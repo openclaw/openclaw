@@ -14,7 +14,7 @@ import { safeJsonStringify } from "../utils/safe-json.js";
 import { redactAgentDiagnosticPayload } from "./diagnostic-redaction.js";
 import { getQueuedFileWriter, type QueuedFileWriter } from "./queued-file-writer.js";
 import type { AgentMessage, StreamFn } from "./runtime/index.js";
-import { buildAgentTraceBase } from "./trace-base.js";
+import { buildAgentTraceBase, type AgentTraceBase } from "./trace-base.js";
 
 // Payloads are redacted before JSONL output while stable digests preserve
 // correlation across prompt/session/cache stages.
@@ -30,17 +30,10 @@ type CacheTraceStage =
   | "stream:context"
   | "session:after";
 
-type CacheTraceEvent = {
+type CacheTraceEvent = AgentTraceBase & {
   ts: string;
   seq: number;
   stage: CacheTraceStage;
-  runId?: string;
-  sessionId?: string;
-  sessionKey?: string;
-  provider?: string;
-  modelId?: string;
-  modelApi?: string | null;
-  workspaceDir?: string;
   prompt?: unknown;
   system?: unknown;
   options?: unknown;
@@ -66,16 +59,9 @@ type CacheTrace = {
   wrapStreamFn: (streamFn: StreamFn) => StreamFn;
 };
 
-type CacheTraceInit = {
+type CacheTraceInit = AgentTraceBase & {
   cfg?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
-  runId?: string;
-  sessionId?: string;
-  sessionKey?: string;
-  provider?: string;
-  modelId?: string;
-  modelApi?: string | null;
-  workspaceDir?: string;
   writer?: QueuedFileWriter;
 };
 

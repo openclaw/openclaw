@@ -1,6 +1,6 @@
 import { runInNewContext } from "node:vm";
 import { describe, expect, it, vi } from "vitest";
-import { zoomMeetingLeaveScript, zoomMeetingStatusScript } from "./zoom-meetings-page-scripts.js";
+import { zoomMeetingPageScripts } from "./zoom-meetings-page-scripts.js";
 import { ZOOM_MEETINGS_PLATFORM_ADAPTER } from "./zoom-meetings-platform-adapter.js";
 
 const URL = "https://acme.zoom.us/j/12345678901?pwd=abc";
@@ -144,7 +144,7 @@ async function runStatusFixture(params: {
   window?: Record<string, unknown>;
 }) {
   const result = await runInNewContext(
-    `(${zoomMeetingStatusScript({
+    `(${zoomMeetingPageScripts.status({
       allowMicrophone: params.allowMicrophone ?? false,
       allowSessionAdoption: true,
       autoJoin: true,
@@ -177,7 +177,7 @@ function runLeaveFixture(params: {
 }) {
   return JSON.parse(
     runInNewContext(
-      `(${zoomMeetingLeaveScript({
+      `(${zoomMeetingPageScripts.leave({
         leaveInitiated: params.leaveInitiated ?? false,
         meetingSessionId: "session-1",
         meetingUrl: URL,

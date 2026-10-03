@@ -19,7 +19,6 @@ import { resolveGatewayStateDir } from "./paths.js";
 type MinimalServicePathOptions = {
   platform?: NodeJS.Platform;
   extraDirs?: string[];
-  includeUserDirs?: boolean;
   home?: string;
   cwd?: string;
   env?: Record<string, string | undefined>;
@@ -207,10 +206,9 @@ function resolveSystemPathDirs(platform: NodeJS.Platform): string[] {
   return [];
 }
 
-/** Resolve common user bin directories while preserving platform-specific manager roots. */
+/** Resolve Linux user bin directories after trusted system directories. */
 function resolveUserBinDirs(
   home: string | undefined,
-  platform: "darwin" | "linux",
   env?: Record<string, string | undefined>,
   existsSync: (candidate: string) => boolean = fs.existsSync,
   options: Pick<MinimalServicePathOptions, "cwd" | "home" | "includeMissingUserBinDefaults"> = {},
@@ -229,15 +227,9 @@ function resolveUserBinDirs(
   addEnvConfiguredBinDir(dirs, appendSubdir(env?.BUN_INSTALL, "bin"), pathOptions);
   addEnvConfiguredBinDir(dirs, appendSubdir(env?.VOLTA_HOME, "bin"), pathOptions);
   addEnvConfiguredBinDir(dirs, appendSubdir(env?.ASDF_DATA_DIR, "shims"), pathOptions);
-  addEnvConfiguredBinDir(
-    dirs,
-    platform === "darwin" ? env?.NVM_DIR : appendSubdir(env?.NVM_DIR, "current/bin"),
-    pathOptions,
-  );
+  addEnvConfiguredBinDir(dirs, appendSubdir(env?.NVM_DIR, "current/bin"), pathOptions);
   addEnvConfiguredBinDir(dirs, appendSubdir(env?.FNM_DIR, "aliases/default/bin"), pathOptions);
-  if (platform === "linux") {
-    addEnvConfiguredBinDir(dirs, appendSubdir(env?.FNM_DIR, "current/bin"), pathOptions);
-  }
+  addEnvConfiguredBinDir(dirs, appendSubdir(env?.FNM_DIR, "current/bin"), pathOptions);
   for (const directory of [".local/bin", ".npm-global/bin", "bin"]) {
     const candidate = `${home}/${directory}`;
     if (includeMissingUserBinDefaults || existsSync(candidate)) {
@@ -248,28 +240,16 @@ function resolveUserBinDirs(
     addExistingDir(dirs, `${home}/${directory}`, existsSync);
   }
   addNixProfileBinDirs(dirs, home, env, pathOptions, includeMissingUserBinDefaults, existsSync);
-  // macOS uses Library roots; Linux uses XDG/current symlinks. Preserve both
-  // the pnpm root (v10) and its bin subdirectory (v11) in their original order.
-  const managerDirs =
-    platform === "darwin"
-      ? [
-          "Library/Application Support/fnm/aliases/default/bin",
-          ".fnm/aliases/default/bin",
-          "Library/pnpm/bin",
-          "Library/pnpm",
-          ".local/share/pnpm/bin",
-          ".local/share/pnpm",
-        ]
-      : [
-          ".nvm/current/bin",
-          ".local/share/fnm/aliases/default/bin",
-          ".local/share/fnm/current/bin",
-          ".fnm/aliases/default/bin",
-          ".fnm/current/bin",
-          ".local/share/pnpm/bin",
-          ".local/share/pnpm",
-        ];
-  for (const directory of managerDirs) {
+  // Preserve both the pnpm root (v10) and its bin subdirectory (v11) in order.
+  for (const directory of [
+    ".nvm/current/bin",
+    ".local/share/fnm/aliases/default/bin",
+    ".local/share/fnm/current/bin",
+    ".fnm/aliases/default/bin",
+    ".fnm/current/bin",
+    ".local/share/pnpm/bin",
+    ".local/share/pnpm",
+  ]) {
     addExistingDir(dirs, `${home}/${directory}`, existsSync);
   }
   return dirs;
@@ -288,12 +268,11 @@ export function getMinimalServicePathPartsFromEnv(
 
   const extraDirs = options.extraDirs ?? [];
   const systemDirs = resolveSystemPathDirs(platform);
-  const includeUserDirs = options.includeUserDirs ?? platform !== "darwin";
 
   const existsSync = options.existsSync ?? fs.existsSync;
   const userDirs =
-    includeUserDirs && (platform === "linux" || platform === "darwin")
-      ? resolveUserBinDirs(options.home ?? env.HOME, platform, env, existsSync, options)
+    platform === "linux"
+      ? resolveUserBinDirs(options.home ?? env.HOME, env, existsSync, options)
       : [];
 
   return [...new Set([...extraDirs, ...systemDirs, ...userDirs].filter(Boolean))];
