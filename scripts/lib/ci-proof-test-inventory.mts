@@ -3198,6 +3198,7 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/gateway/worker-environments/store-node-enrollment.test.ts",
   "src/gateway/worker-environments/store-recovery.worker.test.ts",
   "src/gateway/worker-environments/transcript-commit.lazy.test.ts",
+  "src/gateway/worker-environments/transcript-commit.lifecycle.test.ts",
   "src/gateway/worker-environments/transcript-commit.test.ts",
   "src/gateway/worker-environments/worker-github-binding.test.ts",
   "src/gateway/worker-environments/worker-session-tool-executor.test.ts",
