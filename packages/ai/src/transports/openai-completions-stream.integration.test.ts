@@ -440,4 +440,151 @@ describe("openai completions stream", () => {
       }
     },
   );
+
+  it("does not treat empty SSE chunks as diagnostic model progress", async () => {
+    const idleTimeoutMs = 100;
+    const emptyChunkDurationMs = 260;
+    const runId = "empty-stream-progress-run";
+    let resolveEmptyWindow!: () => void;
+    const emptyWindowReached = new Promise<void>((resolve) => {
+      resolveEmptyWindow = resolve;
+    });
+    let resolveFinalResponse!: () => void;
+    const finalResponseAllowed = new Promise<void>((resolve) => {
+      resolveFinalResponse = resolve;
+    });
+    let resolveRequestStarted!: () => void;
+    const requestStarted = new Promise<void>((resolve) => {
+      resolveRequestStarted = resolve;
+    });
+    const streamAbortController = new AbortController();
+    let collectStream: Promise<void> | undefined;
+    const server = createServer((req, res) => {
+      req.resume();
+      req.on("end", () => {
+        resolveRequestStarted();
+        res.writeHead(200, {
+          "content-type": "text/event-stream; charset=utf-8",
+          "cache-control": "no-cache",
+          connection: "keep-alive",
+        });
+
+        const startedAt = Date.now();
+        const writeNextChunk = () => {
+          if (res.destroyed) {
+            return;
+          }
+          if (Date.now() - startedAt < emptyChunkDurationMs) {
+            res.write(
+              `data: ${JSON.stringify({
+                id: "chatcmpl-empty-progress",
+                object: "chat.completion.chunk",
+                created: 1,
+                model: "empty-progress-model",
+                choices: [],
+              })}\n\n`,
+            );
+            setTimeout(writeNextChunk, 20);
+            return;
+          }
+
+          resolveEmptyWindow();
+          void finalResponseAllowed.then(() => {
+            if (res.destroyed) {
+              return;
+            }
+            res.write(
+              `data: ${JSON.stringify(makeCompletionsChunk({ role: "assistant", content: "OK" }))}\n\n`,
+            );
+            res.write(`data: ${JSON.stringify(makeCompletionsChunk({}, "stop"))}\n\n`);
+            res.end("data: [DONE]\n\n");
+          });
+        };
+
+        writeNextChunk();
+      });
+    });
+
+    try {
+      await new Promise<void>((resolve, reject) => {
+        server.once("error", reject);
+        server.listen(0, "127.0.0.1", () => {
+          server.off("error", reject);
+          resolve();
+        });
+      });
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("Missing loopback server address");
+      }
+      const model = makeCompletionsModel({
+        id: "empty-progress-model",
+        provider: "compatible-proxy",
+        baseUrl: `http://127.0.0.1:${address.port}/v1`,
+        reasoning: false,
+      });
+      const runStartedAt = Date.now();
+      markDiagnosticRunProgress({
+        runId,
+        sessionId: runId,
+        reason: "model_call:started",
+      });
+      const stream = streamWithIdleTimeout(
+        createOpenAICompletionsTransportStreamFn(),
+        idleTimeoutMs,
+        undefined,
+        { runId },
+      )(
+        model,
+        {
+          messages: [{ role: "user", content: "Reply OK", timestamp: Date.now() }],
+        } as never,
+        { apiKey: "test-key", signal: streamAbortController.signal } as never,
+      );
+
+      let text = "";
+      const streamCollection = (async () => {
+        for await (const event of stream as AsyncIterable<{ type: string; delta?: string }>) {
+          if (event.type === "text_delta") {
+            text += event.delta ?? "";
+          }
+        }
+      })();
+      collectStream = streamCollection;
+      const streamFinishedBeforeEmptyWindow = streamCollection.then(() => {
+        throw new Error("stream completed before the empty heartbeat window ended");
+      });
+
+      await Promise.race([requestStarted, streamFinishedBeforeEmptyWindow]);
+      await Promise.race([emptyWindowReached, streamFinishedBeforeEmptyWindow]);
+      // Keep HTTP and watchdog timers real; control only the age read so load
+      // does not decide whether this assertion crosses the idle threshold.
+      const duringEmptyActivity = (() => {
+        const dateSpy = vi.spyOn(Date, "now").mockReturnValue(runStartedAt + idleTimeoutMs + 50);
+        try {
+          return getDiagnosticSessionActivitySnapshot({ sessionId: runId });
+        } finally {
+          dateSpy.mockRestore();
+        }
+      })();
+      expect(duringEmptyActivity.lastProgressReason).toBe("model_call:started");
+      expect(duringEmptyActivity.lastProgressAgeMs).toBeGreaterThan(idleTimeoutMs);
+
+      resolveFinalResponse();
+      await streamCollection;
+      expect(text).toBe("OK");
+      expect(getDiagnosticSessionActivitySnapshot({ sessionId: runId }).lastProgressReason).toBe(
+        "model_call:stream_progress",
+      );
+    } finally {
+      resolveFinalResponse();
+      streamAbortController.abort();
+      if (server.listening) {
+        await new Promise<void>((resolve, reject) => {
+          server.close((error) => (error ? reject(error) : resolve()));
+        });
+      }
+      await collectStream?.catch(() => undefined);
+    }
+  });
 });

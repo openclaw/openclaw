@@ -40,10 +40,12 @@ import {
 } from "./openai-completions-dsml.js";
 import { getCompat } from "./openai-transport-params.js";
 import {
+  hasOpenAICompletionsModelProgress,
   isOpenAICompletionsThinkingEnabled,
   parseOpenAICompletionsUsage,
   readOpenAICompletionsContentDeltas,
   readOpenAICompletionsReasoningBatch,
+  trackOpenAICompletionsReasoningUsage,
   type MutableAssistantOutput,
   type OpenAICompletionsContentDelta as CompletionsReasoningDelta,
   type OpenAICompletionsTextSource,
@@ -406,15 +408,28 @@ export async function processCompletionsStream(
     hint: "The provider may be stalled while parsing the tool payload; retry with a smaller tool surface or enable OPENCLAW_DEBUG_MODEL_PAYLOAD=tools to inspect exposed tools.",
   });
   const events = directMode ? guardedStream : iterateModelStream(guardedStream, options?.signal);
+  let maxReasoningTokens: number | undefined;
   for await (const rawChunk of events) {
     throwIfModelStreamAborted(options?.signal);
     chunkPushedEvent = false;
     if (!rawChunk || typeof rawChunk !== "object") {
       continue;
     }
-    // Hidden reasoning is still provider progress; keep the idle watchdog alive without exposing it.
-    notifyLlmRequestActivity(options?.signal);
     const chunk = rawChunk as OpenAICompatibleChatCompletionChunk;
+    const choice = Array.isArray(chunk.choices) ? chunk.choices[0] : undefined;
+    const reasoningUsage = trackOpenAICompletionsReasoningUsage(
+      chunk.usage ?? choice?.usage,
+      maxReasoningTokens,
+    );
+    maxReasoningTokens = reasoningUsage.maxTokens;
+    // Keep transport liveness alive for every provider chunk, but distinguish
+    // heartbeat-only choices:[] frames from actual model output for diagnostics. An
+    // advancing usage-only reasoning counter is also model progress, even when the
+    // provider hides the reasoning text and sends no choice delta.
+    notifyLlmRequestActivity(
+      options?.signal,
+      hasOpenAICompletionsModelProgress(chunk) || reasoningUsage.hasProgress,
+    );
     output.responseId ||= chunk.id;
     // Retain the provider-returned model when it differs from the requested id so
     // routed/alias responses are not misattributed, matching the direct provider
@@ -422,16 +437,13 @@ export async function processCompletionsStream(
     if (typeof chunk.model === "string" && chunk.model.length > 0 && chunk.model !== model.id) {
       output.responseModel ||= chunk.model;
     }
-    let hasReasoningUsageActivity = false;
     if (chunk.usage) {
       output.usage = parseOpenAICompletionsUsage(chunk.usage, model, {
         includeReasoningTokens: !directMode,
       });
-      hasReasoningUsageActivity = hasOpenAICompletionsReasoningUsageActivity(chunk.usage);
     }
-    const choice = Array.isArray(chunk.choices) ? chunk.choices[0] : undefined;
     if (!choice) {
-      emitReasoningUsageActivity(hasReasoningUsageActivity);
+      emitReasoningUsageActivity(reasoningUsage.hasProgress);
       continue;
     }
     const choiceUsage = choice.usage;
@@ -439,7 +451,6 @@ export async function processCompletionsStream(
       output.usage = parseOpenAICompletionsUsage(choiceUsage, model, {
         includeReasoningTokens: !directMode,
       });
-      hasReasoningUsageActivity = hasOpenAICompletionsReasoningUsageActivity(choiceUsage);
     }
     if (choice.finish_reason) {
       const finishReasonResult = mapOpenAIStopReason(choice.finish_reason, {
@@ -453,7 +464,7 @@ export async function processCompletionsStream(
     }
     const rawChoiceDelta = choice.delta ?? choice.message;
     if (!rawChoiceDelta) {
-      emitReasoningUsageActivity(hasReasoningUsageActivity);
+      emitReasoningUsageActivity(reasoningUsage.hasProgress);
       continue;
     }
     for (const normalizedDelta of normalizeToolCallDeltas(rawChoiceDelta, choice.finish_reason)) {
@@ -596,7 +607,7 @@ export async function processCompletionsStream(
       encryptedReasoning.consumeDetails(deltaFields.reasoning_details);
     }
     flushPendingPostToolCallDeltas();
-    emitReasoningUsageActivity(hasReasoningUsageActivity);
+    emitReasoningUsageActivity(reasoningUsage.hasProgress);
   }
   // The SDK can end an aborted SSE iterator normally; cancellation must win
   // before buffered terminal markers can promote provisional tool calls.
@@ -662,13 +673,4 @@ export function shouldEmitOpenAICompletionsReasoning(
     return false;
   }
   return true;
-}
-
-function hasOpenAICompletionsReasoningUsageActivity(
-  rawUsage: NonNullable<ChatCompletionChunk["usage"]>,
-) {
-  const reasoningTokens = rawUsage.completion_tokens_details?.reasoning_tokens;
-  return (
-    typeof reasoningTokens === "number" && Number.isFinite(reasoningTokens) && reasoningTokens > 0
-  );
 }
