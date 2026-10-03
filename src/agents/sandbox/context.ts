@@ -36,7 +36,7 @@ import { readRegisteredSandboxRuntimeIds } from "./registry.js";
 import { resolveSandboxRuntimeStatus } from "./runtime-status.js";
 import { assertSshSandboxSecretOwnerAvailable } from "./secret-owner.js";
 import { resolveSandboxWorkspaceLayoutPaths } from "./shared.js";
-import { captureSandboxStateOwner } from "./state-owner.js";
+import { captureSandboxStateOwner, SandboxStateOwnerRequiredError } from "./state-owner.js";
 import type { SandboxContext, SandboxWorkspaceInfo } from "./types.js";
 import { ensureSandboxWorkspace } from "./workspace.js";
 
@@ -120,6 +120,7 @@ async function ensureSandboxWorkspaceLayout(
       workspaceDir: localWorkspace?.workspaceDir ?? params.workspaceDir,
     });
 
+  params.assertCurrent?.();
   if (cfg.workspaceAccess !== "rw") {
     await ensureSandboxWorkspace(
       sandboxWorkspaceDir,
@@ -381,8 +382,9 @@ async function resolveProvisionedSandboxContext(
     backendId: resolvedCfg.backend,
     scopeKey,
   });
-  const provisionBackend = () =>
-    createSandboxBackend(
+  const provisionBackend = () => {
+    params.assertCurrent?.();
+    return createSandboxBackend(
       {
         sessionKey: rawSessionKey,
         scopeKey,
@@ -391,9 +393,9 @@ async function resolveProvisionedSandboxContext(
         ...(localWorkspace
           ? {
               workspaceSource: "managed-worktree" as const,
-              assertRuntimeCurrent: localWorkspace.assertCurrent,
             }
           : {}),
+        assertRuntimeCurrent: localWorkspace?.assertCurrent ?? params.assertCurrent,
         agentWorkspaceDir,
         skillsWorkspaceDir,
         readOnlyResourceMounts,
@@ -405,6 +407,7 @@ async function resolveProvisionedSandboxContext(
       readAdmittedRunOperatorAuthority(params.admittedRunContext),
       githubIdentity,
     );
+  };
 
   const backend = localWorkspace
     ? await localWorkspace.provision(provisionBackend)
@@ -516,6 +519,9 @@ export async function resolveSandboxContext(
     assertStateOwner();
     return context;
   } catch (error) {
+    if (error instanceof SandboxStateOwnerRequiredError) {
+      throw error;
+    }
     throw toSandboxProvisioningError(error, resolved.cfg.backend);
   }
 }

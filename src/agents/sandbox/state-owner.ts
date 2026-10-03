@@ -3,7 +3,7 @@ import { readActiveGatewayLockIdentity } from "../../infra/gateway-lock.js";
 import { captureGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 
-class SandboxStateOwnerRequiredError extends Error {
+export class SandboxStateOwnerRequiredError extends Error {
   readonly code = "GATEWAY_STATE_OWNER_REQUIRED";
 
   constructor(cause?: unknown) {

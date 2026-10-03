@@ -405,6 +405,9 @@ Catalog list publishers use `createSessionCatalogSourceActorProjector({ pluginId
     then retry offline.
 
     Calls hosted by the current Gateway or embedded owner stay in-process.
+    Preparation rechecks captured custody before workspace setup and backend
+    provisioning. Losing that custody rejects with `GATEWAY_STATE_OWNER_REQUIRED`;
+    built-in container backends also retain the check across provisioning awaits.
     Standalone SDK callers also stay local when no live owner exists. Preparation
     does not acquire a temporary lock or forward permission callbacks over RPC;
     it does not prevent another owner from starting after offline admission.
