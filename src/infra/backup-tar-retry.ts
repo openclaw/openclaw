@@ -13,23 +13,24 @@ export async function writeTarArchiveWithRetry<T>(params: {
   sleepMs?: (ms: number) => Promise<void>;
 }): Promise<T> {
   const sleepFn = params.sleepMs ?? sleep;
-  let lastErr: unknown;
-  let attempts = 0;
-  for (let attempt = 1; attempt <= BACKUP_TAR_MAX_ATTEMPTS; attempt += 1) {
-    attempts = attempt;
+  for (let attempt = 1; ; attempt += 1) {
     const attemptTempArchivePath =
       attempt === 1 ? params.tempArchivePath : `${params.tempArchivePath}.retry-${attempt}`;
     try {
       return await params.runTar(attemptTempArchivePath);
     } catch (err) {
-      lastErr = err;
+      const offendingPath = (err as NodeJS.ErrnoException | undefined)?.path;
       if (!hasErrnoCode(err, "EOF") || attempt === BACKUP_TAR_MAX_ATTEMPTS) {
-        break;
+        const final = err instanceof Error ? err : new Error(String(err));
+        const attemptSuffix = `after ${attempt} attempt${attempt === 1 ? "" : "s"}`;
+        const suffix = offendingPath
+          ? ` (last offending path: ${offendingPath}, ${attemptSuffix})`
+          : ` (${attemptSuffix})`;
+        throw new Error(`Backup archive write failed: ${final.message}${suffix}`, { cause: final });
       }
       // The writer owns checked cleanup inside the private staging directory.
       // A fresh path keeps retries independent when a changed entry is preserved.
       const backoff = BACKUP_TAR_BACKOFF_MS[attempt - 1] ?? 0;
-      const offendingPath = (err as NodeJS.ErrnoException).path;
       params.log?.(
         `Backup archiver hit a live-write race${
           offendingPath ? ` on ${offendingPath}` : ""
@@ -38,11 +39,4 @@ export async function writeTarArchiveWithRetry<T>(params: {
       await sleepFn(backoff);
     }
   }
-  const final = lastErr instanceof Error ? lastErr : new Error(String(lastErr));
-  const offendingPath = (lastErr as NodeJS.ErrnoException | undefined)?.path;
-  const attemptSuffix = `after ${attempts} attempt${attempts === 1 ? "" : "s"}`;
-  const suffix = offendingPath
-    ? ` (last offending path: ${offendingPath}, ${attemptSuffix})`
-    : ` (${attemptSuffix})`;
-  throw new Error(`Backup archive write failed: ${final.message}${suffix}`, { cause: final });
 }

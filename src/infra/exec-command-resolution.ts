@@ -301,14 +301,12 @@ function matchesExecutableBasenamePattern(
   if (hasPathSelector(resolution.rawExecutable)) {
     return false;
   }
-  const candidates = new Set<string>();
-  if (resolution.executableName) {
-    candidates.add(resolution.executableName);
-  }
-  if (resolution.resolvedPath) {
-    candidates.add(path.basename(resolution.resolvedPath));
-  }
-  return [...candidates].some((candidate) => matchesExecAllowlistPattern(pattern, candidate));
+  return Boolean(
+    (resolution.executableName &&
+      matchesExecAllowlistPattern(pattern, resolution.executableName)) ||
+    (resolution.resolvedPath &&
+      matchesExecAllowlistPattern(pattern, path.basename(resolution.resolvedPath))),
+  );
 }
 
 export function matchAllowlist(
@@ -334,9 +332,6 @@ export function matchAllowlist(
     return null;
   }
   const trustPath = resolution.resolvedRealPath?.trim() || resolution.resolvedPath;
-  if (!trustPath) {
-    return null;
-  }
   let pathOnlyMatch: ExecAllowlistEntry | null = null;
   let cwdBoundHash: string | undefined;
   for (const entry of entries) {
@@ -384,19 +379,7 @@ export function matchAllowlist(
 
 type ExecArgvToken =
   | {
-      kind: "empty";
-      raw: string;
-    }
-  | {
-      kind: "terminator";
-      raw: string;
-    }
-  | {
-      kind: "stdin";
-      raw: string;
-    }
-  | {
-      kind: "positional";
+      kind: "empty" | "terminator" | "stdin" | "positional";
       raw: string;
     }
   | {
