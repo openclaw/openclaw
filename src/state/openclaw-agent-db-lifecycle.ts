@@ -15,6 +15,7 @@ import {
   deferSqlitePostCommitPublication,
   hasSqlitePostCommitScope,
 } from "../infra/sqlite-post-commit.js";
+import { runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
 import { createSqliteTerminalOpenLatch } from "../infra/sqlite-terminal-open-latch.js";
 import {
   registerSqliteCacheExitClose,
@@ -659,7 +660,11 @@ export function inspectOpenClawAgentDatabaseOwner(
     const resolvedPath = path.resolve(pathname);
     const opened = cache.databases.get(resolvedPath);
     if (opened?.db.isOpen && !cache.failures.has(resolvedPath)) {
-      assertSupportedAgentSchemaVersion(opened.db, pathname);
+      runSqliteReadOperationSync(
+        opened.db,
+        () => assertSupportedAgentSchemaVersion(opened.db, pathname),
+        "fresh",
+      );
       refreshAgentDatabaseIdleTimer(opened);
       return { status: "owned", agentId: opened.agentId };
     }

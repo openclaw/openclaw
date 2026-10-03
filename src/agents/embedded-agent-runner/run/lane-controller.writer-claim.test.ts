@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { observeHostDataSql } from "../../../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   loadSessionEntry,
   replaceSessionEntry,
@@ -199,16 +200,31 @@ describe("embedded run durable writer admission", () => {
     } as InternalSessionEntry);
     const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
 
-    await claimAgentSessionWriter({
-      agentId: "main",
-      prompt: "next turn",
-      runId: "run-next",
-      sessionId,
-      sessionKey,
-      sessionTarget: { agentId: "main", sessionId, sessionKey, storePath: fixture.storePath() },
-      timeoutMs: 30_000,
-      workspaceDir: "/tmp",
-    });
+    // Cold admission registers its native lease; observe the warmed claim mutation separately.
+    expect(
+      loadSessionEntry({ agentId: "main", sessionKey, storePath: fixture.storePath() }),
+    ).toMatchObject({ activeWriterRunId: "completed-run" });
+    const sql = observeHostDataSql();
+    try {
+      await claimAgentSessionWriter({
+        agentId: "main",
+        prompt: "next turn",
+        runId: "run-next",
+        sessionId,
+        sessionKey,
+        sessionTarget: { agentId: "main", sessionId, sessionKey, storePath: fixture.storePath() },
+        timeoutMs: 30_000,
+        workspaceDir: "/tmp",
+      });
+      // The admission snapshot still reads on the host; the claim transaction must not.
+      expect(
+        sql.queries.filter((query) =>
+          /\b(?:BEGIN|COMMIT|ROLLBACK|INSERT|UPDATE|DELETE)\b/i.test(query),
+        ),
+      ).toEqual([]);
+    } finally {
+      sql.restore();
+    }
 
     expect(warn).not.toHaveBeenCalled();
     expect(
@@ -331,7 +347,7 @@ describe("embedded run durable writer admission", () => {
         lifecycleEvents.push(event);
       }
     });
-    vi.spyOn(sessionAccessor, "updateSessionEntry").mockRejectedValueOnce(
+    vi.spyOn(sessionAccessor, "patchSessionEntryCore").mockRejectedValueOnce(
       new Error("replacement claim conflict"),
     );
     let params: RunEmbeddedAgentParams & { sessionFile: string } = {
