@@ -54,7 +54,6 @@ export type MatrixVerificationSummary = {
   updatedAt: string;
 };
 
-type MatrixVerificationSummaryListener = (summary: MatrixVerificationSummary) => void;
 type MatrixVerificationOwnerTrustCallback = (deviceId: string) => Promise<void>;
 
 type MatrixShowSasCallbacks = {
@@ -155,11 +154,11 @@ export class MatrixVerificationManager {
   private verificationSessionCounter = 0;
   private readonly trackedVerificationRequests = new WeakSet<object>();
   private readonly trackedVerificationVerifiers = new WeakSet<object>();
-  private readonly summaryListeners = new Set<MatrixVerificationSummaryListener>();
 
   constructor(
     private readonly opts: {
       trustOwnDeviceAfterSas?: MatrixVerificationOwnerTrustCallback;
+      onSummaryChanged?: (summary: MatrixVerificationSummary) => void;
     } = {},
   ) {}
 
@@ -237,9 +236,7 @@ export class MatrixVerificationManager {
 
   private emitVerificationSummary(session: MatrixVerificationSession): void {
     const summary = this.buildVerificationSummary(session);
-    for (const listener of this.summaryListeners) {
-      listener(summary);
-    }
+    this.opts.onSummaryChanged?.(summary);
   }
 
   private touchVerificationSession(session: MatrixVerificationSession): void {
@@ -506,13 +503,6 @@ export class MatrixVerificationManager {
       return;
     }
     await this.opts.trustOwnDeviceAfterSas(deviceId);
-  }
-
-  onSummaryChanged(listener: MatrixVerificationSummaryListener): () => void {
-    this.summaryListeners.add(listener);
-    return () => {
-      this.summaryListeners.delete(listener);
-    };
   }
 
   trackVerificationRequest(request: MatrixVerificationRequestLike): MatrixVerificationSummary {

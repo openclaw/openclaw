@@ -1,4 +1,3 @@
-import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { inspectMattermostAccount, listMattermostAccountIds } from "./accounts.js";
 import {
@@ -35,7 +34,7 @@ function buildClients(params: MattermostDirectoryParams): MattermostClient[] {
     const client = createMattermostClient({
       baseUrl: account.baseUrl,
       botToken: account.botToken,
-      allowPrivateNetwork: isPrivateNetworkOptInEnabled(account.config),
+      allowPrivateNetwork: account.config.network?.dangerouslyAllowPrivateNetwork === true,
     });
     if (!seen.has(client.token)) {
       seen.add(client.token);

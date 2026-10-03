@@ -639,6 +639,7 @@ export async function admitChatSend(
   const retainedWork = createChatSendWorkAdmission({
     admission: acquiredGatewayWorkAdmission,
     releaseCallerAuthority,
+    releaseGatewayRootContinuation,
     logGateway: context.logGateway,
   });
   // Prepared inbound media has no transcript reference until the user turn
@@ -650,7 +651,6 @@ export async function admitChatSend(
   const cleanupAdmittedRun: typeof activeRunAbort.cleanup = () => {
     activeRunAbort.cleanup();
     retainedWork.release();
-    releaseGatewayRootContinuation();
     discardAbandonedPreparedMedia?.();
     discardAbandonedPreparedMedia = undefined;
   };

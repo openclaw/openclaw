@@ -88,6 +88,7 @@ import type {
 import { registerPluginServiceReloadTests } from "./config-reload.services.test-support.js";
 import {
   closeTestConfigReloaders,
+  createConfigReloadTestClock,
   createReloaderHarness,
   createWriteReloaderHarness,
   flushReload,
@@ -96,6 +97,7 @@ import {
   getOnlyRestartCall,
   makeGatewayPortConfig,
   makeSnapshot,
+  makeWrite,
   makeZeroDebounceHookSnapshot,
   makeZeroDebounceHookWrite,
   prepareConfigReloadTest,
@@ -140,20 +142,6 @@ beforeEach((context) => {
   configAuditMocks.readLatestSnapshot.mockReset().mockReturnValue(null);
   configAuditMocks.upsertSnapshot.mockReset();
 });
-
-function makeWrite(
-  config: OpenClawConfig,
-  hash: string,
-  overrides: Partial<ConfigWriteNotification> = {},
-): ConfigWriteNotification {
-  return {
-    ...makeZeroDebounceHookWrite(hash),
-    sourceConfig: config,
-    runtimeConfig: config,
-    snapshot: makeSnapshot({ config, hash }),
-    ...overrides,
-  };
-}
 
 describe("diffConfigPaths", () => {
   it("does not report unchanged arrays of objects as changed", () => {
@@ -2068,6 +2056,7 @@ describe("startGatewayConfigReloader", () => {
   it.each(["baseline-only", "invalid", "missing", "restart"] as const)(
     "applies the committed runtime owner before a superseding %s candidate",
     async (kind) => {
+      const { clock, scheduler } = createConfigReloadTestClock();
       const initialConfig = {
         gateway: { reload: {}, terminal: { enabled: true } },
         agents: { defaults: { sandbox: { mode: "off" as const } } },
@@ -2092,6 +2081,7 @@ describe("startGatewayConfigReloader", () => {
       const harness = createReloaderHarness(
         vi.fn(async () => (rejected ? rejectedSnapshot : persistedSnapshot)),
         {
+          scheduler,
           initialConfig,
           initialCompareConfig: initialConfig,
           onHotReload: async (plan, config, ownership) => {
@@ -2147,7 +2137,9 @@ describe("startGatewayConfigReloader", () => {
       };
       await harness.reloader.ready;
       emitWrite(appliedConfig, "runtime-a", 1);
-      await flushReload(harness.reloader);
+      // The committed owner settles in the next pass after its superseding observation.
+      await clock.advanceBy(0);
+      await clock.advanceBy(0);
       if (rejected) {
         expect(harness.onConfigApplied).toHaveBeenCalledOnce();
       } else {
@@ -2821,6 +2813,7 @@ describe("startGatewayConfigReloader", () => {
   it.each(["supersession", "acceptance failure"])(
     "settles masked source publication after %s",
     async (failure) => {
+      const { clock, scheduler } = createConfigReloadTestClock();
       const initialConfig = {
         gateway: { reload: {} },
         logging: { level: "info" as const },
@@ -2837,6 +2830,7 @@ describe("startGatewayConfigReloader", () => {
       const harness = createReloaderHarness(
         vi.fn(async () => makeSnapshot({ config: initialConfig, hash: "superseding-write" })),
         {
+          scheduler,
           initialConfig,
           onConfigAccepted: async (_nextConfig, _ownership, _sourceConfig, acceptance) => {
             await acceptance.publishSource?.();
@@ -2875,7 +2869,9 @@ describe("startGatewayConfigReloader", () => {
           },
         }),
       );
-      await flushReload(harness.reloader);
+      // Join the rolled-back publication, then the replacement it queued.
+      await clock.advanceBy(0);
+      await clock.advanceBy(0);
 
       expect(harness.onEffectiveConfigUnchanged).toHaveBeenCalledTimes(2);
       expect(harness.onEffectiveConfigUnchanged.mock.calls.map((call) => call[2])).toEqual([

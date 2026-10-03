@@ -6,7 +6,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { AsyncWorkScope, getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { notifyListeners } from "../shared/listeners.js";
+import { notifyListeners, registerListener } from "../shared/listeners.js";
 
 type GatewaySuspendAdmissionPhase = GatewaySuspension["phase"];
 
@@ -248,10 +248,7 @@ export function getGatewaySuspendAdmissionPhase(): GatewaySuspendAdmissionPhase 
 export function onGatewaySuspendAdmissionChange(
   listener: (phase: GatewaySuspendAdmissionPhase) => void,
 ): () => void {
-  GATEWAY_WORK_ADMISSION_STATE.suspendListeners.add(listener);
-  return () => {
-    GATEWAY_WORK_ADMISSION_STATE.suspendListeners.delete(listener);
-  };
+  return registerListener(GATEWAY_WORK_ADMISSION_STATE.suspendListeners, listener);
 }
 
 function notifyGatewaySuspendAdmission(): void {

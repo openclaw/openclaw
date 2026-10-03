@@ -1,3 +1,5 @@
+import { registerListener } from "../../../src/shared/listeners.js";
+
 export type ChatInputRegion = "page" | "dock";
 
 class ChatInputOwner {
@@ -19,8 +21,7 @@ class ChatInputOwner {
   }
 
   subscribe(listener: () => void): () => void {
-    this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
+    return registerListener(this.listeners, listener);
   }
 }
 

@@ -9,7 +9,7 @@ import { Button, StringSelectMenu, parseCustomId } from "./components.js";
 import { DiscordError } from "./rest.js";
 import { attachRestMock, createInternalTestClient } from "./test-builders.test-support.js";
 
-type AnyListener = Parameters<Client["registerListener"]>[0];
+type AnyListener = Client["listeners"][number];
 
 afterEach(() => {
   vi.restoreAllMocks();

@@ -7,29 +7,53 @@ import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contra
 import { readSessionTranscriptBoundedActiveContextCore } from "./session-accessor.sqlite-active-context.js";
 import { readExactSessionEntryRow } from "./session-accessor.sqlite-entry-read.js";
 import { readCurrentProjectionSnapshot } from "./session-accessor.sqlite-projection-read.js";
-import { loadTranscriptReadSnapshotSync } from "./session-accessor.sqlite-read.js";
+import {
+  loadTranscriptReadSnapshotSync,
+  readTranscriptExportSnapshotReadOnlySync,
+} from "./session-accessor.sqlite-read.js";
 import { readTranscriptStatsFromDatabase } from "./session-accessor.sqlite-transcript-stats.js";
 import {
   prepareSessionHistoryReadOperation,
   type SessionHistoryReadOperationRequest,
 } from "./session-history-read-operation.worker.js";
 import type {
-  IncognitoHistoryOperations,
-  IncognitoHistoryTarget,
-} from "./session-incognito-history-contract.js";
+  IncognitoSessionFacts,
+  IncognitoSessionOperations,
+} from "./session-incognito-contract.js";
+import type { IncognitoHistoryOperations } from "./session-incognito-history-contract.js";
 import { SessionTranscriptProjectionUnavailableError } from "./session-transcript-projection-error.js";
-import { runWithSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
+import {
+  runWithSessionTranscriptReadFence,
+  SessionTranscriptReadFenceError,
+} from "./session-transcript-read-fence.js";
 
 type Command = SqliteWorkerCommand<IncognitoHistoryOperations>;
+
+type PreparedHistoryRead<Key extends Command["type"]> = {
+  type: Key;
+  read(facts: IncognitoSessionFacts[]): IncognitoSessionOperations[Key]["output"];
+};
+
+function prepareHistoryRead<Key extends Command["type"]>(
+  type: Key,
+  read: () => IncognitoHistoryOperations[Key]["output"],
+): PreparedHistoryRead<Key>;
+function prepareHistoryRead(
+  type: Command["type"],
+  read: () => IncognitoHistoryOperations[Command["type"]]["output"],
+) {
+  return {
+    type,
+    read: (facts: IncognitoSessionFacts[]) => ({ value: read(), facts }),
+  };
+}
 
 /** Reuse durable reader kernels on the actor's admitted connection, never its sentinel opener. */
 export function createIncognitoHistoryWorker(
   database: OpenClawAgentDatabase,
   env: NodeJS.ProcessEnv,
 ) {
-  let prepared:
-    | (() => IncognitoHistoryOperations[keyof IncognitoHistoryOperations]["output"])
-    | undefined;
+  let prepared: PreparedHistoryRead<Command["type"]> | undefined;
   const prepare = async (command: Command) => {
     const { sessionKey, sessionId, admission } = command.input;
     const target = {
@@ -49,7 +73,7 @@ export function createIncognitoHistoryWorker(
     const physical = { agentId: database.agentId, path: database.path };
     const selection = historySelection(command);
     if (selection) {
-      prepared = () =>
+      prepared = prepareHistoryRead(command.type, () =>
         runWithSessionTranscriptReadFence(admission, () => {
           const snapshot = readCurrentProjectionSnapshot(database, resolvedScope, (projection) =>
             selectSessionTranscriptProjection(projection, selection, sessionKey),
@@ -58,7 +82,8 @@ export function createIncognitoHistoryWorker(
             throw new SessionTranscriptProjectionUnavailableError(sessionId);
           }
           return snapshot.value;
-        });
+        }),
+      );
       return;
     }
     let request: SessionHistoryReadOperationRequest;
@@ -132,7 +157,7 @@ export function createIncognitoHistoryWorker(
         break;
       case "session.history.hydrate": {
         const { limits, maxEventBytes } = command.input;
-        prepared = () =>
+        prepared = prepareHistoryRead(command.type, () =>
           runWithSessionTranscriptReadFence(admission, () =>
             limits
               ? {
@@ -153,20 +178,88 @@ export function createIncognitoHistoryWorker(
                     },
                   ),
                 },
-          );
+          ),
+        );
         return;
       }
       case "session.history.stats":
-        prepared = () => readTranscriptStatsFromDatabase(database, sessionId);
+        prepared = prepareHistoryRead(command.type, () =>
+          readTranscriptStatsFromDatabase(database, sessionId),
+        );
         return;
+      case "session.history.memory-entry": {
+        const { projectSessionEntryRecord } =
+          await import("../../../packages/memory-host-sdk/src/host/session-entry-projection.js");
+        prepared = prepareHistoryRead(command.type, () =>
+          runWithSessionTranscriptReadFence(admission, () => {
+            const snapshot = readTranscriptExportSnapshotReadOnlySync(target, {
+              projectEvent: projectSessionEntryRecord,
+            });
+            if (!snapshot) {
+              throw new Error("Incognito actor transcript snapshot is unavailable");
+            }
+            return snapshot;
+          }),
+        );
+        return;
+      }
+      case "session.history.memory-reset-recall": {
+        const { readSessionResetRecallCutoffInProcess } =
+          await import("../../../packages/memory-host-sdk/src/host/session-reset-recall-read.js");
+        prepared = prepareHistoryRead(command.type, () =>
+          runWithSessionTranscriptReadFence(admission, () =>
+            readSessionResetRecallCutoffInProcess(target),
+          ),
+        );
+        return;
+      }
+      case "session.history.native-context":
+      case "session.history.native-context-current": {
+        const {
+          readSessionTranscriptContextMessages,
+          validateSessionTranscriptContextAdmission,
+          validateSessionTranscriptContextVersion,
+        } = await import("./session-accessor.sqlite-model-context.js");
+        prepared = prepareHistoryRead(command.type, () =>
+          runWithSessionTranscriptReadFence(admission, () => {
+            try {
+              if (command.type === "session.history.native-context-current") {
+                if (admission) {
+                  validateSessionTranscriptContextAdmission(target, admission);
+                } else {
+                  validateSessionTranscriptContextVersion(target, command.input.version);
+                }
+                return { ok: true, value: undefined };
+              }
+              const value = readSessionTranscriptContextMessages(
+                target,
+                (messages, header, version) => ({
+                  messages: [...messages],
+                  header,
+                  version,
+                }),
+              );
+              return { ok: true, value };
+            } catch (error) {
+              if (error instanceof SessionTranscriptReadFenceError) {
+                return { ok: false, message: error.message };
+              }
+              throw error;
+            }
+          }),
+        );
+        return;
+      }
       default:
         throw new Error("Unsupported incognito history operation");
     }
-    prepared = await prepareSessionHistoryReadOperation(request, database);
+    const read = await prepareSessionHistoryReadOperation(request, database);
+    prepared = prepareHistoryRead(command.type, read);
   };
   return {
     prepare,
-    execute(target: IncognitoHistoryTarget) {
+    execute(command: Command, facts: IncognitoSessionFacts[]) {
+      const target = command.input;
       const entry = readExactSessionEntryRow(database, target.sessionKey)?.entry;
       if (
         !entry ||
@@ -175,11 +268,11 @@ export function createIncognitoHistoryWorker(
       ) {
         throw new Error("Incognito history session generation is no longer current");
       }
-      if (!prepared) {
+      if (!prepared || prepared.type !== command.type) {
         throw new Error("Incognito history read was not prepared");
       }
       try {
-        return prepared();
+        return prepared.read(facts);
       } finally {
         prepared = undefined;
       }

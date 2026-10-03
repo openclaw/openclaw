@@ -1,4 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { notifyListeners, registerListener } from "../../../src/shared/listeners.js";
 import type { AgentsListResult } from "../api/types.ts";
 import { fnv1aUtf16 } from "../lib/fnv1a.ts";
 import type { SessionGroupSettings } from "../lib/sessions/custom-groups.ts";
@@ -18,8 +19,7 @@ const retirementListeners = new Set<(change: BootRecordChange) => void>();
 export function subscribeBootRecordChanges(
   listener: (change: BootRecordChange) => void,
 ): () => void {
-  retirementListeners.add(listener);
-  return () => retirementListeners.delete(listener);
+  return registerListener(retirementListeners, listener);
 }
 
 export type BootRecord = {
@@ -37,13 +37,9 @@ export type BootRecord = {
 };
 
 function notifyBootRecordChange(change: BootRecordChange): void {
-  for (const listener of retirementListeners) {
-    try {
-      listener(change);
-    } catch (error) {
-      console.error("[boot-record] observer failed", error);
-    }
-  }
+  notifyListeners(retirementListeners, change, (error) =>
+    console.error("[boot-record] observer failed", error),
+  );
 }
 
 export type BootRecordOwner =

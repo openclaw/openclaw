@@ -239,9 +239,18 @@ export async function loadAgentReactionOperations() {
 }
 
 export async function loadAgentPendingInputOperations() {
+  const pending = await import("../config/sessions/session-pending-input-operations.kernel.js");
   const kernel = await import("../config/sessions/session-pending-input-withdrawal.worker.js");
   const history = await import("../config/sessions/session-pending-input-history-reconcile.js");
   return {
+    "session.pendingInputs.read": (
+      input: Parameters<typeof pending.readPendingInputStage>[1],
+      { open },
+    ) => pending.readPendingInputStage(open(), input),
+    "session.pendingInputs.mutate": (
+      input: Parameters<typeof pending.mutatePendingInput>[0],
+      context,
+    ) => pending.mutatePendingInput(input, context, deferSqliteWorkerCommitReceipt),
     "session.pendingInputs.interruptHistory": (
       input: Parameters<typeof history.interruptPendingInputHistoryInDatabase>[2],
       { open, options, admit },
