@@ -8,6 +8,7 @@ import {
   type BoundSubagentRunRecord,
 } from "./subagent-registry.store.kernel.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { copySubagentRunRuntimeOwner } from "./subagent-run-generation.js";
 
 function writeSubagentRunValues(
   values: readonly BoundSubagentRunRecord[],
@@ -76,6 +77,13 @@ export function persistRegistryFixture(
     saveSubagentRegistryToSqlite(runs);
   }
   const events: Array<() => void> = [];
-  publishSubagentRunsAfterAtomicStore(runs, runIds, events);
+  const published = new Map(runs);
+  for (const id of runIds ?? runs.keys()) {
+    const entry = runs.get(id);
+    if (entry) {
+      published.set(id, copySubagentRunRuntimeOwner(entry, structuredClone(entry)));
+    }
+  }
+  publishSubagentRunsAfterAtomicStore(published, runIds, events);
   events.forEach((publish) => publish());
 }
