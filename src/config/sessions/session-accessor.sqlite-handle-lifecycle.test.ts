@@ -217,12 +217,14 @@ describe("SQLite session handle lifecycle", () => {
   );
 
   it("commits a turn after its async predicate loses the cached handle", async () => {
+    const database = openOpenClawAgentDatabase({ agentId: "main", path: databasePath });
     const result = await persistSessionTranscriptTurn(scope, {
       messages: [
         {
           message: { role: "user", content: "append after close" },
           shouldAppend: async () => {
-            expect(closeOpenClawAgentDatabaseByPath(databasePath)).toBe(true);
+            closeCachedOpenClawAgentDatabase(database);
+            expect(database.db.isOpen).toBe(false);
             return true;
           },
         },

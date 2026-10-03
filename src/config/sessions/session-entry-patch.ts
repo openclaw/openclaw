@@ -1,4 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { throwSqliteLifecycleErrors } from "../../infra/sqlite-lifecycle-errors.js";
 import {
   SqliteWorkerError,
   hasSqliteWorkerOutcomeUnknown,
@@ -159,15 +160,26 @@ export async function runSessionEntryWorkerOperation<
           let publicationError: unknown;
           let publishedResult: { value: Result } | undefined;
           try {
-            if (committed) {
-              params.onAcknowledged?.(committed);
+            const failures: unknown[] = [];
+            try {
+              if (committed) {
+                params.onAcknowledged?.(committed);
+              }
+            } catch (error) {
+              failures.push(error);
             }
-            const published = publication?.settle(committed?.publication, unknown);
-            if (committed) {
-              publishedResult = {
-                value: await params.onCommitted(committed, published, identity.physicalIdentity),
-              };
+            // Confirmed writes must release publication custody even if acknowledgment work fails.
+            try {
+              const published = publication?.settle(committed?.publication, unknown);
+              if (committed) {
+                publishedResult = {
+                  value: await params.onCommitted(committed, published, identity.physicalIdentity),
+                };
+              }
+            } catch (error) {
+              failures.push(error);
             }
+            throwSqliteLifecycleErrors(failures, "Session commit publication failed");
           } catch (error) {
             if (!unknown) {
               throw error;

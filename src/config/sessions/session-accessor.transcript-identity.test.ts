@@ -1,5 +1,7 @@
+import { renameSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db-lifecycle.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import {
   loadSessionEntryReadOnly,
@@ -11,6 +13,7 @@ import { applySessionEntryCanonicalReplacements } from "./session-accessor.sqlit
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import * as transcriptTargets from "./session-accessor.transcript-target.js";
 import { setCanonicalSqliteSessionMainKey } from "./session-canonical-key.js";
+import { historyLane } from "./session-transcript-worker-resources.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
 
 describe("transcript turn physical identity", () => {
@@ -38,6 +41,55 @@ describe("transcript turn physical identity", () => {
   };
 
   afterEach(() => vi.restoreAllMocks());
+
+  function pauseTargetSelection() {
+    const selected = createDeferred();
+    const resume = createDeferred();
+    const resolve = transcriptTargets.resolveSessionTranscriptRuntimeTarget;
+    vi.spyOn(transcriptTargets, "resolveSessionTranscriptRuntimeTarget").mockImplementationOnce(
+      async (...args) => {
+        const target = await resolve(...args);
+        selected.resolve();
+        await resume.promise;
+        return target;
+      },
+    );
+    return { selected: selected.promise, resume: resume.resolve };
+  }
+
+  it.runIf(process.platform !== "win32").each([undefined, "agent-qualified"] as const)(
+    "rejects a replaced database before returning a runtime target (%s)",
+    async (keyFormat) => {
+      replaceSessionEntrySync(scope(), { sessionId, updatedAt: 1 });
+      const original = database();
+      const replacement = openOpenClawAgentDatabase({
+        agentId: "main",
+        path: `${original.path}.replacement`,
+      });
+      await closeOpenClawAgentDatabaseByPathAsync(original.path, original.agentId);
+      await closeOpenClawAgentDatabaseByPathAsync(replacement.path, replacement.agentId);
+      const run = historyLane.pool.run.bind(historyLane.pool);
+      let replaced = false;
+      vi.spyOn(historyLane.pool, "run").mockImplementation(async (...args) => {
+        const reply = await run(...args);
+        if (
+          reply.ok &&
+          typeof reply.value !== "boolean" &&
+          !Array.isArray(reply.value) &&
+          reply.value.kind === "session-runtime-target"
+        ) {
+          renameSync(original.path, `${original.path}.retired`);
+          renameSync(replacement.path, original.path);
+          replaced = true;
+        }
+        return reply;
+      });
+      await expect(
+        transcriptTargets.resolveSessionTranscriptRuntimeTarget(scope(), undefined, { keyFormat }),
+      ).rejects.toThrow(/identity/i);
+      expect(replaced).toBe(true);
+    },
+  );
 
   it("writes the qualified unknown identity into its existing raw physical row", async () => {
     const raw = "unknown";
@@ -106,18 +158,27 @@ describe("transcript turn physical identity", () => {
         updatedAt: 1,
         lifecycleRevision: row.revision,
       });
+      const selection = pauseTargetSelection();
       const pending = persistSessionTranscriptTurn(scope("agent:main:global"), {
         expectedSessionId: sessionId,
         expectedLifecycleRevision: row.expected,
         messages: [{ message }],
         updateMode: "none",
       });
-      // The public async entry has selected its row but has not crossed writer admission.
-      replaceSessionEntrySync(scope(), {
-        sessionId,
-        updatedAt: 2,
-        lifecycleRevision: "successor",
-      });
+      try {
+        await awaitGateBeforeSettlement(
+          selection.selected,
+          pending,
+          "Transcript turn settled before selecting its target",
+        );
+        replaceSessionEntrySync(scope(), {
+          sessionId,
+          updatedAt: 2,
+          lifecycleRevision: "successor",
+        });
+      } finally {
+        selection.resume();
+      }
       await expect(pending).resolves.toMatchObject({
         rejectedReason: "session-rebound",
         appendedCount: 0,
@@ -129,11 +190,21 @@ describe("transcript turn physical identity", () => {
 
   it("does not downgrade a deleted persisted selection into a transcript-only append", async () => {
     replaceSessionEntrySync(scope(), { sessionId, updatedAt: 1 });
+    const selection = pauseTargetSelection();
     const pending = persistSessionTranscriptTurn(scope("agent:main:global"), {
       messages: [{ message }],
       updateMode: "none",
     });
-    retainWindowOnly();
+    try {
+      await awaitGateBeforeSettlement(
+        selection.selected,
+        pending,
+        "Transcript turn settled before selecting its target",
+      );
+      retainWindowOnly();
+    } finally {
+      selection.resume();
+    }
     await expect(pending).resolves.toMatchObject({
       rejectedReason: "session-rebound",
       appendedCount: 0,
@@ -149,16 +220,26 @@ describe("transcript turn physical identity", () => {
       if (change === "disappears") {
         replaceSessionEntrySync(scope(), entry);
       }
+      const selection = pauseTargetSelection();
       const pending = persistSessionTranscriptTurn(scope(), {
         expectedSessionId: sessionId,
         initialSessionEntry: entry,
         messages: [{ message }],
         updateMode: "none",
       });
-      if (change === "appears") {
-        replaceSessionEntrySync(scope(), entry);
-      } else {
-        retainWindowOnly();
+      try {
+        await awaitGateBeforeSettlement(
+          selection.selected,
+          pending,
+          "Transcript turn settled before selecting its target",
+        );
+        if (change === "appears") {
+          replaceSessionEntrySync(scope(), entry);
+        } else {
+          retainWindowOnly();
+        }
+      } finally {
+        selection.resume();
       }
       await expect(pending).resolves.toMatchObject({
         rejectedReason: "session-rebound",
@@ -171,23 +252,17 @@ describe("transcript turn physical identity", () => {
   it("does not retarget the selected spelling even when SID and revision survive a move", async () => {
     const entry = { sessionId, updatedAt: 1, lifecycleRevision: "unchanged" };
     replaceSessionEntrySync(scope(), entry);
-    const selected = createDeferred();
-    const resume = createDeferred();
-    const resolve = transcriptTargets.resolveSessionTranscriptRuntimeTarget;
-    vi.spyOn(transcriptTargets, "resolveSessionTranscriptRuntimeTarget").mockImplementationOnce(
-      async (...args) => {
-        const target = await resolve(...args);
-        selected.resolve();
-        await resume.promise;
-        return target;
-      },
-    );
+    const selection = pauseTargetSelection();
     const outcome = persist("agent:main:global").then(
       (result) => ({ result }),
       (error: unknown) => ({ error }),
     );
     try {
-      await selected.promise;
+      await awaitGateBeforeSettlement(
+        selection.selected,
+        outcome,
+        "Transcript turn settled before selecting its target",
+      );
       await applySessionEntryCanonicalReplacements({
         agentId: "main",
         storePath: fixture.storePath(),
@@ -201,7 +276,7 @@ describe("transcript turn physical identity", () => {
         }),
       });
     } finally {
-      resume.resolve();
+      selection.resume();
       await outcome;
     }
     expect(await outcome).toMatchObject({

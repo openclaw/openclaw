@@ -325,36 +325,9 @@ serveOwnedWorkerTasks(
         const { readSessionDiagnosticText } = await import("./session-entry-read.worker.js");
         return readSessionDiagnosticText(request);
       }
-      if (request.kind === "session-entry-read") {
-        const { loadSessionEntryReadOnlyResultInScope } =
-          await import("./session-accessor.sqlite-exact-read.js");
-        let source: SessionTranscriptWorkerValues["session-entry-read"]["source"];
-        const read = loadSessionEntryReadOnlyResultInScope(
-          {
-            ...request.scope,
-            env: cloneEnvWithPlatformSemantics(request.scope.env ?? process.env),
-          },
-          request.continuation,
-          (readSource) => {
-            if (typeof readSource.databaseIdentity !== "string") {
-              throw new Error("Private session entry requires its process-held owner");
-            }
-            source = { ...readSource, databaseIdentity: readSource.databaseIdentity };
-          },
-        );
-        if (!read.ok) {
-          const readError = encodeSessionTranscriptWorkerError(read.error);
-          if (!readError || readError.kind === "fence") {
-            throw read.error;
-          }
-          return {
-            kind: "session-entry-read" as const,
-            entry: undefined,
-            source,
-            readError,
-          };
-        }
-        return { kind: "session-entry-read" as const, entry: read.value, source };
+      if (request.kind === "session-entry-read" || request.kind === "session-runtime-target") {
+        const { readSessionEntryWorkerRequest } = await import("./session-entry-read.worker.js");
+        return readSessionEntryWorkerRequest(request);
       }
       if (request.kind === "session-entry-list") {
         const { listSessionEntriesReadOnly } =

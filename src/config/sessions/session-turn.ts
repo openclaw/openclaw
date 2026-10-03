@@ -13,7 +13,10 @@ import {
 } from "./session-accessor.sqlite-scope.js";
 import { installCommittedTranscriptMessageSequences } from "./session-accessor.sqlite-transcript-sequences.js";
 import { redactTranscriptMessageForStorage } from "./session-accessor.sqlite-transcript-store.js";
-import type { SessionTranscriptTurnMessageAppend } from "./session-accessor.types.js";
+import type {
+  SessionTranscriptTurnMessageAppend,
+  SessionTranscriptTurnWriteContext,
+} from "./session-accessor.types.js";
 import { runSessionEntryWorkerOperation } from "./session-entry-patch.js";
 import { completeSessionTranscriptCommit } from "./session-transcript-commit-completion.js";
 import { startSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
@@ -28,6 +31,7 @@ import type {
 export async function appendSessionTurnInWorker(
   requested: ResolvedTranscriptScope,
   options: SqliteSessionTurnOptions,
+  context: SessionTranscriptTurnWriteContext,
 ): Promise<SqliteExpectedSessionTranscriptTurnResult> {
   const scope = captureLifecycleDatabaseScope(requested);
   const database = { ...toDatabaseOptions(scope), path: scope.path };
@@ -150,15 +154,7 @@ export async function appendSessionTurnInWorker(
         }
         const accepted: SessionTranscriptTurnMessageAppend[] = [];
         for (const append of messages) {
-          if (
-            !append.shouldAppend ||
-            (await append.shouldAppend({
-              agentId: scope.agentId,
-              sessionId: scope.sessionId,
-              sessionKey: scope.sessionKey,
-              storePath: scope.path,
-            }))
-          ) {
+          if (!append.shouldAppend || (await append.shouldAppend(context))) {
             accepted.push(append);
           }
           assertCurrent();

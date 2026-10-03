@@ -14,10 +14,7 @@ import { tryResolveLegacyCompatibilityAgentId } from "../legacy.default-agent-ow
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { resolveSessionStorePathCore } from "./paths.js";
 import { updateSessionEntry } from "./session-accessor.entry-mutation.js";
-import {
-  loadSessionEntryReadOnly,
-  resolveSessionEntryFromStore,
-} from "./session-accessor.entry.js";
+import { resolveSessionEntryFromStore } from "./session-accessor.entry.js";
 import {
   readCommittedTranscriptMessageSequence,
   rememberCommittedTranscriptMessageSequences,
@@ -423,13 +420,8 @@ async function resolveTranscriptTurnTarget(
   const resolved = scope.sessionStore
     ? resolveSessionEntryFromStore({ store: scope.sessionStore, sessionKey: target.sessionKey })
     : undefined;
-  // Mirrors can represent either durable Gateway state or memory-only internal
-  // sessions. Classify that provenance without materializing SQLite state.
-  const persistedEntry = loadSessionEntryReadOnly({
-    ...scope,
-    ...target,
-  });
-  const sessionEntry = persistedEntry ?? resolved?.existing ?? scope.sessionEntry;
+  // The target reader selected persisted identity; only the legacy mirror path needs this entry.
+  const sessionEntry = resolved?.existing ?? scope.sessionEntry;
   return {
     ...target,
     sessionEntry,

@@ -139,15 +139,10 @@ describe("typed Goal operation persistence", () => {
     let turn: Awaited<ReturnType<typeof admit>>;
     try {
       turn = await admit();
-      // The target lookup remains host-side; the compound transaction executes in the worker.
-      expect.soft(reads.counts.sessionNodeSelects).toBeLessThanOrEqual(1);
-      expect.soft(reads.rowCounts.sessionNodeSelects).toBeGreaterThan(0);
-      expect
-        .soft(reads.textBytes.sessionNodeSelects)
-        .toBeGreaterThan(Buffer.byteLength(skillsSnapshot.prompt));
-      expect
-        .soft(reads.textBytes.sessionNodeSelects)
-        .toBeLessThan(1.5 * Buffer.byteLength(skillsSnapshot.prompt));
+      // Target selection and the compound transaction both execute in workers.
+      expect.soft(reads.counts.sessionNodeSelects).toBe(0);
+      expect.soft(reads.rowCounts.sessionNodeSelects).toBe(0);
+      expect.soft(reads.textBytes.sessionNodeSelects).toBe(0);
       expect(identityMutation).not.toHaveBeenCalled();
     } finally {
       reads.restore();

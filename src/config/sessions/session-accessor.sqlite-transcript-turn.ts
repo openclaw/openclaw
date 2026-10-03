@@ -46,6 +46,12 @@ export async function appendExpectedSessionTranscriptTurn(
     ...scope,
     sessionId: options.expectedSessionId,
   });
+  const context: SessionTranscriptTurnWriteContext = {
+    agentId: resolved.agentId,
+    sessionId: options.expectedSessionId,
+    sessionKey: resolved.sessionKey,
+    ...(scope.storePath ? { storePath: scope.storePath } : {}),
+  };
   const keys = new Set<string>();
   // Dependent callbacks retain the released native callback ordering and veto contract.
   const independentPreparation =
@@ -69,7 +75,7 @@ export async function appendExpectedSessionTranscriptTurn(
         !message.beforeFreshMessageCommit,
     )
   ) {
-    return appendSessionTurnInWorker(resolved, options);
+    return appendSessionTurnInWorker(resolved, options, context);
   }
   if (options.acceptedResultGuard || options.sessionTurnMutation?.routingPredicate) {
     await prepareSessionTurnPredicates();
@@ -150,12 +156,7 @@ export async function appendExpectedSessionTranscriptTurn(
         return sqliteSessionTranscriptTurnRebound(preparedEntry, options.sessionFile);
       }
       const messages = await selectAppendableSqliteTranscriptTurnMessages(
-        {
-          agentId: resolved.agentId,
-          sessionId: options.expectedSessionId,
-          sessionKey: resolved.sessionKey,
-          ...(scope.storePath ? { storePath: scope.storePath } : {}),
-        },
+        context,
         options.messages,
       );
       let result: SqliteExpectedSessionTranscriptTurnResult = sqliteSessionTranscriptTurnRebound(
