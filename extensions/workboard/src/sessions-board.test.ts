@@ -337,7 +337,7 @@ describe("Sessions board rules and live facts", () => {
       expect(await store.getSessionsBoard("custom")).toEqual(custom);
       expect(
         (await store.getSessionsBoard("custom-order")).sessions.columns.map((column) => column.id),
-      ).toEqual([...oldOrder].reverse());
+      ).toEqual(oldOrder.toReversed());
       expect(logger.info).toHaveBeenCalledExactlyOnceWith(
         "Sessions board updated default rules on 2 boards.",
       );
