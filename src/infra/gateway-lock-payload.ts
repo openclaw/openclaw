@@ -10,29 +10,31 @@ import { managedHandoffBootSchema } from "./update-managed-service-handoff-schem
 export const GATEWAY_OWNER_HEARTBEAT_MS = 15_000;
 export const GATEWAY_OWNER_HEARTBEAT_STALE_MS = 90_000;
 
-const ProcessNamespaceSchema = z.object({
-  host: z.string().min(1),
-  boot: managedHandoffBootSchema,
-  pidNamespace: z.string().min(1),
-});
+const [uuidBoot, windowsBoot, freebsdBoot] = managedHandoffBootSchema.options;
+const host = z.string().min(1);
+const ProcessNamespaceSchema = z.discriminatedUnion("platform", [
+  uuidBoot.extend({ host, platform: z.literal("linux"), pidNsInode: z.string().min(1) }),
+  uuidBoot.extend({ host, platform: z.literal("darwin") }),
+  windowsBoot.extend({ host }),
+  freebsdBoot.extend({ host }),
+]);
 type ProcessNamespace = z.infer<typeof ProcessNamespaceSchema>;
 let processNamespace: ProcessNamespace | undefined;
 
 /** Successful identity is stable for this process; unavailable probes remain retryable. */
 export function readGatewayLockProcessNamespace(): ProcessNamespace | null {
-  if (processNamespace?.boot.platform === process.platform) {
+  if (processNamespace?.platform === process.platform) {
     return processNamespace;
   }
   try {
     const boot = createManagedHandoffBootIdentityReader(process.env)();
-    processNamespace = {
+    processNamespace = ProcessNamespaceSchema.parse({
       host: os.hostname(),
-      boot,
-      pidNamespace:
-        process.platform === "linux"
-          ? fs.statSync("/proc/self/ns/pid", { bigint: true }).ino.toString()
-          : "host",
-    };
+      ...boot,
+      ...(boot.platform === "linux"
+        ? { pidNsInode: fs.statSync("/proc/self/ns/pid", { bigint: true }).ino.toString() }
+        : {}),
+    });
     return processNamespace;
   } catch {
     return null;
@@ -53,24 +55,31 @@ export function classifyGatewayLockProcessNamespace(
   value: unknown,
   lockPath?: string,
 ): "same" | "dead" | "unknown" {
-  // Evidence                                      Classification
-  // Legacy, or same boot + PID namespace           existing PID rules
-  // Different boot on the same host               dead
-  // Foreign/unreadable namespace, mtime >90s old    dead
-  // Foreign/unreadable namespace, otherwise        unknown; preserve
+  // Legacy/non-Linux, or matching Linux boot + namespace: existing PID rules.
+  // Different boot on the same host: dead.
+  // Foreign/unreadable Linux namespace: mtime >90s old => dead; otherwise unknown/preserve.
   if (value === undefined) {
     return "same";
   }
-  const recorded = ProcessNamespaceSchema.safeParse(value);
+  const owner = ProcessNamespaceSchema.safeParse(value).data;
   const current = readGatewayLockProcessNamespace();
-  if (recorded.success && current && recorded.data.boot.platform === current.boot.platform) {
-    if (recorded.data.boot.identity !== current.boot.identity) {
-      if (recorded.data.host === current.host) {
-        return "dead";
-      }
-    } else if (recorded.data.pidNamespace === current.pidNamespace) {
+  if (owner && current) {
+    if (
+      owner.platform === current.platform &&
+      owner.host === current.host &&
+      owner.identity !== current.identity
+    ) {
+      return "dead";
+    }
+    if (
+      owner.platform !== "linux" ||
+      current.platform !== "linux" ||
+      (owner.identity === current.identity && owner.pidNsInode === current.pidNsInode)
+    ) {
       return "same";
     }
+  } else if (process.platform !== "linux") {
+    return "same";
   }
   try {
     return lockPath && Date.now() - fs.statSync(lockPath).mtimeMs > GATEWAY_OWNER_HEARTBEAT_STALE_MS
@@ -96,7 +105,7 @@ const LockPayloadSchema = z.object({
     .optional(),
   stateDir: z.string().optional(),
   startTime: z.number().optional(),
-  // Null records an unavailable probe; only absent fields use legacy PID recovery.
+  // Null records an unavailable identity; absent fields retain legacy PID recovery.
   processNamespace: ProcessNamespaceSchema.nullable().optional(),
 });
 

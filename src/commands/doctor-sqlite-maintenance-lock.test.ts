@@ -1,3 +1,4 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -16,6 +17,7 @@ import {
 import { assertStateDatabaseAccessAllowed } from "../infra/gateway-state-owner.js";
 import { prepareGithubIssue } from "../infra/github-issue.js";
 import { createSessionSqliteMigrationRun } from "../infra/session-sqlite-migration-manifest.js";
+import * as bootReader from "../infra/update-managed-service-handoff-boot.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
 import {
   claimSessionSqliteMigrationGithubIssue,
@@ -79,6 +81,27 @@ async function seedGatewayOwner(
   return { ownerLockPath, databasePath, raw };
 }
 
+function mockLinuxNamespace(root: string) {
+  if (process.platform !== "linux") {
+    vi.spyOn(bootReader, "createManagedHandoffBootIdentityReader").mockReturnValue(() => ({
+      platform: "linux",
+      identity: "01234567-89ab-cdef-0123-456789abcdef",
+    }));
+    const stat = fsSync.statSync.bind(fsSync);
+    vi.spyOn(fsSync, "statSync").mockImplementation((file, options) =>
+      stat(file === "/proc/self/ns/pid" ? root : file, options),
+    );
+    const platform = vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    readGatewayLockProcessNamespace();
+    platform.mockRestore();
+  }
+  const namespace = readGatewayLockProcessNamespace();
+  if (!namespace || !("pidNsInode" in namespace)) {
+    throw new Error("Expected Linux process namespace identity");
+  }
+  return namespace;
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
 });
@@ -131,15 +154,15 @@ describe("doctor SQLite maintenance lock", () => {
     "preserves foreign-namespace ownership with %s before destructive maintenance",
     async (observation) => {
       const fixture = await createLockFixture();
-      const namespace = readGatewayLockProcessNamespace();
       const startedAt = getFileLockProcessStartTime(process.pid);
-      if (!namespace || startedAt === null) {
+      if (startedAt === null) {
         throw new Error("expected the local process namespace and start identity");
       }
+      const namespace = mockLinuxNamespace(fixture.env.OPENCLAW_STATE_DIR);
       const owner = await seedGatewayOwner(fixture, {
         pid: observation === "absent PID" ? 2_147_483_647 : process.pid,
         startTime: startedAt + 1,
-        processNamespace: { ...namespace, pidNamespace: `${namespace.pidNamespace}-foreign` },
+        processNamespace: { ...namespace, pidNsInode: `${namespace.pidNsInode}-foreign` },
       });
       const marker = path.join(fixture.env.OPENCLAW_STATE_DIR, "maintenance-marker");
       await fs.writeFile(marker, "Gateway data\n");
@@ -172,23 +195,17 @@ describe("doctor SQLite maintenance lock", () => {
     "recovers a stopped Gateway's %s ownership through maintenance",
     async (kind) => {
       const fixture = await createLockFixture();
-      const namespace = readGatewayLockProcessNamespace();
-      if (!namespace) {
-        throw new Error("expected the local process namespace");
-      }
+      const namespace = mockLinuxNamespace(fixture.env.OPENCLAW_STATE_DIR);
       const processNamespace =
         kind === "previous boot"
           ? {
               ...namespace,
-              boot: {
-                ...namespace.boot,
-                identity: namespace.boot.identity.replace(/[0-9a-f]/i, (digit) =>
-                  digit === "1" ? "2" : "1",
-                ),
-              },
+              identity: namespace.identity.replace(/[0-9a-f]/i, (digit) =>
+                digit === "1" ? "2" : "1",
+              ),
             }
           : kind === "expired heartbeat"
-            ? { ...namespace, pidNamespace: `${namespace.pidNamespace}-foreign` }
+            ? { ...namespace, pidNsInode: `${namespace.pidNsInode}-foreign` }
             : namespace;
       const owner = await seedGatewayOwner(fixture, {
         pid: kind === "previous boot" ? process.pid : 2_147_483_647,

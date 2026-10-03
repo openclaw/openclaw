@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, renameSync } from "node:fs";
 import { hostname } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -225,6 +225,39 @@ describe("Gateway owner lease", () => {
       const contender = tryAcquireGatewayStateOwner(resolveOpenClawStateSqlitePath(env));
       contender?.release();
       expect(contender).toBeNull();
+    } finally {
+      coordinator?.release();
+    }
+  });
+
+  it("releases lost physical custody without changing its recorded lease", async () => {
+    const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-gateway-owner-lost-") };
+    const acquire = stateOwners.acquireGatewayStateOwner;
+    let coordinator: ReturnType<typeof acquire> | undefined;
+    vi.spyOn(stateOwners, "acquireGatewayStateOwner").mockImplementation((params) => {
+      coordinator = acquire(params);
+      return coordinator;
+    });
+    const lock = await acquireGatewayLock({
+      env,
+      allowInTests: true,
+      port: 19483,
+      listenerMode: "foreground",
+    });
+    if (!lock) {
+      throw new Error("Expected gateway lock");
+    }
+    try {
+      const recorded = readGatewayOwnerLease({ env });
+      expect(recorded).toBeDefined();
+      renameSync(lock.lockPath, `${lock.lockPath}.retired`);
+      expect(() => lock.assertCurrent()).toThrow("no longer current");
+      await lock.release();
+      expect(existsSync(lock.stateLockPath)).toBe(false);
+      expect(readGatewayOwnerLease({ env })?.owner).toBe(recorded?.owner);
+      const successor = tryAcquireGatewayStateOwner(resolveOpenClawStateSqlitePath(env));
+      expect(successor).not.toBeNull();
+      successor?.release();
     } finally {
       coordinator?.release();
     }
