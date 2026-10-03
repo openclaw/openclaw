@@ -53,6 +53,7 @@ const enMcpApp = {
       sandboxUnavailable: "MCP App sandbox unavailable",
       initializationTimedOut: "MCP App initialization timed out",
       requestFailed: "Request failed",
+      unsupportedResources: "This app returned an unsupported resource list",
       invalidSandboxUrl: "MCP App sandbox URL is invalid",
     },
   },

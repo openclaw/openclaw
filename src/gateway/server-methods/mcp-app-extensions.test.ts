@@ -318,6 +318,25 @@ describe("registered MCP App extensions", () => {
       { assertCurrent: expect.any(Function) },
     );
   });
+  it.each([undefined, { items: [{ type: "resource_link", uri: "cad://part" }] }])(
+    "reports unsupported mention output without exposing validation issues (%j)",
+    async (structuredContent) => {
+      mocks.call.mockResolvedValue({
+        content: [{ type: "resource_link", uri: "cad://part", name: "Part" }],
+        structuredContent,
+      });
+      const response = await invoke("mcp.app.mention", { serverName: "demo", query: "part" });
+      expect(response).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({
+          code: "UNAVAILABLE",
+          message: "This app returned an unsupported resource list",
+          details: { code: "MCP_APP_UNSUPPORTED_MENTION_RESULT" },
+        }),
+      );
+    },
+  );
   it("does not return protected data after revocation during the call", async () => {
     mocks.call.mockImplementation(async () => {
       mocks.assert.mockImplementation(() => {

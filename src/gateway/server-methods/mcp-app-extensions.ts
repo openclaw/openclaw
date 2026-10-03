@@ -21,6 +21,8 @@ import { prepareMcpAppHostFile } from "../mcp-app-host-files.js";
 import { callMcpAppToolWithElicitation } from "../mcp-app-operations.js";
 import type { GatewayRequestHandler, GatewayRequestHandlers } from "./types.js";
 
+class UnsupportedMcpMentionResultError extends Error {}
+
 type Prepared = Awaited<ReturnType<typeof prepareMcpAppExtensionRuntime>>;
 const text = z.string().trim().min(1).max(2_048);
 const targetSchema = z.object({ sessionKey: text, agentId: text.optional() });
@@ -191,6 +193,9 @@ function handler<T>(
         errorShape(
           error instanceof z.ZodError ? ErrorCodes.INVALID_REQUEST : ErrorCodes.UNAVAILABLE,
           error instanceof Error ? error.message : String(error),
+          error instanceof UnsupportedMcpMentionResultError
+            ? { details: { code: "MCP_APP_UNSUPPORTED_MENTION_RESULT" } }
+            : undefined,
         ),
       );
     } finally {
@@ -373,7 +378,10 @@ export const mcpAppExtensionHandlers: GatewayRequestHandlers = {
     const resources = z
       .array(ResourceLinkSchema)
       .max(200)
-      .parse(asOptionalRecord(result.structuredContent)?.items);
-    return { resources };
+      .safeParse(asOptionalRecord(result.structuredContent)?.items);
+    if (!resources.success) {
+      throw new UnsupportedMcpMentionResultError("This app returned an unsupported resource list");
+    }
+    return { resources: resources.data };
   }),
 };

@@ -1,4 +1,5 @@
 import { consume } from "@lit/context";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import type {
@@ -81,7 +82,11 @@ export class McpAppResources extends OpenClawLightDomElement {
       }
     } catch (error) {
       if (current()) {
-        this.error = formatUiError(error);
+        this.error =
+          asOptionalRecord(asOptionalRecord(error)?.details)?.code ===
+          "MCP_APP_UNSUPPORTED_MENTION_RESULT"
+            ? t("mcpApp.errors.unsupportedResources")
+            : formatUiError(error);
       }
     } finally {
       if (current()) {
