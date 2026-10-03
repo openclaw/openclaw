@@ -363,6 +363,19 @@ callbacks retain their existing owner. Native-binding settlement and incognito
 activation remain separate cutovers. These changes require no schema, durability,
 retention, configuration, or update migration.
 
+Durable entry deletion can carry prepared Agents API and Codex binding participants
+through the same executing worker. Binding deletion still commits in shared state
+before the agent transaction commits, and can veto that transaction. Confirmed agent
+rollback conditionally restores the actual removed binding without replacing a
+successor. Binding renewal continues during queue waits, drains before transaction
+entry, and stays quiesced through settlement. Separate shared-state and agent receipts
+prevent a binding deletion receipt from publishing a successful session deletion.
+Unknown outcomes block reuse of that native generation and never replay the write.
+Initialization facts and ACP finalizers become eligible only after acknowledged agent
+COMMIT. Opaque released SDK callbacks, incognito, and message-cut transactions retain
+their native routes. The existing cross-database crash window, schemas, retention,
+and update behavior are unchanged; no migration is required.
+
 Channel setup awaits a fresh policy read after the agent-selection prompt.
 Deferred plugin migration rows are read by the shared-state worker, and setup
 rechecks its config owner after the read before using the selected agent. Each

@@ -22,6 +22,13 @@ export function createNativeSessionBindingLeases<TRecord extends NativeSessionBi
     throw new Error(options.errors.atomicUpdatesRequired);
   }
   const context = new AsyncLocalStorage<Map<string, NativeSessionBindingLeaseOwner>>();
+  const unresolved = new Map<string, { error: Error; custody: unknown }>();
+  const assertSettled = (key: string) => {
+    const blocked = unresolved.get(key);
+    if (blocked) {
+      throw blocked.error;
+    }
+  };
 
   // Prepare data outside SQLite; the worker compares the complete observed row
   // and carries this action's authority through transaction and commit admission.
@@ -83,6 +90,7 @@ export function createNativeSessionBindingLeases<TRecord extends NativeSessionBi
   ): Promise<TResult> => {
     const deadline = Date.now() + options.lease.waitMs;
     while (true) {
+      assertSettled(key);
       let busy = false;
       let leaseLost = false;
       let result!: TResult;
@@ -97,6 +105,7 @@ export function createNativeSessionBindingLeases<TRecord extends NativeSessionBi
       const assertOwnerCurrent = () => {
         assertCurrent?.();
         owner?.assertCurrent?.();
+        assertSettled(key);
         if (owner && (owner.phase !== "held" || owner.failure)) {
           throw owner.failure ?? options.errors.lostLease(key);
         }
@@ -169,6 +178,7 @@ export function createNativeSessionBindingLeases<TRecord extends NativeSessionBi
     run: () => Promise<TResult>,
     acquisition: NativeSessionBindingLeaseOptions<TRecord>,
   ): Promise<TResult> => {
+    assertSettled(key);
     acquisition.assertCurrent?.();
     const owned = context.getStore();
     const existing = owned?.get(key);
@@ -194,6 +204,21 @@ export function createNativeSessionBindingLeases<TRecord extends NativeSessionBi
       phase: "held",
       assertCurrent: acquisition.assertCurrent,
       authority: acquisition.authority,
+      renewalPending: () => renewal !== undefined,
+      joinRenewal: async () => {
+        await renewal;
+      },
+      quiesce() {
+        if (renewal || owner.phase !== "held" || owner.failure) {
+          throw owner.failure ?? options.errors.lostLease(key);
+        }
+        owner.phase = "settling";
+      },
+      block(error, custody) {
+        owner.phase = "unknown";
+        owner.failure = error;
+        unresolved.set(key, { error, custody });
+      },
     };
     let renewal: Promise<void> | undefined;
     let heartbeat: ReturnType<typeof setInterval> | undefined;
@@ -221,7 +246,7 @@ export function createNativeSessionBindingLeases<TRecord extends NativeSessionBi
       // Exact-token renewal keeps bounded native requests serialized while a
       // replaced owner remains fenced, even when the request outlives one lease.
       heartbeat = setInterval(() => {
-        if (!renewal) {
+        if (!renewal && owner.phase === "held") {
           renewal = renew(key, owner).finally(() => {
             renewal = undefined;
           });
@@ -238,25 +263,30 @@ export function createNativeSessionBindingLeases<TRecord extends NativeSessionBi
       return result;
     } finally {
       clearInterval(heartbeat);
-      owner.phase = "closed";
+      const unknown = owner.phase === "unknown";
+      if (!unknown) {
+        owner.phase = "closed";
+      }
       // A queued renewal must settle before release reads its final row. Its
       // admission guard also refuses after deletion or owner closure.
       await renewal;
-      try {
-        await update(key, (raw) => {
-          const stored = readRecord(key, raw);
-          if (stored?.lease?.token !== token) {
-            return {};
-          }
-          const { lease: _lease, ...released } = stored;
-          return {
-            next: readRecord(key, released),
-            ttlMs: options.releaseTtlMs(key, stored),
-          };
-        });
-      } catch (error) {
-        // Crashed or unauthorized owners leave their bounded lease to expire.
-        options.onReleaseFailure?.(key, error);
+      if (!unknown) {
+        try {
+          await update(key, (raw) => {
+            const stored = readRecord(key, raw);
+            if (stored?.lease?.token !== token) {
+              return {};
+            }
+            const { lease: _lease, ...released } = stored;
+            return {
+              next: readRecord(key, released),
+              ttlMs: options.releaseTtlMs(key, stored),
+            };
+          });
+        } catch (error) {
+          // Crashed or unauthorized owners leave their bounded lease to expire.
+          options.onReleaseFailure?.(key, error);
+        }
       }
     }
   };
@@ -336,6 +366,10 @@ export function createNativeSessionBindingLeases<TRecord extends NativeSessionBi
     withLease,
     hasLease: (key: string) => context.getStore()?.has(key) === true,
     owner: (key: string) => context.getStore()?.get(key),
+    assertSettled,
+    block(key: string, error: Error, custody: unknown) {
+      unresolved.set(key, { error, custody });
+    },
   };
 }
 
@@ -379,7 +413,11 @@ export type NativeSessionBindingLeaseConfig<TRecord extends NativeSessionBinding
 
 type NativeSessionBindingLeaseOwner = {
   token: string;
-  phase: "held" | "deleted" | "closed";
+  phase: "held" | "settling" | "deleted" | "unknown" | "closed";
+  renewalPending(): boolean;
+  joinRenewal(): Promise<void>;
+  quiesce(): void;
+  block(error: Error, custody: unknown): void;
   failure?: Error;
   assertCurrent?: () => void;
   authority?: NativeSessionBindingAuthority;

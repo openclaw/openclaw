@@ -12,6 +12,7 @@ import {
   type PluginStateSequencedJournalParams,
 } from "./plugin-state-store.journal.js";
 import { isRetainedPluginStateNamespace } from "./plugin-state-store.kernel.js";
+import { bindPluginStateNativeBindingStore } from "./plugin-state-store.native-binding.js";
 import {
   validatePluginStateKeyRange,
   type PluginStateKeyRangeParams,
@@ -150,7 +151,7 @@ function createAsyncKeyedStore<T>(
     sessionEntryCurrent,
   };
 
-  return {
+  const store: PluginStateKeyedStore<T, 2> = {
     observe: async (key) => {
       const observation = await observePluginStateInWorker({
         ...scope,
@@ -337,6 +338,7 @@ function createAsyncKeyedStore<T>(
       await clearPluginStateInWorker(scope);
     },
   };
+  return bindPluginStateNativeBindingStore(store, prepared, assertActive);
 }
 
 function createSyncKeyedStoreForPluginId<T>(
