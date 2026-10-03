@@ -130,15 +130,11 @@ export type ManagedImageAttachmentLimits = {
 
 type ManagedImageAttachmentLimitsConfig = Partial<ManagedImageAttachmentLimits>;
 
-type ParsedMediaDataUrl =
-  | { kind: "not-data-url" }
-  | { kind: "unsupported-data-url" }
-  | {
-      kind: "media-data-url";
-      buffer: Buffer;
-      contentType: string;
-      mediaKind: ManagedMediaKind;
-    };
+type ParsedMediaDataUrl = {
+  buffer: Buffer;
+  contentType: string;
+  mediaKind: ManagedMediaKind;
+};
 
 type ManagedMediaBlock = Record<string, unknown>;
 
@@ -351,10 +347,10 @@ function parseMediaDataUrl(
   source: string,
   label: string,
   imageLimits: ManagedImageAttachmentLimits,
-): ParsedMediaDataUrl {
+): ParsedMediaDataUrl | undefined {
   const trimmed = source.trim();
   if (!trimmed.startsWith("data:")) {
-    return { kind: "not-data-url" };
+    return undefined;
   }
 
   const afterPrefix = trimmed.slice("data:".length);
@@ -380,7 +376,7 @@ function parseMediaDataUrl(
 
   const mediaKind = mediaKindFromMime(contentType);
   if (mediaKind !== "image" && mediaKind !== "audio" && mediaKind !== "video") {
-    return { kind: "unsupported-data-url" };
+    throw new Error("Managed media attachment has an unsupported data URL content type");
   }
 
   const maxBytes = maxBytesForManagedMediaKind(mediaKind, imageLimits);
@@ -394,7 +390,6 @@ function parseMediaDataUrl(
   );
 
   return {
-    kind: "media-data-url",
     buffer: Buffer.from(base64, "base64"),
     contentType,
     mediaKind,
@@ -1130,9 +1125,6 @@ export async function createManagedOutgoingMediaBlocks(params: {
       try {
         params.assertCurrent?.();
         const parsedDataUrl = parseMediaDataUrl(mediaUrl, fallbackLabel, limits);
-        if (parsedDataUrl.kind === "unsupported-data-url") {
-          throw new Error("Managed media attachment has an unsupported data URL content type");
-        }
         if (
           localMediaPath &&
           (hintedKind === "audio" || hintedKind === "video") &&
@@ -1141,56 +1133,50 @@ export async function createManagedOutgoingMediaBlocks(params: {
           throw new Error("Local audio/video media requires an explicitly trusted reply payload");
         }
         let resizeWarning: ManagedMediaBlock | null = null;
-        let savedOriginal =
-          parsedDataUrl.kind === "media-data-url"
-            ? await saveMediaBuffer(
-                parsedDataUrl.buffer,
-                parsedDataUrl.contentType,
-                "outgoing/originals",
-                maxBytesForManagedMediaKind(parsedDataUrl.mediaKind, limits),
-                `generated-${parsedDataUrl.mediaKind}-${index + 1}`,
-              )
-            : await (async () => {
-                if (localMediaPath) {
-                  const localRoots = params.localRoots;
-                  const localMediaOptions =
-                    localRoots === "any"
-                      ? undefined
-                      : {
-                          resolveRoots: async () => {
-                            resolvedLocalRoots ??= await resolveLocalMediaRoots(localRoots);
-                            return resolvedLocalRoots;
-                          },
-                        };
-                  await assertLocalMediaAllowed(localMediaPath, localRoots, localMediaOptions);
-                }
-                // File URLs have already been normalized for display metadata and policy checks.
-                // Pass that path to the store instead of treating URI syntax as a filename.
-                const ingestSource = localMediaPath ?? mediaUrl;
-                const maxBytes = Math.max(
-                  limits.maxBytes,
-                  maxBytesForKind("audio"),
-                  maxBytesForKind("video"),
-                  maxBytesForKind("document"),
-                  MEDIA_MAX_BYTES,
-                );
-                if (hasHttpUrlPrefix(ingestSource)) {
-                  const { saveRemoteMediaForStore } =
-                    await import("../media/store.remote.runtime.js");
-                  return await saveRemoteMediaForStore({
-                    source: ingestSource,
-                    subdir: "outgoing/originals",
-                    maxBytes,
-                    abortSignal: params.abortSignal,
-                  });
-                }
-                return await saveMediaSource(
-                  ingestSource,
-                  undefined,
-                  "outgoing/originals",
+        let savedOriginal = parsedDataUrl
+          ? await saveMediaBuffer(
+              parsedDataUrl.buffer,
+              parsedDataUrl.contentType,
+              "outgoing/originals",
+              maxBytesForManagedMediaKind(parsedDataUrl.mediaKind, limits),
+              `generated-${parsedDataUrl.mediaKind}-${index + 1}`,
+            )
+          : await (async () => {
+              if (localMediaPath) {
+                const localRoots = params.localRoots;
+                const localMediaOptions =
+                  localRoots === "any"
+                    ? undefined
+                    : {
+                        resolveRoots: async () => {
+                          resolvedLocalRoots ??= await resolveLocalMediaRoots(localRoots);
+                          return resolvedLocalRoots;
+                        },
+                      };
+                await assertLocalMediaAllowed(localMediaPath, localRoots, localMediaOptions);
+              }
+              // File URLs have already been normalized for display metadata and policy checks.
+              // Pass that path to the store instead of treating URI syntax as a filename.
+              const ingestSource = localMediaPath ?? mediaUrl;
+              const maxBytes = Math.max(
+                limits.maxBytes,
+                maxBytesForKind("audio"),
+                maxBytesForKind("video"),
+                maxBytesForKind("document"),
+                MEDIA_MAX_BYTES,
+              );
+              if (hasHttpUrlPrefix(ingestSource)) {
+                const { saveRemoteMediaForStore } =
+                  await import("../media/store.remote.runtime.js");
+                return await saveRemoteMediaForStore({
+                  source: ingestSource,
+                  subdir: "outgoing/originals",
                   maxBytes,
-                );
-              })();
+                  abortSignal: params.abortSignal,
+                });
+              }
+              return await saveMediaSource(ingestSource, undefined, "outgoing/originals", maxBytes);
+            })();
         savedOriginalPath = savedOriginal.path;
         let savedOriginalContentType = savedOriginal.contentType ?? item.mimeType;
         if (!savedOriginalContentType) {
@@ -1212,10 +1198,9 @@ export async function createManagedOutgoingMediaBlocks(params: {
           sizeBytes: savedOriginal.size,
         };
         if (mediaKind === "image") {
-          let originalBuffer =
-            parsedDataUrl.kind === "media-data-url"
-              ? parsedDataUrl.buffer
-              : (await readLocalFileSafely({ filePath: savedOriginal.path })).buffer;
+          let originalBuffer = parsedDataUrl
+            ? parsedDataUrl.buffer
+            : (await readLocalFileSafely({ filePath: savedOriginal.path })).buffer;
           assertManagedMediaByteLimit(originalBuffer.byteLength, "image", label, limits.maxBytes);
           let originalDisplayMetadata: { width: number; height: number } | undefined;
           for (let resizeAttempt = 0; ; resizeAttempt += 1) {

@@ -18,27 +18,6 @@ import { ADMIN_SCOPE, authorizeOperatorScopesForRequiredScope } from "./method-s
 import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
 import { loadSessionEntry } from "./session-utils.js";
 
-type SessionKeyPathResolution =
-  | { matched: false }
-  | { matched: true; sessionKey: string }
-  | { error: "invalid-session-key"; matched: true };
-
-function resolveSessionKeyFromPath(pathname: string): SessionKeyPathResolution {
-  const match = pathname.match(/^\/sessions\/([^/]+)\/kill$/);
-  if (!match) {
-    return { matched: false };
-  }
-  try {
-    const decoded = decodeURIComponent(match[1] ?? "").trim();
-    if (!decoded) {
-      return { error: "invalid-session-key", matched: true };
-    }
-    return { matched: true, sessionKey: decoded };
-  } catch {
-    return { error: "invalid-session-key", matched: true };
-  }
-}
-
 export async function handleSessionKillHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,
@@ -46,15 +25,21 @@ export async function handleSessionKillHttpRequest(
 ): Promise<boolean> {
   const cfg = opts.cfg ?? getRuntimeConfig();
   const url = new URL(req.url ?? "/", "http://localhost");
-  const sessionKeyResolution = resolveSessionKeyFromPath(url.pathname);
-  if (!sessionKeyResolution.matched) {
+  const match = url.pathname.match(/^\/sessions\/([^/]+)\/kill$/);
+  if (!match) {
     return false;
   }
-  if ("error" in sessionKeyResolution) {
+  let sessionKey: string;
+  try {
+    sessionKey = decodeURIComponent(match[1] ?? "").trim();
+  } catch {
     sendInvalidRequest(res, "invalid session key");
     return true;
   }
-  const { sessionKey } = sessionKeyResolution;
+  if (!sessionKey) {
+    sendInvalidRequest(res, "invalid session key");
+    return true;
+  }
 
   if (req.method !== "POST") {
     sendMethodNotAllowed(res, "POST");

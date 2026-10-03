@@ -1393,6 +1393,7 @@ src/sessions/session-key-utils.ts
 src/sessions/session-row-changes.ts
 src/sessions/transcript-events.ts
 src/sessions/user-turn-transcript-admission.ts
+src/secrets/store/secret-store-validation-error.ts
 src/shared/assistant-error-format.ts
 src/shared/async-work-scope.ts
 src/shared/avatar-limits.ts

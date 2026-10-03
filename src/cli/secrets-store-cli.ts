@@ -207,9 +207,9 @@ export function registerSecretStoreCli(secrets: Command): void {
         const scope = teamScope(options.scope);
         const storeModule = await import("../secrets/store/secret-store.js");
         const requestedHosts = options.allowHost ?? [];
-        const existingEntry = storeModule
-          .listSecretStoreEntries({ scope })
-          .find((entry) => entry.name === name);
+        const existingEntry = (await storeModule.listSecretStoreEntries({ scope })).find(
+          (entry) => entry.name === name,
+        );
         const kind = options.kind
           ? storeKind(options.kind, name)
           : (existingEntry?.kind ?? storeKind(undefined, name));
@@ -281,7 +281,7 @@ export function registerSecretStoreCli(secrets: Command): void {
           defaultRuntime.log(`Would ${kind === "secret" ? "write" : "set"} ${name} (${kind}).`);
           return;
         }
-        const storedKind = storeModule.writeSecretStoreEntry({
+        const storedKind = await storeModule.writeSecretStoreEntry({
           scope,
           name,
           value,
@@ -311,7 +311,9 @@ export function registerSecretStoreCli(secrets: Command): void {
           const scope = teamScope(options.scope);
           const { listSecretStoreEntries, readSecretStoreValue } =
             await import("../secrets/store/secret-store.js");
-          const metadata = listSecretStoreEntries({ scope }).find((entry) => entry.name === name);
+          const metadata = (await listSecretStoreEntries({ scope })).find(
+            (entry) => entry.name === name,
+          );
           if (!metadata) {
             throw new SecretStoreCliFailure(3, `Secret store entry "${name}" was not found.`);
           }
@@ -366,7 +368,7 @@ export function registerSecretStoreCli(secrets: Command): void {
         const { deleteSecretStoreEntry, purgeExpiredSecretStoreEntries } =
           await import("../secrets/store/secret-store.js");
         for (const name of names) {
-          deleteSecretStoreEntry({ scope, name });
+          await deleteSecretStoreEntry({ scope, name });
         }
         await purgeExpiredSecretStoreEntries();
         defaultRuntime.log(
@@ -399,9 +401,9 @@ export function registerSecretStoreCli(secrets: Command): void {
         }
         const storeModule = await import("../secrets/store/secret-store.js");
         const existingKinds = new Map(
-          storeModule
-            .listSecretStoreEntries({ scope })
-            .map((entry) => [entry.name, entry.kind] as const),
+          (await storeModule.listSecretStoreEntries({ scope })).map(
+            (entry) => [entry.name, entry.kind] as const,
+          ),
         );
         const normalized = entries.map(([name, value]) => {
           assertStoreName(name);
@@ -434,7 +436,7 @@ export function registerSecretStoreCli(secrets: Command): void {
           return;
         }
         await confirmMutation(`Import ${writable.length} team store entries?`, options.yes);
-        storeModule.writeSecretStoreEntries({
+        await storeModule.writeSecretStoreEntries({
           scope,
           entries: writable,
           inheritExistingKind: options.kind === undefined,

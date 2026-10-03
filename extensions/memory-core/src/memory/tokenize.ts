@@ -1,16 +1,22 @@
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const CJK_RE = /[\u3040-\u309f\u30a0-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af\u1100-\u11ff]/;
+const CJK_RUN_RE = new RegExp(`${CJK_RE.source}+`, "g");
 
 // Only adjacent CJK characters form bigrams: "我喜欢hello你好" must not yield "欢你".
 export function tokenize(text: string): Set<string> {
   const lower = normalizeLowercaseStringOrEmpty(text);
-  const ascii = lower.match(/[a-z0-9_]+/g) ?? [];
+  // Keep CJK in its existing bigram/unigram lane; word marks stay attached to a base.
+  const words =
+    lower
+      .replace(CJK_RUN_RE, " ")
+      .normalize("NFC")
+      .match(/[\p{L}\p{N}_][\p{L}\p{M}\p{N}_]*/gu) ?? [];
   if (!CJK_RE.test(lower)) {
-    return new Set(ascii);
+    return new Set(words);
   }
 
-  const tokens = new Set(ascii);
+  const tokens = new Set(words);
   const unigrams: string[] = [];
   let previousCjk: string | undefined;
   for (const char of lower) {
@@ -25,7 +31,7 @@ export function tokenize(text: string): Set<string> {
     }
   }
 
-  // Preserve insertion order: ASCII tokens, then bigrams, then unigrams.
+  // Preserve insertion order: word tokens, then bigrams, then unigrams.
   for (const char of unigrams) {
     tokens.add(char);
   }

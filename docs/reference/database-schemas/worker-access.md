@@ -17,8 +17,9 @@ paths are migration debt, not a pattern to extend. The
 candidate main-thread paths from SQL already executing in workers.
 
 Inventory classifications describe counted operations, not whole-module runtime
-safety. Reviewed mixed modules use named operation paths rather than line numbers;
-unreviewed operations retain their conservative file classification. Trace every
+safety. Reviewed mixed modules use named operation paths, optionally narrowed to
+a variable initializer, rather than line numbers. Initializer exceptions exclude
+nested function bodies; unreviewed sites retain their conservative classification. Trace every
 production caller before adding an operation exception, and update existing
 reviewed overrides instead of shadowing them with worker-module entries. The
 ratchet applies the same classification rules to the base and candidate sources,
@@ -30,6 +31,13 @@ provenance's counted CLI writes do not cover its raw Gateway SQL reads. Shared
 incognito category readers and native approval SDK compatibility retain their
 existing classifications. A metadata reclassification changes neither execution
 nor update behavior.
+
+Placement claim/result mutations and notifying event cursor operations have
+reviewed worker-only entries. The event recorder's `registeredWatcherKeys`
+initializer is classified separately from its native event/head SQL. Native
+creation, compaction, adoption, and child-spawn producers are non-notifying;
+child-spawn cursor seeding remains T1. Placement restart clearing remains T2,
+while synchronous result compatibility readers and transition guards remain T1.
 
 Runtime cache-TTL, bootstrap, prompt-error, and provider replay markers append
 through the existing transcript writer worker. Custom-message appends use the
@@ -591,6 +599,27 @@ authoring mutation guards remain for the next cutover. Schemas, quotas, retentio
 publication security checks, and update behavior are unchanged.
 
 ## Carry facts, publish after commit
+
+Message-tool-only completion records use the canonical per-agent writer. The
+host captures the original store and run facts before waiting; configured-store
+discovery uses the existing reader. First-use schema admission commits separately
+before the outcome insert and bounded prune, with current host grants at each
+transaction and commit. Recording retains the agent writer's FIFO and settles
+before the turn returns. Failures remain best-effort warnings and never replay
+the model or tool action. Process-held incognito side data retains its native
+owner. Schemas, outcome semantics, the 10,000-row bound, and update behavior are
+unchanged.
+
+Sandbox-browser workspace reservations, activity/port upserts, and browser row
+removal use the existing shared-state writer. Exact-generation retirement shares
+that queue and validates the inspected allocation inside its transaction. Each command captures its database
+and input before yielding; the worker rereads the current row and preserves its
+creation and image fields. Removal shares the writer FIFO so an earlier queued
+activity update cannot restore a removed row. Browser allocation awaits the
+reservation, and transaction/commit grants retain the live workspace assertion.
+That assertion still performs the existing synchronous session and worktree
+authority reads; those other owners remain separate migration work. Schemas,
+stored bytes, retention, and update behavior are unchanged.
 
 Workspace snapshots and conditional alias registration, first-writer setup merges,
 and exact expired-state deletion use the shared-state writer. Read-only snapshots
@@ -1433,8 +1462,16 @@ shutdown stops scheduling and joins accepted cleanup. An OpenClaw chat that save
 a key for a config path writes its store entry in the same worker: one
 transaction mints a random entry name, inserts a new row without touching
 existing ones, and admits the write through the requester's live
-authority at transaction and commit. Other secret-store set/delete operations
-remain separate synchronous migration debt.
+authority at transaction and commit. Ordinary settings set, batch import, delete,
+and exact-writer rollback now use that same writer, and metadata listings use the
+existing reader. Store-bound questions retain authority through persistence and
+publish only an acknowledged safe answer. Reset hides their public entries
+immediately while accepted work settles privately. Runtime refresh follows the
+commit; failed refresh never invites replay of a saved answer. The released
+synchronous question SDK methods retain their contracts. Runtime value and exec
+environment reads, hidden GitHub operations, and the CLI allowed-host setter
+remain with their existing owners. Schemas, retention, stored bytes, and update
+behavior are unchanged.
 
 Placement change reporting reads its before/after snapshots in the shared-state
 read worker using the placement store's row codec. It transfers only session

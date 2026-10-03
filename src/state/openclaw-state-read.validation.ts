@@ -50,6 +50,14 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
         Number.isSafeInteger(input.command.input.limit) &&
         (input.command.input.beforeSequence === undefined ||
           Number.isSafeInteger(input.command.input.beforeSequence))) ||
+      (input.command.type === "secrets.metadata" &&
+        isRecord(input.command.input) &&
+        isRecord(input.command.input.scope) &&
+        input.command.input.scope.kind === "team" &&
+        (input.command.input.includeDeleted === undefined ||
+          typeof input.command.input.includeDeleted === "boolean") &&
+        (input.command.input.redactedOnly === undefined ||
+          typeof input.command.input.redactedOnly === "boolean")) ||
       input.command.type === "acpSessions.list" ||
       input.command.type === "backup.runs" ||
       ((input.command.type === "restartSentinel.current" ||

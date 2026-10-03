@@ -24,15 +24,12 @@ export type DispatchGatewayMethodInProcessOptions = {
   privateCompletion?: true;
   settleWakeReplay?: RequesterSettleWakeReplay;
   allowSyntheticModelOverride?: boolean;
-  allowSyntheticCronRunContinuation?: boolean;
   agentToolCaller?: TrustedAgentToolCaller;
   agentRunTracking?: GatewayAgentRunTaskOwner;
   cancelOnDeadline?: boolean;
   disableSyntheticClient?: boolean;
   expectFinal?: boolean;
   forceSyntheticClient?: boolean;
-  internalDeliveryMediaUrls?: string[];
-  internalDeliverySuppressText?: boolean;
   nodeInvokeStream?: GatewayNodeInvokeStream;
   nodeInvokeApprovalSessionKey?: string;
   onAccepted?: (payload: unknown) => void;

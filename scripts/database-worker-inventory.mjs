@@ -217,7 +217,17 @@ const reviewedOperations = new Map([
           "createPlacementTurnClaimOps.updateWorkspaceBaseManifest",
         ],
         evidence:
-          "placement-store.ts:134 overrides native methods; placement-turn-claims.worker.ts:169,225,230 executes them",
+          "placement-store.ts:132 supplies worker mutations; placement-turn-claims.worker.ts:299,355,360 executes release/manifest methods",
+      },
+      {
+        tier: "W",
+        operations: [
+          "createPlacementTurnClaimOps.publishTurnRelease",
+          "createPlacementTurnClaimOps.claimTurnInDatabase",
+          "createPlacementTurnClaimOps.cancelWorkspaceResultAndReleaseTurn",
+        ],
+        evidence:
+          "placement-store.ts:102 selects only native restart/wait/validation; claim/release/cancel mutations run in placement-turn-claims.worker.ts:102,117,191,200,287,355,360",
       },
       {
         tier: "T2",
@@ -251,7 +261,22 @@ const reviewedOperations = new Map([
         tier: "W",
         operations: ["recordStagedWorkerWorkspaceResult"],
         evidence:
-          "Only placement-turn-claims.worker.ts:183 publishes staged results; shared pending-claim and acceptance helpers stay T1",
+          "Only placement-turn-claims.worker.ts:313 publishes staged results; native compatibility readers and pending-result transition guards stay T1",
+      },
+      {
+        tier: "W",
+        operations: [
+          "hasCurrentWorkspaceResultClaim",
+          "clearWorkerWorkspacePendingResult",
+          "hasAcceptedWorkerWorkspacePendingResult",
+          "insertWorkerWorkspacePendingResult",
+          "markWorkerWorkspacePendingResultAccepted",
+          "assertPendingClaim",
+          "createPlacementWorkspaceResultOps.handoffWorkspaceResultRecovery",
+          "createPlacementWorkspaceResultOps.abandonWorkspaceResult",
+        ],
+        evidence:
+          "Mutation factory/helpers run only through placement-turn-claims.worker.ts:102,117,125,132,140,147,157,191,200,278,299,313,326,346; claim read also in placement-read-projection.ts:101 via state-read.worker.ts:666",
       },
     ],
   ],
@@ -327,7 +352,20 @@ const reviewedOperations = new Map([
           "isSessionStateUpstreamCurrentInDatabase",
         ],
         evidence:
-          "session-state-events.worker.ts:146,147 and session-upstream-links.worker.ts:18,25; shared event/cursor/prune helpers stay T1",
+          "session-state-events.worker.ts:146,147 and session-upstream-links.worker.ts:18,25; shared event/prune and child-spawn seed sites stay T1",
+      },
+      {
+        tier: "W",
+        operations: ["readCursor", "readMaterialCursors", "updateMaterialCursor"],
+        evidence:
+          "Watch calls only in session-state-events.worker.ts:40,58,95; event cursor paths gated by NOTIFY_BY_KIND at kernel:367,386; native producers are non-notifying",
+      },
+      {
+        tier: "W",
+        operations: ["recordSessionStateEventInDatabase"],
+        binding: "registeredWatcherKeys",
+        evidence:
+          "Only the registeredWatcherKeys initializer at kernel:354 is notifying-only; worker record at session-state-events.worker.ts:158 / subagent-registry.store.worker.ts:65; other event sites remain T1",
       },
     ],
   ],
@@ -360,6 +398,21 @@ const reviewedOperations = new Map([
         operations: ["updateSecretStoreAllowedHosts"],
         evidence:
           "Only cli/secrets-store-cli.ts:251 mutates allowed hosts; runtime reads and other writes remain T1",
+      },
+    ],
+  ],
+  [
+    "src/secrets/store/secret-store-write.ts",
+    [
+      {
+        tier: "W",
+        operations: [
+          "writeSecretStoreEntriesInDatabase",
+          "rollbackSecretStoreEntryWriteInDatabase",
+          "deleteSecretStoreEntryInDatabase",
+        ],
+        evidence:
+          "Only openclaw-state-worker-runtime.ts calls these ordinary secret mutation kernels",
       },
     ],
   ],
@@ -544,6 +597,7 @@ const workerModules = new Set([
 
   "src/secrets/store/secret-store-config-ref.kernel.ts", // Config-ref writes are called only by the shared-state worker runtime.
   "src/secrets/store/secret-store-expiry.kernel.ts", // Expiry SQL uses shared-state worker dispatch; host captures cutoffs only.
+  "src/secrets/store/secret-store-metadata.kernel.ts", // Metadata listing only runs through stateReadRegistry in the shared-state reader.
 
   "src/sessions/session-upstream-links.kernel.ts", // openclaw-state.worker.ts dispatches sessionUpstream.listWatched; host imports only the codec.
 
@@ -583,10 +637,14 @@ const cliModules = new Map([
   ],
 ]);
 
-function classify(file, operation) {
+function classify(file, operation, binding) {
   const reviewedOperation = reviewedOperations
     .get(file)
-    ?.find((entry) => entry.operations.includes(operation));
+    ?.find(
+      (entry) =>
+        entry.operations.includes(operation) &&
+        (entry.binding === undefined || entry.binding === binding),
+    );
   if (reviewedOperation) {
     return { tier: reviewedOperation.tier, priority: 99, evidence: reviewedOperation.evidence };
   }
@@ -660,8 +718,15 @@ function findCalls(source) {
     }
   }
   const calls = [];
-  function visit(node, parentOperation = "") {
+  function visit(node, parentOperation, parentBinding) {
     let operation = parentOperation;
+    let binding = parentBinding;
+    // Initializer exceptions stop at callbacks; their SQL needs its own caller proof.
+    if (ts.isFunctionLikeDeclaration(node)) {
+      binding = undefined;
+    } else if (ts.isVariableDeclaration(node) && node.initializer) {
+      binding = ts.isIdentifier(node.name) ? node.name.text : undefined;
+    }
     const namedFunction =
       ts.isFunctionDeclaration(node) ||
       ts.isFunctionExpression(node) ||
@@ -685,12 +750,18 @@ function findCalls(source) {
         const { line, character } = source.getLineAndCharacterOfPosition(
           expression.getStart(source),
         );
-        calls.push({ primitive, line: line + 1, column: character + 1, operation });
+        calls.push({
+          primitive,
+          line: line + 1,
+          column: character + 1,
+          operation,
+          ...(binding === undefined ? {} : { binding }),
+        });
       }
     }
-    node.forEachChild((child) => visit(child, operation));
+    node.forEachChild((child) => visit(child, operation, binding));
   }
-  visit(source);
+  visit(source, "");
   return calls;
 }
 
@@ -748,7 +819,7 @@ export function inventory(root = defaultRoot, ref = "", staged = false) {
       const calls = findCalls(sources[index]);
       const groups = new Map();
       for (const call of calls) {
-        const classification = classify(file, call.operation);
+        const classification = classify(file, call.operation, call.binding);
         const group = groups.get(classification.tier) ?? {
           file,
           owner: ownerOf(file),
@@ -796,13 +867,13 @@ function render(rows) {
     "",
     `This snapshot contains **${total.files} non-test files and ${total.calls} call expressions** for the five primitives below. The campaign previously reported 404 files; that is a historical estimate, not a fixed target or a count of call expressions. This inventory follows current source and excludes import-only matches, comments, tests, fixtures, and test support. Its scan scope and exclusions are explicit below.`,
     "",
-    "Regenerate with `pnpm db:worker-inventory:gen`; verify with `pnpm db:worker-inventory:check`. `node scripts/database-worker-inventory.mjs --json` emits every call's primitive, line, column, lexical operation path, file owner, tier, and classification evidence. The script uses the repository's TypeScript parser and `rg`; it does not load application code or open a database.",
+    "Regenerate with `pnpm db:worker-inventory:gen`; verify with `pnpm db:worker-inventory:check`. `node scripts/database-worker-inventory.mjs --json` emits every call's primitive, line, column, lexical operation path, optional variable-initializer binding, file owner, tier, and classification evidence. The script uses the repository's TypeScript parser and `rg`; it does not load application code or open a database.",
     "",
     "## Scope and interpretation",
     "",
     "T1 is request/event/timer exposure, including conservatively retained runtime or mixed kernels whose callers still need tracing. T2 is startup, migration, or a named boot/lock exception candidate. T3 is CLI, Doctor, or developer one-shot code. W marks worker implementations separately: their synchronous SQL is intentional and is not outstanding main-thread debt. A filename-based T2/T3/W classification is an audit lead, not a proof that every caller is safe. Do not move a mixed kernel or a module with ‘worker’ in its name to W without tracing its callers.",
     "",
-    "Reviewed mixed modules classify calls by their named lexical operation path, so unrelated methods remain conservative even when source lines move. Other file tiers retain the broadest applicable counted exposure, including explicit worker/maintenance mixtures. Each file has at most one row per tier; tier file counts overlap, while total files and call expressions are unique. These are not measured runtime call counts. Recheck the operation and all registered callers before changing its classification. Maintenance invoked by Gateway timers remains T1. Prepared results never confer current authority; follow [worker access](/reference/database-schemas/worker-access).",
+    "Reviewed mixed modules classify calls by their named lexical operation path, optionally narrowed to a variable initializer. Initializer exceptions exclude nested function bodies, so unrelated sites remain conservative even when source lines move. Other file tiers retain the broadest applicable counted exposure, including explicit worker/maintenance mixtures. Each file has at most one row per tier; tier file counts overlap, while total files and call expressions are unique. These are not measured runtime call counts. Recheck the operation and all registered callers before changing its classification. Maintenance invoked by Gateway timers remains T1. Prepared results never confer current authority; follow [worker access](/reference/database-schemas/worker-access).",
     "",
     "Canonical-repair mutations remain T2 Doctor work, but its exact-row reader remains T1 because Gateway agent creation invokes legacy-main detection. Incognito category reads and native approval SDK compatibility remain T1. Claw provenance's counted writes are CLI-only; its raw Gateway reads are still runtime debt outside the five-primitive scan. Likewise, worker-only direct Cron receipt calls do not classify the host current-authority reads they transitively expose. Reclassification corrects metadata; it does not move runtime SQL or demonstrate a speedup.",
     "",
