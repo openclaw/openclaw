@@ -14,6 +14,10 @@ import type { ApplicationGateway } from "../app/context.ts";
 import { t } from "../i18n/index.ts";
 import { registerModelControlsEnglish } from "../i18n/locales/en-model-controls.ts";
 import {
+  isAgentDatabaseInspectionPendingError,
+  resolveGatewayReadRetryDelayMs,
+} from "./gateway-availability.ts";
+import {
   invalidateModelCatalogCache,
   invalidateModelCatalogEntry,
   isModelCatalogRetired,
@@ -203,7 +207,7 @@ function createModelCatalogRequest(params: {
     typeof timeout === "number" && Number.isFinite(timeout)
       ? resolveSafeTimeoutDelayMs(timeout, { minMs: 0 })
       : undefined;
-  const deadline = duration === undefined ? undefined : Date.now() + duration;
+  let deadline = duration === undefined ? undefined : Date.now() + duration;
   let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
   let started = false;
   let requestSent = false;
@@ -276,10 +280,17 @@ function createModelCatalogRequest(params: {
       const requestParams = { ...params.scope, ...(pending.refresh ? { refresh: true } : {}) };
       void (async () => {
         let retried = false;
+        let startupAttempt = 0;
+        let resumeAfterStartup = false;
         for (;;) {
+          if (resumeAfterStartup && duration !== undefined) {
+            deadline = Date.now() + duration;
+            deadlineTimer = setTimeout(() => rejectTimeout(duration), duration);
+          }
+          resumeAfterStartup = false;
           try {
             // Only a received rejection can retry; local timeout still owns its transport.
-            // The existing numeric deadline covers every attempt and wait in this lane.
+            // Confirmed agent startup suspends the overall budget, never a silent read's timeout.
             const result = await (timeout === undefined
               ? client.request<ModelCatalogResult>("models.list", requestParams)
               : client.request<ModelCatalogResult>("models.list", requestParams, {
@@ -296,8 +307,9 @@ function createModelCatalogRequest(params: {
             pending.resolve(result);
             return;
           } catch (error) {
+            const startupPending = isAgentDatabaseInspectionPendingError(error);
             if (
-              retried ||
+              (retried && !startupPending) ||
               !isGatewayProtocolResponseError(error) ||
               error.gatewayCode !== "UNAVAILABLE" ||
               !error.retryable ||
@@ -306,12 +318,20 @@ function createModelCatalogRequest(params: {
               pending.reject(error);
               return;
             }
-            // Retry one superseded snapshot without chasing an indefinitely busy Gateway.
-            retried = true;
+            if (startupPending) {
+              clearTimeout(deadlineTimer);
+              deadline = undefined;
+              resumeAfterStartup = true;
+            } else {
+              // Other unavailable responses retain their one replacement attempt.
+              retried = true;
+            }
             const wake = createDeferredCore();
             const timer = setTimeout(
               wake.resolve,
-              resolveSafeTimeoutDelayMs(error.retryAfterMs ?? 0, { minMs: 0 }),
+              startupPending
+                ? resolveGatewayReadRetryDelayMs(error, startupAttempt++)
+                : resolveSafeTimeoutDelayMs(error.retryAfterMs ?? 0, { minMs: 0 }),
             );
             const stopWatching = subscribeModelCatalogCache(client, () => {
               if (!canRetry()) {

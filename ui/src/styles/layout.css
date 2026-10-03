@@ -2087,6 +2087,12 @@ openclaw-settings-save-indicator:empty {
   font-size: var(--control-ui-text-xs);
 }
 
+.sidebar-session-empty-hint--startup {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .sidebar-session--archived {
   opacity: 0.62;
 }
