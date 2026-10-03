@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { withSetupHealthGateway } from "../../test/helpers/setup-health-gateway.js";
 import { createWizardPrompter as buildWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import type * as AuthChoiceModelCheck from "../commands/auth-choice.model-check.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -54,7 +55,9 @@ const resolveLocalControlUiProbeLinks = vi.hoisted(() =>
   })),
 );
 const setupWizardShellCompletion = vi.hoisted(() => vi.fn(async () => {}));
-const healthCommand = vi.hoisted(() => vi.fn(async () => {}));
+const healthCommand = vi.hoisted(() =>
+  vi.fn<typeof import("../commands/health.js").healthCommandNonExiting>(async () => {}),
+);
 const resolveDefaultModelAuthStatus = vi.hoisted(() =>
   vi.fn<() => DefaultModelAuthStatus>(() => ({
     provider: "anthropic",
@@ -86,6 +89,7 @@ const gatewayServiceRestart = vi.hoisted(() =>
 const gatewayServiceUninstall = vi.hoisted(() => vi.fn(async () => {}));
 const gatewayServiceIsLoaded = vi.hoisted(() => vi.fn(async () => false));
 const gatewayServiceReadCommand = vi.hoisted(() => vi.fn());
+const gatewayServiceReadRuntime = vi.hoisted(() => vi.fn());
 const startGatewayService = vi.hoisted(() => vi.fn());
 const resolveGatewayInstallToken = vi.hoisted(() =>
   vi.fn(async () => ({
@@ -179,7 +183,8 @@ vi.mock("../commands/daemon-runtime.js", () => ({
   ],
 }));
 
-vi.mock("../commands/health-format.js", () => ({
+vi.mock("../commands/health-format.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../commands/health-format.js")>()),
   formatHealthCheckFailure: vi.fn(() => "health failed"),
 }));
 
@@ -226,6 +231,7 @@ vi.mock("../daemon/service.js", () => ({
     label: "Mock Platform Service",
     isLoaded: gatewayServiceIsLoaded,
     readCommand: gatewayServiceReadCommand,
+    readRuntime: gatewayServiceReadRuntime,
     restart: gatewayServiceRestart,
     uninstall: gatewayServiceUninstall,
     install: gatewayServiceInstall,
@@ -384,6 +390,7 @@ describe("finalizeSetupWizard", () => {
     gatewayServiceIsLoaded.mockResolvedValue(false);
     gatewayServiceReadCommand.mockReset();
     gatewayServiceReadCommand.mockResolvedValue(null);
+    gatewayServiceReadRuntime.mockReset();
     startGatewayService.mockReset();
     gatewayServiceRestart.mockReset();
     gatewayServiceRestart.mockResolvedValue({ outcome: "completed" });
@@ -431,6 +438,32 @@ describe("finalizeSetupWizard", () => {
     loadModelCatalog.mockReset();
     loadModelCatalog.mockResolvedValue([]);
   });
+
+  it("keeps real health authentication on the setup Gateway despite ambient endpoints", async ({
+    signal,
+  }) => {
+    const actual =
+      await vi.importActual<typeof import("../commands/health.js")>("../commands/health.js");
+    await withSetupHealthGateway("classic", signal, async ({ config, port, pid, password }) => {
+      gatewayServiceReadRuntime.mockResolvedValue({ status: "running", pid });
+      resolveSetupSecretInputString.mockResolvedValue(password);
+      probeGatewayReachable.mockResolvedValue({ ok: true });
+      let completed = false;
+      healthCommand.mockImplementation(async (...args) => {
+        await actual.healthCommandNonExiting(...args);
+        completed = true;
+      });
+      await finalizeSetupWizard(
+        createFinalizeArgs("quickstart", {
+          opts: { skipHealth: false, skipUi: true },
+          nextConfig: config,
+          settings: { authMode: "trusted-proxy", port },
+        }),
+      );
+      expect(completed).toBe(true);
+      expect(config.gateway?.auth?.mode).toBe("trusted-proxy");
+    });
+  }, 90_000);
 
   // A preserved trusted-proxy gateway authenticates same-host clients with the
   // saved local password and has no token fallback, so finalization has to send

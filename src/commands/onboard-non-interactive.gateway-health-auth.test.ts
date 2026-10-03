@@ -2,12 +2,14 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { withSetupHealthGateway } from "../../test/helpers/setup-health-gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { deleteTestEnvValue } from "../test-utils/env.js";
 import {
   capturedReplaceConfigFileCalls,
   configWritePluginLeaseDepths,
   gatewayReachableState,
+  gatewayServiceMock,
   healthCommandMock,
   readTestConfig,
   resolveTestConfigPath,
@@ -50,12 +52,19 @@ describe("onboard (non-interactive): gateway health auth", () => {
     deleteTestEnvValue("OPENCLAW_GATEWAY_TOKEN");
     deleteTestEnvValue("OPENCLAW_GATEWAY_PASSWORD");
     vi.clearAllMocks();
+    healthCommandMock.mockReset().mockResolvedValue(undefined);
+    gatewayServiceMock.readRuntime.mockReset().mockResolvedValue({
+      status: "running",
+      state: "active",
+      pid: 4242,
+    });
   });
 
   async function runHealthSetup(
     stateDir: string,
     config: OpenClawConfig,
     reachable = true,
+    port = SETUP_GATEWAY_PORT,
   ): Promise<unknown> {
     testConfigStore.set(resolveTestConfigPath(), config);
     gatewayReachableState.mock = vi.fn(async () =>
@@ -65,7 +74,7 @@ describe("onboard (non-interactive): gateway health auth", () => {
     const setup = runNonInteractiveSetup(
       {
         ...createOnboardLocalDaemonOptions(stateDir),
-        gatewayPort: SETUP_GATEWAY_PORT,
+        gatewayPort: port,
         installDaemon: false,
         json: true,
       },
@@ -78,6 +87,30 @@ describe("onboard (non-interactive): gateway health auth", () => {
     }
     return JSON.parse(readCapturedJson());
   }
+
+  it("keeps real health authentication on the setup Gateway despite ambient endpoints", async ({
+    signal,
+  }) => {
+    const actual = await vi.importActual<typeof import("./health.js")>("./health.js");
+    await withStateDir("state-real-health-", async (stateDir) => {
+      await withSetupHealthGateway("noninteractive", signal, async ({ config, port, pid }) => {
+        gatewayServiceMock.readRuntime.mockResolvedValue({
+          status: "running",
+          state: "active",
+          pid,
+        });
+        let completed = false;
+        healthCommandMock.mockImplementation(async (...args) => {
+          await actual.healthCommandNonExiting(...args);
+          completed = true;
+        });
+        const result = await runHealthSetup(stateDir, config, true, port);
+        expect(completed).toBe(true);
+        expect(result).toMatchObject({ ok: true });
+        expect(readTestConfig().gateway?.auth?.mode).toBe("trusted-proxy");
+      });
+    });
+  }, 90_000);
 
   it("resolves file SecretRefs for the local onboarding health probe without persisting plaintext", async () => {
     await withStateDir("state-file-token-", async (stateDir) => {
