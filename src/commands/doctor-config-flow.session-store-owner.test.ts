@@ -51,70 +51,98 @@ describe("Doctor session-store owner recovery", () => {
     closeOpenClawStateDatabaseForTest();
   });
 
-  it.each([true, false])(
-    "offers the latest backed-up owner and honors acceptance=%s",
-    async (accept) => {
+  it.each(["accepted", "declined", "noninteractive update", "config drift"] as const)(
+    "recovers the backed-up owner only with current consent: %s",
+    async (scenario) => {
       await withDoctorConfigPreflightHome(async (home) => {
         const config = fixture(home);
         const configPath = await writeOpenClawConfig(home, config);
         const original = await fs.readFile(configPath, "utf8");
-        await fs.writeFile(`${configPath}.bak`, original);
-        await fs.writeFile(`${configPath}.bak.1`, JSON.stringify(fixture(home, "ops")));
-        await fs.writeFile(`${configPath}.bak.2`, JSON.stringify(fixture(home, "research")));
-        const prompter = recoveryPrompter(async () => accept);
-        const ctx = await prepareDoctorContext(configPath, { prompter });
-        expect(prompter.confirmRuntimeRepair).toHaveBeenCalledWith({
-          message: expect.stringContaining(`${configPath}.bak.1`),
-          initialValue: false,
-          requiresInteractiveConfirmation: true,
-        });
-        await runInitialConfigWriteHealth(ctx);
-        const saved = await readConfigFileSnapshot();
-        expect(saved.sourceConfig.agents?.defaults?.sessionStore?.agentId).toBe(
-          accept ? "ops" : undefined,
+        const edited = JSON.stringify({ ...config, logging: { level: "debug" } });
+        const reviewingHistory = scenario === "accepted" || scenario === "declined";
+        await fs.writeFile(
+          `${configPath}.bak`,
+          reviewingHistory ? original : JSON.stringify(fixture(home, "ops")),
         );
-        expect(saved.sourceConfig.agents?.defaults?.authInheritance).toEqual({ agentId: "ops" });
-        if (accept) {
-          await expect(fs.readFile(`${configPath}.bak`, "utf8")).resolves.toBe(original);
-          expect(
-            note.mock.calls.some(([message]) =>
-              message.includes("Restored agents.defaults.sessionStore.agentId"),
-            ),
-          ).toBe(true);
-        } else {
-          expect(
-            note.mock.calls.some(([message]) =>
-              message.includes("openclaw config set agents.defaults.sessionStore.agentId ops"),
-            ),
-          ).toBe(true);
+        if (reviewingHistory) {
+          await fs.writeFile(`${configPath}.bak.1`, JSON.stringify(fixture(home, "ops")));
+          await fs.writeFile(`${configPath}.bak.2`, JSON.stringify(fixture(home, "research")));
         }
+        const prompter = recoveryPrompter(async () => {
+          if (scenario === "config drift") {
+            await fs.writeFile(configPath, edited);
+          }
+          return scenario !== "declined";
+        });
+        await withEnvAsync(
+          { OPENCLAW_UPDATE_IN_PROGRESS: scenario === "noninteractive update" ? "1" : undefined },
+          async () => {
+            const ctx = await prepareDoctorContext(
+              configPath,
+              scenario === "noninteractive update"
+                ? { options: { repair: true, yes: true, nonInteractive: true } }
+                : { prompter },
+            );
+            if (scenario === "noninteractive update") {
+              expect(ctx.cfg.agents?.defaults?.sessionStore?.agentId).toBeUndefined();
+              expect(
+                note.mock.calls.some(([message]) =>
+                  message.includes("removal may have been intentional"),
+                ),
+              ).toBe(true);
+              return;
+            }
+            expect(prompter.confirmRuntimeRepair).toHaveBeenCalledWith({
+              message: expect.stringContaining(`${configPath}.bak${reviewingHistory ? ".1" : ""}`),
+              initialValue: false,
+              requiresInteractiveConfirmation: true,
+            });
+            await runInitialConfigWriteHealth(ctx);
+            if (scenario === "config drift") {
+              await expect(fs.readFile(configPath, "utf8")).resolves.toBe(edited);
+              expect(ctx.configWriteRefusal).toBe("config-conflict");
+              return;
+            }
+            const saved = await readConfigFileSnapshot();
+            expect(saved.sourceConfig.agents?.defaults?.sessionStore?.agentId).toBe(
+              scenario === "accepted" ? "ops" : undefined,
+            );
+            expect(saved.sourceConfig.agents?.defaults?.authInheritance).toEqual({
+              agentId: "ops",
+            });
+            if (scenario === "accepted") {
+              await expect(fs.readFile(`${configPath}.bak`, "utf8")).resolves.toBe(original);
+            }
+            expect(
+              note.mock.calls.some(([message]) =>
+                message.includes(
+                  scenario === "accepted"
+                    ? "Restored agents.defaults.sessionStore.agentId"
+                    : "openclaw config set agents.defaults.sessionStore.agentId ops",
+                ),
+              ),
+            ).toBe(true);
+          },
+        );
       });
     },
   );
 
-  it("keeps noninteractive update recovery advisory", async () => {
-    await withDoctorConfigPreflightHome(async (home) => {
-      const configPath = await writeOpenClawConfig(home, fixture(home));
-      await fs.writeFile(`${configPath}.bak`, JSON.stringify(fixture(home, "ops")));
-      await withEnvAsync({ OPENCLAW_UPDATE_IN_PROGRESS: "1" }, async () => {
-        const ctx = await prepareDoctorContext(configPath, {
-          options: { repair: true, yes: true, nonInteractive: true },
-        });
-        expect(ctx.cfg.agents?.defaults?.sessionStore?.agentId).toBeUndefined();
-        expect(
-          note.mock.calls.some(([message]) =>
-            message.includes("removal may have been intentional"),
-          ),
-        ).toBe(true);
-      });
-    });
-  });
-
-  it.each(["store-roundtrip", "retired-agent", "absent-history"])(
+  it.each(["store-roundtrip", "directory-alias", "retired-agent", "absent-history"])(
     "never invents ownership from %s",
     async (scenario) => {
       await withDoctorConfigPreflightHome(async (home) => {
-        const configPath = await writeOpenClawConfig(home, fixture(home));
+        const currentDir = path.join(home, "current");
+        const formerDir = path.join(home, "former");
+        const alias = scenario === "directory-alias";
+        if (alias) {
+          await fs.mkdir(currentDir);
+          await fs.symlink(currentDir, formerDir, "junction");
+        }
+        const configPath = await writeOpenClawConfig(
+          home,
+          fixture(home, undefined, alias ? path.join(currentDir, "sessions.json") : undefined),
+        );
         if (scenario !== "absent-history") {
           await fs.writeFile(
             `${configPath}.bak`,
@@ -122,7 +150,11 @@ describe("Doctor session-store owner recovery", () => {
               fixture(
                 home,
                 scenario === "retired-agent" ? "removed" : "ops",
-                scenario === "retired-agent" ? undefined : path.join(home, "other-store.json"),
+                scenario === "retired-agent"
+                  ? undefined
+                  : alias
+                    ? path.join(formerDir, "sessions.json")
+                    : path.join(home, "other-store.json"),
               ),
             ),
           );
@@ -144,41 +176,4 @@ describe("Doctor session-store owner recovery", () => {
       });
     },
   );
-
-  it("does not use today's directory aliases as historical store ownership", async () => {
-    await withDoctorConfigPreflightHome(async (home) => {
-      const currentDir = path.join(home, "current");
-      const formerDir = path.join(home, "former");
-      await fs.mkdir(currentDir);
-      await fs.symlink(currentDir, formerDir, "junction");
-      const configPath = await writeOpenClawConfig(
-        home,
-        fixture(home, undefined, path.join(currentDir, "sessions.json")),
-      );
-      await fs.writeFile(
-        `${configPath}.bak`,
-        JSON.stringify(fixture(home, "ops", path.join(formerDir, "sessions.json"))),
-      );
-      const prompter = recoveryPrompter(async () => true);
-      const ctx = await prepareDoctorContext(configPath, { prompter });
-      expect(prompter.confirmRuntimeRepair).not.toHaveBeenCalled();
-      expect(ctx.cfg.agents?.defaults?.sessionStore?.agentId).toBeUndefined();
-    });
-  });
-
-  it("refuses restoration after the current config changes during confirmation", async () => {
-    await withDoctorConfigPreflightHome(async (home) => {
-      const configPath = await writeOpenClawConfig(home, fixture(home));
-      await fs.writeFile(`${configPath}.bak`, JSON.stringify(fixture(home, "ops")));
-      const edited = JSON.stringify({ ...fixture(home), logging: { level: "debug" } });
-      const prompter = recoveryPrompter(async () => {
-        await fs.writeFile(configPath, edited);
-        return true;
-      });
-      const ctx = await prepareDoctorContext(configPath, { prompter });
-      await runInitialConfigWriteHealth(ctx);
-      await expect(fs.readFile(configPath, "utf8")).resolves.toBe(edited);
-      expect(ctx.configWriteRefusal).toBe("config-conflict");
-    });
-  });
 });

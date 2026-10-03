@@ -15,6 +15,7 @@ import {
   createOpenClawCodingToolsInternal,
   resolveToolLoopDetectionConfig,
 } from "../../agent-tools.js";
+import { assertMemoryFlushPersistenceToolAvailable } from "../../agent-tools.memory-flush.js";
 import { createSkillInstructionDeliveryCache } from "../../agent-tools.read.js";
 import { getChannelAgentToolMeta } from "../../channel-tools.js";
 import { createCodeModePermissionChangeReason } from "../../code-mode-permission-change.js";
@@ -368,6 +369,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
     const toolsRaw = attempt.forceRestartSafeTools
       ? constructedToolsRaw.filter((tool) => isAgentToolRestartSafe(tool, restartSafetyOptions))
       : constructedToolsRaw;
+    assertMemoryFlushPersistenceToolAvailable(toolsRaw, attempt.memoryFlushTools);
     if (attempt.forceRestartSafeTools) {
       log.info(
         `restart-safe recovery tool policy retained ${toolsRaw.length}/${constructedToolsRaw.length} concrete tools`,
