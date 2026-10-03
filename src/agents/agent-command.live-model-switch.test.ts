@@ -40,6 +40,7 @@ import {
   createTestModelVisibilityPolicy,
   makeSuccessResult,
 } from "./agent-command.live-model-switch.test-helpers.js";
+import { registerAgentCommandPreparedConfigCases } from "./agent-command.prepared-config.test-support.js";
 import {
   registerAgentCommandRecoveryCases,
   withStoredAgentCommandRecoverySession,
@@ -393,7 +394,9 @@ vi.mock("../config/io.js", () => ({
 }));
 
 vi.mock("./agent-runtime-config.js", () => ({
-  resolveAgentRuntimeConfig: async () => state.runtimeConfigMock ?? state.defaultRuntimeConfig,
+  resolveAgentRuntimeConfig: vi.fn(
+    async () => state.runtimeConfigMock ?? state.defaultRuntimeConfig,
+  ),
 }));
 
 vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => {
@@ -1231,23 +1234,17 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     vi.restoreAllMocks();
   });
 
-  it("uses Gateway command metadata without resolving the agent workspace", async () => {
-    const pluginGeneration = {
-      pluginMetadataSnapshot: manifestMetadataSnapshot,
-    } as never;
-
-    const prepared = await prepareAgentCommandExecution(
-      { message: "/demo", to: "+1234567890" },
-      {} as never,
-      { config: {}, pluginGeneration },
-    );
-
-    expect(prepared.manifestMetadataSnapshot).toBe(manifestMetadataSnapshot);
-    expect(prepared.commandRuntimeContext?.pluginGeneration).toBe(pluginGeneration);
-    expect(state.listSkillCommandsForWorkspaceMock).toHaveBeenCalledWith(
-      expect.objectContaining({ pluginMetadataSnapshot: manifestMetadataSnapshot }),
-    );
-    expect(state.resolvePluginMetadataSnapshotMock).not.toHaveBeenCalled();
+  registerAgentCommandPreparedConfigCases({
+    prepare: (...args) => prepareAgentCommandExecution(...args),
+    getConfig: () => state.defaultRuntimeConfig,
+    setAmbientConfig: (config) => {
+      state.runtimeConfigMock = config;
+    },
+    getMetadataSnapshot: () => manifestMetadataSnapshot,
+    metadataLookups: {
+      skillCommands: state.listSkillCommandsForWorkspaceMock,
+      resolution: state.resolvePluginMetadataSnapshotMock,
+    },
   });
 
   it("retries with the switched provider/model when LiveSessionModelSwitchError is thrown", async () => {
