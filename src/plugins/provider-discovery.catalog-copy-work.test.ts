@@ -2,7 +2,10 @@ import { parseModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
 import { createStaticModelIdMatcher } from "../agents/embedded-agent-runner/model.static-id.js";
-import { prepareImplicitProviderStaticCatalog } from "../agents/models-config.providers.implicit.js";
+import {
+  prepareImplicitProviderStaticCatalog,
+  resolveImplicitProviders,
+} from "../agents/models-config.providers.implicit.js";
 import {
   collectPreparedModelRuntimeConfiguredRefs,
   prepareConfiguredRuntimeModels,
@@ -100,7 +103,7 @@ it("keeps first-match configured precedence and last-entry aggregate precedence"
   expect(resolvePreparedProviderStaticConfigs(prepared)).toEqual({ [providerId]: last });
 });
 
-it("copies a workspace catalog once while materializing every agent's configured models", async () => {
+it("copies a workspace catalog once across configured and implicit agent reads", async () => {
   const providerId = "catalog-copy-fixture";
   const pluginId = "catalog-copy-owner";
   const agentCount = 32;
@@ -163,7 +166,6 @@ it("copies a workspace catalog once while materializing every agent's configured
     providerDiscoveryProviderIds: [providerId],
     staticCatalogProviderIds: [providerId],
   });
-  const preparationReads = fixture.idReads;
   const matchesStaticModelId = createStaticModelIdMatcher({
     manifestPlugins: metadata.manifestRegistry.plugins,
   });
@@ -186,9 +188,51 @@ it("copies a workspace catalog once while materializing every agent's configured
       }),
     );
   }
-  const configuredReads = fixture.idReads - preparationReads;
   const resolvedProviders = resolvePreparedProviderStaticConfigs(prepared);
-  const aggregateReads = fixture.idReads - preparationReads - configuredReads;
+  const implicitParams = {
+    config,
+    env: {},
+    authStore: { version: 1, profiles: {} },
+    pluginMetadataSnapshot: metadata,
+    preparedStaticProviderCatalog: prepared,
+    providerDiscoveryEntriesOnly: true,
+    providerDiscoveryProviderIds: [providerId],
+  };
+  const overridden = await resolveImplicitProviders({
+    ...implicitParams,
+    agentDir: "/catalog-copy-fixture/agent-one",
+    explicitProviders: {
+      [providerId]: {
+        ...providerConfig,
+        headers: { "X-Catalog": "agent-one" },
+        models: [
+          {
+            ...expectDefined(models[0], "first catalog model"),
+            name: "Agent override",
+            contextWindow: 64_000,
+          },
+        ],
+      },
+    },
+  });
+  expect(overridden?.[providerId]?.models[0]).toMatchObject({
+    id: "model-0",
+    name: "Agent override",
+    contextWindow: 64_000,
+  });
+  expect(overridden?.[providerId]?.headers).toEqual({ "X-Catalog": "agent-one" });
+  const unchanged = await resolveImplicitProviders({
+    ...implicitParams,
+    agentDir: "/catalog-copy-fixture/agent-two",
+  });
+  expect(unchanged?.[providerId]).toEqual(providerConfig);
+  expect(prepared.entries[0]?.providerConfigs[providerId]).toEqual(providerConfig);
+  expect(providerConfig.headers).toEqual({ "X-Catalog": "fixture" });
+  expect(providerConfig.models[0]).toMatchObject({
+    id: "model-0",
+    name: "Model 0",
+    contextWindow: 32_000,
+  });
 
   expect(hookCalls).toBe(1);
   expect(materialized).toEqual(
@@ -208,7 +252,5 @@ it("copies a workspace catalog once while materializing every agent's configured
     })),
   );
   expect(resolvedProviders).toEqual({ [providerId]: providerConfig });
-  expect(preparationReads + configuredReads + aggregateReads, "raw catalog model ID reads").toBe(
-    models.length,
-  );
+  expect(fixture.idReads, "raw catalog model ID reads").toBe(models.length);
 });

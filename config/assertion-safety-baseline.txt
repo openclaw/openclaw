@@ -1965,7 +1965,6 @@ src/config/model-input-normalization.ts	2
 src/config/model-input.ts	1
 src/config/mutate.ts	2
 src/config/official-external-channel-secret-schema.ts	3
-src/config/plugin-auto-enable.apply.ts	1
 src/config/plugin-auto-enable.shared.ts	1
 src/config/plugin-install-record-map.ts	1
 src/config/plugins-allowlist.ts	1
