@@ -10,7 +10,6 @@ import {
 import {
   buildAgentSessionKey,
   deriveLastRoutePolicy,
-  parseAgentSessionKey,
   resolveAgentRoute,
   resolveThreadSessionKeys,
   buildAgentMainSessionKey,
@@ -90,29 +89,35 @@ function prepareTelegramConversationRoute(params: ResolveTelegramConversationRou
     accountId: params.accountId,
     conversationId,
   };
-  // Read the binding owner before ordinary agent selection, which rejects an ambiguous
-  // multi-agent roster even when this conversation's binding already names its agent.
-  // Session-only config keeps scope derivation from consulting the roster at all.
-  const resolveScopeRoute = (agentId?: string) =>
-    resolveAgentRoute({
-      ...routeInput,
-      cfg: { session: params.cfg.session },
-      defaultAgentId: agentId,
-    });
-  const binding = resolveRuntimeConversationBindingRoute({
-    route: resolveScopeRoute(),
+  // The binding owner supplies its agent before ordinary agent selection, which rejects an
+  // ambiguous multi-agent roster even when this conversation's binding already names its
+  // agent. Session-only config keeps scope derivation from consulting the roster at all.
+  let selection = null as {
+    route: TelegramResolvedRoute;
+    ownerBinding: TelegramRuntimeBindingRecord | null;
+  } | null;
+  resolveRuntimeConversationBindingRoute({
     conversation,
     touchBinding: false,
+    resolveRoute: ({ bindingRecord, boundAgentId }) => {
+      selection = boundAgentId
+        ? {
+            route: resolveAgentRoute({
+              ...routeInput,
+              cfg: { session: params.cfg.session },
+              defaultAgentId: boundAgentId,
+            }),
+            ownerBinding: bindingRecord,
+          }
+        : { route: resolveAgentRoute({ ...routeInput, cfg: params.cfg }), ownerBinding: null };
+      return selection.route;
+    },
   });
-  const metadataAgentId = binding.bindingRecord?.metadata?.agentId;
-  const hasBoundAgent = Boolean(
-    binding.boundSessionKey &&
-    (parseAgentSessionKey(binding.boundSessionKey) ||
-      (typeof metadataAgentId === "string" && metadataAgentId.trim())),
-  );
-  let route = hasBoundAgent
-    ? resolveScopeRoute(binding.boundAgentId)
-    : resolveAgentRoute({ ...routeInput, cfg: params.cfg });
+  if (!selection) {
+    throw new Error("Telegram route selection did not run");
+  }
+  const { ownerBinding } = selection;
+  let route = selection.route;
 
   const rawTopicAgentId = params.topicAgentId?.trim();
   if (rawTopicAgentId) {
@@ -179,7 +184,7 @@ function prepareTelegramConversationRoute(params: ResolveTelegramConversationRou
     bindingMode,
     conversation,
     // The binding that chose the agent above; the awaited resolution must still see it.
-    ownerBinding: hasBoundAgent ? binding.bindingRecord : null,
+    ownerBinding,
   };
 }
 
