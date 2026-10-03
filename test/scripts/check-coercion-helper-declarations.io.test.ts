@@ -16,14 +16,15 @@ vi.mock("typescript/unstable/sync", async (importOriginal) => {
     API: class extends actual.API {
       constructor(...args: ConstructorParameters<typeof actual.API>) {
         super(...args);
-        const api: API = this;
-        const createSourceFile = api.createSourceFile;
-        vi.spyOn(api, "createSourceFile").mockImplementation((fileName, content, options) => {
-          if (fileName === "a-parse.ts") {
-            throw parseError;
-          }
-          return createSourceFile(fileName, content, options);
-        });
+        const createSourceFile = this.createSourceFile;
+        vi.spyOn<API, "createSourceFile">(this, "createSourceFile").mockImplementation(
+          (fileName, content, options) => {
+            if (fileName === "a-parse.ts") {
+              throw parseError;
+            }
+            return createSourceFile(fileName, content, options);
+          },
+        );
       }
     },
   };
