@@ -248,16 +248,36 @@ export type ChannelIngressClaimRequest = {
   queueName: string;
   candidateIds?: string[];
   blockedLaneKeys: string[];
-  deriveLaneKey: boolean;
+  /** Stored lane keys are authoritative unless a reconcile callback can remap them. */
+  reconcileStoredLaneKey?: boolean;
   scanLimit?: number;
   orderBy?: "received" | "id";
+  /** Keyset cursor past the last scanned row, used to page beyond a blocked snapshot. */
+  claimAfter?: ChannelIngressClaimCursor;
+  /**
+   * Count of scan-visible pending rows before claimAfter expected by a retained
+   * direct-scan resume cursor. The snapshot computes the authoritative count in
+   * the same read, so a write from any handle that inserted or removed a row
+   * before the cursor invalidates the resume.
+   */
+  expectedPendingBeforeCursor?: number;
 };
 export type ChannelIngressClaimSnapshot = {
   pending: ChannelIngressRow[];
   claimed: ChannelIngressRow[];
+  /** Authoritative count of scan-visible pending rows strictly before claimAfter. */
+  pendingBeforeCursor?: number;
+};
+
+/** Keyset cursor matching the pending ordering; the row after it opens the next claim page. */
+export type ChannelIngressClaimCursor = {
+  receivedAt: number;
+  eventId: string;
 };
 
 export type ChannelIngressClaimSelection = {
   corruptIds: string[];
   selected?: { id: string; laneKey?: string };
+  /** The snapshot consumed its full allowance with no eligible row; another page may exist. */
+  more?: boolean;
 };
