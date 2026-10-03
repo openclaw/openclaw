@@ -24,7 +24,6 @@ type CachedValidator = {
   hasDefaults: boolean;
   validate: TypeBoxValidator;
   schema: JsonSchemaValue;
-  schemaFingerprint: string;
 };
 
 /**
@@ -351,10 +350,11 @@ export function validatePluginSchemaValue(
 
 /**
  * Validate a plugin-owned value against a JSON Schema, optionally hydrating schema defaults.
- * Callers can supply a stable cache key; otherwise the schema fingerprint owns cache identity.
+ * Schema contents own compiled-validator identity, independently of callers and default application.
  */
 export function validateJsonSchemaValue(params: {
   schema: JsonSchemaValue;
+  /** Accepted for SDK compatibility; schema contents now own cache identity. */
   cacheKey?: string;
   value: unknown;
   /** Persisted input paired with this runtime value, before secret resolution. */
@@ -362,8 +362,13 @@ export function validateJsonSchemaValue(params: {
   applyDefaults?: boolean;
   cache?: boolean;
 }): { ok: true; value: unknown } | { ok: false; errors: JsonSchemaValidationError[] } {
-  const schemaKey = params.cacheKey ?? JSON.stringify(params.schema);
-  const cacheKey = params.applyDefaults ? `${schemaKey}::defaults` : schemaKey;
+  let cacheKey: string;
+  try {
+    cacheKey = JSON.stringify(params.schema);
+  } catch (error) {
+    const schemaError = findJsonSchemaShapeError(params.schema);
+    throw schemaError ? new Error(sanitizeTerminalText(`invalid schema: ${schemaError}`)) : error;
+  }
   let cached = params.cache === false ? undefined : schemaCache.get(cacheKey);
   if (!cached || cached.schema !== params.schema) {
     const schemaError = findJsonSchemaShapeError(params.schema);
@@ -371,18 +376,11 @@ export function validateJsonSchemaValue(params: {
       throw new Error(sanitizeTerminalText(`invalid schema: ${schemaError}`));
     }
   }
-  const schemaFingerprint =
-    !cached || cached.schema !== params.schema ? JSON.stringify(params.schema) : undefined;
-  if (
-    !cached ||
-    (cached.schema !== params.schema && cached.schemaFingerprint !== schemaFingerprint)
-  ) {
-    const validate = compileSchema(params.schema);
+  if (!cached) {
     cached = {
-      hasDefaults: params.applyDefaults ? schemaHasDefaults(params.schema) : false,
-      validate,
+      hasDefaults: schemaHasDefaults(params.schema),
+      validate: compileSchema(params.schema),
       schema: params.schema,
-      schemaFingerprint: schemaFingerprint ?? JSON.stringify(params.schema),
     };
     if (params.cache !== false) {
       schemaCache.set(cacheKey, cached);

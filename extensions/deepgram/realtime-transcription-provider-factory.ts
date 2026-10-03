@@ -17,17 +17,6 @@ import { DEFAULT_DEEPGRAM_AUDIO_BASE_URL, DEFAULT_DEEPGRAM_AUDIO_MODEL } from ".
 
 type DeepgramRealtimeTranscriptionEncoding = "linear16" | "mulaw" | "alaw";
 
-type DeepgramRealtimeTranscriptionProviderConfig = {
-  apiKey?: string;
-  baseUrl?: string;
-  model?: string;
-  language?: string;
-  sampleRate?: number;
-  encoding?: DeepgramRealtimeTranscriptionEncoding;
-  interimResults?: boolean;
-  endpointingMs?: number;
-};
-
 type DeepgramRealtimeTranscriptionSessionConfig = RealtimeTranscriptionSessionCreateRequest & {
   apiKey: string;
   baseUrl: string;
@@ -132,9 +121,7 @@ function toDeepgramRealtimeWsUrl(config: DeepgramRealtimeTranscriptionSessionCon
   return url.toString();
 }
 
-function normalizeProviderConfig(
-  config: RealtimeTranscriptionProviderConfig,
-): DeepgramRealtimeTranscriptionProviderConfig {
+function normalizeProviderConfig(config: RealtimeTranscriptionProviderConfig) {
   const raw = readNestedDeepgramConfig(config);
   return {
     apiKey: normalizeResolvedSecretInputString({

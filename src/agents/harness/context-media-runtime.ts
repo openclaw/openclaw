@@ -43,7 +43,7 @@ export async function prepareHarnessContextMedia(params: {
   const message = params.message;
   const media = readPersistedMediaFacts(message) ?? [];
   const inlineImages = Array.isArray(message.content)
-    ? message.content.filter((part): part is ImageContent => part.type === "image")
+    ? message.content.flatMap((part) => (part.type === "image" ? [part] : []))
     : [];
   if (!media.length && !inlineImages.length) {
     return { images: [] };

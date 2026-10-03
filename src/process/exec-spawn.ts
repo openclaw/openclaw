@@ -7,6 +7,7 @@ import { execa } from "execa";
 import { markOpenClawExecEnv } from "../infra/openclaw-exec-env.js";
 import { mergeProcessEnv } from "../infra/process-env.js";
 import { getFileLockProcessStartTime, getProcessInstanceStartTime } from "../shared/pid-alive.js";
+import { sleep } from "../utils/sleep.js";
 import { isChildProcessTreeAlive } from "./child-process-tree.js";
 import type { CommandProcessCustody } from "./command-process-custody.types.js";
 import {
@@ -312,9 +313,7 @@ function retainCommandProcess(
         if ((currentStart !== null && currentStart !== startedAt) || remaining <= 0) {
           throw new CommandProcessCleanupError();
         }
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, Math.min(25, remaining));
-        });
+        await sleep(Math.min(25, remaining));
       }
       settleCustody();
     },

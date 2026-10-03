@@ -128,7 +128,7 @@ describe("offline sessions cleanup harness ownership", () => {
         const cfg: OpenClawConfig = {
           agents: {
             defaults: { model: { primary: "other-provider/other-model" } },
-            entries: { main: { default: true, workspace: state.workspaceDir } },
+            entries: { main: { workspace: state.workspaceDir } },
           },
           plugins: {
             enabled: activation !== "globally-disabled",

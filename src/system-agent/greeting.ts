@@ -2,6 +2,7 @@
 import { createHash } from "node:crypto";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { SystemAgentChatQuestion } from "../../packages/gateway-protocol/src/index.js";
+import { raceWithTimeout } from "../../packages/retry/src/index.js";
 import {
   CONFIG_AUDIT_MAX_ENTRIES,
   CONFIG_AUDIT_SCOPE,
@@ -367,25 +368,6 @@ function resolveSystemAgentGreetingFallback(
   };
 }
 
-async function withGreetingTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<T>((_resolve, reject) => {
-        timer = setTimeout(() => reject(new Error("system-agent greeting timed out")), timeoutMs);
-        if (typeof timer === "object" && "unref" in timer) {
-          timer.unref();
-        }
-      }),
-    ]);
-  } finally {
-    if (timer) {
-      clearTimeout(timer);
-    }
-  }
-}
-
 async function resolveUncachedSystemAgentGreeting(params: {
   overview: SystemAgentOverview;
   facts: SystemAgentGreetingFacts;
@@ -400,9 +382,11 @@ async function resolveUncachedSystemAgentGreeting(params: {
   try {
     // This is the only metered greeting turn. The single-slot hash keeps unchanged
     // caretaker opens at zero tokens while preserving a model-free rescue path.
-    plan = await withGreetingTimeout(
+    plan = await raceWithTimeout(
       params.planner({ overview: params.overview, facts: params.facts, timeoutMs }),
       timeoutMs,
+      () => null,
+      { ref: false },
     );
   } catch {
     plan = null;

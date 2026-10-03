@@ -126,7 +126,7 @@ function fixture(
     }
   }
   for (const [file, value] of Object.entries({
-    "package.json": '{"type":"module","version":"2026.7.33"}',
+    "package.json": '{"type":"module","version":"2026.8.35"}',
     ...files,
   })) {
     mkdirSync(dirname(join(selectedRoot, file)), { recursive: true });
@@ -183,7 +183,7 @@ function fixture(
   return { root, selected, tooling, run, bin };
 }
 
-function survivorFiles(version = "2026.7.33", recipe = "config-recipe.mjs") {
+function survivorFiles(version = "2026.8.35", recipe = "config-recipe.mts") {
   const dir = "scripts/e2e/lib/upgrade-survivor";
   const inertModule = [
     'import { writeFileSync } from "node:fs";',
@@ -226,33 +226,20 @@ function survivorFiles(version = "2026.7.33", recipe = "config-recipe.mjs") {
 }
 
 describe("frozen admission Docker consumer aliases", () => {
-  const cliMetadata = "scripts/print-cli-backend-live-metadata.ts";
   const pluginAssertions = "scripts/e2e/lib/plugins/assertions.mjs";
-  const aliases = [
-    {
-      lane: "live-gateway",
-      consumer: "live-cli-backend",
-      path: cliMetadata,
-      current: "export function resolveCliBackendDockerPackages() {}",
-      legacy: "// Released metadata without the package resolver.",
-      mode: "OPENCLAW_FROZEN_TARGET_LIVE_CLI_BACKEND_PACKAGE_MODE",
-    },
-    ...["mcp-channels", "kitchen-sink-rpc", "plugins-offline"].map((lane) => ({
-      lane,
-      consumer: "plugins",
-      path: pluginAssertions,
-      current: "export function assertPluginUninstallConfigState() {}",
-      legacy: "export function assertPluginTgzRemoved() {}",
-      mode: "OPENCLAW_FROZEN_TARGET_PLUGIN_UNINSTALL_MODE",
-    })),
-  ];
+  const aliases = ["mcp-channels", "kitchen-sink-rpc", "plugins-offline"].map((lane) => ({
+    lane,
+    consumer: "plugins",
+    path: pluginAssertions,
+    current: "export function assertPluginUninstallConfigState() {}",
+    legacy: "export function assertPluginTgzRemoved() {}",
+    mode: "OPENCLAW_FROZEN_TARGET_PLUGIN_UNINSTALL_MODE",
+  }));
   const executionSentinel = [
     'import { writeFileSync } from "node:fs";',
     'writeFileSync(`${process.env.HOME}/selected-code-executed`, "executed");',
   ].join("\n");
-  const consumerAliases = aliases.filter(({ lane }) =>
-    ["live-gateway", "mcp-channels"].includes(lane),
-  );
+  const consumerAliases = aliases.filter(({ lane }) => lane === "mcp-channels");
 
   it.each(consumerAliases)(
     "rejects a missing committed $lane contract before emitting admission",
@@ -294,12 +281,7 @@ describe("frozen admission Docker consumer aliases", () => {
       {
         consumer,
         status: "ADMITTED",
-        modes: {
-          [mode]: dialect,
-          ...(consumer === "plugins"
-            ? { OPENCLAW_FROZEN_PLUGIN_PRERELEASE_FIXTURE_DIALECT: "current" }
-            : {}),
-        },
+        modes: { [mode]: dialect },
         files: [],
       },
     ]);
@@ -321,12 +303,7 @@ describe("frozen admission Docker consumer aliases", () => {
         {
           consumer,
           status: "ADMITTED",
-          modes: {
-            [mode]: consumer === "plugins" ? "current" : "legacy",
-            ...(consumer === "plugins"
-              ? { OPENCLAW_FROZEN_PLUGIN_PRERELEASE_FIXTURE_DIALECT: "current" }
-              : {}),
-          },
+          modes: { [mode]: "current" },
           files: [],
         },
       ]);
@@ -355,7 +332,6 @@ describe("frozen admission Docker consumer aliases", () => {
         status: "ADMITTED",
         modes: {
           OPENCLAW_FROZEN_TARGET_PLUGIN_UNINSTALL_MODE: "legacy",
-          OPENCLAW_FROZEN_PLUGIN_PRERELEASE_FIXTURE_DIALECT: "current",
         },
         files: [],
       },
@@ -368,12 +344,10 @@ describe("frozen admission Docker consumer aliases", () => {
   });
 
   it.each([
-    { lane: "live-gateway", removed: [pluginAssertions], consumer: "live-cli-backend" },
-    { lane: "mcp-channels", removed: [cliMetadata], consumer: "plugins" },
-    { lane: "docker-package-install", removed: [cliMetadata, pluginAssertions], consumer: null },
+    { lane: "live-gateway", removed: [pluginAssertions], consumer: null },
+    { lane: "docker-package-install", removed: [pluginAssertions], consumer: null },
   ])("keeps unreadable unrelated contracts inert for $lane", ({ lane, removed, consumer }) => {
     const f = fixture({
-      [cliMetadata]: `${executionSentinel}\nexport function resolveCliBackendDockerPackages() {}\n`,
       [pluginAssertions]: `${executionSentinel}\nexport function assertPluginUninstallConfigState() {}\n`,
     });
     for (const path of removed) {
@@ -405,17 +379,17 @@ describe("frozen admission upgrade Docker aliases", () => {
     },
     {
       shape: "unsupported correction",
-      version: "2026.7.33-1",
+      version: "2026.8.33-1",
       error: "unsupported extended-stable correction",
     },
     {
       shape: "missing scenario",
-      version: "2026.7.33",
+      version: "2026.8.33",
       error: "selected extended-stable target lacks its scenario",
     },
     {
       shape: "missing companion blob",
-      version: "2026.7.33",
+      version: "2026.8.33",
       error: "unable to read selected source",
     },
   ])("rejects an upgrade alias with $shape before admission", ({ shape, version, error }) => {
@@ -451,8 +425,7 @@ describe("frozen admission upgrade Docker aliases", () => {
 
   it.each([
     ...[
-      { version: "2026.6.35", recipe: "config-recipe.mjs", train: "extended-stable" },
-      { version: "2026.7.33", recipe: "config-recipe.mts", train: "extended-stable" },
+      { version: "2026.8.35", recipe: "config-recipe.mts", train: "extended-stable" },
       { version: "2026.9.9", recipe: "", train: "stable" },
     ].map((value) => Object.assign({}, value, { lane: "root-managed-vps-upgrade" })),
     { lane: "update-restart-auth", version: "2026.9.9", recipe: "", train: "stable" },
@@ -472,7 +445,6 @@ describe("frozen admission upgrade Docker aliases", () => {
     expect(record.selection.consumers).toEqual(["upgrade-survivor"]);
     expect(record.contracts).toHaveLength(1);
     expect(record.contracts[0].modes).toEqual({
-      OPENCLAW_FROZEN_UPGRADE_SURVIVOR_CLAWHUB_MODE: "current",
       OPENCLAW_FROZEN_UPGRADE_SURVIVOR_TOOL_SEARCH_RECIPE: "absent",
       OPENCLAW_FROZEN_UPGRADE_SURVIVOR_MEMBERSHIP_MODE: "native",
       releaseTrain: train,
@@ -562,7 +534,7 @@ describe("frozen admission bootstrap repairs", () => {
           : `\n(await import("node:fs")).writeFileSync(${JSON.stringify(sentinel)}, "executed");\n`;
       writeFileSync(file, readFileSync(file, "utf8") + payload);
       expect(f.tooling.git("rev-parse", "HEAD")).toBe(f.tooling.sha);
-      const result = f.run({ consumers: ["onboard"] });
+      const result = f.run({ consumers: [] });
       expect(existsSync(sentinel), result.stderr).toBe(false);
       expectRejected(result, `tooling closure does not match committed source: ${path}`);
     },
@@ -603,11 +575,11 @@ describe("frozen admission bootstrap repairs", () => {
     f.tooling.git("commit", "-qm", "unrelated file");
     const sha = f.tooling.git("rev-parse", "HEAD");
     const overrides = { tooling: { root: f.tooling.root, sha } };
-    const clean = f.run({ consumers: ["onboard"] }, overrides);
+    const clean = f.run({ consumers: [] }, overrides);
     expect(clean.status, clean.stderr).toBe(0);
     writeFileSync(join(f.tooling.root, "unrelated.txt"), "dirty");
     writeFileSync(join(f.selected.root, source), "unrecognized working copy");
-    const dirty = f.run({ consumers: ["onboard"] }, overrides);
+    const dirty = f.run({ consumers: [] }, overrides);
     expect(dirty.status, dirty.stderr).toBe(0);
     expect(dirty.stdout).toBe(clean.stdout);
     const paths = [
@@ -732,15 +704,6 @@ describe("frozen admission entry", () => {
     { name: "legacy authorized", files: {}, allow: true, mode: "unsupported" },
     { name: "legacy strict", files: {}, allow: false, mode: "required" },
     {
-      name: "parsed-duration legacy authorized",
-      files: {
-        "src/config/zod-schema.session.ts":
-          "export const SessionSchema = z.object({ maintenance: z.object({ pruneAfter: z.union([z.string(), z.number()]).optional() }) });",
-      },
-      allow: true,
-      mode: "unsupported",
-    },
-    {
       name: "current declaration regression",
       files: {
         "src/config/zod-schema.session-config.ts": "export const SessionSchema = z.object({});",
@@ -818,17 +781,7 @@ describe("frozen admission entry", () => {
     const first = f.run(selection);
     expect(first.status, first.stderr).toBe(0);
     const record = JSON.parse(first.stdout);
-    expect(record.contracts).toEqual([
-      {
-        consumer: "onboard",
-        status: "ADMITTED",
-        modes: {
-          OPENCLAW_FROZEN_TARGET_ONBOARD_CASES:
-            "local-basic,remote-non-interactive,reset,channels,skills",
-        },
-        files: [],
-      },
-    ]);
+    expect(record.contracts).toEqual([]);
     expect(record.docker.lanes).toEqual(["docker-package-install", "onboard"]);
     expect(record.selectedSha).toBe(f.selected.sha);
     expect(record.toolingSha).toBe(f.tooling.sha);
@@ -841,40 +794,6 @@ describe("frozen admission entry", () => {
     const invalid = f.run({ docker: { lanes: ["onboard", "session-runtime-context"] } });
     expectRejected(invalid, "unable to resolve frozen runtime-context");
   });
-
-  it.each(["June", "July"])(
-    "evaluates the %s shared AST owner with the real preprovisioned parser",
-    (layout) => {
-      const client =
-        layout === "June"
-          ? "scripts/e2e/agent-bundle-mcp-tools-docker-client.ts"
-          : "test/e2e/qa-lab/runtime/agent-bundle-mcp-tools-docker-client.ts";
-      const prefix = layout === "June" ? "../.." : "../../../..";
-      const f = fixture(
-        {
-          [client]: `import { getOrCreateSessionMcpRuntime, disposeAllSessionMcpRuntimes } from "${prefix}/dist/agents/agent-bundle-mcp-runtime.js";\nimport { createE2eStateDir } from "${layout === "June" ? "./lib" : `${prefix}/scripts/e2e/lib`}/temp-state-dir.ts";\nthrow new Error("target client executed");`,
-          "scripts/e2e/lib/temp-state-dir.ts":
-            'export async function createE2eStateDir() { throw new Error("target helper executed"); }',
-          "src/agents/agent-bundle-mcp-runtime.ts":
-            'export async function getOrCreateSessionMcpRuntime() { throw new Error("target runtime executed"); }\nexport async function disposeAllSessionMcpRuntimes() {}',
-        },
-        true,
-      );
-      const result = f.run({ consumers: ["agent-bundle-mcp-tools"] });
-      expect(result.status, result.stderr).toBe(0);
-      const record = JSON.parse(result.stdout);
-      expect(record.contracts[0].modes.OPENCLAW_FROZEN_TARGET_AGENT_BUNDLE_MCP_MODE).toBe("legacy");
-      expect(record.contracts[0].files).toEqual([{ source: "selected", path: client }]);
-      expect(record.sources.selected).toContainEqual({
-        path: client,
-        oid: f.selected.git("rev-parse", `${f.selected.sha}:${client}`),
-      });
-      rmSync(join(f.tooling.root, "node_modules"), { recursive: true });
-      const rejected = f.run({ consumers: ["agent-bundle-mcp-tools"] });
-      expectRejected(rejected, "trusted TypeScript parser");
-      expect(f.run({ consumers: ["onboard"] }).status).toBe(0);
-    },
-  );
 
   it.each(["unknown catalog", "deleted blob", "dirty absent metadata"])(
     "fails or omits from committed source for %s without running target code",
@@ -1013,13 +932,13 @@ describe("frozen admission entry", () => {
   it("shares the Codex and fs-safe cores while preserving source read errors", () => {
     const catalog = "extensions/codex/provider-catalog.ts";
     const f = fixture({
-      "package.json": '{"version":"2026.7.33","dependencies":{"@openclaw/fs-safe":"0.4.1"}}',
+      "package.json": '{"version":"2026.8.35","dependencies":{"@openclaw/fs-safe":"0.5.6"}}',
       [catalog]:
         'export const FALLBACK_CODEX_MODELS = [{ id: "gpt-5.5" }] satisfies unknown[];\nthrow new Error("catalog executed");',
       "src/infra/fs-safe-defaults.ts":
-        'import { configureFsSafePython } from "@openclaw/fs-safe/config";',
+        'import { configureFsSafeNative } from "@openclaw/fs-safe/config";',
     });
-    f.selected.git("update-ref", "refs/remotes/origin/extended-stable/2026.7.33", f.selected.sha);
+    f.selected.git("update-ref", "refs/remotes/origin/extended-stable/2026.8.33", f.selected.sha);
     const selection = {
       codexSuites: ["live-codex-harness-docker", "live-codex-harness-gpt56-sol-docker"],
       fsSafeNative: true,
@@ -1029,7 +948,7 @@ describe("frozen admission entry", () => {
     expect(JSON.parse(result.stdout).contracts).toEqual([
       { consumer: "live-codex-harness-docker", status: "ADMITTED", model: "openai/gpt-5.5" },
       { consumer: "live-codex-harness-gpt56-sol-docker", status: "NOT RUN" },
-      { consumer: "fs-safe-native", mode: "not-applicable" },
+      { consumer: "fs-safe-native", mode: "bundled" },
     ]);
     removeBlob(f.selected, catalog);
     const rejected = f.run(selection);
@@ -1039,7 +958,6 @@ describe("frozen admission entry", () => {
 
   it.each([
     { dependency: "0.18.2", version: "2026.9.33", requiresDefaults: false },
-    { dependency: "0.4.1", version: "2026.7.33", requiresDefaults: true },
     { dependency: "0.5.6", version: "2026.8.33", requiresDefaults: true },
   ])(
     "retains the fs-safe $dependency contract when the defaults shim is absent",
@@ -1088,7 +1006,7 @@ describe("frozen admission entry", () => {
       {
         ...Object.fromEntries(files.map((file) => [file, "selected fixture, not executable"])),
         ...(consumer === "codex-on-demand"
-          ? { [codexManifest]: '{"name":"@openclaw/codex","version":"2026.7.33"}' }
+          ? { [codexManifest]: '{"name":"@openclaw/codex","version":"2026.8.35"}' }
           : {}),
         ...(consumer === "kitchen-sink-plugin"
           ? { [pluginAssertions]: "function assertPluginTgzRemoved() {}" }
@@ -1154,7 +1072,7 @@ describe("frozen admission entry", () => {
       const capabilityOid = removeBlob(f.selected, pluginAssertions);
       const unreadable = f.run({ consumers: [consumer] });
       expectRejected(unreadable, "unable to read selected source");
-      expect(f.run({ consumers: ["onboard"] }).status).toBe(0);
+      expect(f.run({ consumers: [] }).status).toBe(0);
       expect(f.selected.git("hash-object", "-w", pluginAssertions)).toBe(capabilityOid);
     }
     removeBlob(f.selected, files[0]!);
@@ -1184,7 +1102,7 @@ describe("frozen admission entry", () => {
           shape === "absent" ? "missing required contract file" : "unable to read selected source",
         );
       }
-      expect(f.run({ consumers: ["onboard"] }).status).toBe(0);
+      expect(f.run({ consumers: [] }).status).toBe(0);
     },
   );
 

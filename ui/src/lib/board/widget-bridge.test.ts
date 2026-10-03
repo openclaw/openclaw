@@ -32,7 +32,7 @@ function setup(
     ),
   };
   const confirmPrompt = vi.fn(() => true);
-  const dispatchPrompt = vi.fn(() => true);
+  const dispatchPrompt = vi.fn(async () => true);
   const controller = new BoardWidgetBridgeController({
     frame: document.createElement("iframe"),
     ticket: "ticket",
@@ -105,6 +105,7 @@ describe("board widget bridge", () => {
       "Show details",
       "widget",
       confirmPrompt,
+      undefined,
     );
   });
 
@@ -121,6 +122,7 @@ describe("board widget bridge", () => {
       "Show details",
       "widget",
       undefined,
+      undefined,
     );
   });
 
@@ -136,6 +138,7 @@ describe("board widget bridge", () => {
       "Show details",
       "widget",
       confirmPrompt,
+      undefined,
     );
   });
 

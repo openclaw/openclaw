@@ -450,7 +450,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     try {
       testState.agentsConfig = {
         ownership: "explicit",
-        list: [{ id: "main" }, { id: "beta" }],
+        entries: { main: {}, beta: {} },
       };
       resetConfigRuntimeState();
       agentCommandMock.mockClear();
@@ -534,7 +534,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     };
 
     try {
-      testState.agentsConfig = { list: [{ id: "main" }] };
+      testState.agentsConfig = { entries: { main: {} } };
       resetConfigRuntimeState();
 
       {
@@ -564,7 +564,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
 
       testState.agentsConfig = {
         ownership: "explicit",
-        list: [{ id: "main" }, { id: "beta" }],
+        entries: { main: {}, beta: {} },
       };
       resetConfigRuntimeState();
       await expectAgentSessionKeyMatch({
@@ -581,7 +581,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         matcher: /^agent:beta:/,
       });
 
-      testState.agentsConfig = { list: [{ id: "main" }] };
+      testState.agentsConfig = { entries: { main: {} } };
       resetConfigRuntimeState();
 
       await expectAgentSessionKeyMatch({
@@ -635,7 +635,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       {
         testState.agentsConfig = {
           ownership: "explicit",
-          list: [{ id: "main" }, { id: "beta" }],
+          entries: { main: {}, beta: {} },
         };
         resetConfigRuntimeState();
         mockAgentOnce([{ text: "hello" }]);
@@ -647,7 +647,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
 
         expect(firstAgentCommandOptions()?.sessionKey).toBe("agent:beta:openai:custom");
         await res.text();
-        testState.agentsConfig = { list: [{ id: "main" }] };
+        testState.agentsConfig = { entries: { main: {} } };
         resetConfigRuntimeState();
       }
 

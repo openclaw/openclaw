@@ -8,6 +8,7 @@ import type {
   PluginStateKeyedStore,
   PluginStateSyncKeyedStore,
 } from "../../../plugin-state/plugin-state-store.js";
+import { sleep } from "../../../utils/sleep.js";
 import {
   combineNativeSessionBindingAuthority,
   type NativeSessionBindingAuthority,
@@ -422,9 +423,3 @@ type NativeSessionBindingLeaseOwner = {
   assertCurrent?: () => void;
   authority?: NativeSessionBindingAuthority;
 };
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
-}

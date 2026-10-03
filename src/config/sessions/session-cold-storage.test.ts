@@ -649,7 +649,7 @@ describe("cold transcript storage workers", () => {
     await expect(
       runSessionColdStorageMaintenance({
         config: {
-          agents: { list: [{ id: "main" }] },
+          agents: { entries: { main: {} } },
           session: {
             store: fixture.scope.storePath,
             maintenance: { coldStorage: { enabled: true, afterDays: 30 } },

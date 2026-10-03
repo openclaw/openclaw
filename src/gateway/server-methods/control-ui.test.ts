@@ -739,7 +739,7 @@ describe("controlUi.sessionPullRequests.checks", () => {
     await withOpenClawTestState({ label: "ci-details-global" }, async () => {
       const cfg: OpenClawConfig = {
         session: { scope: "global" },
-        agents: { entries: { main: { default: true }, research: {} } },
+        agents: { entries: { main: {}, research: {} } },
       };
       await replaceSessionEntry(
         { agentId: "research", sessionKey: "global" },

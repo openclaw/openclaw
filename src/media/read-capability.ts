@@ -132,22 +132,38 @@ function workspaceOwnsMediaPath(access: OutboundMediaAccess | undefined, filePat
   );
 }
 
+type AgentScopedOutboundMediaAccessParams = {
+  cfg: OpenClawConfig;
+  agentId?: string;
+  mediaSources?: readonly string[];
+  workspaceDir?: string;
+  sessionWorkspaceDir?: string;
+  workspaceOnly?: boolean;
+  /** False when local execution paths belong to another host. */
+  allowHostWorkspace?: boolean;
+  mediaAccess?: OutboundMediaAccess;
+  /** Workspace-bounded transport reader; sender policy remains owned by this resolver. */
+  workspaceMediaAccess?: OutboundMediaAccess;
+  mediaReadFile?: OutboundMediaReadFile;
+} & OutboundHostMediaPolicyContext;
+
 /** Resolves roots and optional host read capability for outbound media in an agent context. */
 export function resolveAgentScopedOutboundMediaAccess(
-  params: {
-    cfg: OpenClawConfig;
-    agentId?: string;
-    mediaSources?: readonly string[];
-    workspaceDir?: string;
-    sessionWorkspaceDir?: string;
-    workspaceOnly?: boolean;
-    /** False when local execution paths belong to another host. */
-    allowHostWorkspace?: boolean;
-    mediaAccess?: HostOutboundMediaAccess;
-    /** Workspace-bounded transport reader; sender policy remains owned by this resolver. */
-    workspaceMediaAccess?: HostOutboundMediaAccess;
-    mediaReadFile?: OutboundMediaReadFile;
-  } & OutboundHostMediaPolicyContext,
+  params: AgentScopedOutboundMediaAccessParams,
+): OutboundMediaAccess {
+  return resolveAgentScopedMediaAccess(params, false);
+}
+
+/** Adds a bounded native opener for host-owned media staging. */
+export function resolveAgentScopedHostOutboundMediaAccess(
+  params: AgentScopedOutboundMediaAccessParams,
+): HostOutboundMediaAccess {
+  return resolveAgentScopedMediaAccess(params, true);
+}
+
+function resolveAgentScopedMediaAccess(
+  params: AgentScopedOutboundMediaAccessParams,
+  includeHostOpener: boolean,
 ): HostOutboundMediaAccess {
   if (params.allowHostWorkspace === false) {
     return { localRoots: getManagedMediaLocalRoots(params.mediaSources) };
@@ -234,30 +250,31 @@ export function resolveAgentScopedOutboundMediaAccess(
         excludedLocalRoots: registeredRoots,
       })
     : undefined;
+  const mediaAccess: OutboundMediaAccess = {
+    ...(localRoots?.length ? { localRoots } : {}),
+    ...(readFile ? { readFile } : {}),
+    ...(resolvedWorkspaceDir ? { workspaceDir: resolvedWorkspaceDir } : {}),
+  };
+  if (!includeHostOpener) {
+    return mediaAccess;
+  }
   const openFile: HostOutboundMediaAccess["openFile"] = async (filePath, options) => {
-    // The same transport precedence as readFile: a native copy must never read a stale
-    // local mirror of a sandbox or remotely owned workspace.
-    if (mediaReadAllowed && workspaceOwnsMediaPath(params.workspaceMediaAccess, filePath)) {
-      return await params.workspaceMediaAccess?.openFile?.(filePath, options);
-    }
+    // Paths owned by a transport or caller reader stay on that buffered reader: a native
+    // copy must never read a stale local mirror of a sandbox or remotely owned workspace.
     if (
-      registeredMedia &&
-      registeredRoots.some((root) => isPathInside(root, path.resolve(filePath)))
+      (mediaReadAllowed &&
+        (workspaceOwnsMediaPath(params.workspaceMediaAccess, filePath) ||
+          params.mediaAccess?.readFile ||
+          params.mediaReadFile)) ||
+      (registeredMedia &&
+        registeredRoots.some((root) => isPathInside(root, path.resolve(filePath))))
     ) {
       return undefined;
-    }
-    if (mediaReadAllowed && (params.mediaAccess?.readFile || params.mediaReadFile)) {
-      return await params.mediaAccess?.openFile?.(filePath, options);
     }
     return await openLocalMediaFile(filePath, localRoots ?? [], {
       ...options,
       excludedRoots: registeredRoots,
     });
   };
-  return {
-    ...(localRoots?.length ? { localRoots } : {}),
-    ...(readFile ? { readFile } : {}),
-    openFile,
-    ...(resolvedWorkspaceDir ? { workspaceDir: resolvedWorkspaceDir } : {}),
-  };
+  return { ...mediaAccess, openFile };
 }

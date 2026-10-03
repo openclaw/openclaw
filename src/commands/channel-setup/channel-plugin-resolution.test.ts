@@ -100,7 +100,7 @@ describe("resolveInstallableChannelPlugin", () => {
     const result = await resolveInstallableChannelPlugin({
       cfg: {
         agents: {
-          list: [{ id: "alpha" }, { id: "beta" }],
+          entries: { alpha: {}, beta: {} },
         },
       },
       runtime: {} as never,
@@ -131,7 +131,7 @@ describe("resolveInstallableChannelPlugin", () => {
       resolveInstallableChannelPlugin({
         cfg: {
           agents: {
-            list: [{ id: "alpha" }, { id: "beta" }],
+            entries: { alpha: {}, beta: {} },
           },
         },
         runtime: {} as never,

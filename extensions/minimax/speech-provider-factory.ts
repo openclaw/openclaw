@@ -32,18 +32,11 @@ const MINIMAX_TOKEN_PLAN_ENV_VARS = [
   "MINIMAX_CODING_API_KEY",
 ] as const;
 
-type MinimaxTtsProviderConfig = {
-  apiKey?: string;
-  baseUrl: string;
-  model: string;
-  voiceId: string;
-  speed?: number;
-  vol?: number;
-  pitch?: number;
-};
-
 type MinimaxTtsProviderOverrides = Partial<
-  Pick<MinimaxTtsProviderConfig, "model" | "voiceId" | "speed" | "vol" | "pitch">
+  Pick<
+    ReturnType<typeof normalizeMinimaxProviderConfig>,
+    "model" | "voiceId" | "speed" | "vol" | "pitch"
+  >
 >;
 
 function resolveConfiguredPortalTtsBaseUrl(cfg: OpenClawConfig | undefined): string | undefined {
@@ -76,10 +69,7 @@ function resolveMinimaxDirectTtsApiKey(configApiKey?: string): string | undefine
   );
 }
 
-function normalizeMinimaxProviderConfig(
-  rawConfig: Record<string, unknown>,
-  cfg?: OpenClawConfig,
-): MinimaxTtsProviderConfig {
+function normalizeMinimaxProviderConfig(rawConfig: Record<string, unknown>, cfg?: OpenClawConfig) {
   const providers = asOptionalRecord(rawConfig.providers);
   const raw = asOptionalRecord(providers?.minimax) ?? asOptionalRecord(rawConfig.minimax);
   return {
@@ -120,10 +110,7 @@ function normalizeMinimaxPitch(value: unknown): number | undefined {
   return pitch !== undefined ? Math.trunc(pitch) : undefined;
 }
 
-function readMinimaxProviderConfig(
-  config: SpeechProviderConfig,
-  cfg?: OpenClawConfig,
-): MinimaxTtsProviderConfig {
+function readMinimaxProviderConfig(config: SpeechProviderConfig, cfg?: OpenClawConfig) {
   return normalizeMinimaxProviderConfig(
     { minimax: { ...config, apiKey: trimToUndefined(config.apiKey) } },
     cfg,

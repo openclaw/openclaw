@@ -271,7 +271,8 @@ async function prepareSandboxWorkspaceSelection(
         agentId: runtime.agentId,
         sessionKey: rawSessionKey,
         workspaceDir: params.workspaceDir,
-        backend: resolved.cfg.backend,
+        sandbox: resolved.cfg,
+        signal: readAdmittedRunOperatorAuthority(params.admittedRunContext)?.signal,
         assertCurrent: params.assertCurrent,
       })
     : undefined;

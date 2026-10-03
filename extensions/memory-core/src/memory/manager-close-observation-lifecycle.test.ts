@@ -76,7 +76,7 @@ describe("MemoryIndexManager observation close lifecycle", () => {
   async function open(agentId: string) {
     const cfg: OpenClawConfig = {
       plugins: { enabled: false },
-      agents: { defaults: { workspace: state.workspaceDir }, list: [{ id: agentId }] },
+      agents: { defaults: { workspace: state.workspaceDir }, entries: { [agentId]: {} } },
       memory: {
         search: {
           provider: "openai",

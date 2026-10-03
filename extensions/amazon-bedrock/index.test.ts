@@ -126,6 +126,7 @@ const ANTHROPIC_MODEL_DESCRIPTOR = {
 
 const APP_INFERENCE_PROFILE_ARN =
   "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/my-claude-profile";
+const BEDROCK_RUNTIME_CONTEXT = "OpenClaw runtime context:\nTransient context";
 const APP_INFERENCE_PROFILE_DESCRIPTOR = {
   api: "openai-completions",
   provider: "amazon-bedrock",
@@ -901,13 +902,12 @@ describe("amazon-bedrock provider plugin", () => {
     });
 
     it("keeps opaque-profile fallback checkpoints before dynamic system context and out of transient history", async () => {
-      const provider = await registerWithConfig(undefined);
       const payload = {
         system: [{ text: "Stable workspace" }, { text: "Dynamic suffix" }],
-        messages: [{ role: "user", content: [{ text: "Request with transient context" }] }],
+        messages: [{ role: "user", content: [{ text: BEDROCK_RUNTIME_CONTEXT }] }],
       };
       await callWrappedStreamWithPayload(
-        provider,
+        await registerWithConfig(undefined),
         APP_INFERENCE_PROFILE_ARN,
         APP_INFERENCE_PROFILE_DESCRIPTOR,
         { cacheRetention: "long" },
@@ -917,9 +917,9 @@ describe("amazon-bedrock provider plugin", () => {
           messages: [
             {
               role: "user",
-              content: "Request with transient context",
-              runtimeContextCarrier: true,
+              content: BEDROCK_RUNTIME_CONTEXT,
               timestamp: 0,
+              runtimeContext: {},
             },
           ],
         },
@@ -929,7 +929,7 @@ describe("amazon-bedrock provider plugin", () => {
         { cachePoint: { type: "default", ttl: "1h" } },
         { text: "Dynamic suffix" },
       ]);
-      expect(payload.messages[0]?.content).toEqual([{ text: "Request with transient context" }]);
+      expect(payload.messages[0]?.content).toEqual([{ text: BEDROCK_RUNTIME_CONTEXT }]);
     });
 
     it("leaves canonical-profile runtime checkpoints unchanged", async () => {
@@ -945,7 +945,7 @@ describe("amazon-bedrock provider plugin", () => {
             role: "user",
             content: [{ text: "Stable request" }, { cachePoint: { type: "default" } }],
           },
-          { role: "user", content: [{ text: "Transient context" }] },
+          { role: "user", content: [{ text: BEDROCK_RUNTIME_CONTEXT }] },
         ],
       };
       const expected = structuredClone(payload);
@@ -972,9 +972,9 @@ describe("amazon-bedrock provider plugin", () => {
             { role: "user", content: "Stable request", timestamp: 0 },
             {
               role: "user",
-              content: "Transient context",
-              runtimeContextCarrier: true,
+              content: BEDROCK_RUNTIME_CONTEXT,
               timestamp: 1,
+              runtimeContext: {},
             },
           ],
         },

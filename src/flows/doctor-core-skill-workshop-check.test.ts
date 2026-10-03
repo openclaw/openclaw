@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createCanonicalAgentConfigFixture } from "../test-utils/config-roster.js";
 import { createCoreHealthChecks } from "./doctor-core-checks.js";
 import { runDoctorLintChecks } from "./doctor-lint-flow.js";
 import type { HealthCheck } from "./health-checks.js";
@@ -78,14 +79,14 @@ describe("core/doctor/skill-workshop-tool-policy", () => {
     },
     {
       label: "legacy-default roster",
-      cfg: {
+      cfg: createCanonicalAgentConfigFixture({
         agents: {
           list: [
             { id: "owner", default: true, tools: { profile: "messaging" } },
             { id: "helper", tools: { profile: "coding" } },
           ],
         },
-      } satisfies OpenClawConfig,
+      }).config,
       target: "owner",
     },
   ])("preserves normal diagnostics for a $label", async ({ cfg, target }) => {

@@ -235,14 +235,7 @@ const mockedWaitForDeferredTurnMaintenanceForSession = vi.fn(
 );
 const mockedSessionLikelyHasOversizedToolResults = vi.fn(() => false);
 const mockedResolveLiveToolResultMaxChars = vi.fn(() => 32_000);
-type MockTruncateOversizedToolResultsResult = {
-  truncated: boolean;
-  truncatedCount: number;
-  reason?: string;
-};
-const mockedTruncateOversizedToolResultsInSession = vi.fn<
-  () => MockTruncateOversizedToolResultsResult
->(() => ({
+const mockedTruncateOversizedToolResultsInSession = vi.fn(() => ({
   truncated: false,
   truncatedCount: 0,
   reason: "no oversized tool results",
@@ -868,11 +861,17 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
     runEmbeddedAttempt: mockedRunEmbeddedAttempt,
   }));
 
-  vi.doMock("./tool-result-truncation.js", () => ({
-    resolveLiveToolResultMaxChars: mockedResolveLiveToolResultMaxChars,
-    sessionLikelyHasOversizedToolResults: mockedSessionLikelyHasOversizedToolResults,
-    truncateOversizedToolResultsInSessionManager: mockedTruncateOversizedToolResultsInSession,
-  }));
+  vi.doMock("./tool-result-truncation.js", async () => {
+    const { restoreCacheTtlToolResultProjections } = await vi.importActual<
+      typeof import("./tool-result-truncation.js")
+    >("./tool-result-truncation.js");
+    return {
+      restoreCacheTtlToolResultProjections,
+      resolveLiveToolResultMaxChars: mockedResolveLiveToolResultMaxChars,
+      sessionLikelyHasOversizedToolResults: mockedSessionLikelyHasOversizedToolResults,
+      truncateOversizedToolResultsInSessionManager: mockedTruncateOversizedToolResultsInSession,
+    };
+  });
 
   vi.doMock("./context-engine-maintenance.js", () => ({
     runContextEngineMaintenance: mockedRunContextEngineMaintenance,

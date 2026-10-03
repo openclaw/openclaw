@@ -331,6 +331,7 @@ export function createTelegramMessagePipeline({
     dispatchDedupeClaims?: ChannelReplayClaimHandle[];
     spooledReplayParticipants?: readonly TelegramSpooledReplayDeferredParticipant[];
     spooledReplayAbortSignal?: AbortSignal;
+    onTurnDeferred?: () => void;
   }): Promise<TelegramMessageProcessingResult> => {
     let dispatchDedupeCommitted = false;
     let spooledReplayFinalResult: TelegramMessageProcessingResult | undefined;
@@ -534,6 +535,7 @@ export function createTelegramMessagePipeline({
             await commitDispatchDedupeClaims(params.dispatchDedupeClaims ?? []);
             dispatchDedupeCommitted = true;
           },
+          onTurnDeferred: params.onTurnDeferred,
           spooledReplayAbortSignal: params.spooledReplayAbortSignal,
           spooledReplayParticipant: processingParticipant,
           finalizeSpooledReplayResult,

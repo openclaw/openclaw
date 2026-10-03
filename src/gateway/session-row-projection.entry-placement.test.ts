@@ -20,7 +20,7 @@ it("reuses placement after runtime events and entry writes and refreshes actual 
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const cfg = {
       agents: {
-        list: [{ id: "main", default: true }],
+        entries: { main: {} },
         defaults: { model: "unit-test/model", utilityModel: "" },
       },
     };

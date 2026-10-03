@@ -227,7 +227,7 @@ describe("webchat commentary media", () => {
           ...scope,
           backingSessionId: scope.sessionId,
           cfg: {
-            agents: { list: [{ id: "main", workspace: state.workspaceDir }] },
+            agents: { entries: { main: { workspace: state.workspaceDir } } },
             ...(localMedia
               ? {
                   tools: {

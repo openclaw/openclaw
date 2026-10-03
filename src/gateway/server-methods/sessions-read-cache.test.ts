@@ -781,7 +781,7 @@ describe("resident sessions.list", () => {
     "keeps administrator %s projections scoped to their authenticated profiles",
     async (projection) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
-        const config: OpenClawConfig = { agents: { list: [{ id: "main", default: true }] } };
+        const config: OpenClawConfig = { agents: { entries: { main: {} } } };
         const context = requestContext(config);
         const clients = ["ada@example.com", "bob@example.com"].map((email) => {
           const client = identifiedClient(ensureProfileForEmail(email).id);

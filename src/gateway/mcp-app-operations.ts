@@ -235,6 +235,7 @@ export async function prepareModelCreatedAppToolCall(
     options: GatewayRequestHandlerOptions;
     toolName: string;
     input: Record<string, unknown>;
+    view?: McpAppViewLease;
     assertCurrent: () => void;
   },
 ): Promise<() => void> {
@@ -372,6 +373,8 @@ export async function prepareModelCreatedAppToolCall(
       serverName: view.serverName,
       toolName: request.toolName,
       input: request.input,
+      view: request.view,
+      requesterId,
       signal: options.signal,
       assertCurrent: () => {
         assertPolicy();
@@ -425,6 +428,7 @@ export async function executeMcpAppOperation(
           options: request.options,
           toolName: operation.params.name,
           input,
+          view,
           assertCurrent: assertViewCurrent,
           signal: request.options.signal,
         });
@@ -434,6 +438,7 @@ export async function executeMcpAppOperation(
           options: request.options,
           toolName: operation.params.name,
           input,
+          view,
           assertCurrent: assertViewCurrent,
         });
       }

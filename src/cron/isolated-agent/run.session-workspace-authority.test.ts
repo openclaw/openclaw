@@ -88,7 +88,7 @@ describe("scheduled workspace authority through creator, storage, scheduler and 
       ...cfg,
       agents: {
         defaults: { skipBootstrap: true, workspace: stateDir },
-        list: [{ id: "main", workspace: stateDir }],
+        entries: { main: { workspace: stateDir } },
       },
       tools: { allow: [AUTOMATIONS_TOOL_NAME, "read", "write"], fs: { workspaceOnly: true } },
     };

@@ -301,10 +301,10 @@ describe("buildAttemptSystemPrompt", () => {
       const config = {
         agents: {
           ownership: "explicit" as const,
-          list: [
-            { id: "main", sandbox: { mode: "off" as const } },
-            { id: "marketing", sandbox: { mode: "all" as const } },
-          ],
+          entries: {
+            main: { sandbox: { mode: "off" as const } },
+            marketing: { sandbox: { mode: "all" as const } },
+          },
         },
       };
       const attempt = {

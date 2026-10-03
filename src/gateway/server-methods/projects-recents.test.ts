@@ -99,7 +99,7 @@ test("projects.list returns only the caller's deterministic resolved recents", a
         execCwd: "/work/incognito",
       },
     );
-    const cfg = { agents: { list: [{ id: "main", default: true, workspace: "/workspace" }] } };
+    const cfg = { agents: { entries: { main: { workspace: "/workspace" } } } };
     linkEmail("source@example.test", targetProfile.id);
     releaseCatalog = retainUserProfileCatalog();
     const readResult = await invokeProjectMethod(

@@ -44,7 +44,7 @@ describe("resolveGatewayScopedTools", () => {
   it("rejects collector mode after gateway policy removes its reader", async () => {
     const result = resolveTools({
       cfg: {
-        agents: { entries: { main: { default: true } } },
+        agents: { entries: { main: {} } },
         tools: { profile: "coding" },
         gateway: { tools: { deny: ["agents_wait"] } },
       },

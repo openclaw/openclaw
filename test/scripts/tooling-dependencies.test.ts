@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, renameSync, symlinkSync } from "node:fs";
+import { existsSync, mkdirSync, renameSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -25,6 +25,31 @@ it.each([false, true])(
     expect(existsSync(join(fixture.checkout, "node_modules"))).toBe(false);
   },
 );
+
+it("loads tooling-root exports that a stale ancestor install lacks", () => {
+  const root = tempDirs.make("openclaw-tooling-exports-");
+  const fixture = createToolingDependencyFixture(root);
+  // Mirrors a primary checkout's older install: one subpath lacks a newer named
+  // export, another subpath is missing from its exports map entirely.
+  fixture.writePackage("fixture-pkg", 'export default "stale";', "0.0.0-stale", root, {
+    "./advanced": 'export const legacyCopy = "stale";',
+  });
+  fixture.writePackage("fixture-pkg", 'export default "qualified";', "1.0.0", fixture.tooling, {
+    "./advanced": 'export const copyFileDescriptorSync = "advanced";',
+    "./watch": 'export const watch = "watch";',
+  });
+  writeFileSync(
+    join(fixture.checkout, "scripts/crabbox-wrapper.mts"),
+    `import { copyFileDescriptorSync } from "fixture-pkg/advanced";
+import { watch } from "fixture-pkg/watch";
+console.log(copyFileDescriptorSync, watch);
+`,
+  );
+  const result = fixture.run();
+  expect(result.status, result.stderr).toBe(0);
+  expect(result.stdout).toBe("advanced watch\n");
+  expect(existsSync(join(fixture.checkout, "node_modules"))).toBe(false);
+});
 
 it.each(["tsx", "fixture-pkg"])("rejects stale %s before executing its source", (name) => {
   const fixture = createToolingDependencyFixture(tempDirs.make("openclaw-tooling-version-"), true);

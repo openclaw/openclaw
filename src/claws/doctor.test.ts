@@ -353,7 +353,7 @@ describe("collectClawStateHealthFindings", () => {
       expect.arrayContaining([
         expect.objectContaining({
           message: expect.stringContaining("changed after installation"),
-          path: "agents.list.worker",
+          path: "agents.entries.worker",
         }),
         expect.objectContaining({
           message: expect.stringContaining("workspace file changed"),

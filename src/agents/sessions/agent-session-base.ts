@@ -3,6 +3,10 @@ import { getStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
 import type { AssistantMessage, Model } from "../../llm/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { notifyListeners } from "../../shared/listeners.js";
+import {
+  getSteeringRuntimeContext,
+  shouldRetainSteeringRuntimeContext,
+} from "../embedded-agent-runner/run/runtime-context-prompt.js";
 import type {
   Agent,
   AgentEvent,
@@ -397,6 +401,20 @@ export abstract class AgentSessionBase {
           event.message.role === "toolResult" &&
           this.extensionModifiedToolResultIds.delete(event.message.toolCallId);
         try {
+          const retainedSteeringContext =
+            event.message.role === "user" && shouldRetainSteeringRuntimeContext(this)
+              ? getSteeringRuntimeContext(event.message)
+              : undefined;
+          if (retainedSteeringContext) {
+            // Prefix-bound thinking replays this carrier before its owning user.
+            // Persist that append-only prefix before the user can acquire a signed reply.
+            await this.sessionManager.appendCustomMessageEntryAsync(
+              retainedSteeringContext.customType,
+              retainedSteeringContext.content,
+              retainedSteeringContext.display,
+              retainedSteeringContext.details,
+            );
+          }
           const entryId = await persistAgentSessionMessage(this.sessionManager, event.message, {
             invalidateSerializedPrefixCache: messageChanged || toolResultChangedByExtension,
             sourceAppend: sourceSlots,

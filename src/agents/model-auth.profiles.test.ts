@@ -224,7 +224,7 @@ function cooldownStore(
 }
 
 function configuredAgent(agentDir: string) {
-  return { list: [{ id: "configured", default: true, agentDir }] };
+  return { entries: { configured: { agentDir } } };
 }
 
 function buildDemoLocalStore(keys: string[]) {

@@ -22,6 +22,10 @@ import {
   captureOpenClawAgentDatabaseExecution,
   supportsOpenClawAgentDatabaseExecution,
 } from "../../state/openclaw-agent-execution.js";
+import {
+  captureOpenClawDatabaseMaintenanceResource,
+  getOpenClawDatabaseMaintenanceScope,
+} from "../../state/openclaw-state-db-async-lifecycle.js";
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import { resolveStateDir } from "../state-dir.js";
 import {
@@ -59,6 +63,7 @@ type SessionEntryMaintenanceOwner = SessionEntryMaintenanceRequest & {
   ageChanges: Map<string, SessionEntryMaintenanceAgeChange>;
   assertCurrent: () => void;
   captureExecution: () => OpenClawAgentDatabaseExecution | undefined;
+  maintenanceResource?: ReturnType<typeof captureOpenClawDatabaseMaintenanceResource>;
   execution?: OpenClawAgentDatabaseExecution;
   active?: Promise<void>;
   release?: Promise<void>;
@@ -151,6 +156,7 @@ export function kickSessionEntryMaintenanceAfterWrite(
     rejections: 0,
   };
   maintenanceByStore.set(databasePath, created);
+  const maintenanceScope = getOpenClawDatabaseMaintenanceScope();
   const unregister: Array<() => void> = [];
   created.unregisterClose = () => unregister.forEach((release) => release());
   try {
@@ -166,17 +172,22 @@ export function kickSessionEntryMaintenanceAfterWrite(
       );
     }
     for (const resourcePath of new Set([databasePath, identity?.canonicalPath ?? databasePath])) {
-      unregister.push(
-        registerOpenClawAgentDatabaseAsyncResource({
-          agentId: options.agentId,
-          path: resourcePath,
-          revoke: () => retireMaintenanceOwner(databasePath, created),
-          close: async () => {
-            retireMaintenanceOwner(databasePath, created);
-            await created.retirement;
-          },
-        }),
-      );
+      const unregisterResource = registerOpenClawAgentDatabaseAsyncResource({
+        agentId: options.agentId,
+        path: resourcePath,
+        revoke: () => retireMaintenanceOwner(databasePath, created),
+        close: async () => {
+          retireMaintenanceOwner(databasePath, created);
+          await created.retirement;
+        },
+      });
+      unregister.push(unregisterResource);
+      if (maintenanceScope) {
+        created.maintenanceResource ??= captureOpenClawDatabaseMaintenanceResource(
+          unregisterResource,
+          maintenanceScope,
+        );
+      }
     }
   } catch (error) {
     retireMaintenanceOwner(databasePath, created);
@@ -193,6 +204,7 @@ function isMaintenanceOwnerCurrent(
     return false;
   }
   try {
+    owner.maintenanceResource?.assertCurrent();
     owner.assertCurrent();
     return true;
   } catch {
@@ -299,7 +311,16 @@ function scheduleMaintenanceAfterWriteQuiet(
 
 function startPendingMaintenance(databasePath: string, owner: SessionEntryMaintenanceOwner): void {
   // Publish the join before a pass can synchronously retire itself.
-  owner.active = Promise.resolve().then(() => runPendingMaintenance(databasePath, owner));
+  owner.active = Promise.resolve().then(async () => {
+    if (!isMaintenanceOwnerCurrent(databasePath, owner)) {
+      retireMaintenanceOwner(databasePath, owner);
+      return;
+    }
+    // Detach turn context, but keep Doctor/temporary-command database custody
+    // so background borrowing cannot move handles outside their cleanup scope.
+    const run = () => runPendingMaintenance(databasePath, owner);
+    await (owner.maintenanceResource ? owner.maintenanceResource.run(run) : run());
+  });
 }
 
 async function runPendingMaintenance(

@@ -252,19 +252,6 @@ export async function authorizeGatewayConnectDevice(
         );
       }
       let approved: Awaited<ReturnType<typeof approveDevicePairing>> | undefined;
-      const resolveLivePendingRequestId = async (): Promise<string | undefined> => {
-        const pendingList = await listDevicePairing();
-        const exactPending = pendingList.pending.find(
-          (pending) => pending.requestId === pairing.request.requestId,
-        );
-        if (exactPending) {
-          return exactPending.requestId;
-        }
-        const replacementPending = pendingList.pending.find(
-          (pending) => pending.deviceId === device.id && pending.publicKey === devicePublicKey,
-        );
-        return replacementPending?.requestId;
-      };
       const inlineApprovalAttempted =
         trustedProxyApprovalScopes !== null ||
         pairing.request.silent === true ||
@@ -388,7 +375,11 @@ export async function authorizeGatewayConnectDevice(
         reason,
       });
       // Re-resolve: another connection may have superseded/approved the request since we created it
-      const recoveryRequestId = await resolveLivePendingRequestId();
+      const { pending } = await listDevicePairing();
+      const recoveryRequestId = (
+        pending.find((entry) => entry.requestId === pairing.request.requestId) ??
+        pending.find((entry) => entry.deviceId === device.id && entry.publicKey === devicePublicKey)
+      )?.requestId;
       // Approval may come from another connection or be revoked during the
       // awaits above. Only the current device record can authorize continuation.
       const livePaired = await getPairedDevice(device.id);
@@ -514,7 +505,6 @@ export async function authorizeGatewayConnectDevice(
         paired,
         devicePublicKey,
         clientAccessMetadata,
-        handoffBootstrapProfile,
         requirePairing,
       });
       if (!existingDevice.ok) {

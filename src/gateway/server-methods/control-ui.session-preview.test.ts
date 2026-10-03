@@ -223,7 +223,7 @@ describe("controlUi.sessionPreview", () => {
     await withOpenClawTestState({ label: "hover-global-owner" }, async () => {
       const cfg: OpenClawConfig = {
         session: { scope: "global" },
-        agents: { entries: { main: { default: true }, research: {} } },
+        agents: { entries: { main: {}, research: {} } },
       };
       for (const agentId of ["main", "research"]) {
         const scope = { agentId, sessionKey: "global", sessionId: `hover-${agentId}` };

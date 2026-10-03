@@ -77,7 +77,7 @@ async function widgetHarness(
   const registry = createWorkboardCapabilityRegistry(handlers);
   setActivePluginRegistry(registry);
   const harness = createBoardHarness(undefined, {}, undefined, {
-    getRuntimeConfig: () => ({ agents: { list: [{ id: "main" }] }, tools: { exec: { mode } } }),
+    getRuntimeConfig: () => ({ agents: { entries: { main: {} } }, tools: { exec: { mode } } }),
   });
   const put = await harness.invoke("board.widget.put", {
     ...target,

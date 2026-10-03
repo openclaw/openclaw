@@ -122,43 +122,6 @@ const entry = {
   model: "qwen3:7b",
 };
 
-it("bounds exact discovery by matching rows instead of the resident roster", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    replaceSessionEntrySync(scope, entry);
-    addUnrelatedSessions();
-    const projection = await createSessionRowProjection({ cfg });
-    try {
-      await projection.ensureMaterialized();
-      const selections = vi.spyOn(projection, "selectEntries");
-      for (const p of [
-        { sessionId: entry.sessionId },
-        { sessionId: entry.sessionId, agentId: "main" },
-        { sessionId: key },
-        { reference: { key, slug: "other-session" } },
-        { sessionId: "missing-id", allowMissing: true },
-        { reference: { key: "agent:main:missing" }, allowMissing: true },
-      ]) {
-        selections.mockClear();
-        const result = resolveSessionKeyFromResolveParams({
-          client: null,
-          projection,
-          p,
-        });
-        expect(result).toMatchObject(
-          p.allowMissing ? { ok: true, missing: true } : { ok: true, key },
-        );
-        const enumerated = selections.mock.results.reduce(
-          (count, selection) => count + (selection.type === "return" ? selection.value.length : 0),
-          0,
-        );
-        expect(enumerated).toBeLessThanOrEqual(2);
-      }
-    } finally {
-      projection.dispose();
-    }
-  });
-});
-
 it.each(["exact", "broad"] as const)(
   "resolves replaced IDs immediately after a %s committed publication",
   async (publication) => {
@@ -289,24 +252,42 @@ it.each(["global", "unknown"] as const)(
   },
 );
 
-it("resolves all selectors from one resident projection and sees committed label changes", async () => {
+it("bounds exact resident selection without SQLite and sees committed label changes", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     replaceSessionEntrySync(scope, entry);
+    addUnrelatedSessions();
     const projection = await createSessionRowProjection({ cfg });
     const resolve = (p: SessionsResolveParams) =>
       withPreparedSessionResolve({ client: null, projection, p }, (resolved) => resolved);
     try {
       await projection.ensureMaterialized();
       const reads = observeMainThreadReads();
+      const selections = vi.spyOn(projection, "selectEntries");
       try {
         for (const p of [
           { key },
           { sessionId: entry.sessionId },
+          { sessionId: entry.sessionId, agentId: "main" },
+          { sessionId: key },
           { label: entry.label },
           { shortId: "12345678" },
           { reference: { key } },
+          { reference: { key, slug: "other-session" } },
+          { sessionId: "missing-id", allowMissing: true },
+          { reference: { key: "agent:main:missing" }, allowMissing: true },
         ]) {
-          expect(await resolve(p)).toMatchObject({ ok: true, key, agentId: "main" });
+          selections.mockClear();
+          expect(await resolve(p)).toMatchObject(
+            p.allowMissing ? { ok: true, missing: true } : { ok: true, key, agentId: "main" },
+          );
+          if ("sessionId" in p || "reference" in p) {
+            const enumerated = selections.mock.results.reduce(
+              (count, selection) =>
+                count + (selection.type === "return" ? selection.value.length : 0),
+              0,
+            );
+            expect(enumerated).toBeLessThanOrEqual(2);
+          }
         }
         reads.expectIdle();
       } finally {

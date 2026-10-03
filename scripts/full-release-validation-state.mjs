@@ -713,6 +713,7 @@ function manifestContextFromEnvironment(source) {
     validationInputs: inputs,
     publicationArtifacts: {
       npmPreflight: JSON.parse(env.QUALIFIED_NPM_BUNDLE_JSON || "null"),
+      pluginNpm: JSON.parse(env.PREPARED_PLUGIN_NPM_JSON || "null"),
       docker: env.PREPARED_DOCKER_MANIFEST_SHA256
         ? {
             preparedRunId: env.PREPARED_DOCKER_RUN_ID,

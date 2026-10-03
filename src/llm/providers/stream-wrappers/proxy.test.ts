@@ -180,7 +180,12 @@ describe("proxy stream wrappers", () => {
             systemPrompt: `${stable}${SYSTEM_PROMPT_CACHE_BOUNDARY}VOLATILE`,
             messages: [
               ...(hasUser ? [{ role: "user" as const, content: "Question", timestamp: 1 }] : []),
-              { role: "user", content: "Runtime", timestamp: 2, runtimeContextCarrier: true },
+              {
+                role: "user",
+                content: "OpenClaw runtime context:\nRuntime",
+                timestamp: 2,
+                runtimeContext: {},
+              },
             ],
           });
           const wire = JSON.stringify(payload);
@@ -195,7 +200,7 @@ describe("proxy stream wrappers", () => {
             expect(payload.messages).toEqual([
               { role: "system", content: `${stable}\nVOLATILE` },
               ...(hasUser ? [{ role: "user", content: "Question" }] : []),
-              { role: "user", content: "Runtime" },
+              { role: "system", content: "OpenClaw runtime context:\nRuntime" },
             ]);
           }
           expect(wire.includes('"ttl":"1h"')).toBe(

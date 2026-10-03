@@ -48,6 +48,7 @@ import {
   OLLAMA_DEFAULT_BASE_URL,
 } from "./defaults.js";
 import { normalizeOllamaWireModelId } from "./model-id.js";
+import { applyOllamaThinkingFloor } from "./model-reasoning.js";
 import { resolveOllamaBaseUrlForRun } from "./provider-base-url.js";
 import { buildOllamaBaseUrlSsrFPolicy, isOllamaCloudModel } from "./provider-models.js";
 import {
@@ -57,9 +58,8 @@ import {
 import {
   type OllamaThinkValue,
   resolveOllamaConfiguredNumCtx,
-  resolveOllamaThinkParamValue,
+  resolveOllamaConfiguredThink,
   supportsNativeOllamaMax,
-  shouldForwardNativeOllamaThink,
 } from "./stream-compat.js";
 import { OLLAMA_INCOMPLETE_STREAM_ERROR } from "./stream-contract.js";
 import { checkNdjsonRecordCap } from "./stream-ndjson-cap.js";
@@ -232,8 +232,8 @@ function resolveOllamaTopLevelParams(
 ): Record<string, unknown> | undefined {
   const params = model.params;
   const requestParams = pickOllamaParams(params, OLLAMA_TOP_LEVEL_PARAM_KEYS);
-  const think = resolveOllamaThinkParamValue(params, supportsNativeOllamaMax(model));
-  if (think !== undefined && shouldForwardNativeOllamaThink(model, think)) {
+  const think = resolveOllamaConfiguredThink(model, supportsNativeOllamaMax(model));
+  if (think !== undefined) {
     requestParams.think = think;
   }
   return Object.keys(requestParams).length > 0 ? requestParams : undefined;
@@ -919,7 +919,8 @@ function createRawOllamaStreamFn(
           init: {
             method: "POST",
             headers,
-            body: JSON.stringify(requestBody),
+            // Applied after payload hooks, so a `false` from any writer gets the model's floor.
+            body: JSON.stringify(applyOllamaThinkingFloor(requestBody, model.id)),
           },
           policy: ssrfPolicy,
           ...(options?.signal ? { signal: options.signal } : {}),

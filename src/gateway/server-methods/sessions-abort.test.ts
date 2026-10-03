@@ -30,7 +30,7 @@ function requireStateDir(): string {
 beforeEach(async () => {
   testState.sessionStorePath = undefined;
   testState.sessionConfig = undefined;
-  testState.agentsConfig = { list: [{ id: "main", default: true }, { id: "work" }] };
+  testState.agentsConfig = { entries: { main: {}, work: {} } };
   const { clearConfigCache, clearRuntimeConfigSnapshot } = await getGatewayConfigModule();
   clearRuntimeConfigSnapshot();
   clearConfigCache();
@@ -48,7 +48,7 @@ async function configureFixedSessionStore(label = "default"): Promise<string> {
   fs.mkdirSync(path.dirname(storePath), { recursive: true });
   fs.writeFileSync(storePath, "{}\n", "utf8");
   testState.sessionStorePath = storePath;
-  testState.agentsConfig = { list: [{ id: "main", default: true }] };
+  testState.agentsConfig = { entries: { main: {} } };
   const { clearConfigCache, clearRuntimeConfigSnapshot } = await getGatewayConfigModule();
   clearRuntimeConfigSnapshot();
   clearConfigCache();
@@ -202,7 +202,7 @@ test("sessions.abort finds a retired store only reachable through its determinis
   );
   const storePath = storeTemplate.replace("{agentId}", agentId);
   testState.sessionStorePath = storeTemplate;
-  testState.agentsConfig = { list: [{ id: "main", default: true }] };
+  testState.agentsConfig = { entries: { main: {} } };
   const { clearConfigCache, clearRuntimeConfigSnapshot } = await getGatewayConfigModule();
   clearRuntimeConfigSnapshot();
   clearConfigCache();
