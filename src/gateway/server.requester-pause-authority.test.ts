@@ -378,8 +378,14 @@ describe("requester pause authority at the Gateway effect", () => {
           await mutateSubagentRuns(
             [later.runId],
             (rows) => {
-              const draft = structuredClone(expectDefined(rows.get(later.runId), "later cohort child"));
-              draft.execution = { status: "terminal", endedAt: Date.now(), outcome: { status: "ok" } };
+              const draft = structuredClone(
+                expectDefined(rows.get(later.runId), "later cohort child"),
+              );
+              draft.execution = {
+                status: "terminal",
+                endedAt: Date.now(),
+                outcome: { status: "ok" },
+              };
               return { value: undefined, postimages: new Map([[draft.runId, draft]]) };
             },
             { runs, context: captureOpenClawStateWorkerContext() },
@@ -412,12 +418,20 @@ describe("requester pause authority at the Gateway effect", () => {
           originalBatch.map((entry) => entry.runId),
           (rows) => ({
             value: undefined,
-            postimages: new Map(originalBatch.map((entry) => {
-              const draft = structuredClone(expectDefined(rows.get(entry.runId), "settled cohort child"));
-              draft.pauseReason = undefined;
-              draft.execution = { status: "terminal", endedAt: Date.now(), outcome: { status: "ok" } };
-              return [entry.runId, draft];
-            })),
+            postimages: new Map(
+              originalBatch.map((entry) => {
+                const draft = structuredClone(
+                  expectDefined(rows.get(entry.runId), "settled cohort child"),
+                );
+                draft.pauseReason = undefined;
+                draft.execution = {
+                  status: "terminal",
+                  endedAt: Date.now(),
+                  outcome: { status: "ok" },
+                };
+                return [entry.runId, draft];
+              }),
+            ),
           }),
           { runs, context: captureOpenClawStateWorkerContext() },
         );

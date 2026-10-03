@@ -23,6 +23,10 @@ import {
 import { createResourceLoader } from "../agents/sessions/agent-session-loop-resource-loader.test-support.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
 import { deliverSubagentAnnouncement } from "../agents/subagents/announce/subagent-announce-delivery.js";
+import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
+import { mutateSubagentRuns } from "../agents/subagents/registry/subagent-registry-persistence.js";
+import { resumeSubagentRun } from "../agents/subagents/registry/subagent-registry.js";
+import { loadSubagentRegistryFromSqlite } from "../agents/subagents/registry/subagent-registry.store.sqlite.js";
 import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
 import {
   prepareRequesterCronAuthority,
@@ -33,6 +37,7 @@ import {
 import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import { listSessionPendingInputs } from "../config/sessions/session-accessor.pending-inputs.js";
+import { readMessageIdempotencyKey } from "../config/sessions/transcript-message-identity.js";
 import {
   claimAgentRunDelegatedAuthority,
   registerAgentRunContext,
@@ -40,11 +45,6 @@ import {
   clearAgentRunContext,
   validateAgentRunDelegatedAuthority,
 } from "../infra/agent-run-registry.js";
-import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
-import { mutateSubagentRuns } from "../agents/subagents/registry/subagent-registry-persistence.js";
-import { resumeSubagentRun } from "../agents/subagents/registry/subagent-registry.js";
-import { loadSubagentRegistryFromSqlite } from "../agents/subagents/registry/subagent-registry.store.sqlite.js";
-import { readMessageIdempotencyKey } from "../config/sessions/transcript-message-identity.js";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
 import {
   captureAgentHarnessCompletionCustody,
@@ -147,7 +147,7 @@ async function createCompletion(context: GatewayRequestContext, yieldedFollowup 
       cleanup: "keep",
       createdAt: 1,
       execution: { status: "terminal", endedAt: 2 },
-      expectsCompletionMessage: true,
+      completion: { required: true },
       delivery: { status: "pending" },
       requesterSettleWake: {
         status: "pending",
