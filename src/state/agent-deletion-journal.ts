@@ -289,7 +289,7 @@ function fromRow(
   };
 }
 
-function parseCleanupPaths(value: string): AgentDeletionJournalCleanupPath[] {
+export function parseCleanupPaths(value: string): AgentDeletionJournalCleanupPath[] {
   const parsed: unknown = JSON.parse(value);
   if (
     !Array.isArray(parsed) ||

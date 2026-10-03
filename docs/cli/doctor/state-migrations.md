@@ -174,17 +174,33 @@ when deletion history is unavailable, preserving legacy sources without importin
 or archiving them. Recorded deletion and reconstruction holds and retained plugin
 inputs with import receipts remain protected.
 Unreadable history does not erase readable deletion identities or recorded holds.
-`openclaw doctor --fix` reconstructs the journal and records a receipt listing the
-held database paths in the existing migration tables. Reconstruction preserves
-those stores; it does not migrate or retire them. Runtime admission remains separate
+`openclaw doctor --fix` reconstructs a missing journal and quarantines unusable
+journal records. Before removing an unusable record, it saves its original row,
+including malformed JSON, and the held-store inventory under
+`<state-dir>/agents/<id>/recovery/deletion-journal-<unique-id>.json`. Missing
+history gets an inventory receipt in the same recovery directory. Doctor records
+the maintenance holds in the existing migration tables. It leaves valid in-flight
+deletions with their lifecycle owner. For regular agents, quarantine retains a
+safe deletion tombstone until explicit restoration; it never resurrects a deleted
+agent merely by archiving malformed cleanup details. Recovery preserves held
+stores; it does not migrate or retire them. Runtime admission remains separate
 from Doctor's repair holds. Review the paths and use the
 noninteractive `openclaw agents add` command printed by Doctor to restore the
 intended agent, or `openclaw agents delete` to confirm deletion. An unconfigured
 agent must be restored before deletion. For a custom database filename, restore
 the original `session.store` configuration first; `agents add` refuses to create
-an empty replacement when it cannot select a held store. If Doctor cannot verify
-a custom store's owner, it leaves the journal unavailable and reports the path
-as a failing `agent-deletion-journal` check. Rerun Doctor after resolving the holds.
+an empty replacement when it cannot select a held store. Doctor prints the exact
+restore and delete commands using the regular agent's ID, such as `main`.
+The reserved system agents `openclaw` and `crestodian` cannot be added or deleted;
+a deletion record for either is invalid and is quarantined. Doctor preserves
+their stores and any held internal SQLite coordination artifacts without
+recommending an impossible `agents add` command. Do not assign a preserved
+system-agent database to a different agent ID.
+
+These holds are visible warnings, not update refusals: leaving the stores in
+place does not put their data at risk. If Doctor cannot verify a custom store's
+owner, it leaves the journal unavailable and reports the path. Resolve the
+inventory or ownership problem, then rerun `openclaw doctor --fix`.
 
 Invalid configuration also leaves the journal unavailable: Doctor cannot record
 a complete recovery inventory until it can validate configured ownership paths.
@@ -195,8 +211,9 @@ The intact historical shared schema written by `2026.7.35` predates the deletion
 journal. Doctor recognizes that schema and initializes the journal during the
 shared-schema migration, before migrating the agent databases in the same pass.
 This does not apply to modern databases with a missing journal or to recorded
-recovery holds. Explicit repair exits nonzero while deletion-history recovery
-leaves stores unverified; the failing check names the reason and restoration steps.
+recovery holds. Unverified deletion-history stores remain held while unrelated
+repairs and updates continue. Separate integrity, schema, and required-state
+refusals retain their existing data-preservation checks.
 
 Doctor reports interrupted auth-profile archive recovery even when no new migration remains or you decline another migration. If recovery cannot finish, its warning includes the failure cause and leaves the pending source for recovery; do not delete it to silence the warning.
 
