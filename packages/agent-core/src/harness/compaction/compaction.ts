@@ -949,15 +949,15 @@ export function compactWithoutSummary(
 ): Result<CompactionResult, CompactionError> {
   const droppedCount =
     preparation.messagesToSummarize.length + preparation.turnPrefixMessages.length;
-  const droppedNote = `[${droppedCount} earlier message(s) were removed without a summary because summarization failed. The messages after this summary are verbatim; ask the user if older details matter.]`;
-  const previousSummary = previousSummaryWithoutFileOperations(preparation);
+  const lossNotice = `[${droppedCount} earlier message(s) were removed without a summary because summarization failed. The messages after this summary are verbatim; ask the user if older details matter.]\n\n`;
   const sourceAsk = preparation.isSplitTurn
     ? extractLatestUserRequest(preparation.turnPrefixMessages)
     : undefined;
   return finalizeCompaction(
     preparation,
-    previousSummary ? `${previousSummary}\n\n${droppedNote}` : droppedNote,
+    previousSummaryWithoutFileOperations(preparation) ?? "",
     sourceAsk ? `${TURN_CONTEXT_PREFIX}## Original Request\n${JSON.stringify(sourceAsk)}` : "",
+    lossNotice,
   );
 }
 
@@ -978,14 +978,18 @@ function finalizeCompaction(
   preparation: CompactionPreparation,
   historySummary: string,
   latestContext: string,
+  lossNotice = "",
 ): Result<CompactionResult, CompactionError> {
   const { readFiles, modifiedFiles } = computeFileLists(preparation.fileOps);
   const fileOperations = formatFileOperations(readFiles, modifiedFiles);
-  const unresolvedRequestContext = preparation.latestUnresolvedUserRequest
-    ? `## Latest unresolved user request\n${JSON.stringify(preparation.latestUnresolvedUserRequest)}\n\n`
-    : "";
+  // Required prefix content survives fitting; only the history and split-turn context shrink.
+  const requiredPrefix = `${lossNotice}${
+    preparation.latestUnresolvedUserRequest
+      ? `## Latest unresolved user request\n${JSON.stringify(preparation.latestUnresolvedUserRequest)}\n\n`
+      : ""
+  }`;
   const fitted = fitCompactionSummary(preparation.summaryTokenBudget, (maxChars) => {
-    const requiredChars = fileOperations.length + unresolvedRequestContext.length;
+    const requiredChars = fileOperations.length + requiredPrefix.length;
     if (maxChars <= requiredChars + SUMMARY_TRUNCATED_MARKER.length) {
       return undefined;
     }
@@ -1008,9 +1012,9 @@ function finalizeCompaction(
     }
     const suffix = `${latestContextBudget > 0 ? capCompactionSummary(latestContext, latestContextBudget) : ""}${fileOperations}`;
     return {
-      summary: `${unresolvedRequestContext}${capCompactionSummary(
+      summary: `${requiredPrefix}${capCompactionSummary(
         `${historySummary}${suffix}`,
-        maxChars - unresolvedRequestContext.length,
+        maxChars - requiredPrefix.length,
         suffix,
       )}`,
     };

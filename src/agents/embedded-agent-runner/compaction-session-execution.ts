@@ -28,7 +28,7 @@ import {
 } from "../agent-settings.js";
 import { toToolDefinitions } from "../agent-tool-definition-adapter.js";
 import { pickFallbackThinkingLevel } from "../embedded-agent-helpers.js";
-import { coerceToFailoverError } from "../failover-error.js";
+import { resolveFailoverReasonFromError } from "../failover-error.js";
 import { registerProviderStreamForModel } from "../provider-stream.js";
 import { resolveAgentRunSessionTarget } from "../run-session-target.js";
 import { guardSessionManager } from "../session-tool-result-guard-wrapper.js";
@@ -43,7 +43,7 @@ import { DefaultResourceLoader } from "../sessions/resource-loader.js";
 import { createAgentSession } from "../sessions/sdk.js";
 import { setSessionModelUsageSink } from "../sessions/session-model-usage.js";
 import { normalizeUsage, type UsageLike } from "../usage.js";
-import { classifyCompactionReason, resolveCompactionFailure } from "./compact-reasons.js";
+import { resolveCompactionFailure } from "./compact-reasons.js";
 import {
   containsRealConversationMessages,
   summarizeCompactionMessages,
@@ -526,17 +526,15 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
                 safeguardCancellation: getCompactionSafeguardRuntime(sessionManager)?.cancellation,
                 abortSignal: params.abortSignal,
               });
+              // Classify the underlying error: safeguard display reasons mention "guard".
               // Other summary failures are fast and keep their owners' outcomes.
-              if (classifyCompactionReason(failure.reason) !== "timeout") {
+              if (resolveFailoverReasonFromError(failure.error, provider) !== "timeout") {
                 throw error;
               }
               // The timed-out request consumed the delegated window too. Rearm it synchronously,
               // before its same-window timer fires, for the next model candidate or the commit.
               params.compactionTimeoutReset?.();
-              if (
-                params.summaryFailoverPending &&
-                coerceToFailoverError(failure.error, { provider, model: modelId })
-              ) {
+              if (params.summaryFailoverPending) {
                 throw error;
               }
               // The same summary would time out again next turn (#164220): commit the

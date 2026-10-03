@@ -10,6 +10,8 @@ import {
 import {
   calculateContextTokens,
   compact,
+  compactWithoutSummary,
+  MAX_COMPACTION_SUMMARY_CHARS,
   estimateContextTokens,
   estimateTokens,
   findCutPoint,
@@ -993,4 +995,33 @@ describe("split-turn compaction", () => {
       }
     },
   );
+});
+
+describe("compactWithoutSummary", () => {
+  const lossNotice = "2 earlier message(s) were removed without a summary";
+  it.each([
+    { name: "a capped previous summary", summaryTokenBudget: undefined },
+    { name: "a constrained foreground budget", summaryTokenBudget: 200 },
+  ])("keeps the loss notice, source ask, and unresolved request beside $name", (case_) => {
+    const result = compactWithoutSummary({
+      firstKeptEntryId: "kept-entry",
+      messagesToSummarize: [{ role: "user", content: "history", timestamp: 1 }],
+      turnPrefixMessages: [{ role: "user", content: "original split ask", timestamp: 2 }],
+      isSplitTurn: true,
+      latestUnresolvedUserRequest: "finish the review",
+      previousSummary: "p".repeat(MAX_COMPACTION_SUMMARY_CHARS),
+      tokensBefore: 100,
+      fileOps: createFileOps(),
+      settings: { enabled: true, reserveTokens: 1_000, keepRecentTokens: 100 },
+      summaryTokenBudget: case_.summaryTokenBudget,
+    });
+
+    expect(result.ok).toBe(true);
+    const summary = result.ok ? result.value.summary : "";
+    expect(summary.length).toBeLessThanOrEqual(MAX_COMPACTION_SUMMARY_CHARS);
+    expect(summary).toContain(lossNotice);
+    expect(summary).toContain('"finish the review"');
+    expect(summary).toContain('"original split ask"');
+    expect(result.ok && result.value.firstKeptEntryId).toBe("kept-entry");
+  });
 });

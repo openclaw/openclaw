@@ -14,7 +14,7 @@ import { compactEmbeddedAgentSession } from "./compact.queued.js";
 
 // Real queued compaction, native delegate, AgentSession, and SQLite transcript; only the
 // provider is a local OpenAI-compatible endpoint whose summary requests stall, fail, or answer.
-type SummaryMode = "stall" | "error" | "ok";
+type SummaryMode = "stall" | "provider-timeout" | "error" | "ok";
 type SessionTarget = { agentId: string; sessionId: string; sessionKey: string; storePath: string };
 type Fixture = { state: OpenClawTestState; config: OpenClawConfig; target: SessionTarget };
 
@@ -34,6 +34,11 @@ beforeAll(async () => {
       const mode = body.includes('"model":"fallback-model"') ? "ok" : summaryMode;
       if (mode === "stall") {
         res.writeHead(200, { "content-type": "text/event-stream" });
+        return;
+      }
+      if (mode === "provider-timeout") {
+        res.writeHead(408, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: { message: "upstream request timed out" } }));
         return;
       }
       if (mode === "error") {
@@ -116,7 +121,7 @@ function appendToolTurns(fixture: Fixture, first: number, count: number): string
 
 async function withSession(
   run: (fixture: Fixture) => Promise<void>,
-  options: { modelFallback?: boolean } = {},
+  options: { modelFallback?: boolean; safeguard?: boolean } = {},
 ) {
   const state = await createOpenClawTestState({ prefix: "openclaw-summary-fallback-" });
   try {
@@ -137,7 +142,11 @@ async function withSession(
             primary: "fixture/model",
             ...(options.modelFallback ? { fallbacks: ["fixture/fallback-model"] } : {}),
           },
-          compaction: { timeoutSeconds: 5, keepRecentTokens: 300 },
+          compaction: {
+            timeoutSeconds: 5,
+            keepRecentTokens: 300,
+            ...(options.safeguard ? { mode: "safeguard" as const } : {}),
+          },
         },
       },
       models: {
@@ -252,6 +261,25 @@ describe("automatic compaction summary failure", () => {
         ).toEqual([expect.stringContaining("Model summary after recovery.")]);
       },
       { modelFallback: true },
+    );
+  });
+
+  it("commits the reduction after a provider-returned timeout in safeguard mode", async () => {
+    await withSession(
+      async (fixture) => {
+        appendToolTurns(fixture, 0, 8);
+        summaryMode = "provider-timeout";
+
+        expect(await compactSession(fixture)).toMatchObject({ ok: true, compacted: true });
+        expect(summaryRequests.length).toBeGreaterThan(0);
+        expect(
+          openSession(fixture)
+            .getBranch()
+            .filter((entry) => entry.type === "compaction")
+            .map((entry) => entry.summary),
+        ).toEqual([expect.stringContaining("removed without a summary")]);
+      },
+      { safeguard: true },
     );
   });
 
