@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { Worker } from "node:worker_threads";
-import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
+import { coerceErrorMessage, extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveGatewayLockDir } from "../config/paths.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -137,7 +137,7 @@ function verifyOwnerLock(owner: ProcessOwner, lock: StateOwnerFile | undefined):
     if (!projection.verifyStillHeld()) {
       return false;
     }
-    owner.heartbeat.worker.postMessage([projection.lockPath, raw]);
+    owner.heartbeat.worker.postMessage([projection.lockPath, raw], []);
     owner.heartbeat.paths.add(projection.lockPath);
   }
   owner.verifiedAt = performance.now();
@@ -161,7 +161,7 @@ function startOwnerHeartbeat(owner: ProcessOwner) {
   });
   worker.on("error", (error) =>
     log.warn(
-      `Gateway ownership heartbeat stopped: ${error.message}; restart the Gateway to renew ownership.`,
+      `Gateway ownership heartbeat stopped: ${coerceErrorMessage(error)}; restart the Gateway to renew ownership.`,
     ),
   );
   worker.unref();
@@ -398,7 +398,7 @@ function leaseForFile(
         }
         if (owner.locks.size === 0 && owners.get(pathname) === owner) {
           // Final physical release also ends its worker; retained schema leases keep both alive.
-          owner.heartbeat?.worker.postMessage("stop");
+          owner.heartbeat?.worker.postMessage("stop", []);
           void owner.heartbeat?.worker.terminate();
           owner.accepting = false;
           owners.delete(pathname);
@@ -565,7 +565,7 @@ export function acquireStateDatabaseSchemaLease(
     const heartbeat = (owner.heartbeat ??= startOwnerHeartbeat(owner));
     const raw = fs.readFileSync(projection.lockPath, "utf8");
     lease.assertCurrent();
-    heartbeat.worker.postMessage([projection.lockPath, raw]);
+    heartbeat.worker.postMessage([projection.lockPath, raw], []);
     heartbeat.paths.add(projection.lockPath);
     return lease;
   } catch (error) {
