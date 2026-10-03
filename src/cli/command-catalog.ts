@@ -195,11 +195,13 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     exact: true,
     policy: { networkProxy: "bypass" },
   })),
-  ...["stability", "stop", "restart", "uninstall", "usage-cost"].map((subcommand): CliCommandCatalogEntry => ({
-    commandPath: ["gateway", subcommand],
-    exact: true,
-    policy: { configGuard: "skip", loadPlugins: "never", networkProxy: "bypass" },
-  })),
+  ...["stability", "stop", "restart", "uninstall", "usage-cost"].map(
+    (subcommand): CliCommandCatalogEntry => ({
+      commandPath: ["gateway", subcommand],
+      exact: true,
+      policy: { configGuard: "skip", loadPlugins: "never", networkProxy: "bypass" },
+    }),
+  ),
   {
     commandPath: ["sessions"],
     exact: true,
