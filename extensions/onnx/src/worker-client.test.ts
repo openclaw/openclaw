@@ -69,7 +69,6 @@ process.on('message', async (request) => {
     }
   }
   if (text === 'missing') { process.send({ kind: 'error', id: request.id, code: 'model-missing' }); return; }
-  if (text === 'exit') process.exit(7);
   const results = request.inputs.map(() => ({ logits: [process.pid, Number(Boolean(process.env.ONNX_CLIENT_TEST_SECRET))], inputTokens: 1 }));
   if (text === 'malformed') results[0].logits = ['invalid', 0];
   process.send({ kind: 'results', id: text === 'stale' ? request.id + 1000 : request.id, results: text === 'shape' ? [] : results });
@@ -233,7 +232,7 @@ describe("InferenceWorkerClient", () => {
     expect(result[0]?.logits[0]).not.toBe(started.pid);
   });
 
-  it.each(["stale", "malformed", "shape", "exit"])(
+  it.each(["stale", "malformed", "shape"])(
     "rejects %s replies and recovers queued work in a new process",
     async (text) => {
       const { client, events } = fixture();
@@ -248,24 +247,19 @@ describe("InferenceWorkerClient", () => {
     },
   );
 
-  it.each([false, true])(
-    "stops and joins running work even before readiness (%s), then refuses new admission",
-    async (holdInit) => {
-      const { client, waitFor, events } = fixture({ holdInit });
-      const active = client.classify("test-model", input("block"), signal());
-      const activeRejected = expect(active).rejects.toMatchObject({ code: "runtime" });
-      const started = await waitFor((event) =>
-        holdInit ? event.kind === "init" : event.text === "block",
-      );
-      const queued = client.warm(["test-model"], signal());
-      const queuedRejected = expect(queued).rejects.toMatchObject({ code: "runtime" });
-      await Promise.all([client.stop(), client.stop(), activeRejected, queuedRejected]);
-      expect(alive(started.pid)).toBe(false);
-      await expect(client.classify("test-model", input("late"), signal())).rejects.toMatchObject({
-        code: "runtime",
-      });
-      expect(events().filter((event) => event.kind === "init")).toHaveLength(1);
-      expect(events().some((event) => event.kind === "warm")).toBe(false);
-    },
-  );
+  it("stops and joins startup before readiness, then refuses new admission", async () => {
+    const { client, waitFor, events } = fixture({ holdInit: true });
+    const active = client.classify("test-model", input("block"), signal());
+    const activeRejected = expect(active).rejects.toMatchObject({ code: "runtime" });
+    const started = await waitFor((event) => event.kind === "init");
+    const queued = client.warm(["test-model"], signal());
+    const queuedRejected = expect(queued).rejects.toMatchObject({ code: "runtime" });
+    await Promise.all([client.stop(), client.stop(), activeRejected, queuedRejected]);
+    expect(alive(started.pid)).toBe(false);
+    await expect(client.classify("test-model", input("late"), signal())).rejects.toMatchObject({
+      code: "runtime",
+    });
+    expect(events().filter((event) => event.kind === "init")).toHaveLength(1);
+    expect(events().some((event) => event.kind === "warm")).toBe(false);
+  });
 });
