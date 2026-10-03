@@ -48,6 +48,7 @@ export type MainSessionRecoveryView =
   | { status: "tombstoned" };
 
 export type MainSessionRecoveryConflict =
+  | "acp_source_turn"
   | "already_tombstoned"
   | "foreground_active"
   | "not_interrupted"

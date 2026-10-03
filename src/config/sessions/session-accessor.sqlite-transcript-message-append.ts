@@ -38,6 +38,10 @@ import {
   readTranscriptMessageByScopedIdempotencyKey,
   redactTranscriptMessageForStorage,
 } from "./session-accessor.sqlite-transcript-store.js";
+import {
+  captureTranscriptEntryProvenance,
+  rememberTranscriptMessageProvenance,
+} from "./transcript-entry-provenance.js";
 import { normalizeTranscriptJsonValue } from "./transcript-json.js";
 import { readMessageIdempotencyKey } from "./transcript-message-identity.js";
 import { prepareTranscriptPayloadForReuse } from "./transcript-payload.js";
@@ -175,6 +179,19 @@ export function appendTranscriptMessageInTransaction<TMessage>(
       entryId: params.messageId,
       message: params.message,
     });
+  const retainOriginalSource = (result: TranscriptMessageAppendResult<TMessage>) => {
+    if (result.appended && isRecord(result.message) && result.message.role === "user") {
+      rememberTranscriptMessageProvenance(
+        [result],
+        captureTranscriptEntryProvenance(
+          database,
+          readSessionEntryRow(database, resolved.sessionKey)?.entry,
+        ),
+        resolved,
+      );
+    }
+    return result;
+  };
   const existingAppendResult = (found: { message: unknown; messageId: string }) => {
     const anchor = readAnchor(found);
     if (pending) {
@@ -194,7 +211,7 @@ export function appendTranscriptMessageInTransaction<TMessage>(
       }
       consumeSessionPendingInput(database, pending);
     }
-    return {
+    return retainOriginalSource({
       appended: false as const,
       ...(anchor ? { anchor } : {}),
       effectiveParentId:
@@ -202,7 +219,7 @@ export function appendTranscriptMessageInTransaction<TMessage>(
         null,
       message: found.message as TMessage,
       messageId: found.messageId,
-    };
+    });
   };
   const idempotencyKey = readMessageIdempotencyKey(options.message);
   if (idempotencyKey && options.idempotencyLookup !== "caller-checked") {
@@ -312,11 +329,11 @@ export function appendTranscriptMessageInTransaction<TMessage>(
       consumeSessionPendingInput(database, pending);
     }
   }
-  return {
+  return retainOriginalSource({
     appended: true,
     ...(anchor ? { anchor } : {}),
     effectiveParentId: parentId ?? null,
     message: persistedMessage,
     messageId,
-  };
+  });
 }

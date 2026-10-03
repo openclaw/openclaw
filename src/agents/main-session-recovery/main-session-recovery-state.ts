@@ -7,6 +7,7 @@ import type {
   MainRestartRecoveryState,
   RestartRecoveryRun,
 } from "../../config/sessions.js";
+import { hasCurrentAcpSourceTurn } from "../../config/sessions/acp-source-turn-state.js";
 import { hasRestartRecoveryTerminalRun } from "../../config/sessions/restart-recovery-state.js";
 import {
   isAcpSessionKey,
@@ -108,6 +109,9 @@ function validateRecoveryAdmission(
   const state = entry.mainRestartRecovery;
   if (entry.sessionId !== command.sessionId) {
     return "session_replaced";
+  }
+  if (hasCurrentAcpSourceTurn(entry)) {
+    return "acp_source_turn";
   }
   if (entry.status !== "running" || entry.abortedLastRun !== true || !state) {
     return "not_interrupted";
@@ -429,6 +433,9 @@ export function transitionMainSessionRecovery(
       };
     }
     case "prepare_attempt": {
+      if (hasCurrentAcpSourceTurn(entry)) {
+        return { kind: "rejected", reason: "acp_source_turn" };
+      }
       const conflict = matchesObservation(entry, command.observation);
       if (conflict) {
         return { kind: "rejected", reason: conflict };

@@ -1,5 +1,9 @@
+import path from "node:path";
 import { vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
+import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { FinalizedRuntimeMsgContext } from "../templating.js";
 import { tryDispatchAcpReplyCore } from "./dispatch-acp.js";
 import type { ReplyDispatcher } from "./reply-dispatcher.types.js";
@@ -8,6 +12,29 @@ import {
   createAcpTestConfig,
   createAcpTestReplyDispatcherFixture as createDispatcher,
 } from "./test-fixtures/acp-runtime.js";
+
+export async function createAcpSourceTranscriptFixture(
+  state: OpenClawTestState,
+  sessionKey: string,
+  sessionId: string,
+  text: string,
+) {
+  const target = {
+    agentId: "codex-acp",
+    sessionId,
+    sessionKey,
+    storePath: path.join(state.sessionsDir("codex-acp"), "sessions.json"),
+  };
+  const entry = await upsertSessionEntryCore(target, { sessionId, updatedAt: 1 });
+  if (!entry) {
+    throw new Error("Missing canonical ACP source fixture entry");
+  }
+  const recorder = createUserTurnTranscriptRecorder({
+    target: { ...target, sessionEntry: undefined },
+    resolveInput: async () => ({ text }),
+  });
+  return { target, entry, recorder };
+}
 
 export async function runDispatch(params: {
   bodyForAgent: string;

@@ -150,7 +150,11 @@ export async function prepareCliHistoryBoundary(
       ) {
         throw new Error("CLI history owner changed before preparation");
       }
-      return { activeWriterRunId: writerRunId, cliHistoryBoundary: boundary };
+      return {
+        activeWriterRunId: writerRunId,
+        acpSourceTurn: undefined,
+        cliHistoryBoundary: boundary,
+      };
     },
     {
       preserveActivity: true,

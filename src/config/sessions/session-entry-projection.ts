@@ -14,6 +14,7 @@ type RetiredSessionMetadata = {
 
 export const SESSION_ENTRY_PRIVATE_CLEAR_PATCH = {
   activeWriterRunId: undefined,
+  acpSourceTurn: undefined,
   lastRunId: undefined,
   lifecycleRunId: undefined,
   mainRestartRecovery: undefined,
@@ -29,6 +30,7 @@ const PRIVATE_SESSION_ENTRY_KEYS = [
   "cliHistoryBoundary",
   "publicShare",
   "activeWriterRunId",
+  "acpSourceTurn",
   "lastRunId",
   "lifecycleRunId",
   "mainRestartRecovery",

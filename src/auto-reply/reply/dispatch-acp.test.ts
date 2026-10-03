@@ -1,16 +1,13 @@
+// Shared mock registration precedes the production dispatch dependency graph.
+import "./dispatch-acp.shared.test-harness.js";
 import path from "node:path";
 import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
 import type { AcpElicitationHandler } from "@openclaw/acp-core/runtime/types";
-import { detectMime } from "@openclaw/media-core/mime";
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { DecisionReceiptV1 } from "../../../packages/gateway-protocol/src/index.js";
-import type { MediaUnderstandingSkipError } from "../../../packages/media-understanding-common/src/errors.js";
 import { createTestChannelIngressOwner } from "../../../test/helpers/channel-admission-evidence.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import type { AcpSessionResolution } from "../../acp/control-plane/manager.types.js";
 import { AcpRuntimeError } from "../../acp/runtime/errors.js";
-import type { AcpSessionStoreEntry } from "../../acp/runtime/session-meta.js";
 import { registerPendingAgentQuestion } from "../../agents/harness/gateway-question.js";
 import { configureExecutionIdentityAdmissionSink } from "../../audit/execution-identity-admission.js";
 import { configureRuntimeActionDecisionSink } from "../../audit/runtime-action-decision.js";
@@ -19,17 +16,11 @@ import { createHostChannelInboundEventContextBuilder } from "../../channels/inbo
 import { createChannelAdmissionAudit } from "../../channels/message-access/admission-evidence.js";
 import { createHostChannelIngressRuntime } from "../../channels/message-access/runtime.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import {
-  loadTranscriptEvents,
-  upsertSessionEntryCore,
-} from "../../config/sessions/session-accessor.js";
+import { loadTranscriptEvents } from "../../config/sessions/session-accessor.js";
 import {
   OutboundDeliveryError,
   PlatformMessageNotDispatchedError,
 } from "../../infra/outbound/deliver-types.js";
-import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
-import type { ApplyMediaUnderstandingResult } from "../../media-understanding/apply.js";
-import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { ReplyDispatchRun } from "../get-reply-options.types.js";
@@ -37,12 +28,10 @@ import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-paylo
 import type { ReplyPayload } from "../types.js";
 import { tryDispatchAcpReplyCore } from "./dispatch-acp.js";
 import { expectAcpSessionParticipantInput } from "./dispatch-acp.participant.test-support.js";
-import { runDispatch } from "./dispatch-acp.test-support.js";
+import { createAcpSourceTranscriptFixture, runDispatch } from "./dispatch-acp.test-support.js";
 import { createAbortAwareDispatcher } from "./dispatch-from-config.abort.js";
-import type { HistoryEntry } from "./history.types.js";
 import { finalizeInboundContext } from "./inbound-context.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
-import type { ReplyDispatcher } from "./reply-dispatcher.types.js";
 import { buildTestCtx } from "./test-ctx.js";
 import {
   createAcpSessionMeta,
@@ -50,390 +39,43 @@ import {
   createAcpTestReplyDispatcherFixture as createDispatcher,
 } from "./test-fixtures/acp-runtime.js";
 
-const managerMocks = vi.hoisted(() => ({
-  resolveSessionAsync: vi.fn<() => Promise<AcpSessionResolution>>(),
-  runTurn: vi.fn(),
-  getObservabilitySnapshot: vi.fn(() => ({
-    turns: { queueDepth: 0 },
-    runtimeCache: { activeSessions: 0 },
-  })),
-}));
-
-const auditMocks = vi.hoisted(() => ({
-  emitAcpLifecycleStart: vi.fn(),
-  emitAcpRuntimeEvent: vi.fn(),
-  emitAcpLifecycleEnd: vi.fn(),
-  emitAcpLifecycleError: vi.fn(),
-}));
-
-const policyMocks = vi.hoisted(() => ({
-  resolveAcpDispatchPolicyError: vi.fn<(cfg: OpenClawConfig) => AcpRuntimeError | null>(() => null),
-  resolveAcpAgentPolicyError: vi.fn<(cfg: OpenClawConfig, agent: string) => AcpRuntimeError | null>(
-    () => null,
-  ),
-}));
-
-const routeMocks = vi.hoisted(() => ({
-  routeReply: vi.fn<(_params: unknown) => ReturnType<typeof import("./route-reply.js").routeReply>>(
-    async () => ({ ok: true, delivered: true, messageId: "mock" }),
-  ),
-}));
-
-const channelPluginMocks = vi.hoisted(() => ({
-  getChannelPlugin: vi.fn((channelId: string) => {
-    if (channelId !== "discord" && channelId !== "slack" && channelId !== "telegram") {
-      return undefined;
-    }
-    return {
-      config: {
-        listAccountIds: () => [],
-        resolveAccount: () => ({}),
-      },
-      outbound: {
-        shouldTreatDeliveredTextAsVisible: ({
-          kind,
-          text,
-        }: {
-          kind: "tool" | "block" | "final";
-          text?: string;
-        }) => kind === "block" && typeof text === "string" && text.trim().length > 0,
-      },
-    };
-  }),
-}));
-
-const messageActionMocks = vi.hoisted(() => ({
-  runMessageAction: vi.fn(async (_params: unknown) => ({ ok: true as const })),
-}));
-
-const ttsMocks = vi.hoisted(() => ({
-  maybeApplyTtsToPayload: vi.fn(async (paramsUnknown: unknown) => {
-    const params = paramsUnknown as { payload: unknown };
-    return params.payload;
-  }),
-}));
-
-const ttsCapabilityMocks = vi.hoisted(() => ({ captionedFinalText: false }));
-
-const mediaUnderstandingMocks = vi.hoisted(() => ({
-  applyMediaUnderstanding: vi.fn<
-    (_params: unknown) => Promise<ApplyMediaUnderstandingResult | undefined>
-  >(async () => undefined),
-}));
-
-const acpAttachmentBuffers = vi.hoisted(() => new Map<string, Buffer>());
-const ACP_PNG_IMAGE_BYTES = Buffer.from(
-  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=",
-  "base64",
-);
-const ACP_JPEG_IMAGE_BYTES = Buffer.from("ffd8ffe000104a46494600010100000100010000ffd9", "hex");
-const ACP_PDF_BYTES = Buffer.from("%PDF-1.7\n1 0 obj\n<< /Type /Catalog >>\nendobj\n");
-
-const diagnosticMocks = vi.hoisted(() => ({
-  markDiagnosticSessionProgress: vi.fn(),
-}));
-
-const sessionMetaMocks = vi.hoisted(() => ({
-  readAcpSessionEntry: vi.fn<
-    (params: { sessionKey: string; cfg?: OpenClawConfig }) => AcpSessionStoreEntry | null
-  >(() => null),
-}));
-
-const transcriptMocks = vi.hoisted(() => ({
-  persistAcpDispatchTranscript: vi.fn(async (_params: unknown) => undefined),
-}));
-
-const { mocks: bindingServiceMocks, module: bindingServiceModule } = await vi.hoisted(async () => {
-  const { createAcpBindingMocks } = await import("./session-binding.test-mocks.js");
-  return createAcpBindingMocks(vi);
-});
-
-vi.mock("../../infra/outbound/session-binding-service.js", () => bindingServiceModule);
-vi.mock("./dispatch-acp-manager.runtime.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./dispatch-acp-manager.runtime.js")>()),
-  getAcpSessionManager: () => managerMocks,
-  readAcpSessionEntryAsync: async (params: { sessionKey: string; cfg?: OpenClawConfig }) =>
-    sessionMetaMocks.readAcpSessionEntry(params),
-}));
-
-vi.mock("../../agents/command/acp-lifecycle.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../agents/command/acp-lifecycle.js")>();
-  return {
-    createAcpToolLifecycleTracker: actual.createAcpToolLifecycleTracker,
-    emitAcpLifecycleStart: auditMocks.emitAcpLifecycleStart,
-    emitAcpRuntimeEvent: auditMocks.emitAcpRuntimeEvent,
-    emitAcpLifecycleEnd: auditMocks.emitAcpLifecycleEnd,
-    emitAcpLifecycleError: auditMocks.emitAcpLifecycleError,
-    resolveAcpLifecycleEndFields: actual.resolveAcpLifecycleEndFields,
-  };
-});
-
-vi.mock("../../acp/policy.js", () => ({
-  resolveAcpDispatchPolicyError: (cfg: OpenClawConfig) =>
-    policyMocks.resolveAcpDispatchPolicyError(cfg),
-  resolveAcpAgentPolicyError: (cfg: OpenClawConfig, agent: string) =>
-    policyMocks.resolveAcpAgentPolicyError(cfg, agent),
-}));
-
-vi.mock("./route-reply.runtime.js", () => ({
-  routeReply: (params: unknown) => routeMocks.routeReply(params),
-}));
-
-vi.mock("../../channels/plugins/index.js", () => ({
-  getChannelPlugin: (channelId: string) => channelPluginMocks.getChannelPlugin(channelId),
-  getLoadedChannelPlugin: (channelId: string) => channelPluginMocks.getChannelPlugin(channelId),
-  normalizeChannelId: (channelId?: string | null) => channelId?.trim().toLowerCase() || null,
-}));
-
-vi.mock("../../infra/outbound/message-action-runner.js", () => ({
-  runMessageAction: (params: unknown) => messageActionMocks.runMessageAction(params),
-}));
-
-vi.mock("../../tts/tts.runtime.js", () => ({
-  maybeApplyTtsToPayload: (params: unknown) => ttsMocks.maybeApplyTtsToPayload(params),
-}));
-
-vi.mock("../../tts/captioned-final.js", async () => {
-  const actual = await vi.importActual<typeof import("../../tts/captioned-final.js")>(
-    "../../tts/captioned-final.js",
-  );
-  return {
-    ...actual,
-    shouldDeferFinalTtsText: () => ttsCapabilityMocks.captionedFinalText,
-  };
-});
-
-vi.mock("../../tts/status-config.js", () => ({
-  resolveStatusTtsSnapshot: () => ({
-    autoMode: "always",
-    provider: "auto",
-    maxLength: 1500,
-    summarize: true,
-  }),
-}));
-
-vi.mock("./dispatch-acp-media.runtime.js", async () => {
-  const attachmentNormalization = await vi.importActual<
-    typeof import("../../media-understanding/attachments.normalize.js")
-  >("../../media-understanding/attachments.normalize.js");
-  return {
-    applyMediaUnderstanding: (params: unknown) =>
-      mediaUnderstandingMocks.applyMediaUnderstanding(params),
-    isImageAttachment: attachmentNormalization.isImageAttachment,
-    isMediaUnderstandingSkipError: (error: unknown): error is MediaUnderstandingSkipError =>
-      error instanceof Error && error.name === "MediaUnderstandingSkipError",
-    normalizeAttachments: attachmentNormalization.normalizeAttachments,
-    resolveMediaAttachmentLocalRoots: (params: {
-      cfg: { channels?: Record<string, { attachmentRoots?: string[] } | undefined> };
-      ctx: { Provider?: string; Surface?: string };
-    }) => {
-      const channel = params.ctx.Provider ?? params.ctx.Surface ?? "";
-      return params.cfg.channels?.[channel]?.attachmentRoots ?? [];
-    },
-    MediaAttachmentCache: class {
-      constructor(
-        private readonly attachments: Array<{ path?: string; mime?: string; index: number }>,
-      ) {}
-      async getBuffer({ attachmentIndex }: { attachmentIndex: number }) {
-        const attachment = this.attachments.find((item) => item.index === attachmentIndex);
-        const pathLocal = attachment?.path;
-        const buffer = pathLocal ? acpAttachmentBuffers.get(pathLocal) : undefined;
-        if (buffer) {
-          return {
-            buffer,
-            mime: await detectMime({
-              buffer,
-              filePath: pathLocal,
-              headerMime: attachment?.mime,
-            }),
-            fileName: pathLocal,
-            size: buffer.length,
-          };
-        }
-        const error = new Error("outside allowed roots");
-        error.name = "MediaUnderstandingSkipError";
-        throw error;
-      }
-    },
-  };
-});
-
-vi.mock("../../logging/diagnostic.js", () => ({
-  markDiagnosticSessionProgress: diagnosticMocks.markDiagnosticSessionProgress,
-}));
-
-vi.mock("./dispatch-acp-transcript.runtime.js", () => ({
-  persistAcpDispatchTranscript: (params: unknown) =>
-    transcriptMocks.persistAcpDispatchTranscript(params),
-}));
-
-const sessionKey = "agent:codex-acp:session-1";
-const originalFetch = globalThis.fetch;
-type MockTtsReply = Awaited<ReturnType<typeof ttsMocks.maybeApplyTtsToPayload>>;
-type MockCallSource = { mock: { calls: Array<Array<unknown>> } };
-
-const requireRecord = createRequireRecord("object", "expected-label");
-
-function routeCall(index = 0) {
-  return requireRecord(routeMocks.routeReply.mock.calls[index]?.[0], "route call");
-}
-
-function routePayload(index = 0) {
-  return requireRecord(routeCall(index).payload, `route payload ${index}`);
-}
-
-function expectTranscript(fields: Record<string, unknown>) {
-  expect(transcriptMocks.persistAcpDispatchTranscript).toHaveBeenCalledExactlyOnceWith(
-    expect.objectContaining(fields),
-  );
-}
-
-function transcriptCall() {
-  return requireRecord(
-    transcriptMocks.persistAcpDispatchTranscript.mock.calls[0]?.[0],
-    "transcript",
-  );
-}
-
-function runTurnCall(index = 0) {
-  return requireRecord(managerMocks.runTurn.mock.calls[index]?.[0], "run turn");
-}
-
-function dispatcherCall(
-  fn:
-    | ReplyDispatcher["sendToolResult"]
-    | ReplyDispatcher["sendBlockReply"]
-    | ReplyDispatcher["sendFinalReply"],
-  index = 0,
-) {
-  return requireRecord((fn as unknown as MockCallSource).mock.calls[index]?.[0], "dispatcher call");
-}
-
-function sessionBinding(targetSessionKey: string, accountId = "default"): SessionBindingRecord {
-  return {
-    bindingId: `discord:${accountId}:thread-1`,
-    targetSessionKey,
-    targetKind: "session",
-    status: "active",
-    boundAt: 0,
-    conversation: { channel: "discord", accountId, conversationId: "thread-1" },
-  };
-}
-
-function imageHistory(
-  media: HistoryEntry["media"],
-  overrides: Partial<HistoryEntry> = {},
-): HistoryEntry {
-  return {
-    sender: "@alice",
-    body: "<media:image>",
-    timestamp: 1_700_000_000_000,
-    media,
-    ...overrides,
-  };
-}
-
-function liveConfig(tts: OpenClawConfig["tts"]) {
-  return createAcpTestConfig({
-    acp: { enabled: true, stream: { deliveryMode: "live" } },
-    tts,
-  });
-}
-
-function mockToolLifecycleTurn(toolCallId: string) {
-  managerMocks.runTurn.mockImplementation(
-    async ({ onEvent }: { onEvent: (event: unknown) => Promise<void> }) => {
-      await onEvent({
-        type: "tool_call",
-        tag: "tool_call",
-        toolCallId,
-        status: "in_progress",
-        title: "Run command",
-        text: "Run command (in_progress)",
-      });
-      await onEvent({
-        type: "tool_call",
-        tag: "tool_call_update",
-        toolCallId,
-        status: "completed",
-        title: "Run command",
-        text: "Run command (completed)",
-      });
-      await onEvent({ type: "done" });
-    },
-  );
-}
-
-function mockVisibleTextTurn(text = "visible") {
-  managerMocks.runTurn.mockImplementationOnce(
-    async ({ onEvent }: { onEvent: (event: unknown) => Promise<void> }) => {
-      await onEvent({ type: "text_delta", text, tag: "agent_message_chunk" });
-      await onEvent({ type: "done" });
-    },
-  );
-}
+const {
+  managerMocks,
+  auditMocks,
+  policyMocks,
+  routeMocks,
+  messageActionMocks,
+  ttsMocks,
+  ttsCapabilityMocks,
+  mediaUnderstandingMocks,
+  acpAttachmentBuffers,
+  ACP_PNG_IMAGE_BYTES,
+  ACP_JPEG_IMAGE_BYTES,
+  ACP_PDF_BYTES,
+  diagnosticMocks,
+  sessionMetaMocks,
+  transcriptMocks,
+  sessionKey,
+  requireRecord,
+  routeCall,
+  routePayload,
+  expectTranscript,
+  transcriptCall,
+  runTurnCall,
+  dispatcherCall,
+  sessionBinding,
+  imageHistory,
+  liveConfig,
+  mockToolLifecycleTurn,
+  mockVisibleTextTurn,
+  bindingServiceMocks,
+} = await import("./dispatch-acp.shared.test-harness.js");
 
 describe("tryDispatchAcpReplyCore", () => {
   it("records an accepted channel input in the canonical participant store", async () => {
     await expectAcpSessionParticipantInput(sessionKey, async () => {
       await runDispatch({ bodyForAgent: "hello", ctxOverrides: { SenderId: "participant" } });
     });
-  });
-  beforeEach(() => {
-    auditMocks.emitAcpLifecycleStart.mockReset();
-    auditMocks.emitAcpRuntimeEvent.mockReset();
-    auditMocks.emitAcpLifecycleEnd.mockReset();
-    auditMocks.emitAcpLifecycleError.mockReset();
-    auditMocks.emitAcpLifecycleError.mockReturnValue({ reason: "failed", status: "error" });
-    managerMocks.resolveSessionAsync.mockReset();
-    managerMocks.resolveSessionAsync.mockResolvedValue({
-      kind: "ready",
-      sessionKey,
-      agentId: "codex-acp",
-      meta: createAcpSessionMeta(),
-    });
-    managerMocks.runTurn.mockReset();
-    managerMocks.runTurn.mockImplementation(
-      async ({ onEvent }: { onEvent?: (event: unknown) => Promise<void> }) => {
-        await onEvent?.({ type: "done" });
-      },
-    );
-    managerMocks.getObservabilitySnapshot.mockReset();
-    managerMocks.getObservabilitySnapshot.mockReturnValue({
-      turns: { queueDepth: 0 },
-      runtimeCache: { activeSessions: 0 },
-    });
-    policyMocks.resolveAcpDispatchPolicyError.mockReset();
-    policyMocks.resolveAcpDispatchPolicyError.mockReturnValue(null);
-    policyMocks.resolveAcpAgentPolicyError.mockReset();
-    policyMocks.resolveAcpAgentPolicyError.mockReturnValue(null);
-    routeMocks.routeReply.mockReset();
-    routeMocks.routeReply.mockResolvedValue({
-      ok: true,
-      delivered: true,
-      messageId: "mock",
-    });
-    channelPluginMocks.getChannelPlugin.mockClear();
-    messageActionMocks.runMessageAction.mockReset();
-    messageActionMocks.runMessageAction.mockResolvedValue({ ok: true as const });
-    ttsMocks.maybeApplyTtsToPayload.mockReset();
-    ttsMocks.maybeApplyTtsToPayload.mockImplementation(async (paramsUnknown: unknown) => {
-      const params = paramsUnknown as { payload: unknown };
-      return params.payload;
-    });
-    ttsCapabilityMocks.captionedFinalText = false;
-    mediaUnderstandingMocks.applyMediaUnderstanding.mockReset();
-    mediaUnderstandingMocks.applyMediaUnderstanding.mockResolvedValue(undefined);
-    acpAttachmentBuffers.clear();
-    diagnosticMocks.markDiagnosticSessionProgress.mockReset();
-    sessionMetaMocks.readAcpSessionEntry.mockReset();
-    sessionMetaMocks.readAcpSessionEntry.mockReturnValue(null);
-    transcriptMocks.persistAcpDispatchTranscript.mockClear();
-    bindingServiceMocks.listBySession.mockReset();
-    bindingServiceMocks.listBySession.mockReturnValue([]);
-    bindingServiceMocks.unbind.mockReset();
-    bindingServiceMocks.unbind.mockResolvedValue([]);
-    globalThis.fetch = originalFetch;
   });
 
   it("admits ACP message turns with the original channel participant", async () => {
@@ -934,20 +576,22 @@ describe("tryDispatchAcpReplyCore", () => {
 
   it("keeps settled ACP completion aligned with transcript persistence during caller cancellation", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const target = {
-        agentId: "codex-acp",
-        sessionId: "acp-cancel-during-transcript",
+      const { target, entry, recorder } = await createAcpSourceTranscriptFixture(
+        state,
         sessionKey,
-        storePath: path.join(state.sessionsDir("codex-acp"), "sessions.json"),
-      };
-      await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+        "acp-cancel-during-transcript",
+        "Cancel while saving this turn.",
+      );
+      managerMocks.resolveSessionAsync.mockResolvedValue({
+        kind: "ready",
+        sessionKey,
+        agentId: target.agentId,
+        meta: createAcpSessionMeta(),
+        entry,
+      });
       const text = "Completed output awaiting transcript persistence.";
       mockVisibleTextTurn(text);
       const controller = new AbortController();
-      const recorder = createUserTurnTranscriptRecorder({
-        target: { ...target, sessionEntry: undefined },
-        resolveInput: async () => ({ text: "Cancel while saving this turn." }),
-      });
       const actualTranscript = await vi.importActual<
         typeof import("./dispatch-acp-transcript.runtime.js")
       >("./dispatch-acp-transcript.runtime.js");
@@ -980,8 +624,8 @@ describe("tryDispatchAcpReplyCore", () => {
         },
       });
       const persistedMessages = (await loadTranscriptEvents(target)).flatMap((event) => {
-        const entry = requireRecord(event, "transcript event");
-        return entry.type === "message" ? [entry.message] : [];
+        const record = requireRecord(event, "transcript event");
+        return record.type === "message" ? [record.message] : [];
       });
       const expectedAssistant = {
         role: "assistant",
@@ -1024,7 +668,7 @@ describe("tryDispatchAcpReplyCore", () => {
   });
 
   it("passes the ACP agent directory without declaring host-path access", async () => {
-    const agentDir = "/tmp/acp-agent";
+    const agentDir = path.resolve("/tmp/acp-agent");
     await runDispatch({
       bodyForAgent: "describe image",
       cfg: createAcpTestConfig({
@@ -1584,7 +1228,7 @@ describe("tryDispatchAcpReplyCore", () => {
       ttsMocks.maybeApplyTtsToPayload.mockResolvedValueOnce({
         mediaUrl,
         audioAsVoice: true,
-      } as MockTtsReply);
+      });
       const attempted: Array<{ kind: string; text?: string; mediaUrl?: string }> = [];
       const dispatcher = createReplyDispatcher({
         transformReplyPayload:
@@ -1702,7 +1346,7 @@ describe("tryDispatchAcpReplyCore", () => {
         audioAsVoice: true,
         spokenText: text,
         ttsSupplement: { spokenText: text },
-      } as MockTtsReply);
+      });
       mockVisibleTextTurn(text);
       const controller = new AbortController();
       const started = createDeferred();

@@ -299,6 +299,9 @@ export function retainSessionHistoryWorkerDatabase(
     const owner: SessionHistoryWorkerDatabase = {
       generation: owned.generation,
       assertCurrent,
+      get entryReadSource() {
+        return entryReadSource;
+      },
       ...createSessionHistoryWorkerReaders(runRequest),
     };
     return { owner, release };

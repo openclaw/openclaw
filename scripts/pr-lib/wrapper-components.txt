@@ -578,6 +578,7 @@ src/config/sessions/targets-collision.ts
 src/config/sessions/targets-configured-agents.ts
 src/config/sessions/targets-path-validation.ts
 src/config/sessions/targets.ts
+src/config/sessions/transcript-entry-provenance.ts
 src/config/sessions/transcript-payload.ts
 src/config/sessions/transcript-target-binding.ts
 src/config/sessions/version.ts

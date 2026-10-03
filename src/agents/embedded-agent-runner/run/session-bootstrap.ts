@@ -439,6 +439,7 @@ export async function claimAgentSessionWriter(params: RunEmbeddedAgentParams): P
       }
       return Object.assign({}, entry, {
         activeWriterRunId: params.runId,
+        acpSourceTurn: undefined,
       });
     },
     { skipMaintenance: true },

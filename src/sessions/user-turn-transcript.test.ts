@@ -252,6 +252,24 @@ describe("user turn transcript persistence", () => {
   });
 
   describe("createUserTurnTranscriptRecorder", () => {
+    it.each([undefined, "source-input:user"])(
+      "enforces the fresh input commit assertion with key %s",
+      async (idempotencyKey) => {
+        const target = createSqliteTranscriptTarget({ dir: sessionDirs.make() });
+        const recorder = createUserTurnTranscriptRecorder({
+          input: { text: "fresh input", ...(idempotencyKey ? { idempotencyKey } : {}) },
+          target,
+          updateMode: "none",
+          assertOriginalInputCommit: () => {
+            throw new Error("Original input commit refused");
+          },
+        });
+
+        await expect(recorder.persistApproved()).rejects.toThrow("Original input commit refused");
+        await expect(readTranscriptMessages(target)).resolves.toEqual([]);
+      },
+    );
+
     it("persists fallback user turns only once", async () => {
       const dir = sessionDirs.make();
       const target = createSqliteTranscriptTarget({ dir });

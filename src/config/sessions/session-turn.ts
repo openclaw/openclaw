@@ -27,6 +27,12 @@ import type {
   SqliteSessionTurnOptions,
   SqliteExpectedSessionTranscriptTurnResult,
 } from "./session-turn.types.js";
+import {
+  createTranscriptEntryProvenance,
+  rememberTranscriptMessageProvenance,
+  type TranscriptEntryProvenance,
+} from "./transcript-entry-provenance.js";
+import { assertTranscriptSourceCommitDatabase } from "./transcript-source-commit-restrictions.js";
 
 export async function appendSessionTurnInWorker(
   requested: ResolvedTranscriptScope,
@@ -39,10 +45,14 @@ export async function appendSessionTurnInWorker(
   const custody = captureSessionPendingInputWorkerCustody();
   const cliWriter = getCliHistoryWriter({ ...scope, storePath: scope.path });
   let custodyRequired = false;
+  let committedDatabase: TranscriptEntryProvenance["database"];
   const freshCommitGuards = new Set<() => void>();
   const assertCurrent = () => {
     execution.assertCurrent();
     options.assertCurrent?.();
+    if (committedDatabase) {
+      assertTranscriptSourceCommitDatabase(options.assertCurrent, committedDatabase.identity);
+    }
     options.sessionTurnMutation?.assertCurrent?.();
     if (options.sessionTurnMutation) {
       assertSessionGoalOperationTime(options.sessionTurnMutation.operation, Date.now());
@@ -147,6 +157,16 @@ export async function appendSessionTurnInWorker(
         }
       },
       async run(worker, commit) {
+        // Preparation already bound this execution to the original native file owner.
+        const identity = execution.fileIdentity;
+        if (!identity) {
+          throw new Error("Transcript append has no admitted physical database.");
+        }
+        committedDatabase = {
+          path: database.path,
+          identity: { key: `file:${identity.physicalIdentity}`, birthtime: identity.birthtime },
+        };
+        assertCurrent();
         const selected = await worker.execute({ type: "session.turn.prepare", input: plan });
         assertCurrent();
         if (selected.result) {
@@ -227,6 +247,14 @@ export async function appendSessionTurnInWorker(
         }
       },
       async onCommitted(candidate, published, identity) {
+        rememberTranscriptMessageProvenance(
+          candidate.result.appendedMessages,
+          createTranscriptEntryProvenance(
+            published?.current.get(scope.sessionKey) ?? candidate.result.sessionEntry,
+            committedDatabase,
+          ),
+          scope,
+        );
         if (published) {
           publishCommittedSessionIdentity(
             scope.agentId,

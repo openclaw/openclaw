@@ -73,6 +73,27 @@ describe("session-store-runtime", () => {
     );
   }
 
+  async function seedAcpSourceSession(sessionKey: string) {
+    const acpSourceTurn = {
+      sourceSessionId: "source-session",
+      sourceLifecycleRevision: "source-revision",
+      runId: "source-run",
+      targetAgentId: "acp-agent",
+      targetSessionKey: "agent:acp-agent:acp:target",
+      targetSessionId: "target-session",
+    };
+    await replaceInternalSessionEntry({ sessionKey, storePath }, {
+      acpSourceTurn,
+      activeWriterRunId: acpSourceTurn.runId,
+      lifecycleRevision: acpSourceTurn.sourceLifecycleRevision,
+      lifecycleRunId: acpSourceTurn.runId,
+      sessionId: acpSourceTurn.sourceSessionId,
+      status: "running",
+      updatedAt: 10,
+    } satisfies InternalSessionEntry);
+    return acpSourceTurn;
+  }
+
   function assignOwner(sessionKey: string): void {
     const actor = { id: "profile-owner", type: "human" as const };
     assignSessionOwner({ sessionKey, storePath }, { assignedBy: actor, owner: actor });
@@ -258,6 +279,90 @@ describe("session-store-runtime", () => {
       updatedAt: 20,
     });
     expect(loadInternalSessionEntry({ sessionKey, storePath })?.model).toBeUndefined();
+  });
+
+  it.each(["upsert", "replaceEntry"] as const)(
+    "preserves running ACP source ownership across stale same-generation $0 replacements",
+    async (mutation) => {
+      const sessionKey = "agent:main:acp-source";
+      await seedSessionEntry(sessionKey, {
+        lifecycleRevision: "source-revision",
+        sessionId: "source-session",
+        status: "done",
+        updatedAt: 5,
+      });
+      const publicEntry = getSessionEntry({ sessionKey, storePath })!;
+      expect(publicEntry).not.toHaveProperty("acpSourceTurn");
+      const acpSourceTurn = await seedAcpSourceSession(sessionKey);
+      expect(listSessionEntries({ storePath })[0]?.entry).not.toHaveProperty("acpSourceTurn");
+      const replacement = {
+        ...publicEntry,
+        acpSourceTurn: { ...acpSourceTurn, runId: "forged-run" },
+        activeWriterRunId: "forged-run",
+        lifecycleRunId: "forged-run",
+        model: "replacement-model",
+        updatedAt: 20,
+      } satisfies InternalSessionEntry;
+
+      if (mutation === "upsert") {
+        await upsertSessionEntry({ sessionKey, storePath, entry: replacement });
+      } else {
+        await patchSessionEntry({
+          sessionKey,
+          storePath,
+          replaceEntry: true,
+          skipMaintenance: true,
+          update: () => replacement,
+        });
+      }
+
+      expect(loadInternalSessionEntry({ sessionKey, storePath })).toMatchObject({
+        acpSourceTurn,
+        activeWriterRunId: acpSourceTurn.runId,
+        lifecycleRunId: acpSourceTurn.runId,
+        model: "replacement-model",
+        status: "running",
+      });
+      expect(getSessionEntry({ sessionKey, storePath })).not.toHaveProperty("acpSourceTurn");
+    },
+  );
+
+  it("clears private ACP source provenance across public session and lifecycle replacements", async () => {
+    for (const { mutation, generationField } of [
+      { mutation: "upsert", generationField: "sessionId" },
+      { mutation: "upsert", generationField: "lifecycleRevision" },
+      { mutation: "replaceEntry", generationField: "sessionId" },
+      { mutation: "replaceEntry", generationField: "lifecycleRevision" },
+    ] as const) {
+      const sessionKey = `agent:main:acp-source:${mutation}:${generationField}`;
+      const acpSourceTurn = await seedAcpSourceSession(sessionKey);
+      const replacement = {
+        ...getSessionEntry({ sessionKey, storePath })!,
+        [generationField]: "replacement-generation",
+        acpSourceTurn,
+        activeWriterRunId: acpSourceTurn.runId,
+        lifecycleRunId: acpSourceTurn.runId,
+        updatedAt: 20,
+      } satisfies InternalSessionEntry;
+
+      if (mutation === "upsert") {
+        await upsertSessionEntry({ sessionKey, storePath, entry: replacement });
+      } else {
+        await patchSessionEntry({
+          sessionKey,
+          storePath,
+          replaceEntry: true,
+          skipMaintenance: true,
+          update: () => replacement,
+        });
+      }
+
+      const persistedEntry = loadInternalSessionEntry({ sessionKey, storePath });
+      expect(persistedEntry?.[generationField]).toBe("replacement-generation");
+      expect(persistedEntry?.acpSourceTurn).toBeUndefined();
+      expect(persistedEntry?.activeWriterRunId).toBeUndefined();
+      expect(persistedEntry?.lifecycleRunId).toBeUndefined();
+    }
   });
 
   it("clears core recovery state when public replacements change session identity", async () => {

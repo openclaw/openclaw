@@ -38,6 +38,7 @@ import type {
   SqliteSessionTurnOptions,
 } from "./session-turn.types.js";
 import { collectSessionEntryLookupKeys } from "./store-entry.js";
+import { assertTranscriptSourceCommitNativeDatabase } from "./transcript-source-commit-restrictions.js";
 import { mergeSessionEntry, type SessionEntry } from "./types.js";
 
 export function createSessionTranscriptTurnKernel(
@@ -91,6 +92,7 @@ export function createSessionTranscriptTurnKernel(
     ) {
       const mutation = options.sessionTurnMutation;
       options.assertCurrent?.();
+      assertTranscriptSourceCommitNativeDatabase(options.assertCurrent, transactionDb);
       mutation?.assertCurrent?.();
       assertRouting?.(transactionDb);
       let result: SqliteExpectedSessionTranscriptTurnResult;

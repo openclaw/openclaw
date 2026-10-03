@@ -4,6 +4,7 @@ import {
   resolveSessionWorkStartError,
   type InternalSessionEntry as SessionEntry,
 } from "../../config/sessions.js";
+import { hasCurrentAcpSourceTurn } from "../../config/sessions/acp-source-turn-state.js";
 import { buildRestartRecoveryClaimCleanupPatch } from "../../config/sessions/restart-recovery-state.js";
 import {
   listSessionEntriesByStatus,
@@ -41,7 +42,10 @@ import {
   markSessionCompletedAfterRecoveryCheckpoint,
   reconcileInvalidHarnessCompletion,
 } from "./main-session-restart-recovery-checkpoint.js";
-import { tombstoneMainRestartRecoveryWithNotice } from "./main-session-restart-recovery-failure.js";
+import {
+  interruptAcpSourceTurnWithNotice,
+  tombstoneMainRestartRecoveryWithNotice,
+} from "./main-session-restart-recovery-failure.js";
 import { readMainSessionRecoveryCheckpoint } from "./main-session-restart-recovery-replay-safety.js";
 import {
   hasReplaySafeCodeModeCheckpointInCurrentTurn,
@@ -290,6 +294,26 @@ export async function recoverStore(params: {
       recoveryView.status === "tombstoned"
     ) {
       result.skipped++;
+      continue;
+    }
+    if (hasCurrentAcpSourceTurn(entry)) {
+      if (params.observationOnly) {
+        result.skipped++;
+        continue;
+      }
+      if (stopped()) {
+        return result;
+      }
+      const outcome = await interruptAcpSourceTurnWithNotice({
+        ...target,
+        cfg: params.cfg,
+        entry,
+        gatewayRuntime: params.gatewayRuntime,
+      });
+      result[outcome]++;
+      if (outcome === "settled") {
+        params.handledSessionKeys.add(resumeDedupeKey);
+      }
       continue;
     }
     if (

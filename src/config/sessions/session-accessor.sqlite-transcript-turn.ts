@@ -35,6 +35,11 @@ import type {
   SqliteExpectedSessionTranscriptTurnResult,
   SqliteSessionTurnOptions,
 } from "./session-turn.types.js";
+import {
+  captureTranscriptEntryProvenance,
+  rememberTranscriptMessageProvenance,
+  type TranscriptEntryProvenance,
+} from "./transcript-entry-provenance.js";
 import { readMessageIdempotencyKey } from "./transcript-message-identity.js";
 
 /** Appends a guarded transcript turn and touches its session row in one queued write. */
@@ -168,10 +173,15 @@ export async function appendExpectedSessionTranscriptTurn(
         options,
         prepareSessionTurnRouting(mutation?.routingPredicate, resolved.env),
       );
+      let committedProvenance: TranscriptEntryProvenance | undefined;
       const publish = runOpenClawAgentWriteTransaction(
         (transactionDb) => {
           const committed = commit(transactionDb, messages);
           result = committed.result;
+          committedProvenance = captureTranscriptEntryProvenance(
+            transactionDb,
+            committed.identity?.current.get(resolved.sessionKey) ?? result.sessionEntry,
+          );
           return committed.identity
             ? prepareSessionIdentityPublication(
                 transactionDb,
@@ -184,6 +194,9 @@ export async function appendExpectedSessionTranscriptTurn(
         toDatabaseOptions(resolved),
         { operationLabel: "session.transcript.append-turn" },
       );
+      if (committedProvenance) {
+        rememberTranscriptMessageProvenance(result.appendedMessages, committedProvenance, resolved);
+      }
       publish?.();
       const completion = completeSessionTranscriptCommit(
         result.appendedMessages,

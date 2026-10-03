@@ -632,6 +632,16 @@ export type InternalSessionEntryCore = SessionEntryCore & {
   lastRunId?: string;
   /** Run admitted by the session lane; overwritten at admission and checked by transcript writes. */
   activeWriterRunId?: string;
+  /** Exact source execution provenance; never authority to resume an ACP runtime. */
+  acpSourceTurn?: {
+    sourceSessionId: string;
+    sourceLifecycleRevision?: string;
+    runId: string;
+    targetAgentId: string;
+    targetSessionKey: string;
+    /** Null when legacy ready metadata selected no canonical target incarnation. */
+    targetSessionId: string | null;
+  };
   /** Canonical remote repository awaiting preparation by this exact session generation. */
   pendingProjectGitUrl?: string;
   /** Authorized worktree intent awaiting preparation by an admitted turn. */

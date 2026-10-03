@@ -8,6 +8,9 @@ export type SessionLifecycleRevisionExpectation = string | null;
 export type SessionTranscriptTurnExpectedState = {
   /** Rejects a run-owned turn after another admitted run takes writer ownership. */
   expectedWriterRunId?: string;
+  acpSourceTurn?: SessionEntry["acpSourceTurn"];
+  activeWriterRunId?: SessionEntry["activeWriterRunId"];
+  lifecycleRunId?: SessionEntry["lifecycleRunId"];
   abortedLastRun: boolean | undefined;
   /** Fences recovery-only transcript writes against concurrent ownership changes. */
   mainRestartRecoveryCycleId: string | undefined;
@@ -29,6 +32,7 @@ export type SessionTranscriptTurnExpectedState = {
 
 /** Lifecycle fields committed with an accepted transcript turn. */
 export type SessionTranscriptTurnLifecyclePatch = {
+  acpSourceTurn?: SessionEntry["acpSourceTurn"];
   abortedLastRun?: boolean;
   endedAt?: number;
   lifecycleRunId?: SessionEntry["lifecycleRunId"];

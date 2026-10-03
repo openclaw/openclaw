@@ -1,5 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
+import { hasCurrentAcpSourceTurn } from "../../config/sessions/acp-source-turn-state.js";
 import {
   loadSessionEntry,
   type SessionTranscriptTurnExpectedState,
@@ -22,6 +23,72 @@ const TOMBSTONED_SESSION_NOTICE =
   "I couldn't continue this session after a gateway restart. " +
   "Your transcript is safe. In WebChat, use Resume in new session to continue it; " +
   "in other channels, use /new or /reset to start a replacement session.";
+
+const INTERRUPTED_ACP_SOURCE_NOTICE =
+  "This ACP request was interrupted by a gateway restart. " +
+  "I couldn't safely resume it, and I haven't replayed it with another agent. " +
+  "Check any work already performed, then resend your request to continue.";
+
+/** No ACP continuation contract exists; settlement must not mint a native replay. */
+export async function interruptAcpSourceTurnWithNotice(params: {
+  agentId: string;
+  cfg?: OpenClawConfig;
+  entry: SessionEntry;
+  gatewayRuntime: GatewayRecoveryRuntime;
+  sessionKey: string;
+  storePath: string;
+}): Promise<"failed" | "settled" | "skipped"> {
+  const turn = params.entry.acpSourceTurn;
+  if (!turn || !hasCurrentAcpSourceTurn(params.entry)) {
+    return "skipped";
+  }
+  const now = Date.now();
+  const idempotencyKey = `acp-source-restart:${turn.runId}:interrupted`;
+  const result = await appendAssistantMessageToSessionTranscript({
+    ...params,
+    expectedSessionId: turn.sourceSessionId,
+    expectedLifecycleRevision: turn.sourceLifecycleRevision ?? null,
+    expectedSessionState: buildRestartRecoveryExpectedState(params.entry),
+    sessionLifecyclePatch: {
+      acpSourceTurn: undefined,
+      abortedLastRun: false,
+      endedAt: now,
+      lastRunId: turn.runId,
+      lifecycleRunId: undefined,
+      mainRestartRecovery: undefined,
+      restartRecoveryRuns: undefined,
+      runtimeMs: Math.max(0, now - (params.entry.startedAt ?? now)),
+      status: "interrupted",
+      updatedAt: now,
+    },
+    text: INTERRUPTED_ACP_SOURCE_NOTICE,
+    idempotencyKey,
+  }).catch((error: unknown) => ({ ok: false as const, reason: String(error) }));
+  if (!result.ok) {
+    mainSessionRecoveryLog.warn(
+      `failed to write ACP interruption notice ${params.sessionKey}: ${result.reason}`,
+    );
+    return "code" in result && result.code === "session-rebound" ? "skipped" : "failed";
+  }
+  const deliveryContext = resolveRestartRecoveryDeliveryContext({
+    cfg: params.cfg,
+    entry: params.entry,
+    includeSessionDeliveryFallback: true,
+    sessionKey: params.sessionKey,
+  });
+  if (deliveryContext) {
+    await params.gatewayRuntime
+      .sendRecoveryNotice({
+        ...deliveryContext,
+        text: INTERRUPTED_ACP_SOURCE_NOTICE,
+        idempotencyKey,
+      })
+      .catch((error: unknown) => {
+        mainSessionRecoveryLog.warn(`failed to deliver ACP interruption notice: ${String(error)}`);
+      });
+  }
+  return "settled";
+}
 
 function buildRestartRecoveryTombstoneNoticeKey(entry: SessionEntry): string {
   const interruptedRunId =

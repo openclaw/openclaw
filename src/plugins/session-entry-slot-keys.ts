@@ -76,6 +76,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "lifecycleRunId",
   "lastRunId",
   "activeWriterRunId",
+  "acpSourceTurn",
   "mainRestartRecovery",
   "subagentRecovery",
   "pluginOwnerId",

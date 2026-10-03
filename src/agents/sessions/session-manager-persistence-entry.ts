@@ -3,6 +3,10 @@ import type {
   SessionTranscriptContextVersion,
   TranscriptMessageAppendResult,
 } from "../../config/sessions/session-accessor.sqlite-contract.js";
+import {
+  rememberTranscriptMessageProvenance,
+  type TranscriptEntryProvenance,
+} from "../../config/sessions/transcript-entry-provenance.js";
 import { normalizeTranscriptJsonValue } from "../../config/sessions/transcript-json.js";
 import { copyPreparedModelVisibleToolText } from "../../logging/redact-internal.js";
 import {
@@ -75,6 +79,23 @@ export function adoptCommittedMessagePayload(
     throw new Error(`Session transcript append was not persisted: ${entry.id}`);
   }
   return receipt.effectiveParentId;
+}
+
+export function adoptCommittedWorkerMessagePayload(
+  entry: SessionMessageEntry,
+  receipt: TranscriptMessageAppendResult<SessionMessageEntry["message"] | undefined>,
+  persistedMessage: SessionMessageEntry["message"],
+  options: {
+    idempotencyLookup: AppendPersistenceOptions["idempotencyLookup"];
+    provenance: TranscriptEntryProvenance;
+    source: Pick<TranscriptEntryAnchor, "agentId" | "sessionKey" | "sessionId">;
+  },
+): string | null {
+  // Fresh worker replies omit their retained payload; provenance and adoption
+  // must consume the same canonical receipt.
+  const messageReceipt = { ...receipt, message: receipt.message ?? persistedMessage };
+  rememberTranscriptMessageProvenance([messageReceipt], options.provenance, options.source);
+  return adoptCommittedMessagePayload(entry, messageReceipt, options.idempotencyLookup);
 }
 
 export function canonicalizeSessionEntry<T extends SessionEntry>(

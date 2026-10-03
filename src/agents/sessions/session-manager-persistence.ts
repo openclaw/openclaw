@@ -13,6 +13,7 @@ import {
 } from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
 import { resolveSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
 import { startSessionTranscriptIndexReconcile } from "../../config/sessions/session-transcript-reconcile.js";
+import { captureTranscriptEntryProvenance } from "../../config/sessions/transcript-entry-provenance.js";
 import {
   captureSessionTranscriptTargetBinding,
   sameSessionTranscriptTargetBinding,
@@ -41,6 +42,7 @@ import { SessionManagerCore } from "./session-manager-core.js";
 import type { SessionMetadataWorkerOperations } from "./session-manager-metadata.worker.js";
 import {
   adoptCommittedMessagePayload,
+  adoptCommittedWorkerMessagePayload,
   canonicalizeSessionEntry,
   transcriptAppendNeedsReload,
   type PersistRecordOptions,
@@ -365,11 +367,16 @@ export class SessionManagerPersistence extends SessionManagerCore {
           if (!("messageId" in receipt) || !message) {
             throw new Error(`Session transcript parent entry was not persisted: ${entry.id}`);
           }
-          adoptCommittedMessagePayload(
-            entry,
-            { ...receipt, message: receipt.message ?? message.prepared.persistedMessage },
-            message.idempotencyLookup,
-          );
+          // A successful message snapshot validated the canonical row in its original transaction.
+          // Its reply retains the nullable revision; this native owner retains the original file.
+          adoptCommittedWorkerMessagePayload(entry, receipt, message.prepared.persistedMessage, {
+            idempotencyLookup: message.idempotencyLookup,
+            provenance: captureTranscriptEntryProvenance(database, {
+              sessionId,
+              lifecycleRevision: committed.lifecycleRevision,
+            }),
+            source: captured,
+          });
         }
         const effectiveParentId =
           "effectiveParentId" in receipt && receipt.effectiveParentId !== undefined

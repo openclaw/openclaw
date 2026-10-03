@@ -5,22 +5,35 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, describe, expect, test, vi } from "vitest";
 import type { WebSocket } from "ws";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { resolveStoredAcpSession } from "../acp/control-plane/manager.utils.js";
 import { AcpRuntimeError } from "../acp/runtime/errors.js";
+import { readAcpSessionEntryAsync } from "../acp/runtime/session-meta-read.js";
+import { upsertAcpSessionMeta } from "../acp/runtime/session-meta-write.js";
+import { createRecoveryRuntimeFixture } from "../agents/main-session-recovery/main-session-recovery-runtime.test-support.js";
+import { markStartupOrphanedMainSessionsForRecovery } from "../agents/main-session-recovery/main-session-restart-recovery-marking.js";
+import { recoverRestartAbortedMainSessions } from "../agents/main-session-recovery/main-session-restart-recovery.js";
 import type { dispatchInboundMessage } from "../auto-reply/dispatch.js";
 import { createDispatchReplyOperationCoordinator } from "../auto-reply/reply/dispatch-from-config.lifecycle.js";
 import { createAcpSessionMeta } from "../auto-reply/reply/test-fixtures/acp-runtime.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
+import { getRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
 import {
   loadSessionEntryReadOnly,
   loadTranscriptEventsSync,
+  appendTranscriptMessage,
+  replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
+import { getSessionBindingService } from "../infra/outbound/session-binding-service.js";
 import { tryDispatchAcpReplyHook } from "../plugin-sdk/acpx.js";
+import { initializeGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { getSessionWorkAdmissionRelease } from "../sessions/session-lifecycle-admission.js";
 import { readAssistantDisplayContent } from "../shared/assistant-display-content.js";
 import { extractFirstTextBlock } from "../shared/chat-message-content.js";
 import type { Deferred } from "../shared/deferred.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
+import * as gatewayCalls from "./call.js";
+import { loadGatewayTestConfig } from "./test-helpers.config-runtime.js";
 import {
   dispatchInboundMessageMock,
   installGatewayTestHooks,
@@ -28,6 +41,7 @@ import {
   testState,
   writeSessionStore,
 } from "./test-helpers.js";
+import { getTestPluginRegistry } from "./test-helpers.plugin-registry.js";
 import { installConnectedControlUiServerSuite } from "./test-with-server.js";
 
 const runtime = vi.hoisted(() => ({
@@ -562,6 +576,287 @@ describe("Gateway ACP completion ownership", () => {
       releaseTurn.resolve();
       await Promise.all(admittedReleases);
       ws.off("message", capture);
+    }
+  });
+
+  test("interrupts an ACP-bound source after restart without native replay", async () => {
+    const storePath = path.join(tempDirs.make(), "sessions.json");
+    testState.sessionStorePath = storePath;
+    const priorRuntimeConfig = getRuntimeConfigSnapshot();
+    setRuntimeConfigSnapshot(loadGatewayTestConfig());
+    const sourceKey = "agent:main:dashboard:acp-restart-source";
+    const targetKey = "agent:main:acp:restart-target";
+    const runId = "acp-restart-source-run";
+    await writeSessionStore({
+      entries: {
+        [targetKey]: acpSessionEntry("acp-restart-target-session"),
+      },
+    });
+    expect((await rpcReq(ws, "sessions.create", { key: sourceKey, agentId: "main" })).ok).toBe(
+      true,
+    );
+    const sourceSessionId = loadSessionEntryReadOnly({
+      agentId: "main",
+      sessionKey: sourceKey,
+      storePath,
+    })?.sessionId;
+    if (!sourceSessionId) {
+      throw new Error("public sessions.create did not publish the ACP source");
+    }
+    const binding = await getSessionBindingService().bind({
+      targetSessionKey: targetKey,
+      targetKind: "session",
+      placement: "current",
+      conversation: { channel: "webchat", accountId: "default", conversationId: sourceKey },
+    });
+    const registry = getTestPluginRegistry();
+    const priorHooks = [...registry.typedHooks];
+    registry.typedHooks.push({
+      pluginId: "acpx",
+      hookName: "reply_dispatch",
+      handler: tryDispatchAcpReplyHook,
+      eligibleDispatchKinds: ["acp"],
+      source: "test",
+    });
+    initializeGlobalHookRunner(registry);
+    const started = createDeferred();
+    const finish = createDeferred();
+    let admissionRelease: Promise<void> | undefined;
+    const actualDispatch = await vi.importActual<typeof import("../auto-reply/dispatch.js")>(
+      "../auto-reply/dispatch.js",
+    );
+    dispatchInboundMessageMock.mockImplementation(
+      async (input: Parameters<typeof dispatchInboundMessage>[0]) => {
+        const release = getSessionWorkAdmissionRelease({
+          scope: storePath,
+          identities: [sourceKey],
+        });
+        try {
+          if (!release) {
+            throw new Error("missing public chat.send admission");
+          }
+          admissionRelease = release;
+          const result = await actualDispatch.dispatchInboundMessage({
+            ...input,
+            cfg: {
+              ...input.cfg,
+              acp: { enabled: true, dispatch: { enabled: true } },
+              session: { ...input.cfg.session, threadBindings: { enabled: true } },
+            },
+          });
+          if (runtime.runTurn.mock.calls.length === 0) {
+            started.reject(new Error("bound ACP runtime was not entered"));
+          }
+          return result;
+        } catch (error) {
+          started.reject(error);
+          throw error;
+        }
+      },
+    );
+    runtime.runTurn.mockImplementation(
+      async ({
+        sessionKey,
+        onEvent,
+      }: {
+        sessionKey: string;
+        onEvent: (event: AcpRuntimeEvent) => Promise<void>;
+      }) => {
+        expect(sessionKey).toBe(targetKey);
+        started.resolve();
+        await finish.promise;
+        await onEvent({ type: "text_delta", text: "ACP completed the request" });
+        await onEvent({ type: "done", status: "completed" });
+      },
+    );
+    let snapshot: NonNullable<ReturnType<typeof loadSessionEntryReadOnly>> | undefined;
+    try {
+      expect(
+        (
+          await rpcReq(ws, "chat.send", {
+            sessionKey: sourceKey,
+            message: "continue through the bound ACP runtime",
+            idempotencyKey: runId,
+          })
+        ).ok,
+      ).toBe(true);
+      await started.promise;
+      snapshot = loadSessionEntryReadOnly({ agentId: "main", sessionKey: sourceKey, storePath });
+      expect(snapshot).toMatchObject({ sessionId: sourceSessionId, status: "running" });
+      expect(snapshot?.acp).toBeUndefined();
+      expect(snapshot).toMatchObject({
+        acpSourceTurn: {
+          sourceSessionId,
+          runId,
+          targetSessionKey: targetKey,
+          targetSessionId: "acp-restart-target-session",
+        },
+      });
+      expect(
+        readTranscriptMessages({
+          agentId: "main",
+          sessionKey: sourceKey,
+          sessionId: sourceSessionId,
+          storePath,
+        }),
+      ).toContainEqual(
+        expect.objectContaining({
+          role: "user",
+          content: "continue through the bound ACP runtime",
+        }),
+      );
+    } finally {
+      finish.resolve();
+      await admissionRelease;
+      registry.typedHooks = priorHooks;
+      initializeGlobalHookRunner(registry);
+      await getSessionBindingService().unbind({
+        bindingId: binding.bindingId,
+        reason: "test_cleanup",
+      });
+      if (priorRuntimeConfig) {
+        setRuntimeConfigSnapshot(priorRuntimeConfig);
+      }
+    }
+    expect((await rpcReq(ws, "agent.wait", { runId, timeoutMs: 5_000 })).payload).toMatchObject({
+      status: "ok",
+    });
+    const completed = loadSessionEntryReadOnly({
+      agentId: "main",
+      sessionKey: sourceKey,
+      storePath,
+    });
+    expect(completed).toMatchObject({ status: "done", abortedLastRun: false, lastRunId: runId });
+    expect(completed?.acpSourceTurn).toBeUndefined();
+    if (!completed) {
+      throw new Error("missing completed source");
+    }
+    if (!snapshot) {
+      throw new Error("missing interrupted source snapshot");
+    }
+    // Replay the observed in-flight durable source row after its process owner is gone.
+    // The live Gateway was allowed to finish and remains isolated from this cold store.
+    const callGateway = vi
+      .spyOn(gatewayCalls, "callGateway")
+      .mockResolvedValue({ runId: "recovery-run" });
+    const gatewayRuntime = createRecoveryRuntimeFixture({
+      callGateway: gatewayCalls.callGateway,
+      getDispatchSettlement: () => Promise.resolve(),
+      sendRecoveryNotice: async () => ({ suppressed: true }),
+    });
+    const completedStorePath = path.join(tempDirs.make(), "sessions.json");
+    const completedCfg = { session: { store: completedStorePath } };
+    await replaceSessionEntry(
+      { agentId: "main", sessionKey: sourceKey, storePath: completedStorePath },
+      completed,
+    );
+    expect(await markStartupOrphanedMainSessionsForRecovery({ cfg: completedCfg })).toMatchObject({
+      marked: 0,
+    });
+    expect(
+      await recoverRestartAbortedMainSessions({ cfg: completedCfg, gatewayRuntime }),
+    ).toMatchObject({ started: 0, settled: 0 });
+    expect(callGateway).not.toHaveBeenCalled();
+    for (const bindingState of ["missing", "closed", "rebound"] as const) {
+      const coldStorePath = path.join(tempDirs.make(), "sessions.json");
+      const recoveryCfg = { session: { store: coldStorePath } };
+      await replaceSessionEntry(
+        { agentId: "main", sessionKey: sourceKey, storePath: coldStorePath },
+        snapshot,
+      );
+      await appendTranscriptMessage(
+        { sessionKey: sourceKey, sessionId: sourceSessionId, storePath: coldStorePath },
+        {
+          cwd: path.dirname(coldStorePath),
+          message: { role: "user", content: "continue through the bound ACP runtime" },
+        },
+      );
+      let replacementBinding:
+        | Awaited<ReturnType<ReturnType<typeof getSessionBindingService>["bind"]>>
+        | undefined;
+      try {
+        if (bindingState === "closed") {
+          await replaceSessionEntry(
+            { agentId: "main", sessionKey: targetKey, storePath: coldStorePath },
+            acpSessionEntry("acp-restart-target-session"),
+          );
+          await upsertAcpSessionMeta({
+            cfg: recoveryCfg,
+            agentId: "main",
+            sessionKey: targetKey,
+            mutate: () => null,
+          });
+        }
+        if (bindingState === "rebound") {
+          const replacementKey = "agent:main:acp:replacement-target";
+          await replaceSessionEntry(
+            { agentId: "main", sessionKey: replacementKey, storePath: coldStorePath },
+            acpSessionEntry("replacement-target-session"),
+          );
+          replacementBinding = await getSessionBindingService().bind({
+            targetSessionKey: replacementKey,
+            targetKind: "session",
+            placement: "current",
+            conversation: { channel: "webchat", accountId: "default", conversationId: sourceKey },
+          });
+        }
+        expect(
+          resolveStoredAcpSession(
+            { agentId: "main", sessionKey: sourceKey },
+            await readAcpSessionEntryAsync({
+              cfg: recoveryCfg,
+              agentId: "main",
+              sessionKey: sourceKey,
+            }),
+          ).kind,
+        ).toBe("none");
+        expect(
+          await markStartupOrphanedMainSessionsForRecovery({ cfg: recoveryCfg }),
+        ).toMatchObject({ marked: 1 });
+        const result = await recoverRestartAbortedMainSessions({
+          cfg: recoveryCfg,
+          gatewayRuntime,
+        });
+        expect(result, bindingState).toMatchObject({ started: 0, settled: 1, failed: 0 });
+        expect(callGateway).not.toHaveBeenCalled();
+        expect(
+          loadSessionEntryReadOnly({
+            agentId: "main",
+            sessionKey: sourceKey,
+            storePath: coldStorePath,
+          }),
+        ).toMatchObject({ status: "interrupted", abortedLastRun: false });
+        const messages = readTranscriptMessages({
+          agentId: "main",
+          sessionKey: sourceKey,
+          sessionId: sourceSessionId,
+          storePath: coldStorePath,
+        });
+        expect(messages).toContainEqual(
+          expect.objectContaining({
+            role: "assistant",
+            content: expect.arrayContaining([
+              expect.objectContaining({ type: "text", text: expect.stringContaining("resend") }),
+            ]),
+          }),
+        );
+        await recoverRestartAbortedMainSessions({ cfg: recoveryCfg, gatewayRuntime });
+        expect(
+          readTranscriptMessages({
+            agentId: "main",
+            sessionKey: sourceKey,
+            sessionId: sourceSessionId,
+            storePath: coldStorePath,
+          }),
+        ).toHaveLength(messages.length);
+      } finally {
+        if (replacementBinding) {
+          await getSessionBindingService().unbind({
+            bindingId: replacementBinding.bindingId,
+            reason: "test_cleanup",
+          });
+        }
+      }
     }
   });
 });
