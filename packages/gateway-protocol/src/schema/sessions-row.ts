@@ -109,6 +109,8 @@ const SessionSwarmSummarySchema = closedObject({
 export const SessionRowSchema = Type.Object(
   {
     key: Type.String(),
+    /** Detail fields omitted in compact lists must not clear a client's full-row cache. */
+    rowMode: Type.Optional(Type.Literal("compact")),
     sessionId: Type.Optional(Type.String()),
     incognito: Type.Optional(Type.Literal(true)),
     kind: Type.Union([
