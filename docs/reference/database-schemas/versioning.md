@@ -86,6 +86,16 @@ writes maintain the added indexes. Older same-version readers can ignore them,
 so binary rollback preserves both rows and indexes. See the
 [accepted index design](https://github.com/openclaw/openclaw/issues/153533).
 
+Logbook's plugin-local database keeps schema version 1 while replacing the unused
+batch-day index with a nonunique partial index on `batches(start_ms, id)` where
+`status = 'pending'`. The existing worker-owned schema open installs the index on
+populated databases before dropping the retired index. Batch rows remain canonical;
+the index is derived, and retention and recovery are unchanged. Initial construction
+scans batch history once and stores only pending entries. Older same-version builds
+can read and write the database safely, leaving the new index intact and recreating
+their day index; reopening with the current build retires it again. Binary rollback
+requires no row conversion or schema-version change.
+
 Removing the Tasks and TaskFlow runtime does not change the shared-state or agent
 schema. The existing tables, indexes, and optional execution-owner columns
 remain part of the released storage contract. Cron reads and writes its existing
