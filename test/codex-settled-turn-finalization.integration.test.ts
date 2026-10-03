@@ -14,11 +14,15 @@ import { prepareTerminalWithSettledTurnFinalization } from "../src/agents/embedd
 import { createSettledFinalizationTestInput } from "../src/agents/embedded-agent-runner/run/settled-turn-finalization.test-support.js";
 import { isEmbeddedRunTerminalTimeout } from "../src/agents/embedded-agent-runner/run/terminal-outcome.js";
 import { resolveEmbeddedRunTerminalTimeout } from "../src/agents/embedded-agent-runner/run/terminal-timeout.js";
+import { SILENT_REPLY_TOKEN } from "../src/auto-reply/tokens.js";
 
 const { createCodexSettledFinalizerTestFixture, registerCodexEventProjectorTestLifecycle } =
   await loadCodexSettledFinalizerTestFixture();
 
 registerCodexEventProjectorTestLifecycle();
+
+const SETTLED_TOOL_FINALIZATION_FALLBACK_TEXT =
+  "The tool run finished, but no final summary was produced. I did not repeat any completed actions.";
 
 describe("registered Codex finalizer host silence contract", () => {
   let admission: ReturnType<typeof prepareSystemAgentRunAdmission>;
@@ -102,26 +106,61 @@ describe("registered Codex finalizer host silence contract", () => {
     expect(fixture.mirror).not.toHaveBeenCalled();
   });
 
+  // This suite runs on a heartbeat trigger, which is unattended like cron: a run
+  // that only has the host placeholder left has nobody waiting to read it. The one
+  // exception is an explicitly required reply — that path keeps the visible
+  // placeholder instead of emitting NO_REPLY and dropping a reply the caller asked
+  // for. So the expectation decides, not the text.
   it.each([
-    { text: "NO_REPLY", expectation: "required" },
-    { text: " ", expectation: "optional" },
-  ] as const)("distinguishes $expectation $text output", async ({ text, expectation }) => {
-    const input = await createInput();
-    input.terminalBase.runParams.terminalReplyExpectation = expectation;
-    input.terminalBase.runParams.allowEmptyAssistantReplyAsSilent = true;
-    returnBoundedText(text);
+    {
+      text: "no_reply",
+      expectation: "optional",
+      outcome: "answered",
+      placeholder: false,
+      finalText: "no_reply",
+    },
+    {
+      text: "NO_REPLY",
+      expectation: "required",
+      outcome: "completed-empty",
+      placeholder: true,
+      finalText: SETTLED_TOOL_FINALIZATION_FALLBACK_TEXT,
+    },
+    {
+      text: " ",
+      expectation: "optional",
+      outcome: "silent-fallback",
+      placeholder: false,
+      finalText: SILENT_REPLY_TOKEN,
+    },
+    {
+      text: " ",
+      expectation: "required",
+      outcome: "completed-empty",
+      placeholder: true,
+      finalText: SETTLED_TOOL_FINALIZATION_FALLBACK_TEXT,
+    },
+  ] as const)(
+    "distinguishes $expectation $text output",
+    async ({ text, expectation, outcome, placeholder, finalText }) => {
+      const input = await createInput();
+      input.terminalBase.runParams.terminalReplyExpectation = expectation;
+      input.terminalBase.runParams.allowEmptyAssistantReplyAsSilent = true;
+      returnBoundedText(text);
 
-    const result = await prepareTerminalWithSettledTurnFinalization(input);
+      const result = await prepareTerminalWithSettledTurnFinalization(input);
 
-    expect(fixture.runBounded).toHaveBeenCalledTimes(2);
-    expect(result.finalizationOutcome).toBe("completed-empty");
-    expect(result.prepared.payloadsWithToolMedia).toEqual([
-      expect.objectContaining({
-        text: "The tool run finished, but no final summary was produced. I did not repeat any completed actions.",
-      }),
-    ]);
-    expect(fixture.mirror).not.toHaveBeenCalled();
-  });
+      expect(fixture.runBounded).toHaveBeenCalledTimes(outcome === "answered" ? 1 : 2);
+      expect(result.finalizationOutcome).toBe(outcome);
+      expect(result.attempt.assistantTexts).toEqual([finalText]);
+      expect(result.prepared.payloadsWithToolMedia ?? []).toEqual(
+        placeholder
+          ? [expect.objectContaining({ text: SETTLED_TOOL_FINALIZATION_FALLBACK_TEXT })]
+          : [],
+      );
+      expect(fixture.mirror).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([{ failedTool: true }, { timedOut: true }])(
     "does not hide an original failure with authored silence: %j",

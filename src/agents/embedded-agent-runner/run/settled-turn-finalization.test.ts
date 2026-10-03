@@ -497,12 +497,15 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
       silent: true,
     },
     {
+      // A heartbeat whose reply the host explicitly required must stay visible:
+      // exhausting finalization cannot downgrade it to authored silence.
       name: "mandatory reply",
       text: SILENT_REPLY_TOKEN,
       optional: false,
       allowed: true,
       failedTool: false,
       silent: false,
+      visible: true,
     },
     {
       name: "optional authored silence with empty replies disabled",
@@ -521,6 +524,8 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
       silent: true,
     },
     {
+      // An unattended heartbeat is not authored silence, yet it must not
+      // materialize the host placeholder either.
       name: "blank output",
       text: "",
       optional: true,
@@ -538,7 +543,7 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
     },
   ])(
     "honors the finalization silence contract: $name",
-    async ({ text, optional, allowed, failedTool, silent }) => {
+    async ({ text, optional, allowed, failedTool, silent, visible }) => {
       const attempt = failedTool ? settledFailedAttempt() : createSettledProviderFailureAttempt();
       const input = finalizationInput(attempt);
       Object.assign(input.terminalBase.runParams, {
@@ -558,15 +563,21 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
         expect(result.attempt.assistantTexts).toEqual([SILENT_REPLY_TOKEN]);
         expect(result.prepared.payloadsWithToolMedia ?? []).toEqual([]);
         expect(transcriptMocks.appendAssistantMirrorMessageByIdentity).not.toHaveBeenCalled();
+      } else if (visible) {
+        // Required replies never become silent-fallback: the outcome stays a
+        // recoverable failure carrying a visible message.
+        expect(result.finalizationOutcome).not.toBe("silent-fallback");
+        expect(result.attempt.assistantTexts).not.toEqual([SILENT_REPLY_TOKEN]);
+        expect(result.attempt.assistantTexts.join("")).not.toBe("");
       } else if (failedTool) {
         expect(result.finalizationOutcome).toBe("failed");
         expect(result.attempt).toBe(attempt);
         expect(result.prepared.payloadsWithToolMedia?.[0]).toMatchObject({ isError: true });
       } else {
-        expect(result.finalizationOutcome).toBe("completed-empty");
-        expect(result.prepared.payloadsWithToolMedia).toEqual([
-          expect.objectContaining({ text: SETTLED_TOOL_FINALIZATION_FALLBACK_TEXT }),
-        ]);
+        expect(result.finalizationOutcome).toBe("silent-fallback");
+        expect(result.attempt.assistantTexts).toEqual([SILENT_REPLY_TOKEN]);
+        expect(result.prepared.payloadsWithToolMedia ?? []).toEqual([]);
+        expect(transcriptMocks.appendAssistantMirrorMessageByIdentity).not.toHaveBeenCalled();
       }
     },
   );
@@ -597,15 +608,18 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
   });
 
   it.each([
-    { trigger: "user", outcome: "empty" },
-    { trigger: "cron", outcome: "empty" },
-    { trigger: "user", outcome: "failed" },
-    { trigger: "cron", outcome: "failed" },
+    { trigger: "user", outcome: "empty", unattended: false },
+    { trigger: "cron", outcome: "empty", unattended: true },
+    { trigger: "heartbeat", outcome: "empty", unattended: true },
+    { trigger: "user", outcome: "failed", unattended: false },
+    { trigger: "cron", outcome: "failed", unattended: true },
+    { trigger: "heartbeat", outcome: "failed", unattended: true },
   ] as const)(
     "persists and delivers a $trigger fallback after $outcome finalization",
-    async ({ trigger, outcome }) => {
-      const expectedText =
-        trigger === "cron" ? SILENT_REPLY_TOKEN : SETTLED_TOOL_FINALIZATION_FALLBACK_TEXT;
+    async ({ trigger, outcome, unattended }) => {
+      const expectedText = unattended
+        ? SILENT_REPLY_TOKEN
+        : SETTLED_TOOL_FINALIZATION_FALLBACK_TEXT;
       const attempt = settledSuccessfulAttempt();
       const emptyAssistant = buildEmbeddedRunnerAssistant({
         content: [{ type: "text", text: "" }],
@@ -622,6 +636,10 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
       const input = finalizationInput(attempt);
       input.terminalBase.runParams.trigger = trigger;
       input.terminalBase.runParams.sourceReplyDeliveryMode = "automatic";
+      // An unattended poll is optional work: nobody is waiting on its reply, so
+      // the placeholder is noise. A user turn is a required reply and must not
+      // be waived by an exhausted finalizer.
+      input.terminalBase.runParams.terminalReplyExpectation = unattended ? "optional" : "required";
       input.finalization.preparedAttempt.abortSignal = AbortSignal.abort(
         new Error("original attempt timed out"),
       );
@@ -646,10 +664,10 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
         outcome === "empty" ? 2 : 1,
       );
       expect(result.finalizationOutcome).toBe(
-        trigger === "cron" ? "silent-fallback" : outcome === "empty" ? "completed-empty" : "failed",
+        unattended ? "silent-fallback" : outcome === "empty" ? "completed-empty" : "failed",
       );
       expect(result.prepared.payloadsWithToolMedia).toEqual(
-        trigger === "cron" ? [] : [expect.objectContaining({ text: expectedText })],
+        unattended ? [] : [expect.objectContaining({ text: expectedText })],
       );
       expect(result.prepared.finalAssistantRawText).toBe(expectedText);
       if (trigger === "user") {
@@ -707,9 +725,7 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
       }
       expect(terminal.result.meta.error).toBeUndefined();
       expect(terminal.result.payloads).toEqual([expect.objectContaining({ text: expectedText })]);
-      expect(terminal.result.meta.terminalReplyKind).toBe(
-        trigger === "cron" ? "silent-empty" : undefined,
-      );
+      expect(terminal.result.meta.terminalReplyKind).toBe(unattended ? "silent-empty" : undefined);
     },
   );
 
