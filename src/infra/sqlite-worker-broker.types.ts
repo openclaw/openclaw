@@ -110,6 +110,7 @@ export type EnqueueOptions = {
 export type StoreClient = {
   actor: Actor;
   close(): Promise<void>;
+  retireIdle?: () => Promise<void> | undefined;
   sealed: boolean;
   isAvailable(): boolean;
   scopes: Set<Promise<void>>;
@@ -131,6 +132,8 @@ export type SqliteWorkerStoreOptions = {
 };
 
 export type PreparedSqliteWorkerOpen = {
+  /** The caching owner synchronously seals an idle client, or declines reclamation. */
+  retireIdle?: () => Promise<void> | undefined;
   target?: SqliteWorkerEphemeralTarget;
   onNativeLost?: (reason: Error) => void;
   signal?: AbortSignal;
@@ -170,6 +173,7 @@ export type SqliteWorkerOpenCustody = Pick<
   | "onNativeStopped"
   | "onNativeLost"
   | "signal"
+  | "retireIdle"
 > & { preparation?: unknown };
 export type SqliteWorkerInputRetention = "snapshot" | "stream";
 export type SqliteWorkerInputPreparation = {

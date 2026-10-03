@@ -1,5 +1,6 @@
 import { channel } from "node:diagnostics_channel";
 import { once } from "node:events";
+import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { deserialize } from "node:v8";
@@ -24,7 +25,12 @@ import { initializeSqliteRuntimeCapabilities } from "./bun-sqlite-library.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import type { SqliteWorkerRequest } from "./sqlite-worker-contract.js";
 import * as sqliteWorkers from "./sqlite-worker-store.js";
-import { getSqliteWorkerActorIdentity } from "./sqlite-worker-store.js";
+import {
+  getSqliteWorkerActorIdentity,
+  openSqliteWorkerStore,
+  type SqliteWorkerStore,
+} from "./sqlite-worker-store.js";
+import type { FixtureOperations } from "./sqlite-worker-store.test-support.js";
 
 vi.mock("node:diagnostics_channel", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:diagnostics_channel")>();
@@ -383,6 +389,79 @@ async function openClient(context: OpenClawStateWorkerContext) {
     operations.mockRestore();
   }
 }
+
+poolIt(
+  "reclaims only an idle shared-state client at 64 and reopens its persisted state",
+  async () => {
+    const env = { OPENCLAW_STATE_DIR: dirs.make("openclaw-worker-capacity-") };
+    const context = captureOpenClawStateWorkerContext({ env });
+    const first = await openClient(context);
+    const identityKey = "idle-fixture:capacity-reopen";
+    const identity = await executeOpenClawStateWorker(context, {
+      type: "deviceIdentity.load",
+      input: { identityKey },
+    });
+    const maintenance = createOpenClawDatabaseMaintenanceScope();
+    const peerContext = maintenance.run(() => captureOpenClawStateWorkerContext({ env }));
+    const peer = await openClient(peerContext);
+    expect(peer.actor).toBe(first.actor);
+
+    const fillerPath = path.join(dirs.make("openclaw-worker-capacity-fill-"), "store.sqlite");
+    const fillers: SqliteWorkerStore<FixtureOperations>[] = [];
+    const entered = createDeferredCore();
+    const resume = createDeferredCore();
+    let active: Promise<unknown> | undefined;
+    try {
+      for (let index = 0; index < 62; index += 1) {
+        fillers.push(
+          await openSqliteWorkerStore<FixtureOperations>({
+            moduleUrl: new URL("./sqlite-worker-store.test-support.ts", import.meta.url),
+            databasePath: fillerPath,
+            input: undefined,
+          }),
+        );
+      }
+      const next = captureOpenClawStateWorkerContext({
+        env: { OPENCLAW_STATE_DIR: dirs.make("openclaw-worker-capacity-next-") },
+      });
+      active = runOpenClawStateWorkerOperation(peerContext, async (scope) => {
+        entered.resolve();
+        await resume.promise;
+        return scope.execute(read);
+      });
+      await entered.promise;
+      await expect(executeOpenClawStateWorker(next, read)).rejects.toMatchObject({
+        code: "overloaded",
+      });
+      expect(getSqliteWorkerActorIdentity(first.store)).toBe(first.actor);
+      expect(getSqliteWorkerActorIdentity(peer.store)).toBe(first.actor);
+
+      resume.resolve();
+      await expect(active).resolves.toBeNull();
+      await expect(executeOpenClawStateWorker(next, read)).resolves.toBeNull();
+      await expect(first.store.execute(read)).rejects.toMatchObject({ code: "closed" });
+      expect(getSqliteWorkerActorIdentity(peer.store)).toBe(first.actor);
+      await expect(executeOpenClawStateWorker(peerContext, read)).resolves.toBeNull();
+
+      await expect(
+        executeOpenClawStateWorker(context, {
+          type: "deviceIdentity.read",
+          input: { identityKey },
+        }),
+      ).resolves.toEqual(identity);
+      const reopened = await openClient(context);
+      expect(reopened.store).not.toBe(first.store);
+      expect(reopened.actor).toBe(first.actor);
+    } finally {
+      resume.resolve();
+      await Promise.allSettled([
+        active,
+        ...fillers.map((store) => store.close()),
+        maintenance.close(),
+      ]);
+    }
+  },
+);
 
 poolIt("joins expiring idle-client maintenance without retiring a healthy co-user", async () => {
   const f = await fixture();
