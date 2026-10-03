@@ -1,3 +1,4 @@
+import type { StatementSync as NativeStatement } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
@@ -752,7 +753,7 @@ describe("event Web Push classification", () => {
           const originalGet = StatementSync.prototype.get;
           const statements = {
             get: vi.spyOn(StatementSync.prototype, "get").mockImplementation(function (
-              this: InstanceType<typeof StatementSync>,
+              this: NativeStatement,
               ...args
             ) {
               reads.push({ sql: this.sourceSQL, stack: new Error("Unexpected caller SQL").stack });
