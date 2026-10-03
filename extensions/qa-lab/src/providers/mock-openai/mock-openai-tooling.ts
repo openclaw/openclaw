@@ -180,7 +180,8 @@ export function extractActiveMemorySummary(text: string) {
 }
 
 export function extractToolSearchTarget(text: string): string | null {
-  const match = /\btarget=([A-Za-z0-9_.:-]+)\b/.exec(text);
+  // Tool descriptions also contain target= arguments; only the QA marker selects a tool.
+  const match = /\btool search qa (?:check|failure)\s+target=([A-Za-z0-9_.:-]+)\b/i.exec(text);
   return match?.[1]?.trim() || null;
 }
 

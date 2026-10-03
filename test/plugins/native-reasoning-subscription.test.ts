@@ -268,7 +268,6 @@ describe("runtime-context replay at prompt submission", () => {
         onSteeringAcknowledged: vi.fn(),
         persistToolResultProjections: async () => {},
         runtimeOnly: false,
-        sessionPromptState,
         systemPrompt: session.systemPrompt,
         toolResultAggregateMaxChars: 8_000,
         toolResultMaxChars: 4_000,

@@ -370,7 +370,7 @@ describe("worker launch descriptor", () => {
     }
   });
 
-  it("requires a unique closed worker tool authority", () => {
+  it("requires bounded unique tool names and admits Gateway-owned tools", () => {
     const descriptor = launchDescriptor();
     const { toolAuthority: _missing, ...assignmentWithoutAuthority } = descriptor.assignment;
     const cases: unknown[] = [
@@ -379,7 +379,10 @@ describe("worker launch descriptor", () => {
     ];
     for (const allowedToolNames of [
       ["read", "read"],
-      ["read", "gateway"],
+      [""],
+      [" read"],
+      ["x".repeat(WORKER_PROTOCOL_MAX_IDENTIFIER_LENGTH + 1)],
+      Array.from({ length: 257 }, (_, index) => `tool_${index}`),
     ]) {
       cases.push({
         ...descriptor,
@@ -398,6 +401,9 @@ describe("worker launch descriptor", () => {
     expect(parseWorkerLaunchDescriptor(structuredClone(descriptor))).toEqual(descriptor);
 
     descriptor.assignment.toolAuthority.allowedToolNames = ["browser"];
+    expect(parseWorkerLaunchDescriptor(structuredClone(descriptor))).toEqual(descriptor);
+
+    descriptor.assignment.toolAuthority.allowedToolNames = ["read", "web_search", "custom_tool"];
     expect(parseWorkerLaunchDescriptor(structuredClone(descriptor))).toEqual(descriptor);
   });
 

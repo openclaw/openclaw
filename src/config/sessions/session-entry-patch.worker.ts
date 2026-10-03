@@ -66,7 +66,19 @@ export function transferSessionEntryWorkerCandidate(
   database: OpenClawAgentDatabase,
   admit: AgentWorkerOperationContext["admit"],
   result: { kind: string },
-): SessionEntryPatchReceipt {
+): SessionEntryPatchReceipt;
+export function transferSessionEntryWorkerCandidate<Receipt>(
+  database: OpenClawAgentDatabase,
+  admit: AgentWorkerOperationContext["admit"],
+  result: { kind: string },
+  wrapReceipt: (receipt: SessionEntryPatchReceipt) => Receipt,
+): Receipt;
+export function transferSessionEntryWorkerCandidate<Receipt>(
+  database: OpenClawAgentDatabase,
+  admit: AgentWorkerOperationContext["admit"],
+  result: { kind: string },
+  wrapReceipt?: (receipt: SessionEntryPatchReceipt) => Receipt,
+): SessionEntryPatchReceipt | Receipt {
   // Deliver the exact candidate before COMMIT; the small native receipt certifies it afterward.
   const transfer = createSqliteWorkerTransferOwner();
   const handle = transfer.start([{ kind: "patch", value: result }].values(), {
@@ -85,9 +97,10 @@ export function transferSessionEntryWorkerCandidate(
       kind: "session-entry-patch-committed",
       transferId: handle.id,
     };
-    deferSqliteWorkerCommitReceipt(database.db, receipt);
-    admit("commit", receipt);
-    return receipt;
+    const publication = wrapReceipt ? wrapReceipt(receipt) : receipt;
+    deferSqliteWorkerCommitReceipt(database.db, publication);
+    admit("commit", publication);
+    return publication;
   } finally {
     transfer.cancel();
   }

@@ -31,7 +31,7 @@ import { resolveSourceReplyDeliveryMode } from "./source-reply-delivery-mode.js"
 export function resolveSessionStableReplyMode(params: {
   cfg: OpenClawConfig;
   ctx: FinalizedMsgContext;
-  sessionEntry: SessionEntry;
+  sessionEntry?: SessionEntry;
   sessionAgentId: string;
   sessionKey?: string;
   sessionStore?: Record<string, SessionEntry>;
@@ -39,7 +39,7 @@ export function resolveSessionStableReplyMode(params: {
 }): SourceReplyDeliveryMode {
   const { cfg, ctx, sessionEntry } = params;
   const chatType =
-    normalizeChatType(ctx.ChatType) ?? normalizeChatType(sessionEntry.chatType) ?? undefined;
+    normalizeChatType(ctx.ChatType) ?? normalizeChatType(sessionEntry?.chatType) ?? undefined;
   // A targetless internal turn uses the session's established reply policy;
   // changing that policy on a wake would invalidate its reusable CLI binding.
   const stableReplyContext = {

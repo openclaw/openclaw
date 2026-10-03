@@ -146,7 +146,8 @@ describe("Feishu outbound shared delivery", () => {
     expect(sendMediaFeishuMock).toHaveBeenCalledWith(
       expect.objectContaining({
         mediaUrl: "pipeline.png",
-        mediaAccess,
+        // Core adds its bounded native opener to the resolved host access.
+        mediaAccess: { ...mediaAccess, openFile: expect.any(Function) },
         mediaLocalRoots: mediaAccess.localRoots,
         mediaReadFile: readFile,
         to: "chat_1",

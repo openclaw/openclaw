@@ -6,27 +6,28 @@ import type {
   WorkerInferenceOptions,
 } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
 import type { OperationalRunInstanceRef } from "../agents/admitted-run-context.js";
-import { finalizeAgentToolAvailability } from "../agents/agent-tool-availability.js";
 import { toToolDefinitions } from "../agents/agent-tool-definition-adapter.js";
 import { copyAgentToolMetadata } from "../agents/agent-tool-metadata.js";
 import { wrapToolWithAbortSignal } from "../agents/agent-tools.abort.js";
 import { wrapToolWithBeforeToolCallHook } from "../agents/agent-tools.before-tool-call.wrapper.js";
 import { projectMemoryFlushTools } from "../agents/agent-tools.memory-flush.js";
+import { disposeAllCodeModeRuns } from "../agents/code-mode-state.js";
 import { createNativeModelOwnedRuntimeModel } from "../agents/defaults.js";
 import { buildBootstrapContextForFiles } from "../agents/embedded-agent-helpers/bootstrap.js";
 import { createEmbeddedAgentResourceLoader } from "../agents/embedded-agent-runner/resource-loader.js";
 import { recordModelFallbackStop } from "../agents/failover-error.js";
 import type { PreparedGitHubToolEnvironment } from "../agents/github-tool-identity.types.js";
+import { createAgentHarnessToolSurfaceRuntimeCore } from "../agents/harness/tool-surface-bridge.js";
 import { guardSessionManager } from "../agents/session-tool-result-guard-wrapper.js";
 import { AuthStorage } from "../agents/sessions/auth-storage.js";
 import { ModelRegistry } from "../agents/sessions/model-registry.js";
 import { createAgentSession } from "../agents/sessions/sdk.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
 import { SettingsManager } from "../agents/sessions/settings-manager.js";
-import { resolveToolLoopDetectionConfig } from "../agents/tool-loop-detection-config.js";
 import { wrapToolWithGatewayCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import type { loadWorkspaceBootstrapFiles } from "../agents/workspace.js";
 import type { AssistantMessage } from "../llm/types.js";
+import { setPluginToolMeta } from "../plugins/tool-metadata.js";
 import { materializeSkillResources } from "../skills/runtime/resources.js";
 import { createWorkerBrowserToolRuntime, type WorkerBrowserRuntime } from "./browser-runtime.js";
 import { createWorkerComputerTool } from "./computer-runtime.js";
@@ -38,7 +39,6 @@ import {
 } from "./embedded-agent-transcript.runtime.js";
 import type { createWorkerInferenceStreamAdapter } from "./inference-stream.runtime.js";
 import type { WorkerBrowserLaunchDescriptor, WorkerLaunchPlan } from "./launch-descriptor.js";
-import type { WorkerToolAuthority, WorkerToolName } from "./tool-authority.js";
 import { WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE } from "./transcript-message.js";
 import { createWorkerGatewayToolProxies } from "./worker-gateway-tools.js";
 import { createWorkerPlacementTools, WORKER_TOOL_CONFIG } from "./worker-placement-tools.js";
@@ -71,9 +71,9 @@ type RunWorkerEmbeddedTurnParams = {
   suppressPromptTranscript?: boolean;
   systemPrompt?: string;
   inferenceOptions?: WorkerInferenceOptions;
-  allowedToolNames: readonly WorkerToolName[];
+  allowedToolNames: readonly string[];
   permissionMode?: import("../../packages/gateway-protocol/src/schema/sessions-row.js").SessionPermissionMode;
-  execAuthority: WorkerToolAuthority["exec"];
+  execAuthority: WorkerLaunchPlan["assignment"]["toolAuthority"]["exec"];
   browser?: WorkerBrowserLaunchDescriptor;
   browserRuntime?: WorkerBrowserRuntime;
   computer?: Omit<Parameters<typeof createWorkerComputerTool>[0], "runId" | "registerRunCleanup">;
@@ -115,19 +115,18 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
       retry: { enabled: false },
     });
     const contextFiles = buildBootstrapContextForFiles(params.bootstrapFiles, {});
+    let toolSchemaDirectoryPrompt: string | undefined;
     const resourceLoader = createEmbeddedAgentResourceLoader({
       cwd: params.cwd,
       agentDir: params.stateDir,
       settingsManager,
       // The Gateway supplies literal text, not a local prompt-file path.
       appendSystemPromptTransform: () =>
-        [params.systemPrompt, resources?.snapshot.prompt].filter((prompt): prompt is string =>
-          Boolean(prompt),
+        [params.systemPrompt, resources?.snapshot.prompt, toolSchemaDirectoryPrompt].filter(
+          (prompt): prompt is string => Boolean(prompt),
         ),
       agentsFilesOverride: () => ({ agentsFiles: contextFiles }),
     });
-    await resourceLoader.reload();
-
     const baseSessionManager = SessionManager.inMemory(params.cwd);
     for (const message of params.initialMessages ?? []) {
       await baseSessionManager.appendMessageAsync(structuredClone(message));
@@ -141,23 +140,16 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
 
     const allowedToolNameSet = new Set<string>(params.allowedToolNames);
     for (const entry of toolSurface.tools) {
-      if (!allowedToolNameSet.has(entry.definition.name)) {
+      if (entry.execution === "placement" && !allowedToolNameSet.has(entry.definition.name)) {
         throw new Error(`Worker tool surface exceeds launch authority: ${entry.definition.name}`);
       }
     }
-    const activeToolNames = toolSurface.tools.map((entry) => entry.definition.name);
+    const activeToolNames = new Set(toolSurface.tools.map(({ definition }) => definition.name));
     const coreTools = projectMemoryFlushTools(
       createWorkerPlacementTools({
+        ...params,
         policy: toolSurface.policy,
-        cwd: params.cwd,
         containmentRoot: params.workerContainmentRoot,
-        execAuthority: params.execAuthority,
-        permissionMode: params.permissionMode,
-        agentId: params.agentId,
-        sessionKey: params.sessionKey,
-        sessionId: params.sessionId,
-        runId: params.runId,
-        github: params.github,
         skillsSnapshot: resources?.snapshot,
       }),
       toolSurface.policy.memoryFlushWritePath
@@ -168,7 +160,7 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
         : undefined,
     );
     const browserRuntime =
-      params.browser && activeToolNames.includes("browser")
+      params.browser && activeToolNames.has("browser")
         ? await createWorkerBrowserToolRuntime({
             descriptor: params.browser,
             sessionKey: params.sessionKey,
@@ -182,6 +174,7 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
       ? AbortSignal.any([params.signal, turnLifetime.signal])
       : turnLifetime.signal;
     let computerCleanup: ((reason: string) => Promise<void>) | undefined;
+    let toolSurfaceRuntime: ReturnType<typeof createAgentHarnessToolSurfaceRuntimeCore> | undefined;
     function disposeTools(failure: Error): Promise<Error>;
     function disposeTools(failure?: Error): Promise<Error | undefined>;
     async function disposeTools(failure?: Error): Promise<Error | undefined> {
@@ -190,9 +183,12 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
       computerCleanup = undefined;
       const failures = failure ? [failure] : [];
       const disposals = await Promise.allSettled(
-        [() => cleanup?.("Worker turn finished"), () => browserRuntime?.dispose()].map(
-          async (dispose) => await dispose(),
-        ),
+        [
+          () => toolSurfaceRuntime?.cleanup(),
+          () => cleanup?.("Worker turn finished"),
+          () => browserRuntime?.dispose(),
+          disposeAllCodeModeRuns,
+        ].map(async (dispose) => await dispose()),
       );
       for (const disposal of disposals) {
         if (disposal.status === "rejected") {
@@ -206,7 +202,7 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
     const { session } = await (async () => {
       try {
         const computerTool =
-          params.computer && activeToolNames.includes("computer")
+          params.computer && activeToolNames.has("computer")
             ? createWorkerComputerTool({
                 ...params.computer,
                 runId: params.runId,
@@ -237,6 +233,9 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
             throw new Error(`Worker placement tool unavailable: ${entry.definition.name}`);
           }
           const tool = copyAgentToolMetadata(source, { ...source, ...entry.definition });
+          if (entry.plugin) {
+            setPluginToolMeta(tool, entry.plugin);
+          }
           return wrapToolWithGatewayCallerIdentity(
             wrapToolWithAbortSignal(
               wrapToolWithBeforeToolCallHook(tool, {
@@ -248,10 +247,6 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
                 sessionId: params.sessionId,
                 runId: params.runId,
                 requester: { senderIsOwner: true },
-                loopDetection: resolveToolLoopDetectionConfig({
-                  cfg: WORKER_TOOL_CONFIG,
-                  agentId: params.agentId,
-                }),
               }),
               toolSignal,
             ),
@@ -264,7 +259,24 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
           );
         });
 
-        finalizeAgentToolAvailability(tools);
+        toolSurfaceRuntime = createAgentHarnessToolSurfaceRuntimeCore({
+          agentId: params.agentId,
+          sessionId: params.sessionId,
+          sessionKey: params.sessionKey,
+          runId: params.runId,
+          abortSignal: toolSignal,
+          presentation: toolSurface.presentation,
+          supportsDeferredToolCalls: false,
+          modelToolsEnabled: tools.length > 0,
+          model,
+        });
+        const projected = toolSurfaceRuntime
+          .compactTools(tools, {
+            prepared: { abortSignal: toolSignal, preserveToolNames: [] },
+          })
+          .promptToolPolicy.apply();
+        toolSchemaDirectoryPrompt = projected.toolSchemaDirectoryPrompt;
+        await resourceLoader.reload();
         return await createAgentSession({
           cwd: params.cwd,
           agentDir: params.stateDir,
@@ -272,8 +284,8 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
           modelRegistry,
           model,
           thinkingLevel: "medium",
-          tools: [...activeToolNames],
-          customTools: toToolDefinitions(tools),
+          tools: projected.tools.map((tool) => tool.name),
+          customTools: toToolDefinitions(projected.tools),
           sessionManager,
           settingsManager,
           resourceLoader,
@@ -284,7 +296,6 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
       }
     })();
     session.agent.sessionId = params.sessionId;
-    session.setActiveToolsByName([...activeToolNames]);
     session.agent.streamFn = (_model, context, options) => {
       const projected = toWorkerInferenceContext(context);
       if (projected.kind === "provider-replay-unavailable") {

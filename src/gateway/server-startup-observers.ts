@@ -54,7 +54,7 @@ export async function runGatewayStartupObservers(params: {
     params.log.warn(`restart sentinel refresh failed: ${String(err)}`);
   });
   try {
-    sweepSessionStateWatchNotices();
+    await sweepSessionStateWatchNotices();
     const hookRunner = await params.createHookRunner(params.registry, { logger: params.logHooks });
     if (params.isClosing?.() || !hookRunner.hasHooks("gateway_start")) {
       return;

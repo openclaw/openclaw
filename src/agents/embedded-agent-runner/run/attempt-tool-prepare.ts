@@ -10,7 +10,6 @@ import { resolveStagedInputMediaPaths } from "../../../media/staged-inputs.js";
 import { extractModelCompat } from "../../../plugins/provider-model-compat.js";
 import { getPluginToolMeta } from "../../../plugins/tool-metadata.js";
 import { isSubagentSessionKey } from "../../../routing/session-key.js";
-import type { NestedToolActivity } from "../../../sessions/nested-tool-activity.js";
 import {
   createOpenClawCodingToolsInternal,
   resolveToolLoopDetectionConfig,
@@ -46,6 +45,7 @@ import type {
   CronToolsAllowCaptureRef,
 } from "../../tools/cron-tool.js";
 import { log } from "../logger.js";
+import { createAttemptNestedToolActivityState } from "./attempt-nested-tool-activity.js";
 import type { EmbeddedAttemptSetup } from "./attempt-setup.js";
 import { resolveAttemptSpawnWorkspaceDir } from "./attempt-thread-helpers.js";
 import {
@@ -155,7 +155,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
   const computerContextEpoch: ComputerContextEpoch = { value: 0 };
   const skillInstructionDeliveryCache = createSkillInstructionDeliveryCache();
   const toolSearchCatalogRef = toolSurfaceRuntime.toolSearchCatalogRef;
-  const nestedToolActivities: NestedToolActivity[] = [];
+  const nestedToolActivityState = createAttemptNestedToolActivityState();
   const codeModeSkills = toolPolicyRestrictsTools({ allow: attempt.toolsAllow })
     ? []
     : params.codeModeSkills;
@@ -456,7 +456,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
       toolSearchConfig,
       toolSearchControlsEnabledForRun,
       toolSearchRuntimeConfig,
-      nestedToolActivities,
+      nestedToolActivityState,
       toolsEnabled,
       toolsRaw,
     };

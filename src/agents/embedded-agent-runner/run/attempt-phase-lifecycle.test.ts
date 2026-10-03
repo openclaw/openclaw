@@ -6,7 +6,6 @@ import {
   readActiveTranscriptEntryAnchor,
   upsertSessionEntryCore,
 } from "../../../config/sessions/session-accessor.js";
-import { createNestedToolActivity } from "../../../sessions/nested-tool-activity.js";
 import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { runOpenClawAgentWorkerWrite } from "../../../state/openclaw-agent-write-admission.js";
@@ -16,6 +15,7 @@ import { installSessionToolResultGuard } from "../../session-tool-result-guard.j
 import { SessionManager } from "../../sessions/session-manager.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import { createToolResultPromptProjectionState } from "../session-prompt-state.js";
+import { createAttemptNestedToolActivityState } from "./attempt-nested-tool-activity.js";
 import { createEmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-lifecycle.js";
 import type { EmbeddedAttemptExecutionState } from "./types.js";
 
@@ -113,7 +113,7 @@ describe("embedded attempt phase lifecycle state", () => {
       isProbeSession: true,
       abortable: async (promise) => await promise,
       prePromptMessageCount: 0,
-      nestedToolActivities: [],
+      nestedToolActivityState: createAttemptNestedToolActivityState(),
       cache: {
         retention: undefined,
       },
@@ -186,7 +186,7 @@ describe("embedded attempt phase lifecycle state", () => {
       isProbeSession: true,
       abortable: async (promise) => await promise,
       prePromptMessageCount: 0,
-      nestedToolActivities: [],
+      nestedToolActivityState: createAttemptNestedToolActivityState(),
       cache: {
         retention: undefined,
       },
@@ -274,25 +274,7 @@ describe("embedded attempt phase lifecycle state", () => {
       isProbeSession: true,
       abortable: async (promise) => await promise,
       prePromptMessageCount: 1,
-      nestedToolActivities: [
-        createNestedToolActivity({
-          runId: "run-test",
-          scopeId: "scope-test",
-          afterEntryId: null,
-          startOrder: 0,
-          parentToolCallId: "outer-exec",
-          toolCallId: "tool_call:outer-exec:read:1",
-          toolName: "read",
-          input: { path: "missing.txt" },
-          result: {
-            content: [{ type: "text", text: "ENOENT" }],
-            details: { status: "error", error: "ENOENT" },
-          },
-          isError: true,
-          startedAt: 1,
-          timestamp: 2,
-        }),
-      ],
+      nestedToolActivityState: createAttemptNestedToolActivityState(),
       cache: {
         retention: undefined,
       },
@@ -406,7 +388,7 @@ describe("embedded attempt phase lifecycle state", () => {
           prepared: {
             bootstrap: { shouldRecordCompletedBootstrapTurn: true },
             bundleTools: { uncompactedEffectiveTools: [] },
-            toolBase: { nestedToolActivities: undefined },
+            toolBase: { nestedToolActivityState: createAttemptNestedToolActivityState() },
             sessionRuntime: {
               sessionManager,
               agentSession: { hookRunner: null },
@@ -491,7 +473,7 @@ describe("embedded attempt phase lifecycle state", () => {
         prepared: {
           bootstrap: { shouldRecordCompletedBootstrapTurn: false },
           bundleTools: { uncompactedEffectiveTools: [{ name: "skill_workshop" }] },
-          toolBase: { nestedToolActivities: undefined },
+          toolBase: { nestedToolActivityState: createAttemptNestedToolActivityState() },
           sessionRuntime: {
             sessionManager: SessionManager.inMemory(),
             agentSession: { hookRunner: null },
@@ -585,7 +567,7 @@ describe("embedded attempt phase lifecycle state", () => {
           prepared: {
             bootstrap: { shouldRecordCompletedBootstrapTurn: true },
             bundleTools: { uncompactedEffectiveTools: [{ name: "skill_workshop" }] },
-            toolBase: { nestedToolActivities: undefined },
+            toolBase: { nestedToolActivityState: createAttemptNestedToolActivityState() },
             sessionRuntime: {
               sessionManager,
               agentSession: { hookRunner: null },
@@ -684,7 +666,7 @@ describe("embedded attempt phase lifecycle state", () => {
               shouldRecordCompletedBootstrapTurn: scenario !== "completion not requested",
             },
             bundleTools: { uncompactedEffectiveTools: [] },
-            toolBase: { nestedToolActivities: undefined },
+            toolBase: { nestedToolActivityState: createAttemptNestedToolActivityState() },
             sessionRuntime: {
               sessionManager,
               agentSession: { hookRunner: null },
@@ -766,7 +748,7 @@ describe("embedded attempt phase lifecycle state", () => {
         prepared: {
           bootstrap: { shouldRecordCompletedBootstrapTurn: false },
           bundleTools: { uncompactedEffectiveTools: [] },
-          toolBase: { nestedToolActivities: undefined },
+          toolBase: { nestedToolActivityState: createAttemptNestedToolActivityState() },
           sessionRuntime: {
             sessionManager: SessionManager.inMemory(),
             agentSession: { hookRunner: null },
@@ -818,7 +800,7 @@ describe("embedded attempt phase lifecycle state", () => {
         prepared: {
           bootstrap: { shouldRecordCompletedBootstrapTurn: false },
           bundleTools: { uncompactedEffectiveTools: [] },
-          toolBase: { nestedToolActivities: undefined },
+          toolBase: { nestedToolActivityState: createAttemptNestedToolActivityState() },
           sessionRuntime: {
             sessionManager: SessionManager.inMemory(),
             agentSession: { hookRunner: null },

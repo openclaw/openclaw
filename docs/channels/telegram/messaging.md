@@ -24,6 +24,12 @@ How inbound and outbound Telegram messages are routed, previewed, acknowledged, 
 - The polling watchdog restarts after 120 seconds without completed `getUpdates` liveness.
 - Telegram Bot API has no read-receipt support (`sendReadReceipts` does not apply).
 
+After an upgrade, old unversioned reply-cache entries are treated as cache misses.
+Their reply-chain context may be unavailable until those messages are observed
+again. Version-1 cache entries, retained group history, and session transcripts
+remain supported. Transcript deduplication uses recorded message identities;
+markerless assistant replies may appear in both reply context and the transcript.
+
 <Note>
   **Upgrade note: Telegram's default preview changed in 2026.8.1.** With `channels.telegram.streaming` unset, Telegram keeps one editable status draft during the turn (the agent's current status plus its tool lines) and sends the final answer as a normal message. It previously streamed the answer text itself into the preview. No config becomes invalid and no `doctor --fix` is needed; to keep the previous behavior, set:
 

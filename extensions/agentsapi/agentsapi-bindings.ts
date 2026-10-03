@@ -4,9 +4,14 @@ import type {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createNativeSessionBindingLifecycle } from "openclaw/plugin-sdk/agent-harness-session-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
-import { z } from "zod";
+import {
+  bindingSchema,
+  readRecord,
+  type AgentsApiBinding,
+  type StoredBinding,
+} from "./agentsapi-binding-record.js";
 
-export type AgentsApiBinding = { sessionId: string; configFingerprint: string };
+export type { AgentsApiBinding } from "./agentsapi-binding-record.js";
 
 /** Native identity is plugin-owned; shared runtime owns mutation and lease coordination. */
 export function createAgentsApiBindings(runtime: PluginRuntime) {
@@ -30,6 +35,7 @@ export function createAgentsApiBindings(runtime: PluginRuntime) {
       },
     },
     {
+      workerCodec: "agentsapi",
       readRecord,
       lease: {
         staleMs: 65_000,
@@ -147,24 +153,6 @@ export function createAgentsApiBindings(runtime: PluginRuntime) {
       );
     },
   };
-}
-
-const bindingSchema = z.object({
-  sessionId: z.string().min(1),
-  configFingerprint: z.string().min(1),
-});
-const storedBindingSchema = z
-  .object({
-    sessionId: z.string().min(1).optional(),
-    configFingerprint: z.string().min(1).optional(),
-    lease: z.object({ token: z.string().min(1), expiresAt: z.number().finite() }).optional(),
-  })
-  .refine((row) => (row.sessionId === undefined) === (row.configFingerprint === undefined));
-type StoredBinding = z.infer<typeof storedBindingSchema>;
-
-function readRecord(raw: unknown): StoredBinding | undefined {
-  const result = storedBindingSchema.safeParse(raw);
-  return result.success ? result.data : undefined;
 }
 
 function nativeBinding(row: StoredBinding | undefined): AgentsApiBinding | undefined {

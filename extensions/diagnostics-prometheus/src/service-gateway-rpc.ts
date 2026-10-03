@@ -88,6 +88,20 @@ export function recordGatewayRpcEvent(
           seconds(evt.durationMs),
         );
       } else if (evt.phase === "handler") {
+        if (evt.heapDeltaBytes !== undefined) {
+          store.counter(
+            "openclaw_gateway_rpc_handler_heap_delta_exclusive_total",
+            "Gateway RPC handlers with an exclusive main-thread heap-change sample.",
+            labels,
+          );
+        }
+        store.histogram(
+          "openclaw_gateway_rpc_handler_heap_delta_bytes",
+          "Exclusive RPC handler heap change; background work and GC can affect signed samples.",
+          labels,
+          evt.heapDeltaBytes,
+          HEAP_DELTA_BYTE_BUCKETS,
+        );
         store.histogram(
           "openclaw_gateway_rpc_handler_seconds",
           "Gateway RPC handler duration until return or throw.",
@@ -101,13 +115,6 @@ export function recordGatewayRpcEvent(
           seconds(evt.admissionMs),
         );
       } else if (evt.phase === "dispatch") {
-        store.histogram(
-          "openclaw_gateway_rpc_handler_heap_delta_bytes",
-          "Indicative main-thread heap change over an RPC request; GC can make it negative.",
-          labels,
-          evt.heapDeltaBytes,
-          HEAP_DELTA_BYTE_BUCKETS,
-        );
         store.histogram(
           "openclaw_gateway_rpc_queue_wait_seconds",
           "Gateway operator request start queue wait.",

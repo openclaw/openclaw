@@ -56,6 +56,7 @@ import {
 import { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import type { ModelFallbackRunOptions } from "./model-fallback-attempt.js";
+import type { ModelFallbackStepFields } from "./model-fallback-observation.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "./prepared-model-runtime.test-support.js";
 import {
   createAgentRunDirectAbortError,
@@ -3726,40 +3727,51 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     });
   });
 
-  it("records fallback steps to the session trajectory runtime", async () => {
-    state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
-      await params.onFallbackStep?.({
+  it.each(["next_fallback", "succeeded", "chain_exhausted"] as const)(
+    "records and publishes a run-scoped %s fallback step",
+    async (outcome) => {
+      const step: ModelFallbackStepFields = {
         fallbackStepType: "fallback_step",
-        fallbackStepFromModel: "ollama/llama3",
-        fallbackStepToModel: "openai/gpt-5.4",
+        fallbackStepFromModel: "fixture-primary/primary-model",
+        ...(outcome !== "chain_exhausted"
+          ? { fallbackStepToModel: "fixture-fallback/fallback-model" }
+          : {}),
         fallbackStepFromFailureReason: "overloaded",
         fallbackStepChainPosition: 1,
-        fallbackStepFinalOutcome: "next_fallback",
-      });
-      const result = await runInitialFallbackAttempt(params);
-      return {
-        result,
-        provider: params.provider,
-        model: params.model,
-        attempts: [],
+        fallbackStepFinalOutcome: outcome,
       };
-    });
-    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "gpt-5.4"));
+      state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
+        await params.onFallbackStep?.(step);
+        const result = await runInitialFallbackAttempt(params);
+        return {
+          result,
+          provider: params.provider,
+          model: params.model,
+          attempts: [],
+        };
+      });
+      state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "gpt-5.4"));
 
-    await runBasicAgentCommand();
+      await runBasicAgentCommand({ runId: "run-fallback-step" });
 
-    expect(state.trajectoryRecordEventMock).toHaveBeenCalledTimes(1);
-    expect(mockCallArg(state.trajectoryRecordEventMock, 0, 0)).toBe("model.fallback_step");
-    expectRecordFields(mockCallArg(state.trajectoryRecordEventMock, 0, 1), {
-      fallbackStepType: "fallback_step",
-      fallbackStepFromModel: "ollama/llama3",
-      fallbackStepToModel: "openai/gpt-5.4",
-      fallbackStepFromFailureReason: "overloaded",
-      fallbackStepChainPosition: 1,
-      fallbackStepFinalOutcome: "next_fallback",
-    });
-    expect(state.trajectoryFlushMock).toHaveBeenCalledTimes(1);
-  });
+      expect(state.trajectoryRecordEventMock).toHaveBeenCalledTimes(1);
+      expect(mockCallArg(state.trajectoryRecordEventMock, 0, 0)).toBe("model.fallback_step");
+      expect(mockCallArg(state.trajectoryRecordEventMock, 0, 1)).toEqual(step);
+      const fallbackEvents = state.emitAgentEventMock.mock.calls
+        .map(([event]) => requireRecord(event, "agent event"))
+        .filter((event) => requireRecord(event.data, "agent event data").phase === "fallback_step");
+      expect(fallbackEvents).toEqual([
+        {
+          runId: "run-fallback-step",
+          lifecycleGeneration: "test-generation",
+          sessionKey: "agent:main:main",
+          stream: "lifecycle",
+          data: { phase: "fallback_step", ...step },
+        },
+      ]);
+      expect(state.trajectoryFlushMock).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("suppresses duplicate user persistence only after the current turn has flushed", async () => {
     type AttemptCall = {

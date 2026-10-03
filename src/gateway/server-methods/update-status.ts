@@ -59,13 +59,16 @@ export const updateStatusHandlers: GatewayRequestHandlers = {
       phase = next;
     };
     try {
-      let manager = await resolveOcmUpdateManager().catch((error: unknown) => {
-        if (!(error instanceof OcmUpdateCapabilitiesUnsupportedError)) {
-          throw error;
-        }
-        context?.logGateway?.warn(error.message);
-        return null;
-      });
+      const immutable = lifecycle.installStatus?.status.installKind === "immutable";
+      let manager = immutable
+        ? null
+        : await resolveOcmUpdateManager().catch((error: unknown) => {
+            if (!(error instanceof OcmUpdateCapabilitiesUnsupportedError)) {
+              throw error;
+            }
+            context?.logGateway?.warn(error.message);
+            return null;
+          });
       const managedRun = manager ? await manager.status() : null;
       if (manager && !manager.canStart && !managedRun) {
         manager = null;
@@ -81,7 +84,7 @@ export const updateStatusHandlers: GatewayRequestHandlers = {
       }
       mark("checkout");
       const config = context?.getRuntimeConfig?.();
-      if (params.refreshCheckout === true && config) {
+      if ((params.refreshCheckout === true || immutable) && config) {
         try {
           await refreshGatewayUpdateStatus(config);
         } catch (err) {

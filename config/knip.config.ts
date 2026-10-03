@@ -52,7 +52,6 @@ const repositoryScriptEntries = [
   "scripts/test-macos-native.mts!",
   "scripts/check-control-ui-performance.mts!",
   "scripts/check-control-ui-precompressed-assets.mts!",
-  "scripts/check-live-cache.ts!",
   "scripts/check-package-dist-imports.mjs!",
   "scripts/check-plugin-sdk-exports.mts!",
   // Declaration preparation and boundary checks launch this compiler worker by path.

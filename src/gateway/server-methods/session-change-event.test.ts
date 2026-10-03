@@ -96,7 +96,7 @@ function createContext(
     getRuntimeConfig: () => config,
     ...bindSessionRowProjection({}, () => projection as unknown as SessionRowProjection),
     getSessionEventSubscriberConnIds: () => receivers,
-    mentionInbox: { invalidate: vi.fn() },
+    mentionInbox: { invalidateAsync: vi.fn() },
   } as unknown as GatewayRequestContext;
 }
 
@@ -198,7 +198,7 @@ describe("sessions.changed coalescing", () => {
 
     expect(changed).not.toHaveBeenCalled();
     expect(mocks.invalidate).not.toHaveBeenCalled();
-    expect(context.mentionInbox?.invalidate).not.toHaveBeenCalled();
+    expect(context.mentionInbox?.invalidateAsync).not.toHaveBeenCalled();
     expect(readGatewayAccessRevision()).toBe(initialAccessRevision);
     expect(context.broadcastToConnIds).toHaveBeenCalledWith(
       "sessions.changed",
@@ -211,7 +211,7 @@ describe("sessions.changed coalescing", () => {
     await emitAndSettleLeading(context, { reason: "groups" });
     expect(changed).toHaveBeenCalledWith({ all: true, scope: "sessions" });
     expect(mocks.invalidate).toHaveBeenCalledOnce();
-    expect(context.mentionInbox?.invalidate).toHaveBeenCalledOnce();
+    expect(context.mentionInbox?.invalidateAsync).toHaveBeenCalledOnce();
     expect(readGatewayAccessRevision()).toBe(initialAccessRevision + 1);
   });
 
@@ -791,7 +791,7 @@ describe("sessions.changed coalescing", () => {
       );
 
       expect(readGatewayAccessRevision()).toBe(initialAccessRevision);
-      expect(context.mentionInbox?.invalidate).toHaveBeenCalledOnce();
+      expect(context.mentionInbox?.invalidateAsync).toHaveBeenCalledOnce();
       loadCachedSessionSharingSnapshot({ sessionKey, resolve });
       expect(resolve).toHaveBeenCalledTimes(2);
       if (receivesEvents) {
@@ -1032,9 +1032,9 @@ describe("sessions.changed coalescing", () => {
     await emitAndSettleLeading(context, { reason: "update", sessionKey: "agent:main:chat" });
 
     expect(mocks.invalidate).toHaveBeenCalledOnce();
-    expect(context.mentionInbox?.invalidate).toHaveBeenCalledOnce();
+    expect(context.mentionInbox?.invalidateAsync).toHaveBeenCalledOnce();
     expect(mocks.invalidate.mock.invocationCallOrder[0]).toBeLessThan(
-      vi.mocked(context.mentionInbox!.invalidate).mock.invocationCallOrder[0]!,
+      vi.mocked(context.mentionInbox!.invalidateAsync).mock.invocationCallOrder[0]!,
     );
     expect(mocks.loadRow).not.toHaveBeenCalled();
     expect(context.broadcastToConnIds).not.toHaveBeenCalled();

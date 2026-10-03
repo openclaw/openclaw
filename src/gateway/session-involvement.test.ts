@@ -5,6 +5,7 @@ import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
 } from "../state/openclaw-agent-db.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { linkEmail } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
@@ -14,6 +15,7 @@ import {
   SESSION_ID,
   withMentionInbox as withInbox,
   readMentionInbox as read,
+  dismissMentionInbox as dismiss,
 } from "./mention-inbox.test-support.js";
 import { identifiedClient } from "./server-methods/sessions-sharing.test-support.js";
 import { listSessionFixture } from "./session-list.test-support.js";
@@ -36,10 +38,11 @@ describe("personal session involvement", () => {
         });
       };
       expect((await list()).sessions).toEqual([]);
-      f.post();
+      await f.post();
       expect((await list()).sessions.map((row) => row.key)).toEqual([SESSION_KEY]);
-      const items = read(f.inbox, f.bobClient).items;
-      f.inbox.dismiss(
+      const items = (await read(f.inbox, f.bobClient)).items;
+      await dismiss(
+        f.inbox,
         f.bobClient,
         items.map((item) => item.id),
       );
@@ -54,7 +57,7 @@ describe("personal session involvement", () => {
       expect((await list()).sessions).toEqual([]);
       expect((await list(f.bob.id, false)).sessions[0]?.hiddenFromInvolvingMe).toBe(true);
       expect((await list(f.alice.id)).sessions).toHaveLength(1);
-      f.post();
+      await f.post();
       expect((await list()).sessions).toEqual([]);
       // A stale generic metadata replacement must not erase the personal choice.
       replaceSessionEntrySync(scope, {
@@ -64,12 +67,12 @@ describe("personal session involvement", () => {
       });
       expect((await list()).sessions).toEqual([]);
       await f.clock.advanceBy(8 * 24 * 60 * 60_000);
-      expect(readMentionStoreSnapshot(-1)?.sources).toHaveLength(0);
+      expect(readMentionStoreSnapshot(-1, openOpenClawStateDatabase().db)?.sources).toHaveLength(0);
       await f.inbox.dispose();
       const restarted = f.openInbox("after-retention");
-      f.post("source-one", {}, restarted);
+      await f.post("source-one", {}, restarted);
       expect((await list()).sessions).toEqual([]);
-      f.post("fresh-mention", {}, restarted);
+      await f.post("fresh-mention", {}, restarted);
       expect((await list()).sessions.map((row) => row.key)).toEqual([SESSION_KEY]);
       expect((await setHidden(true)).ok).toBe(true);
       expect((await setHidden(false)).ok).toBe(true);
@@ -101,7 +104,7 @@ describe("personal session involvement", () => {
       };
       await reopen();
       expect(loadSessionEntry(scope)).toEqual(existing);
-      f.post("before-restart", {}, inbox);
+      await f.post("before-restart", {}, inbox);
       const mentioned = loadSessionEntry(scope)!.profileInvolvement!.profiles[f.bob.id]!;
       const setHidden = async (hidden: boolean) => {
         expect(
@@ -125,14 +128,14 @@ describe("personal session involvement", () => {
       await setHidden(true);
       await reopen();
       check(true, 1);
-      f.post("before-restart", {}, inbox);
+      await f.post("before-restart", {}, inbox);
       check(true, 1);
       await setHidden(false);
       await reopen();
       check(false, 1);
       await setHidden(true);
       await reopen();
-      f.post("after-restart", {}, inbox);
+      await f.post("after-restart", {}, inbox);
       check(false, 2);
       const fresh = loadSessionEntry(scope)!.profileInvolvement;
       await reopen();
@@ -202,9 +205,9 @@ describe("personal session involvement", () => {
       await withInbox(async (f) => {
         const old = ensureProfileForEmail("previous@mentions.example.test");
         const oldClient = { ...identifiedClient(old.id, "Previous"), connId: "previous" };
-        f.post("old-mention", { recipientProfileIds: [old.id] });
+        await f.post("old-mention", { recipientProfileIds: [old.id] });
         if (bothMentioned) {
-          f.post("existing-current-profile-mention");
+          await f.post("existing-current-profile-mention");
         }
         expect(
           (
@@ -231,10 +234,10 @@ describe("personal session involvement", () => {
         expect((await list()).sessions).toEqual([]);
         expect((await list(false)).sessions).toHaveLength(1);
         if (bothMentioned) {
-          f.post("existing-current-profile-mention");
+          await f.post("existing-current-profile-mention");
         }
         expect((await list()).sessions).toEqual([]);
-        f.post("new-mention");
+        await f.post("new-mention");
         expect((await list()).sessions).toHaveLength(1);
       });
     },

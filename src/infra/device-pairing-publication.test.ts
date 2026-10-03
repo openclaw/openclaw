@@ -233,6 +233,37 @@ test("keeps inspection snapshot bytes without republishing revoked node authorit
   );
 });
 
+test("retains pairing admission through final publication preparation and synchronous start", async () => {
+  const entered = createDeferredCore();
+  const release = createDeferredCore();
+  const order: string[] = [];
+  const delivery = withCurrentDevicePairingSnapshot(
+    baseDir,
+    (paired) => ({
+      start: () => {
+        expect(paired.map((device) => device.deviceId)).toEqual(["node"]);
+        order.push("send");
+      },
+    }),
+    async () => {
+      entered.resolve();
+      await release.promise;
+    },
+  );
+  await awaitGateBeforeSettlement(entered.promise, delivery, "Final preparation did not start");
+  const revocation = removePairedDevice("node", baseDir).then(() => {
+    order.push("revoked");
+  });
+  try {
+    expect(order).toEqual([]);
+  } finally {
+    release.resolve();
+    await Promise.all([delivery, revocation]);
+  }
+  expect(order).toEqual(["send", "revoked"]);
+  expect(getPublishedPairedDeviceBinding("node", baseDir)).toBeNull();
+});
+
 test.each(["worker commit", "external commit"] as const)(
   "does not restore revoked node authority from a read delayed past a newer %s",
   async (commit) => {

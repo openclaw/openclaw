@@ -971,7 +971,7 @@ describe("initSessionState thread forking", () => {
     });
     sessionForkMocks.forkSessionFromParent.mockResolvedValueOnce(undefined);
     const promptState = getEmbeddedSessionPromptState(threadSessionKey);
-    promptState.sentUserTurnIds.add("retained-turn");
+    promptState.toolResults.frozen.add("retained-tool-result");
     enqueueFollowupRun(
       threadSessionKey,
       createQueueTestRun({ prompt: "retained followup" }),
@@ -1009,7 +1009,7 @@ describe("initSessionState thread forking", () => {
         mainRestartRecovery: { tombstone: { reason: "old transcript exhausted" } },
       });
       expect(getEmbeddedSessionPromptState(threadSessionKey)).toBe(promptState);
-      expect(promptState.sentUserTurnIds).toContain("retained-turn");
+      expect(promptState.toolResults.frozen).toContain("retained-tool-result");
       expect(getFollowupQueueDepth(threadSessionKey)).toBe(1);
       expect(peekSystemEvents(threadSessionKey)).toEqual(["retained event"]);
       expect(replyRunRegistry.get(threadSessionKey)).toBe(activeReply);

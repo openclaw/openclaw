@@ -47,7 +47,7 @@ export async function updateWizardCommand(opts: UpdateWizardOptions = {}): Promi
   }
   if (updateStatus.installKind === "immutable") {
     defaultRuntime.log(
-      "Use openclaw update to prepare official main, or openclaw update --sha <full-sha> for an exact revision. Immutable activation is not available yet.",
+      "Use openclaw update for official main, or openclaw update --sha <full-sha> for an exact revision. Immutable activation runs only when explicitly enabled in the adoption record; --no-restart prepares only.",
     );
     return;
   }

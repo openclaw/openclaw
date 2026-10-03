@@ -642,45 +642,40 @@ describe("narrow session read owners", () => {
     });
   });
 
-  it.each(["sessions.files.get", "sessions.branches.list"] as const)(
-    "%s keeps the missing-row contract without reading a workspace",
-    async (method) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async () => {
-        const reader = roleClient("view", "missing-reader");
-        reader.connect.scopes = ["operator.sessions.read"];
-        const io = prepareRead(method, async () => {});
-        const respond = vi.fn();
-        await dispatchRead(method, {
-          client: reader,
-          context: createDirectChatContext({ getRuntimeConfig: rolePolicyConfig }),
-          respond,
-        });
-        expect(io).not.toHaveBeenCalled();
-        expect(respond.mock.calls[0]?.[0]).toBe(method === "sessions.branches.list");
+  it.each([
+    ["sessions.files.get", "narrow"],
+    ["sessions.branches.list", "narrow"],
+    ["sessions.files.get", "solo"],
+    ["sessions.files.get", "internal"],
+  ] as const)("%s keeps missing-row access for %s callers", async (method, identity) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const client =
+        identity === "internal"
+          ? null
+          : identity === "solo"
+            ? sharingPolicyClient({ user: GATEWAY_OWNER_PROFILE_ID, scopes: ["operator.read"] })
+            : roleClient("view", "missing-reader");
+      if (identity === "narrow" && client) {
+        client.connect.scopes = ["operator.sessions.read"];
+      }
+      const io = prepareRead(method, async () => {});
+      const respond = vi.fn();
+      await dispatchRead(method, {
+        client,
+        context: createDirectChatContext({
+          getRuntimeConfig: identity === "narrow" ? rolePolicyConfig : () => ({}),
+        }),
+        respond,
+      });
+      expect(io).toHaveBeenCalledTimes(identity === "narrow" ? 0 : 1);
+      expect(respond.mock.calls[0]?.[0]).toBe(
+        identity !== "narrow" || method === "sessions.branches.list",
+      );
+      if (identity === "narrow") {
         expect(respond.mock.calls[0]?.[1]).toEqual(
           method === "sessions.branches.list" ? { branches: [] } : undefined,
         );
-      });
-    },
-  );
-
-  it("preserves canonical solo-owner and internal browsing without a session row", async () => {
-    const method = "sessions.files.get";
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const io = prepareRead(method, async () => {});
-      for (const client of [
-        null,
-        sharingPolicyClient({ user: GATEWAY_OWNER_PROFILE_ID, scopes: ["operator.read"] }),
-      ]) {
-        const respond = vi.fn();
-        await dispatchRead(method, {
-          client,
-          context: createDirectChatContext(),
-          respond,
-        });
-        expect(respond.mock.calls[0]?.[0]).toBe(true);
       }
-      expect(io).toHaveBeenCalledTimes(2);
     });
   });
 });

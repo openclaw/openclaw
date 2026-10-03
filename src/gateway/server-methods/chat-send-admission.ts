@@ -193,6 +193,14 @@ export async function admitChatSend(
       context.dedupe.delete(pendingChatSendKey);
     }
   };
+  const abortPendingChatSend = (stopReason: string) =>
+    writePreRegisteredChatAbort({
+      context,
+      runId: clientRunId,
+      stopReason,
+      attemptId: pendingAttemptId,
+      requestIdentity,
+    });
   let admittedSessionId = backingSessionId ?? clientRunId;
   let expectedActiveReplyOperation: ReplyOperation | undefined;
   let gatewayWorkAdmission: Awaited<ReturnType<typeof beginSessionWorkAdmission>> | undefined;
@@ -236,24 +244,14 @@ export async function admitChatSend(
       }
     }
     if (lifecycleGeneration !== getAgentEventLifecycleGeneration()) {
-      writePreRegisteredChatAbort({
-        context,
-        runId: clientRunId,
-        stopReason: "restart",
-        attemptId: pendingAttemptId,
-      });
+      abortPendingChatSend("restart");
       return;
     }
     if (
       !pendingReservation ||
       !isFutureDateTimestampMs(pendingReservation.payload.expiresAtMs, { nowMs: Date.now() })
     ) {
-      writePreRegisteredChatAbort({
-        context,
-        runId: clientRunId,
-        stopReason: "timeout",
-        attemptId: pendingAttemptId,
-      });
+      abortPendingChatSend("timeout");
       return;
     }
     const latestEntry = latestSession.entry;
@@ -404,12 +402,7 @@ export async function admitChatSend(
         const stopReason = isAgentRunDirectAbortReason(reason) ? "rpc" : "restart";
         if (!admittedRunAbort) {
           if (!context.chatRunState.hasAbortMarker(clientRunId)) {
-            writePreRegisteredChatAbort({
-              context,
-              runId: clientRunId,
-              stopReason,
-              attemptId: pendingAttemptId,
-            });
+            abortPendingChatSend(stopReason);
           }
         } else if (!admittedRunAbort.controller.signal.aborted) {
           // A later lifecycle drain must not overwrite the first abort reason.
@@ -480,12 +473,7 @@ export async function admitChatSend(
     }
     gatewayWorkAdmission.release();
     if (!readChatSendDedupeResponse(context.dedupe, clientRunId)) {
-      writePreRegisteredChatAbort({
-        context,
-        runId: clientRunId,
-        stopReason: activeRunAbort?.entry?.abortStopReason ?? "restart",
-        attemptId: pendingAttemptId,
-      });
+      abortPendingChatSend(activeRunAbort?.entry?.abortStopReason ?? "restart");
     }
     const aborted = readChatSendDedupeResponse(context.dedupe, clientRunId);
     respond(aborted?.ok ?? true, aborted?.payload, aborted?.error, {

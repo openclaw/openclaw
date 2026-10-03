@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { channel } from "node:diagnostics_channel";
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
@@ -183,15 +184,23 @@ describe("Node Code Mode worker custody", () => {
     },
   );
 
-  it("reuses idle workers within five minutes and expires each after inactivity", async () => {
+  it("reuses idle workers and expires them without retaining completed caller context", async () => {
+    const caller = new AsyncLocalStorage<string>();
+    const retiredContexts: Array<string | undefined> = [];
     vi.useFakeTimers();
     try {
-      await Promise.all([run(), run()]);
+      await caller.run("completed-turn", () => Promise.all([run(), run()]));
       const count = fixture.pools.length;
       const previous = fixture.pools.at(-1)!;
       const reused = fixture.pools.at(-2)!;
+      for (const pool of [previous, reused]) {
+        pool.close.mockImplementation(async () => {
+          retiredContexts.push(caller.getStore());
+          pool.isClosed = true;
+        });
+      }
       await vi.advanceTimersByTimeAsync(70_000);
-      expect(await run()).toMatchObject({ status: "completed" });
+      expect(await caller.run("reused-turn", run)).toMatchObject({ status: "completed" });
       expect(fixture.pools).toHaveLength(count);
       expect(previous.isClosed).toBe(false);
       await vi.advanceTimersByTimeAsync(4 * 60_000);
@@ -199,7 +208,9 @@ describe("Node Code Mode worker custody", () => {
       expect(reused.isClosed).toBe(false);
       await vi.advanceTimersByTimeAsync(60_000);
       expect(reused.isClosed).toBe(true);
+      expect(retiredContexts).toEqual([undefined, undefined]);
     } finally {
+      caller.disable();
       vi.useRealTimers();
     }
   });

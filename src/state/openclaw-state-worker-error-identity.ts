@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { DuplicateAgentError } from "../agents/agent-create-error.js";
 import { McpOAuthStoreCorruptionError } from "../agents/mcp-oauth-store-error.js";
 import { WorkspaceAliasRepointedError } from "../agents/workspace-state-identity.js";
@@ -22,6 +23,7 @@ import {
   StartupMaintenanceRequiredError,
 } from "../infra/startup-maintenance-required.js";
 import { PluginBlobStoreError } from "../plugin-state/plugin-blob-store.types.js";
+import { PluginStateStoreError } from "../plugin-state/plugin-state-error.js";
 import {
   SecretStoreValidationError,
   isSecretStoreValidationCode,
@@ -85,6 +87,13 @@ export type ErrorIdentity =
       path?: string;
     }
   | { type: "maintenance"; kind: MaintenanceKind }
+  | {
+      type: "plugin-state";
+      stateCode: PluginStateStoreError["code"];
+      operation: PluginStateStoreError["operation"];
+      path?: string;
+      owner: PluginStateStoreError["owner"];
+    }
   | { type: "state-migration"; kind: StateMigrationKind; pathname: string }
   | {
       type: "session-metadata";
@@ -94,6 +103,15 @@ export type ErrorIdentity =
   | { type: "agent-media-migration"; pathname: string; schemaVersion: number };
 
 export function identifyError(error: Error): ErrorIdentity {
+  if (error instanceof PluginStateStoreError) {
+    return {
+      type: "plugin-state",
+      stateCode: error.code,
+      operation: error.operation,
+      path: error.path,
+      owner: error.owner,
+    };
+  }
   if (error instanceof SkillLibraryError) {
     return {
       type: "skill-library",
@@ -228,6 +246,50 @@ export function parseIdentity(node: Record<string, unknown>): ErrorIdentity | un
     return { type: node.type };
   }
   switch (node.type) {
+    case "plugin-state": {
+      const codes: readonly PluginStateStoreError["code"][] = [
+        "PLUGIN_STATE_SQLITE_UNAVAILABLE",
+        "PLUGIN_STATE_OPEN_FAILED",
+        "PLUGIN_STATE_WRITE_FAILED",
+        "PLUGIN_STATE_READ_FAILED",
+        "PLUGIN_STATE_CORRUPT",
+        "PLUGIN_STATE_LIMIT_EXCEEDED",
+        "PLUGIN_STATE_INVALID_INPUT",
+      ];
+      const operations: readonly PluginStateStoreError["operation"][] = [
+        "load-sqlite",
+        "open",
+        "ensure-schema",
+        "register",
+        "lookup",
+        "consume",
+        "delete",
+        "entries",
+        "count",
+        "clear",
+        "sweep",
+        "probe",
+        "close",
+      ];
+      const stateCode = codes.find((code) => code === node.stateCode && code === node.code);
+      const operation = operations.find((candidate) => candidate === node.operation);
+      const owner = node.owner;
+      return stateCode &&
+        operation &&
+        isRecord(owner) &&
+        typeof owner.pid === "number" &&
+        typeof owner.threadId === "number" &&
+        typeof owner.version === "string" &&
+        (node.path === undefined || typeof node.path === "string")
+        ? {
+            type: node.type,
+            stateCode,
+            operation,
+            owner: { pid: owner.pid, threadId: owner.threadId, version: owner.version },
+            ...(typeof node.path === "string" ? { path: node.path } : {}),
+          }
+        : undefined;
+    }
     case "skill-library":
       return isSkillLibraryCode(node.libraryCode) &&
         node.code === node.libraryCode &&
@@ -333,6 +395,13 @@ export function createError(node: ErrorIdentity & { message: string }): Error {
     return new ErrorType(node.message);
   }
   switch (node.type) {
+    case "plugin-state":
+      return new PluginStateStoreError(node.message, {
+        code: node.stateCode,
+        operation: node.operation,
+        path: node.path,
+        owner: node.owner,
+      });
     case "skill-library":
       return new SkillLibraryError(node.libraryCode, node.message, node.currentRevision);
     case "secret-store-validation":

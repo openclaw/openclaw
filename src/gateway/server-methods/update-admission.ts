@@ -63,8 +63,8 @@ export async function admitGatewayUpdateRequest(request: GatewayRequestHandlerOp
     respond(
       false,
       undefined,
-      errorShape(ErrorCodes.UNAVAILABLE, IMMUTABLE_PREPARATION_GUIDANCE, {
-        details: { reason: "immutable-activation-unavailable" },
+      errorShape(ErrorCodes.UNAVAILABLE, IMMUTABLE_UPDATE_GUIDANCE, {
+        details: { reason: "immutable-native-updater-required" },
         retryable: false,
       }),
     );
@@ -109,23 +109,23 @@ export async function admitGatewayUpdateRequest(request: GatewayRequestHandlerOp
   return null;
 }
 
-const IMMUTABLE_PREPARATION_GUIDANCE =
-  "Immutable activation is not available yet. Run openclaw update as the installation owner to prepare a sealed generation while the current Gateway keeps serving.";
+const IMMUTABLE_UPDATE_GUIDANCE =
+  "Run openclaw update as the root installation owner outside the Gateway service cgroup. Native immutable activation requires an explicitly enabled adoption record; use openclaw update recover --root <installation-root> for retained recovery. Gateway update.run cannot acquire that external updater authority.";
 
 export function reportImmutableGatewayUpdateRefusal(
   runId: string,
   installSurface: Extract<UpdateInstallSurface, { kind: "immutable" }>,
   respond: GatewayRequestHandlerOptions["respond"],
 ): void {
-  const reason = "immutable-activation-unavailable";
+  const reason = "immutable-native-updater-required";
   recordUpdateRunPhase(runId, "requested", {
-    origin: { nextAction: IMMUTABLE_PREPARATION_GUIDANCE },
+    origin: { nextAction: IMMUTABLE_UPDATE_GUIDANCE },
   });
   finishUpdateRun(runId, { status: "skipped", reason });
   respond(true, {
     runId,
     ok: false,
-    message: IMMUTABLE_PREPARATION_GUIDANCE,
+    message: IMMUTABLE_UPDATE_GUIDANCE,
     result: {
       status: "skipped",
       mode: installSurface.mode,

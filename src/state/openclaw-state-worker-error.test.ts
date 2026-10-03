@@ -21,6 +21,7 @@ import {
   StartupMaintenanceRequiredError,
 } from "../infra/startup-maintenance-required.js";
 import { PluginBlobStoreError } from "../plugin-state/plugin-blob-store.types.js";
+import { PluginStateStoreError } from "../plugin-state/plugin-state-store.types.js";
 import { SkillUploadRequestError } from "../skills/lifecycle/upload-store-error.js";
 import { OpenClawAgentDatabaseMediaMigrationRequiredError } from "./openclaw-agent-db-migration-required.js";
 import { DATABASE_QUARANTINE_READ_CLEANUP_ERROR_NAME } from "./openclaw-quarantine-error.js";
@@ -54,6 +55,24 @@ function roundTrip(error: Error): Error {
 }
 
 describe("shared-state worker error transport", () => {
+  it("preserves binding storage failure identity and its original executing owner", () => {
+    const original = new PluginStateStoreError("Synthetic binding deletion failed", {
+      code: "PLUGIN_STATE_WRITE_FAILED",
+      operation: "delete",
+      path: "/fixture/state.sqlite",
+      owner: { pid: 42, threadId: 7, version: "fixture" },
+      cause: new SyntaxError("Synthetic stored JSON failure"),
+    });
+    const decoded = roundTrip(original);
+    expect(decoded).toMatchObject({
+      code: original.code,
+      operation: original.operation,
+      path: original.path,
+      owner: original.owner,
+    });
+    expect(decoded.cause).toBeInstanceOf(SyntaxError);
+  });
+
   it("preserves MCP OAuth corruption details and parsing cause", () => {
     const cause = new SyntaxError("Synthetic malformed JSON");
     const error = new McpOAuthStoreCorruptionError(

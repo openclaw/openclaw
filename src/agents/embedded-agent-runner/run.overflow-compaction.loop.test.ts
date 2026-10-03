@@ -5,7 +5,6 @@ import type { GatewayRequestContext } from "../../gateway/server-methods/types.j
 import { resolveWorkerToolAuthority } from "../../gateway/worker-environments/worker-tool-authority.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { bindGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
-import { WORKER_TOOL_NAMES } from "../../worker/tool-authority.js";
 import { mergeAcceptedSessionSpawnsForRun } from "../accepted-session-spawn.js";
 import {
   prepareSystemAgentRunAdmission,
@@ -14,7 +13,6 @@ import {
 import { createSubscribedSessionHarness } from "../embedded-agent-subscribe.e2e-harness.js";
 import type { ExecSessionDefaults } from "../exec-defaults.js";
 import { createOpenClawTools } from "../openclaw-tools.js";
-import type { SessionPlacementTurnParams } from "../session-placement-admission.js";
 import {
   createEmbeddedRunReplayState,
   type EmbeddedRunReplayState,
@@ -232,19 +230,24 @@ describe("embedded run retry dispatch", () => {
     },
   ] satisfies Array<{
     session: ExecSessionDefaults;
-    expected: ReturnType<typeof resolveWorkerToolAuthority>["toolAuthority"]["exec"];
+    expected: ReturnType<typeof resolveWorkerToolAuthority>["exec"];
   }>)(
     "resolves a projected $expected.host session's execution authority",
     async ({ session, expected }) => {
       const result = await dispatchExecSession(session);
 
       const authority = resolveWorkerToolAuthority({
-        launchToolNames: WORKER_TOOL_NAMES,
         modelRef: { provider: "openai", model: "gpt-5.6-luna" },
-        turn: result.preparedAttempt as unknown as SessionPlacementTurnParams,
+        turn: {
+          ...result.preparedAttempt,
+          model: result.preparedAttempt.model.id,
+          fastMode: false,
+        },
+        placement: { agentId: "main", sessionKey: "agent:main:session-1" },
+        assertCurrent: () => {},
       });
 
-      expect(authority.toolAuthority.exec).toEqual(expected);
+      expect(authority.exec).toEqual(expected);
     },
   );
 

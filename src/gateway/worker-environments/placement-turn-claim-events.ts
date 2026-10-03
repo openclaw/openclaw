@@ -74,6 +74,7 @@ export type WorkerTurnTranscriptSource = Pick<
 
 export type WorkerTurnExecutionIdentityCapability = WorkerTurnTranscriptSource &
   Readonly<{
+    assertPresenceSourceCurrent?: () => void;
     run<T>(callback: (identity: WorkerTurnExecutionIdentity) => Promise<T> | T): Promise<T>;
   }>;
 
@@ -233,6 +234,7 @@ export async function bindWorkerTurnOwner(
   const capability = Object.freeze({
     sessionTarget,
     receiptAuthority: assertActive,
+    ...(assertPresenceSourceCurrent ? { assertPresenceSourceCurrent } : {}),
     async run<T>(callback: (current: WorkerTurnExecutionIdentity) => Promise<T> | T): Promise<T> {
       assertActive();
       const result = await callback(identity);

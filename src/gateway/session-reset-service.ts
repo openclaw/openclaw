@@ -1264,7 +1264,7 @@ export async function performGatewaySessionReset(params: {
           }
           return nextEntry;
         },
-        afterEntryMutation: (mutation) => {
+        afterEntryMutation: async (mutation) => {
           if (resetSkipped) {
             return;
           }
@@ -1363,7 +1363,7 @@ export async function performGatewaySessionReset(params: {
             sessionKey: target.canonicalKey ?? params.key,
           });
           if (createdNewEntry) {
-            recordSessionCreated(cfg, {
+            await recordSessionCreated(cfg, {
               sessionKey: target.canonicalKey ?? params.key,
               agentId,
               entry: mutation.nextEntry,

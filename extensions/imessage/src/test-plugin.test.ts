@@ -561,7 +561,8 @@ describe("imessagePlugin contracts", () => {
         );
         expect(readFile.mock.calls).toEqual([[sourcePath], [sourcePath]]);
         const forwardedMediaAccess = nativeSend.mock.calls[0]?.[2]?.mediaAccess;
-        expect(forwardedMediaAccess).toEqual(mediaAccess);
+        // Core adds its bounded native opener to the resolved host access.
+        expect(forwardedMediaAccess).toEqual({ ...mediaAccess, openFile: expect.any(Function) });
         expect(forwardedMediaAccess?.readFile).toBe(readFile);
 
         await drainPendingDeliveries({

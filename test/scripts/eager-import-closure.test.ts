@@ -88,6 +88,7 @@ it("acquires and releases wrapper leases without the application command runtime
     "src/state/openclaw-state.worker.ts",
     "src/state/openclaw-state-lease-worker.ts",
     "src/state/openclaw-state-lease-heartbeat.worker.ts",
+    "src/infra/gateway-state-owner-heartbeat.worker.ts",
     "src/infra/sqlite-store.worker.ts",
     "src/infra/sqlite-readonly-location.worker.ts",
   ]);

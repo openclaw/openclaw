@@ -14,7 +14,7 @@ import type { Api, Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderCatNoncePngBase64 } from "../../test/helpers/live-image-probe.js";
 import { installTestEnv } from "../../test/test-env.js";
-import { discoverAuthStorage, discoverModels } from "../agents/agent-model-discovery.js";
+import { discoverAuthStorageFacts, discoverModels } from "../agents/agent-model-discovery.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentDir } from "../agents/agent-scope.js";
 import {
   ensureAuthProfileStore,
@@ -2133,7 +2133,7 @@ describe("resolveGatewayLiveModelThinkingLevel", () => {
             ...createGatewayLiveTestModel(provider, "grok-build-0.1"),
             reasoning: true,
             thinkingLevelMap: {
-              off: null,
+              off: undefined,
               minimal: null,
               low: null,
               medium: null,
@@ -5396,9 +5396,9 @@ async function loadAuthBackedLiveModelRegistry(params: {
     ),
     "[all-models] load auth profiles",
   );
-  const authStorage = await withGatewayLiveSetupTimeout(
+  const { authStorage } = await withGatewayLiveSetupTimeout(
     Promise.resolve().then(() =>
-      discoverAuthStorage(params.agentDir, {
+      discoverAuthStorageFacts(params.agentDir, {
         config: params.cfg,
         env: process.env,
         ...(params.providerList
@@ -7094,7 +7094,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
       const hostStore = ensureAuthProfileStore(agentDir, {
         allowKeychainPrompt: false,
       });
-      const authStorage = discoverAuthStorage(agentDir);
+      const { authStorage } = discoverAuthStorageFacts(agentDir);
       const modelRegistry = discoverModels(authStorage, agentDir);
       const anthropic = modelRegistry.find("anthropic", "claude-opus-4-6") as Model | null;
       const zai = modelRegistry.find("zai", "glm-5.1") as Model | null;

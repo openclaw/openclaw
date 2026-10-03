@@ -4,8 +4,7 @@ import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { GatewayScheduledJob, GatewaySchedulerScope } from "../infra/gateway-scheduler.js";
 import { runBestEffortCleanup } from "../infra/non-fatal-cleanup.js";
-import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
-import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
 import {
   WorkerTaskError,
   WorkerTaskPool,
@@ -16,6 +15,7 @@ import {
   type LegacyPluginSdkResourceHost,
 } from "../plugins/legacy-sdk-resource-host.js";
 import { PluginRuntimeCloseRetainedError } from "../plugins/runtime-close-error.js";
+import { runInDetachedAsyncContext } from "../shared/async-work-scope.js";
 import {
   codeModeFailureCode,
   CodeModeHeadlessAbortError,
@@ -127,7 +127,7 @@ async function takePool(memoryLimitBytes: number, signal: AbortSignal): Promise<
   for (;;) {
     signal.throwIfAborted();
     lifetime?.scheduler.signal.throwIfAborted();
-    workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.codeModeNode);
+    workerUrl = resolveRuntimeProcessEntrypointUrl("codeModeNode");
     const retiring = new Set([
       ...[...retiringPools].filter(
         (owner) => owner.lifetime === lifetime || owner.lifetime?.scheduler.signal.aborted,
@@ -181,23 +181,27 @@ async function takePool(memoryLimitBytes: number, signal: AbortSignal): Promise<
 }
 
 async function releasePool(owner: NodePool): Promise<void> {
+  const { lifetime } = owner;
   if (
     idlePools.size >= MAX_IDLE_POOLS ||
-    !owner.lifetime ||
-    owner.lifetime.scheduler.signal.aborted ||
+    !lifetime ||
+    lifetime.scheduler.signal.aborted ||
     owner.tasks.isClosed ||
-    owner.url !== resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.codeModeNode).href
+    owner.url !== resolveRuntimeProcessEntrypointUrl("codeModeNode").href
   ) {
     await closePool(owner);
     return;
   }
   idlePools.set(
     owner,
-    owner.lifetime.scheduler.schedule({
-      id: `code-mode-worker-idle:${++nextPoolId}`,
-      delayMs: 5 * 60_000,
-      run: () => closePool(owner),
-    }),
+    // Warm-worker retirement belongs to the host, never the completed turn's transcript context.
+    runInDetachedAsyncContext(() =>
+      lifetime.scheduler.schedule({
+        id: `code-mode-worker-idle:${++nextPoolId}`,
+        delayMs: 5 * 60_000,
+        run: () => closePool(owner),
+      }),
+    ),
   );
   if (idlePools.size === 1) {
     memoryPressure.subscribe(retireIdlePools);
