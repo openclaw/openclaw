@@ -37,7 +37,7 @@ class YouTubeVideoCard extends OpenClawLitElement {
       min-width: 0;
       min-height: 200px;
       aspect-ratio: 16 / 9;
-      background: var(--surface);
+      background: var(--panel);
     }
     .preview,
     iframe {
@@ -51,7 +51,7 @@ class YouTubeVideoCard extends OpenClawLitElement {
     .preview {
       padding: 0;
       color: var(--text-strong);
-      background: linear-gradient(145deg, var(--elevated), var(--surface));
+      background: linear-gradient(145deg, var(--bg-elevated), var(--panel));
       cursor: default;
     }
     a.preview {
@@ -116,7 +116,7 @@ class YouTubeVideoCard extends OpenClawLitElement {
       line-height: 1.4;
       overflow-wrap: anywhere;
     }
-    .watch {
+    a.watch {
       display: inline-flex;
       align-items: center;
       gap: 5px;
