@@ -35,7 +35,7 @@ import {
 } from "../helpers/fixture-receipts.js";
 import { isProcessAlive } from "../helpers/process-wait.js";
 import { startProcessWatchdogFixture } from "../helpers/process-watchdog.js";
-import { withinTest } from "../helpers/promise.js";
+import { createDeferred, withinTest } from "../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 vi.mock("node:https", () => ({ request: vi.fn() }));
@@ -985,7 +985,7 @@ printf '[{"filename":"openclaw-%s.tgz"}]\\n' "$version"
   it("allows private package_url downloads only through an explicit trusted source policy", async () => {
     const target = path.join(autoTempDirs.make("openclaw-package-download-"), "openclaw.tgz");
     const url = "https://packages.internal:8443/artifactory/openclaw/openclaw.tgz";
-    const pinnedLookup = Promise.withResolvers<unknown>();
+    const pinnedLookup = createDeferred<unknown>();
     mockPackageRequests((requestedUrl, options) => {
       expect(requestedUrl.toString()).toBe(url);
       options.lookup!(requestedUrl.hostname, { all: true }, (error, addresses) => {
@@ -1209,7 +1209,7 @@ printf '[{"filename":"openclaw-%s.tgz"}]\\n' "$version"
       "openclaw.tgz",
     );
     const response = packageResponse();
-    const started = Promise.withResolvers<void>();
+    const started = createDeferred<void>();
     response._read = () => started.resolve();
     mockPackageRequests(() => {
       if (phase === "headers") {

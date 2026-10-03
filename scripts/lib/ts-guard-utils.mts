@@ -38,7 +38,7 @@ export function isTestLikeTypeScriptFile(filePath: string, extraTestSuffixes: st
   return [...baseTestSuffixes, ...extraTestSuffixes].some((suffix) => filePath.endsWith(suffix));
 }
 
-export async function collectTypeScriptFiles(
+async function collectTypeScriptFiles(
   targetPath: string,
   options: CollectTypeScriptFilesOptions = {},
 ): Promise<string[]> {
