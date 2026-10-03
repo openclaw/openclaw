@@ -281,6 +281,10 @@ export function createWorkerSessionTurnPlacementProvider(
     resolveWorkspace: async () => ({ kind: "local" as const, path: root }),
     workspaceOperations: createWorkerWorkspaceOperationCoordinator(),
     ...options,
+    environments: {
+      createGatewayTools: async ({ prepareTools }) => prepareTools?.([]) ?? [],
+      ...options.environments,
+    },
   });
 }
 
@@ -487,7 +491,6 @@ export function unusedEnvironments(): WorkerTurnEnvironmentService {
   const unexpected = () => new Error("unexpected worker environment call");
   return {
     get: vi.fn(() => undefined),
-    createGatewayTools: async ({ prepareTools }) => prepareTools?.([]) ?? [],
     resolveSshIdentity: vi.fn(async () => {
       throw unexpected();
     }),
