@@ -10,6 +10,7 @@ import {
 } from "../infra/update-doctor-result.js";
 import {
   createOpenClawDatabaseMaintenanceScope,
+  getOpenClawDatabaseMaintenanceScope,
   type OpenClawDatabaseMaintenanceScope,
 } from "../state/openclaw-state-db-async-lifecycle.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
@@ -33,6 +34,7 @@ export function createDoctorMaintenanceState(options: {
 }) {
   const { params, env, settle } = options;
   let resources: OpenClawDatabaseMaintenanceScope | undefined;
+  let resourcesParent: OpenClawDatabaseMaintenanceScope | undefined;
   let inspections: ReturnType<typeof createSqliteReadOnlyWorkerScope> | undefined;
   let owner: Awaited<ReturnType<typeof acquireDoctorGatewayMaintenanceOwner>> | undefined;
   let selectedEnv = env;
@@ -46,7 +48,7 @@ export function createDoctorMaintenanceState(options: {
     warn: options.warn,
   });
   const closeResources = async () => {
-    if (resources) {
+    if (resources && !resourcesParent) {
       const { closeOpenClawAgentDatabasesAsync } =
         await import("../state/openclaw-agent-db-lifecycle.js");
       await resources.run(() => closeOpenClawAgentDatabasesAsync(resolveStateDir(selectedEnv)));
@@ -58,6 +60,7 @@ export function createDoctorMaintenanceState(options: {
       await import("../agents/auth-profiles/sqlite-read-pool.js");
     closeAuthProfileReadPool({ kind: "root", rootPath: resolveStateDir(selectedEnv) });
     resources = undefined;
+    resourcesParent = undefined;
     inspections = undefined;
   };
   const settleCapture = async () => {
@@ -72,6 +75,7 @@ export function createDoctorMaintenanceState(options: {
     owner = acquired;
     try {
       acquired.assertCurrent(options.assertCurrent);
+      resourcesParent = getOpenClawDatabaseMaintenanceScope();
       resources = createOpenClawDatabaseMaintenanceScope({
         schemaMaintenance: true,
         assertDatabaseAccess: acquired.assertDatabaseAccess,
