@@ -578,9 +578,11 @@ export function stripLegacyBracketToolCallBlocks(text: string): string {
     const isResult = openMatch[1]?.toUpperCase() === "RESULT";
     const closeRe = isResult ? /\[\s*\/\s*TOOL_RESULT\s*\]/gi : /\[\s*\/\s*TOOL_CALL\s*\]/gi;
     closeRe.lastIndex = payloadStart;
-    const closeMatch = closeRe.exec(text);
-    const closeStart =
-      closeMatch && !isInsideCode(closeMatch.index, codeRegions) ? closeMatch.index : -1;
+    let closeMatch = closeRe.exec(text);
+    while (closeMatch && isInsideCode(closeMatch.index, codeRegions)) {
+      closeMatch = closeRe.exec(text);
+    }
+    const closeStart = closeMatch ? closeMatch.index : -1;
     const payload = text.slice(payloadStart, closeStart >= 0 ? closeStart : text.length);
     if (
       !(isResult
