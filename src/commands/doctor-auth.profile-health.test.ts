@@ -236,7 +236,8 @@ describe("noteAuthProfileHealth", () => {
         message: "Auth profile openai:billing is disabled:billing (5m).",
         path: expectedAuthStorePath(mainDir),
         target: "openai:billing",
-        fixHint: "Top up credits (provider billing) or switch provider.",
+        fixHint:
+          "Top up credits (provider billing), then run `openclaw models auth clear-cooldown 'openai:billing'`, or switch provider.",
       }),
     ]);
   });

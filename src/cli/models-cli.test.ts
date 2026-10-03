@@ -26,6 +26,7 @@ const mocks = vi.hoisted(() => ({
   modelsAuthLoginCommand: vi.fn().mockResolvedValue(undefined),
   modelsAuthLogoutCommand: vi.fn().mockResolvedValue(undefined),
   modelsAuthActivateCommand: vi.fn().mockResolvedValue(undefined),
+  modelsAuthClearCooldownCommand: vi.fn().mockResolvedValue(undefined),
   modelsAuthOrderClearCommand: vi.fn().mockResolvedValue(undefined),
   modelsAuthOrderGetCommand: vi.fn().mockResolvedValue(undefined),
   modelsAuthOrderSetCommand: vi.fn().mockResolvedValue(undefined),
@@ -86,6 +87,9 @@ vi.mock("../commands/models/accounts.js", () => ({
 }));
 vi.mock("../commands/models/auth-activate.js", () => ({
   modelsAuthActivateCommand: mocks.modelsAuthActivateCommand,
+}));
+vi.mock("../commands/models/auth-clear-cooldown.js", () => ({
+  modelsAuthClearCooldownCommand: mocks.modelsAuthClearCooldownCommand,
 }));
 vi.mock("../commands/models/auth-logout.js", () => ({
   modelsAuthLogoutCommand: mocks.modelsAuthLogoutCommand,
@@ -287,6 +291,12 @@ describe("models cli", () => {
       expected: { agent: "poe", profileId: "openai:saved" },
     },
     {
+      label: "clear-cooldown",
+      args: ["models", "auth", "--agent", "poe", "clear-cooldown", "openai:saved"],
+      command: mocks.modelsAuthClearCooldownCommand,
+      expected: { agent: "poe", profileId: "openai:saved" },
+    },
+    {
       label: "list",
       args: ["models", "auth", "--agent", "poe", "list", "--provider", "openai"],
       command: modelsAuthListCommand,
@@ -345,6 +355,12 @@ describe("models cli", () => {
       label: "activate",
       args: ["models", "auth", "activate", "openai:saved", "--agent", "poe"],
       command: mocks.modelsAuthActivateCommand,
+      expected: { agent: "poe", profileId: "openai:saved" },
+    },
+    {
+      label: "clear-cooldown",
+      args: ["models", "auth", "clear-cooldown", "openai:saved", "--agent", "poe"],
+      command: mocks.modelsAuthClearCooldownCommand,
       expected: { agent: "poe", profileId: "openai:saved" },
     },
     {
