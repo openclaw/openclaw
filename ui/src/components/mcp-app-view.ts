@@ -142,6 +142,7 @@ export class McpAppView extends LitElement {
   @property({ attribute: false }) viewId = "";
   @property({ type: Number }) height = 600;
   @property({ type: Boolean, attribute: "fill-container", reflect: true }) fillContainer = false;
+  @property({ attribute: false }) surface: "conversation" | "board" = "conversation";
   @property() override title = "";
   @property({ attribute: false }) deepLink: string | undefined;
   @property({ attribute: false }) onRelaunch: (() => void) | undefined;
@@ -660,7 +661,7 @@ export class McpAppView extends LitElement {
           : nothing
       }
       ${
-        this.inactive
+        this.inactive && this.surface === "conversation"
           ? html`<div class="inactive" role="status">
               <span>${t(relaunch ? "mcpApp.sessionEnded" : "mcpApp.reconstructed")}</span>
               ${relaunch ? html`<button type="button" ?disabled=${this.relaunching} @click=${relaunch}>${t("mcpApp.relaunch")}</button>` : nothing}

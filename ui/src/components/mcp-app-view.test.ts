@@ -326,7 +326,7 @@ describe("mcp-app-view localization", () => {
     expect(received).toHaveLength(1);
   });
 
-  it("signals its board owner and marks an expired view inactive", async () => {
+  it("delegates expired-view recovery to its board owner", async () => {
     const request = vi.fn(async () => {
       throw Object.assign(new Error("MCP App view expired"), {
         details: { code: GatewayErrorDetailCodes.MCP_APP_VIEW_EXPIRED },
@@ -341,14 +341,14 @@ describe("mcp-app-view localization", () => {
     });
     view.sessionKey = "agent:main:main";
     view.viewId = "mcp-app-expired";
+    view.surface = "board";
     const expired = vi.fn();
     view.addEventListener(MCP_APP_VIEW_EXPIRED_EVENT, expired);
     document.body.append(view);
 
     await expect.poll(() => expired).toHaveBeenCalledOnce();
-    await expect
-      .poll(() => view.shadowRoot?.querySelector('[role="status"]')?.textContent)
-      .toContain("Send a message to interact again");
+    await view.updateComplete;
+    expect(view.shadowRoot?.querySelector('[role="status"]')).toBeNull();
   });
 
   it("relaunches an ended entrypoint through the panel's existing launch request", async () => {
