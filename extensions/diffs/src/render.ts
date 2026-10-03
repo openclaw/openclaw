@@ -527,16 +527,7 @@ async function renderPatchDiff(
   target: DiffRenderTarget,
 ) {
   const languagePackAvailable = options.languagePackAvailable === true;
-  const files = await Promise.all(
-    parsePatchFiles(input.patch)
-      .flatMap((entry) => entry.files ?? [])
-      .map(async (fileDiff): Promise<FileDiffMetadata> => {
-        const lang = await normalizeSupportedLanguageHint(fileDiff.lang, { languagePackAvailable });
-        return lang === fileDiff.lang
-          ? fileDiff
-          : Object.assign({}, fileDiff, { lang: lang ?? "text" });
-      }),
-  );
+  const files = parsePatchFiles(input.patch).flatMap((entry) => entry.files ?? []);
   if (files.length === 0) {
     throw new DiffRenderInputError("Patch input did not contain any file diffs.");
   }
