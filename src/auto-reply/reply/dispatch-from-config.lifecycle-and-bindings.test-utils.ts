@@ -1218,6 +1218,58 @@ describe("dispatchReplyFromConfig", () => {
     externalLifecycleRequest.emitDestroy();
   });
 
+  it("releases an idle borrowed lifecycle lease when the queued successor is aborted", async () => {
+    const sessionKey = "agent:main:discord:channel:cancelled-successor";
+    const sessionId = "cancelled-successor-session";
+    const storePath = "/tmp/mock-sessions.json";
+    const entry = { sessionId, updatedAt: Date.now() };
+    sessionStoreMocks.currentEntry = entry;
+    const existingOperation = createReplyOperation({
+      sessionKey,
+      sessionId,
+      resetTriggered: false,
+    });
+    const abort = new AbortController();
+    const { createDispatchReplyOperationCoordinator } =
+      await import("./dispatch-from-config.lifecycle.js");
+    const coordinator = createDispatchReplyOperationCoordinator({
+      allowActiveQueueResolution: true,
+      agentId: "main",
+      cfg: emptyConfig,
+      ctx: finalizeInboundContextForSdk(
+        buildTestCtx({
+          Provider: "discord",
+          Surface: "discord",
+          SessionKey: sessionKey,
+          Body: "cancel this queued successor",
+        }),
+      ),
+      dispatcher: createDispatcher(),
+      dispatchOperationSessionKey: sessionKey,
+      operationSessionStoreEntry: { entry, storePath },
+      replyOptions: { abortSignal: abort.signal },
+      resolveOperationExpectedSessionId: () => sessionId,
+    });
+
+    try {
+      await expect(coordinator.ensureDispatchReplyOperation("pre_dispatch")).resolves.toEqual({
+        status: "ready",
+      });
+      expect(isSessionWorkAdmissionActive(storePath, [sessionKey, sessionId])).toBe(true);
+
+      abort.abort(new Error("queued successor cancelled"));
+
+      await vi.waitFor(() => {
+        expect(isSessionWorkAdmissionActive(storePath, [sessionKey, sessionId])).toBe(false);
+      });
+      expect(replyRunRegistry.get(sessionKey)).toBe(existingOperation);
+      expect(existingOperation.abortSignal.aborted).toBe(false);
+    } finally {
+      await coordinator.releasePreDispatchLifecycleAdmission();
+      existingOperation.complete();
+    }
+  });
+
   it("holds a lifecycle lease for plugin claims behind an active reply operation", async () => {
     const resolveClaim = mockPendingPluginClaim({
       bindingId: "binding-active-lifecycle-race",
