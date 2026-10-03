@@ -29,6 +29,11 @@ export type BashSandboxConfig = {
   workdirRoots?: readonly string[];
   /** Approved read-only skill mounts that may be selected as an exec workdir. */
   readOnlyWorkspaceSkillMounts?: readonly BashSandboxWorkdirMount[];
+  /**
+   * Operator-configured bind mounts from the sandbox mount selection; the same
+   * targets file tools accept may be selected as an exec workdir.
+   */
+  bindMounts?: readonly BashSandboxWorkdirMount[];
   env?: Record<string, string>;
   prepareProcessCleanup?: SandboxBackendHandle["prepareProcessCleanup"];
   buildExecSpec?: (params: {
