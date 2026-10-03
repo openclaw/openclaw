@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createCoreHealthChecks } from "./doctor-core-checks.js";
 import { runDoctorLintChecks } from "./doctor-lint-flow.js";
 import type { HealthCheck } from "./health-checks.js";
@@ -113,4 +115,71 @@ describe("core/doctor/skill-workshop-tool-policy", () => {
       }),
     ).resolves.toEqual([]);
   });
+
+  it.each([undefined, "off"] as const)(
+    "reports CLI review inactivity per agent without replacing sandbox findings (mode=%s)",
+    async (mode) => {
+      const registry = createEmptyPluginRegistry();
+      registry.cliBackends.push({
+        pluginId: "fixture-provider",
+        source: "runtime",
+        backend: {
+          id: "fixture-cli",
+          modelProvider: "fixture-provider",
+          config: { command: "fixture-cli" },
+        },
+      });
+      const cfg: OpenClawConfig = {
+        ...(mode ? { skills: { workshop: { autonomous: { mode } } } } : {}),
+        agents: {
+          ownership: "explicit",
+          entries: {
+            direct: { model: { primary: "fixture-cli/fixture-model" } },
+            canonical: {
+              model: { primary: "fixture-provider/fixture-model" },
+              models: {
+                "fixture-provider/fixture-model": { agentRuntime: { id: "fixture-cli" } },
+              },
+            },
+            sandboxed: {
+              model: { primary: "fixture-cli/fixture-model" },
+              sandbox: { mode: "all" },
+            },
+            native: { model: { primary: "fixture-provider/fixture-model" } },
+            codex: {
+              model: { primary: "openai/fixture-model" },
+              models: { "openai/fixture-model": { agentRuntime: { id: "codex" } } },
+            },
+          },
+        },
+        tools: { profile: "coding" },
+      };
+      const result = await withPluginRuntimeRegistryScope(registry, () =>
+        runDoctorLintChecks({ mode: "lint", runtime, cfg }, { checks: [getSkillWorkshopCheck()] }),
+      );
+      if (mode === "off") {
+        expect(result.findings).toEqual([]);
+        return;
+      }
+      const inactive = result.findings.filter((finding) =>
+        finding.message.includes("delayed experience review is unavailable"),
+      );
+      expect(inactive).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ severity: "warning", target: "direct" }),
+          expect.objectContaining({ severity: "warning", target: "canonical" }),
+          expect.objectContaining({ severity: "warning", target: "sandboxed" }),
+        ]),
+      );
+      expect(inactive).toHaveLength(3);
+      expect(inactive.every((finding) => finding.message.includes("fixture-cli"))).toBe(true);
+      expect(result.findings).toHaveLength(4);
+      expect(result.findings).toContainEqual(
+        expect.objectContaining({
+          target: "sandboxed",
+          path: "agents.entries.sandboxed.sandbox.mode",
+        }),
+      );
+    },
+  );
 });

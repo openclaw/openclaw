@@ -200,7 +200,11 @@ actual `skill_workshop` availability. The embedded runner and Codex app-server
 harness report those facts. Codex also reports its exact model-iteration count.
 Other CLI-backed runtimes fail closed until they provide the same runtime facts.
 `/learn` does not depend on delayed review and continues to work on those
-runtimes.
+runtimes when sandbox and tool policy permit `skill_workshop`. Ordinary sandboxed
+sessions cannot construct that tool without host-granted library-authoring authority.
+When autonomous learning is enabled, `openclaw doctor` reports the CLI-runtime
+exemption for each affected agent, including agents whose tool policy allows
+Workshop.
 
 ## Cost and privacy
 
@@ -314,8 +318,11 @@ error explaining that weekly collection review manages the skill collection.
 
 ### Doctor reports that Workshop is hidden
 
-In `propose` and `auto` modes, `openclaw doctor` checks whether the default agent
-tool policy permits `skill_workshop`. Apply the reported `tools.allow` or
+In `propose` and `auto` modes, `openclaw doctor` checks each agent's runtime,
+sandbox, and tool policy. A CLI-runtime finding means delayed experience review
+is unavailable even when the tool is allowed; changing an allowlist cannot enable
+it. Use a supported runtime for delayed review, or use `/learn` when sandbox and
+tool policy permit it. For a policy finding, apply the reported `tools.allow` or
 `tools.alsoAllow` change, or set the autonomous mode to `off`.
 
 ### A proposal remains pending in auto mode
