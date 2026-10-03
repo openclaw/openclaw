@@ -329,6 +329,19 @@ const REVIEWED_EXACT_PACKED_FIXTURES = [
     ruleId: "dangerous-exec",
     count: 1,
     sha256: "111364dcbc09d239ddac974953b2fe4d587b32ebcba3da8ac579a0dc1768569a",
+    targetContextRefs: ["", "release/2026.10.1"],
+  },
+  // The frozen 2026.9.9 fixture predates its direct child-process launch. Bind
+  // its zero-finding expectation to the exact shipped bytes so edited inert
+  // input cannot disappear into an empty reviewed inventory.
+  {
+    packageName: "@openclaw/codex",
+    path: "src/app-server/run-attempt.skills.native.test.ts",
+    ruleId: "dangerous-exec",
+    count: 0,
+    sha256: "7892ff3003799d8087edeb48f108ebf050e9a2a20b254f352d09bd50519ae8e8",
+    targetContextRefs: ["release/2026.9.9"],
+    requireExactBytes: true,
   },
   // The Windows-only fixture invokes the pinned MXC executable with a generated
   // config in dry-run mode and a fixed timeout.
@@ -338,6 +351,7 @@ const REVIEWED_EXACT_PACKED_FIXTURES = [
     ruleId: "dangerous-exec",
     count: 1,
     sha256: "9b5b0dc1f3f43bf2983135a35e12e53c76d9769bc3abdd5da1f08f2f1085d4ee",
+    targetContextRefs: ["", "release/2026.9.9", "release/2026.10.1"],
   },
 ] as const;
 
@@ -462,6 +476,14 @@ const FROZEN_RELEASE_SECURITY_INVENTORY_POLICIES = new Map<string, PluginSecurit
   ],
   [
     "release/2026.9.8",
+    {
+      ...CURRENT_SECURITY_INVENTORY_POLICY,
+      optionalPackedFindingCounts: RELEASE_2026_9_8_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS,
+      requiredSourceFindingCounts: RELEASE_2026_9_8_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS,
+    },
+  ],
+  [
+    "release/2026.9.9",
     {
       ...CURRENT_SECURITY_INVENTORY_POLICY,
       optionalPackedFindingCounts: RELEASE_2026_9_8_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS,
@@ -1209,9 +1231,11 @@ async function scanSupplementalInertPluginInput(
     }
     let qualifiedFixtureKey: string | undefined;
     const fixture = REVIEWED_EXACT_PACKED_FIXTURES.find(
-      (candidate) => candidate.packageName === plugin.packageName,
+      (candidate) =>
+        candidate.packageName === plugin.packageName &&
+        candidate.targetContextRefs.some((context) => context === targetContextRef),
     );
-    if (fixture && (targetContextRef === "" || targetContextRef === "release/2026.10.1")) {
+    if (fixture) {
       const entry = staged.inspection.inventory.find(
         (candidate) => candidate.type === "file" && candidate.path === `package/${fixture.path}`,
       );
@@ -1220,6 +1244,8 @@ async function scanSupplementalInertPluginInput(
         expectedReviewedCriticalFindings.push(...Array.from({ length: fixture.count }, () => key));
         if (entry.sha256 === fixture.sha256) {
           qualifiedFixtureKey = key;
+        } else if ("requireExactBytes" in fixture && fixture.requireExactBytes) {
+          throw new Error(`${fixture.packageName}: reviewed exact packed fixture bytes changed.`);
         }
       }
     }

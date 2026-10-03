@@ -263,6 +263,7 @@ describe("scripts/lib/plugin-npm-security-scan.mts", () => {
       "release/2026.9.6",
       "release/2026.9.7",
       "release/2026.9.8",
+      "release/2026.9.9",
       "release/2026.10.1",
     ]) {
       expect(resolveReviewedSourceLayout(current, context)?.id, context).toBe("current");
@@ -798,6 +799,7 @@ describe("scripts/lib/plugin-npm-security-scan.mts", () => {
           "extended-stable/2026.7.33",
           "release/2026.9.7",
           "release/2026.9.8",
+          "release/2026.9.9",
           "release/2026.10.1",
         ]) {
           const admitted =
@@ -805,6 +807,7 @@ describe("scripts/lib/plugin-npm-security-scan.mts", () => {
             context === "release/2026.9.6" ||
             context === "release/2026.9.7" ||
             context === "release/2026.9.8" ||
+            context === "release/2026.9.9" ||
             context === "release/2026.10.1" ||
             (context === "release/2026.9.5" && reviewedIn95);
           const label = `${context || "current"}: ${count ?? "absent"}`;
@@ -868,6 +871,7 @@ describe("scripts/lib/plugin-npm-security-scan.mts", () => {
       expect.stringContaining(proxyKey),
     ]);
     expect(reportErrors([authBridgeKey, proxyKey], "release/2026.9.8")).toEqual([]);
+    expect(reportErrors([authBridgeKey, proxyKey], "release/2026.9.9")).toEqual([]);
     expect(reportErrors([authBridgeKey, proxyKey], "release/2026.10.1")).toEqual([
       expect.stringContaining(proxyKey),
     ]);
@@ -898,7 +902,7 @@ describe("scripts/lib/plugin-npm-security-scan.mts", () => {
       packageName,
     });
 
-    for (const context of ["", "release/2026.10.1"] as const) {
+    for (const context of ["", "release/2026.9.9", "release/2026.10.1"] as const) {
       const scanned = await scanPublishablePluginPackages([artifact.artifact], context);
       expect(scanned.scanErrors, context).toEqual([]);
       const result = scanned.packageResults[0]!;
@@ -1021,6 +1025,15 @@ describe("scripts/lib/plugin-npm-security-scan.mts", () => {
     expect(releaseResult.unexpectedCriticalFindings).toHaveLength(
       variant === "exact" || variant === "removed exec" ? 0 : variant === "extra exec" ? 2 : 1,
     );
+    const frozen99 = await scanPublishablePluginPackages([artifact], "release/2026.9.9");
+    if (packageName === "@openclaw/codex" && packedPath === fixturePath) {
+      expect(frozen99.scanErrors).toEqual([
+        expect.stringContaining("reviewed exact packed fixture bytes changed"),
+      ]);
+      expect(frozen99.packageResults).toEqual([]);
+    } else {
+      expect(frozen99.scanErrors).toEqual([]);
+    }
     if (variant === "removed exec") {
       const report = buildPluginNpmSecurityScanReport({
         candidateSha: CANDIDATE_SHA,
