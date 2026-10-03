@@ -1269,7 +1269,7 @@ src/agents/auth-profiles/usage.ts	1
 src/agents/bash-process-registry.ts	1
 src/agents/bash-tools.exec-approval-followup.ts	5
 src/agents/bash-tools.exec-approval-request.ts	2
-src/agents/bash-tools.exec-host-node-phases.ts	3
+src/agents/bash-tools.exec-host-node-phases.ts	1
 src/agents/bash-tools.exec-host-node.ts	2
 src/agents/bash-tools.exec-request-preparation.ts	6
 src/agents/bash-tools.exec-run.ts	1
