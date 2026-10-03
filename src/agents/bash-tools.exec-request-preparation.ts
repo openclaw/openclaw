@@ -15,6 +15,7 @@ import {
   installationTargetEnv,
   LOCAL_INSTALLATION_TARGET_UNSUPPORTED,
 } from "../infra/installation-target-context.js";
+import { omitGatewayAgentCliPath } from "../infra/openclaw-cli-shim.js";
 import { OPENCLAW_CLI_ENV_VAR, SUBAGENT_EXEC_ENV_VAR } from "../infra/openclaw-exec-env.js";
 import {
   getShellPathFromLoginShell,
@@ -520,10 +521,13 @@ export function resolvePreparedExecEnvironment(params: {
 
   // `tools.exec.pathPrepend` is only meaningful when exec runs locally (gateway) or in the sandbox.
   // Node hosts intentionally ignore request-scoped PATH overrides, so don't pretend this applies.
-  if (params.host === "node" && params.defaultPathPrepend.length > 0) {
-    params.warnings.push(
-      "Warning: tools.exec.pathPrepend is ignored for host=node. Configure PATH on the node host/service instead.",
-    );
+  // The Gateway CLI shim is merged in automatically and only exists on the Gateway host.
+  if (params.host === "node") {
+    if (omitGatewayAgentCliPath(params.defaultPathPrepend).length > 0) {
+      params.warnings.push(
+        "Warning: tools.exec.pathPrepend is ignored for host=node. Configure PATH on the node host/service instead.",
+      );
+    }
   } else {
     applyPathPrepend(env, params.defaultPathPrepend);
   }

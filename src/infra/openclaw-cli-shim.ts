@@ -99,3 +99,9 @@ export function mergeGatewayAgentCliPath(configured?: string[]): string[] | unde
   ]);
   return merged.length > 0 ? merged : undefined;
 }
+
+/** Drop the Gateway-local CLI shim, e.g. before judging operator PATH entries for remote hosts. */
+export function omitGatewayAgentCliPath(entries: readonly string[]): string[] {
+  const binDir = gatewayAgentCliState.binDir;
+  return entries.filter((entry) => entry !== binDir);
+}
