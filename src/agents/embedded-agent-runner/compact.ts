@@ -501,7 +501,8 @@ export async function compactEmbeddedAgentSessionDirect(
         })[0];
         const fallbackSessionKey =
           params.sandboxSessionKey ?? params.sessionKey ?? params.sessionId;
-        let deferredSummaryTimeout = false;
+        // The candidate whose summary timed out while a later candidate was pending.
+        let timedOutCandidate: PreparedCompactEmbeddedAgentSessionParams | undefined;
         let chainResult: EmbeddedAgentCompactResult | undefined;
         let chainError: unknown;
         try {
@@ -545,7 +546,7 @@ export async function compactEmbeddedAgentSessionDirect(
               const preservesPrimaryAuth =
                 isPrimaryCandidate || primaryAuthProviders.has(resolveAuthProvider(provider));
               const authProfileId = preservesPrimaryAuth ? params.authProfileId : undefined;
-              const result = await compactEmbeddedAgentSessionDirectOnce({
+              const candidate: PreparedCompactEmbeddedAgentSessionParams = {
                 ...params,
                 provider,
                 model,
@@ -556,23 +557,29 @@ export async function compactEmbeddedAgentSessionDirect(
                 // actual fallback may change route/auth class and must rebuild it.
                 runtimeAuthPlan: isPrimaryCandidate ? params.runtimeAuthPlan : undefined,
                 runtimePlan: isPrimaryCandidate ? params.runtimePlan : undefined,
-                ...(options?.isFinalFallbackAttempt === false
-                  ? { summaryFailoverPending: true as const }
-                  : {}),
-              });
-              deferredSummaryTimeout ||=
-                options?.isFinalFallbackAttempt === false && result.failure?.reason === "timeout";
+              };
+              const summaryFailoverPending =
+                options?.isFinalFallbackAttempt === false && params.trigger !== "manual";
+              const result = await compactEmbeddedAgentSessionDirectOnce(
+                summaryFailoverPending ? { ...candidate, summaryFailoverPending: true } : candidate,
+              );
+              if (summaryFailoverPending && result.failure?.reason === "timeout") {
+                timedOutCandidate = candidate;
+              }
               return result;
             },
           });
           chainResult = fallbackResult.result;
         } catch (error) {
+          if (!isFallbackSummaryError(error)) {
+            throw error;
+          }
           chainError = error;
         }
-        // The candidates after a deferred summary timeout were skipped or failed too (#164220).
-        if (deferredSummaryTimeout && !chainResult?.ok && !params.abortSignal?.aborted) {
+        // Every candidate after a deferred summary timeout was skipped or failed (#164220).
+        if (timedOutCandidate && !chainResult?.ok && !params.abortSignal?.aborted) {
           return await compactEmbeddedAgentSessionDirectOnce({
-            ...params,
+            ...timedOutCandidate,
             commitWithoutSummary: true,
           });
         }
