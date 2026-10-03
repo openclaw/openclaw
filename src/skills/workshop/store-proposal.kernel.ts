@@ -13,8 +13,9 @@ import {
   updateProposal,
   type StoredSkillProposal,
 } from "./store-sqlite-record.js";
+import { skillProposalRollbackValues } from "./store-sqlite-rollback.js";
 import type { SkillWorkshopDatabase } from "./store-sqlite-schema.js";
-import type { SkillProposalEvent, SkillProposalRecord } from "./types.js";
+import type { SkillProposalEvent, SkillProposalRecord, SkillProposalRollback } from "./types.js";
 
 export type CreateSkillProposalInput = {
   record: SkillProposalRecord;
@@ -28,6 +29,12 @@ export type UpdateSkillProposalRecordInput = {
   ownerAgentId?: string;
   invalidateRollback?: boolean;
   event?: NewSkillProposalEvent;
+};
+
+export type ImportLegacySkillProposalInput = {
+  record: SkillProposalRecord;
+  rollback?: SkillProposalRollback;
+  ownerAgentId: string;
 };
 
 export type ListStoredSkillProposalsInput = {
@@ -133,4 +140,47 @@ export function listStoredSkillProposalsInDatabase(
     const record = parseSkillProposalRow(row);
     return record ? [{ record, row }] : [];
   });
+}
+
+export function importLegacySkillProposalInDatabase(
+  db: DatabaseSync,
+  params: ImportLegacySkillProposalInput,
+): "imported" | "already-imported" {
+  assertProposalId(params.record.id);
+  const kysely = getNodeSqliteKysely<SkillWorkshopDatabase>(db);
+  const current = executeSqliteQueryTakeFirstSync(
+    db,
+    kysely
+      .selectFrom("skill_workshop_proposals")
+      .selectAll()
+      .where("proposal_id", "=", params.record.id),
+  );
+  if (current) {
+    const existing = parseSkillProposalRow(current);
+    if (
+      !existing ||
+      existing.draftHash !== params.record.draftHash ||
+      existing.target.skillFile !== params.record.target.skillFile
+    ) {
+      throw new Error(`Legacy skill proposal conflicts with SQLite: ${params.record.id}`);
+    }
+  } else {
+    insertProposal(db, {
+      record: params.record,
+      ownerAgentId: params.ownerAgentId,
+    });
+  }
+  if (params.rollback) {
+    executeSqliteQuerySync(
+      db,
+      kysely
+        .insertInto("skill_workshop_proposal_rollbacks")
+        .values({
+          proposal_id: params.record.id,
+          ...skillProposalRollbackValues(params.rollback),
+        })
+        .onConflict((conflict) => conflict.column("proposal_id").doNothing()),
+    );
+  }
+  return current ? "already-imported" : "imported";
 }

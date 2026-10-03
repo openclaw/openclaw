@@ -10,7 +10,7 @@ import {
 import { createAppliedLegacyProposal } from "../commands/doctor-skill-workshop-sqlite.test-support.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
-import { seedSkillProposal } from "../skills/workshop/store.test-support.js";
+import { importLegacySkillProposal } from "../skills/workshop/store.js";
 import {
   openOpenClawStateDatabase,
   closeOpenClawStateDatabaseAsync,
@@ -96,7 +96,7 @@ describe("workspace state during an update rehearsal", () => {
     };
     await fs.mkdir(record.target.skillDir, { recursive: true });
     await fs.writeFile(record.target.skillFile, content);
-    seedSkillProposal({ record, ownerAgentId: "main", store: { env: state.env } });
+    await importLegacySkillProposal({ record, ownerAgentId: "main", store: { env: state.env } });
     const before = await fileHashes(historical);
     const candidateRoot = state.path("candidate");
     await materializeUpdateCandidateStateWorker(candidateRoot);

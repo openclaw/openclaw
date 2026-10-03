@@ -5,7 +5,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { prepareUpdateCandidateRehearsal } from "../infra/update-candidate-rehearsal.js";
 import { materializeUpdateCandidateStateWorker } from "../infra/update-candidate-state.test-support.js";
-import { seedSkillProposal } from "../skills/workshop/store.test-support.js";
+import { importLegacySkillProposal } from "../skills/workshop/store.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -160,7 +160,7 @@ it.each(["pending", "applied"] as const)(
       };
       await fs.mkdir(skillDir, { recursive: true });
       await fs.writeFile(record.target.skillFile, content);
-      seedSkillProposal({ record, ownerAgentId: "main", store: { env: source.env } });
+      await importLegacySkillProposal({ record, ownerAgentId: "main", store: { env: source.env } });
       const config: OpenClawConfig = {
         agents: { entries: { main: { workspace: source.workspaceDir } } },
       };

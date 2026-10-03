@@ -52,6 +52,7 @@ import {
   type SkillProposalManifestEntry,
   type SkillProposalReadResult,
   type SkillProposalRecord,
+  type SkillProposalRollback,
   type SkillProposalSupportFileInput,
   type SkillProposalEvent,
 } from "./types.js";
@@ -494,6 +495,20 @@ export async function readSkillProposalBundle(
     content,
     ...(supportFiles.length > 0 ? { supportFiles } : {}),
   };
+}
+
+export async function importLegacySkillProposal(params: {
+  record: SkillProposalRecord;
+  rollback?: SkillProposalRollback;
+  ownerAgentId: string;
+  store?: SkillWorkshopStoreOptions;
+}): Promise<"imported" | "already-imported"> {
+  assertProposalId(params.record.id);
+  return executeSkillWorkshopOperation(
+    "workshop.proposal.import",
+    { record: params.record, rollback: params.rollback, ownerAgentId: params.ownerAgentId },
+    params.store,
+  );
 }
 
 function manifestEntryFromRecord(record: SkillProposalRecord): SkillProposalManifestEntry {

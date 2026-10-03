@@ -18,6 +18,7 @@ import { hashSkillProposalContent } from "./proposal-hash.js";
 import { recordSkillProposalEvaluationInDatabase } from "./store-evaluation.kernel.js";
 import {
   createSkillProposalInDatabase,
+  importLegacySkillProposalInDatabase,
   listStoredSkillProposalsInDatabase,
   updateSkillProposalRecordInDatabase,
 } from "./store-proposal.kernel.js";
@@ -147,6 +148,13 @@ export const skillWorkshopOperations = {
       "skill-workshop.proposal.update",
       (database) => updateSkillProposalRecordInDatabase(database.db, input.value),
       input.value.record.id,
+    ),
+  "workshop.proposal.import": (
+    input: WorkshopInput<Parameters<typeof importLegacySkillProposalInDatabase>[1]>,
+    context,
+  ) =>
+    write(input, context, "doctor.skill-workshop.import", (database) =>
+      importLegacySkillProposalInDatabase(database.db, input.value),
     ),
   "workshop.proposal.evaluate": (
     input: WorkshopInput<Parameters<typeof recordSkillProposalEvaluationInDatabase>[1]>,

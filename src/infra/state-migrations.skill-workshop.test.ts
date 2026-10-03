@@ -18,8 +18,11 @@ import {
 } from "../skills/workshop/service.js";
 import { resolveWorkshopSkillsDir } from "../skills/workshop/skills-root.js";
 import { readStoredProposal } from "../skills/workshop/store-client.js";
-import { readSkillProposalRollback, updateSkillProposalRecord } from "../skills/workshop/store.js";
-import { seedSkillProposal } from "../skills/workshop/store.test-support.js";
+import {
+  importLegacySkillProposal,
+  readSkillProposalRollback,
+  updateSkillProposalRecord,
+} from "../skills/workshop/store.js";
 import {
   SKILL_WORKSHOP_ROLLBACK_SCHEMA,
   type SkillProposalRollback,
@@ -93,7 +96,7 @@ describe("Skill Workshop migration ownership", () => {
     await fs.mkdir(path.join(applied.target.skillDir, "assets"), { recursive: true });
     await fs.writeFile(applied.target.skillFile, content);
     await fs.writeFile(path.join(applied.target.skillDir, "assets", "fixture.bin"), support);
-    seedSkillProposal({
+    await importLegacySkillProposal({
       record: applied,
       ownerAgentId: "main",
       store: { env: state.env },
@@ -317,7 +320,7 @@ describe("Skill Workshop migration ownership", () => {
       } else {
         await fs.unlink(proposal.file);
         if (source === "sqlite" || source === "sqlite-no-rollback") {
-          seedSkillProposal({
+          await importLegacySkillProposal({
             record: ownedRecord,
             ownerAgentId: "main",
             store: { env: state.env },
@@ -425,7 +428,7 @@ describe("Skill Workshop migration ownership", () => {
         action: "create",
         supportFiles: [],
       };
-      seedSkillProposal({
+      await importLegacySkillProposal({
         record: proposal.record,
         rollback,
         ownerAgentId: "main",
@@ -457,7 +460,7 @@ describe("Skill Workshop migration ownership", () => {
       if (recoveryKind === "connected") {
         await fs.mkdir(connected.target.skillDir, { recursive: true });
         await fs.writeFile(connected.target.skillFile, connectedContent);
-        seedSkillProposal({
+        await importLegacySkillProposal({
           record: connected,
           ownerAgentId: "main",
           store: { env: state.env },

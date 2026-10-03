@@ -5,7 +5,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { createAppliedLegacyProposal } from "../commands/doctor-skill-workshop-sqlite.test-support.js";
-import { seedSkillProposal } from "../skills/workshop/store.test-support.js";
+import { importLegacySkillProposal } from "../skills/workshop/store.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -90,7 +90,7 @@ describe("legacy state migration plan identity", () => {
     });
     fs.mkdirSync(skillDir, { recursive: true });
     fs.writeFileSync(record.target.skillFile, content);
-    seedSkillProposal({ record, ownerAgentId: "main", store: { env: fixture.env } });
+    await importLegacySkillProposal({ record, ownerAgentId: "main", store: { env: fixture.env } });
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     const before = await captureLegacyStateSnapshotIdentity(fixture);
