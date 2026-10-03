@@ -405,7 +405,7 @@ export function validateJsonSchemaValue(params: {
         params.applyDefaults &&
         value !== originalValue &&
         Check(
-          normalizeJsonSchemaForTypeBox(relaxConditionalRequiredKeywords(params.schema)) as never,
+          normalizeJsonSchemaForTypeBox(relaxConditionalRequiredKeywords(params.schema)),
           value,
         ) &&
         cached.validate.Check(originalValue)

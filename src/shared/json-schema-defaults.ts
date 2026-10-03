@@ -658,7 +658,7 @@ function schemaMatches(
   try {
     const matchSchema = inlineLocalRefsForMatch(schema, root, resourceRoot, resourceBaseId);
     const contextualSchema = schemaWithResourceContext(matchSchema, resourceRoot);
-    return Check(normalizeJsonSchemaForTypeBox(contextualSchema) as never, value);
+    return Check(normalizeJsonSchemaForTypeBox(contextualSchema), value);
   } catch {
     return false;
   }
