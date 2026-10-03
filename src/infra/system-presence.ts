@@ -13,33 +13,8 @@ import { resolveMachineModelIdentifier } from "./machine-model.js";
 import { pickBestEffortPrimaryLanIPv4 } from "./network-discovery-display.js";
 import { resolveDarwinProductVersion } from "./os-summary.js";
 
-export type SystemPresence = {
-  connectionId?: string;
-  host?: string;
-  clientId?: string;
-  ip?: string;
-  version?: string;
-  platform?: string;
-  deviceFamily?: string;
-  modelIdentifier?: string;
-  timeZone?: string;
-  lastInputSeconds?: number;
-  mode?: string;
-  reason?: string;
-  deviceId?: string;
-  roles?: string[];
-  scopes?: string[];
-  instanceId?: string;
-  user?: PresenceEntry["user"];
-  watchedSessions?: string[];
-  /** Server-owned timing for the person's current continuous live interval. */
-  onlineSince?: number;
-  lastActivityAt?: number;
-  /** Latest accepted OpenClaw interaction on this connection only. */
-  connectionLastActivityAt?: number;
+export type SystemPresence = Omit<PresenceEntry, "tags" | "text"> & {
   text: string;
-  /** Heartbeat freshness, independent of person activity and online duration. */
-  ts: number;
 };
 
 type StoredPresence = {

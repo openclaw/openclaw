@@ -1,4 +1,6 @@
 import { normalizeOptionalString as readString } from "@openclaw/normalization-core/string-coerce";
+import type { z } from "zod";
+import type { OpenClawSchemaShape } from "../config/zod-schema.root-shape.js";
 
 /**
  * Configuration normalization for transcript capture/import.
@@ -7,16 +9,7 @@ import { normalizeOptionalString as readString } from "@openclaw/normalization-c
  * returns bounded defaults and drops malformed entries before runtime startup.
  */
 /** Raw auto-start transcript source entry from config. */
-type TranscriptsAutoStartConfig = {
-  providerId: string;
-  whenOccupied?: boolean;
-  sessionId?: string;
-  title?: string;
-  accountId?: string;
-  guildId?: string;
-  channelId?: string;
-  meetingUrl?: string;
-};
+type TranscriptsAutoStartConfig = NonNullable<TranscriptsConfig["autoStart"]>[number];
 
 /** Normalized auto-start source entry consumed by transcript runtime code. */
 export type ResolvedTranscriptsAutoStartConfig = TranscriptsAutoStartConfig & {
@@ -24,10 +17,7 @@ export type ResolvedTranscriptsAutoStartConfig = TranscriptsAutoStartConfig & {
 };
 
 /** Raw transcripts config block. */
-export type TranscriptsConfig = {
-  enabled?: boolean;
-  autoStart?: TranscriptsAutoStartConfig[];
-};
+export type TranscriptsConfig = NonNullable<z.input<typeof OpenClawSchemaShape.transcripts>>;
 
 /** Resolved transcripts config with defaults applied. */
 type ResolvedTranscriptsConfig = {

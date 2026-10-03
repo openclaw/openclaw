@@ -1,3 +1,4 @@
+import type { SessionBranch } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { AssistantMessage } from "../../llm/types.js";
 import type {
   InternalSessionTranscriptUpdate,
@@ -742,13 +743,7 @@ export type SessionMessageCutMutationParams = {
   repositoryWorkspaceId?: string;
 };
 
-export type SessionBranchSummary = {
-  leafEntryId: string;
-  headline: string;
-  messageCount: number;
-  updatedAt?: string;
-  active: boolean;
-};
+export type SessionBranchSummary = SessionBranch;
 
 export type SessionBranchListResult =
   | { status: "ok"; branches: SessionBranchSummary[] }

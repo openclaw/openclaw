@@ -1,6 +1,7 @@
 // Shared exec approval types and mode normalization.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { ApprovalScope } from "../../packages/gateway-protocol/src/schema/approvals.js";
+import type { ExecApprovalRequestParams } from "../../packages/gateway-protocol/src/schema/exec-approvals.js";
 import type { CommandExplanationSummary } from "./command-analysis/explain.js";
 import type { ExecApprovalPolicySnapshot } from "./exec-approval-policy-snapshot.js";
 import type { ExecAllowlistEntry, McpToolGrant } from "./exec-approvals.types.js";
@@ -163,27 +164,18 @@ export type SystemRunApprovalBinding = {
   envHash: string | null;
 };
 
-export type SystemRunApprovalFileOperand = {
-  argvIndex: number;
-  path: string;
-  sha256: string;
-};
+export type SystemRunApprovalFileOperand = NonNullable<SystemRunApprovalPlan["mutableFileOperand"]>;
 
-export type SystemRunApprovalPlan = {
-  argv: string[];
-  cwd: string | null;
-  commandText: string;
-  commandPreview?: string | null;
-  agentId: string | null;
-  sessionKey: string | null;
+export type SystemRunApprovalPlan = Omit<
+  NonNullable<ExecApprovalRequestParams["systemRunPlan"]>,
+  "policySnapshot"
+> & {
   policySnapshot?: ExecApprovalPolicySnapshot;
-  mutableFileOperand?: SystemRunApprovalFileOperand | null;
 };
 
-export type ExecApprovalCommandSpan = {
-  startIndex: number;
-  endIndex: number;
-};
+export type ExecApprovalCommandSpan = NonNullable<
+  ExecApprovalRequestParams["commandSpans"]
+>[number];
 
 /** Cron job identity recorded at approval creation for a cron isolated run. */
 type ExecApprovalCronExecutionSource = {

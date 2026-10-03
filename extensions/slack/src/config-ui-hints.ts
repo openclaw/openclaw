@@ -1,5 +1,4 @@
-import { createChannelConfigUiHints } from "openclaw/plugin-sdk/channel-core";
-import type { ChannelConfigUiHint } from "openclaw/plugin-sdk/channel-core";
+import { createChannelConfigUiHints } from "openclaw/plugin-sdk/channel-config-ui-hints";
 
 const observedGroupHistoryHint = {
   help: "Automatic observed-message context uses a default of 50 and a maximum of 200 messages; 0 disables automatic injection. The JSON integer maximum selects the 50-message default. Session transcript trimming separately counts user turns, where 0 means no trimming. The observed-message cap does not rewrite saved values.",
@@ -182,4 +181,4 @@ export const slackChannelConfigUiHints = {
     label: "Slack Thread Initial History Limit",
     help: "Maximum number of existing Slack thread messages to fetch when starting a new thread session (default: 20, set to 0 to disable).",
   },
-} satisfies Record<string, ChannelConfigUiHint>;
+} satisfies ReturnType<typeof createChannelConfigUiHints>;

@@ -10,6 +10,8 @@ import {
 } from "openclaw/plugin-sdk/provider-http";
 import { resolvePinnedHostnameWithPolicy, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import type { z } from "zod";
+import type { webhookMessageSchema, webhookUpdateSchema } from "./message-schema.js";
 import { ZALO_DEFAULT_REQUEST_TIMEOUT_MS, ZALO_SEND_PHOTO_REQUEST_TIMEOUT_MS } from "./timeouts.js";
 
 const ZALO_API_BASE = "https://bot-api.zaloplatforms.com";
@@ -32,33 +34,9 @@ export type ZaloBotInfo = {
   can_join_groups: boolean;
 };
 
-export type ZaloMessage = {
-  message_id: string;
-  from: {
-    id: string;
-    name?: string;
-    display_name?: string;
-    avatar?: string;
-    is_bot?: boolean;
-  };
-  chat: {
-    id: string;
-    chat_type: "PRIVATE" | "GROUP";
-  };
-  date: number;
-  text?: string;
-  photo_url?: string;
-  caption?: string;
-  sticker?: string;
-  message_type?: string;
-};
+export type ZaloMessage = z.infer<typeof webhookMessageSchema>;
 
-export type ZaloUpdate = {
-  event_name:
-    | "message.text.received"
-    | "message.image.received"
-    | "message.sticker.received"
-    | "message.unsupported.received";
+export type ZaloUpdate = Omit<z.infer<typeof webhookUpdateSchema>, "message"> & {
   message?: ZaloMessage;
 };
 

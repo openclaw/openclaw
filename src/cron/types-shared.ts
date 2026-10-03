@@ -1,3 +1,5 @@
+import type { CronJob } from "../../packages/gateway-protocol/src/schema/cron.types.js";
+
 export type CronAgentScope = {
   agentId?: string | null;
   sessionKey?: string | null;
@@ -18,10 +20,7 @@ export type QuarantinedCronConfigJob = {
 export type CronQuarantinedJob = QuarantinedCronConfigJob & { quarantinedAtMs: number };
 
 /** Optional dynamic-cadence bounds for one cron job. */
-export type CronPacing = {
-  min?: string;
-  max?: string;
-};
+export type CronPacing = NonNullable<CronJob["pacing"]>;
 
 /** Shared persisted cron job envelope used by runtime and external config shapes. */
 export type CronJobBase<TSchedule, TSessionTarget, TWakeMode, TPayload, TDelivery, TFailureAlert> =

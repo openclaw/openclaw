@@ -2,16 +2,16 @@ import {
   SESSION_EXPANDED_PARTICIPANT_LIMIT,
   type SessionParticipant,
 } from "../../../packages/gateway-protocol/src/schema/session-participant.js";
-import type { SessionConversationLink } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
+import type {
+  SessionConversationLink,
+  SessionCreatedActor as ProjectedSessionCreatedActor,
+  SessionRow,
+} from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
 import type { SkillLibrarySelection } from "../../../packages/gateway-protocol/src/schema/skill-library.js";
 import type { HookExternalContentSource } from "../../security/external-content.js";
 
-/** Kept aligned with SessionStateActorType (src/sessions/session-state-event-kinds.ts); not imported to avoid layering config/sessions onto src/sessions. */
-export type SessionActor = {
-  type: "human" | "agent" | "system";
-  id?: string;
-  label?: string;
-};
+/** Persisted identity excludes display-only actor projections. */
+export type SessionActor = Pick<ProjectedSessionCreatedActor, "type" | "id" | "label">;
 
 /** Only trusted creation owners may stamp a Gateway profile namespace. */
 export type SessionCreatedActor = SessionActor &
@@ -113,15 +113,7 @@ export function inheritSpawnSessionOwner(
   };
 }
 
-export type SessionCreatedVia =
-  | "operator" // gateway sessions.create (Control UI / operator clients)
-  | "spawn" // sessions_spawn native or ACP subagent spawn
-  | "channel" // inbound channel conversation materialization
-  | "cron"
-  | "talk"
-  | "run" // create-on-run materialization (agent-session-persist)
-  | "plugin" // trusted plugin runtime creation
-  | "internal"; // internal/hidden sessions (internal-session-effects, voice bare rows)
+export type SessionCreatedVia = NonNullable<SessionRow["createdVia"]>;
 
 // Return shape mirrors the SessionEntry creation fields as a leaf contract;
 // types.ts imports from here, never the reverse (madge cycle guard).

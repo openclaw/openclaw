@@ -1,45 +1,94 @@
 /** Wire metadata for OpenAI MCP Plugin Extensions; never a tool grant. */
-export type McpAppIcon = {
-  src: string;
-  mimeType?: string;
-  sizes?: string[];
-  theme?: "light" | "dark";
-};
-type McpAppQuickAction = {
-  title: string;
-  icons: McpAppIcon[];
-  target: { type: "tool"; name: string; arguments?: Record<string, unknown> };
-};
-type McpAppEntrypoint =
-  | { type: "global"; quickAction?: McpAppQuickAction }
-  | { type: "thread" }
-  | { type: "file"; extensions: string[] }
-  | { type: "settings"; searchTerms?: string[] };
+import { z } from "zod";
+
+const text = z.string().trim().min(1).max(2_048);
+export const mcpAppIconSchema = z.object({
+  src: text,
+  mimeType: text.optional(),
+  sizes: z.array(text).max(16).optional(),
+  theme: z.enum(["light", "dark"]).optional(),
+});
+const quickActionSchema = z.object({
+  title: text,
+  icons: z.array(mcpAppIconSchema).min(1).max(16),
+  target: z.object({
+    type: z.literal("tool"),
+    name: text,
+    arguments: z.record(z.string(), z.unknown()).optional(),
+  }),
+});
+export const mcpAppEntrypointSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("global"), quickAction: quickActionSchema.optional() }),
+  z.object({ type: z.literal("thread") }),
+  z.object({
+    type: z.literal("file"),
+    extensions: z
+      .array(
+        z
+          .string()
+          .trim()
+          .regex(/^\.[^\s/\\,]+$/),
+      )
+      .min(1)
+      .max(64),
+  }),
+  z.object({ type: z.literal("settings"), searchTerms: z.array(text).max(64).optional() }),
+]);
+export const mcpAppSettingsCapabilitySchema = z.object({ readTool: text, updateTool: text });
+const title = { title: text, description: z.string().max(8_192).optional() };
+const settingSchema = z.discriminatedUnion("type", [
+  z.object({ ...title, type: z.literal("boolean") }),
+  z.object({
+    ...title,
+    type: z.literal("string"),
+    enum: z.array(z.string()).optional(),
+    minLength: z.number().int().nonnegative().optional(),
+    maxLength: z.number().int().nonnegative().optional(),
+    pattern: z.string().optional(),
+  }),
+  ...(["number", "integer"] as const).map((type) =>
+    z.object({
+      ...title,
+      type: z.literal(type),
+      minimum: z.number().finite().optional(),
+      maximum: z.number().finite().optional(),
+      multipleOf: z.number().positive().optional(),
+    }),
+  ),
+]);
+export const mcpAppSettingsSchema = z.object({
+  schema: z.object({
+    type: z.literal("object"),
+    properties: z.record(z.string(), settingSchema),
+    required: z.array(text).optional(),
+  }),
+  values: z.record(z.string(), z.union([z.string(), z.number().finite(), z.boolean()])),
+  layout: z
+    .array(
+      z.object({
+        kind: z.literal("group"),
+        title: text,
+        items: z.array(
+          z.discriminatedUnion("kind", [
+            z.object({ kind: z.literal("property"), property: text }),
+            z.object({ kind: z.literal("tool"), tool: text, ...title }),
+          ]),
+        ),
+      }),
+    )
+    .optional(),
+});
+
+export type McpAppIcon = z.infer<typeof mcpAppIconSchema>;
+type McpAppEntrypoint = z.infer<typeof mcpAppEntrypointSchema>;
 export type McpAppToolExtensions = {
   entrypoints?: McpAppEntrypoint[];
   mentionSearch?: true;
   icons?: McpAppIcon[];
   preferredModelDisplayMode?: "inline" | "fullscreen";
 };
-export type McpAppSettingsCapability = { readTool: string; updateTool: string };
-type McpAppSettingSchema = { title: string; description?: string } & (
-  | { type: "boolean" }
-  | { type: "string"; enum?: string[]; minLength?: number; maxLength?: number; pattern?: string }
-  | { type: "number" | "integer"; minimum?: number; maximum?: number; multipleOf?: number }
-);
-type McpAppSettingsGroup = {
-  kind: "group";
-  title: string;
-  items: Array<
-    | { kind: "property"; property: string }
-    | { kind: "tool"; tool: string; title: string; description?: string }
-  >;
-};
-export type McpAppSettings = {
-  schema: { type: "object"; properties: Record<string, McpAppSettingSchema>; required?: string[] };
-  values: Record<string, string | number | boolean>;
-  layout?: McpAppSettingsGroup[];
-};
+export type McpAppSettingsCapability = z.infer<typeof mcpAppSettingsCapabilitySchema>;
+export type McpAppSettings = z.infer<typeof mcpAppSettingsSchema>;
 export type McpAppDiscoveredEntrypoint = {
   toolName: string;
   title: string;

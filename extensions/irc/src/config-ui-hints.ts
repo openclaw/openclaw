@@ -1,6 +1,5 @@
-import { createChannelConfigUiHints } from "openclaw/plugin-sdk/channel-core";
+import { createChannelConfigUiHints } from "openclaw/plugin-sdk/channel-config-ui-hints";
 // Irc helper module supports config ui hints behavior.
-import type { ChannelConfigUiHint } from "openclaw/plugin-sdk/core";
 
 export const ircChannelConfigUiHints = {
   "": {
@@ -33,4 +32,4 @@ export const ircChannelConfigUiHints = {
     help: "Email used with NickServ REGISTER (required when register=true).",
   },
   ...createChannelConfigUiHints({ channelLabel: "IRC", configWrites: true }),
-} satisfies Record<string, ChannelConfigUiHint>;
+} satisfies ReturnType<typeof createChannelConfigUiHints>;

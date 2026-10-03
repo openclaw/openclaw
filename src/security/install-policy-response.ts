@@ -8,14 +8,7 @@ const MAX_FINDINGS = 100;
 const MAX_FINDING_TEXT_CHARS = 1000;
 const TRUNCATION_MARKER = "...";
 
-export type InstallPolicyFinding = {
-  ruleId: string;
-  severity: "info" | "warn" | "critical";
-  message: string;
-  file?: string;
-  line?: number;
-  evidence?: string;
-};
+export type InstallPolicyFinding = z.output<typeof installPolicyFindingSchema>;
 
 export type InstallPolicyResult =
   | { blocked?: undefined; warning?: undefined; findings?: InstallPolicyFinding[] }

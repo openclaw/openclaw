@@ -15,20 +15,7 @@ import { UpdateFailureFactSchema } from "./update-run-schema.js";
 type RestartSentinelStats = z.infer<typeof restartSentinelStatsSchema>;
 export type RestartSentinelContinuation = z.infer<typeof restartSentinelContinuationSchema>;
 
-export type RestartSentinelPayload = {
-  kind: "config-apply" | "config-auto-recovery" | "config-patch" | "update" | "restart";
-  status: "ok" | "error" | "skipped";
-  ts: number;
-  sessionKey?: string;
-  deliveryContext?: {
-    channel?: string;
-    to?: string;
-    accountId?: string;
-  };
-  threadId?: string;
-  message?: string | null;
-  continuation?: RestartSentinelContinuation | null;
-  doctorHint?: string | null;
+export type RestartSentinelPayload = Omit<z.input<typeof restartSentinelPayloadSchema>, "stats"> & {
   stats?: RestartSentinelStats | null;
 };
 

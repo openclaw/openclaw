@@ -1,5 +1,5 @@
 // Versioned metadata-only activity audit query payloads.
-import { type Static, type TProperties, type TSchema, Type } from "typebox";
+import { type Static, type TObject, type TProperties, type TSchema, Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
 
@@ -451,24 +451,10 @@ export const AuditActivityListResultSchema: TSchema = closedObject({
 });
 
 /** Metadata-only audit query payloads. */
-// These wire types stay explicit because the runtime schemas use JSON Schema
-// `allOf` correlations that TypeBox cannot infer without expanding the public
-// declaration graph far beyond the compact protocol contract.
-type AuditActivityRecordBaseV1 = {
+// Terminal unions preserve JSON Schema `allOf` correlations that TypeBox cannot
+// infer; ordinary fields derive from the same properties as the runtime schemas.
+type AuditActivityRecordBaseV1 = Omit<Static<TObject<typeof commonProperties>>, "schemaVersion"> & {
   schemaVersion: 1;
-  eventId: string;
-  sequence: number;
-  sourceSequence: number;
-  occurredAt: number;
-  redaction: "metadata_only";
-};
-
-type AuditActivityAgentRecordBaseV1 = AuditActivityRecordBaseV1 & {
-  actor: { type: "agent" | "system"; id: string };
-  agentId: string;
-  sessionKey?: string;
-  sessionId?: string;
-  runId: string;
 };
 
 type AuditActivityAgentRunV1Terminal =
@@ -478,10 +464,9 @@ type AuditActivityAgentRunV1Terminal =
   | { action: "agent.run.finished"; status: "cancelled"; errorCode: "run_cancelled" }
   | { action: "agent.run.finished"; status: "timed_out"; errorCode: "run_timed_out" }
   | { action: "agent.run.finished"; status: "blocked"; errorCode: "run_blocked" };
-export type AuditActivityAgentRunV1 = AuditActivityAgentRecordBaseV1 & {
-  eventType: "agent_run";
-  kind: "agent_run";
-} & AuditActivityAgentRunV1Terminal;
+export type AuditActivityAgentRunV1 = AuditActivityRecordBaseV1 &
+  Static<TObject<typeof agentRunProperties>> &
+  AuditActivityAgentRunV1Terminal;
 
 type AuditActivityToolActionV1Terminal =
   | { action: "tool.action.started"; status: "started"; errorCode?: never }
@@ -495,25 +480,11 @@ type AuditActivityToolActionV1Terminal =
       status: "unknown";
       errorCode: "tool_outcome_unknown";
     };
-export type AuditActivityToolActionV1 = AuditActivityAgentRecordBaseV1 & {
-  eventType: "tool_action";
-  kind: "tool_action";
-  toolCallId?: string;
-  toolName?: string;
-} & AuditActivityToolActionV1Terminal;
+export type AuditActivityToolActionV1 = AuditActivityRecordBaseV1 &
+  Static<TObject<typeof toolActionProperties>> &
+  AuditActivityToolActionV1Terminal;
 
 type AuditActivityMessageRecordBaseV1 = AuditActivityRecordBaseV1 & {
-  kind: "message";
-  channel: string;
-  conversationKind: "direct" | "group" | "channel" | "unknown";
-  durationMs?: number;
-  resultCount?: number;
-  agentId?: string;
-  runId?: string;
-  accountRef?: string;
-  conversationRef?: string;
-  messageRef?: string;
-  targetRef?: string;
   sessionKey?: never;
   sessionId?: never;
   toolCallId?: never;
@@ -539,14 +510,11 @@ type AuditActivityInboundMessageV1Terminal =
       errorCode: "message_processing_failed";
       reasonCode?: Static<typeof inboundFailureReasonSchema>;
     };
-export type AuditActivityInboundMessageV1 = AuditActivityMessageRecordBaseV1 & {
-  eventType: "inbound_message";
-  action: "message.inbound.processed";
-  direction: "inbound";
-  actor: { type: "channel_sender"; id: string } | { type: "system"; id: string };
-  deliveryKind?: never;
-  failureStage?: never;
-} & AuditActivityInboundMessageV1Terminal;
+export type AuditActivityInboundMessageV1 = AuditActivityMessageRecordBaseV1 &
+  Static<TObject<typeof inboundMessageProperties>> & {
+    deliveryKind?: never;
+    failureStage?: never;
+  } & AuditActivityInboundMessageV1Terminal;
 
 type AuditActivityOutboundMessageV1Terminal =
   | {
@@ -581,12 +549,9 @@ type AuditActivityOutboundMessageV1Terminal =
       failureStage: Static<typeof outboundFailureStageSchema>;
       deliveryKind?: never;
     };
-export type AuditActivityOutboundMessageV1 = AuditActivityMessageRecordBaseV1 & {
-  eventType: "outbound_message";
-  action: "message.outbound.finished";
-  direction: "outbound";
-  actor: { type: "agent" | "system"; id: string };
-} & AuditActivityOutboundMessageV1Terminal;
+export type AuditActivityOutboundMessageV1 = AuditActivityMessageRecordBaseV1 &
+  Static<TObject<typeof outboundMessageProperties>> &
+  AuditActivityOutboundMessageV1Terminal;
 
 export type AuditActivityEventV1 =
   | AuditActivityAgentRunV1

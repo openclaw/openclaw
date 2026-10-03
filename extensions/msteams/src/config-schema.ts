@@ -1,172 +1,77 @@
 import {
   buildChannelConfigSchema,
-  buildChannelAccountSchemaParts,
-  ChannelDangerouslyAllowNameMatchingSchema,
-  ChannelPreviewStreamingConfigSchema,
-  MSTeamsReplyStyleSchema,
   refineChannelDmPolicy,
-  ToolPolicySchema,
 } from "openclaw/plugin-sdk/channel-config-schema";
-import {
-  buildSecretInputSchema,
-  registerSensitiveConfigSchema,
-} from "openclaw/plugin-sdk/secret-input";
 import { isHttpsUrlAllowedByHostnameSuffixAllowlist } from "openclaw/plugin-sdk/ssrf-policy";
 import { z } from "zod";
+import { MSTeamsConfigSchemaBase } from "../config-schema-api.js";
 import { isAllowedBotFrameworkServiceUrl } from "./bot-framework-service-url.js";
 import { msTeamsChannelConfigUiHints } from "./config-ui-hints.js";
-
-const SecretInputSchema = buildSecretInputSchema();
-const ToolPolicyBySenderSchema = z.record(z.string(), ToolPolicySchema).optional();
-
-const MSTeamsChannelSchema = z
-  .object({
-    requireMention: z.boolean().optional(),
-    requireMentionInBotThreads: z.boolean().optional(),
-    tools: ToolPolicySchema,
-    toolsBySender: ToolPolicyBySenderSchema,
-    replyStyle: MSTeamsReplyStyleSchema.optional(),
-  })
-  .strict();
-
-const MSTeamsTeamSchema = MSTeamsChannelSchema.extend({
-  channels: z.record(z.string(), MSTeamsChannelSchema.optional()).optional(),
-});
 
 function isAzureChinaBotFrameworkServiceUrl(value: string): boolean {
   return isHttpsUrlAllowedByHostnameSuffixAllowlist(value.trim(), ["botframework.azure.cn"]);
 }
 
-const { accountShape, rootPolicyShape } = buildChannelAccountSchemaParts({
-  omit: ["name", "mentionPatterns", "replyToMode"],
-  allowFrom: z.array(z.string()).optional(),
-  groupAllowFrom: z.array(z.string()).optional(),
-  streaming: ChannelPreviewStreamingConfigSchema.optional(),
+export const MSTeamsConfigSchema = MSTeamsConfigSchemaBase.extend({
+  serviceUrl: MSTeamsConfigSchemaBase.shape.serviceUrl
+    .unwrap()
+    .refine(isAllowedBotFrameworkServiceUrl, {
+      message:
+        "channels.msteams.serviceUrl must use a supported Microsoft Teams Bot Connector host",
+    })
+    .optional(),
+}).superRefine((value, ctx) => {
+  refineChannelDmPolicy({ channelId: "msteams", value, ctx });
+  if (value.sso?.enabled === true && !value.sso.connectionName?.trim()) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["sso", "connectionName"],
+      message:
+        "channels.msteams.sso.enabled=true requires channels.msteams.sso.connectionName to identify the Bot Framework OAuth connection",
+    });
+  }
+  if (
+    value.cloud &&
+    value.cloud !== "Public" &&
+    value.cloud !== "China" &&
+    !value.serviceUrl?.trim()
+  ) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["serviceUrl"],
+      message:
+        "channels.msteams.cloud requires channels.msteams.serviceUrl for non-public Teams clouds",
+    });
+  }
+  if (
+    value.cloud === "China" &&
+    value.serviceUrl?.trim() &&
+    !isAzureChinaBotFrameworkServiceUrl(value.serviceUrl)
+  ) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["serviceUrl"],
+      message:
+        "channels.msteams.cloud=China requires channels.msteams.serviceUrl to use an Azure China Bot Framework channel host",
+    });
+  }
+  if (
+    value.cloud !== "China" &&
+    value.serviceUrl?.trim() &&
+    isAzureChinaBotFrameworkServiceUrl(value.serviceUrl)
+  ) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["cloud"],
+      message: "Azure China Bot Framework serviceUrl hosts require channels.msteams.cloud=China",
+    });
+  }
+
+  // Federated auth fields (appId, tenantId, certificatePath,
+  // useManagedIdentity) may come from MSTEAMS_* environment variables,
+  // so we cannot require them in the config object itself.
+  // Runtime validation happens in resolveMSTeamsCredentials().
 });
-
-export const MSTeamsConfigSchema = z
-  .object({
-    ...accountShape,
-    ...rootPolicyShape,
-    dangerouslyAllowNameMatching: ChannelDangerouslyAllowNameMatchingSchema,
-    appId: z.string().optional(),
-    appPassword: registerSensitiveConfigSchema(SecretInputSchema.optional()),
-    tenantId: z.string().optional(),
-    cloud: z.enum(["Public", "USGov", "USGovDoD", "China"]).optional(),
-    serviceUrl: z
-      .string()
-      .url()
-      .refine(isAllowedBotFrameworkServiceUrl, {
-        message:
-          "channels.msteams.serviceUrl must use a supported Microsoft Teams Bot Connector host",
-      })
-      .optional(),
-    authType: z.enum(["secret", "federated"]).optional(),
-    certificatePath: z.string().optional(),
-    certificateThumbprint: z.string().optional(),
-    useManagedIdentity: z.boolean().optional(),
-    managedIdentityClientId: z.string().optional(),
-    webhook: z
-      .object({
-        path: z.string().optional(),
-      })
-      .strict()
-      .optional(),
-    legacyWebhook: z
-      .union([
-        z.literal(false),
-        z
-          .object({
-            port: z.number().int().min(1).max(65535),
-            host: z.string().optional(),
-          })
-          .strict(),
-      ])
-      .optional(),
-    typingIndicator: z.boolean().optional(),
-    mediaAllowHosts: z.array(z.string()).optional(),
-    mediaAuthAllowHosts: z.array(z.string()).optional(),
-    graphMediaFallback: z.boolean().optional(),
-    requireMention: z.boolean().optional(),
-    requireMentionInBotThreads: z.boolean().optional(),
-    replyStyle: MSTeamsReplyStyleSchema.optional(),
-    teams: z.record(z.string(), MSTeamsTeamSchema.optional()).optional(),
-    /** SharePoint site ID for file uploads in group chats/channels (e.g., "contoso.sharepoint.com,guid1,guid2") */
-    sharePointSiteId: z.string().optional(),
-    welcomeCard: z.boolean().optional(),
-    promptStarters: z.array(z.string()).optional(),
-    groupWelcomeCard: z.boolean().optional(),
-    feedbackEnabled: z.boolean().optional(),
-    feedbackReflection: z.boolean().optional(),
-    feedbackReflectionCooldownMs: z.number().int().min(0).optional(),
-    delegatedAuth: z
-      .object({
-        enabled: z.boolean().optional(),
-        scopes: z.array(z.string()).optional(),
-      })
-      .strict()
-      .optional(),
-    sso: z
-      .object({
-        enabled: z.boolean().optional(),
-        connectionName: z.string().optional(),
-      })
-      .strict()
-      .optional(),
-  })
-  .strict()
-  .superRefine((value, ctx) => {
-    refineChannelDmPolicy({ channelId: "msteams", value, ctx });
-    if (value.sso?.enabled === true && !value.sso.connectionName?.trim()) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["sso", "connectionName"],
-        message:
-          "channels.msteams.sso.enabled=true requires channels.msteams.sso.connectionName to identify the Bot Framework OAuth connection",
-      });
-    }
-    if (
-      value.cloud &&
-      value.cloud !== "Public" &&
-      value.cloud !== "China" &&
-      !value.serviceUrl?.trim()
-    ) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["serviceUrl"],
-        message:
-          "channels.msteams.cloud requires channels.msteams.serviceUrl for non-public Teams clouds",
-      });
-    }
-    if (
-      value.cloud === "China" &&
-      value.serviceUrl?.trim() &&
-      !isAzureChinaBotFrameworkServiceUrl(value.serviceUrl)
-    ) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["serviceUrl"],
-        message:
-          "channels.msteams.cloud=China requires channels.msteams.serviceUrl to use an Azure China Bot Framework channel host",
-      });
-    }
-    if (
-      value.cloud !== "China" &&
-      value.serviceUrl?.trim() &&
-      isAzureChinaBotFrameworkServiceUrl(value.serviceUrl)
-    ) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["cloud"],
-        message: "Azure China Bot Framework serviceUrl hosts require channels.msteams.cloud=China",
-      });
-    }
-
-    // Federated auth fields (appId, tenantId, certificatePath,
-    // useManagedIdentity) may come from MSTEAMS_* environment variables,
-    // so we cannot require them in the config object itself.
-    // Runtime validation happens in resolveMSTeamsCredentials().
-  });
 
 export const MSTeamsChannelConfigSchema = buildChannelConfigSchema(MSTeamsConfigSchema, {
   uiHints: msTeamsChannelConfigUiHints,

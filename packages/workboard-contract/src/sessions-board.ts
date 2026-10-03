@@ -25,25 +25,9 @@ const COLUMN_COLORS = new Set([
 ]);
 
 export type WorkboardSessionsObserverHealth = (typeof OBSERVER_HEALTH)[number];
-export type WorkboardSessionsColumnMatch = {
-  health?: WorkboardSessionsObserverHealth[];
-  run?: Array<(typeof RUN_STATES)[number]>;
-  pullRequest?: Array<(typeof PULL_REQUEST_STATES)[number]>;
-  archived?: boolean;
-};
-export type WorkboardSessionsColumn = {
-  id: string;
-  label: string;
-  color?: string;
-  description: string;
-  match?: WorkboardSessionsColumnMatch | WorkboardSessionsColumnMatch[];
-  fallback?: boolean;
-};
-export type WorkboardSessionsBoardSpec = {
-  columns: WorkboardSessionsColumn[];
-  scope?: { agentIds?: string[]; includeArchived?: boolean; maxAgeHours?: number };
-  agentSessionKey?: string;
-};
+export type WorkboardSessionsColumnMatch = ReturnType<typeof normalizeMatch>;
+export type WorkboardSessionsColumn = ReturnType<typeof normalizeColumn>;
+export type WorkboardSessionsBoardSpec = ReturnType<typeof normalizeWorkboardSessionsBoardSpec>;
 export type WorkboardSessionsBoard = WorkboardBoardMetadata & {
   kind: "sessions";
   sessions: WorkboardSessionsBoardSpec;
@@ -183,7 +167,7 @@ function choices<T extends string>(value: unknown, name: string, allowed: readon
   ];
 }
 
-function normalizeMatch(value: unknown): WorkboardSessionsColumnMatch {
+function normalizeMatch(value: unknown) {
   const input = record(value, "column match", ["health", "run", "pullRequest", "archived"]);
   return {
     ...(input.health !== undefined
@@ -199,7 +183,7 @@ function normalizeMatch(value: unknown): WorkboardSessionsColumnMatch {
   };
 }
 
-function normalizeColumn(value: unknown): WorkboardSessionsColumn {
+function normalizeColumn(value: unknown) {
   const input = record(value, "column", [
     "id",
     "label",
@@ -235,7 +219,7 @@ function normalizeColumn(value: unknown): WorkboardSessionsColumn {
   };
 }
 
-function normalizeScope(value: unknown): NonNullable<WorkboardSessionsBoardSpec["scope"]> {
+function normalizeScope(value: unknown) {
   const input = record(value, "scope", ["agentIds", "includeArchived", "maxAgeHours"]);
   let agentIds: string[] | undefined;
   if (input.agentIds !== undefined) {
@@ -263,7 +247,7 @@ function normalizeScope(value: unknown): NonNullable<WorkboardSessionsBoardSpec[
 const SPEC_KEYS = ["columns", "scope", "agentSessionKey"];
 
 /** Shared validation for durable specifications, agent tools, and the board editor. */
-export function normalizeWorkboardSessionsBoardSpec(value: unknown): WorkboardSessionsBoardSpec {
+export function normalizeWorkboardSessionsBoardSpec(value: unknown) {
   const input = record(value, "sessions board specification", [...SPEC_KEYS, "instructions"]);
   if (!Array.isArray(input.columns) || input.columns.length < 2 || input.columns.length > 12) {
     throw new Error("sessions board columns must contain 2..12 columns.");
