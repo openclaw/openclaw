@@ -226,6 +226,21 @@ it.each(["base", "drop-in", "drop-in-unknown", "drop-in-dependency"])(
   },
 );
 
+it("names each operator drop-in that sets a directive outside installer policy", async () => {
+  const fixture = await systemdFixture((unit) => unit, "[Service]\nCPUWeight=1000\n");
+  const first = `${fixture.sourcePath}.d/operator.conf`;
+  const second = `${fixture.sourcePath}.d/zz-operator.conf`;
+  await fs.writeFile(second, "[Service]\nCPUWeight=500\n");
+  fixture.command.definitionPaths.push(second);
+  const result = await auditGatewayServiceConfig({ ...fixture, platform: "linux" });
+  const findings = result.definitionDrift?.filter((fact) => fact.key === "Service.CPUWeight");
+  expect(findings).toEqual([
+    expect.objectContaining({ sourcePath: first, message: expect.stringContaining(first) }),
+    expect.objectContaining({ sourcePath: second, message: expect.stringContaining(second) }),
+  ]);
+  expect(JSON.stringify(findings)).not.toContain("unrecognized");
+});
+
 it("reports unavailable drop-in inspection without adding a repair candidate", async () => {
   const fixture = await systemdFixture((unit) => unit);
   fixture.command.definitionPaths.push(`${fixture.sourcePath}.d/unreadable.conf`);

@@ -351,7 +351,10 @@ async function auditSystemdDefinition(
                   sourcePath === unitPath
                     ? "Unrecognized directive or value in the managed unit."
                     : "Operator drop-in overrides installer policy.",
-                message: `Systemd ${key} contains an unrecognized setting.`,
+                message:
+                  sourcePath === unitPath
+                    ? `Systemd ${key} contains an unrecognized setting.`
+                    : `Systemd ${key} is set by operator drop-in ${sourcePath}; not changed.`,
               },
       );
     }
