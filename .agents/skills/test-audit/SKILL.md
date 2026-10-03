@@ -63,7 +63,30 @@ matches one, and audits hunt for existing tests that do.
 - negative controls that pass for an unrelated reason, such as a denial from a
   different guard or a rejection the production path never reaches;
 - names or fixtures that promise more than the input exercises, such as a
-  "retires the window" test asserting the window was not cleared.
+  "retires the window" test asserting the window was not cleared;
+- "complete", "all", or "every" gates whose universe is a hand-picked list, not
+  enumerated from the owner's schema, type union, registry, or runtime
+  discovery, so a new owner entry never forces a classification decision;
+- helper-parity tests standing in for the live caller: follow real callers and
+  their input projections to an observable boundary, and for negotiated
+  protocols exercise every supported capability combination and both
+  deployment directions;
+- diagnostics or explainers that copy a projection instead of importing the
+  production canonicalizers, projectors, and registries, unless independence is
+  the intended oracle and divergence is detectable.
+
+## Quality gates
+
+Validators, linters, and static analyzers are tests of the tests; a gate must
+derive its universe from the owner, prove the complete path it names, and
+reject anything it cannot analyze.
+
+- Give each gate focused negative fixtures that independently break discovery,
+  classification, wiring, and output. A green self-test is insufficient unless
+  representative defects fail it for the intended reason.
+- Fail closed: unsupported syntax, unresolved module identities, uninspected
+  test roots, and opaque replacement shapes produce actionable errors, never
+  silent exemptions.
 
 ## Value bar
 
@@ -148,6 +171,13 @@ Never edit source or tests while Vitest is running in the checkout. Follow
 5. Inspect `git diff --numstat`; report production/tooling separately from
    tests and test support.
 6. After final audit edits, run mandatory `$autoreview`.
+
+CI retries need evidence. For an apparently unrelated infrastructure failure,
+inspect the failed step, run the exact case or smallest lane in isolation, and
+check whether the changed paths intersect it. One targeted retry can classify a
+transient failure. If it recurs, investigate within bounds, record the failure
+and remaining uncertainty, and continue under the normal CI and review gates;
+an unresolved failure alone does not block landing. Blanket retries hide it.
 
 ## Landing and continuation
 
