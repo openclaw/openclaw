@@ -41,6 +41,10 @@ afterEach(() => {
 
 export async function runNodeMain(params: RunNodeFixture = {}) {
   const overrides = {
+    // Imported script entry guards still observe the native invocation.
+    argv: process.argv,
+    env: params.env ?? process.env,
+    cwd: () => params.cwd ?? process.cwd(),
     stderr: params.stderr ?? process.stderr,
     stdout: params.stdout ?? process.stdout,
     execPath: params.execPath ?? process.execPath,

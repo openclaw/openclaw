@@ -1,4 +1,5 @@
 // Covers gateway watch tmux script helpers.
+import type { SpawnSyncOptions, SpawnSyncReturns } from "node:child_process";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -8,9 +9,15 @@ import {
   runGatewayWatchServiceHandoff as runGatewayWatchServiceHandoffNative,
 } from "../../scripts/gateway-watch-tmux.mts";
 
+type SpawnSyncFixture = (
+  command: string,
+  args: string[],
+  options: SpawnSyncOptions,
+) => Partial<SpawnSyncReturns<string | Buffer>>;
+
 const native = vi.hoisted(() => {
   const overrides: Record<string, unknown> = {};
-  return { overrides, spawnSync: vi.fn() };
+  return { overrides, spawnSync: vi.fn<SpawnSyncFixture>() };
 });
 vi.mock("node:child_process", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:child_process")>()),
@@ -31,7 +38,7 @@ vi.mock("node:process", async (importOriginal) => {
 
 type RuntimeParams = NonNullable<Parameters<typeof runGatewayWatchTmuxMainNative>[0]>;
 type RuntimeFixture = RuntimeParams & {
-  spawnSync: ReturnType<typeof vi.fn>;
+  spawnSync: SpawnSyncFixture;
   nodePath?: string;
   stderr?: { write(message: string): unknown };
   stdout?: { write(message: string): unknown };
