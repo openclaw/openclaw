@@ -403,19 +403,19 @@ export async function runWatchMain(): Promise<WatchExit> {
     };
 
     const startChild = (
-      args: string[],
+      childArgs: string[],
       label: string,
-      env: NodeJS.ProcessEnv,
+      childEnv: NodeJS.ProcessEnv,
       onExit: (
         exitedProcess: ChildProcess | null,
         exitCode: number | null,
         exitSignal: ProcessSignal | null,
       ) => void,
     ) => {
-      watchProcess = spawn(process.execPath, args, {
+      watchProcess = spawn(process.execPath, childArgs, {
         cwd,
         detached: useChildProcessGroup,
-        env,
+        env: childEnv,
         stdio: "inherit",
       });
       watchProcess.on("error", (error) => {

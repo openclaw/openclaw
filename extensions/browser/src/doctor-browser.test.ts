@@ -31,8 +31,11 @@ const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform")!
 const uidDescriptor = Object.getOwnPropertyDescriptor(process, "getuid");
 afterEach(() => {
   Object.defineProperty(process, "platform", platformDescriptor);
-  if (uidDescriptor) Object.defineProperty(process, "getuid", uidDescriptor);
-  else Reflect.deleteProperty(process, "getuid");
+  if (uidDescriptor) {
+    Object.defineProperty(process, "getuid", uidDescriptor);
+  } else {
+    Reflect.deleteProperty(process, "getuid");
+  }
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
 });

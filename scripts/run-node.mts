@@ -66,6 +66,10 @@ type RunNodeMainParams = {
   cwd?: string;
   args?: string[];
   env?: NodeJS.ProcessEnv;
+  // Publication must join an asynchronous writer before releasing build ownership.
+  runRuntimePostBuild?: (
+    params?: Parameters<typeof runRuntimePostBuild>[0],
+  ) => void | Promise<void>;
 };
 type RunNodeProgress = {
   clearLine(): void;
@@ -843,7 +847,7 @@ const logRunner = (message: string, deps: RunNodeLogDeps) => {
 const RUN_NODE_PROGRESS_FRAMES = ["-", "\\", "|", "/"];
 
 const shouldUseRunNodeProgress = (deps: RunNodeDeps) =>
-  deps.stderr?.isTTY === true &&
+  deps.stderr.isTTY &&
   deps.env.OPENCLAW_RUNNER_PROGRESS !== "0" &&
   deps.env.CI !== "true" &&
   !deps.outputTee;
@@ -1633,7 +1637,7 @@ function createRunNodeDeps(params: RunNodeMainParams) {
     args,
     env,
     platform: process.platform,
-    runRuntimePostBuild,
+    runRuntimePostBuild: params.runRuntimePostBuild ?? runRuntimePostBuild,
     cancellation: new AbortController(),
     distRoot,
     distEntry: path.join(distRoot, "/entry.js"),

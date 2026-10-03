@@ -3,7 +3,7 @@ import fs from "node:fs";
 import process from "node:process";
 import { afterEach, vi } from "vitest";
 import * as qaAuth from "../../scripts/lib/qa-codex-auth-env.mts";
-import * as postbuild from "../../scripts/runtime-postbuild.mts";
+import type * as postbuild from "../../scripts/runtime-postbuild.mts";
 import { importFreshModule } from "../../src/plugin-sdk/test-helpers/import-fresh.js";
 
 type TestWritable = { isTTY?: boolean; write(value: string | Uint8Array): unknown };
@@ -35,7 +35,6 @@ afterEach(() => {
   vi.doUnmock("node:child_process");
   vi.doUnmock("node:fs");
   vi.doUnmock("node:process");
-  vi.doUnmock("../../scripts/runtime-postbuild.mts");
   vi.doUnmock("../../scripts/lib/qa-codex-auth-env.mts");
 });
 
@@ -67,10 +66,6 @@ export async function runNodeMain(params: RunNodeFixture = {}) {
     spawnSync: params.spawnSync ?? childProcess.spawnSync,
   }));
   vi.doMock("node:fs", () => ({ ...fs, default: params.fs ?? fs }));
-  vi.doMock("../../scripts/runtime-postbuild.mts", () => ({
-    ...postbuild,
-    runRuntimePostBuild: params.runRuntimePostBuild ?? postbuild.runRuntimePostBuild,
-  }));
   vi.doMock("../../scripts/lib/qa-codex-auth-env.mts", () => ({
     ...qaAuth,
     resolveQaCodexApiKeyEnvPatch: (
@@ -84,5 +79,10 @@ export async function runNodeMain(params: RunNodeFixture = {}) {
     import.meta.url,
     `../../scripts/run-node.mts?boundary=${generation++}`,
   );
-  return await runner.runNodeMain({ cwd: params.cwd, args: params.args, env: params.env });
+  return await runner.runNodeMain({
+    cwd: params.cwd,
+    args: params.args,
+    env: params.env,
+    runRuntimePostBuild: params.runRuntimePostBuild,
+  });
 }

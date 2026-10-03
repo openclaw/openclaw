@@ -1,6 +1,4 @@
 import { spawnSync, type SpawnSyncReturns } from "node:child_process";
-import "./extension-install-fixture.test-support.js";
-
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

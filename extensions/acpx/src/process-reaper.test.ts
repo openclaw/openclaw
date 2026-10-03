@@ -10,10 +10,8 @@ import {
   cleanupOpenClawOwnedAcpxProcessTree,
   reapStaleOpenClawOwnedAcpxOrphans,
 } from "./process-reaper.js";
-import {
-  mockAcpxProcessSystem,
-  type AcpxProcessSystemFixture,
-} from "./process-reaper.test-support.js";
+const { mockAcpxProcessSystem } = await import("./process-reaper.test-support.js");
+type AcpxProcessSystemFixture = import("./process-reaper.test-support.js").AcpxProcessSystemFixture;
 
 const WRAPPER_ROOT = "/tmp/owner's state/acpx";
 const CODEX_WRAPPER_COMMAND = `node ${WRAPPER_ROOT}/codex-acp-wrapper.mjs`;

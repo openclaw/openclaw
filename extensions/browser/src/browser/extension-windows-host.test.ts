@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import "./extension-install-fixture.test-support.js";
 import {
   installChromeExtensionBootstrap,
   inspectWindowsNativeHosts,

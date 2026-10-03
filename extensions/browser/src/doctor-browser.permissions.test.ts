@@ -1,4 +1,3 @@
-import "./browser/extension-install-fixture.test-support.js";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import os from "node:os";
@@ -91,7 +90,9 @@ describe("general Doctor browser profile permission boundary", () => {
     async ({ platform, installed }) => {
       const value = await protectedProfiles(platform, installed);
       Object.defineProperty(process, "platform", { ...platformDescriptor, value: platform });
-      for (const [key, entry] of Object.entries(value.deps.env)) vi.stubEnv(key, entry);
+      for (const [key, entry] of Object.entries(value.deps.env)) {
+        vi.stubEnv(key, entry);
+      }
       vi.stubEnv("OPENCLAW_STATE_DIR", value.stateDir);
       for (const allowSystemProfileImport of [false, undefined, true]) {
         const noteFn = vi.fn();

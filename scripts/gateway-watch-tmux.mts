@@ -316,7 +316,7 @@ export const runGatewayWatchServiceHandoff = (params: GatewayWatchRuntimeParams 
   );
   if (statusResult.error || statusResult.status !== 0) {
     const detail =
-      statusResult.error?.message || String(statusResult.stderr || "").trim() || "unknown error";
+      statusResult.error?.message || (statusResult.stderr || "").trim() || "unknown error";
     log(`failed to inspect the managed Gateway service before watch: ${detail}`);
     return statusResult.status || 1;
   }
@@ -390,7 +390,7 @@ const log = (message: string): void => {
 };
 
 const getTmuxErrorText = (result: ReturnType<typeof runTmux>): string =>
-  result.error?.message || String(result.stderr || "").trim() || "unknown error";
+  result.error?.message || (result.stderr || "").trim() || "unknown error";
 
 const isNodeErrorCode = (error: Error | undefined, code: string): boolean =>
   error !== undefined && "code" in error && error.code === code;

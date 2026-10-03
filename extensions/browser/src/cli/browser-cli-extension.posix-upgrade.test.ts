@@ -1,4 +1,3 @@
-import "../browser/extension-install-fixture.test-support.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { Command } from "commander";

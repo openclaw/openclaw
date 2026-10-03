@@ -96,8 +96,11 @@ function selectFixture(fixture: InstallFixture = {}) {
       process.env[key] = env[key];
     }
     restores.push(() => {
-      if (previous === undefined) delete process.env[key];
-      else process.env[key] = previous;
+      if (previous === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = previous;
+      }
     });
   }
   if (fixture.now) {
@@ -142,8 +145,8 @@ function selectFixture(fixture: InstallFixture = {}) {
       "--browser-profile",
       context.browserProfile,
     ]);
-    vi.mocked(resolveStateDir).mockImplementation((env) =>
-      env ? context.stateDir : (fixture.stateDir ?? context.stateDir),
+    vi.mocked(resolveStateDir).mockImplementation((selectedEnv) =>
+      selectedEnv ? context.stateDir : (fixture.stateDir ?? context.stateDir),
     );
     vi.mocked(resolveConfigPath).mockReturnValue(context.configPath);
     restores.push(() => vi.mocked(resolveStateDir).mockReset());
@@ -156,7 +159,7 @@ function selectFixture(fixture: InstallFixture = {}) {
       );
     restores.push(() => cli.mockRestore());
   }
-  return () => restores.reverse().forEach((restore) => restore());
+  return () => restores.toReversed().forEach((restore) => restore());
 }
 
 async function inFixture<T>(
@@ -169,9 +172,12 @@ async function inFixture<T>(
     const entry = path.join(pluginRoot, "native-host-entry.js");
     if (entry !== fixture.nativeHostPath) {
       const existing = await fs.lstat(entry).catch(() => undefined);
-      if (existing && !existing.isSymbolicLink())
+      if (existing && !existing.isSymbolicLink()) {
         throw new Error("Fixture entry must be a symlink");
-      if (existing) await fs.unlink(entry);
+      }
+      if (existing) {
+        await fs.unlink(entry);
+      }
       await fs.symlink(fixture.nativeHostPath, entry);
     }
   }
