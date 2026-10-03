@@ -24,12 +24,15 @@ import { logVerbose } from "../../globals.js";
 import { FsSafeError } from "../../infra/fs-safe.js";
 import { collectReplyMediaEntries } from "../../infra/outbound/reply-media-entries.js";
 import { resolveOutboundMediaMaxBytes } from "../../media/configured-max-bytes.js";
-import type { OutboundMediaAccess } from "../../media/load-options.js";
 import { HostReadMediaTypeError, LocalMediaAccessError } from "../../media/local-media-access.js";
 import { normalizeMediaReferenceForComparison } from "../../media/media-reference-comparison.js";
 import { resolveInboundMediaReference } from "../../media/media-reference.js";
 import { resolveOutboundAttachmentFromUrl } from "../../media/outbound-attachment.js";
-import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
+import {
+  resolveAgentScopedOutboundMediaAccess,
+  type HostOutboundMediaAccess,
+} from "../../media/read-capability.js";
+import { resolveWebchatAttachmentFromUrl } from "../../media/webchat-attachment.js";
 import {
   appendReplyMediaFailures,
   copyReplyPayloadMetadata,
@@ -141,8 +144,8 @@ export function createReplyMediaSourcePreparer(params: {
   requesterSenderE164?: string;
   sandboxRoot?: string;
   sandboxContainerWorkdir?: string;
-  mediaAccess?: OutboundMediaAccess;
-  workspaceMediaAccess?: OutboundMediaAccess;
+  mediaAccess?: HostOutboundMediaAccess;
+  workspaceMediaAccess?: HostOutboundMediaAccess;
   /** Physical remote alias of the captured logical workspace. */
   workspaceMediaRoot?: string;
   /** Streams local audio/video up to this size instead of the channel cap. */
@@ -221,30 +224,35 @@ export function createReplyMediaSourcePreparer(params: {
     if (cached) {
       return await cached;
     }
-    const persistPromise = resolveOutboundAttachmentFromUrl(media, maxBytes, {
-      localMediaMaxBytes: params.localMediaMaxBytes,
-      mediaAccess: resolveAgentScopedOutboundMediaAccess({
-        cfg: params.cfg,
-        agentId,
-        workspaceDir: workspaceDir ?? params.workspaceDir,
-        sessionWorkspaceDir: sessionWorkspaceDir ?? params.sessionWorkspaceDir,
-        workspaceOnly: params.workspaceOnly,
-        allowHostWorkspace: params.allowHostWorkspace,
-        mediaSources: [media],
-        mediaAccess: params.mediaAccess,
-        workspaceMediaAccess: params.workspaceMediaAccess,
-        sessionKey: params.sessionKey,
-        messageProvider: params.sessionKey ? undefined : params.messageProvider,
-        accountId: params.accountId,
-        requesterSenderId: params.requesterSenderId,
-        requesterSenderName: params.requesterSenderName,
-        requesterSenderUsername: params.requesterSenderUsername,
-        requesterSenderE164: params.requesterSenderE164,
-        groupId: params.groupId,
-        groupChannel: params.groupChannel,
-        groupSpace: params.groupSpace,
-      }),
-    })
+    const mediaAccess = resolveAgentScopedOutboundMediaAccess({
+      cfg: params.cfg,
+      agentId,
+      workspaceDir: workspaceDir ?? params.workspaceDir,
+      sessionWorkspaceDir: sessionWorkspaceDir ?? params.sessionWorkspaceDir,
+      workspaceOnly: params.workspaceOnly,
+      allowHostWorkspace: params.allowHostWorkspace,
+      mediaSources: [media],
+      mediaAccess: params.mediaAccess,
+      workspaceMediaAccess: params.workspaceMediaAccess,
+      sessionKey: params.sessionKey,
+      messageProvider: params.sessionKey ? undefined : params.messageProvider,
+      accountId: params.accountId,
+      requesterSenderId: params.requesterSenderId,
+      requesterSenderName: params.requesterSenderName,
+      requesterSenderUsername: params.requesterSenderUsername,
+      requesterSenderE164: params.requesterSenderE164,
+      groupId: params.groupId,
+      groupChannel: params.groupChannel,
+      groupSpace: params.groupSpace,
+    });
+    const persistPromise = (
+      params.localMediaMaxBytes
+        ? resolveWebchatAttachmentFromUrl(media, maxBytes, {
+            mediaAccess,
+            localMediaMaxBytes: params.localMediaMaxBytes,
+          })
+        : resolveOutboundAttachmentFromUrl(media, maxBytes, { mediaAccess })
+    )
       .then((saved) => ({
         ...saved,
         contentType: saved.contentType ?? mimeTypeFromFilePath(media) ?? "application/octet-stream",

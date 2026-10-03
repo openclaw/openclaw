@@ -1,19 +1,10 @@
-import type { OpenResult } from "../infra/fs-safe.js";
-
 /** Host callback used to read an already-authorized outbound media file. */
 export type OutboundMediaReadFile = (filePath: string) => Promise<Buffer>;
-
-/** A native descriptor, or undefined when a transport reader owns this path. */
-type OutboundMediaOpenFile = (
-  filePath: string,
-  options: { maxBytes: number },
-) => Promise<OpenResult | undefined>;
 
 /** Host-provided file access used when a runtime can read outbound media from local disk. */
 export type OutboundMediaAccess = {
   localRoots?: readonly string[];
   readFile?: OutboundMediaReadFile;
-  openFile?: OutboundMediaOpenFile;
   /** Agent workspace directory for resolving relative media paths. */
   workspaceDir?: string;
 };
@@ -66,15 +57,13 @@ export function resolveOutboundMediaAccess(
   );
   const localRoots = resolvedLocalRoots === "any" ? undefined : resolvedLocalRoots;
   const readFile = params.mediaAccess?.readFile ?? params.mediaReadFile;
-  const openFile = params.mediaAccess?.openFile;
   const workspaceDir = params.mediaAccess?.workspaceDir;
-  if (!localRoots && !readFile && !openFile && !workspaceDir) {
+  if (!localRoots && !readFile && !workspaceDir) {
     return undefined;
   }
   return {
     ...(localRoots ? { localRoots } : {}),
     ...(readFile ? { readFile } : {}),
-    ...(openFile ? { openFile } : {}),
     ...(workspaceDir ? { workspaceDir } : {}),
   };
 }

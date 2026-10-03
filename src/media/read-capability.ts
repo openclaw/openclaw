@@ -9,6 +9,7 @@ import { isToolAllowedByPolicies } from "../agents/tool-policy-match.js";
 import { captureAgentWorkspaceOutboundMedia } from "../agents/workspace-access.js";
 import { resolveWorkspaceRoot } from "../agents/workspace-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { OpenResult } from "../infra/fs-safe.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { resolveConfigDir } from "../utils.js";
 import { createBoundedOutboundMediaReadFile, readOutboundMediaFile } from "./bounded-read-file.js";
@@ -18,6 +19,12 @@ import {
   getAgentScopedMediaLocalRoots,
   getAgentScopedMediaLocalRootsForSources,
 } from "./local-roots.js";
+
+/** Internal host access; native descriptors are not part of the plugin SDK. */
+export type HostOutboundMediaAccess = OutboundMediaAccess & {
+  /** A native descriptor, or undefined when a transport reader owns this path. */
+  openFile?: (filePath: string, options: { maxBytes: number }) => Promise<OpenResult | undefined>;
+};
 
 type OutboundHostMediaPolicyContext = {
   sessionKey?: string;
@@ -136,12 +143,12 @@ export function resolveAgentScopedOutboundMediaAccess(
     workspaceOnly?: boolean;
     /** False when local execution paths belong to another host. */
     allowHostWorkspace?: boolean;
-    mediaAccess?: OutboundMediaAccess;
+    mediaAccess?: HostOutboundMediaAccess;
     /** Workspace-bounded transport reader; sender policy remains owned by this resolver. */
-    workspaceMediaAccess?: OutboundMediaAccess;
+    workspaceMediaAccess?: HostOutboundMediaAccess;
     mediaReadFile?: OutboundMediaReadFile;
   } & OutboundHostMediaPolicyContext,
-): OutboundMediaAccess {
+): HostOutboundMediaAccess {
   if (params.allowHostWorkspace === false) {
     return { localRoots: getManagedMediaLocalRoots(params.mediaSources) };
   }
@@ -227,7 +234,7 @@ export function resolveAgentScopedOutboundMediaAccess(
         excludedLocalRoots: registeredRoots,
       })
     : undefined;
-  const openFile: OutboundMediaAccess["openFile"] = async (filePath, options) => {
+  const openFile: HostOutboundMediaAccess["openFile"] = async (filePath, options) => {
     // The same transport precedence as readFile: a native copy must never read a stale
     // local mirror of a sandbox or remotely owned workspace.
     if (mediaReadAllowed && workspaceOwnsMediaPath(params.workspaceMediaAccess, filePath)) {
