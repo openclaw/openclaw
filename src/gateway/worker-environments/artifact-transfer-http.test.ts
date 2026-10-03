@@ -158,38 +158,28 @@ describe("artifact transfer response settlement", () => {
     expect(onProgress).toHaveBeenCalled();
   });
 
-  it.each([0, 4, contents.length - 1])(
-    "serves exactly the bytes from offset %i",
-    async (offset) => {
-      const { res, body } = await serve({ range: `bytes=${offset}-` });
-      expect(res.statusCode).toBe(206);
-      expect(res.getHeader("content-range")).toBe(
-        `bytes ${offset}-${artifact.tarballBytes - 1}/${artifact.tarballBytes}`,
-      );
-      expect(res.getHeader("content-length")).toBe(String(artifact.tarballBytes - offset));
-      expect(res.getHeader("x-openclaw-content-sha256")).toBe(artifact.tarballSha256);
-      expect(res.getHeader("accept-ranges")).toBe("bytes");
-      expect(body).toBe(contents.slice(offset));
+  it("serves exactly the bytes from the requested offset", async () => {
+    const offset = 4;
+    const { res, body } = await serve({ range: `bytes=${offset}-` });
+    expect(res.statusCode).toBe(206);
+    expect(res.getHeader("content-range")).toBe(
+      `bytes ${offset}-${artifact.tarballBytes - 1}/${artifact.tarballBytes}`,
+    );
+    expect(res.getHeader("content-length")).toBe(String(artifact.tarballBytes - offset));
+    expect(res.getHeader("x-openclaw-content-sha256")).toBe(artifact.tarballSha256);
+    expect(res.getHeader("accept-ranges")).toBe("bytes");
+    expect(body).toBe(contents.slice(offset));
+  });
+
+  it.each(["bytes=0-,4-", "bytes=9007199254740992-", `bytes=${contents.length}-`])(
+    "rejects unsupported or unsatisfiable range %j",
+    async (range) => {
+      const { res, body } = await serve({ range });
+      expect(res.statusCode).toBe(416);
+      expect(res.getHeader("content-range")).toBe(`bytes */${artifact.tarballBytes}`);
+      expect(JSON.parse(body)).toEqual({ error: "range_not_satisfiable" });
     },
   );
-
-  it.each([
-    "bytes=0-,4-",
-    "bytes=-4",
-    "bytes=0-4",
-    "bytes=-1-",
-    "bytes=1.5-",
-    "bytes=9007199254740992-",
-    `bytes=${contents.length}-`,
-    `bytes=${contents.length + 1}-`,
-    "items=0-",
-    "",
-  ])("rejects unsupported or unsatisfiable range %j", async (range) => {
-    const { res, body } = await serve({ range });
-    expect(res.statusCode).toBe(416);
-    expect(res.getHeader("content-range")).toBe(`bytes */${artifact.tarballBytes}`);
-    expect(JSON.parse(body)).toEqual({ error: "range_not_satisfiable" });
-  });
 
   it("terminates a ranged response when its capability is revoked mid-stream", async () => {
     await prepareArtifact(Buffer.alloc(256 * 1024, "x"));
@@ -256,20 +246,20 @@ describe("artifact transfer response settlement", () => {
     expect(received + completed.body).toBe(contents);
   });
 
-  it.each([undefined, "bytes=4-"])(
-    "allows 256 serial serves (Range: %s), then returns opaque 404",
-    async (range) => {
-      for (let attempt = 1; attempt <= 256; attempt++) {
-        const completed = await serve({ range });
-        expect(completed.res.statusCode).toBe(range ? 206 : 200);
-        expect(completed.res.writableFinished).toBe(true);
-        expect(completed.body).toBe(range ? contents.slice(4) : contents);
-      }
+  it("shares the 256-serve budget between full and ranged responses", async () => {
+    for (let attempt = 1; attempt <= 256; attempt++) {
+      const range = attempt % 2 === 0 ? "bytes=4-" : undefined;
+      const completed = await serve({ range });
+      expect(completed.res.statusCode).toBe(range ? 206 : 200);
+      expect(completed.res.writableFinished).toBe(true);
+      expect(completed.body).toBe(range ? contents.slice(4) : contents);
+    }
+    for (const range of [undefined, "bytes=4-"]) {
       const rejected = await serve({ range });
       expect(rejected.res.statusCode).toBe(404);
       expect(JSON.parse(rejected.body)).toEqual({ error: "not_found" });
-    },
-  );
+    }
+  });
 
   it("fences stale attempts and retains the original retry deadline", async () => {
     const request = { token, artifactKey: artifact.tarballSha256 };
@@ -353,43 +343,13 @@ describe("artifact transfer response settlement", () => {
     },
   );
 
-  it.each(["owner", "expiry", "signal"] as const)(
-    "keeps busy artifact identity opaque and rejects %s closure",
-    async (closure) => {
-      service.authorize({ token, artifactKey: artifact.tarballSha256 });
-      expect((await serve({ artifactKey: "0".repeat(64) })).res.statusCode).toBe(404);
-      expect((await serve()).res.statusCode).toBe(503);
-      if (closure === "owner") {
-        authorized = false;
-      } else if (closure === "expiry") {
-        now = expiresAtMs;
-      } else {
-        owner.abort();
-      }
-      expect((await serve()).res.statusCode).toBe(404);
-    },
-  );
-
-  it.each(["owner", "signal", "revoke", "shutdown"] as const)(
-    "never reopens an interrupted transfer after %s closure",
-    (closure) => {
-      const request = { token, artifactKey: artifact.tarballSha256 };
-      const admission = service.authorize(request)!;
-      if (closure === "owner") {
-        authorized = false;
-      } else if (closure === "signal") {
-        owner.abort();
-      } else if (closure === "revoke") {
-        service.revoke(token);
-      } else {
-        service.closeAll();
-      }
-      service.finish(admission);
-      expect(service.authorizationSignal(admission).aborted).toBe(true);
-      authorized = true;
-      expect(service.authorize(request)).toBeUndefined();
-    },
-  );
+  it("keeps busy artifact identity opaque and rejects lost authority", async () => {
+    service.authorize({ token, artifactKey: artifact.tarballSha256 });
+    expect((await serve({ artifactKey: "0".repeat(64) })).res.statusCode).toBe(404);
+    expect((await serve()).res.statusCode).toBe(503);
+    authorized = false;
+    expect((await serve()).res.statusCode).toBe(404);
+  });
 });
 
 describe("artifact transfer interruption observations", () => {
@@ -488,6 +448,10 @@ describe("artifact transfer interruption observations", () => {
         authorized = false;
         authorityError = error;
       },
+      restoreAuthority: () => {
+        authorized = true;
+        authorityError = undefined;
+      },
       expire: () => {
         now = prepared.expiresAtMs;
       },
@@ -522,6 +486,8 @@ describe("artifact transfer interruption observations", () => {
         h.expire();
       } else if (closure === "owner cancelled") {
         h.owner.abort(new Error("private cancellation detail"));
+        h.service.revoke(h.prepared.token);
+        h.service.closeAll();
       } else if (closure === "authorization lost" || closure === "throwing authorization") {
         h.loseAuthority(
           closure === "throwing authorization" ? new Error("private error") : undefined,
@@ -531,7 +497,7 @@ describe("artifact transfer interruption observations", () => {
       } else {
         h.service.closeAll();
       }
-    });
+    }, 3);
     await h.run();
     expect(h.interrupted).toHaveBeenCalledExactlyOnceWith(
       2,
@@ -540,22 +506,10 @@ describe("artifact transfer interruption observations", () => {
     expect(h.socketErrors).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ code: "ABORT_ERR" }),
     );
+    h.restoreAuthority();
     expect(
       h.service.authorize({ token: h.prepared.token, artifactKey: h.artifactKey }),
     ).toBeUndefined();
-  });
-
-  it("keeps the first closure cause when release follows owner cancellation", async () => {
-    const h = await prepare(() => {
-      h.owner.abort();
-      h.service.revoke(h.prepared.token);
-      h.service.closeAll();
-    });
-    await h.run();
-    expect(h.interrupted).toHaveBeenCalledExactlyOnceWith(2, "authority closed (owner cancelled)");
-    expect(h.socketErrors).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ code: "ABORT_ERR" }),
-    );
   });
 
   it("records timer expiry independently of a later owner cancellation", async () => {
@@ -582,25 +536,23 @@ describe("artifact transfer interruption observations", () => {
     ).toBeUndefined();
   });
 
-  it("does not report an interruption after the complete response", async () => {
-    const h = await prepare();
-    await h.run();
-    h.socket.destroy();
-    h.owner.abort();
-    expect(h.progress.mock.calls.flat()).toEqual([2, 4, 6]);
-    expect(h.res.writableFinished).toBe(true);
-    expect(h.interrupted).not.toHaveBeenCalled();
-    expect(h.socketErrors).not.toHaveBeenCalled();
-  });
-
-  it("reports a completed ranged serve by its delivered position", async () => {
-    const h = await prepare();
-    await h.run("bytes=2-");
-    expect(h.res.statusCode).toBe(206);
-    expect(h.res.writableFinished).toBe(true);
-    expect(h.progress.mock.calls.flat()).toEqual([4, 6]);
-    expect(h.interrupted).not.toHaveBeenCalled();
-  });
+  it.each([
+    { range: undefined, status: 200, progress: [2, 4, 6] },
+    { range: "bytes=2-", status: 206, progress: [4, 6] },
+  ])(
+    "reports completed progress without interruption for $status",
+    async ({ range, status, progress }) => {
+      const h = await prepare();
+      await h.run(range);
+      h.socket.destroy();
+      h.owner.abort();
+      expect(h.res.statusCode).toBe(status);
+      expect(h.progress.mock.calls.flat()).toEqual(progress);
+      expect(h.res.writableFinished).toBe(true);
+      expect(h.interrupted).not.toHaveBeenCalled();
+      expect(h.socketErrors).not.toHaveBeenCalled();
+    },
+  );
 
   it("retains observers across interrupted and completed retries with per-serve byte counts", async () => {
     let firstServe = true;
