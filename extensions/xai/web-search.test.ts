@@ -148,7 +148,7 @@ function requireXaiWebSearchTool(
 
 const defaultAgentConfig = {
   agents: {
-    list: [{ id: "main", default: true, agentDir: "/tmp/openclaw-xai-main-agent" }],
+    entries: { main: { agentDir: "/tmp/openclaw-xai-main-agent" } },
   },
 };
 
@@ -275,10 +275,10 @@ describe("xai web search config resolution", () => {
       agentDir: "/tmp/openclaw-xai-active-agent",
       config: {
         agents: {
-          list: [
-            { id: "main", default: true, agentDir: "/tmp/openclaw-xai-main-agent" },
-            { id: "side", agentDir: "/tmp/openclaw-xai-active-agent" },
-          ],
+          entries: {
+            main: { agentDir: "/tmp/openclaw-xai-main-agent" },
+            side: { agentDir: "/tmp/openclaw-xai-active-agent" },
+          },
         },
       },
     });

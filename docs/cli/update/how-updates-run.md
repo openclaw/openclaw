@@ -142,6 +142,13 @@ path to inspect before retrying recovery. Sibling `.openclaw.update-stage-*`
 directories are outside that package fingerprint; do not remove stages that
 another updater may still be using.
 
+Launcher backups verify the saved file bytes or symlink target. Recreating an
+equivalent npm or Homebrew launcher does not invalidate recovery because its
+inode, timestamps, or ownership metadata changed. A changed symlink target still
+refuses the swap and names both targets; filesystem mutation ownership checks
+remain in effect. This fix belongs to the installed updater, so a candidate
+cannot change an older updater's launcher checks during that first update.
+
 Package publication verifies the candidate before activation and the installed
 package after publication. Launcher publication checks package identities without
 repeatedly hashing both generations. Retirement verifies the live package before

@@ -47,7 +47,7 @@ describe("schema-only agent preflight", () => {
           return prepare(pathname, options);
         },
       );
-      const config = { agents: { list: [{ id: "worker", default: true }] } };
+      const config = { agents: { entries: { worker: {} } } };
       const ready = (operation: "doctor" | "gateway-restart" | "gateway-startup") =>
         assertOpenClawDatabasesReady({
           env,

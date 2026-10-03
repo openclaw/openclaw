@@ -4,7 +4,7 @@ import path from "node:path";
 import { isWithinDir } from "@openclaw/fs-safe/path";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { listAgentEntries } from "../agents/agent-scope-config.js";
+import { listAgentEntries, toAgentEntriesRecord } from "../agents/agent-scope-config.js";
 import { normalizePersistedSessionEntryShape } from "../commands/doctor/shared/session-entry-shape.js";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { resolveStateDir } from "../config/paths.js";
@@ -673,18 +673,18 @@ export async function migrateLegacyAcpSessionMetadata(params: {
     configuredAgents.flatMap((entry) => (entry?.id ? [normalizeAgentId(entry.id)] : [])),
   );
   const discoveryCfg = [...declaredAgentIds].some((agentId) => !configuredAgentIds.has(agentId))
-    ? ({
+    ? {
         ...params.cfg,
         agents: {
           ...params.cfg.agents,
-          list: [
+          entries: toAgentEntriesRecord([
             ...configuredAgents,
             ...[...declaredAgentIds]
               .filter((agentId) => !configuredAgentIds.has(agentId))
               .map((id) => ({ id })),
-          ],
+          ]),
         },
-      } as OpenClawConfig)
+      }
     : params.cfg;
   // Reuse the validated resolver for every declared owner. Owner multiplicity
   // is restored below as metadata without re-adding rejected raw paths.

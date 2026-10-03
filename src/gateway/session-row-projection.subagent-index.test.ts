@@ -47,7 +47,7 @@ it("settles a registry revision after persisting an already absent run", async (
   await withOpenClawTestState(
     { scenario: "minimal", env: { OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE: "1" } },
     async () => {
-      const cfg = { agents: { list: [{ id: "main", default: true }] } };
+      const cfg = { agents: { entries: { main: {} } } };
       setRuntimeConfigSnapshot(cfg);
       clearSubagentRunsReadCacheForTest();
       const target = { agentId: "main", sessionKey: "agent:main:registry-revision" };
@@ -104,7 +104,7 @@ it.each([
     await withOpenClawTestState(
       { scenario: "minimal", env: { OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE: "1" } },
       async () => {
-        const cfg = { agents: { list: [{ id: "main", default: true }] } };
+        const cfg = { agents: { entries: { main: {} } } };
         setRuntimeConfigSnapshot(cfg);
         clearSubagentRunsReadCacheForTest();
         const key = "agent:main:archive-during-recovery";
@@ -409,7 +409,7 @@ it.each(["exact", "bulk"] as const)(
 
 it("reuses the subagent index across a 2,048-session drain with unrelated writes and refreshes a changed run", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg = { agents: { list: [{ id: "main", default: true }] } };
+    const cfg = { agents: { entries: { main: {} } } };
     setRuntimeConfigSnapshot(cfg);
     const count = seedSessionRowProjectionTranscriptFixture();
     for (let index = 1; index < count; index++) {
@@ -493,7 +493,7 @@ it.each(
     await withOpenClawTestState(
       { scenario: "minimal", env: { OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE: "1" } },
       async () => {
-        const cfg = { agents: { list: [{ id: "main", default: true }] } };
+        const cfg = { agents: { entries: { main: {} } } };
         const child = "agent:main:child",
           parent = "agent:main:parent",
           nextParent = "agent:main:next";

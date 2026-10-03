@@ -510,7 +510,7 @@ describe("auth profile sqlite store", () => {
       const customAgentDir = path.join(path.dirname(path.dirname(envAgentDir)), "custom-coder");
       const cfg = {
         agents: {
-          list: [{ id: "coder", agentDir: customAgentDir }],
+          entries: { coder: { agentDir: customAgentDir } },
         },
       };
       const agentDir = resolveAgentDir(cfg, "coder");

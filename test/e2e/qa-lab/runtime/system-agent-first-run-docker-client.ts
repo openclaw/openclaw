@@ -26,6 +26,7 @@ import {
 } from "../../../../dist/system-agent/setup-inference.js";
 import { runSystemAgent } from "../../../../dist/system-agent/system-agent.js";
 import { createE2eStateDir } from "../../../../scripts/e2e/lib/temp-state-dir.ts";
+import type { OpenClawConfigWithLegacyRoster } from "../../../../src/config/legacy.roster.js";
 
 type SystemAgentFirstRunCommand = {
   id: string;
@@ -234,7 +235,7 @@ async function runReleasedPendingRecovery(inferenceConfig: OpenClawConfig) {
     default: true,
     models: { [EXPECTED_PERSISTED_MODEL]: { agentRuntime: { id: "claude-cli" } } },
   };
-  const releasedConfig: OpenClawConfig = {
+  const releasedConfig: OpenClawConfigWithLegacyRoster = {
     ...structuredClone(inferenceConfig),
     agents: { defaults, entries: { main } },
   };
@@ -273,7 +274,7 @@ async function runReleasedPendingRecovery(inferenceConfig: OpenClawConfig) {
     "--yes",
   ]);
   clearConfigCache();
-  const after = JSON.parse(await fs.readFile(configPath, "utf8")) as OpenClawConfig;
+  const after: OpenClawConfigWithLegacyRoster = JSON.parse(await fs.readFile(configPath, "utf8"));
   const owner = readLocalOnboardingStateForConfig(configPath, after);
   const mainPreserved = isDeepStrictEqual(after.agents?.entries, { main });
   console.log(

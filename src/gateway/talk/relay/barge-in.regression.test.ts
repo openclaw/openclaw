@@ -15,7 +15,7 @@ import { createTalkRealtimeRelaySession } from "./index.js";
 import { closeRelaySession } from "./operations.js";
 import { relaySessions } from "./state.js";
 
-const cfg = { agents: { entries: { main: { default: true } } } };
+const cfg = { agents: { entries: { main: {} } } };
 
 function makeRelayTransport(): RealtimeVoiceBridge {
   return {

@@ -30,7 +30,7 @@ const recallHit = {
 function recallTool(dreaming: { enabled: boolean; timezone?: string }, userTimezone?: string) {
   return createMemorySearchToolOrThrow({
     config: {
-      agents: { defaults: { userTimezone }, list: [{ id: "main", default: true }] },
+      agents: { defaults: { userTimezone }, entries: { main: {} } },
       plugins: { entries: { "memory-core": { config: { dreaming } } } },
     },
   });

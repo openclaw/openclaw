@@ -441,7 +441,7 @@ suite.define(() => {
           await captureProof(page, `archived-${surface.replaceAll(" ", "-")}`);
           await expectBrowser(
             page.getByRole("menuitemradio").locator(":scope > .session-menu__text"),
-          ).toHaveText(["Me", "OpenClaw", "Bob", "Carol", ...extraNames].slice(0, 20));
+          ).toHaveText(["Me", "OpenClaw", "Bob", "Carol", ...extraNames]);
           await expectAssignmentAvatarLayout(page);
           const target = extraNames.at(-1) ?? "Carol";
           if (extraNames.length > 0) {
@@ -494,7 +494,7 @@ suite.define(() => {
           await expectBrowser(search).toHaveValue("Teammate 0999");
           await expectBrowser(page.getByRole("menuitemradio")).toHaveCount(1);
           await search.clear();
-          await expectBrowser(page.getByRole("menuitemradio")).toHaveCount(20);
+          await expectBrowser(page.getByRole("menuitemradio")).toHaveCount(1004);
           await search.fill("Teammate 0999");
           await captureProof(page, `directory-${width}-search`);
           await search.press("Escape");

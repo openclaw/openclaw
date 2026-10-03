@@ -36,7 +36,7 @@ function createMainStoreFixture(stateDir: string, mainKey?: string) {
   const storeTemplate = path.join(stateDir, "agents", "{agentId}", "sessions.json");
   const storePath = resolveSessionStorePathCore(storeTemplate, { agentId: "main", env });
   const cfg: OpenClawConfig = {
-    agents: { list: [{ id: "main", default: true }] },
+    agents: { entries: { main: {} } },
     session: { ...(mainKey ? { mainKey } : {}), store: storeTemplate },
   };
   return {
@@ -225,7 +225,7 @@ describe("doctor canonical session-key repair", () => {
       const storeTemplate = path.join(stateDir, "agents", "{agentId}", "sessions.json");
       const storePath = resolveSessionStorePathCore(storeTemplate, { agentId: "historian2", env });
       const cfg = {
-        agents: { list: [{ id: "main", default: true }, { id: "historian2" }] },
+        agents: { entries: { main: {}, historian2: {} } },
         session: { scope: "global", store: storeTemplate },
       } as OpenClawConfig;
       insertLegacySession({
@@ -513,7 +513,7 @@ describe("doctor canonical session-key repair", () => {
       const mainStore = resolveSessionStorePathCore(storeTemplate, { agentId: "main", env });
       const opsStore = resolveSessionStorePathCore(storeTemplate, { agentId: "ops", env });
       const cfg = {
-        agents: { list: [{ id: "main", default: true }, { id: "ops" }] },
+        agents: { entries: { main: {}, ops: {} } },
         session: { store: storeTemplate },
       } as OpenClawConfig;
       replaceSessionEntrySync(
@@ -760,7 +760,7 @@ describe("doctor canonical session-key repair", () => {
       const mainStore = resolveSessionStorePathCore(storeTemplate, { agentId: "main", env });
       const opsStore = resolveSessionStorePathCore(storeTemplate, { agentId: "ops", env });
       const cfg = {
-        agents: { list: [{ id: "main", default: true }, { id: "ops" }] },
+        agents: { entries: { main: {}, ops: {} } },
         session: { mainKey: "work", store: storeTemplate },
       } as OpenClawConfig;
       insertLegacySession({
@@ -845,7 +845,7 @@ describe("doctor canonical session-key repair", () => {
       const mainStore = resolveSessionStorePathCore(storeTemplate, { agentId: "main", env });
       const opsStore = resolveSessionStorePathCore(storeTemplate, { agentId: "ops", env });
       const cfg = {
-        agents: { list: [{ id: "main", default: true }, { id: "ops" }] },
+        agents: { entries: { main: {}, ops: {} } },
         session: { mainKey: "shared", store: storeTemplate },
       } as OpenClawConfig;
       insertLegacySession({

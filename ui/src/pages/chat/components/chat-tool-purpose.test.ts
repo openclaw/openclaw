@@ -6,6 +6,46 @@ import { renderToolCard } from "./chat-tool-cards.ts";
 
 describe("execution purpose cards", () => {
   it.each([
+    { name: "wait", args: { runId: "cm_test" }, label: "Wait" },
+    { name: "session_status", args: {}, label: "Session Status" },
+    { name: "custom_tool", args: { text: "custom tool" }, label: "Custom Tool" },
+    {
+      name: "tool_call",
+      args: { id: "openclaw:core:wait", args: { runId: "cm_test" } },
+      label: "Wait",
+    },
+  ])("keeps $name readable without distinct detail text", ({ name, args, label }) => {
+    const container = document.createElement("div");
+    for (const expanded of [false, true]) {
+      render(
+        renderToolCard(
+          { id: "no-detail", name, args, completed: true },
+          { messageKey: "no-detail", expanded, onToggleExpanded: vi.fn() },
+        ),
+        container,
+      );
+      expect(container.querySelector(".chat-tool-disclosure__content")?.textContent?.trim()).toBe(
+        label,
+      );
+    }
+  });
+
+  it("keeps the tool name icon-only when a distinct preview identifies the operation", () => {
+    const container = document.createElement("div");
+    render(
+      renderToolCard(
+        { id: "with-detail", name: "custom_tool", args: { text: "Inspect the workspace" } },
+        { messageKey: "with-detail", expanded: false, onToggleExpanded: vi.fn() },
+      ),
+      container,
+    );
+    expect(container.querySelector(".chat-tool-disclosure__content")?.textContent?.trim()).toBe(
+      "Inspect the workspace",
+    );
+    expect(container.querySelector(".chat-tool-msg-summary__label")).toBeNull();
+  });
+
+  it.each([
     { name: "exec", args: { code: "await tools.read({ path: 'README.md' })" } },
     { name: "exec", args: { command: "set -euo pipefail\npnpm test" } },
     {

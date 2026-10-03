@@ -1,5 +1,6 @@
 // QA Lab mock provider output event builders.
 
+import { stripInboundMetadata } from "openclaw/plugin-sdk/qa-runtime";
 import {
   type MockAssistantMessageSpec,
   type StreamEvent,
@@ -208,7 +209,7 @@ const QA_TELEGRAM_POLICY_HOT_RELOAD_RE =
   /^Write (40|12) numbered plain-text lines\. Every line must contain (TG-RELOAD-(?:root|account)-[0-9a-f]{8}(?:-NEXT)?) and the words ((?:hot reload|new policy) keeps this conversation connected)\. Finish with a separate final line containing \2-END\. Do not use tools, Markdown, or explicit reply tags\.$/u;
 
 function readTelegramPolicyHotReloadPrompt(prompt: string) {
-  const match = QA_TELEGRAM_POLICY_HOT_RELOAD_RE.exec(prompt);
+  const match = QA_TELEGRAM_POLICY_HOT_RELOAD_RE.exec(stripInboundMetadata(prompt));
   const lineCount = Number(match?.[1]);
   const marker = match?.[2];
   const phrase = match?.[3];
@@ -222,16 +223,22 @@ function readTelegramPolicyHotReloadPrompt(prompt: string) {
   return isHeldTurn || isNextTurn ? { lineCount, marker, phrase } : undefined;
 }
 
-function buildTelegramPolicyHotReloadText(prompt: string): string | undefined {
+function buildTelegramPolicyHotReloadEvents(prompt: string): StreamEvent[] | undefined {
   const fixture = readTelegramPolicyHotReloadPrompt(prompt);
   if (!fixture) {
     return undefined;
   }
   const { lineCount, marker, phrase } = fixture;
-  return [
-    ...Array.from({ length: lineCount }, (_, index) => `${index + 1}. ${marker} ${phrase}`),
-    `${marker}-END`,
-  ].join("\n");
+  const lines = Array.from(
+    { length: lineCount },
+    (_, index) => `${index + 1}. ${marker} ${phrase}`,
+  );
+  const text = [...lines, `${marker}-END`].join("\n");
+  return buildStreamingFinalAnswerEvents(
+    "msg_mock_telegram_policy_hot_reload",
+    text,
+    lineCount === 40 ? lines[0] : text,
+  );
 }
 
 export function resolveTelegramChannelStreamingPause(
@@ -248,12 +255,9 @@ export function buildChannelStreamingFixtureEvents(params: {
   allInputText: string;
   hasCompletedToolOutput: boolean;
 }): StreamEvent[] | undefined {
-  const policyHotReloadText = buildTelegramPolicyHotReloadText(params.currentPrompt);
-  if (policyHotReloadText) {
-    return buildStreamingFinalAnswerEvents(
-      "msg_mock_telegram_policy_hot_reload",
-      policyHotReloadText,
-    );
+  const policyHotReloadEvents = buildTelegramPolicyHotReloadEvents(params.currentPrompt);
+  if (policyHotReloadEvents) {
+    return policyHotReloadEvents;
   }
   if (QA_TELEGRAM_LONG_FINAL_THREE_CHUNK_PROMPT_RE.test(params.allInputText)) {
     const text = buildQaLongFinalText({

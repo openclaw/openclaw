@@ -343,7 +343,7 @@ test("sessions.create revalidates parent participation before committing a fork 
 
 test("createGatewaySession rejects explicit and key-derived unconfigured creation owners", async () => {
   const { createGatewaySession } = await import("./session-create-service.js");
-  const cfg = { agents: { entries: { ops: { default: true } } } };
+  const cfg = { agents: { entries: { ops: {} } } };
   const prepareLifecycle = vi.fn();
 
   for (const { owner, message } of [

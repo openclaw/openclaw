@@ -181,7 +181,6 @@ describe("runNonInteractiveLocalSetup default-agent ownership", () => {
       legacyState: false,
       agentName: "robby",
     },
-    { label: "empty legacy roster", agents: { list: [] }, legacyState: false, agentName: "robby" },
     { label: "legacy workspace state", agents: {}, legacyState: true, agentName: "robby" },
   ])(
     "keeps auth and provisioning on the requested owner with $label config",
@@ -225,7 +224,7 @@ describe("runNonInteractiveLocalSetup default-agent ownership", () => {
                 ...config.agents,
                 entries: {
                   [agentId]: {
-                    ...(agentName ? { name: agentName } : { default: true }),
+                    ...(agentName ? { name: agentName } : {}),
                     workspace: expectedWorkspace,
                   },
                 },
@@ -445,8 +444,8 @@ describe("runNonInteractiveLocalSetup default-agent ownership", () => {
           authChoice: "skip",
         },
         runtime,
-        baseConfig: { agents: { entries: { ops: { default: true } } } },
-        sourceConfigBeforeMigrations: { agents: { entries: { ops: { default: true } } } },
+        baseConfig: { agents: { entries: { ops: {} } } },
+        sourceConfigBeforeMigrations: { agents: { entries: { ops: {} } } },
       }),
     ).rejects.toThrow("workspace is unwritable");
 

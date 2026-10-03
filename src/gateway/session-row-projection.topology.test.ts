@@ -563,7 +563,7 @@ it("starts a new topology read after healthy integrity confirmation without revi
 it("retains physical sentinels and stable store precedence after a primary update", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const cfg = {
-      agents: { list: [{ id: "main", default: true }] },
+      agents: { entries: { main: {} } },
       session: { scope: "global" as const },
     };
     const primary = resolveOpenClawAgentSqlitePath({ agentId: "main" });

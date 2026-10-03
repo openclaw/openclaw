@@ -46,7 +46,7 @@ vi.mock("../agents/runtime-plugins.js", () => ({
 function embeddedRoute(runtime: "codex" | "openclaw" = "codex"): SystemAgentConfiguredRoute {
   const config: OpenClawConfig = {
     agents: {
-      entries: { main: { default: true, agentDir: "/tmp/openclaw-agent" } },
+      entries: { main: { agentDir: "/tmp/openclaw-agent" } },
       defaults: {
         model: "openai/gpt-5.6-sol",
         models: { "openai/gpt-5.6-sol": { agentRuntime: { id: runtime } } },
@@ -282,7 +282,7 @@ describe("setup inference plugin ownership", () => {
   it("does not load plugins for a direct custom provider using the built-in OpenClaw harness", async () => {
     const config: OpenClawConfig = {
       agents: {
-        entries: { main: { default: true, agentDir: "/tmp/openclaw-agent" } },
+        entries: { main: { agentDir: "/tmp/openclaw-agent" } },
         defaults: {
           model: "fixture/direct-model",
           models: { "fixture/direct-model": { agentRuntime: { id: "openclaw" } } },

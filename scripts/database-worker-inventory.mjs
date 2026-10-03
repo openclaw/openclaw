@@ -172,6 +172,31 @@ const reviewed = new Map([
 // Match lexical operation paths, not moving line numbers or whole mixed modules.
 const reviewedOperations = new Map([
   [
+    "src/config/sessions/session-accessor.sqlite-reset.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["readResetInventory", "previewSessionStoreReset"],
+        evidence:
+          "Only cleanup-utils.ts:620,628,641 reaches full-store reset from reset.ts:154 and onboard-helpers.ts:254, including CLI dev bootstrap; Gateway session reset is separate",
+      },
+    ],
+  ],
+  [
+    "src/config/sessions/session-accessor.sqlite-archive-store-kernel.ts",
+    [
+      {
+        tier: "T3",
+        operations: [
+          "readSessionTranscriptArchiveResetInventory",
+          "deleteAllSessionTranscriptArchivesInTransaction",
+        ],
+        evidence:
+          "Only offline full-store reset calls these at session-accessor.sqlite-reset.ts:65,239 via commands/cleanup-utils.ts; other archive operations retain native lifecycle callers",
+      },
+    ],
+  ],
+  [
     "src/infra/update-managed-service-handoff-database-recovery.ts",
     [
       {
@@ -291,7 +316,13 @@ const reviewedOperations = new Map([
           "createPlacementWorkspaceJournalOps.abortWorkspaceReconciliation",
         ],
         evidence:
-          "state-read.worker.ts:648,659 and placement-workspace-journal.worker.ts:30; host acceptance/drain cleanup stays T1",
+          "Read dispatch at state-read.worker.ts:653 and journal mutation factory at placement-workspace-journal.worker.ts:30",
+      },
+      {
+        tier: "W",
+        operations: ["clearWorkerWorkspaceReconciliation"],
+        evidence:
+          "Acceptance at placement-turn-claims.worker.ts:190, journal abort via placement-workspace-journal.worker.ts:30 and manifest drain via placement-transitions.worker.ts:82; native move drain supplies no manifest and skips cleanup",
       },
     ],
   ],
@@ -355,6 +386,13 @@ const reviewedOperations = new Map([
         operations: ["readWorkerPlacementChangeSnapshotInDatabase"],
         evidence: "Reporting snapshot only called by openclaw-state-read.worker.ts:644",
       },
+      {
+        tier: "W",
+        operations: ["updateTransition"],
+        binding: "activated",
+        evidence:
+          "Only activation at placement-transitions.worker.ts:58 reaches this initializer; native placement-store.ts:325 passes provisioning, not active; the placement update stays T1",
+      },
     ],
   ],
   [
@@ -373,6 +411,17 @@ const reviewedOperations = new Map([
     ],
   ],
   [
+    "src/gateway/operator-approval-store.kernel.ts",
+    [
+      {
+        tier: "W",
+        operations: ["listTerminalOperatorApprovalsInDatabase"],
+        evidence:
+          "Only openclaw-state-read.worker.ts:489 serves approval history; the native compatibility operation map has no history operation",
+      },
+    ],
+  ],
+  [
     "src/gateway/operator-approval-store.transitions.ts",
     [
       {
@@ -380,6 +429,46 @@ const reviewedOperations = new Map([
         operations: ["closeOrphanedOperatorApprovals", "pruneTerminalOperatorApprovals"],
         evidence:
           "Boot calls only in server-aux-handlers.ts:105,109; remaining transitions retain native SDK compatibility",
+      },
+    ],
+  ],
+  [
+    "src/infra/push-web-store.kernel.ts",
+    [
+      {
+        tier: "W",
+        operations: [
+          "findBoundWebPushSubscriptionByEndpointInDatabase",
+          "listWebPushSubscriptionsInDatabase",
+          "hasBoundWebPushSubscriptionsInDatabase",
+          "listBoundWebPushSubscriptionsInDatabase",
+          "prepareWebPushApprovalDeliveriesInDatabase",
+          "listWebPushApprovalDeliveryTargetsInDatabase",
+          "deleteWebPushApprovalDeliveryTargetsInDatabase",
+          "listTerminalWebPushApprovalDeliveryIdsInDatabase",
+          "deleteWebPushSubscriptionIfCurrentInDatabase",
+        ],
+        evidence:
+          "Only push-web-store.worker.ts:14,20,22,24,28,32,36,40,62 calls these operations; native preferences/upsert/delete-bound and their shared schema helper stay T1",
+      },
+    ],
+  ],
+  [
+    "src/node-host/node-worker-prepared-workspace-store.kernel.ts",
+    [
+      {
+        tier: "W",
+        operations: [
+          "selectRow",
+          "write",
+          "list",
+          "register",
+          "bind",
+          "completeMutation",
+          "retire",
+        ],
+        evidence:
+          "List/mutations run only in node-worker-journal.worker.ts:14,19,26,31,36; selectRow/write are mutation-only helpers; native findSync at node-worker-prepared-workspace-store.ts:31 reaches only find, which stays T1",
       },
     ],
   ],

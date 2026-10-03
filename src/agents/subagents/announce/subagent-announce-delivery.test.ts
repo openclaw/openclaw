@@ -590,7 +590,7 @@ describe("deliverSubagentAnnouncement active requester steering", () => {
   const sharedStore = "/stores/shared.sqlite";
   const configuredAgents: NonNullable<OpenClawConfig["agents"]> = {
     ownership: "explicit",
-    list: [{ id: "ops" }, { id: "research" }],
+    entries: { ops: {}, research: {} },
   };
   function announce(overrides: Partial<AnnouncementInput> = {}) {
     const requesterSessionKey = overrides.requesterSessionKey ?? "agent:eng:paperclip:issue:123";
@@ -1156,7 +1156,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         session: { scope: "global" },
         agents: {
           ownership: "explicit",
-          list: [{ id: "ops" }, { id: "research" }],
+          entries: { ops: {}, research: {} },
         },
       },
       internalEvents: taskCompletionEvents({ childSessionId: "child-session-id" }),

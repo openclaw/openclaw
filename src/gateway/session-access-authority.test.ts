@@ -460,7 +460,7 @@ describe("session resource admission", () => {
       const storePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
       const staged = state.statePath("imports", "replacement.sqlite");
       const cfg = {
-        agents: { list: [{ id: "main", default: true }] },
+        agents: { entries: { main: {} } },
         session: { store: storePath },
       };
       const entry: SessionEntry = {

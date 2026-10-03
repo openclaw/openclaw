@@ -88,7 +88,7 @@ it.each([
       const releaseForeground = retainSessionListForegroundWork();
       try {
         const projection = await createSessionRowProjection({
-          cfg: { agents: { list: [{ id: "main", default: true }] } },
+          cfg: { agents: { entries: { main: {} } } },
           modelCatalog: [],
         });
         try {
@@ -297,7 +297,7 @@ it("preserves a keyed replacement while an older worker reply is pending", async
     const release = createDeferredCore();
     let reading: Promise<void> | undefined;
     const projection = await createSessionRowProjection({
-      cfg: { agents: { list: [{ id: "main", default: true }] } },
+      cfg: { agents: { entries: { main: {} } } },
     });
     try {
       await projection.ensureMaterialized();
@@ -561,7 +561,7 @@ it.each([
   "captured sibling row",
 ] as const)("consumes current list facts across an awaited worker reply: %s", async (change) => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg = { agents: { list: [{ id: "main", default: true }] } };
+    const cfg = { agents: { entries: { main: {} } } };
     const changesOwner =
       change === "runtime stored facts" || change === "invalidated presentation facts";
     const changesSibling = change === "unrelated stored row" || change === "captured sibling row";
@@ -873,7 +873,7 @@ it("keeps the stored main address and ACP runtime after mainKey changes", async 
 it("refreshes prepared ACP metadata on publication and fences replacement lifecycles", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const key = "agent:main:acp:worker-row";
-    const cfg = { agents: { list: [{ id: "main", default: true }] } };
+    const cfg = { agents: { entries: { main: {} } } };
     const target = { agentId: "main", sessionKey: key };
     replaceSessionEntrySync(target, {
       sessionId: "worker-row",

@@ -182,16 +182,16 @@ describe("system agent operations", () => {
   });
 
   it("reads canonical array indices after redaction", async () => {
-    const configPath = "agents.list[00].id";
+    const configPath = "agents.entries.main.skills[00]";
     mockConfig.setConfig({
       channels: { modelByChannel: { telegram: { "team.ops[west]": "openai/gpt-5.5" } } },
       models: { providers: { "local.service": { apiKey: "synthetic-key" } } },
-      agents: { list: [{ id: "main" }] },
+      agents: { entries: { main: { skills: ["weather"] } } },
     });
     const operation = parseSystemAgentOperation(`config get ${configPath}`);
     expect(operation).toEqual({ kind: "config-get", path: configPath });
     expect(await executeSystemAgentOperation(operation, runtime)).toEqual({ applied: false });
-    expect(lines).toEqual([`${configPath} = "main"`]);
+    expect(lines).toEqual([`${configPath} = "weather"`]);
   });
 
   it("keeps invalid config reads available without exposing recovery secrets", async () => {

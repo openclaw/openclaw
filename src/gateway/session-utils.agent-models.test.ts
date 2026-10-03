@@ -34,7 +34,7 @@ describe("listAgentsForGateway model identity", () => {
           models: { "local-utility/shared": { alias: "helper" } },
         },
         entries: {
-          main: { default: true },
+          main: {},
           ops: {
             model: {
               primary: "openai/gpt-5.5@openai:primary",
@@ -74,7 +74,7 @@ describe("listAgentsForGateway model identity", () => {
           models: { "local-utility/small": { alias: "helper" } },
         },
         entries: {
-          main: { default: true },
+          main: {},
           ops: {
             utilityModel: "worker-helper@local:ops",
             models: { "local-utility/small": { alias: "worker-helper" } },
@@ -120,7 +120,7 @@ describe("listAgentsForGateway model identity", () => {
     const cfg = {
       agents: {
         defaults: { model: { primary } },
-        list: [{ id: "main", default: true }],
+        entries: { main: {} },
       },
     } as OpenClawConfig;
 

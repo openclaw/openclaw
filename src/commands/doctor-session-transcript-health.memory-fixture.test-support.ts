@@ -17,7 +17,7 @@ process.env.OPENCLAW_STATE_DIR = stateDir;
 process.env.OPENCLAW_CONFIG_PATH = path.join(stateDir, "openclaw.json");
 const started = performance.now();
 const params = {
-  cfg: { agents: { list: [{ id: "main" }] } },
+  cfg: { agents: { entries: { main: {} } } },
   env: process.env,
   shouldRepair: true,
 };

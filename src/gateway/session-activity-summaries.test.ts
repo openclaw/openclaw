@@ -661,7 +661,7 @@ describe("Activity recap lifecycle with the canonical session store", () => {
     await messages(1);
     const secondTarget = { key: "agent:main:second-recap", agentId: "main" };
     const thirdTarget = { key: "agent:other:third-recap", agentId: "other" };
-    cfg.agents!.list = [{ id: "main" }, { id: "other", utilityModel: "test/other" }];
+    cfg.agents!.entries = { main: {}, other: { utilityModel: "test/other" } };
     for (const other of [secondTarget, thirdTarget]) {
       const otherScope = { agentId: other.agentId, sessionKey: other.key, sessionId: other.key };
       await upsertSessionEntryCore(otherScope, { sessionId: other.key, updatedAt: 1 });
@@ -820,7 +820,7 @@ describe("Activity recap lifecycle with the canonical session store", () => {
       { agentId: "main" },
     );
     const maintenance: OpenClawConfig = {
-      agents: { list: [{ id: "main" }] },
+      agents: { entries: { main: {} } },
       session: {
         store: database.path,
         maintenance: { coldStorage: { enabled: true, afterDays: 30 } },

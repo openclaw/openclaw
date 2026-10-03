@@ -55,8 +55,12 @@ function createDynamicConfig() {
   };
 }
 
-function createCanonicalAgentRoster() {
-  return { list: [{ id: "main", default: true }] };
+function createCanonicalAgentRoster(): OpenClawConfig["agents"] {
+  return {
+    ownership: "explicit",
+    defaults: { systemAgent: { agentId: "main" } },
+    entries: { main: {} },
+  };
 }
 
 function createConfig(feishu: Partial<FeishuConfig> = {}): OpenClawConfig {
@@ -122,14 +126,14 @@ describe("maybeCreateDynamicAgent", () => {
       afterWrite: { mode: "auto" },
       mutate: expect.any(Function),
     });
-    expect(result.updatedCfg.agents?.list).toEqual([
-      { id: "main", default: true },
-      {
-        id: "feishu-ou_sender",
+    expect(result.updatedCfg.agents?.entries).toEqual({
+      main: {},
+      "feishu-ou_sender": {
         workspace: path.join(tempRoot, "workspace-feishu-ou_sender"),
         agentDir: path.join(tempRoot, "agent-feishu-ou_sender"),
       },
-    ]);
+    });
+    expect(result.updatedCfg.agents).not.toHaveProperty("list");
     expect(result.updatedCfg.bindings).toEqual([
       {
         agentId: "feishu-ou_sender",
@@ -174,7 +178,7 @@ describe("maybeCreateDynamicAgent", () => {
     expect(canCreateForConfig).toHaveBeenCalledTimes(2);
     expect(mutateConfigFile).toHaveBeenCalledTimes(1);
     expect(commitConfig).not.toHaveBeenCalled();
-    expect(result.updatedCfg.agents?.list).toEqual([{ id: "main", default: true }]);
+    expect(result.updatedCfg.agents?.entries).toEqual({ main: {} });
     expect(result.updatedCfg.bindings).toEqual([]);
     expect(await pathExists(path.join(tempRoot, "workspace-feishu-ou_sender"))).toBe(false);
     expect(await pathExists(path.join(tempRoot, "agent-feishu-ou_sender"))).toBe(false);
@@ -240,7 +244,7 @@ describe("maybeCreateDynamicAgent", () => {
     expect(first.agentId).toHaveLength(52);
     expect(second.agentId).toHaveLength(52);
     expect(first.agentId).not.toBe(second.agentId);
-    expect(second.updatedCfg.agents?.list?.map((agent) => agent.id)).toEqual([
+    expect(Object.keys(second.updatedCfg.agents?.entries ?? {})).toEqual([
       "main",
       first.agentId,
       second.agentId,
@@ -258,14 +262,14 @@ describe("maybeCreateDynamicAgent", () => {
         },
       },
       agents: {
-        list: [
-          { id: "main", default: true },
-          {
-            id: "feishu-ou_existing",
+        ...createCanonicalAgentRoster(),
+        entries: {
+          main: {},
+          "feishu-ou_existing": {
             workspace: path.join(tempRoot, "existing-workspace"),
             agentDir: path.join(tempRoot, "existing-agent"),
           },
-        ],
+        },
       },
       bindings: [],
     } as OpenClawConfig;
@@ -283,18 +287,77 @@ describe("maybeCreateDynamicAgent", () => {
     expect(mutateConfigFile).not.toHaveBeenCalled();
   });
 
+  it("adds only the missing binding for an agent found in the cloned mutation roster", async () => {
+    const cfg = createConfig();
+    const mutationCfg: OpenClawConfig = {
+      ...cfg,
+      agents: {
+        ...cfg.agents,
+        entries: {
+          main: {},
+          "feishu-ou_sender": {
+            workspace: path.join(tempRoot, "existing-workspace"),
+            agentDir: path.join(tempRoot, "existing-agent"),
+          },
+        },
+      },
+    };
+    const { runtime, commitConfig } = createRuntime(cfg, undefined, mutationCfg);
+
+    const result = await createAgent(cfg, runtime);
+
+    expect(result.created).toBe(true);
+    expect(commitConfig).toHaveBeenCalledTimes(1);
+    expect(result.updatedCfg.agents).toEqual(mutationCfg.agents);
+    expect(result.updatedCfg.agents).not.toHaveProperty("list");
+    expect(result.updatedCfg.bindings).toEqual([
+      {
+        agentId: "feishu-ou_sender",
+        match: {
+          channel: "feishu",
+          accountId: "default",
+          peer: { kind: "direct", id: "ou_sender" },
+        },
+      },
+    ]);
+    expect(await pathExists(path.join(tempRoot, "workspace-feishu-ou_sender"))).toBe(false);
+    expect(await pathExists(path.join(tempRoot, "agent-feishu-ou_sender"))).toBe(false);
+  });
+
+  it("counts dynamic entries added before the cloned mutation roster reaches the lock", async () => {
+    const cfg = createConfig({
+      dynamicAgentCreation: { ...createDynamicConfig(), maxAgents: 1 },
+    });
+    const mutationCfg: OpenClawConfig = {
+      ...cfg,
+      agents: {
+        ...cfg.agents,
+        entries: { main: {}, "feishu-ou_existing": {}, unrelated: {} },
+      },
+    };
+    const { runtime, commitConfig, mutateConfigFile } = createRuntime(cfg, undefined, mutationCfg);
+
+    const result = await createAgent(cfg, runtime);
+
+    expect(result).toEqual({ created: false, updatedCfg: mutationCfg });
+    expect(mutateConfigFile).toHaveBeenCalledTimes(1);
+    expect(commitConfig).not.toHaveBeenCalled();
+    expect(await pathExists(path.join(tempRoot, "workspace-feishu-ou_sender"))).toBe(false);
+    expect(await pathExists(path.join(tempRoot, "agent-feishu-ou_sender"))).toBe(false);
+  });
+
   it("preserves concurrent runtime config when creating from a stale request snapshot", async () => {
     const currentCfg = {
       channels: { feishu: { dynamicAgentCreation: createDynamicConfig() } },
       agents: {
-        list: [
-          { id: "main", default: true },
-          {
-            id: "feishu-ou_existing",
+        ...createCanonicalAgentRoster(),
+        entries: {
+          main: {},
+          "feishu-ou_existing": {
             workspace: path.join(tempRoot, "existing-workspace"),
             agentDir: path.join(tempRoot, "existing-agent"),
           },
-        ],
+        },
       },
       bindings: [
         {
@@ -318,14 +381,14 @@ describe("maybeCreateDynamicAgent", () => {
       afterWrite: { mode: "auto" },
       mutate: expect.any(Function),
     });
-    expect(result.updatedCfg.agents?.list).toEqual([
-      ...currentCfg.agents!.list!,
-      {
-        id: "feishu-ou_sender",
+    expect(result.updatedCfg.agents?.entries).toEqual({
+      ...currentCfg.agents?.entries,
+      "feishu-ou_sender": {
         workspace: path.join(tempRoot, "workspace-feishu-ou_sender"),
         agentDir: path.join(tempRoot, "agent-feishu-ou_sender"),
       },
-    ]);
+    });
+    expect(result.updatedCfg.agents).not.toHaveProperty("list");
     expect(result.updatedCfg.bindings).toEqual([
       ...currentCfg.bindings!,
       {
@@ -363,14 +426,14 @@ describe("maybeCreateDynamicAgent", () => {
     const currentCfg = {
       channels: { feishu: { configWrites: false } },
       agents: {
-        list: [
-          { id: "main", default: true },
-          {
-            id: "feishu-ou_sender",
+        ...createCanonicalAgentRoster(),
+        entries: {
+          main: {},
+          "feishu-ou_sender": {
             workspace: path.join(tempRoot, "existing-workspace"),
             agentDir: path.join(tempRoot, "existing-agent"),
           },
-        ],
+        },
       },
       bindings: [
         {

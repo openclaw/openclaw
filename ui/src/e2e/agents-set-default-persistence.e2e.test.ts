@@ -25,7 +25,11 @@ suite.define(() => {
   it("persists Set Default through config.set instead of only staging the form draft", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const initialConfig = {
-        agents: { entries: { main: { default: true }, kimi: {} } },
+        agents: {
+          ownership: "explicit",
+          defaults: { systemAgent: { agentId: "main" } },
+          entries: { main: {}, kimi: {} },
+        },
       };
       const savedConfig = {
         agents: {

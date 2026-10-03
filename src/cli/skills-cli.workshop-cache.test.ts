@@ -116,7 +116,7 @@ async function run(...args: string[]) {
 const stdout = () => mocks.defaultRuntime.writeStdout.mock.lastCall?.[0].trimEnd();
 async function configureAgentDirectory() {
   const agentDir = await tempDirs.make("skills-cli-agent-");
-  mocks.config = { agents: { entries: { main: { default: true, agentDir } } } };
+  mocks.config = { agents: { entries: { main: { agentDir } } } };
 }
 
 describe("skills workshop CLI", () => {

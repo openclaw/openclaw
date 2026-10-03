@@ -1850,7 +1850,7 @@ describe("config cli", () => {
       },
     ])("$name", async ({ args, error, list }) => {
       if (list) {
-        const resolved = { agents: { list } } as unknown as OpenClawConfig;
+        const resolved: OpenClawConfig = { agents: { entries: {} } };
         setSnapshot(resolved, resolved);
       }
       await expect(runConfigCommand(args)).rejects.toThrow(ExitError);

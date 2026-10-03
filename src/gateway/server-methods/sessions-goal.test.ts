@@ -22,7 +22,7 @@ vi.mock("./chat-send-handler.js", () => ({ handleSessionGoalResumeChat: resumeCh
 
 const sessionKey = "agent:main:goal-controls";
 const sessionId = "goal-controls-session";
-const cfg: OpenClawConfig = { agents: { list: [{ id: "main", default: true }] } };
+const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
 
 function initialGoal(): SessionGoal {
   return {

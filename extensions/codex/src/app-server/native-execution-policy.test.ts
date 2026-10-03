@@ -147,7 +147,7 @@ describe("resolveCodexNativeExecutionPolicy", () => {
       resolveCodexNativeExecutionPolicy({
         config: {
           tools: { exec: { host: "gateway" } },
-          agents: { list: [{ id: "bot-a", default: true }] },
+          agents: { entries: { "bot-a": {} } },
         },
         sessionKey: "node-session",
         agentId: "bot-a",

@@ -37,7 +37,7 @@ async function withStreamingProjection(
   }) => Promise<void>,
 ) {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg = { agents: { list: [{ id: "main", default: true }] } };
+    const cfg = { agents: { entries: { main: {} } } };
     setRuntimeConfigSnapshot(cfg);
     const target = { agentId: "main", sessionKey: "agent:main:stream", sessionId: "stream" };
     for (const [name, parent] of [["parent"], ["stream", "parent"], ["child", "stream"]] as const) {
@@ -224,7 +224,7 @@ it("does not carry a pending transcript refresh into a replacement session", asy
 
 it("eventually fills legacy titles and previews without waiting during startup or changing activity", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg = { agents: { list: [{ id: "main", default: true }] } };
+    const cfg = { agents: { entries: { main: {} } } };
     setRuntimeConfigSnapshot(cfg);
     const target = { agentId: "main", sessionKey: "agent:main:legacy", sessionId: "legacy" };
     replaceSessionEntrySync(target, { sessionId: target.sessionId, updatedAt: 1 });
@@ -310,7 +310,7 @@ it.each([false, true])(
   "serves session lists during renewal with modelFactsChanged=%s",
   async (modelFactsChanged) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const cfg = { agents: { list: [{ id: "main", default: true }] } };
+      const cfg = { agents: { entries: { main: {} } } };
       const query = { agentId: "main", key: "agent:main:catalog" };
       replaceSessionEntrySync(
         { agentId: "main", sessionKey: query.key },
@@ -378,7 +378,7 @@ it.each([false, true])(
 
 it("waits for the first catalog before admitting session reads", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg = { agents: { list: [{ id: "main", default: true }] } };
+    const cfg = { agents: { entries: { main: {} } } };
     const catalog = createDeferredCore<[]>();
     const admitted = vi.fn();
     const startup = createSessionRowProjection({ cfg, getModelCatalog: () => catalog.promise });
@@ -398,7 +398,7 @@ it("waits for the first catalog before admitting session reads", async () => {
 
 it("fences superseded and disposed background catalog reads", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg = { agents: { list: [{ id: "main", default: true }] } };
+    const cfg = { agents: { entries: { main: {} } } };
     const initial: [] = [];
     const superseded = createDeferredCore<[]>();
     const current = createDeferredCore<[]>();
@@ -472,7 +472,7 @@ it("continues backfill queued as the previous batch settles", async () => {
 
 it("preserves a stored fallback model without requiring a terminal transcript", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg = { agents: { list: [{ id: "main", default: true }] } };
+    const cfg = { agents: { entries: { main: {} } } };
     const key = "agent:main:stored-fallback";
     const entry = {
       sessionId: "stored-fallback",
@@ -519,7 +519,7 @@ it("preserves a stored fallback model without requiring a terminal transcript", 
 
 it("backfills terminal fallback models and clears previews when the newest message cannot fit", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg = { agents: { list: [{ id: "main", default: true }] } };
+    const cfg = { agents: { entries: { main: {} } } };
     const target = { agentId: "main", sessionKey: "agent:main:fallback", sessionId: "fallback" };
     replaceSessionEntrySync(target, {
       sessionId: target.sessionId,
@@ -579,7 +579,7 @@ it("backfills terminal fallback models and clears previews when the newest messa
 
 it("publishes created and moved child relationships before the background drain", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg = { agents: { list: [{ id: "main", default: true }] } };
+    const cfg = { agents: { entries: { main: {} } } };
     const now = Date.now();
     const first = "agent:main:first-parent",
       second = "agent:main:second-parent",

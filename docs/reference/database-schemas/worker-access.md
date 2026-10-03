@@ -43,8 +43,21 @@ reviewed worker-only entries. The event recorder's `registeredWatcherKeys`
 initializer is classified separately from its native event/head SQL.
 Creation, compaction, adoption, and child-spawn producers are non-notifying.
 Creation, compaction, child-spawn cursor seeding, and periodic retention use the
-existing signal worker; adoption/native-binding recording remains T1. Placement restart clearing remains T2,
-while synchronous result compatibility readers and transition guards remain T1.
+existing signal worker; adoption/native-binding recording remains T1. Placement restart clearing remains T2.
+The activation-only `activated` initializer and workspace-journal cleanup have
+exact worker-only entries: native prepared binding selects `provisioning`, and
+native move drains omit the manifest that triggers journal cleanup. The shared
+placement update, native drain SQL, synchronous result compatibility readers,
+and pending-result guards remain T1.
+
+Web Push reads, approval delivery operations, and current-subscription cleanup
+have exact worker-only entries; native preferences, subscription upsert/deletion,
+and their shared schema helper remain T1. Prepared-workspace list and mutation
+operations are worker-only, while the synchronous `find` compatibility query
+remains T1. Terminal approval history uses the read worker; native approval
+operations retain their existing tiers. Offline full-store reset inventory and
+archive-reset operations are T3 CLI one-shots, including dev bootstrap; Gateway
+session reset and other archive lifecycle operations are classified separately.
 
 Workspace alias registration and snapshot operations retain T2 for their native
 Doctor/migration and relocation-retirement callers alongside worker dispatch.

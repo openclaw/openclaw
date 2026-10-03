@@ -305,6 +305,9 @@ const REVIEWED_TELEGRAM_WAIVERS = new Map([
   // The release owner approved the same Telegram and Matrix QA-live scope for 2026.9.8
   // on 2026-10-02. Every other stable-release gate remains blocking.
   ["2026.9.8-owner-approved", ["telegram", "matrix"]],
+  // The release owner approved the same Telegram and Matrix QA-live scope for 2026.9.9
+  // on 2026-10-03. Every other stable-release gate remains blocking.
+  ["2026.9.9-owner-approved", ["telegram", "matrix"]],
 ]);
 const HARD_GH_TRANSPORT_PATTERN =
   /HTTP (?:400|401|403|404|410|422)\b|Bad credentials|authentication required|not authenticated|gh auth login|unknown (?:command|flag)|Usage: gh\b|ENOENT|EACCES/iu;

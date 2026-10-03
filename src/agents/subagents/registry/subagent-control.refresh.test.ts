@@ -40,7 +40,11 @@ it.for(["complete", "reject undefined"] as const)(
       const cfg = getRuntimeConfig();
       setRuntimeConfigSnapshot({
         ...cfg,
-        agents: { ...cfg.agents, list: [{ id: "main", default: true }, { id: "research" }] },
+        agents: {
+          ...cfg.agents,
+          ownership: "explicit",
+          entries: { main: {}, research: {} },
+        },
       });
     }
     const agentId = (id: string) => (sharedRawKey && id === "second" ? "research" : "main");

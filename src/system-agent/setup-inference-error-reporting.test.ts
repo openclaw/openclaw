@@ -70,7 +70,7 @@ async function observeScenario(scenario: Scenario, json: boolean) {
           agents: {
             ownership: "explicit",
             entries: {
-              main: { default: true, workspace: root, agentDir: path.join(root, "main-agent") },
+              main: { workspace: root, agentDir: path.join(root, "main-agent") },
             },
             defaults: {
               model: "openai/gpt-5.5@openai:proof",

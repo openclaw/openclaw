@@ -38,15 +38,16 @@ describe("Codex source-bound pending input", () => {
     const harness = createStartedThreadHarness();
     const params = createTestParams();
     params.agentId = "ops";
+    params.sandboxAgentId = "main";
     params.sessionKey = "global";
     params.config = {
       ...params.config,
-      agents: { list: [{ id: "main", default: true }, { id: "ops" }] },
+      agents: { entries: { main: {}, ops: {} } },
       session: { scope: "global" },
     };
     const run = runCodexAppServerAttempt(params);
+    await run.waitForTurnAccepted();
     try {
-      await harness.waitForMethod("turn/start");
       await vi.waitFor(() => {
         expect(registrations).toHaveBeenCalledWith(
           params.sessionId,

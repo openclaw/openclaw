@@ -1,11 +1,62 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { hashCliReseedPrompt } from "../agents/cli-runner/reseed-envelope.js";
 import type { CliSessionReseedReceipt, SessionEntry } from "../config/sessions.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { readClaudeCliSessionMessagesAsync } from "./cli-session-history.claude-snapshot.js";
+import { CliSessionHistoryIndex } from "./cli-session-history-index.worker.js";
+import {
+  resolveClaudeCliHistorySource,
+  visitClaudeCliSessionMessages,
+  type ClaudeCliHistoryParams,
+} from "./cli-session-history.claude-snapshot.js";
 
+export async function readClaudeCliSessionMessagesAsync(
+  params: ClaudeCliHistoryParams,
+): Promise<Record<string, unknown>[]> {
+  const source = await resolveClaudeCliHistorySource(params);
+  const messages: Record<string, unknown>[] = [];
+  if (source) {
+    await visitClaudeCliSessionMessages(
+      source[0],
+      params,
+      (message) => messages.push(message),
+      source[2],
+    );
+  }
+  return messages;
+}
+
+export function mergeImportedChatHistoryMessages(params: {
+  localMessages: unknown[];
+  importedMessages: unknown[];
+}): unknown[] {
+  const index = new CliSessionHistoryIndex();
+  try {
+    index.appendLocal(
+      params.localMessages.map((message, position) => ({ message, seq: position + 1 })),
+    );
+    for (const message of params.importedMessages) {
+      index.appendImported(message);
+    }
+    index.finish();
+    const messages: unknown[] = [];
+    for (const row of index.rows(0, index.count)) {
+      const message =
+        row.local_seq === null ? index.message(row.id) : params.localMessages[row.local_seq - 1];
+      const record = asOptionalRecord(message);
+      messages.push(
+        record
+          ? { ...record, ...(row.metadata ? { __openclaw: JSON.parse(row.metadata) } : {}) }
+          : message,
+      );
+    }
+    return messages;
+  } finally {
+    index.close();
+  }
+}
 export function cliMeta(externalId: string, cliSessionId: string | null = "session-1") {
   return {
     importedFrom: "claude-cli",

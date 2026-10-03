@@ -276,83 +276,70 @@ describe("trusted plugin session facts", () => {
       }
     }));
 
-  it("returns unknown PR facts without waiting and publishes the completed background snapshot", ({
-    signal,
-  }) =>
-    withFixture(async (fixture) => {
-      const entered = createDeferredCore();
-      const release = createDeferredCore();
-      const published = createDeferredCore();
-      let unsubscribe: (() => void) | undefined;
-      fixture.load.mockImplementationOnce(async () => {
-        entered.resolve();
-        await release.promise;
-        return { pullRequests: [], rateLimited: false };
-      });
-      try {
-        const result = await withinTest(read(fixture, [sessionKey]), signal);
-        expect(result.sessions).toMatchObject([{ key: sessionKey, pullRequestsUnavailable: true }]);
-        await withinTest(entered.promise, signal);
-        expect((await read(fixture, [sessionKey])).sessions[0]?.pullRequestsUnavailable).toBe(true);
-        expect(fixture.load).toHaveBeenCalledTimes(1);
-        const projection = getSessionRowProjection(fixture.context)!;
-        const query = { key: sessionKey, agentId: "main" };
-        const before = projection.capture(query)!;
-        const revision = before.databaseFactsRevision;
-        const retainedFacts = before.retainedDatabaseFacts;
-        expect(retainedFacts).toBeDefined();
-        unsubscribe = runtime.gateway.subscribeSessionChanges((change) => {
-          if (change.sessionKey === sessionKey) {
-            published.resolve();
-          }
-        });
-        release.resolve();
-        await withinTest(published.promise, signal);
-        const ready = await read(fixture, [sessionKey]);
-        expect(projection.capture(query)?.databaseFactsRevision).toBe(revision);
-        expect(projection.capture(query)?.retainedDatabaseFacts).toBe(retainedFacts);
-        expect(ready.sessions[0]?.pullRequestsUnavailable).toBeUndefined();
-        expect(ready.warnings).toBeUndefined();
-        expect(fixture.load).toHaveBeenCalledTimes(1);
-        fixture.access.abort(new Error("Synthetic caller grant retired"));
-        await expect(read(fixture, [sessionKey])).rejects.toThrow();
-      } finally {
-        release.resolve();
-        unsubscribe?.();
-      }
-    }));
-
-  it.for(["session", "owner"] as const)(
-    "does not publish background PR facts after the %s retires",
-    (retired, { signal }) =>
+  it.for(["current", "session", "owner"] as const)(
+    "publishes background PR facts only while its lifetime remains current: %s",
+    (lifetime, { signal }) =>
       withFixture(async (fixture) => {
         const entered = createDeferredCore();
         const release = createDeferredCore();
+        const published = createDeferredCore();
         const listener = vi.fn();
-        const unsubscribe = runtime.gateway.subscribeSessionChanges((change) => {
-          if (change.sessionKey === sessionKey) {
-            listener();
-          }
-        });
+        const subscribe = () =>
+          runtime.gateway.subscribeSessionChanges((change) => {
+            if (change.sessionKey === sessionKey) {
+              listener();
+              published.resolve();
+            }
+          });
+        let unsubscribe = lifetime === "current" ? undefined : subscribe();
         fixture.load.mockImplementationOnce(async () => {
           entered.resolve();
           await release.promise;
           return { pullRequests: [], rateLimited: false };
         });
         try {
-          await withinTest(read(fixture, [sessionKey]), signal);
-          await withinTest(entered.promise, signal);
-          if (retired === "session") {
-            await fixture.seed(sessionKey, fixture.other.id, { visibility: "draft" });
+          const result = await withinTest(read(fixture, [sessionKey]), signal);
+          if (lifetime === "current") {
+            expect(result.sessions).toMatchObject([
+              { key: sessionKey, pullRequestsUnavailable: true },
+            ]);
           }
-          listener.mockClear();
-          const stopping = retired === "owner" ? fixture.subscriptions.stop() : undefined;
-          release.resolve();
-          await (stopping ?? fixture.subscriptions.pollNow());
-          expect(listener).not.toHaveBeenCalled();
+          await withinTest(entered.promise, signal);
+          if (lifetime === "current") {
+            expect((await read(fixture, [sessionKey])).sessions[0]?.pullRequestsUnavailable).toBe(
+              true,
+            );
+            expect(fixture.load).toHaveBeenCalledTimes(1);
+            const projection = getSessionRowProjection(fixture.context)!;
+            const query = { key: sessionKey, agentId: "main" };
+            const before = projection.capture(query)!;
+            const revision = before.databaseFactsRevision;
+            const retainedFacts = before.retainedDatabaseFacts;
+            expect(retainedFacts).toBeDefined();
+            unsubscribe = subscribe();
+            release.resolve();
+            await withinTest(published.promise, signal);
+            const ready = await read(fixture, [sessionKey]);
+            expect(projection.capture(query)?.databaseFactsRevision).toBe(revision);
+            expect(projection.capture(query)?.retainedDatabaseFacts).toBe(retainedFacts);
+            expect(ready.sessions[0]?.pullRequestsUnavailable).toBeUndefined();
+            expect(ready.warnings).toBeUndefined();
+            expect(fixture.load).toHaveBeenCalledTimes(1);
+            fixture.access.abort(new Error("Synthetic caller grant retired"));
+            await expect(read(fixture, [sessionKey])).rejects.toThrow();
+          } else {
+            if (lifetime === "session") {
+              await fixture.seed(sessionKey, fixture.other.id, { visibility: "draft" });
+            }
+            listener.mockClear();
+            const stopping = lifetime === "owner" ? fixture.subscriptions.stop() : undefined;
+            release.resolve();
+            await (stopping ?? fixture.subscriptions.pollNow());
+            expect(listener).not.toHaveBeenCalled();
+          }
         } finally {
           release.resolve();
-          unsubscribe();
+          unsubscribe?.();
         }
       }),
   );

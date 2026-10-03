@@ -65,7 +65,7 @@ it("reuses descendants after parent progress while keeping inherited models curr
     vi.spyOn(Date, "now").mockReturnValue(100);
     const cfg = {
       agents: {
-        list: [{ id: "main", default: true }],
+        entries: { main: {} },
         defaults: { model: "unit-test/default" },
       },
     };
@@ -230,7 +230,7 @@ it("hydrates a same-path replacement with a reused inode and retires its previou
     const storePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
     const staged = state.statePath("imports", "replacement.sqlite");
     const cfg = {
-      agents: { list: [{ id: "main", default: true }] },
+      agents: { entries: { main: {} } },
       session: { store: storePath },
     };
     replaceSessionEntrySync(
@@ -345,7 +345,7 @@ it.each([
   async (scope) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const cfg = {
-        agents: { list: [{ id: "main", default: true }], defaults: { model: "unit-test/model" } },
+        agents: { entries: { main: {} }, defaults: { model: "unit-test/model" } },
       };
       const count = 256;
       for (let index = 0; index < count + 8; index++) {
@@ -430,7 +430,7 @@ it.each([
 
 it("refreshes profile display fields on selected live and archived rows without rereading entries", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg = { agents: { list: [{ id: "main", default: true }] } };
+    const cfg = { agents: { entries: { main: {} } } };
     const owner = ensureProfileForEmail("owner@example.com");
     const participant = ensureProfileForEmail("participant@example.com");
     for (const archived of [false, true]) {
@@ -592,7 +592,7 @@ it("reuses row identities across lists until their entry, profile, or config cha
 
 it("keeps projected rows clean when config.apply rewrites a value-identical config", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg = { agents: { list: [{ id: "main", default: true }] } };
+    const cfg = { agents: { entries: { main: {} } } };
     for (let index = 0; index < 4; index++) {
       replaceSessionEntrySync(
         { agentId: "main", sessionKey: `agent:main:rewrite-${index}` },
@@ -652,7 +652,7 @@ it("keeps projected rows clean when config.apply rewrites a value-identical conf
 
 it("keeps projected rows clean when a config publication resolves to the published snapshot", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg = { agents: { list: [{ id: "main", default: true }] } };
+    const cfg = { agents: { entries: { main: {} } } };
     for (let index = 0; index < 4; index++) {
       replaceSessionEntrySync(
         { agentId: "main", sessionKey: `agent:main:republish-${index}` },
@@ -681,7 +681,7 @@ it("keeps projected rows clean when a config publication resolves to the publish
       setConfigResolutionFacts(
         reresolved,
         createConfigResolutionFacts([
-          { varName: "UNIT_TEST_AGENT", configPath: "agents.list.0.id" },
+          { varName: "UNIT_TEST_AGENT", configPath: "agents.entries.main" },
         ]),
       );
       setRuntimeConfigSnapshot(reresolved);

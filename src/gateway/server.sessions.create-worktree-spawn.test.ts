@@ -522,10 +522,7 @@ test("trusted cross-agent worktree spawns select the target agent's workspace", 
   await createManagedProjectParent();
   const otherRepository = await createRepository(state.root, "other-project");
   testState.agentsConfig = {
-    list: [
-      { id: "main", default: true },
-      { id: "other", workspace: otherRepository },
-    ],
+    entries: { main: {}, other: { workspace: otherRepository } },
   };
   const config = await getGatewayConfigModule();
   config.clearRuntimeConfigSnapshot();

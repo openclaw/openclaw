@@ -815,7 +815,7 @@ describe("session sharing policy", () => {
         { sessionId: "session-solo-draft", updatedAt: 1, visibility: "draft" },
       );
       const cfg = {
-        agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+        agents: { entries: { main: {}, work: {} } },
       } as never;
       const context = {
         chatAbortControllers: new Map([["run-1", { sessionKey: "global", agentId: "work" }]]),

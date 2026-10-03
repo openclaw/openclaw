@@ -26,7 +26,7 @@ it("serves the published model-list projection and replaces it with its metadata
     async (state) => {
       const config: OpenClawConfig = {
         agents: {
-          list: [{ id: "main", default: true }],
+          entries: { main: {} },
           defaults: { model: "test/first", modelPolicy: { allow: ["test/*"] } },
         },
       };

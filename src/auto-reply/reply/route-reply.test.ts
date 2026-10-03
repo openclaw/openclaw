@@ -675,12 +675,11 @@ describe("routeReply", () => {
   it("does not derive responsePrefix from agent identity when routing", async () => {
     const cfg = {
       agents: {
-        list: [
-          {
-            id: "rich",
+        entries: {
+          rich: {
             identity: { name: "Richbot", theme: "lion bot", emoji: "lion" },
           },
-        ],
+        },
       },
       messages: {},
     } as unknown as OpenClawConfig;

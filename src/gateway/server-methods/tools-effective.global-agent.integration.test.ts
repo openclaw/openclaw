@@ -29,7 +29,7 @@ describe("tools.effective global agent integration", () => {
     testState.sessionStorePath = storeTemplate;
     testState.sessionConfig = { scope: "global" };
     testState.agentConfig = undefined;
-    testState.agentsConfig = { list: [{ id: "main", default: true }, { id: "work" }] };
+    testState.agentsConfig = { entries: { main: {}, work: {} } };
     mainStorePath = storeTemplate.replace("{agentId}", "main");
     workStorePath = storeTemplate.replace("{agentId}", "work");
     const configModule = await getGatewayConfigModule();
@@ -196,7 +196,7 @@ describe("tools.effective global agent integration", () => {
     const storeTemplate = path.join(dir, "{agentId}", "sessions.json");
     testState.sessionStorePath = storeTemplate;
     testState.sessionConfig = undefined;
-    testState.agentsConfig = { list: [{ id: "main", default: true }, { id: "work" }] };
+    testState.agentsConfig = { entries: { main: {}, work: {} } };
     mainStorePath = storeTemplate.replace("{agentId}", "main");
     const configModule = await getGatewayConfigModule();
     configModule.clearRuntimeConfigSnapshot();

@@ -676,7 +676,6 @@ for (const subpath of ${JSON.stringify(privateQaSubpaths)}) {
           },
           entries: {
             qa: {
-              default: true,
               model: "mock-openai/qa",
             },
           },
@@ -705,7 +704,6 @@ for (const subpath of ${JSON.stringify(privateQaSubpaths)}) {
           },
           list: [
             {
-              default: true,
               id: "qa",
               model: "mock-openai/qa",
             },
@@ -752,7 +750,6 @@ for (const subpath of ${JSON.stringify(privateQaSubpaths)}) {
           },
           entries: {
             qa: {
-              default: true,
               model: "mock-openai/qa",
             },
           },
@@ -773,7 +770,6 @@ for (const subpath of ${JSON.stringify(privateQaSubpaths)}) {
           },
           list: [
             {
-              default: true,
               id: "qa",
               model: "mock-openai/qa",
             },

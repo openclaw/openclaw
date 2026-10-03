@@ -34,14 +34,16 @@ function formatLegacyVectorRows(count: number | undefined): string {
 type MemoryFtsTokenizer = "unicode61" | "trigram";
 
 function resolveConfiguredAgentIds(config: unknown): string[] {
-  const cfg = config as { agents?: { entries?: unknown; list?: unknown } };
-  const entries = readLegacyObjectRecord(cfg.agents?.entries);
-  const listedIds = Array.isArray(cfg.agents?.list)
-    ? cfg.agents.list.flatMap((entry) => {
-        const id = readLegacyObjectRecord(entry)?.id;
-        return typeof id === "string" ? [id] : [];
-      })
-    : [];
+  const agents = readLegacyObjectRecord(readLegacyObjectRecord(config)?.agents);
+  const entries = readLegacyObjectRecord(agents?.entries);
+  const listedEntries: unknown[] =
+    Object.prototype.propertyIsEnumerable.call(agents ?? {}, "list") && Array.isArray(agents?.list)
+      ? agents.list
+      : [];
+  const listedIds = listedEntries.flatMap((entry) => {
+    const id = readLegacyObjectRecord(entry)?.id;
+    return typeof id === "string" ? [id] : [];
+  });
   const ids = new Set([...Object.keys(entries ?? {}), ...listedIds].map(normalizeAgentId));
   return ids.size > 0 ? [...ids] : [normalizeAgentId(undefined)];
 }
@@ -61,7 +63,10 @@ function readAgentMemorySearch(
   if (keyedSearch) {
     return keyedSearch;
   }
-  const entries = Array.isArray(agents?.list) ? agents.list : [];
+  const entries: unknown[] =
+    Object.prototype.propertyIsEnumerable.call(agents ?? {}, "list") && Array.isArray(agents?.list)
+      ? agents.list
+      : [];
   const entry = entries
     .map(readLegacyObjectRecord)
     .find(

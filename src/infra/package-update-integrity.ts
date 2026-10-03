@@ -78,18 +78,17 @@ export type PackageLauncherFingerprint = {
 export function packageLauncherDifferences(
   expected: PackageLauncherFingerprint,
   actual: PackageLauncherFingerprint,
-  ownershipPreserved = true,
 ): string[] {
   const symlink = expected.type === "symlink" && actual.type === "symlink";
-  return (["type", "mode", "uid", "gid", "contents"] as const)
-    .filter(
-      (field) =>
-        !(
-          symlink &&
-          (field === "mode" || (!ownershipPreserved && (field === "uid" || field === "gid")))
-        ) && expected[field] !== actual[field],
-    )
-    .map((field) => (field === "contents" && symlink ? "target" : field));
+  // A copied launcher must restore the same bytes or link target; npm may
+  // recreate its metadata. Exact-object mutation authority is checked separately.
+  return (["type", "contents"] as const)
+    .filter((field) => expected[field] !== actual[field])
+    .map((field) =>
+      field === "contents" && symlink
+        ? `target (expected ${JSON.stringify(expected.contents)}, actual ${JSON.stringify(actual.contents)})`
+        : field,
+    );
 }
 
 export class PackageIntegrityTimeoutError extends Error {
@@ -563,11 +562,23 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
   }
 
   async function launcher(file: string): Promise<PackageLauncherFingerprint> {
-    const stat = await read(() => fs.lstat(file, { bigint: true }));
-    const contents = stat.isSymbolicLink()
+    let stat = await read(() => fs.lstat(file, { bigint: true }));
+    const symlink = stat.isSymbolicLink();
+    const contents = symlink
       ? await read(() => fs.readlink(file))
       : (await hashFile(file, stat, MAX_LAUNCHER_BYTES)).digest;
-    if (!unchanged(stat, await read(() => fs.lstat(file, { bigint: true })))) {
+    const current = await read(() => fs.lstat(file, { bigint: true }));
+    if (symlink && current.isSymbolicLink()) {
+      // npm can relink an equivalent bin while it is observed. Verify the raw
+      // target again without following it, including when it is dangling.
+      const target = await read(() => fs.readlink(file));
+      if (target !== contents) {
+        throw new Error(
+          `Package rollback launcher target changed: ${file}; expected ${JSON.stringify(contents)}, actual ${JSON.stringify(target)}`,
+        );
+      }
+      stat = current;
+    } else if (!unchanged(stat, current)) {
       throw new Error("Package rollback launcher changed during verification");
     }
     return {
