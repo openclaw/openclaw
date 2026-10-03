@@ -8,7 +8,7 @@ import { resolveSessionStoreKey } from "./session-utils.js";
 
 export async function resolveSessionResetTarget(
   cfg: OpenClawConfig,
-  params: { key: string; agentId?: string; assertCurrent?: () => void },
+  params: { key: string; agentId?: string },
 ) {
   const agentInput = resolveRequestedSessionAgentInput(params.key, params.agentId);
   if (!agentInput.ok) {
@@ -37,7 +37,6 @@ export async function resolveSessionResetTarget(
     cfg,
     key: params.key,
     ...(requestedAgentId ? { agentId: requestedAgentId } : {}),
-    assertActive: params.assertCurrent,
   });
   return { ok: true as const, cfg, target, storePath: target.storePath, requestedAgentId };
 }

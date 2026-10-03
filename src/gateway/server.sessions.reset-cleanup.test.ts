@@ -406,34 +406,29 @@ test("sessions.reset rejects an active lifecycle mutation without interrupting a
       interrupted = true;
     },
   });
-  let releaseMutation = () => {};
+  const { promise: mutationReleased, resolve: releaseMutation } = createDeferred();
   const { promise: mutationStarted, resolve: markMutationStarted } = createDeferred();
   const blocker = runExclusiveSessionLifecycleMutation("reset", {
     scope: storePath,
     identities: ["agent:main:main", "sess-main"],
     run: async () => {
       markMutationStarted();
-      await new Promise<void>((resolve) => {
-        releaseMutation = resolve;
-      });
+      await mutationReleased;
     },
   });
-  await mutationStarted;
-  const { performGatewaySessionReset } = await import("./session-reset-service.js");
-  const assertCurrent = vi.fn(() => {
-    throw new Error("stale lifecycle");
-  });
-  const reset = await performGatewaySessionReset({
-    key: "main",
-    reason: "reset",
-    commandSource: "gateway:agent",
-    workerPlacementContext: {},
-    assertCurrent,
-  });
-  releaseMutation();
-
   try {
-    await blocker;
+    await mutationStarted;
+    const { performGatewaySessionReset } = await import("./session-reset-service.js");
+    const assertCurrent = vi.fn(() => {
+      throw new Error("stale lifecycle");
+    });
+    const reset = await performGatewaySessionReset({
+      key: "main",
+      reason: "reset",
+      commandSource: "gateway:agent",
+      workerPlacementContext: {},
+      assertCurrent,
+    });
     expect(reset).toMatchObject({
       ok: false,
       error: {
@@ -444,7 +439,9 @@ test("sessions.reset rejects an active lifecycle mutation without interrupting a
     expect(assertCurrent).not.toHaveBeenCalled();
     expect(interrupted).toBe(false);
   } finally {
+    releaseMutation();
     admissionLease.release();
+    await blocker;
   }
 });
 
