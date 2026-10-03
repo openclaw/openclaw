@@ -186,10 +186,12 @@ export function createOpenClawDatabaseMaintenanceScope(
       closing = completion.promise;
       void maintenanceResources.current
         .run({ scope, active: true }, async () => {
-          while (pending.size) {
-            await Promise.allSettled(pending);
+          if (beforeResources) {
+            while (pending.size) {
+              await Promise.allSettled(pending);
+            }
+            await beforeResources();
           }
-          await beforeResources?.();
           while (pending.size || resources.size) {
             while (pending.size) {
               await Promise.allSettled(pending);
