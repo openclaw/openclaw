@@ -550,11 +550,13 @@ export class ManagedWorktreeService {
       "--verify",
       `refs/heads/${branch}`,
     ]);
-    if (branchExists.code === 0) {
-      throw new Error(`branch already exists: ${branch}`);
-    }
-    if (branchExists.code !== 1) {
+    if (branchExists.code !== 0 && branchExists.code !== 1) {
       throw commandError("git show-ref --verify", branchExists);
+    }
+    const reuseWorkboardBranch =
+      branchExists.code === 0 && params.ownerKind === "workboard" && Boolean(params.ownerId);
+    if (branchExists.code === 0 && !reuseWorkboardBranch) {
+      throw new Error(`branch already exists: ${branch}`);
     }
     // Default-base resolution fetches remote refs; it is an effect, not just discovery.
     params.signal?.throwIfAborted();
@@ -564,19 +566,21 @@ export class ManagedWorktreeService {
     if (params.checkoutCommit && !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u.test(params.checkoutCommit)) {
       throw new Error("Worktree checkout commit is invalid");
     }
-    const base = params.checkoutCommit
-      ? {
-          commit: params.checkoutCommit,
-          gitOperand: params.checkoutCommit,
-          recordRef: params.baseRef ?? params.checkoutCommit,
-          remote: false,
-        }
-      : await resolveWorktreeBase(
-          repository.repoRoot,
-          params.baseRef,
-          params.signal,
-          params.commitGuard,
-        );
+    const base = reuseWorkboardBranch
+      ? { commit: undefined, gitOperand: branch, recordRef: branch, remote: false }
+      : params.checkoutCommit
+        ? {
+            commit: params.checkoutCommit,
+            gitOperand: params.checkoutCommit,
+            recordRef: params.baseRef ?? params.checkoutCommit,
+            remote: false,
+          }
+        : await resolveWorktreeBase(
+            repository.repoRoot,
+            params.baseRef,
+            params.signal,
+            params.commitGuard,
+          );
     let gitBytes = 0;
     const provisionedBytes =
       params.provisionIgnoredFiles === false
@@ -631,7 +635,7 @@ export class ManagedWorktreeService {
         worktreeRoot: path.dirname(root),
         destination: worktreePath,
         sourceOnly: params.provisionIgnoredFiles === false,
-        branch,
+        branch: reuseWorkboardBranch ? { name: branch, kind: "local" as const } : branch,
         base: sourceProfile?.commit ?? gitBase,
         sourceProfile,
         prepareCommit: async (commit) => {
