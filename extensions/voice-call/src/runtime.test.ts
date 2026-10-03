@@ -978,6 +978,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
       );
       const call = {
         callId: "call-1",
+        agentId: "main",
         state: "active",
         direction: "inbound",
         from: "+15550001234",
