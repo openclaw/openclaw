@@ -26,7 +26,7 @@ it("warns once per plugin and released Inbox method, including after a plugin re
     });
     expect(warning).toHaveBeenCalledTimes(5);
     for (const { plugin, method } of [
-      ...methods.map((method) => ({ plugin: "mention-compat-first", method })),
+      ...methods.map((name) => ({ plugin: "mention-compat-first", method: name })),
       { plugin: "mention-compat-second", method: "list" },
     ]) {
       const calls = warning.mock.calls.filter(

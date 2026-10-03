@@ -40,7 +40,7 @@ it("refreshes 50 connected mention views without rereading unchanged session tar
         broadcastToConnIds: f.broadcast,
         chatAbortControllers: new Map(),
       };
-      const invalidation = vi.spyOn(f.inbox, "invalidate");
+      const invalidation = vi.spyOn(f.inbox, "invalidateAsync");
       const emit = async (sessionKey = "agent:main:unrelated") => {
         emitSessionsChanged(context, { sessionKey, agentId: "main", reason: "patch" });
         await invalidation.mock.results.at(-1)?.value;
