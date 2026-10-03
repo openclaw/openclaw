@@ -53,6 +53,8 @@
     "README.md",
     "THIRD_PARTY_NOTICES.md",
     "dist/",
+    "!dist/worker/**",
+    "dist/worker-artifacts/*.tar.gz",
     ".openclaw-lifecycle-pending",
     "!dist/.buildstamp",
     "!dist/.runtime-postbuildstamp",
@@ -2240,7 +2242,7 @@
   ],
   "dependencies": {
     "@agentclientprotocol/sdk": "1.4.0",
-    "@anthropic-ai/sdk": "0.127.0",
+    "@anthropic-ai/sdk": "0.128.0",
     "@babel/generator": "8.0.6",
     "@babel/parser": "8.0.6",
     "@babel/traverse": "8.0.6",

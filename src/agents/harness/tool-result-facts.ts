@@ -1,4 +1,5 @@
 import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { AgentToolResult } from "../../../packages/agent-core/src/types.js";
 import {
   HEARTBEAT_RESPONSE_TOOL_NAME,
@@ -274,46 +275,23 @@ function readFirstString(record: Record<string, unknown>, keys: string[]): strin
 }
 
 export function collectAgentHarnessMessagingMediaUrls(record: Record<string, unknown>): string[] {
-  const urls: string[] = [];
-  const pushMediaUrl = (value: unknown) => {
-    if (typeof value === "string" && value.trim()) {
-      urls.push(value.trim());
-    }
-  };
-  const pushAttachment = (value: unknown) => {
-    if (!isRecord(value)) {
-      return;
-    }
-    for (const key of ["media", "mediaUrl", "path", "filePath", "fileUrl", "url"]) {
-      pushMediaUrl(value[key]);
-    }
-  };
-  for (const key of [
-    "media",
-    "mediaUrl",
-    "media_url",
-    "path",
-    "filePath",
-    "fileUrl",
-    "imageUrl",
-    "image_url",
-  ]) {
-    const value = record[key];
-    pushMediaUrl(value);
-  }
+  const urls = normalizeTrimmedStringList(
+    ["media", "mediaUrl", "media_url", "path", "filePath", "fileUrl", "imageUrl", "image_url"].map(
+      (key) => record[key],
+    ),
+  );
   for (const key of ["mediaUrls", "media_urls", "imageUrls", "image_urls"]) {
-    const value = record[key];
-    if (!Array.isArray(value)) {
-      continue;
-    }
-    for (const entry of value) {
-      pushMediaUrl(entry);
+    for (const url of normalizeTrimmedStringList(record[key])) {
+      urls.push(url);
     }
   }
-  const attachments = record.attachments;
-  if (Array.isArray(attachments)) {
-    for (const attachment of attachments) {
-      pushAttachment(attachment);
+  for (const attachment of Array.isArray(record.attachments) ? record.attachments : []) {
+    if (isRecord(attachment)) {
+      urls.push(
+        ...normalizeTrimmedStringList(
+          ["media", "mediaUrl", "path", "filePath", "fileUrl", "url"].map((key) => attachment[key]),
+        ),
+      );
     }
   }
   return urls;

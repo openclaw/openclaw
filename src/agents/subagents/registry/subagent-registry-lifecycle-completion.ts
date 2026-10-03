@@ -647,13 +647,8 @@ function planTerminalCompletion(
 
   if (completeParams.completionSnapshot) {
     const completion = ensureCompletionState(entry);
-    if (
-      completion.resultText !== completeParams.completionSnapshot.resultText ||
-      completion.capturedAt !== completeParams.completionSnapshot.capturedAt
-    ) {
-      completion.resultText = completeParams.completionSnapshot.resultText;
-      completion.capturedAt = completeParams.completionSnapshot.capturedAt;
-    }
+    completion.resultText = completeParams.completionSnapshot.resultText;
+    completion.capturedAt = completeParams.completionSnapshot.capturedAt;
   }
 
   if (terminalReply) {

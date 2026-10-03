@@ -15,21 +15,45 @@ afterEach(() => {
 });
 afterAll(cleanupRuntimeToolFixtureTempRoots);
 
-describe("runtime tool fixture transcript evidence", () => {
-  it("requires live runtime tool fixtures to produce transcript tool output", async () => {
-    const env = await makeEnv();
-    await writeRuntimeToolTranscripts(
-      env,
-      "read",
-      [{ role: "assistant", content: "I checked README.md and it looks good." }],
-      [{ role: "assistant", content: "The denied-input path looks good." }],
-    );
-
-    await expect(runLiveRuntimeToolFixture(env)).rejects.toThrow(
-      "expected live happy-path tool call for read",
-    );
+async function runTranscriptFixture(
+  happyMessages: Array<Record<string, unknown>>,
+  {
+    toolName = "read",
+    failureMessages,
+    asyncOutput = false,
+  }: {
+    toolName?: string;
+    failureMessages?: Array<Record<string, unknown>>;
+    asyncOutput?: boolean;
+  } = {},
+) {
+  const env = await makeEnv();
+  await writeRuntimeToolTranscripts(
+    env,
+    toolName,
+    happyMessages,
+    failureMessages ?? [
+      transcriptToolCall(
+        toolName,
+        "failure",
+        toolName === "image_generate"
+          ? { __qaFailureMode: "denied-input" }
+          : toolName === "read"
+            ? { path: "/missing" }
+            : { command: "denied" },
+      ),
+      transcriptToolResult(toolName, "failure", "permission denied", true),
+    ],
+  );
+  return runLiveRuntimeToolFixture(env, {
+    toolName,
+    ...(asyncOutput
+      ? { config: runtimeToolFixtureConfig(toolName, { happyPathOutputRequired: false }) }
+      : {}),
   });
+}
 
+describe("runtime tool fixture transcript evidence", () => {
   it.each([
     {
       name: "Code Mode control output without a physical exec",
@@ -78,13 +102,9 @@ describe("runtime tool fixture transcript evidence", () => {
   ])(
     "rejects $name as runtime execution proof",
     async ({ happyMessages, expectedError, toolName = "exec" }) => {
-      const env = await makeEnv();
-      await writeRuntimeToolTranscripts(env, toolName, happyMessages, [
-        transcriptToolCall(toolName, "failure", { command: "denied" }),
-        transcriptToolResult(toolName, "failure", "permission denied", true),
-      ]);
-
-      await expect(runLiveRuntimeToolFixture(env, { toolName })).rejects.toThrow(expectedError);
+      await expect(runTranscriptFixture(happyMessages, { toolName })).rejects.toThrow(
+        expectedError,
+      );
     },
   );
 
@@ -140,94 +160,54 @@ describe("runtime tool fixture transcript evidence", () => {
   );
 
   it("skips async live runtime tool fixtures when the happy path has no result", async () => {
-    const env = await makeEnv();
-    await writeRuntimeToolTranscripts(
-      env,
-      "image_generate",
-      [
-        transcriptToolCall("image_generate", "happy", {
-          prompt: "QA lighthouse runtime parity fixture",
-        }),
-      ],
-      [
-        transcriptToolCall("image_generate", "failure", {
-          __qaFailureMode: "denied-input",
-        }),
-        transcriptToolResult("image_generate", "failure", "denied-input", true),
-      ],
-    );
-
     await expect(
-      runLiveRuntimeToolFixture(env, {
-        toolName: "image_generate",
-        config: runtimeToolFixtureConfig("image_generate", { happyPathOutputRequired: false }),
-      }),
+      runTranscriptFixture(
+        [
+          transcriptToolCall("image_generate", "happy", {
+            prompt: "QA lighthouse runtime parity fixture",
+          }),
+        ],
+        { toolName: "image_generate", asyncOutput: true },
+      ),
     ).rejects.toThrow("planned call without a linked successful result");
   });
 
   it("still requires async live runtime tool fixtures to call the happy-path tool", async () => {
-    const env = await makeEnv();
-    await writeRuntimeToolTranscripts(
-      env,
-      "image_generate",
-      [{ role: "assistant", content: "I can start image generation later." }],
-      [
-        transcriptToolCall("image_generate", "failure", {
-          __qaFailureMode: "denied-input",
-        }),
-        transcriptToolResult("image_generate", "failure", "denied-input", true),
-      ],
-    );
-
     await expect(
-      runLiveRuntimeToolFixture(env, {
-        toolName: "image_generate",
-        config: runtimeToolFixtureConfig("image_generate", { happyPathOutputRequired: false }),
-      }),
+      runTranscriptFixture(
+        [{ role: "assistant", content: "I can start image generation later." }],
+        { toolName: "image_generate", asyncOutput: true },
+      ),
     ).rejects.toThrow("expected live happy-path tool call for image_generate");
   });
 
   it("requires live failure fixtures to produce failure-shaped tool output", async () => {
-    const env = await makeEnv();
-    await writeRuntimeToolTranscripts(
-      env,
-      "read",
-      [
-        transcriptToolCall("read", "happy", { path: "README.md" }),
-        transcriptToolResult(
-          "read",
-          "happy",
-          "README documents invalid requests, errors, and denied inputs.",
-        ),
-      ],
-      [
-        transcriptToolCall("read", "failure", { path: "/missing" }),
-        transcriptToolResult("read", "failure", "README contents"),
-      ],
-    );
-
-    await expect(runLiveRuntimeToolFixture(env)).rejects.toThrow(
-      "expected live failure-path tool failure output for read",
-    );
+    await expect(
+      runTranscriptFixture(
+        [
+          transcriptToolCall("read", "happy", { path: "README.md" }),
+          transcriptToolResult(
+            "read",
+            "happy",
+            "README documents invalid requests, errors, and denied inputs.",
+          ),
+        ],
+        {
+          failureMessages: [
+            transcriptToolCall("read", "failure", { path: "/missing" }),
+            transcriptToolResult("read", "failure", "README contents"),
+          ],
+        },
+      ),
+    ).rejects.toThrow("expected live failure-path tool failure output for read");
   });
 
   it("rejects failure-shaped live happy-path tool output", async () => {
-    const env = await makeEnv();
-    await writeRuntimeToolTranscripts(
-      env,
-      "read",
-      [
+    await expect(
+      runTranscriptFixture([
         transcriptToolCall("read", "happy", { path: "README.md" }),
         transcriptToolResult("read", "happy", "ENOENT: no such file or directory", true),
-      ],
-      [
-        transcriptToolCall("read", "failure", { path: "/missing" }),
-        transcriptToolResult("read", "failure", "ENOENT: no such file or directory", true),
-      ],
-    );
-
-    await expect(runLiveRuntimeToolFixture(env)).rejects.toThrow(
-      "expected live happy-path successful tool output for read",
-    );
+      ]),
+    ).rejects.toThrow("expected live happy-path successful tool output for read");
   });
 });

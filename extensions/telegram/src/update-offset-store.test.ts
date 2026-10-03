@@ -133,11 +133,13 @@ describe("deleteTelegramUpdateOffset", () => {
     });
   });
 
-  it("invokes onRotationDetected for imported legacy offsets without bot identity", async () => {
+  it("invokes onRotationDetected for canonical offsets without bot identity", async () => {
     await withStateDirEnv("openclaw-tg-offset-", async () => {
       await updateOffsetStore.register("default", {
-        version: 1,
+        version: 3,
         lastUpdateId: 777,
+        botId: null,
+        tokenFingerprint: null,
       });
 
       const rotations: Array<Record<string, unknown>> = [];
@@ -223,12 +225,13 @@ describe("deleteTelegramUpdateOffset", () => {
     });
   });
 
-  it("treats imported v2 bot-id-only offsets as stale when token identity cannot be verified", async () => {
+  it("treats canonical bot-id-only offsets as stale when token identity cannot be verified", async () => {
     await withStateDirEnv("openclaw-tg-offset-", async () => {
       await updateOffsetStore.register("default", {
-        version: 2,
+        version: 3,
         lastUpdateId: 999,
         botId: "111111",
+        tokenFingerprint: null,
       });
 
       const rotations: Array<Record<string, unknown>> = [];
@@ -280,18 +283,40 @@ describe("deleteTelegramUpdateOffset", () => {
   it("ignores invalid persisted update IDs from plugin-state", async () => {
     await withStateDirEnv("openclaw-tg-offset-", async () => {
       await updateOffsetStore.register("default", {
-        version: 2,
+        version: 3,
         lastUpdateId: -1,
         botId: "111111",
+        tokenFingerprint: null,
       });
       expect(await readTelegramUpdateOffset({ accountId: "default" })).toBeNull();
 
       await updateOffsetStore.register("default", {
-        version: 2,
+        version: 3,
         lastUpdateId: "not-a-number",
         botId: "111111",
+        tokenFingerprint: null,
       });
       expect(await readTelegramUpdateOffset({ accountId: "default" })).toBeNull();
+    });
+  });
+
+  it.each([1, 2])("requires Doctor before reading or preparing a v%s offset", async (version) => {
+    await withStateDirEnv("openclaw-tg-offset-", async () => {
+      const original = {
+        version,
+        lastUpdateId: 777,
+        ...(version === 2 ? { botId: "111111" } : {}),
+      };
+      await updateOffsetStore.register("default", original);
+      await expect(readTelegramUpdateOffset({})).rejects.toThrow("openclaw doctor --fix");
+      await expect(
+        prepareTelegramAccount({
+          accountId: "default",
+          botToken: "222222:fixture",
+          onRotationDetected() {},
+        }),
+      ).rejects.toThrow("openclaw doctor --fix");
+      expect(await updateOffsetStore.lookup("default")).toEqual(original);
     });
   });
 

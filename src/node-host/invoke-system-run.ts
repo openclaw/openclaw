@@ -7,13 +7,9 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  describeInterpreterInlineEval,
-  type InterpreterInlineEvalHit,
-} from "../infra/command-analysis/inline-eval.js";
+import { describeInterpreterInlineEval } from "../infra/command-analysis/inline-eval.js";
 import { detectInlineEvalInSegments } from "../infra/command-analysis/risks.js";
 import { createDedupeCache } from "../infra/dedupe.js";
-import { DEFAULT_ASK, DEFAULT_SECURITY } from "../infra/exec-approvals-config.js";
 import {
   analyzeArgvCommand,
   commitExecAuthorizationLocked,
@@ -26,19 +22,12 @@ import {
   resolveAllowAlwaysPersistenceDecision,
   resolveDurableExecApprovalRequirement,
   resolveExecApprovalsLocked,
-  type ExecAllowlistEntry,
   type ExecApprovalUsageAuthorization,
-  type ExecApprovalPolicySnapshot,
   type ExecApprovalsResolved,
   type ExecAsk,
-  type ExecCommandSegment,
-  type ExecSegmentSatisfiedBy,
   type ExecSecurity,
 } from "../infra/exec-approvals.js";
-import {
-  planExecAuthorization,
-  type ExecAuthorizationPlan,
-} from "../infra/exec-authorization-plan.js";
+import { planExecAuthorization } from "../infra/exec-authorization-plan.js";
 import { resolveUnpinnedAutoApprovalEligibility } from "../infra/exec-auto-approval-eligibility.js";
 import {
   EXEC_AUTO_REVIEW_DENIAL_GUIDANCE,
@@ -76,7 +65,6 @@ import { normalizeSystemRunApprovalPlan } from "../infra/system-run-approval-pla
 import { formatExecCommand, resolveSystemRunCommandRequest } from "../infra/system-run-command.js";
 import {
   APPROVAL_CWD_DRIFT_DENIED_MESSAGE,
-  type ApprovedCwdSnapshot,
   captureApprovedCwdSnapshotSync,
   revalidateApprovedCwdSnapshot,
 } from "../infra/system-run-cwd-binding.js";
@@ -131,48 +119,8 @@ type SystemRunExecutionContext = {
   suppressNotifyOnExit: boolean;
 };
 
-type SystemRunParsePhase = {
-  argv: string[];
-  shellPayload: string | null;
-  shellWrapperInvocation: boolean;
-  commandText: string;
-  approvalPlan: import("../infra/exec-approvals.js").SystemRunApprovalPlan | null;
-  agentId: string | undefined;
-  sessionKey: string;
-  runId: string;
-  execution: SystemRunExecutionContext;
-  approvalDecision: ReturnType<typeof resolveExecApprovalDecision>;
-  approvalSource: "ask-fallback" | "auto-review" | undefined;
-  delayedApprovalPolicySnapshot: ExecApprovalPolicySnapshot | null;
-  envOverrides: Record<string, string> | undefined;
-  env: Record<string, string> | undefined;
-  cwd: string | undefined;
-  timeoutMs: number | undefined;
-  needsScreenRecording: boolean;
-  approved: boolean;
-};
-
-type SystemRunPolicyPhase = SystemRunParsePhase & {
-  approvals: ExecApprovalsResolved;
-  evaluationPolicySnapshot: ExecApprovalPolicySnapshot;
-  security: ExecSecurity;
-  ask: ExecAsk;
-  policy: ReturnType<typeof evaluateSystemRunPolicy>;
-  approvalGrantSource: "explicit-approval" | "auto-review" | null;
-  durableApprovalSatisfied: boolean;
-  durableApprovalRequirement: ReturnType<typeof resolveDurableExecApprovalRequirement>;
-  strictInlineEval: boolean;
-  inlineEvalHit: InterpreterInlineEvalHit | null;
-  allowlistMatches: ExecAllowlistEntry[];
-  allowlistAuthorizationSatisfied: boolean;
-  segments: ExecCommandSegment[];
-  segmentSatisfiedBy: ExecSegmentSatisfiedBy[];
-  authorizationPlan: ExecAuthorizationPlan | undefined;
-  plannedAllowlistArgv: string[] | undefined;
-  isWindows: boolean;
-  approvedCwdSnapshot: ApprovedCwdSnapshot | undefined;
-  executableBinding: SystemRunMutableFileBinding | undefined;
-};
+type SystemRunParsePhase = NonNullable<Awaited<ReturnType<typeof parseSystemRunPhase>>>;
+type SystemRunPolicyPhase = NonNullable<Awaited<ReturnType<typeof evaluateSystemRunPolicyPhase>>>;
 
 const safeBinTrustedDirWarningCache = createDedupeCache({
   ttlMs: 0,
@@ -221,11 +169,7 @@ export async function resolveEffectiveSystemRunExecPolicy(params: {
   agentId: string | undefined;
   requireSocket: boolean;
 }): Promise<EffectiveSystemRunExecPolicy> {
-  const modePolicy = resolveNodeExecConfigPolicy({
-    ...params,
-    defaultSecurity: DEFAULT_SECURITY,
-    defaultAsk: DEFAULT_ASK,
-  });
+  const modePolicy = resolveNodeExecConfigPolicy(params);
   const { agentExec, globalExec } = modePolicy;
   const approvals = await resolveExecApprovalsLocked(params.agentId, {
     security: modePolicy.security,
@@ -349,9 +293,7 @@ function argvArraysMatch(left: readonly string[] | undefined, right: readonly st
   );
 }
 
-async function parseSystemRunPhase(
-  opts: HandleSystemRunInvokeOptions,
-): Promise<SystemRunParsePhase | null> {
+async function parseSystemRunPhase(opts: HandleSystemRunInvokeOptions) {
   const invalid = async (message: string) => {
     await opts.sendInvokeResult({ ok: false, error: { code: "INVALID_REQUEST", message } });
     return null;
@@ -453,6 +395,7 @@ async function parseSystemRunPhase(
     overrides: opts.params.env ?? undefined,
     shellWrapper: shellWrapperInvocation,
   });
+  const validatedApprovalSource: ExecHostRequest["approvalSource"] = approvalSource ?? undefined;
   return {
     argv: command.argv,
     shellPayload,
@@ -464,7 +407,7 @@ async function parseSystemRunPhase(
     runId,
     execution: { sessionKey, runId, commandText, suppressNotifyOnExit },
     approvalDecision,
-    approvalSource: approvalSource ?? undefined,
+    approvalSource: validatedApprovalSource,
     delayedApprovalPolicySnapshot,
     envOverrides,
     env: sanitizeHostExecEnv({ overrides: envOverrides, blockPathOverrides: true }),
@@ -478,7 +421,7 @@ async function parseSystemRunPhase(
 async function evaluateSystemRunPolicyPhase(
   opts: HandleSystemRunInvokeOptions,
   parsed: SystemRunParsePhase,
-): Promise<SystemRunPolicyPhase | null> {
+) {
   const cfg = await loadSystemRunConfig(opts);
   const effectivePolicy = await resolveEffectiveSystemRunExecPolicy({
     cfg,
@@ -562,7 +505,7 @@ async function evaluateSystemRunPolicyPhase(
     segmentAllowlistEntries.some((entry) => entry?.source === "allow-always");
   const forwardedAutoReview = parsed.approvalSource === "auto-review";
   let approvalDecision = forwardedAutoReview ? "allow-once" : parsed.approvalDecision;
-  let approvalGrantSource: SystemRunPolicyPhase["approvalGrantSource"] = forwardedAutoReview
+  let approvalGrantSource: "explicit-approval" | "auto-review" | null = forwardedAutoReview
     ? "auto-review"
     : parsed.approved || approvalDecision !== null
       ? "explicit-approval"

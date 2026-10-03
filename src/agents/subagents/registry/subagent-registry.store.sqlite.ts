@@ -166,7 +166,6 @@ const subagentSessionListPaths = [
   "delivery.handoffInjectedAt",
   "childAgentId",
   "requesterAgentId",
-  "childAgentId",
   "sessionStartedAt",
   "accumulatedRuntimeMs",
   "endedReason",
@@ -326,21 +325,14 @@ export function loadVersionedSubagentRunsInDatabase(
   database: Pick<OpenClawStateDatabase, "db">,
   runIds?: readonly string[],
 ): { runs: Map<string, SubagentRunRecord>; versions: Map<string, string | null> } {
-  const runs = new Map<string, SubagentRunRecord>();
   const versions = new Map<string, string | null>(runIds?.map((runId) => [runId, null]));
-  if (runIds?.length === 0) {
-    return { runs, versions };
-  }
-  for (const row of readSubagentRegistryRows(
-    runIds ? { kind: "runs", runIds } : undefined,
-    database,
-  )) {
-    versions.set(row.run_id, subagentRunRowVersion(row));
-    const entry = rowToSubagentRunRecord(row);
-    if (entry) {
-      runs.set(entry.runId, entry);
-    }
-  }
+  const runs = decodeSubagentRegistryRows(
+    runIds?.length === 0
+      ? []
+      : readSubagentRegistryRows(runIds ? { kind: "runs", runIds } : undefined, database),
+    (entry) => entry,
+    (row) => versions.set(row.run_id, subagentRunRowVersion(row)),
+  );
   return { runs, versions };
 }
 
@@ -350,26 +342,23 @@ export function loadSubagentRegistryFromSqlite(
 ): Map<string, SubagentRunRecord> {
   // Retired file-era runs are intentionally not recovered here: after SQLite
   // pruning, the file cannot prove whether a run is live or stale. Doctor owns discard.
-  const runs = new Map<string, SubagentRunRecord>();
-  for (const row of readSubagentRegistryRows(undefined, database)) {
-    const entry = rowToSubagentRunRecord(row);
-    if (entry) {
-      runs.set(entry.runId, entry);
-    }
-  }
-  return runs;
+  return decodeSubagentRegistryRows(
+    readSubagentRegistryRows(undefined, database),
+    (entry) => entry,
+  );
 }
 
-function decodeSubagentMaintenanceRows(
+function decodeSubagentRegistryRows<T>(
   rows: Iterable<SubagentRunSqliteRow>,
+  project: (entry: SubagentRunRecord) => T,
   observe?: (row: SubagentRunSqliteRow) => void,
-): Map<string, SubagentRunMaintenanceRecord> {
-  const runs = new Map<string, SubagentRunMaintenanceRecord>();
+): Map<string, T> {
+  const runs = new Map<string, T>();
   for (const row of rows) {
     observe?.(row);
     const entry = rowToSubagentRunRecord(row);
     if (entry) {
-      runs.set(entry.runId, projectSubagentRunForMaintenance(entry));
+      runs.set(entry.runId, project(entry));
     }
   }
   return runs;
@@ -377,8 +366,9 @@ function decodeSubagentMaintenanceRows(
 
 /** Uses the canonical codec without transferring retained prompts and completion results. */
 export function loadSubagentMaintenanceRunsFromSqlite(): Map<string, SubagentRunMaintenanceRecord> {
-  return decodeSubagentMaintenanceRows(
+  return decodeSubagentRegistryRows(
     readSubagentRegistryRows(undefined, undefined, "maintenance"),
+    projectSubagentRunForMaintenance,
   );
 }
 
@@ -388,8 +378,9 @@ export function loadSubagentMaintenanceRunsInDatabase(
 ): { runs: Map<string, SubagentRunMaintenanceRecord>; digest: string } {
   return runSqliteDeferredTransactionSync(database.db, () => {
     const hash = createHash("sha256");
-    const runs = decodeSubagentMaintenanceRows(
+    const runs = decodeSubagentRegistryRows(
       readSubagentRegistryRows(undefined, database, "maintenance"),
+      projectSubagentRunForMaintenance,
       (row) => {
         hash.update(JSON.stringify(row));
       },

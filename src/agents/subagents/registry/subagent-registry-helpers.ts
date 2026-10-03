@@ -1,3 +1,4 @@
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { DEFAULT_SUBAGENT_ARCHIVE_AFTER_MINUTES } from "../../../config/agent-limits.js";
 import { getRuntimeConfig } from "../../../config/config.js";
@@ -130,10 +131,7 @@ export async function persistSubagentSessionTiming(
     options?.assertCommitAllowed?.();
   };
   const startedAt = getSubagentSessionStartedAt(entry);
-  const endedAt =
-    typeof entry.execution.endedAt === "number" && Number.isFinite(entry.execution.endedAt)
-      ? entry.execution.endedAt
-      : undefined;
+  const endedAt = asFiniteNumber(entry.execution.endedAt);
   const runtimeMs = getSubagentSessionRuntimeMs(entry, endedAt);
   const status = resolveSubagentSessionStatus(entry);
 
@@ -351,10 +349,7 @@ function resolveArchiveAfterMs(cfg?: OpenClawConfig) {
 
 /** Arms retention only after the run or its waitable collector result has completed. */
 export function updateSubagentArchiveAtMs(entry: SubagentRunRecord, cfg?: OpenClawConfig): boolean {
-  const endedAt =
-    typeof entry.execution.endedAt === "number" && Number.isFinite(entry.execution.endedAt)
-      ? entry.execution.endedAt
-      : undefined;
+  const endedAt = asFiniteNumber(entry.execution.endedAt);
   const completedAt = entry.collect
     ? endedAt === undefined && !entry.collectorCompletion
       ? undefined

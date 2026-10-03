@@ -17,6 +17,7 @@ import {
   preparePackageActivation,
   runPackageActivationRecovery,
 } from "./package-update-activation.js";
+import { interceptPackageFileHashes } from "./package-update-integrity-hasher.test-support.js";
 import * as integrity from "./package-update-integrity.js";
 import type { PackageUpdateTransaction } from "./package-update-swap-contract.js";
 import { swapStagedPackageInstall } from "./package-update-swap.js";
@@ -77,6 +78,7 @@ it.skipIf(process.platform === "win32").each(["unchanged", "previous", "candidat
         if (changed !== "unchanged") {
           await fsp.writeFile(tampered, `changed ${changed} package content\n`);
         }
+        const hash = interceptPackageFileHashes();
         const packageOpens: string[] = [];
         const open = fsp.open.bind(fsp);
         vi.spyOn(fsp, "open").mockImplementation(async (...args) => {
@@ -94,16 +96,18 @@ it.skipIf(process.platform === "win32").each(["unchanged", "previous", "candidat
         const publishing = prepared!.publish(false);
         if (changed !== "unchanged") {
           await expect(publishing).rejects.toBeInstanceOf(integrity.PackageIntegrityMismatchError);
-          expect(packageOpens).toContain(tampered);
+          expect(hash.mock.calls.map(([file]) => file)).toEqual([tampered]);
           expect(fs.readFileSync(f.launcher, "utf8")).toBe("old launcher\n");
           return;
         }
         await expect(publishing).resolves.toMatchObject({ phase: "publication-complete" });
         expect(fs.readFileSync(f.launcher, "utf8")).toBe("candidate launcher\n");
+        expect(hash).not.toHaveBeenCalled();
         // Each of the four remaining content walks still reads its manifest version.
         expect(packageOpens).toHaveLength(4);
         expect(packageOpens.every((file) => path.basename(file) === "package.json")).toBe(true);
         await expect(prepared!.retire()).resolves.toMatchObject({ phase: "complete" });
+        expect(hash).not.toHaveBeenCalled();
         expect(packageOpens).toHaveLength(5);
         expect(packageOpens.every((file) => path.basename(file) === "package.json")).toBe(true);
         expect(fs.existsSync(anchor)).toBe(false);

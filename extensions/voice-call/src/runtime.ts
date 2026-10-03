@@ -246,13 +246,7 @@ async function createRealtimeInstructionsResolver(params: {
     }),
   );
   const instructionsByAgentId = new Map(entries);
-  return (call) => {
-    const numberRouteKey = resolveVoiceCallNumberRouteKeyForCall(call);
-    const effectiveConfig = resolveVoiceCallEffectiveConfig(params.config, numberRouteKey).config;
-    return (
-      instructionsByAgentId.get(resolveCallAgentId(call, effectiveConfig)) ?? genericInstructions
-    );
-  };
+  return (call) => instructionsByAgentId.get(resolveCallAgentId(call)) ?? genericInstructions;
 }
 
 export async function createVoiceCallRuntime(params: {
@@ -331,7 +325,7 @@ export async function createVoiceCallRuntime(params: {
     const resolveCallRegistration = (call: CallRecord) => {
       const numberRouteKey = resolveVoiceCallNumberRouteKeyForCall(call);
       const effectiveConfig = resolveVoiceCallEffectiveConfig(config, numberRouteKey).config;
-      const agentId = resolveCallAgentId(call, effectiveConfig);
+      const agentId = resolveCallAgentId(call);
       const resolved = realtimeVoiceRuntime.resolveConfiguredRealtimeVoiceProvider({
         configuredProviderId: effectiveConfig.realtime.provider,
         providerConfigs: effectiveConfig.realtime.providers,
@@ -367,7 +361,7 @@ export async function createVoiceCallRuntime(params: {
           }
           const numberRouteKey = resolveVoiceCallNumberRouteKeyForCall(call);
           const effectiveConfig = resolveVoiceCallEffectiveConfig(config, numberRouteKey).config;
-          const agentId = resolveCallAgentId(call, effectiveConfig);
+          const agentId = resolveCallAgentId(call);
           const sessionKey = resolveVoiceCallSessionKey({
             config: { ...effectiveConfig, agentId },
             callId: call.callId,

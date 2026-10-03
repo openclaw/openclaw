@@ -484,19 +484,10 @@ describe("bootstrapWorker", () => {
     expect(npmRunner.calls[1]?.options.input).toContain("npm pack");
     expect(npmRunner.calls[1]?.options.input).not.toContain("npm install");
     expect(npmRunner.calls[1]?.options.input).toContain("--registry=https://registry.npmjs.org/");
-    for (const artifactPath of [
-      "worker.mjs",
-      "file-tool-planning.worker.mjs",
-      "github-exec-launcher.mjs",
-      "image-processor.worker.mjs",
-      "service-child-group-anchor.mjs",
-      "service-child-relay.mjs",
-      "sqlite-store.worker.mjs",
-      "workspace-rsync-receiver.mjs",
-    ]) {
-      expect(npmRunner.calls[1]?.options.input).toContain(JSON.stringify(artifactPath));
-    }
-    expect(npmRunner.calls[1]?.options.input).toContain('const prefix = "package/dist/worker/"');
+    expect(npmRunner.calls[1]?.options.input).toContain(
+      'const expected = "package/dist/worker-artifacts/" + process.argv[2] + ".tar.gz"',
+    );
+    expect(npmRunner.calls[1]?.options.input).toContain("worker_archive=$staging/$hash.tar.gz");
     expect(npmRunner.calls[1]?.options.input).not.toContain("node_modules");
     expect(npmRunner.calls[1]?.argv.at(-1)).toContain(`openclaw@${VERSION}`);
   });
@@ -947,13 +938,13 @@ describe("bootstrapWorker", () => {
           cacheDir: path.join(root, "cache"),
           openclawVersion: VERSION,
         }).prepare();
-        const nestedChunk = path.join(packageRoot, "dist/worker/worker-chunk-nested/escape.mjs");
-        await fs.mkdir(path.dirname(nestedChunk));
-        await fs.writeFile(nestedChunk, "export {};\n");
-        await fs.writeFile(
-          path.join(packageRoot, "dist/worker/worker-chunk-invalid.txt"),
-          "ignore",
+        const packagedWorkerRoot = path.join(packageRoot, "dist/worker-artifacts");
+        await fs.mkdir(packagedWorkerRoot);
+        await fs.copyFile(
+          bundle.tarballPath,
+          path.join(packagedWorkerRoot, `${bundle.bundleHash}.tar.gz`),
         );
+        await fs.rm(path.join(packageRoot, "dist/worker"), { recursive: true });
         const packageArchive = path.join(root, "package.tgz");
         await tar.create({ cwd: root, file: packageArchive, gzip: true }, ["package"]);
         const packageIntegrity = `sha512-${createHash("sha512")

@@ -8,7 +8,6 @@ import {
   type ClaudeCliFallbackSeed,
   CLAUDE_CLI_PROVIDER,
   readClaudeCliFallbackSeed,
-  readClaudeCliSessionMessages,
   resolveClaudeCliBindingSessionId,
 } from "./cli-session-history.claude.js";
 import { mergeImportedChatHistoryMessages } from "./cli-session-history.merge.js";
@@ -23,7 +22,6 @@ type CliSessionHistoryParams = {
   provider?: string;
   localMessages: unknown[];
   homeDir?: string;
-  preparedImportedMessages?: unknown[];
 };
 
 function resolveEligibleCliSessionBinding(params: CliSessionHistoryParams) {
@@ -38,7 +36,9 @@ function resolveEligibleCliSessionBinding(params: CliSessionHistoryParams) {
 }
 
 /** Resolves chat history plus whether a bound external transcript was actually incorporated. */
-export function resolveChatHistoryWithCliSessionImports(params: CliSessionHistoryParams): {
+export function resolveChatHistoryWithCliSessionImports(
+  params: CliSessionHistoryParams & { preparedImportedMessages: unknown[] },
+): {
   messages: unknown[];
   imported: boolean;
   expanded: boolean;
@@ -47,14 +47,7 @@ export function resolveChatHistoryWithCliSessionImports(params: CliSessionHistor
   if (!binding) {
     return { messages: params.localMessages, imported: false, expanded: false };
   }
-  const importedMessages =
-    params.preparedImportedMessages ??
-    readClaudeCliSessionMessages({
-      cliSessionId: binding.sessionId,
-      homeDir: params.homeDir,
-      localSessionId: params.entry?.sessionId,
-      reseedReceipt: binding.reseedReceipt,
-    });
+  const importedMessages = params.preparedImportedMessages;
   if (importedMessages.length === 0) {
     return { messages: params.localMessages, imported: false, expanded: false };
   }

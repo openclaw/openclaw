@@ -205,11 +205,10 @@ function collectGatewayProcessResourceCounts(): ReadonlyArray<readonly [string, 
   const processWithResourceAccess = process as NodeJS.Process & {
     _getActiveHandles?: () => unknown[];
     _getActiveRequests?: () => unknown[];
-    getActiveResourcesInfo?: () => string[];
   };
   const activeHandles = processWithResourceAccess["_getActiveHandles"]?.();
   const activeRequests = processWithResourceAccess["_getActiveRequests"]?.();
-  const activeResources = processWithResourceAccess.getActiveResourcesInfo?.();
+  const activeResources = process.getActiveResourcesInfo();
   const metrics: Array<readonly [string, number]> = [
     ["processSigintListenersCount", process.listenerCount("SIGINT")],
     ["processSigtermListenersCount", process.listenerCount("SIGTERM")],
@@ -221,34 +220,11 @@ function collectGatewayProcessResourceCounts(): ReadonlyArray<readonly [string, 
   if (activeRequests) {
     metrics.push(["activeRequestsCount", activeRequests.length]);
   }
-  const activeTimersCount = activeResources
-    ? countActiveTimersFromResourceInfo(activeResources)
-    : activeHandles
-      ? countActiveTimersFromHandles(activeHandles)
-      : undefined;
-  if (activeTimersCount !== undefined) {
-    metrics.push(["activeTimersCount", activeTimersCount]);
-  }
+  metrics.push([
+    "activeTimersCount",
+    activeResources.filter((resource) => resource === "Timeout" || resource === "Timer").length,
+  ]);
   return metrics;
-}
-
-function countActiveTimersFromResourceInfo(activeResources: readonly string[]): number {
-  return activeResources.filter((resource) => resource === "Timeout" || resource === "Timer")
-    .length;
-}
-
-function countActiveTimersFromHandles(activeHandles: readonly unknown[]): number {
-  let count = 0;
-  for (const handle of activeHandles) {
-    if (typeof handle !== "object" || handle === null) {
-      continue;
-    }
-    const constructorName = (handle as { constructor?: { name?: string } }).constructor?.name;
-    if (constructorName === "Timeout" || constructorName === "Timer") {
-      count += 1;
-    }
-  }
-  return count;
 }
 
 function normalizeRestartTraceHandoff(value: unknown): GatewayRestartTraceHandoff | null {

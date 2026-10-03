@@ -79,6 +79,12 @@ type PackageManifestLifecycle = {
   preparePackageManifest: (cwd: string) => Promise<unknown>;
   restorePackageManifest: (cwd: string) => Promise<unknown>;
 };
+type PackageWorkerBundlePrepareLifecycle = {
+  preparePackagedWorkerBundle: (cwd: string) => Promise<unknown>;
+};
+type PackageWorkerBundleRestoreLifecycle = {
+  restorePackagedWorkerBundle: (cwd: string) => Promise<unknown>;
+};
 type PackageOptions = RunOptions & {
   bundlePlugins?: string[];
   allowUnreleasedChangelog?: unknown;
@@ -92,9 +98,11 @@ type PackageOptions = RunOptions & {
   prepareChangelog?: (cwd: string) => Promise<unknown>;
   prepareDocsMap?: (cwd: string) => Promise<unknown>;
   prepareManifest?: (cwd: string) => Promise<unknown>;
+  prepareWorkerBundle?: (cwd: string) => Promise<unknown>;
   restoreChangelog?: (cwd: string) => Promise<unknown>;
   restoreDocsMap?: (cwd: string) => Promise<unknown>;
   restoreManifest?: (cwd: string) => Promise<unknown>;
+  restoreWorkerBundle?: (cwd: string) => Promise<unknown>;
   runCaptureImpl?: RunImpl;
   runImpl?: CommandRunner;
 };
@@ -114,6 +122,18 @@ function isPackageManifestLifecycle(value: unknown): value is PackageManifestLif
     typeof value.preparePackageManifest === "function" &&
     typeof value.restorePackageManifest === "function"
   );
+}
+
+function isPackageWorkerBundlePrepareLifecycle(
+  value: unknown,
+): value is PackageWorkerBundlePrepareLifecycle {
+  return isRecord(value) && typeof value.preparePackagedWorkerBundle === "function";
+}
+
+function isPackageWorkerBundleRestoreLifecycle(
+  value: unknown,
+): value is PackageWorkerBundleRestoreLifecycle {
+  return isRecord(value) && typeof value.restorePackagedWorkerBundle === "function";
 }
 
 function hasErrorCode(error: unknown, code: string) {
@@ -793,10 +813,12 @@ async function restorePackageSourceArtifacts(
   sourceDir: string,
   restoreDocsMap: (cwd: string) => Promise<unknown>,
   restoreManifest: (cwd: string) => Promise<unknown>,
+  restoreWorkerBundle: (cwd: string) => Promise<unknown>,
   restoreChangelog: (cwd: string) => Promise<unknown>,
 ) {
   await restoreChangelog(sourceDir);
   await restoreManifest(sourceDir);
+  await restoreWorkerBundle(sourceDir);
   await Promise.all(
     [PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH, LEGACY_PACKAGE_INSTALL_GUARD_RELATIVE_PATH].map(
       (relativePath) => fs.rm(path.join(sourceDir, relativePath), { force: true }),
@@ -879,6 +901,28 @@ export async function packOpenClawPackageForDocker(
     packageOptions.restoreManifest ??
     sourceManifestLifecycle?.restorePackageManifest ??
     (async () => false);
+  const sourceWorkerBundlePrepareLifecycle = packageOptions.prepareWorkerBundle
+    ? null
+    : ((await loadSourcePackageLifecycle(
+        sourcePath,
+        "package-worker-bundle.mts",
+        isPackageWorkerBundlePrepareLifecycle,
+      )) as PackageWorkerBundlePrepareLifecycle | null);
+  const sourceWorkerBundleRestoreLifecycle = packageOptions.restoreWorkerBundle
+    ? null
+    : ((await loadSourcePackageLifecycle(
+        sourcePath,
+        "package-worker-bundle-lifecycle.mjs",
+        isPackageWorkerBundleRestoreLifecycle,
+      )) as PackageWorkerBundleRestoreLifecycle | null);
+  const prepareWorkerBundle =
+    packageOptions.prepareWorkerBundle ??
+    sourceWorkerBundlePrepareLifecycle?.preparePackagedWorkerBundle ??
+    (async () => false);
+  const restoreWorkerBundle =
+    packageOptions.restoreWorkerBundle ??
+    sourceWorkerBundleRestoreLifecycle?.restorePackagedWorkerBundle ??
+    (async () => false);
   const prepareBundledAiRuntime =
     packageOptions.prepareBundledAiRuntime ?? prepareBundledAiRuntimePackage;
   const packTool = packageOptions.pnpmPack ? "pnpm" : "npm";
@@ -897,6 +941,7 @@ export async function packOpenClawPackageForDocker(
     }
   };
   try {
+    await prepareWorkerBundle(sourcePath);
     console.error("==> Writing OpenClaw package inventory");
     await writePackageInventoryForDocker(sourcePath, packageOptions.runImpl ?? run);
 
@@ -908,6 +953,7 @@ export async function packOpenClawPackageForDocker(
         sourcePath,
         restoreDocsMap,
         restoreManifest,
+        restoreWorkerBundle,
         restoreChangelog,
       );
     } catch (restoreError) {
@@ -989,6 +1035,7 @@ export async function packOpenClawPackageForDocker(
           await restoreDocsMap(cwd);
         },
         restoreManifest,
+        restoreWorkerBundle,
         restoreChangelog,
       );
     }

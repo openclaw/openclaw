@@ -146,14 +146,7 @@ export function readWorkerPlacementChangeSnapshotInDatabase(
         "worker_environments.environment_id",
         "worker_session_placements.environment_id",
       )
-      .where(
-        "worker_session_placements.environment_id",
-        "in",
-        query(db)
-          .selectFrom("worker_environments")
-          .select("environment_id")
-          .where("profile_id", "in", profileIds),
-      )
+      .where("worker_environments.profile_id", "in", profileIds)
       // Match the instance correlation used by readWorkerPlacementIdentity, including
       // terminal provenance and pre-epoch dispatch states.
       .where((eb) =>

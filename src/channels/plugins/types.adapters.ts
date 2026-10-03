@@ -401,6 +401,8 @@ export type ChannelDoctorConfigMutation = {
   config: OpenClawConfig;
   changes: string[];
   warnings?: string[];
+  /** null defers environment-dependent eligibility; an undefined account ID selects the root. */
+  historicalWebhookAccountIds?: readonly (string | undefined)[] | null;
 };
 
 export type ChannelDoctorLegacyConfigRule = LegacyConfigRule;

@@ -8996,7 +8996,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         let appModel = NodeAppModel()
         let url = try #require(URL(string: "openclaw://agent?message=hello"))
         await appModel.handleDeepLink(url: url)
-        #expect(appModel.lastShareEventText.contains("gateway not connected"))
+        #expect(ShareGatewayRelaySettings.loadLastEvent()?.contains("gateway not connected") == true)
     }
 
     @Test func `agent deep link logging excludes the original URL`() throws {
@@ -9016,7 +9016,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         let msg = String(repeating: "a", count: 20001)
         let url = try #require(URL(string: "openclaw://agent?message=\(msg)"))
         await appModel.handleDeepLink(url: url)
-        #expect(appModel.lastShareEventText.contains("message too large"))
+        #expect(ShareGatewayRelaySettings.loadLastEvent()?.contains("message too large") == true)
     }
 
     @Test @MainActor func `handle deep link requires confirmation when connected and unkeyed`() async {
@@ -9032,7 +9032,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         await appModel.approvePendingAgentDeepLinkPrompt()
         #expect(appModel.pendingAgentDeepLinkPrompt == nil)
         #expect(appModel.openChatRequestID == 1)
-        #expect(appModel.lastShareEventText.contains("Sent to gateway"))
+        #expect(ShareGatewayRelaySettings.loadLastEvent()?.contains("Sent to gateway") == true)
     }
 
     @Test @MainActor func `handle deep link coalesces prompt when rate limited`() async throws {
@@ -9073,7 +9073,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
 
         await appModel.handleDeepLink(url: url)
         #expect(appModel.pendingAgentDeepLinkPrompt == nil)
-        #expect(appModel.lastShareEventText.contains("Rejected"))
+        #expect(ShareGatewayRelaySettings.loadLastEvent()?.contains("Rejected") == true)
     }
 
     @Test @MainActor func `handle deep link bypasses prompt with valid key`() async {
@@ -9086,7 +9086,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         await appModel.handleDeepLink(url: url)
         #expect(appModel.pendingAgentDeepLinkPrompt == nil)
         #expect(appModel.openChatRequestID == 1)
-        #expect(appModel.lastShareEventText.contains("Sent to gateway"))
+        #expect(ShareGatewayRelaySettings.loadLastEvent()?.contains("Sent to gateway") == true)
     }
 
     @Test @MainActor func `operator scopes use the active gateway token`() throws {

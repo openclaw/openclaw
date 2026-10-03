@@ -25,7 +25,6 @@ import {
   type AcceptedRestartTarget,
   type AcceptedRestartTargetOwnership,
   type CurrentRuntimeSecretsPreparation,
-  type GatewayGmailRestartAbortController,
   type GatewayRestartRequestOptions,
   type GatewayRestartTransactionResult,
   type ManagedGatewayConfigReloaderHandle,
@@ -120,12 +119,12 @@ export function startManagedGatewayConfigReloader(
       throw error;
     }
   };
-  let activeGmailRestartAbortController: GatewayGmailRestartAbortController | null = null;
+  let activeGmailRestartAbortController: AbortController | null = null;
   const abortActiveGmailRestart = () => {
     activeGmailRestartAbortController?.abort();
     activeGmailRestartAbortController = null;
   };
-  const createGmailRestartAbortController = (): GatewayGmailRestartAbortController => {
+  const createGmailRestartAbortController = (): AbortController => {
     abortActiveGmailRestart();
     const abortController = new AbortController();
     if (lifecycle.signal.aborted) {
