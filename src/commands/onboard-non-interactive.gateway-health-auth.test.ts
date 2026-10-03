@@ -127,25 +127,41 @@ describe("onboard (non-interactive): gateway health auth", () => {
     });
   });
 
-  it("resolves password auth for the local onboarding health probe", async () => {
-    await withStateDir("state-password-ref-", async (stateDir) => {
-      process.env.OPENCLAW_GATEWAY_TOKEN = "stale-env-token";
-      process.env.OPENCLAW_GATEWAY_PASSWORD = "resolved-password"; // pragma: allowlist secret
-      const passwordRef = {
-        source: "env" as const,
-        provider: "default",
-        id: "OPENCLAW_GATEWAY_PASSWORD",
-      };
-      const result = await runHealthSetup(stateDir, {
-        gateway: { auth: { mode: "password", password: passwordRef } },
-      });
+  it.each(["password", "trusted-proxy"] as const)(
+    "resolves %s auth for the local onboarding health probe",
+    async (mode) => {
+      await withStateDir("state-password-ref-", async (stateDir) => {
+        if (mode === "password") {
+          process.env.OPENCLAW_GATEWAY_TOKEN = "stale-env-token";
+        }
+        process.env.OPENCLAW_GATEWAY_PASSWORD = "resolved-password"; // pragma: allowlist secret
+        const passwordRef = {
+          source: "env" as const,
+          provider: "default",
+          id: "OPENCLAW_GATEWAY_PASSWORD",
+        };
+        const result = await runHealthSetup(stateDir, {
+          gateway: {
+            auth: {
+              mode,
+              password: passwordRef,
+              ...(mode === "trusted-proxy"
+                ? { trustedProxy: { userHeader: "x-forwarded-user" } }
+                : {}),
+            },
+            trustedProxies: ["10.0.0.5"],
+          },
+        });
 
-      expectAuthCall(gatewayReachableState.mock, "reachability", { password: "resolved-password" });
-      expectAuthCall(healthCommandMock, "health", { password: "resolved-password" });
-      expect(readTestConfig().gateway?.auth?.password).toEqual(passwordRef);
-      expect(result).toMatchObject({ ok: true });
-    });
-  });
+        expectAuthCall(gatewayReachableState.mock, "reachability", {
+          password: "resolved-password",
+        });
+        expectAuthCall(healthCommandMock, "health", { password: "resolved-password" });
+        expect(readTestConfig().gateway?.auth?.password).toEqual(passwordRef);
+        expect(result).toMatchObject({ ok: true });
+      });
+    },
+  );
 
   it("does not fall back to ambient password auth when its configured SecretRef is unresolved", async () => {
     await withStateDir("state-missing-password-", async (stateDir) => {
