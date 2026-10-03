@@ -1504,7 +1504,7 @@ src/agents/sessions/keybindings.ts	2
 src/agents/sessions/model-registry.ts	9
 src/agents/sessions/package-manager.ts	2
 src/agents/sessions/resolve-config-value.ts	1
-src/agents/sessions/sdk.ts	2
+src/agents/sessions/sdk.ts	1
 src/agents/sessions/session-manager-codec.ts	5
 src/agents/sessions/session-manager-core.ts	1
 src/agents/sessions/session-manager-entries.ts	2

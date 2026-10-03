@@ -230,14 +230,15 @@ export class DefaultResourceLoader implements ResourceLoader {
       (prompt) => prompt.name,
       (prompt) => prompt.filePath,
     );
-    this.prompts = resources.map((prompt) => ({
-      ...prompt,
-      sourceInfo: this.resolveSourceInfoForPath(
-        prompt.filePath,
-        this.extensionPromptSourceInfos,
-        prompt.sourceInfo,
-      ),
-    }));
+    this.prompts = resources.map((prompt) =>
+      Object.assign({}, prompt, {
+        sourceInfo: this.resolveSourceInfoForPath(
+          prompt.filePath,
+          this.extensionPromptSourceInfos,
+          prompt.sourceInfo,
+        ),
+      }),
+    );
     this.promptDiagnostics = diagnostics;
   }
 

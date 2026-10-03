@@ -16,7 +16,6 @@ import {
 import {
   capEntryCount,
   countUnarchivedSessionEntries,
-  getActiveSessionMaintenanceWarning,
   pruneStaleEntries,
   pruneStaleModelRunEntries,
   resolveMaintenanceConfigFromInput,
@@ -589,6 +588,35 @@ describe("pruneStaleModelRunEntries", () => {
 });
 
 describe("capEntryCount", () => {
+  it("removes synthetic cap overflow while retaining newer sessions", () => {
+    const now = Date.now();
+    const syntheticKey = "agent:main:subagent:old";
+    const store = makeStore([
+      ["newest", makeEntry(now)],
+      [syntheticKey, makeEntry(now - 1)],
+    ]);
+
+    expect(capEntryCount(store, 1, { nowMs: now })).toBe(1);
+    expect(store[syntheticKey]).toBeUndefined();
+    expect(store).toHaveProperty("newest");
+    expect(store.newest?.archivedAt).toBeUndefined();
+  });
+
+  it("archives later-inserted sessions first when activity timestamps tie", () => {
+    const now = Date.now();
+    const store = makeStore([
+      ["same-before", makeEntry(now)],
+      ["z-middle", makeEntry(now)],
+      ["same-after", makeEntry(now)],
+    ]);
+
+    expect(capEntryCount(store, 1, { nowMs: now })).toBe(2);
+    expect(store).toHaveProperty("same-before");
+    expect(store["same-before"]?.archivedAt).toBeUndefined();
+    expect(store["z-middle"]?.archivedAt).toBe(now);
+    expect(store["same-after"]?.archivedAt).toBe(now);
+  });
+
   it("preserves durable external conversation entries when capping", () => {
     const now = Date.now();
     const threadKey = "agent:main:discord:channel:123456:thread:987654";
@@ -883,69 +911,5 @@ describe("resolveMaintenanceConfigFromInput", () => {
     expect(resolveSessionEntryMaintenanceHighWater(50)).toBe(75);
     expect(resolveSessionEntryMaintenanceHighWater(500)).toBe(550);
     expect(resolveSessionEntryMaintenanceHighWater(5000)).toBe(5500);
-  });
-});
-
-describe("getActiveSessionMaintenanceWarning", () => {
-  it("warns when the active session is outside the retained recent entries", () => {
-    const now = Date.now();
-    const store = makeStore([
-      ["newest", makeEntry(now)],
-      ["recent", makeEntry(now - 1)],
-      ["active", makeEntry(now - 2)],
-      ["old", makeEntry(now - 3)],
-    ]);
-
-    const warning = getActiveSessionMaintenanceWarning({
-      store,
-      activeSessionKey: "active",
-      pruneAfterMs: DAY_MS,
-      maxEntries: 2,
-      nowMs: now,
-    });
-
-    expect(warning?.wouldCap).toBe(true);
-    expect(warning?.wouldPrune).toBe(false);
-    expect(warning?.capOutcome).toBe("archive");
-  });
-
-  it("classifies synthetic cap overflow as removal", () => {
-    const now = Date.now();
-    const activeSessionKey = "agent:main:subagent:active";
-    const store = makeStore([
-      ["newest", makeEntry(now)],
-      [activeSessionKey, makeEntry(now - 1)],
-    ]);
-
-    const warning = getActiveSessionMaintenanceWarning({
-      store,
-      activeSessionKey,
-      pruneAfterMs: DAY_MS,
-      maxEntries: 1,
-      nowMs: now,
-    });
-
-    expect(warning?.wouldCap).toBe(true);
-    expect(warning?.capOutcome).toBe("remove");
-  });
-
-  it("preserves insertion order tie behavior from stable sorting", () => {
-    const now = Date.now();
-    const activeSessionKey = "z-active";
-    const store = makeStore([
-      ["same-before", makeEntry(now)],
-      [activeSessionKey, makeEntry(now)],
-      ["same-after", makeEntry(now)],
-    ]);
-
-    const warning = getActiveSessionMaintenanceWarning({
-      store,
-      activeSessionKey,
-      pruneAfterMs: DAY_MS,
-      maxEntries: 1,
-      nowMs: now,
-    });
-
-    expect(warning?.wouldCap).toBe(true);
   });
 });
