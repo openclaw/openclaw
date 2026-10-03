@@ -6,6 +6,7 @@ import { root as fsSafeRoot, type Root } from "@openclaw/fs-safe/root";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { PLUGIN_CAPABILITY_CONSENT_REQUIRED } from "../../../../packages/gateway-protocol/src/capability-consent-error-details.js";
+import type { OpenClawConfigWithLegacyRoster } from "../../../config/legacy.roster.js";
 import type { OpenClawConfig, PluginsConfig } from "../../../config/types.js";
 import {
   installPackageDir,
@@ -33,6 +34,7 @@ import { collectConfiguredNpmPluginTargets } from "./missing-configured-plugin-i
 import {
   brokenPluginSnapshot,
   channelPluginEntry,
+  configuredPlugin,
   installedRecords,
   officialPluginEntry,
   officialWebSearchPluginEntry,
@@ -76,10 +78,6 @@ async function useRealCapabilityConsent() {
   prepareManagedPluginArtifactConsentHandler.mockImplementation(
     actual.prepareManagedPluginArtifactConsentHandler,
   );
-}
-
-function configuredPlugin(id: string): OpenClawConfig {
-  return { plugins: { entries: { [id]: { enabled: true } } } };
 }
 
 describe("repairMissingConfiguredPluginInstalls", () => {
@@ -1375,14 +1373,15 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       },
     ]);
 
-    const result = await repairMissingConfiguredPluginInstalls({
-      cfg: {
-        plugins: { enabled: false, entries: { "diagnostics-otel": { enabled: true } } },
-        channels: {
-          matrix: { homeserver: "https://matrix.example.org" },
-        },
-        agents: { defaults: { agentRuntime: { id: "codex" } } },
+    const cfg: OpenClawConfigWithLegacyRoster = {
+      plugins: { enabled: false, entries: { "diagnostics-otel": { enabled: true } } },
+      channels: {
+        matrix: { homeserver: "https://matrix.example.org" },
       },
+      agents: { defaults: { agentRuntime: { id: "codex" } } },
+    };
+    const result = await repairMissingConfiguredPluginInstalls({
+      cfg,
       env: testEnv,
     });
 

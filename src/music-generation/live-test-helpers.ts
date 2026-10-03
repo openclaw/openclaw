@@ -10,7 +10,7 @@ export const DEFAULT_LIVE_MUSIC_MODELS: Record<string, string> = {
   openrouter: "openrouter/google/lyria-3-pro-preview",
 };
 
-/** Resolve configured provider/model refs from the musicGenerationModel defaults. */
+/** Resolve configured provider/model refs from `agents.defaults.mediaModels.music`. */
 export function resolveConfiguredLiveMusicModels(cfg: OpenClawConfig): Map<string, string> {
   return resolveConfiguredLiveProviderModels(cfg.agents?.defaults?.mediaModels?.music);
 }

@@ -117,13 +117,11 @@ type TelegramMessageHandler = (ctx: TelegramMiddlewareTestContext) => Promise<vo
 function configureOpenDm(
   params: {
     debounceMs?: number;
-    timezone?: "envelopeTimezone" | "userTimezone";
+    userTimezone?: string;
   } = {},
 ): void {
   loadConfig.mockReturnValue({
-    agents: params.timezone
-      ? { defaults: { [params.timezone]: params.timezone === "userTimezone" ? "UTC" : "utc" } }
-      : undefined,
+    agents: params.userTimezone ? { defaults: { userTimezone: params.userTimezone } } : undefined,
     messages: { inbound: { debounceMs: params.debounceMs ?? 0 } },
     channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
   });
@@ -495,7 +493,7 @@ describe("createTelegramBot", () => {
   });
 
   it("preserves same-chat reply order when a debounced run is still active", async () => {
-    configureOpenDm({ debounceMs: INBOUND_DEBOUNCE_MS, timezone: "envelopeTimezone" });
+    configureOpenDm({ debounceMs: INBOUND_DEBOUNCE_MS, userTimezone: "UTC" });
 
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
     const startedBodies: string[] = [];
@@ -645,7 +643,7 @@ describe("createTelegramBot", () => {
 
   it("assembles a default short-long-short burst despite intervening message IDs", async () => {
     loadConfig.mockReturnValue({
-      agents: { defaults: { envelopeTimezone: "utc" } },
+      agents: { defaults: { userTimezone: "UTC" } },
       channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
     });
     vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
@@ -720,7 +718,7 @@ describe("createTelegramBot", () => {
 
   it("lets /stop@openclaw_bot bypass and cancel pending same-chat inbound debounce", async () => {
     const stopText = "/stop@openclaw_bot";
-    configureOpenDm({ debounceMs: INBOUND_DEBOUNCE_MS, timezone: "userTimezone" });
+    configureOpenDm({ debounceMs: INBOUND_DEBOUNCE_MS, userTimezone: "UTC" });
 
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
     const startedBodies: string[] = [];
@@ -953,7 +951,7 @@ describe("createTelegramBot", () => {
   });
 
   it("stop cancels ordinary and forwarded batches queued behind an active turn", async () => {
-    configureOpenDm({ debounceMs: 3000, timezone: "envelopeTimezone" });
+    configureOpenDm({ debounceMs: 3000, userTimezone: "UTC" });
     const attachmentPath = path.join(
       requireValue(process.env.OPENCLAW_STATE_DIR, "test state directory"),
       "caption.txt",
@@ -1128,7 +1126,7 @@ describe("createTelegramBot", () => {
   });
 
   it("keeps separate text-batch replay settlements isolated when the next batch fails", async () => {
-    configureOpenDm({ debounceMs: 300, timezone: "envelopeTimezone" });
+    configureOpenDm({ debounceMs: 300, userTimezone: "UTC" });
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     const secondDispatchError = new Error("next batch failed before adoption");
     replySpy.mockResolvedValueOnce(undefined).mockRejectedValueOnce(secondDispatchError);
@@ -1169,7 +1167,7 @@ describe("createTelegramBot", () => {
   });
 
   it("retries deferred adoption after durable commit fails without settling buffered participants", async () => {
-    configureOpenDm({ debounceMs: INBOUND_DEBOUNCE_MS, timezone: "envelopeTimezone" });
+    configureOpenDm({ debounceMs: INBOUND_DEBOUNCE_MS, userTimezone: "UTC" });
 
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
     const queuedLifecycleReady = createDeferred<GetReplyOptions["turnAdoptionLifecycle"]>();
@@ -1218,7 +1216,7 @@ describe("createTelegramBot", () => {
   });
 
   it("serializes timeout settlement behind an in-flight durable adoption commit", async () => {
-    configureOpenDm({ debounceMs: INBOUND_DEBOUNCE_MS, timezone: "envelopeTimezone" });
+    configureOpenDm({ debounceMs: INBOUND_DEBOUNCE_MS, userTimezone: "UTC" });
 
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
     const queuedTurnReady = createDeferred<void>();
@@ -1291,7 +1289,7 @@ describe("createTelegramBot", () => {
   });
 
   it("blocks buffered adoption after an exposed replay participant times out", async () => {
-    configureOpenDm({ debounceMs: INBOUND_DEBOUNCE_MS, timezone: "envelopeTimezone" });
+    configureOpenDm({ debounceMs: INBOUND_DEBOUNCE_MS, userTimezone: "UTC" });
 
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
     const queuedLifecycleReady = createDeferred<GetReplyOptions["turnAdoptionLifecycle"]>();
@@ -1368,7 +1366,7 @@ describe("createTelegramBot", () => {
   it.each([false, true])(
     "preserves forwarded origin and formatting across debounce (multiple=%s)",
     async (multiple) => {
-      configureOpenDm({ timezone: "envelopeTimezone" });
+      configureOpenDm({ userTimezone: "UTC" });
       const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
       const sourceWork: Promise<unknown>[] = [];
       let flushForward: (() => void) | undefined;
@@ -1444,7 +1442,7 @@ describe("createTelegramBot", () => {
     loadConfig.mockReturnValue({
       agents: {
         defaults: {
-          envelopeTimezone: "utc",
+          userTimezone: "UTC",
         },
       },
       messages: {

@@ -325,6 +325,14 @@ the authored config type omits them and `resolveAgentConfig` no longer returns
 `agentRuntime`. Read runtime policy from per-model `models[ref].agentRuntime` and
 compaction settings from `agents.defaults.compaction`.
 
+`agents.defaults` also no longer types `imageGenerationModel`, `videoGenerationModel`,
+`musicGenerationModel`, `envelopeTimezone`, `envelopeTimestamp`, `envelopeElapsed`,
+`timeFormat`, `promptOverlays`, or `agentRuntime`; validation rejects all nine. Use
+`mediaModels.image`, `mediaModels.video`, and `mediaModels.music`, `userTimezone` with
+built-in envelope and time formatting, `plugins.entries.openai.config.personality`,
+and per-model `models[ref].agentRuntime`. This is a type-only SDK change; run
+`openclaw doctor --fix` to migrate stored configs.
+
 Plugins built against stable SDK releases through 2026.9.x may still read the
 deprecated, non-enumerable runtime `agents.list` projection introduced in
 [#113146](https://github.com/openclaw/openclaw/pull/113146). It is no longer typed
