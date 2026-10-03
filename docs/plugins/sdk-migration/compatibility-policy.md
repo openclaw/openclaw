@@ -159,6 +159,23 @@ Core and bundled callers use these worker-backed methods. Legacy calls emit one
 once-per-method warning for unscoped calls. Schemas, retained data, and update
 behavior are unchanged.
 
+### Personal model-account control plane
+
+The October 3, 2026 `model-account-connect-sync-persistence` record retains the
+seven synchronous `modelAccountConnectService` methods shipped in 2026.9.8:
+`listLinks`, `link`, `unlink`, `list`, `select`, `status`, and `cancel`. They remain
+available through the Gateway Plugin SDK context with their existing arguments,
+return envelopes, and immediate completion until the next Plugin SDK major and
+explicit breaking-release approval. In particular, the released action shape
+`{ owner: string; assertCurrent: () => void }` remains source-compatible.
+
+Core and bundled callers use the corresponding `Async` methods; see
+[awaited personal model-account operations](/plugins/sdk-migration/how-to-migrate#await-personal-model-account-operations).
+Synchronous calls emit one `DEP_SESSION_PERSISTENCE` warning per plugin and
+method per process; unscoped callers warn once per method. The compatibility
+adapters retain native database access during this window. RPC schemas,
+credential storage, retention, and update behavior are unchanged.
+
 ### Awaited session persistence
 
 The October 1, 2026 records `session-manager-sync-persistence`,

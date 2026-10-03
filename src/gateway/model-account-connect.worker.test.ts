@@ -226,11 +226,11 @@ it("serves personal account RPCs without caller-thread SQL or credentials", asyn
       expect(JSON.stringify(connected)).not.toContain(credential.token);
 
       const action = await prepareUserModelAccountAction({ client, context }, owner);
-      const staleList = service.list(action);
+      const staleList = service.listAsync(action);
       clients.clear();
       await expect(staleList).rejects.toBeInstanceOf(ModelAccountConnectAuthorityError);
       clients.add(client);
-      const staleStatus = service.status(action, started.connectId);
+      const staleStatus = service.statusAsync(action, started.connectId);
       clients.clear();
       await expect(staleStatus).rejects.toBeInstanceOf(ModelAccountConnectAuthorityError);
       expect(sql.queries).toEqual([]);

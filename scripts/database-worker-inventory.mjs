@@ -1743,14 +1743,9 @@ const reviewedOperations = new Map([
     [
       {
         tier: "W",
-        operations: [
-          "listUserModelAccounts",
-          "connectUserModelAccount",
-          "setUserProfileAuthLink",
-          "clearUserProfileAuthLink",
-        ],
+        operations: ["connectUserModelAccount"],
         evidence:
-          "Gateway account service and summary callers use user-model-account-operations.ts; these kernels execute only through userProfiles.modelAccount operations in user-profiles.worker.ts. Shared credential/OAuth kernels and the live account pin guard retain T1.",
+          "Personal sign-in persistence executes only through userProfiles.modelAccount.connect in user-profiles.worker.ts. Inventory/link/unlink kernels retain T1 for deprecated v2026.9.8 Gateway SDK methods; bundled callers use the Async replacements. Shared credential/OAuth kernels and the live account pin guard also retain T1.",
       },
       {
         tier: "T3",

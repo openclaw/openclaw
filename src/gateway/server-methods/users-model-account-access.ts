@@ -10,6 +10,7 @@ import { ensureProfileIdForEmail } from "../../state/user-profile-email.js";
 import { UserProfileNotFoundError } from "../../state/user-profiles-schema.js";
 import type {
   ModelAccountConnectAction,
+  ModelAccountConnectWorkerAction,
   ModelAccountRole,
   UserModelAccountSelection,
 } from "../model-account-authority.js";
@@ -31,7 +32,7 @@ export async function prepareUserModelAccountAction(
     | PersonalModelSelectionScope
     | "operator.admin"
     | typeof SESSION_WRITE_SCOPE = WRITE_SCOPE,
-): Promise<ModelAccountConnectAction> {
+): Promise<ModelAccountConnectWorkerAction> {
   const { client, context } = options;
   const profileReference = client?.authenticatedUserProfile?.profileId;
   const userReference = client?.authenticatedUserId;

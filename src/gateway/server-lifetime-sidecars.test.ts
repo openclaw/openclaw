@@ -411,7 +411,7 @@ describe("gateway lifetime sidecars", () => {
     expect(context.githubOAuthService).toBeUndefined();
     expect(context.modelAccountConnectService).toBeUndefined();
     await expect(
-      modelAccounts?.status({ owner: "profile-1", assertCurrent: () => {} }, "stale-flow"),
+      modelAccounts?.statusAsync({ owner: "profile-1", assertCurrent: () => {} }, "stale-flow"),
     ).rejects.toThrow("current authorized connection");
   });
 });

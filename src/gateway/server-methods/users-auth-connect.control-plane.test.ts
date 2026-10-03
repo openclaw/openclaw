@@ -173,8 +173,8 @@ describe("users model-account control plane", () => {
       lookupEntered.resolve();
       return releaseLookup.promise;
     });
-    const unlink = service.unlink.bind(service);
-    vi.spyOn(service, "unlink").mockImplementation((...args) => {
+    const unlink = service.unlinkAsync.bind(service);
+    vi.spyOn(service, "unlinkAsync").mockImplementation((...args) => {
       const result = unlink(...args);
       unlinkEntered.resolve();
       return result;
