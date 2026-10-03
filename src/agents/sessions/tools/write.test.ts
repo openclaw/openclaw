@@ -247,6 +247,64 @@ describe("write tool", () => {
     },
   );
 
+  it.each([
+    {
+      name: "start.cmd",
+      content: "@echo off\r\ncall :run\n",
+      expected: "@echo off\r\ncall :run\r\n",
+    },
+    {
+      name: "START.BAT",
+      content: "@echo off\r\ncall :run\n",
+      expected: "@echo off\r\ncall :run\r\n",
+    },
+    {
+      name: "lone-cr.cmd",
+      content: "@echo off\rcall :run\r",
+      expected: "@echo off\r\ncall :run\r\n",
+    },
+    { name: "start.sh", content: "@echo off\r\ncall :run\n", expected: "@echo off\r\ncall :run\n" },
+  ])("persists $name with its platform line endings", async ({ name, content, expected }) => {
+    const filePath = await createTempPath(name);
+    const tool = createWriteTool(tmpDir);
+
+    const result = await tool.execute("call-1", { path: name, content }, undefined);
+
+    await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(expected);
+    const tc0 = expectDefined(result.content[0], "result.content[0] test invariant");
+    expect("text" in tc0 ? tc0.text : "").toContain(
+      `Successfully wrote ${Buffer.byteLength(expected)} bytes`,
+    );
+  });
+
+  it.each(["@echo off\necho hi\n", "@echo off\r\necho hi\r\n"])(
+    "treats an exact write to an existing batch file as a no-op: %j",
+    async (content) => {
+      const filePath = await createTempPath("start.cmd");
+      await fs.writeFile(filePath, content, "utf-8");
+      const tool = createWriteTool(tmpDir);
+
+      const result = await tool.execute("call-1", { path: "start.cmd", content }, undefined);
+
+      expect(result.details).toEqual({ changed: false });
+      await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(content);
+    },
+  );
+
+  it("keeps the requested bytes when overwriting an existing batch file", async () => {
+    const filePath = await createTempPath("start.cmd");
+    await fs.writeFile(filePath, "@echo off\r\necho old\r\n", "utf-8");
+    const tool = createWriteTool(tmpDir);
+
+    await tool.execute(
+      "call-1",
+      { path: "start.cmd", content: "@echo off\necho new\n" },
+      undefined,
+    );
+
+    await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("@echo off\necho new\n");
+  });
+
   it("reports a created file with its authoritative diff", async () => {
     await createTempPath("created.txt");
     const content = "first\nsecond\n";

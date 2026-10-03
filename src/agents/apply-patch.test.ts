@@ -106,6 +106,34 @@ describe("applyPatch", () => {
 *** End Patch`;
 
   it.each([
+    { name: "run.cmd", lines: "+@echo off\n+call :run", expected: "@echo off\r\ncall :run\r\n" },
+    { name: "lone-cr.cmd", lines: "+@echo off\rcall :run", expected: "@echo off\r\ncall :run\r\n" },
+    { name: "notes.txt", lines: "+@echo off\n+call :run", expected: "@echo off\ncall :run\n" },
+  ])("adds $name with its platform line endings", async ({ name, lines, expected }) => {
+    await withTempDir(async (dir) => {
+      await applyPatch(`*** Begin Patch\n*** Add File: ${name}\n${lines}\n*** End Patch`, {
+        cwd: dir,
+      });
+
+      await expect(fs.readFile(path.join(dir, name), "utf8")).resolves.toBe(expected);
+    });
+  });
+
+  it("keeps the existing line endings when updating a batch file", async () => {
+    await withTempDir(async (dir) => {
+      const filePath = path.join(dir, "run.cmd");
+      await fs.writeFile(filePath, "@echo off\necho old\n");
+
+      await applyPatch(
+        "*** Begin Patch\n*** Update File: run.cmd\n@@\n-echo old\n+echo new\n*** End Patch",
+        { cwd: dir },
+      );
+
+      await expect(fs.readFile(filePath, "utf8")).resolves.toBe("@echo off\necho new\n");
+    });
+  });
+
+  it.each([
     { name: "workspace-confined host", workspaceOnly: true },
     { name: "unconfined host", workspaceOnly: false },
   ])("preserves a valid UTF-8 BOM in $name updates", async ({ workspaceOnly }) => {

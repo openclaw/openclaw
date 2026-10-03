@@ -20,6 +20,7 @@ import {
 } from "./apply-patch-file-ops.js";
 import { resolveApplyPatchInputPath, toDisplayPath } from "./apply-patch-paths.js";
 import { applyUpdateHunk, type UpdateFileChunk } from "./apply-patch-update.js";
+import { normalizeNewFileLineEndings } from "./line-endings.js";
 import type { MemoryWriteProvenanceObserver } from "./memory-write-provenance.js";
 import {
   preserveAtPrefixedRelativePath,
@@ -214,7 +215,7 @@ async function applyPatch(input: string, options: ApplyPatchOptions): Promise<Ap
           await ensureDir(target.resolved, fileOps);
           await createPatchTarget({
             target,
-            contents: hunk.contents,
+            contents: normalizeNewFileLineEndings(target.resolved, hunk.contents),
             ops: fileOps,
             hint: `Use "*** Update File: ${target.display}" to change it, or delete it earlier in the same patch.`,
           });
