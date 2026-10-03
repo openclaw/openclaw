@@ -43,7 +43,6 @@ import {
   type UpdateConfigSnapshot,
 } from "./update-command-config-snapshot.js";
 import { restoreFailedUpdateDatabases } from "./update-command-database-backup.js";
-import { createUpdateCommandExecutionGuards } from "./update-command-execution-guards.js";
 import { readPackageUpdateIdentity } from "./update-command-package-identity.js";
 import { UpdateCommandPendingRecoveryFailure } from "./update-command-result.js";
 import type {

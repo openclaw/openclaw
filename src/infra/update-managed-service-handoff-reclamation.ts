@@ -1,18 +1,12 @@
 import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { executeSqliteQuerySync } from "./kysely-sync.js";
-import type { createManagedHandoffBootIdentityReader } from "./update-managed-service-handoff-boot.js";
 import {
   managedCommandCustody,
   managedCommandUnsettled,
 } from "./update-managed-service-handoff-children.js";
-import {
-  canCleanupLegacyManagedHandoff,
-} from "./update-managed-service-handoff-cleanup.js";
-import {
-  leaseQueries,
-  type LeaseRow,
-} from "./update-managed-service-handoff-database.js";
+import { canCleanupLegacyManagedHandoff } from "./update-managed-service-handoff-cleanup.js";
+import { leaseQueries, type LeaseRow } from "./update-managed-service-handoff-database.js";
 import type { ManagedHandoffLease } from "./update-managed-service-handoff-lease-types.js";
 import type { createManagedHandoffProcessIdentityReader } from "./update-managed-service-handoff-process.js";
 import { managedHandoffLeaseText as text } from "./update-managed-service-handoff-rows.js";
