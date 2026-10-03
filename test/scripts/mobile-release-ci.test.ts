@@ -330,7 +330,7 @@ describe("mobile release CI tools", () => {
     const upload = findStep("Prepare and upload Android release");
     const uploadEnvironment = expectDefined(upload.env, "Android upload environment");
     const tooling = findStep("Prepare trusted Linux Android tooling");
-    const diagnostics = findStep("Retain emulator startup diagnostics");
+    const diagnostics = findStep("Retain screenshot diagnostics");
     const emulators = expectDefined(
       findStep("Setup Android toolchain").with?.["install-screenshot-emulators"],
       "screenshot emulator selection",
@@ -543,23 +543,29 @@ describe("mobile release CI tools", () => {
     },
   );
 
-  it("uploads only Android emulator startup diagnostics after a screenshot failure", () => {
+  it("uploads Android screenshot diagnostics without logcat or signing files after a capture failure", () => {
     const runnerTemp = tempRoots.make("openclaw-android-emulator-artifact-selection-");
     const source = "android-release-recovery/source";
     const diagnostics = `${source}/.artifacts/android-screenshots/latest`;
     const expected = ["phone", "wear"]
       .flatMap((formFactor) =>
-        ["emulator.log", "emulator-args.txt", "process-status.txt"].map(
-          (file) => `${diagnostics}/${formFactor}/${file}`,
-        ),
+        [
+          "emulator.log",
+          "emulator-args.txt",
+          "process-status.txt",
+          "ui-dumps/openclaw-settings.xml",
+          "activity-start/openclaw-settings.txt",
+        ].map((file) => `${diagnostics}/${formFactor}/${file}`),
       )
       .toSorted();
     for (const file of expected) {
-      writeFile(runnerTemp, file, "synthetic emulator startup diagnostic");
+      writeFile(runnerTemp, file, "synthetic screenshot diagnostic");
     }
     for (const file of [
       `${diagnostics}/phone/logcat.txt`,
-      `${diagnostics}/wear/ui-dumps/openclaw-home.xml`,
+      `${diagnostics}/wear/ui-dumps/private.xml`,
+      `${diagnostics}/phone/activity-start/private.txt`,
+      `${diagnostics}/phone/ui-dumps/nested/openclaw-settings.xml`,
       `${source}/apps/android/build/release-signing/google-play.json`,
     ]) {
       writeFile(runnerTemp, file, "synthetic excluded data");
