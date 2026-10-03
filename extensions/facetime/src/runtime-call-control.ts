@@ -42,13 +42,15 @@ export function createFaceTimeCallControl(params: {
     ].filter((candidate, index, all) => all.indexOf(candidate) === index);
     let lastAbsent: FaceTimeHelperAmbiguousError | undefined;
     for (const candidate of candidates) {
-      let result: HelperActionResult;
       try {
-        result = await request.call.runCarrierCommand({
+        const result = await request.call.runCarrierCommand({
           generation: request.generation,
           allowClosing: true,
           action: async () => await request.run(candidate),
         });
+        projectFaceTimeNativeAction(request.action, result);
+        request.call.promoteCarrierCallUUID(candidate);
+        return result;
       } catch (error) {
         if (!(error instanceof FaceTimeHelperAmbiguousError)) {
           throw error;
@@ -56,25 +58,6 @@ export function createFaceTimeCallControl(params: {
         try {
           projectCompleteFaceTimeAbsence(error.result);
           lastAbsent = error;
-        } catch {
-          throw error;
-        }
-        continue;
-      }
-      try {
-        projectFaceTimeNativeAction(request.action, result);
-        request.call.promoteCarrierCallUUID(candidate);
-        return result;
-      } catch (error) {
-        try {
-          projectCompleteFaceTimeAbsence(result);
-          lastAbsent =
-            error instanceof FaceTimeHelperAmbiguousError
-              ? error
-              : new FaceTimeHelperAmbiguousError(
-                  `FaceTime ${request.action} carrier owner is missing`,
-                  result,
-                );
         } catch {
           throw error;
         }

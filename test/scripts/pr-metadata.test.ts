@@ -388,13 +388,14 @@ describe("PR metadata through REST", () => {
         source === "string" || source === "empty"
           ? JSON.stringify(expected.toString())
           : `Buffer.from("${expected.toString("base64")}", "base64")`;
-      const producer = `node -e 'process.stdout.write(Buffer.from("${payload.toString("base64")}", "base64"))'`;
+      const stdinPath = join(tempDirs.make("openclaw-pr-input-"), "stdin");
+      writeFileSync(stdinPath, payload);
       const inputArgs = source === "string" ? '"--input=-"' : '"--input", "-"';
       const command =
         source === "inherited"
-          ? `${producer} | pr_gh_plain api repos/base-owner/base-repo --input -`
-          : `${producer} | node --input-type=module -e 'import { execPrGh } from "./scripts/pr-lib/github.mjs"; process.stdout.write(execPrGh(["api", "repos/base-owner/base-repo", ${inputArgs}], {encoding:"utf8", ${source === "ignored" ? "" : `input:${input},`} stdio:["${source === "ignored" ? "ignore" : "inherit"}","pipe","pipe"]}, "plain"))'`;
-      const result = readPrMetadata({}, command);
+          ? "pr_gh_plain api repos/base-owner/base-repo --input -"
+          : `node --input-type=module -e 'import { execPrGh } from "./scripts/pr-lib/github.mjs"; process.stdout.write(execPrGh(["api", "repos/base-owner/base-repo", ${inputArgs}], {encoding:"utf8", ${source === "ignored" ? "" : `input:${input},`} stdio:["${source === "ignored" ? "ignore" : "inherit"}","pipe","pipe"]}, "plain"))'`;
+      const result = readPrMetadata({}, `${command} < '${stdinPath.replaceAll("'", "'\\''")}'`);
       expect(result.status, result.stderr).toBe(0);
       expect(JSON.parse(result.stdout)).toMatchObject({ full_name: "base-owner/base-repo" });
       expect(result.payloads).toEqual([

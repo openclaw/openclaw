@@ -8,13 +8,9 @@ let defaultAgentMaxConcurrent: number | undefined;
 
 function resolveDefaultAgentMaxConcurrent(): number {
   if (defaultAgentMaxConcurrent === undefined) {
-    // Prefer the quota-aware count on modern Node; retain the CPU-list fallback
-    // for runtimes where availableParallelism is absent.
-    const availableParallelism =
-      typeof os.availableParallelism === "function" ? os.availableParallelism() : os.cpus().length;
     defaultAgentMaxConcurrent = Math.max(
       MIN_AGENT_MAX_CONCURRENT,
-      availableParallelism * AGENT_RUNS_PER_CPU,
+      os.availableParallelism() * AGENT_RUNS_PER_CPU,
     );
   }
   return defaultAgentMaxConcurrent;

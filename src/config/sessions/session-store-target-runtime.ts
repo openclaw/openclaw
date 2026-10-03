@@ -50,7 +50,7 @@ export function prepareSessionStoreTargetInventoryRead(
   unchangedBy?: Parameters<typeof prepareOpenClawAgentDatabaseRegistrySnapshotRead>[1],
 ) {
   const { candidates, ...prepared } = request;
-  const registry = prepareOpenClawAgentDatabaseRegistrySnapshotRead(
+  let registry = prepareOpenClawAgentDatabaseRegistrySnapshotRead(
     { env: request.env },
     unchangedBy,
   );
@@ -84,7 +84,19 @@ export function prepareSessionStoreTargetInventoryRead(
         assertCurrent();
         if (inventory.kind === "session-target-registry-required") {
           registryStarted = true;
-          const current = await registry.read();
+          let current;
+          try {
+            current = await registry.read();
+          } catch (error) {
+            if (!(error instanceof AgentDatabaseRegistryChangedError)) {
+              throw error;
+            }
+            registry = prepareOpenClawAgentDatabaseRegistrySnapshotRead(
+              { env: request.env },
+              unchangedBy,
+            );
+            current = await registry.read();
+          }
           assertCurrent();
           inventory = await discovery.readTargetInventory({
             ...prepared,

@@ -92,7 +92,8 @@ describe("shared/node-match", () => {
     { clientIds: ["openclaw-macos", undefined] },
     { clientIds: ["openclaw-macos", "clawdbot-macos", "node-host"] },
     { clientIds: ["clawdbot-macos", undefined] },
-  ])("keeps non-migration ties ambiguous for $clientIds", ({ clientIds }) => {
+    { clientIds: ["clawdbot-macos", "moldbot-macos", " OpenClaw-MacOS "] },
+  ])("keeps equally strong client ties ambiguous for $clientIds", ({ clientIds }) => {
     for (const connected of [true, false, undefined]) {
       const nodes = clientIds.map((clientId, index) => ({
         nodeId: `node-${index}`,
@@ -107,23 +108,6 @@ describe("shared/node-match", () => {
       }
     }
   });
-
-  it.each([true, false, undefined])(
-    "keeps the unique current client in an entirely legacy migration tie (connected=%s)",
-    (connected) => {
-      const nodes = ["clawdbot-macos", "moldbot-macos", " OpenClaw-MacOS "].map(
-        (clientId, index) => ({
-          nodeId: `node-${index}`,
-          displayName: "Shared Desk",
-          clientId,
-          connected,
-        }),
-      );
-      for (const candidates of [nodes, nodes.toReversed()]) {
-        expect(resolveNodeIdFromCandidates(candidates, "Shared Desk")).toBe("node-2");
-      }
-    },
-  );
 
   it.each(["node-host", "clawdbot-macos", undefined])(
     "prefers a connected %s client over a disconnected current app",

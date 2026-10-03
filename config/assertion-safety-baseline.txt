@@ -379,7 +379,6 @@ extensions/firecrawl/index.ts	2
 extensions/firecrawl/src/config.ts	3
 extensions/firecrawl/src/firecrawl-client.ts	1
 extensions/firecrawl/src/firecrawl-fetch-provider-shared.ts	5
-extensions/fish-audio-speech/speech-provider.ts	1
 extensions/github-copilot/embeddings.ts	3
 extensions/github-copilot/index.ts	3
 extensions/github-copilot/login.ts	2
@@ -1144,7 +1143,7 @@ packages/ai/src/transports/openai-responses-client.ts	11
 packages/ai/src/transports/openai-responses-compact-request.ts	2
 packages/ai/src/transports/openai-responses-continuation.ts	2
 packages/ai/src/transports/openai-responses-contracts.ts	1
-packages/ai/src/transports/openai-responses-debug.ts	11
+packages/ai/src/transports/openai-responses-debug.ts	10
 packages/ai/src/transports/openai-responses-params-internal.ts	5
 packages/ai/src/transports/openai-responses-payload-policy.ts	3
 packages/ai/src/transports/openai-responses-prompt-observer-internal.ts	2
@@ -1325,7 +1324,7 @@ src/agents/compaction-usage.ts	1
 src/agents/compaction.ts	4
 src/agents/content-blocks.ts	1
 src/agents/context-cache.ts	1
-src/agents/context-runtime-state.ts	4
+src/agents/context-runtime-state.ts	1
 src/agents/cron-creator-authority-context.ts	1
 src/agents/custom-api-registry.ts	2
 src/agents/delegation-capability.ts	1
@@ -2081,7 +2080,6 @@ src/fleet/backup.runtime.ts	3
 src/fleet/service-support.runtime.ts	1
 src/flows/channel-setup.status.ts	2
 src/flows/channel-setup.ts	3
-src/flows/doctor-core-checks.runtime.ts	2
 src/flows/doctor-core-checks.ts	1
 src/flows/doctor-health-contributions-final.ts	1
 src/flows/doctor-health-contributions.ts	1
@@ -2421,7 +2419,7 @@ src/infra/windows-shell-command.ts	1
 src/interactive/payload.ts	1
 src/llm/providers/stream-wrappers/google-thinking-payload.ts	3
 src/llm/providers/stream-wrappers/moonshot-thinking.ts	2
-src/llm/providers/stream-wrappers/openai.ts	11
+src/llm/providers/stream-wrappers/openai.ts	8
 src/llm/providers/stream-wrappers/stream-payload-utils.ts	1
 src/llm/utils/node-http-proxy.ts	1
 src/llm/utils/oauth/anthropic.ts	2
@@ -2436,14 +2434,13 @@ src/logging/diagnostic-support-redaction.ts	1
 src/logging/diagnostic.ts	1
 src/logging/json-console-line.ts	2
 src/logging/levels.ts	2
-src/logging/log-file-shared.ts	1
 src/logging/logger.ts	7
 src/logging/parse-log-line.ts	1
 src/logging/redact-internal-state.ts	1
 src/logging/redact.ts	2
 src/logging/secret-redaction-registry.ts	1
 src/logging/state.ts	6
-src/logging/subsystem.ts	3
+src/logging/subsystem.ts	1
 src/mcp/channel-bridge.ts	4
 src/mcp/channel-shared.ts	2
 src/mcp/codex-supervision-tools-serve.ts	6
@@ -2475,7 +2472,7 @@ src/meeting-bot/plugin-entry.ts	5
 src/meeting-bot/plugin-shell.ts	1
 src/meeting-bot/realtime-tool-continuity.ts	2
 src/meeting-bot/runtime-facade.ts	4
-src/meeting-bot/runtime-probes.ts	8
+src/meeting-bot/runtime-probes.ts	6
 src/meeting-bot/runtime-setup.ts	1
 src/meeting-bot/session-runtime.ts	4
 src/meeting-bot/session-speech-readiness.ts	1
@@ -2678,7 +2675,7 @@ src/process/supervisor/adapters/child.ts	2
 src/process/supervisor/adapters/pty.ts	1
 src/process/terminal-pty.ts	1
 src/process/windows-command.ts	1
-src/provider-runtime/operation-retry.ts	3
+src/provider-runtime/operation-retry.ts	2
 src/proxy-capture/env.ts	1
 src/proxy-capture/store.sqlite.ts	2
 src/realtime-transcription/websocket-session.ts	2
@@ -2730,7 +2727,7 @@ src/shared/config-eval.ts	1
 src/shared/deferred.ts	1
 src/shared/frontmatter.ts	1
 src/shared/global-singleton.ts	4
-src/shared/json-schema-defaults.ts	25
+src/shared/json-schema-defaults.ts	21
 src/shared/message-content-blocks.ts	2
 src/shared/node-list-parse.ts	3
 src/shared/node-presence.ts	1
@@ -2764,7 +2761,6 @@ src/state/openclaw-agent-db-session-migrations.ts	1
 src/state/openclaw-quarantine-store.ts	2
 src/state/openclaw-state-db-delivery-queue-backfill.ts	1
 src/state/openclaw-state-db-legacy-backfills.ts	4
-src/state/openclaw-state-db-schema-additive.ts	1
 src/state/openclaw-state-db-schema-helpers.ts	1
 src/state/openclaw-state-db-schema-repair.ts	2
 src/state/openclaw-state-ownership.ts	1
@@ -2786,9 +2782,8 @@ src/talk/client-voice-session.ts	1
 src/talk/consult-question.ts	2
 src/talk/exact-speech-protocol.ts	1
 src/talk/provider-internal.ts	2
-src/talk/provider-resolver.ts	1
 src/talk/turn-context-tracker.ts	2
-src/trajectory/export.ts	14
+src/trajectory/export.ts	9
 src/trajectory/runtime-store.sqlite.ts	1
 src/trajectory/runtime.ts	4
 src/transcripts/config.ts	2
@@ -2826,9 +2821,9 @@ src/utils/usage-format.ts	1
 src/version.ts	5
 src/video-generation/capability-overlays.ts	1
 src/video-generation/runtime.ts	1
-src/web-fetch/runtime.ts	3
+src/web-fetch/runtime.ts	2
 src/web-search/runtime-execution.ts	1
-src/web-search/runtime.ts	3
+src/web-search/runtime.ts	2
 src/web/provider-runtime-shared.ts	1
 src/wizard/clack-navigation-prompts.ts	11
 src/wizard/clack-prompter.ts	2
@@ -2959,7 +2954,6 @@ ui/src/lit/subscriptions-controller.ts	1
 ui/src/local-storage.ts	2
 ui/src/main.ts	1
 ui/src/pages/activity/view.ts	2
-ui/src/pages/agents/memory/memory-panel.ts	1
 ui/src/pages/agents/memory/view.ts	1
 ui/src/pages/agents/model-config.ts	2
 ui/src/pages/agents/panels-overview.ts	2
@@ -3018,7 +3012,6 @@ ui/src/pages/chat/talk/google-live.ts	1
 ui/src/pages/chat/talk/shared.ts	3
 ui/src/pages/chat/talk/webrtc.ts	1
 ui/src/pages/chat/workspace-conflict.ts	2
-ui/src/pages/config/config-page.ts	1
 ui/src/pages/config/config-sections.ts	1
 ui/src/pages/config/language-select.ts	2
 ui/src/pages/config/memory-dreaming.ts	1

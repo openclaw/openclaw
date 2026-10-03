@@ -568,6 +568,29 @@ export function hasActiveGatewayStateOwner(databasePath: string): boolean {
   );
 }
 
+/** Capture registered process custody; a PID or copied lock payload grants no authority. */
+export function captureGatewayStateOwner(databasePath: string) {
+  const pathname = resolveGatewayStateOwnerPath(databasePath);
+  const owner = owners.get(pathname);
+  if (!owner || owner.kind !== "process") {
+    return undefined;
+  }
+  const assertCurrent = () => {
+    if (
+      owners.get(pathname) !== owner ||
+      !owner.accepting ||
+      resolveGatewayStateOwnerPath(databasePath) !== pathname ||
+      !hasPhysicalOwnership(owner) ||
+      (owner.getProjection && !owner.getProjection()?.verifyStillHeld())
+    ) {
+      throw new GatewayStateOwnerContentionError(databasePath);
+    }
+    assertStateDatabaseAccessAllowed(databasePath);
+  };
+  assertCurrent();
+  return { ownerId: owner.payload.ownerId, role: owner.payload.role ?? "gateway", assertCurrent };
+}
+
 function hasRecentVerification(verifiedAt: number | undefined, now: number): boolean {
   return verifiedAt !== undefined && now - verifiedAt < READ_OWNERSHIP_MAX_AGE_MS;
 }

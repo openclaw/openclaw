@@ -41,13 +41,7 @@ function configPathsInStateDir(stateDir: string): string[] {
 }
 
 function findExistingConfigPath(candidates: readonly string[]): string | undefined {
-  return candidates.find((candidate) => {
-    try {
-      return fs.existsSync(candidate);
-    } catch {
-      return false;
-    }
-  });
+  return candidates.find((candidate) => fs.existsSync(candidate));
 }
 
 /** True when the root CLI selected a non-default isolated profile. */
@@ -213,7 +207,7 @@ export function resolveIncludeRoots(
     const resolved = path.resolve(
       resolveHomeRelativePath(trimmed, { env, homedir: effectiveHomedir }),
     );
-    if (!path.isAbsolute(resolved) || seen.has(resolved)) {
+    if (seen.has(resolved)) {
       continue;
     }
     seen.add(resolved);

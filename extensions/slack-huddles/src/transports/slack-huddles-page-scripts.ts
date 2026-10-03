@@ -1,9 +1,9 @@
 import { MeetingPlatformAdapter } from "openclaw/plugin-sdk/meeting-runtime";
 import { SLACK_HUDDLE_SELECTORS } from "./slack-huddles-selectors.js";
-import { slackHuddleStatusCallSource } from "./slack-huddles-status-call-source.js";
+import { slackHuddleStatusCall } from "./slack-huddles-status-call-source.js";
 import {
   SLACK_HUDDLE_JOIN_SETTLE_MS,
-  slackHuddleStatusPreludeSource,
+  slackHuddleStatusPrelude,
 } from "./slack-huddles-status-prejoin-source.js";
 import { normalizeSlackHuddleUrlForReuse } from "./slack-huddles-urls.js";
 
@@ -46,13 +46,10 @@ function pageIdentityFunctionSource(expectedIdentity: string | undefined): strin
   };`;
 }
 
-export const {
-  audioCapture: slackHuddleAudioCaptureScript,
-  status: slackHuddleStatusScript,
-  transcript: slackHuddleTranscriptScript,
-  leave: slackHuddleLeaveScript,
-} = MeetingPlatformAdapter.createPageScripts({
+export const slackHuddlePageScripts = MeetingPlatformAdapter.createPageScripts({
   platform: {
+    audioOutputElementIdPrefix: "openclaw-slack-huddle-audio-output-",
+    manualActionReasonPrefix: "slack",
     displayName: "Slack huddle",
     globals: {
       audioOutputs: "__openclawSlackHuddleAudioOutputs",
@@ -71,8 +68,8 @@ export const {
       if (/^mute microphone(?: mute microphone)?$/i.test(input?.label || "")) return "on";
       return undefined;
     }`,
-  statusPreludeSource: slackHuddleStatusPreludeSource,
-  statusCallSource: slackHuddleStatusCallSource,
+  statusPrelude: slackHuddleStatusPrelude,
+  statusCall: slackHuddleStatusCall,
   audioOwnershipSource: ({ expectedIdentity, pageIdentitySource }) => `
       ${pageIdentitySource}
       const expectedIdentity = ${JSON.stringify(expectedIdentity)};

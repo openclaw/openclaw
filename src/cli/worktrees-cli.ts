@@ -1,7 +1,9 @@
+import { realpathSync, statSync } from "node:fs";
 import { Option, type Command } from "commander";
 import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
 import type { ManagedWorktreeRecord } from "../agents/worktrees/types.js";
 import { defaultRuntime } from "../runtime.js";
+import { runWithLocalStateOwner } from "./local-state-owner.js";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
 
 type JsonOption = { json?: boolean };
@@ -80,14 +82,37 @@ export function registerWorktreesCli(program: Command): void {
         repoRoot: string,
         opts: JsonOption & { name?: string; baseRef?: string; sourceProfile?: string[] },
       ) => {
-        const { managedWorktrees } = await import("../agents/worktrees/service.js");
+        // Match the service's physical symlink/.. resolution before yielding to admission.
+        const target = realpathSync.native(repoRoot);
+        const identity = statSync(target, { bigint: true });
+        const input = {
+          repoRoot: target,
+          name: opts.name,
+          baseRef: opts.baseRef,
+          ...(opts.sourceProfile?.length ? { profiles: [...opts.sourceProfile] } : {}),
+        };
         printRecord(
-          await managedWorktrees.create({
-            repoRoot,
-            name: opts.name,
-            baseRef: opts.baseRef,
-            ...(opts.sourceProfile?.length ? { profiles: opts.sourceProfile } : {}),
-            ownerKind: "manual",
+          await runWithLocalStateOwner<ManagedWorktreeRecord>({
+            method: "worktrees.create",
+            params: { ...input, expectedRepoIdentity: `${identity.dev}:${identity.ino}` },
+            target,
+            recoveryCommand: "openclaw worktrees list --json",
+            assertTargetCurrent: () => {
+              const current = statSync(target, { bigint: true });
+              if (current.dev !== identity.dev || current.ino !== identity.ino) {
+                throw new Error("Source repository changed; rerun worktrees create.");
+              }
+            },
+            runLocal: async ({ env, config, signal, assertCurrent }) => {
+              const { ManagedWorktreeService } = await import("../agents/worktrees/service.js");
+              assertCurrent();
+              return new ManagedWorktreeService({ env, getConfig: () => config }).create({
+                ...input,
+                ownerKind: "manual",
+                signal,
+                commitGuard: assertCurrent,
+              });
+            },
           }),
           opts.json === true,
         );

@@ -11,7 +11,7 @@ export class SessionLabelOwnerIndex {
 
   constructor(private readonly store: Record<string, SessionEntry>) {
     for (const [sessionKey, entry] of Object.entries(this.store)) {
-      this.#update(sessionKey, entry.label, true);
+      this.#add(sessionKey, entry.label);
     }
   }
 
@@ -30,26 +30,25 @@ export class SessionLabelOwnerIndex {
     entry: SessionEntry,
   ): SessionEntry {
     for (const sessionKey of new Set([...candidateKeys, primaryKey])) {
-      this.#update(sessionKey, this.store[sessionKey]?.label, false);
+      const label = this.store[sessionKey]?.label;
+      if (label !== undefined) {
+        this.#owners.get(label)?.delete(sessionKey);
+      }
       delete this.store[sessionKey];
     }
     const cloned = structuredClone(entry);
     this.store[primaryKey] = cloned;
-    this.#update(primaryKey, cloned.label, true);
+    this.#add(primaryKey, cloned.label);
     return cloned;
   }
 
-  #update(sessionKey: string, label: string | undefined, add: boolean): void {
+  #add(sessionKey: string, label: string | undefined): void {
     if (label === undefined) {
       return;
     }
     const owners = this.#owners.get(label) ?? new Set<string>();
-    if (add) {
-      owners.add(sessionKey);
-      this.#owners.set(label, owners);
-      return;
-    }
-    owners.delete(sessionKey);
+    owners.add(sessionKey);
+    this.#owners.set(label, owners);
   }
 }
 

@@ -235,7 +235,10 @@ describe("DraftSubmissionFlow submit gates", () => {
         build: () => {
           const fixture = createDraftFixture();
           fixture.flow.setMessage("hello");
-          fixture.flow.attachmentDraft.updatePending(fixture.flow.attachmentDraft.readSignal, 1);
+          fixture.flow.attachmentDraft.reads.updatePending(
+            fixture.flow.attachmentDraft.reads.readSignal,
+            1,
+          );
           return fixture;
         },
       },
@@ -427,8 +430,8 @@ describe("DraftSubmissionFlow submit gates", () => {
 it("keeps attachment preparation gated without duplicating its composer status after Start", async () => {
   const { flow, context } = createDraftFixture();
   flow.setMessage("Include the pending attachment");
-  const signal = flow.attachmentDraft.readSignal;
-  flow.attachmentDraft.updatePending(signal, 1);
+  const signal = flow.attachmentDraft.reads.readSignal;
+  flow.attachmentDraft.reads.updatePending(signal, 1);
   expect(flow.submitBlock()?.gate).toBe("attachment-reads");
   expect(flow.canSubmit()).toBe(false);
   expect(flow.submitDisabledReason()).toBe("Reading attachment");
@@ -437,6 +440,6 @@ it("keeps attachment preparation gated without duplicating its composer status a
 
   expect(context.sessions.createResult).not.toHaveBeenCalled();
   expect(flow.blockedSubmitNotice()).toBeUndefined();
-  flow.attachmentDraft.updatePending(signal, -1);
+  flow.attachmentDraft.reads.updatePending(signal, -1);
   expect(flow.canSubmit()).toBe(true);
 });

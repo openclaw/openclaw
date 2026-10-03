@@ -59,7 +59,7 @@ describe("new-session submission preview", () => {
     composer.dispatchEvent(drop);
     expect(drop.defaultPrevented).toBe(true);
     expect(attachmentDraft.attachments).toEqual([]);
-    expect(attachmentDraft.pendingReads).toBe(0);
+    expect(attachmentDraft.reads.pendingReads).toBe(0);
   });
 
   it.each([

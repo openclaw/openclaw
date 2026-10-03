@@ -3,15 +3,11 @@ import type {
   AgentMessage,
   AgentToolResult,
   AgentToolUpdateCallback,
-  InternalBeforeToolBatchContext,
   InternalBeforeToolBatchResult,
   ToolLoopWarning,
 } from "./types.js";
 
-export type InternalBeforeToolBatchHook = (
-  context: InternalBeforeToolBatchContext,
-  signal?: AbortSignal,
-) => Promise<InternalBeforeToolBatchResult | undefined>;
+export type InternalBeforeToolBatchHook = NonNullable<AgentLoopConfig["beforeToolBatch"]>;
 
 const beforeToolBatchByAgent = new WeakMap<object, InternalBeforeToolBatchHook>();
 

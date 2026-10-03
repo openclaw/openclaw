@@ -11,6 +11,15 @@ export function readSessionColdStorageInventory(database?: { db: DatabaseSync; p
     database.db,
     () => {
       const db = getNodeSqliteKysely<DB>(database.db);
+      const cold = executeSqliteQueryTakeFirstSync(
+        database.db,
+        db
+          .selectFrom("session_transcript_cold_archives")
+          .select((eb) => [
+            eb.fn.countAll<number>().as("count"),
+            eb.fn.sum<number>("archive_bytes").filterWhere("storage", "=", "sqlite").as("bytes"),
+          ]),
+      );
       return {
         hotTranscripts:
           executeSqliteQueryTakeFirstSync(
@@ -33,21 +42,8 @@ export function readSessionColdStorageInventory(database?: { db: DatabaseSync; p
                 ),
               ),
           )?.count ?? 0,
-        embeddedArchiveBytes:
-          executeSqliteQueryTakeFirstSync(
-            database.db,
-            db
-              .selectFrom("session_transcript_cold_archives")
-              .select((eb) => eb.fn.sum<number>("archive_bytes").as("bytes"))
-              .where("storage", "=", "sqlite"),
-          )?.bytes ?? 0,
-        coldTranscripts:
-          executeSqliteQueryTakeFirstSync(
-            database.db,
-            db
-              .selectFrom("session_transcript_cold_archives")
-              .select((eb) => eb.fn.countAll<number>().as("count")),
-          )?.count ?? 0,
+        embeddedArchiveBytes: cold?.bytes ?? 0,
+        coldTranscripts: cold?.count ?? 0,
       };
     },
     { databaseLabel: database.path, operationLabel: "session cold storage inventory" },

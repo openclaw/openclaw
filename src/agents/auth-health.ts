@@ -350,58 +350,25 @@ export function buildAuthHealthSummary(params: {
       continue;
     }
 
-    let hasApiKeyProfile = false;
-    let hasExpirableProfile = false;
-    let hasExpired = false;
-    let hasMissing = false;
-    let hasExpiring = false;
+    const expirableProfiles = effectiveProfiles.filter((profile) => profile.type !== "api_key");
+    const statuses = new Set(effectiveProfiles.map((profile) => profile.status));
+    provider.status =
+      (["expired", "missing", "expiring"] as const).find((status) => statuses.has(status)) ??
+      (expirableProfiles.length > 0 ? "ok" : "static");
+
     let earliestExpiry: number | undefined;
-    for (const profile of effectiveProfiles) {
-      if (profile.type === "api_key") {
-        if (profile.status === "static") {
-          hasApiKeyProfile = true;
-        } else if (profile.status === "missing") {
-          hasMissing = true;
-        }
-        continue;
-      }
-      if (profile.type !== "oauth" && profile.type !== "token") {
-        continue;
-      }
-      hasExpirableProfile = true;
-      if (typeof profile.expiresAt === "number" && Number.isFinite(profile.expiresAt)) {
+    for (const profile of expirableProfiles) {
+      if (profile.expiresAt !== undefined) {
         earliestExpiry =
           earliestExpiry === undefined
             ? profile.expiresAt
             : Math.min(earliestExpiry, profile.expiresAt);
       }
-      if (profile.status === "expired") {
-        hasExpired = true;
-      } else if (profile.status === "missing") {
-        hasMissing = true;
-      } else if (profile.status === "expiring") {
-        hasExpiring = true;
-      }
-    }
-
-    if (!hasExpirableProfile) {
-      provider.status = hasMissing ? "missing" : hasApiKeyProfile ? "static" : "missing";
-      continue;
     }
 
     if (earliestExpiry !== undefined) {
       provider.expiresAt = earliestExpiry;
       provider.remainingMs = provider.expiresAt - now;
-    }
-
-    if (hasExpired) {
-      provider.status = "expired";
-    } else if (hasMissing) {
-      provider.status = "missing";
-    } else if (hasExpiring) {
-      provider.status = "expiring";
-    } else {
-      provider.status = "ok";
     }
   }
 

@@ -5,11 +5,6 @@ import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-ma
 
 registerPluginManagementEnglish();
 
-export type PluginCardAttribution = {
-  author?: string;
-  official: boolean;
-};
-
 export type InstalledPluginState = "enabled" | "disabled" | "needs-setup" | "error";
 
 const INSTALLED_PLUGIN_STATUS = {
@@ -21,7 +16,7 @@ const INSTALLED_PLUGIN_STATUS = {
 
 export function renderPluginStateStatus(
   state: InstalledPluginState,
-  className = "installed-plugins-card__status-notice",
+  className: string,
 ): TemplateResult {
   const [labelKey, tone] = INSTALLED_PLUGIN_STATUS[state];
   const label = t(labelKey);
@@ -64,20 +59,6 @@ export function renderPluginAuthor(
         >${label}</a
       >`
     : html`<span class="plugin-card-author">${label}</span>`;
-}
-
-export function renderPluginCardIdentity(params: {
-  name: string;
-  attribution: PluginCardAttribution;
-  linkedAuthor?: boolean;
-}): TemplateResult {
-  return html`<div class="installed-plugins-card__identity">
-    <div class="plugin-card-title-row">
-      <h3>${params.name}</h3>
-      ${params.attribution.official ? renderPluginOfficialBadge() : nothing}
-    </div>
-    ${renderPluginAuthor(params.attribution.author, { linked: params.linkedAuthor })}
-  </div>`;
 }
 
 export function renderPluginCardSummary(summary: string): TemplateResult {

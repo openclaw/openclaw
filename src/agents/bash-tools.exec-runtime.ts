@@ -11,7 +11,6 @@ import {
 import {
   DEFAULT_EXEC_APPROVAL_TIMEOUT_MS,
   resolveExecApprovalAllowedDecisions,
-  type ExecHost,
   type ExecApprovalDecision,
   type ExecTarget,
 } from "../infra/exec-approvals.js";
@@ -138,14 +137,9 @@ export type ExecProcessHandle = {
   disableUpdates: () => void;
 };
 
-/** Renders a host label for user-facing exec policy messages. */
-function renderExecHostLabel(host: ExecHost) {
-  return host === "sandbox" ? "sandbox" : host === "gateway" ? "gateway" : "node";
-}
-
 /** Renders an exec target label, preserving `auto`. */
 export function renderExecTargetLabel(target: ExecTarget) {
-  return target === "auto" ? "auto" : renderExecHostLabel(target);
+  return target;
 }
 
 /** Returns true when a per-call target override is allowed by configured policy. */
@@ -530,7 +524,6 @@ export async function runExecProcess({
   beforeSpawn: initialBeforeSpawn,
   assertCurrent: initialAssertCurrent,
   onSettledBeforeNotify: initialOnSettledBeforeNotify,
-  onActivity: initialOnActivity,
   ...opts
 }: {
   command: string;
@@ -568,8 +561,6 @@ export async function runExecProcess({
   onUpdate?: (partialResult: AgentToolResult<ExecToolDetails>) => void;
   /** Runs after process finalization and before the exit wake is queued. */
   onSettledBeforeNotify?: (outcome: ExecProcessOutcome) => void | Promise<void>;
-  /** Process-owned invalidation survives foreground delivery and ends at settlement. */
-  onActivity?: (at: number) => void;
   /** Revalidates authorization after async preparation, immediately before each spawn attempt. */
   beforeSpawn?: () => Promise<AgentToolResult<ExecToolDetails> | undefined>;
   /** Rechecks host policy at the supervisor's final synchronous spawn boundary. */
@@ -626,7 +617,6 @@ export async function runExecProcess({
   let beforeSpawn = initialBeforeSpawn;
   let assertPolicyCurrent = initialAssertCurrent;
   let onSettledBeforeNotify = initialOnSettledBeforeNotify;
-  let onActivity = initialOnActivity;
 
   const emitUpdate = () => {
     if (!onUpdate || session.backgrounded || session.exited) {
@@ -660,7 +650,6 @@ export async function runExecProcess({
 
   const handleOutput =
     (stream: "stdout" | "stderr", sanitize: (data: string) => string) => (data: string) => {
-      onActivity?.(session.processActivity?.lastOutputAtMs ?? Date.now());
       for (const chunk of chunkString(sanitize(data))) {
         appendOutput(session, stream, chunk);
         emitUpdate();
@@ -709,7 +698,6 @@ export async function runExecProcess({
     secretEgressGrant?.revoke();
     let finalOutcome = outcome;
     session.finalizing = true;
-    onActivity?.(Date.now());
     try {
       if (!opts.sandbox && managedRun?.waitForExtinction) {
         // Root completion does not release descendants that retained the group's lineage fd.
@@ -906,7 +894,6 @@ export async function runExecProcess({
       }),
     ).finally(() => {
       onSettledBeforeNotify = undefined;
-      onActivity = undefined;
       operatorSignal?.removeEventListener("abort", onOperatorRevoked);
       releaseOperatorAuthority?.();
       releaseOperatorAuthority = undefined;
@@ -965,7 +952,6 @@ export async function runExecProcess({
       return finalOutcome;
     } finally {
       onSettledBeforeNotify = undefined;
-      onActivity = undefined;
       operatorSignal?.removeEventListener("abort", onOperatorRevoked);
       releaseOperatorAuthority?.();
       releaseOperatorAuthority = undefined;

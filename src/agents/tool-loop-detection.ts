@@ -440,31 +440,14 @@ function getPingPongStreak(
     return { count: 0, noProgressEvidence: false };
   }
 
-  let otherSignature: string | undefined;
-  let otherToolName: string | undefined;
-  for (let i = history.length - 2; i >= 0; i -= 1) {
-    const call = history[i];
-    if (!call) {
-      continue;
-    }
-    if (call.argsHash !== last.argsHash) {
-      otherSignature = call.argsHash;
-      otherToolName = call.toolName;
-      break;
-    }
-  }
-
-  if (!otherSignature || !otherToolName) {
+  const other = history.findLast((call) => call.argsHash !== last.argsHash);
+  if (!other?.argsHash || !other.toolName || currentSignature !== other.argsHash) {
     return { count: 0, noProgressEvidence: false };
   }
 
   let alternatingTailCount = 0;
-  for (let i = history.length - 1; i >= 0; i -= 1) {
-    const call = history[i];
-    if (!call) {
-      continue;
-    }
-    const expected = alternatingTailCount % 2 === 0 ? last.argsHash : otherSignature;
+  for (const call of history.toReversed()) {
+    const expected = alternatingTailCount % 2 === 0 ? last.argsHash : other.argsHash;
     if (call.argsHash !== expected) {
       break;
     }
@@ -475,40 +458,22 @@ function getPingPongStreak(
     return { count: 0, noProgressEvidence: false };
   }
 
-  if (currentSignature !== otherSignature) {
-    return { count: 0, noProgressEvidence: false };
-  }
-
-  const tailStart = Math.max(0, history.length - alternatingTailCount);
   const resultHashes = new Map<string, string>();
-  let noProgressEvidence = true;
-  for (let i = tailStart; i < history.length; i += 1) {
-    const call = history[i];
-    if (!call) {
-      continue;
-    }
-    if (!call.resultHash || (call.argsHash !== last.argsHash && call.argsHash !== otherSignature)) {
-      noProgressEvidence = false;
-      break;
-    }
+  const stableOutcomes = history.slice(-alternatingTailCount).every((call) => {
     const previousHash = resultHashes.get(call.argsHash);
-    if (previousHash && previousHash !== call.resultHash) {
-      noProgressEvidence = false;
-      break;
+    if (!call.resultHash || (previousHash && previousHash !== call.resultHash)) {
+      return false;
     }
     resultHashes.set(call.argsHash, call.resultHash);
-  }
-
-  // Need repeated stable outcomes on both sides before treating ping-pong as no-progress.
-  if (resultHashes.size !== 2) {
-    noProgressEvidence = false;
-  }
+    return true;
+  });
 
   return {
     count: alternatingTailCount + 1,
     pairedToolName: last.toolName,
     pairedSignature: last.argsHash,
-    noProgressEvidence,
+    // Both sides must have a stable outcome before alternation counts as no progress.
+    noProgressEvidence: stableOutcomes && resultHashes.size === 2,
   };
 }
 
@@ -721,31 +686,24 @@ export function recordToolCallOutcome(
       call.resultHash === undefined &&
       call.outcomeKind === undefined,
   );
-  if (recordedOutcome) {
-    recordedOutcome.outcomeKind = outcome.outcomeKind;
-    recordedOutcome.resultHash = outcome.resultHash;
-    recordedOutcome.failureIdentityHash = outcome.failureIdentityHash;
-    if (outcome.noProgress) {
-      recordedOutcome.noProgress = true;
-    } else {
-      delete recordedOutcome.noProgress;
-    }
-    recordedOutcome.unknownToolName = outcome.unknownToolName;
-  } else {
-    const record: ToolCallRecord = {
+  if (!recordedOutcome) {
+    recordedOutcome = {
       toolName: params.toolName,
       argsHash,
       toolCallId: params.toolCallId,
       ...(runId && { runId }),
-      outcomeKind: outcome.outcomeKind,
-      resultHash: outcome.resultHash,
-      failureIdentityHash: outcome.failureIdentityHash,
-      ...(outcome.noProgress ? { noProgress: true as const } : {}),
-      unknownToolName: outcome.unknownToolName,
       timestamp: Date.now(),
     };
-    state.toolCallHistory.push(record);
-    recordedOutcome = record;
+    state.toolCallHistory.push(recordedOutcome);
+  }
+  recordedOutcome.outcomeKind = outcome.outcomeKind;
+  recordedOutcome.resultHash = outcome.resultHash;
+  recordedOutcome.failureIdentityHash = outcome.failureIdentityHash;
+  recordedOutcome.unknownToolName = outcome.unknownToolName;
+  if (outcome.noProgress) {
+    recordedOutcome.noProgress = true;
+  } else {
+    delete recordedOutcome.noProgress;
   }
 
   if (state.toolCallHistory.length > TOOL_CALL_HISTORY_SIZE) {

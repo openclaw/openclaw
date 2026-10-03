@@ -1,7 +1,6 @@
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import {
   readChannelPairingState,
-  sqliteOptionsForEnv,
   writeChannelPairingStateToDatabase,
 } from "./pairing-store-sqlite.js";
 import type { PairingChannel } from "./pairing-store.types.js";
@@ -22,6 +21,6 @@ export function writeChannelPairingStateSnapshot(
 ): void {
   runOpenClawStateWriteTransaction(
     (database) => writeChannelPairingStateToDatabase(database, channel, state),
-    sqliteOptionsForEnv(env),
+    { env },
   );
 }

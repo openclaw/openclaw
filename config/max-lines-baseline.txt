@@ -524,7 +524,6 @@ src/infra/update-managed-service-handoff.ts
 src/infra/update-startup.test.ts
 src/infra/update-startup.ts
 src/interactive/payload.ts
-src/llm/providers/stream-wrappers/openai.ts
 src/logging/diagnostic-stability-bundle.ts
 src/logging/diagnostic-stability.ts
 src/logging/diagnostic-support-export.ts

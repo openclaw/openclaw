@@ -3,15 +3,21 @@ import type {
   BootstrapBudgetAnalysis,
   BootstrapPromptWarning,
   BootstrapPromptWarningMode,
-  BootstrapTruncationCause,
 } from "./bootstrap-budget.types.js";
-import { USER_BOOTSTRAP_MAX_CHARS } from "./embedded-agent-helpers/bootstrap.js";
 
-const DEFAULT_BOOTSTRAP_PROMPT_WARNING_MAX_FILES = 3;
 const DEFAULT_BOOTSTRAP_PROMPT_WARNING_SIGNATURE_HISTORY_MAX = 32;
 
-function formatWarningCause(cause: BootstrapTruncationCause): string {
-  return cause === "per-file-limit" ? "max/file" : "max/total";
+const BOOTSTRAP_TRUNCATION_NOTICE = [
+  "[Bootstrap truncation warning]",
+  "Some workspace bootstrap files were truncated before Project Context injection.",
+  "Treat Project Context as partial and read the relevant files directly if details seem missing.",
+].join("\n");
+
+/** Builds the compact truncation notice mirrored into run metadata. */
+export function buildBootstrapPromptWarningNotice(warningLines?: string[]): string | undefined {
+  return warningLines?.some((line) => line.trim().length > 0)
+    ? BOOTSTRAP_TRUNCATION_NOTICE
+    : undefined;
 }
 
 function appendSeenSignature(signatures: string[], signature: string): string[] {
@@ -49,77 +55,12 @@ function buildBootstrapTruncationSignature(analysis: BootstrapBudgetAnalysis): s
   });
 }
 
-function formatBootstrapTruncationWarningLines(params: {
-  analysis: BootstrapBudgetAnalysis;
-  maxFiles?: number;
-}): string[] {
-  if (!params.analysis.hasTruncation) {
-    return [];
-  }
-  const maxFiles =
-    typeof params.maxFiles === "number" && Number.isFinite(params.maxFiles) && params.maxFiles > 0
-      ? Math.floor(params.maxFiles)
-      : DEFAULT_BOOTSTRAP_PROMPT_WARNING_MAX_FILES;
-  const lines: string[] = [];
-  const duplicateNameCounts = params.analysis.truncatedFiles.reduce((acc, file) => {
-    acc.set(file.name, (acc.get(file.name) ?? 0) + 1);
-    return acc;
-  }, new Map<string, number>());
-  const topFiles = params.analysis.truncatedFiles.slice(0, maxFiles);
-  for (const file of topFiles) {
-    const pct =
-      file.rawChars > 0
-        ? Math.round(((file.rawChars - file.injectedChars) / file.rawChars) * 100)
-        : 0;
-    const causeText = file.causes.map(formatWarningCause).join(", ");
-    const nameLabel =
-      (duplicateNameCounts.get(file.name) ?? 0) > 1 && file.path.trim().length > 0
-        ? `${file.name} (${file.path})`
-        : file.name;
-    lines.push(
-      `${nameLabel}: ${file.rawChars} raw -> ${file.injectedChars} injected (~${Math.max(0, pct)}% removed${causeText ? `; ${causeText}` : ""}).`,
-    );
-  }
-  if (params.analysis.truncatedFiles.length > topFiles.length) {
-    lines.push(
-      `+${params.analysis.truncatedFiles.length - topFiles.length} more truncated file(s).`,
-    );
-  }
-  if (params.analysis.truncatedFiles.some((file) => file.name?.toLowerCase() === "agents.md")) {
-    lines.push("AGENTS.md was truncated; read the full AGENTS.md before relying on scoped policy.");
-  }
-  const fixedUserCapApplied = params.analysis.truncatedFiles.some(
-    (file) =>
-      file.name?.toLowerCase() === "user.md" &&
-      file.effectiveFileLimit === USER_BOOTSTRAP_MAX_CHARS &&
-      file.causes.includes("per-file-limit"),
-  );
-  if (fixedUserCapApplied) {
-    lines.push(
-      `USER.md has a fixed ${USER_BOOTSTRAP_MAX_CHARS}-character bootstrap cap; keep it compact.`,
-    );
-  }
-  const configurableLimitApplied = params.analysis.truncatedFiles.some(
-    (file) =>
-      file.name?.toLowerCase() !== "user.md" ||
-      file.effectiveFileLimit < USER_BOOTSTRAP_MAX_CHARS ||
-      file.causes.includes("total-limit"),
-  );
-  if (configurableLimitApplied) {
-    lines.push(
-      "If unintentional, raise agents.defaults.bootstrapMaxChars and/or agents.defaults.bootstrapTotalMaxChars.",
-    );
-  }
-  return lines;
-}
-
 /** Decides whether to show a prompt warning and returns the updated dedupe state. */
 export function buildBootstrapPromptWarning(params: {
   analysis: BootstrapBudgetAnalysis;
   mode: BootstrapPromptWarningMode;
   previousSignature?: string;
   seenSignatures?: string[];
-  maxFiles?: number;
 }): BootstrapPromptWarning {
   const signature = buildBootstrapTruncationSignature(params.analysis);
   let seenSignatures = normalizeUniqueTrimmedStringList(params.seenSignatures);
@@ -136,12 +77,7 @@ export function buildBootstrapPromptWarning(params: {
   return {
     signature,
     warningShown,
-    lines: warningShown
-      ? formatBootstrapTruncationWarningLines({
-          analysis: params.analysis,
-          maxFiles: params.maxFiles,
-        })
-      : [],
+    lines: warningShown ? [BOOTSTRAP_TRUNCATION_NOTICE] : [],
     warningSignaturesSeen,
   };
 }

@@ -170,11 +170,11 @@ export class ModelSetupWizardRunner {
     this.setState({ phase: "starting", authChoice: session.authChoice });
     try {
       if (session.terminalResult) {
-        return this.applyResult(session, session.authChoice, session.terminalResult);
+        return this.applyResult(session, session.terminalResult);
       }
       // Never repeat start or the last answer: either may have committed before
       // the socket closed. The existing wizard owns the next visible step.
-      return await this.requestNext(session, session.authChoice);
+      return await this.requestNext(session);
     } catch (error) {
       this.handleError(error, session);
       return null;
@@ -288,9 +288,9 @@ export class ModelSetupWizardRunner {
         return null;
       }
       if (started.done) {
-        return this.applyResult(session, authChoice, started);
+        return this.applyResult(session, started);
       }
-      return await this.requestNext(session, authChoice);
+      return await this.requestNext(session);
     } catch (error) {
       this.handleError(error, session);
       return null;
@@ -306,7 +306,7 @@ export class ModelSetupWizardRunner {
     this.setState({ ...state, busy: true, validationError: null });
     const answer = includeValue ? { stepId: state.step.id, value } : { stepId: state.step.id };
     try {
-      return await this.requestNext(session, state.authChoice, answer);
+      return await this.requestNext(session, answer);
     } catch (error) {
       const pending = session.externalInputRequest;
       if (pending) {
@@ -452,14 +452,13 @@ export class ModelSetupWizardRunner {
 
   private async requestNext(
     session: WizardSession,
-    authChoice: string,
     answer?: { stepId: string; value?: unknown },
     acceptResult?: () => boolean,
   ): Promise<ModelSetupWizardCompletion | null> {
     if (session.suspended || this.isRetired(session)) {
       return null;
     }
-    const { client, sessionId, abortController } = session;
+    const { client, sessionId, abortController, authChoice } = session;
     const signal = abortController.signal;
     let nextAnswer = answer;
     let acceptsFirstResult = acceptResult;
@@ -499,7 +498,7 @@ export class ModelSetupWizardRunner {
         nextAnswer = { stepId: result.step.id };
         continue;
       }
-      const completion = this.applyResult(session, authChoice, result);
+      const completion = this.applyResult(session, result);
       if (session !== this.session || completion) {
         return completion;
       }
@@ -515,7 +514,6 @@ export class ModelSetupWizardRunner {
 
   private applyResult(
     session: WizardSession,
-    authChoice: string,
     result: ModelSetupWizardResult,
   ): ModelSetupWizardCompletion | null {
     if (session === this.session && session.suspended && result.done) {
@@ -535,7 +533,7 @@ export class ModelSetupWizardRunner {
       return null;
     }
     let next = wizardStateFromResult(
-      authChoice,
+      session.authChoice,
       result,
       result.status === "cancelled"
         ? this.options.cancelledMessage()
@@ -620,7 +618,7 @@ export class ModelSetupWizardRunner {
         return;
       }
       try {
-        const request = this.requestNext(session, session.authChoice, undefined, current);
+        const request = this.requestNext(session, undefined, current);
         session.externalInputRequest = request;
         const completion = await request;
         if (session.externalInputRequest !== request) {

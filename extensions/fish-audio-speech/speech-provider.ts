@@ -55,8 +55,9 @@ function normalizeModel(value: unknown): FishAudioModel {
   if (!model) {
     return DEFAULT_MODEL;
   }
-  if (FISH_AUDIO_MODELS.some((candidate) => candidate === model)) {
-    return model as FishAudioModel;
+  const supported = FISH_AUDIO_MODELS.find((candidate) => candidate === model);
+  if (supported) {
+    return supported;
   }
   throw new Error(`invalid Fish Audio model "${model}"`);
 }
@@ -223,10 +224,7 @@ function resolveFormat(target: SpeechSynthesisTarget): {
 }
 
 async function resolveSynthesisRequest(
-  req: Pick<
-    SpeechSynthesisRequest,
-    "cfg" | "providerConfig" | "providerOverrides" | "text" | "timeoutMs" | "target"
-  >,
+  req: SpeechSynthesisRequest,
 ): Promise<FishAudioTtsRequest & { fileExtension: string; voiceCompatible: boolean }> {
   const config = readProviderConfig(req.providerConfig);
   const overrides = readOverrides(req.providerOverrides);

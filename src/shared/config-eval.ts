@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { getOrCreatePromise } from "./lazy-promise.js";
+import type { RequirementsMetadata } from "./requirements.js";
 
 /** Normalizes primitive config values into the truthiness rules used by requirements checks. */
 function isTruthy(value: unknown): boolean {
@@ -51,77 +52,52 @@ export function isConfigPathTruthyWithDefaults(
   return isTruthy(value);
 }
 
-type RuntimeRequires = {
-  bins?: string[];
-  anyBins?: string[];
-  env?: string[];
-  config?: string[];
-};
-
-type RuntimeRequirementEvalParams = {
-  requires?: RuntimeRequires;
-  hasBin: (bin: string) => boolean;
-  hasAnyRemoteBin?: (bins: string[]) => boolean;
-  hasRemoteBin?: (bin: string) => boolean;
-  hasEnv: (envName: string) => boolean;
-  isConfigPathTruthy: (pathStr: string) => boolean;
-};
-
-/** Evaluates binary/env/config requirements against local and optional remote capabilities. */
-function evaluateRuntimeRequires(params: RuntimeRequirementEvalParams): boolean {
+/** Enforces OS compatibility before allowing `always` to bypass runtime requirements. */
+export function evaluateRuntimeEligibility(
+  params: RequirementsMetadata & {
+    platform?: string;
+    remotePlatforms?: string[];
+    always?: boolean;
+    hasBin: (bin: string) => boolean;
+    hasAnyRemoteBin?: (bins: string[]) => boolean;
+    hasRemoteBin?: (bin: string) => boolean;
+    hasEnv: (envName: string) => boolean;
+    isConfigPathTruthy: (pathStr: string) => boolean;
+  },
+): boolean {
+  const osList = params.os ?? [];
+  if (
+    osList.length > 0 &&
+    !osList.includes(params.platform ?? process.platform) &&
+    !params.remotePlatforms?.some((platform) => osList.includes(platform))
+  ) {
+    return false;
+  }
   const requires = params.requires;
-  if (!requires) {
+  if (params.always === true || !requires) {
     return true;
   }
-
   for (const envName of requires.env ?? []) {
     if (!params.hasEnv(envName)) {
       return false;
     }
   }
-
   for (const configPath of requires.config ?? []) {
     if (!params.isConfigPathTruthy(configPath)) {
       return false;
     }
   }
-
   for (const bin of requires.bins ?? []) {
     if (!params.hasBin(bin) && !params.hasRemoteBin?.(bin)) {
       return false;
     }
   }
-
   const requiredAnyBins = requires.anyBins ?? [];
   return (
     requiredAnyBins.length === 0 ||
     requiredAnyBins.some((bin) => params.hasBin(bin)) ||
     Boolean(params.hasAnyRemoteBin?.(requiredAnyBins))
   );
-}
-
-/** Enforces OS compatibility before allowing `always` to bypass runtime requirements. */
-export function evaluateRuntimeEligibility(
-  params: {
-    os?: string[];
-    platform?: string;
-    remotePlatforms?: string[];
-    always?: boolean;
-  } & RuntimeRequirementEvalParams,
-): boolean {
-  const osList = params.os ?? [];
-  const remotePlatforms = params.remotePlatforms ?? [];
-  if (
-    osList.length > 0 &&
-    !osList.includes(params.platform ?? process.platform) &&
-    !remotePlatforms.some((platform) => osList.includes(platform))
-  ) {
-    return false;
-  }
-  if (params.always === true) {
-    return true;
-  }
-  return evaluateRuntimeRequires(params);
 }
 
 function windowsPathExtensions(raw: string | undefined): string[] {

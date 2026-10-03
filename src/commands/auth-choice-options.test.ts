@@ -21,14 +21,7 @@ function flowContribution(
   providerId: string,
   option: ProviderSetupFlowContribution["option"],
 ): ProviderSetupFlowContribution {
-  return {
-    id: `provider:setup:${option.value}`,
-    kind: "provider",
-    surface: "setup",
-    providerId,
-    option,
-    source: "manifest",
-  };
+  return { providerId, option };
 }
 
 function getOptions(includeSkip = false) {

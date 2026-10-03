@@ -42,7 +42,7 @@ function renderFixture(
             aliases: [],
             models: [model],
             voices: [],
-            transports: [selection?.transport ?? "webrtc"],
+            transports: ["webrtc", "gateway-relay"],
             defaultModel: model,
             ...provider,
           },

@@ -1,4 +1,7 @@
-import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import {
+  asPositiveFiniteNumber,
+  resolveOptionalIntegerOption,
+} from "@openclaw/normalization-core/number-coercion";
 /**
  * Shared compact tool-call display helpers.
  * Redacts and summarizes arguments into short labels/details for chat and UI
@@ -162,17 +165,8 @@ function resolveReadDetail(args: unknown): string | undefined {
     return undefined;
   }
 
-  const offsetRaw =
-    typeof record.offset === "number" && Number.isFinite(record.offset)
-      ? Math.floor(record.offset)
-      : undefined;
-  const limitRaw =
-    typeof record.limit === "number" && Number.isFinite(record.limit)
-      ? Math.floor(record.limit)
-      : undefined;
-
-  const offset = offsetRaw !== undefined ? Math.max(1, offsetRaw) : undefined;
-  const limit = limitRaw !== undefined ? Math.max(1, limitRaw) : undefined;
+  const offset = resolveOptionalIntegerOption(record.offset, { min: 1 });
+  const limit = resolveOptionalIntegerOption(record.limit, { min: 1 });
 
   if (offset !== undefined && limit !== undefined) {
     const unit = limit === 1 ? "line" : "lines";
@@ -248,15 +242,12 @@ function resolveWebSearchDetail(args: unknown): string | undefined {
 }
 
 function collectWebSearchQueries(record: Record<string, unknown>): string[] {
-  const queries: string[] = [];
-  const seen = new Set<string>();
+  const queries = new Set<string>();
   const add = (value: unknown) => {
     const normalized = normalizeOptionalString(value);
-    if (!normalized || seen.has(normalized)) {
-      return;
+    if (normalized) {
+      queries.add(normalized);
     }
-    seen.add(normalized);
-    queries.push(normalized);
   };
 
   add(record.query);
@@ -289,7 +280,7 @@ function collectWebSearchQueries(record: Record<string, unknown>): string[] {
     }
   }
 
-  return queries;
+  return [...queries];
 }
 
 function resolveWebFetchDetail(args: unknown): string | undefined {

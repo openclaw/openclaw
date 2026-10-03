@@ -110,15 +110,6 @@ function modelName(modelRef: string): string {
   return separator < 0 ? modelRef : modelRef.slice(separator + 1);
 }
 
-function findConfiguredCandidate(
-  result: SystemAgentSetupDetectResult,
-  modelRef: string,
-): Candidate | undefined {
-  return result.candidates.find(
-    (candidate) => candidate.modelRef === modelRef && !candidate.kind.startsWith("saved-auth:"),
-  );
-}
-
 function configuredModelDetail(candidate: Candidate | undefined, modelRef: string): string {
   const name = modelName(modelRef);
   const detail = candidate?.detail.trim();
@@ -155,7 +146,12 @@ export function renderConfiguredModel(props: {
   const displayRef = props.verify.phase === "ok" ? props.verify.modelRef : configuredRef;
   const providerId = providerIdFromModelRef(displayRef);
   const configuredCandidate =
-    displayRef === configuredRef ? findConfiguredCandidate(props.result, configuredRef) : undefined;
+    displayRef === configuredRef
+      ? props.result.candidates.find(
+          (candidate) =>
+            candidate.modelRef === configuredRef && !candidate.kind.startsWith("saved-auth:"),
+        )
+      : undefined;
   const providerLabel = providerId ? providerDisplayLabel(providerId) : displayRef;
   const detail = configuredModelDetail(configuredCandidate, displayRef);
 

@@ -184,7 +184,7 @@ export class GroupRouteRevalidation {
 }
 
 export function resolveAgentId(
-  data: Pick<NewSessionRouteData, "agentId" | "catalogId"> | undefined,
+  data: Pick<NewSessionRouteData, "agentId"> | undefined,
   availableAgents: readonly { id: string }[],
   fallback: string,
 ): string {

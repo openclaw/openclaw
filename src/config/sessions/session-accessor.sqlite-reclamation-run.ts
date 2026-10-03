@@ -1,5 +1,6 @@
 import { isMainThread } from "node:worker_threads";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
+import { ownedWorkerBytes } from "../../infra/worker-transfer-bytes.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { retainOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import { captureOpenClawAgentDatabaseValidationTransfer } from "../../state/openclaw-agent-db-validation-cache.js";
@@ -362,22 +363,9 @@ function prepareReclamationWorkerTransferList(plan: SqliteArchiveReclamationPlan
     if (!archive) {
       continue;
     }
-    const bytes = archive.bytes;
-    let owned = bytes;
-    let buffer: ArrayBuffer;
-    if (
-      bytes.buffer instanceof ArrayBuffer &&
-      bytes.byteOffset === 0 &&
-      bytes.byteLength === bytes.buffer.byteLength
-    ) {
-      buffer = bytes.buffer;
-    } else {
-      buffer = new ArrayBuffer(bytes.byteLength);
-      owned = new Uint8Array(buffer);
-      owned.set(bytes);
-    }
-    materializedPlan.archive = { ...archive, bytes: owned };
-    buffers.add(buffer);
+    const bytes = ownedWorkerBytes(archive.bytes);
+    materializedPlan.archive = { ...archive, bytes };
+    buffers.add(bytes.buffer);
   }
   return [...buffers];
 }

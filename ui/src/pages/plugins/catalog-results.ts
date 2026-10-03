@@ -19,8 +19,9 @@ import { renderCatalogGridSkeleton } from "./catalog-skeleton.ts";
 import { renderArtTile } from "./consent-dialog.ts";
 import type { PluginInstallProgress } from "./install-progress.ts";
 import {
-  renderPluginCardIdentity,
+  renderPluginAuthor,
   renderPluginCardSummary,
+  renderPluginOfficialBadge,
   renderPluginStateStatus,
 } from "./plugin-card.ts";
 import { renderPluginRowMessage, type PluginRowMessage } from "./plugin-row-message.ts";
@@ -215,14 +216,13 @@ function renderCatalogCard(
         >
           ${renderCatalogIcon(plugin, props)}
         </span>
-        ${renderPluginCardIdentity({
-          name: plugin.catalog.name,
-          attribution: {
-            ...(plugin.catalog.author ? { author: plugin.catalog.author } : {}),
-            official: plugin.catalog.official,
-          },
-          linkedAuthor: true,
-        })}
+        <div class="installed-plugins-card__identity">
+          <div class="plugin-card-title-row">
+            <h3>${plugin.catalog.name}</h3>
+            ${plugin.catalog.official ? renderPluginOfficialBadge() : nothing}
+          </div>
+          ${renderPluginAuthor(plugin.catalog.author, { linked: true })}
+        </div>
       </div>
       <div class="plugin-catalog-card__action">
         ${

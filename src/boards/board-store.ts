@@ -22,7 +22,7 @@ import { BOARD_REPORT_WIDGET_KIND, parseBoardReport } from "./board-report.js";
 import { BOARD_WEBSITE_WIDGET_KIND, parseBoardWebsite } from "./board-website.js";
 import { GITHUB_ACTIONS_GRANT_PREFIX } from "./github-actions-capability.js";
 
-export type BoardWidgetHtmlDocument = {
+type BoardWidgetHtmlDocument = {
   html: string;
   revision: number;
   sha256: string;
@@ -32,10 +32,7 @@ export type BoardWidgetHtmlDocument = {
   resourceOrigins?: string[];
 };
 export type BoardWidgetHtmlViewMetadata = Omit<BoardWidgetHtmlDocument, "html">;
-export type BoardWidgetRegisteredDocument = Omit<
-  BoardWidgetHtmlDocument,
-  "html" | "resourceOrigins"
-> & {
+type BoardWidgetRegisteredDocument = Omit<BoardWidgetHtmlDocument, "html" | "resourceOrigins"> & {
   pluginKind: string;
   source: string;
   title?: string;
@@ -157,13 +154,6 @@ export function createBoardDeclaredSummary(
   return lines.length > 0 ? lines : undefined;
 }
 
-function generatedIdentityMatches(
-  left: BoardWidgetNameIdentityMarker | undefined,
-  right: BoardWidgetGeneratedIdentityMarker,
-): boolean {
-  return left?.kind === "generated" && left.source === right.source && left.key === right.key;
-}
-
 export function resolveBoardWidgetPutParams(
   prior: BoardSnapshot,
   params: BoardWidgetMaterializedPutParams,
@@ -179,14 +169,14 @@ export function resolveBoardWidgetPutParams(
       "generated widget fallback name must differ from its preferred name",
     );
   }
-  const marker: BoardWidgetGeneratedIdentityMarker = {
-    kind: "generated",
-    source: generatedIdentity.source,
-    key: generatedIdentity.key,
-  };
-  const existingGenerated = prior.widgets.find((widget) =>
-    generatedIdentityMatches(nameIdentities.get(widget.name), marker),
-  );
+  const existingGenerated = prior.widgets.find((widget) => {
+    const identity = nameIdentities.get(widget.name);
+    return (
+      identity?.kind === "generated" &&
+      identity.source === generatedIdentity.source &&
+      identity.key === generatedIdentity.key
+    );
+  });
   if (existingGenerated) {
     return { ...params, name: existingGenerated.name };
   }
@@ -253,18 +243,6 @@ function validatePluginContent(params: BoardWidgetMaterializedPutParams): void {
   }
 }
 
-function validateRegisteredContent(params: BoardWidgetMaterializedPutParams): void {
-  if (params.content.kind !== "registered") {
-    return;
-  }
-  if (Buffer.byteLength(params.content.source, "utf8") > BOARD_MAX_REGISTERED_SOURCE_BYTES) {
-    throw new BoardValidationError(
-      "invalid_operation",
-      `board registered widget source exceeds ${BOARD_MAX_REGISTERED_SOURCE_BYTES} UTF-8 bytes`,
-    );
-  }
-}
-
 export function createBoardWidgetPutSnapshot(
   prior: BoardSnapshot,
   params: BoardWidgetMaterializedPutParams,
@@ -275,7 +253,15 @@ export function createBoardWidgetPutSnapshot(
   },
 ): BoardSnapshot {
   validatePluginContent(params);
-  validateRegisteredContent(params);
+  if (
+    params.content.kind === "registered" &&
+    Buffer.byteLength(params.content.source, "utf8") > BOARD_MAX_REGISTERED_SOURCE_BYTES
+  ) {
+    throw new BoardValidationError(
+      "invalid_operation",
+      `board registered widget source exceeds ${BOARD_MAX_REGISTERED_SOURCE_BYTES} UTF-8 bytes`,
+    );
+  }
   if (
     params.content.kind === "html" &&
     Buffer.byteLength(params.content.html, "utf8") > WIDGET_HTML_MAX_UTF8_BYTES

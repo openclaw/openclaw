@@ -201,12 +201,14 @@ describe("worker tunnel manager", () => {
 
   it("renews a workspace quiescence lease while reconciliation is still running", async () => {
     const nonce = "a".repeat(32);
+    const acquireArgs = "'/home/worker/workspace' '720000' 'dedicated'";
+    const renewArgs = `'/home/worker/workspace' '${nonce}' '720000' 'heartbeat' 'dedicated'`;
     const fake = fakeRunner((argv) => {
       const remoteCommand = argv.at(-1) ?? "";
-      if (remoteCommand.includes('process.stdout.write("quiesced "')) {
+      if (remoteCommand.endsWith(acquireArgs)) {
         return success(`quiesced ${nonce}\n`);
       }
-      if (remoteCommand.includes('process.stdout.write("renewed "')) {
+      if (remoteCommand.endsWith(renewArgs)) {
         return success(`renewed ${nonce}\n`);
       }
       return undefined;
@@ -218,9 +220,7 @@ describe("worker tunnel manager", () => {
     try {
       const quiescence = await handle.quiesceWorkspace("/home/worker/workspace");
       await vi.advanceTimersByTimeAsync(4 * 60_000);
-      expect(
-        fake.runs.filter((entry) => entry.argv.at(-1)?.includes('process.stdout.write("renewed "')),
-      ).toHaveLength(1);
+      expect(fake.runs.filter((entry) => entry.argv.at(-1)?.endsWith(renewArgs))).toHaveLength(1);
       await quiescence.resume();
     } finally {
       vi.useRealTimers();
@@ -230,12 +230,14 @@ describe("worker tunnel manager", () => {
 
   it("passes shared-host isolation to initial and renewal quiescence commands", async () => {
     const nonce = "b".repeat(32);
+    const acquireArgs = "'/home/worker/workspace' '720000' 'shared-host'";
+    const renewArgs = `'/home/worker/workspace' '${nonce}' '720000' 'final' 'shared-host'`;
     const fake = fakeRunner((argv) => {
       const remoteCommand = argv.at(-1) ?? "";
-      if (remoteCommand.includes('process.stdout.write("quiesced "')) {
+      if (remoteCommand.endsWith(acquireArgs)) {
         return success(`quiesced ${nonce}\n`);
       }
-      if (remoteCommand.includes('process.stdout.write("renewed "')) {
+      if (remoteCommand.endsWith(renewArgs)) {
         return success(`renewed ${nonce}\n`);
       }
       return undefined;
@@ -245,13 +247,8 @@ describe("worker tunnel manager", () => {
 
     const quiescence = await handle.quiesceWorkspace("/home/worker/workspace");
     await quiescence.assertActive();
-    const quiescenceCommands = fake.runs.filter((entry) =>
-      entry.argv.at(-1)?.includes("workspace quiescence"),
-    );
-    expect(quiescenceCommands).toHaveLength(2);
-    expect(quiescenceCommands.every((entry) => entry.argv.at(-1)?.includes("shared-host"))).toBe(
-      true,
-    );
+    expect(fake.runs).toHaveLength(2);
+    expect(fake.runs.every((entry) => entry.argv.at(-1)?.endsWith("'shared-host'"))).toBe(true);
     await quiescence.resume();
     await handle.stop();
   });

@@ -796,7 +796,6 @@ export async function writeDiagnosticSupportExport(
   const published = await writeSupportBundleZip({
     outputPath,
     files: artifact.files,
-    compressionLevel: 6,
   });
   return {
     path: published.path,

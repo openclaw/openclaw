@@ -47,7 +47,11 @@ function appendArtifactSummary(
   }
 }
 
-function renderAttendance(result: GoogleMeetAttendanceResult, markdown: boolean): string {
+export function renderAttendance(
+  result: GoogleMeetAttendanceResult,
+  format: "summary" | "markdown",
+): string {
+  const markdown = format === "markdown";
   const lines: string[] = markdown ? ["# Google Meet Attendance"] : [];
   const field = (label: string, value: string | number) => {
     lines.push(`${markdown ? label : label.toLowerCase()}: ${value}`);
@@ -82,14 +86,6 @@ function renderAttendance(result: GoogleMeetAttendanceResult, markdown: boolean)
     }
   }
   return `${lines.join("\n")}\n`;
-}
-
-export function renderAttendanceSummary(result: GoogleMeetAttendanceResult): string {
-  return renderAttendance(result, false);
-}
-
-export function renderAttendanceMarkdown(result: GoogleMeetAttendanceResult): string {
-  return renderAttendance(result, true);
 }
 
 export function writeLatestConferenceRecordSummary(
@@ -159,7 +155,11 @@ function appendArtifactDocuments(
   }
 }
 
-function renderArtifacts(result: GoogleMeetArtifactsResult, markdown: boolean): string {
+export function renderArtifacts(
+  result: GoogleMeetArtifactsResult,
+  format: "summary" | "markdown",
+): string {
+  const markdown = format === "markdown";
   const lines: string[] = markdown ? ["# Google Meet Artifacts"] : [];
   const field = (label: string, value: string | number) => {
     lines.push(`${markdown ? label : label.toLowerCase()}: ${value}`);
@@ -240,14 +240,6 @@ function renderArtifacts(result: GoogleMeetArtifactsResult, markdown: boolean): 
     appendArtifactDocuments(lines, "Smart Notes", entry.smartNotes);
   }
   return `${lines.join("\n")}\n`;
-}
-
-export function renderArtifactsSummary(result: GoogleMeetArtifactsResult): string {
-  return renderArtifacts(result, false);
-}
-
-export function renderArtifactsMarkdown(result: GoogleMeetArtifactsResult): string {
-  return renderArtifacts(result, true);
 }
 
 function neutralizeSpreadsheetFormulaCell(text: string): string {
@@ -518,7 +510,7 @@ export async function writeMeetExportBundle(params: {
   const files = [
     {
       name: "summary.md",
-      content: `${renderArtifactsMarkdown(params.artifacts)}\n${renderAttendanceMarkdown(params.attendance)}`,
+      content: `${renderArtifacts(params.artifacts, "markdown")}\n${renderAttendance(params.attendance, "markdown")}`,
     },
     { name: "attendance.csv", content: renderAttendanceCsv(params.attendance) },
     { name: "transcript.md", content: renderTranscriptMarkdown(params.artifacts) },

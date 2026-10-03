@@ -191,7 +191,47 @@ function withWindowsWorkspaceLease(databasePath, workspaceKey, run) {
   }
 }`;
 
-const REMOTE_QUIESCENCE_CONTROL_JS = String.raw`function renewWorkspaceLease(timeoutMs, validationMode, isolationMode, watchdogReference) {
+const REMOTE_QUIESCENCE_CONTROL_JS = String.raw`function freezeWorkspaceProcesses(input, frozen, refreshLease, initial = false) {
+  let quietScans = 0;
+  const sleeper = new Int32Array(new SharedArrayBuffer(4));
+  const refresh = () => refreshLease([...frozen].map(([pid, start]) => ({ pid, start })));
+  // Initial acquisition journals each candidate and counts its first quiet scan;
+  // final renewal enrolls the whole scan and requires three subsequent quiet scans.
+  for (let attempt = 0; attempt < 250 && quietScans < 3; attempt += 1) {
+    const candidates = quiescenceCandidates(processes(), process.getuid(), new Set([input.watchdog.pid]), initial ? frozen : undefined);
+    if (candidates.length + frozen.size > 4096) throw new Error("too many worker processes to quiesce safely");
+    if (!initial) {
+      for (const [pid, row] of candidates) frozen.set(pid, row.start);
+      refresh();
+    }
+    for (const [pid, row] of candidates) {
+      try {
+        if (initial) { frozen.set(pid, row.start); refresh(); }
+        else if (input.expiresAtMs - Date.now() < 5000) refresh();
+        const start = initial ? processIdentity(pid) : processIdentity(pid, true)?.start;
+        if (start !== row.start) {
+          frozen.delete(pid);
+          if (initial) refresh();
+          continue;
+        }
+        if (!initial && input.expiresAtMs - Date.now() < 2500) refresh();
+        process.kill(pid, "SIGSTOP");
+      } catch (error) {
+        if (!error || (error.code !== "ESRCH" && error.code !== "EPERM")) throw error;
+        if (!initial || error.code === "EPERM") {
+          frozen.delete(pid);
+          if (initial) refresh();
+        }
+      }
+    }
+    if (!initial) refresh();
+    Atomics.wait(sleeper, 0, 0, 20);
+    const writable = quiescenceCandidates(processes(), process.getuid(), new Set([input.watchdog.pid])).length > 0;
+    quietScans = writable || (!initial && candidates.length > 0) ? 0 : quietScans + 1;
+  }
+  if (quietScans < 3) throw new Error("worker processes did not " + (initial ? "reach" : "return to") + " a quiescent state");
+}
+function renewWorkspaceLease(timeoutMs, validationMode, isolationMode, watchdogReference) {
 if (!/^[a-f0-9]{32}$/.test(nonce || "")) throw new Error("invalid workspace quiescence nonce");
 if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 10 * 1000) throw new Error("invalid watchdog timeout");
 if (validationMode !== "heartbeat" && validationMode !== "final") throw new Error("invalid workspace quiescence validation mode");
@@ -210,7 +250,6 @@ if (process.platform === "win32" && sharedHost) {
   return "renewed " + nonce + "\n";
 }
 if (typeof process.getuid !== "function") throw new Error("workspace quiescence requires POSIX");
-const uid = process.getuid();
 const input = parseLease(fs.readFileSync(leasePath, "utf8"), nonce, {
   requireWatchdog: true,
   minimumRemainingMs: 5000,
@@ -253,51 +292,8 @@ for (const entry of input.processes) {
 if (validationMode === "final" && !sharedHost) {
   refreshLease(input.processes);
   const frozen = new Map(input.processes.map((entry) => [entry.pid, entry.start]));
-  let quietScans = 0;
-  const sleeper = new Int32Array(new SharedArrayBuffer(4));
-  // A control tunnel can reconnect after the initial freeze; enroll every late process.
-  for (let attempt = 0; attempt < 250 && quietScans < 3; attempt += 1) {
-    const candidates = quiescenceCandidates(
-      processes(),
-      uid,
-      new Set([input.watchdog.pid]),
-    );
-    if (candidates.length + frozen.size > 4096) {
-      throw new Error("too many worker processes to quiesce safely");
-    }
-    for (const [pid, row] of candidates) frozen.set(pid, row.start);
-    let frozenEntries = [...frozen].map(([pid, start]) => ({ pid, start }));
-    refreshLease(frozenEntries);
-    for (const [pid, row] of candidates) {
-      try {
-        if (input.expiresAtMs - Date.now() < 5000) refreshLease(frozenEntries);
-        const current = processIdentity(pid, true);
-        if (!current || current.start !== row.start) {
-          frozen.delete(pid);
-          continue;
-        }
-        if (input.expiresAtMs - Date.now() < 2500) refreshLease(frozenEntries);
-        process.kill(pid, "SIGSTOP");
-      } catch (error) {
-        if (!error || (error.code !== "ESRCH" && error.code !== "EPERM")) throw error;
-        // Fail-closed either way: the candidate scan below runs without the frozen filter,
-        // so an EPERM-live process re-registers as a candidate and blocks quiescence.
-        frozen.delete(pid);
-      }
-    }
-    frozenEntries = [...frozen].map(([pid, start]) => ({ pid, start }));
-    refreshLease(frozenEntries);
-    Atomics.wait(sleeper, 0, 0, 20);
-    const unknownProcess = quiescenceCandidates(
-      processes(),
-      uid,
-      new Set([input.watchdog.pid]),
-    ).length > 0;
-    quietScans = candidates.length > 0 || unknownProcess ? 0 : quietScans + 1;
-  }
-  if (quietScans < 3) {
-    throw new Error("worker processes did not return to a quiescent state");
-  }
+  // Reconnected control tunnels can introduce late processes before final acceptance.
+  freezeWorkspaceProcesses(input, frozen, refreshLease);
   input.processes = [...frozen].map(([pid, start]) => ({ pid, start }));
 }
 refreshLease(input.processes);
@@ -367,15 +363,15 @@ if (process.platform !== "win32") fs.chmodSync(leaseDirectory, 0o700);
 const watchdogLifetime = process.argv[4] || "detached";
 if (watchdogLifetime !== "detached" && watchdogLifetime !== "owned") throw new Error("invalid watchdog lifetime");
 const ownedWatchdog = watchdogLifetime === "owned";
-const nonce = ownedWatchdog ? process.argv[5] : crypto.randomBytes(16).toString("hex");
+let nonce = ownedWatchdog ? process.argv[5] : crypto.randomBytes(16).toString("hex");
 if (!/^[a-f0-9]{32}$/.test(nonce || "")) throw new Error("invalid workspace quiescence nonce");
-const watchdogTimeoutMs = Number(process.argv[2] || 12 * 60 * 1000);
+let watchdogTimeoutMs = Number(process.argv[2] || 12 * 60 * 1000);
 if (!Number.isSafeInteger(watchdogTimeoutMs) || watchdogTimeoutMs < 1) throw new Error("invalid watchdog timeout");
 const isolationMode = process.argv[3] || "dedicated";
 if (isolationMode !== "dedicated" && isolationMode !== "shared-host") throw new Error("invalid workspace quiescence isolation mode");
 const sharedHost = isolationMode === "shared-host";
 if (ownedWatchdog && !sharedHost) throw new Error("native quiescence requires a shared host");
-const leasePath = path.join(leaseDirectory, workspaceKey + "." + nonce + ".json");
+let leasePath = path.join(leaseDirectory, workspaceKey + "." + nonce + ".json");
 ${REMOTE_QUIESCENCE_LEASE_JS}
 if (process.platform === "win32" && sharedHost) {
   withWindowsWorkspaceLease(windowsLeaseDatabasePath, workspaceKey, (raw) => {
@@ -410,16 +406,18 @@ ${REMOTE_QUIESCENCE_PS_JS}
 ${REMOTE_QUIESCENCE_CONTROL_JS}
 const frozen = new Map();
 let watchdogReference = null;
-function writeLease(expiresAtMs = Date.now() + watchdogTimeoutMs) {
+function writeLease(processes = [...frozen].map(([pid, start]) => ({ pid, start }))) {
   persistLease(leasePath, {
     version: 1,
     nonce,
     sharedHost,
-    processes: [...frozen].map(([pid, start]) => ({ pid, start })),
+    processes,
     watchdog: watchdogReference,
-    expiresAtMs,
+    expiresAtMs: Date.now() + watchdogTimeoutMs,
   });
 }
+function acquireWorkspaceLease() {
+processProbe = createProcessProbe();
 const orphanNames = fs.readdirSync(leaseDirectory).filter((name) =>
   name.startsWith(workspaceKey + ".") && name.endsWith(".json"),
 );
@@ -471,7 +469,7 @@ if (!Number.isSafeInteger(watchdog.pid) || watchdog.pid < 1) {
   fs.unlinkSync(leasePath);
   throw new Error("workspace quiescence watchdog did not start");
 }
-let watchdogStart = null;
+let watchdogStart = ownedWatchdog ? watchdogReference?.start : null;
 try {
   for (let attempt = 0; attempt < 100 && !watchdogStart; attempt += 1) {
     watchdogStart = processIdentity(watchdog.pid);
@@ -487,54 +485,12 @@ try {
   try { fs.unlinkSync(leasePath); } catch (unlinkError) { if (!unlinkError || unlinkError.code !== "ENOENT") throw unlinkError; }
   throw error;
 }
-let quietScans = 0;
 try {
   if (sharedHost) {
-    // The worker has already published its terminal result. Manifest stability fences around
-    // transfer, apply, renewal, and publication reject later writes; only the uid-wide SIGSTOP
-    // sweep is skipped because this provider explicitly declared processes the lease does not own.
+    // Shared hosts use manifest fences because this lease does not own every uid process.
     process.stderr.write("workspace quiescence: shared host declared; skipping process freeze sweep\n");
-    quietScans = 3;
-  }
-  for (let attempt = 0; !sharedHost && attempt < 250 && quietScans < 3; attempt += 1) {
-    const candidates = quiescenceCandidates(
-      processes(),
-      uid,
-      new Set([watchdog.pid]),
-      frozen,
-    );
-    if (candidates.length + frozen.size > 4096) {
-      throw new Error("too many worker processes to quiesce safely");
-    }
-    for (const [pid, row] of candidates) {
-      try {
-        frozen.set(pid, row.start);
-        writeLease();
-        if (processIdentity(pid) !== row.start) {
-          frozen.delete(pid);
-          writeLease();
-          continue;
-        }
-        process.kill(pid, "SIGSTOP");
-      } catch (error) {
-        if (error && error.code === "EPERM") {
-          frozen.delete(pid);
-          writeLease();
-          continue;
-        }
-        if (!error || error.code !== "ESRCH") throw error;
-      }
-    }
-    Atomics.wait(sleeper, 0, 0, 20);
-    const writable = quiescenceCandidates(
-      processes(),
-      uid,
-      new Set([watchdog.pid]),
-    ).length > 0;
-    quietScans = writable ? 0 : quietScans + 1;
-  }
-  if (quietScans < 3) {
-    throw new Error("worker processes did not reach a quiescent state");
+  } else {
+    freezeWorkspaceProcesses({ watchdog: watchdogReference }, frozen, writeLease, true);
   }
 } catch (error) {
   // Thaw before retiring the watchdog: a bounded identity probe can throw here, and
@@ -546,14 +502,9 @@ try {
   try { fs.unlinkSync(leasePath); } catch (unlinkError) { if (!unlinkError || unlinkError.code !== "ENOENT") throw unlinkError; }
   throw error;
 }
+}
+acquireWorkspaceLease();
 function watchdogMain(watchedLeasePath, watchedNonce) {
-  const retire = () => {
-    if (process.connected) {
-      process.send({ type: "workspace-quiescence-retired", nonce: watchedNonce }, () => {
-        if (process.connected) process.disconnect();
-      });
-    }
-  };
   let retryDelayMs = 1000;
   // Four 30s passes plus 1+2+4s backoff allow slow hosts 127s of recovery work.
   // A total cap prevents endless fresh budgets from silently leaving workers stopped.
@@ -572,7 +523,7 @@ function watchdogMain(watchedLeasePath, watchedNonce) {
         lease.nonce !== watchedNonce ||
         !Array.isArray(lease.processes) ||
         !Number.isSafeInteger(lease.expiresAtMs)
-      ) { if (process.connected) { process.exitCode = 1; process.disconnect(); } return; }
+      ) { return; }
       const remainingMs = lease.expiresAtMs - Date.now();
       if (remainingMs > 0) {
         remainingProcesses = undefined;
@@ -613,13 +564,13 @@ function watchdogMain(watchedLeasePath, watchedNonce) {
         }
         remainingProcesses.shift();
       }
-      if (canResume()) { watchdogFs.unlinkSync(watchedLeasePath); retire(); }
+      if (canResume()) watchdogFs.unlinkSync(watchedLeasePath);
     } catch (error) {
       // A missing ps also throws ENOENT; only a missing lease means someone else finished.
-      if (error && error.code === "ENOENT" && error.path === watchedLeasePath) { retire(); return; }
+      if (error && error.code === "ENOENT" && error.path === watchedLeasePath) { return; }
       // An unreadable lease is terminal: the pids to resume live in that file, so retrying
       // cannot recover them and would leave this detached process alive forever.
-      if (error instanceof SyntaxError) { if (process.connected) { process.exitCode = 1; process.disconnect(); } return; }
+      if (error instanceof SyntaxError) { return; }
       const current = canResume?.();
       if (canResume && !current) return;
       failedPasses += 1;
@@ -630,7 +581,6 @@ function watchdogMain(watchedLeasePath, watchedNonce) {
           ...current, processes: unfinished, recoveryError: reportPendingProcesses(unfinished, true),
         });
         process.exitCode = 1;
-        if (process.connected) process.disconnect();
         return;
       }
       if (error && error.code === "WORKSPACE_PROBE_BUDGET_EXHAUSTED") {
@@ -645,29 +595,49 @@ function watchdogMain(watchedLeasePath, watchedNonce) {
   check();
 }
 if (ownedWatchdog) {
+  let active = true;
+  let expiry;
+  const scheduleExpiry = () => {
+    clearTimeout(expiry);
+    expiry = setTimeout(() => {
+      resumeWorkspaceLease(true, watchdogReference);
+      active = false;
+      if (process.connected) process.send({ type: "workspace-quiescence-retired", nonce });
+    }, watchdogTimeoutMs);
+  };
   process.on("message", (message) => {
-    if (message?.type !== "workspace-quiescence-control" || message.nonce !== nonce) return;
+    if (message?.type === "workspace-quiescence-retire" && message.nonce === nonce && !active) process.exit(0);
+    if (message?.type !== "workspace-quiescence-control") return;
     const { action } = message;
-    if (action !== "renew" && action !== "release") return;
     let failure;
     try {
-      if (action === "renew") {
+      if (action === "acquire" && !active) {
+        if (!/^[a-f0-9]{32}$/.test(message.nonce || "") || !Number.isSafeInteger(message.timeoutMs) || message.timeoutMs < 1) throw new Error("invalid workspace quiescence acquisition");
+        nonce = message.nonce;
+        watchdogTimeoutMs = message.timeoutMs;
+        leasePath = path.join(leaseDirectory, workspaceKey + "." + nonce + ".json");
+        active = true;
+        acquireWorkspaceLease();
+      } else if (message.nonce !== nonce || !active) {
+        throw new Error("workspace quiescence lease is no longer active");
+      } else if (action === "renew") {
         renewWorkspaceLease(message.timeoutMs, message.validationMode, "shared-host", watchdogReference);
-      } else {
+        watchdogTimeoutMs = message.timeoutMs;
+      } else if (action === "release") {
         resumeWorkspaceLease(true, watchdogReference);
+        active = false;
+        clearTimeout(expiry);
+      } else {
+        throw new Error("workspace quiescence lease is already active");
       }
+      if (active) scheduleExpiry();
     } catch (error) {
       failure = error instanceof Error ? error.message : String(error);
     }
-    process.send({ type: "workspace-quiescence-result", nonce, action, ...(failure !== undefined ? { error: failure } : {}) }, () => {
-      // Release settles only after the exact child has acknowledged and exited.
-      if (action === "release" && failure === undefined) process.exit(0);
-    });
+    process.send({ type: "workspace-quiescence-result", id: message.id, nonce: message.nonce, action, ...(failure !== undefined ? { error: failure } : {}) });
   });
-  process.stdout.write("quiesced " + nonce + "\n", () => {
-    if (process.connected) process.send({ type: "workspace-quiescence-ready", nonce });
-  });
-  watchdogMain(leasePath, nonce);
+  process.send({ type: "workspace-quiescence-result", nonce, action: "acquire" });
+  scheduleExpiry();
 } else {
   process.stdout.write("quiesced " + nonce + "\n");
 }

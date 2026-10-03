@@ -76,10 +76,9 @@ export async function load(
   ) {
     return unresolved();
   }
-  const agentsList = loadedAgentsList;
-  const availableAgents = listSelectableAgents(agentsList?.agents ?? []);
-  const fallbackAgentId = availableAgents.some((agent) => agent.id === agentsList.defaultId)
-    ? agentsList.defaultId
+  const availableAgents = listSelectableAgents(loadedAgentsList.agents);
+  const fallbackAgentId = availableAgents.some((agent) => agent.id === loadedAgentsList.defaultId)
+    ? loadedAgentsList.defaultId
     : availableAgents[0]?.id;
   const agentId = fallbackAgentId
     ? resolveAgentId(requestedLocation, availableAgents, fallbackAgentId)

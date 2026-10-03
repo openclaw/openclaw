@@ -14,19 +14,6 @@ import type {
 import type { AgentToolResult } from "./runtime/index.js";
 import { failedTextResult, textResult } from "./tools/common.js";
 
-export function createExecProcessSettlement() {
-  const settlement: {
-    outcome: ExecProcessOutcome | null;
-    settle: (outcome: ExecProcessOutcome) => void;
-  } = {
-    outcome: null,
-    settle(outcome: ExecProcessOutcome) {
-      settlement.outcome = outcome;
-    },
-  };
-  return settlement;
-}
-
 export function attachExecApprovalReview(
   result: AgentToolResult<ExecToolDetails>,
   review?: ExecToolApprovalReview,

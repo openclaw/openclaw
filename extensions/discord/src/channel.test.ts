@@ -303,6 +303,25 @@ describe("discordPlugin outbound", () => {
     });
   });
 
+  it("resolves the current thread only for sends addressed to that thread's channel", () => {
+    const resolveAutoThreadId = discordPlugin.threading?.resolveAutoThreadId;
+    if (!resolveAutoThreadId) {
+      throw new Error("Expected discordPlugin.threading.resolveAutoThreadId to be defined");
+    }
+    const resolveFor = (to: string, currentThreadTs?: string) =>
+      resolveAutoThreadId({
+        cfg: {} as OpenClawConfig,
+        to,
+        toolContext: { currentChannelId: "channel:111", currentThreadTs },
+      });
+
+    expect(resolveFor("channel:111", "111")).toBe("111");
+    expect(resolveFor("111", "111")).toBe("111");
+    expect(resolveFor("channel:222", "111")).toBeUndefined();
+    expect(resolveFor("user:111", "111")).toBeUndefined();
+    expect(resolveFor("channel:111")).toBeUndefined();
+  });
+
   it("avoids local require calls for bundled-only sibling modules", async () => {
     const source = await readFile(
       resolve(process.cwd(), "extensions/discord/src/channel.ts"),

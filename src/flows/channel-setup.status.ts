@@ -28,8 +28,7 @@ import {
   type BundledPluginSource,
 } from "../plugins/bundled-sources.js";
 import { t, wizardT } from "../wizard/i18n/index.js";
-import type { WizardPrompter } from "../wizard/prompts.js";
-import type { FlowContribution } from "./types.js";
+import type { WizardPrompter, WizardSelectOption } from "../wizard/prompts.js";
 
 type ChannelStatusSummary = {
   installedPlugins: ChannelSetupPlugin[];
@@ -37,13 +36,6 @@ type ChannelStatusSummary = {
   installedCatalogEntries: ChannelPluginCatalogEntry[];
   statusByChannel: Map<ChannelChoice, ChannelSetupStatus>;
   statusLines: string[];
-};
-
-type ChannelSetupSelectionContribution = FlowContribution & {
-  kind: "channel";
-  surface: "setup";
-  channel: ChannelChoice;
-  source: "catalog" | "core" | "plugin";
 };
 
 type ChannelSetupSelectionEntry = {
@@ -90,26 +82,6 @@ const CHANNEL_PRIMER_BLURB_KEYS: Record<string, string> = {
   zalo: "wizard.channelsPrimer.blurbs.zalo",
   zalouser: "wizard.channelsPrimer.blurbs.zalouser",
 };
-
-function buildChannelSetupSelectionContribution(params: {
-  channel: ChannelChoice;
-  label: string;
-  hint?: string;
-  source: "catalog" | "core" | "plugin";
-}): ChannelSetupSelectionContribution {
-  return {
-    id: `channel:setup:${params.channel}`,
-    kind: "channel",
-    surface: "setup",
-    channel: params.channel,
-    option: {
-      value: params.channel,
-      label: params.label,
-      ...(params.hint ? { hint: params.hint } : {}),
-    },
-    source: params.source,
-  };
-}
 
 function formatSetupSelectionLabel(label: string, fallback: string): string {
   return (
@@ -486,25 +458,27 @@ export function resolveChannelSelectionNoteLines(params: {
     .filter((line): line is string => Boolean(line));
 }
 
-export function resolveChannelSetupSelectionContributions(params: {
+export function resolveChannelSetupSelectionOptions(params: {
   entries: ChannelSetupSelectionEntry[];
   statusByChannel: Map<ChannelChoice, { selectionHint?: string }>;
   resolveDisabledHint: (channel: ChannelChoice) => string | undefined;
-}): ChannelSetupSelectionContribution[] {
-  const bundledChannelIds = new Set(listChatChannels().map((channel) => channel.id));
+}): WizardSelectOption<ChannelChoice>[] {
   return params.entries
     .filter((entry) => shouldShowChannelInSetup(entry.meta))
     .toSorted((left, right) => compareChannelSetupSelectionEntries(left, right))
     .map((entry) => {
       const disabledHint = params.resolveDisabledHint(entry.id);
       const statusHint = params.statusByChannel.get(entry.id)?.selectionHint;
-      const hint = [statusHint, disabledHint].filter(Boolean).join(" · ") || undefined;
-      return buildChannelSetupSelectionContribution({
-        channel: entry.id,
-        label: formatSetupSelectionLabel(entry.meta.selectionLabel ?? entry.meta.label, entry.id),
-        hint: formatSetupSelectionHint(hint),
-        source: bundledChannelIds.has(entry.id) ? "core" : "plugin",
-      });
+      const hint = formatSetupSelectionHint(
+        [statusHint, disabledHint].filter(Boolean).join(" · ") || undefined,
+      );
+      return Object.assign(
+        {
+          value: entry.id,
+          label: formatSetupSelectionLabel(entry.meta.selectionLabel ?? entry.meta.label, entry.id),
+        },
+        hint ? { hint } : undefined,
+      );
     });
 }
 

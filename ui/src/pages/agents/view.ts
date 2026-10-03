@@ -440,11 +440,24 @@ export function renderAgents(props: AgentsProps) {
                 renderSettingsEmpty(t("agents.selectSubtitle")),
               )
             : html`
-                ${renderAgentTabs(
-                  props.activePanel,
-                  (panel) => props.onSelectPanel(panel),
-                  tabCounts,
-                )}
+                ${renderHubTabs({
+                  id: "agents",
+                  active: props.activePanel,
+                  tabs: (
+                    [
+                      ["overview", "agents.tabs.overview"],
+                      ["files", "agents.tabs.files"],
+                      ["tools", "agents.tabs.tools"],
+                      ["skills", "agents.tabs.skills"],
+                      ["channels", "agents.tabs.channels"],
+                      ["cron", "agents.tabs.cronJobs"],
+                      ["memory", "agents.tabs.memory"],
+                    ] as const
+                  ).map(([value, key]) => ({ value, label: t(key), count: tabCounts[value] })),
+                  ariaLabel: t("tabs.agents"),
+                  panelId: "agent-panel",
+                  onSelect: props.onSelectPanel,
+                })}
                 <div
                   id="agent-panel"
                   class="settings-stack"
@@ -465,32 +478,4 @@ export function renderAgents(props: AgentsProps) {
       </section>
     </div>
   `;
-}
-
-function renderAgentTabs(
-  active: AgentsPanel,
-  onSelect: (panel: AgentsPanel) => void,
-  counts: Record<string, number | null>,
-) {
-  const tabs: Array<{ id: AgentsPanel; label: string }> = [
-    { id: "overview", label: t("agents.tabs.overview") },
-    { id: "files", label: t("agents.tabs.files") },
-    { id: "tools", label: t("agents.tabs.tools") },
-    { id: "skills", label: t("agents.tabs.skills") },
-    { id: "channels", label: t("agents.tabs.channels") },
-    { id: "cron", label: t("agents.tabs.cronJobs") },
-    { id: "memory", label: t("agents.tabs.memory") },
-  ];
-  return renderHubTabs({
-    id: "agents",
-    active,
-    tabs: tabs.map((tab) => ({
-      value: tab.id,
-      label: tab.label,
-      count: counts[tab.id],
-    })),
-    ariaLabel: t("tabs.agents"),
-    panelId: "agent-panel",
-    onSelect,
-  });
 }

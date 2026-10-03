@@ -10,6 +10,7 @@ import {
   NODE_WORKER_ENVIRONMENT_STOP_COMMAND,
   NODE_WORKER_SUPERVISOR_CANCEL_COMMAND,
   NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
+  NODE_WORKER_WORKSPACE_RETAIN_COMMAND,
 } from "../../../../src/infra/node-commands.js";
 import { withOpenClawStateDatabaseReadOnly } from "../../../../src/state/openclaw-state-db-readonly.js";
 import type { DB as StateDatabase } from "../../../../src/state/openclaw-state-db.generated.js";
@@ -511,6 +512,18 @@ describe("paired node worker lifecycle wire", () => {
           bundleStatus: true,
         });
         const nodeId = workerNode.identity.deviceId;
+        const retainHost = workerNode;
+        const retainCommandCount = () =>
+          retainHost.commands.filter((command) => command === NODE_WORKER_WORKSPACE_RETAIN_COMMAND)
+            .length;
+        const waitForNewRetainCommand = async (previousCount: number) => {
+          await vi.waitFor(() => expect(retainCommandCount()).toBeGreaterThan(previousCount), {
+            timeout: 30_000,
+            interval: 100,
+          });
+          await retainHost.waitForInvokes();
+          expect(retainHost.invokeErrors).toEqual([]);
+        };
         const localKey = await createSession({ operator, published, suffix: "local-control" });
         const retainedKey = await createSession({ operator, published, suffix: "retention" });
         const retainedPlacement = await dispatchNodeSession({
@@ -578,16 +591,20 @@ describe("paired node worker lifecycle wire", () => {
         await fs.rm(installedBundle, { recursive: true, force: true });
         await workerNode.disconnect();
         await waitForNodeDisconnected(operator, nodeId);
+        const retainCountBeforeReconnect = retainCommandCount();
         await workerNode.connect();
+        await waitForNewRetainCommand(retainCountBeforeReconnect);
         await expectPublicBundleStatus({ operator, nodeId, status: "missing" });
         await expectSuccessfulTurn({ operator, key: localKey, marker: "WIRE-LOCAL-AFTER-LOSS" });
 
         const repairedKey = await createSession({ operator, published, suffix: "reinstalled" });
+        const retainCountBeforeRepair = retainCommandCount();
         await dispatchNodeSession({ gateway, key: repairedKey, nodeId });
         await vi.waitFor(
           () => expect(bundleInstallFrames(workerNode!).length).toBe(installCountBeforeLoss + 1),
           { timeout: 30_000, interval: 100 },
         );
+        await waitForNewRetainCommand(retainCountBeforeRepair);
         await expectPublicBundleStatus({ operator, nodeId, status: "installed" });
 
         // An offline runner fails before handoff, leaves the active placement retryable, and

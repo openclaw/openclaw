@@ -32,6 +32,7 @@ import {
   cliMessageExitEntrypoints,
   cliRecoveryEntrypoints,
   gatewayDirectStopEntrypoints,
+  localStateOwnerFixtureEntrypoint,
   updateExecutorEntrypoints,
   stateDirGatewayFixtureEntrypoint,
   updateCandidateExitEntrypoints,
@@ -337,6 +338,7 @@ export const vitestWorkerBuildEntries = {
     ...Object.values(updateExecutorEntrypoints),
     ...Object.values(gatewayDirectStopEntrypoints),
     stateDirGatewayFixtureEntrypoint,
+    localStateOwnerFixtureEntrypoint,
     ...Object.values(doctorConfigRuntimeEntrypoints),
     ...Object.values(cronOwnerHardeningEntrypoints),
     ...(nativeSchtasksIntegrationEnabled

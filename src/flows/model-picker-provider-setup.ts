@@ -20,16 +20,15 @@ export async function resolveProviderPluginSetupOptions(params: {
 }): Promise<WizardSelectOption[]> {
   const runtime = await loadResolvedModelPickerRuntime();
   return runtime
-    .resolveProviderModelPickerContributions({
+    .resolveProviderModelPickerEntries({
       config: params.cfg,
       workspaceDir: params.workspaceDir,
       env: params.env,
     })
-    .map(({ option }) =>
-      Object.assign(
-        { value: option.value, label: option.label },
-        option.hint ? { hint: option.hint } : {},
-      ),
+    .map(({ value, label, hint }) => Object.assign({ value, label }, hint ? { hint } : undefined))
+    .toSorted(
+      (left, right) =>
+        left.label.localeCompare(right.label) || left.value.localeCompare(right.value),
     );
 }
 

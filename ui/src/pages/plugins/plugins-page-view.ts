@@ -60,7 +60,7 @@ type PluginsPageViewActions = {
   installCatalogEntry: (id: string) => void;
   setQuery: (query: string) => void;
   refreshCatalog: () => void;
-  openPluginSettings: (pluginId: string | null, fromDiscovery: boolean) => void;
+  openPluginSettings: (pluginId: string | null) => void;
   handlePluginIconError: (pluginId: string) => void;
   updateEnabled: (pluginId: string, enabled: boolean, rowKey: string) => void;
   uninstall: (pluginId: string, rowKey: string) => void;
@@ -232,7 +232,7 @@ export function renderPluginsPage(model: PluginsPageViewModel) {
             secondaryAction: {
               label: t("pluginsPage.pluginSettings"),
               icon: icons.settings,
-              onClick: () => actions.openPluginSettings(null, false),
+              onClick: () => actions.openPluginSettings(null),
             },
           })
         : nothing
@@ -334,7 +334,7 @@ export function renderPluginsPage(model: PluginsPageViewModel) {
                 onTabChange: actions.selectSettingsTab,
                 onQueryChange: actions.setQuery,
                 pluginHref: (pluginId) => pathForPluginSettings(pluginId, context.basePath),
-                onOpenPlugin: (pluginId) => actions.openPluginSettings(pluginId, false),
+                onOpenPlugin: (pluginId) => actions.openPluginSettings(pluginId),
               })
       }
     `)}

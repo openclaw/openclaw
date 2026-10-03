@@ -205,7 +205,7 @@ const resolvePluginProviders = vi.hoisted(() => vi.fn(() => []));
 const runProviderPluginAuthMethod = vi.hoisted(() => vi.fn());
 vi.mock("../commands/model-picker.runtime.js", () => ({
   modelPickerRuntime: {
-    resolveProviderModelPickerContributions: providerModelPickerContributionRuntime.resolve,
+    resolveProviderModelPickerEntries: providerModelPickerContributionRuntime.resolve,
     resolveProviderPluginChoice,
     runProviderModelSelectedHook,
     resolvePluginProviders,
@@ -586,10 +586,8 @@ describe("promptDefaultModel", () => {
     );
     providerModelPickerContributionRuntime.resolve.mockReturnValue([
       {
-        option: {
-          value: "provider-plugin:nvidia:api-key",
-          label: "NVIDIA (custom)",
-        },
+        value: "provider-plugin:nvidia:api-key",
+        label: "NVIDIA (custom)",
       },
     ] as never);
     cliBackendsTesting.setDepsForTest({
@@ -660,10 +658,9 @@ describe("promptDefaultModel", () => {
     ]);
     providerModelPickerContributionRuntime.resolve.mockReturnValue([
       {
-        id: "provider:model-picker:vllm",
-        kind: "provider",
-        surface: "model-picker",
-        option: { value: "vllm", label: "vLLM (custom)", hint: "Enter vLLM URL + API key + model" },
+        value: "vllm",
+        label: "vLLM (custom)",
+        hint: "Enter vLLM URL + API key + model",
       },
     ] as never);
     resolvePluginProviders.mockReturnValue([{ id: "vllm" }] as never);

@@ -304,14 +304,9 @@ function collectProviderCatalogModelFindings(params: {
       ),
     ];
   }
-  let modelEntries: Array<[number, unknown]>;
+  let modelEntries: unknown[];
   try {
-    modelEntries = [];
-    let index = 0;
-    for (const model of models) {
-      modelEntries.push([index, model]);
-      index += 1;
-    }
+    modelEntries = [...models];
   } catch (error) {
     return [
       providerCatalogProjectionFinding(
@@ -321,42 +316,34 @@ function collectProviderCatalogModelFindings(params: {
       ),
     ];
   }
-  for (const [index, model] of modelEntries) {
-    const modelId = readProviderCatalogValue({
-      value: model,
-      key: "id",
-      providerId: params.providerId,
-      pluginId: params.pluginId,
-    });
-    if (!modelId.ok) {
-      findings.push(modelId.finding);
-      continue;
-    }
-    if (!isTrimmedNonEmptyString(modelId.value)) {
+  for (const [index, model] of modelEntries.entries()) {
+    try {
+      const modelId = isReadableRecord(model) ? model.id : undefined;
+      if (!isTrimmedNonEmptyString(modelId)) {
+        findings.push(
+          providerCatalogProjectionFinding(
+            params,
+            `Provider catalog ${params.providerId} model row ${index} has an invalid model id.`,
+            new Error("model id must be a non-empty trimmed string"),
+          ),
+        );
+      }
+      const modelName = isReadableRecord(model) ? model.name : undefined;
+      if (modelName !== undefined && typeof modelName !== "string") {
+        findings.push(
+          providerCatalogProjectionFinding(
+            params,
+            `Provider catalog ${params.providerId} model row ${index} has an invalid model name.`,
+            new Error("model name must be a string when present"),
+          ),
+        );
+      }
+    } catch (error) {
       findings.push(
         providerCatalogProjectionFinding(
           params,
-          `Provider catalog ${params.providerId} model row ${index} has an invalid model id.`,
-          new Error("model id must be a non-empty trimmed string"),
-        ),
-      );
-    }
-    const modelName = readProviderCatalogValue({
-      value: model,
-      key: "name",
-      providerId: params.providerId,
-      pluginId: params.pluginId,
-    });
-    if (!modelName.ok) {
-      findings.push(modelName.finding);
-      continue;
-    }
-    if (modelName.value !== undefined && typeof modelName.value !== "string") {
-      findings.push(
-        providerCatalogProjectionFinding(
-          params,
-          `Provider catalog ${params.providerId} model row ${index} has an invalid model name.`,
-          new Error("model name must be a string when present"),
+          `Provider catalog ${params.providerId} entry cannot be read during doctor validation.`,
+          error,
         ),
       );
     }
@@ -501,35 +488,6 @@ function collectProviderCatalogResultFindings(params: {
   return findings;
 }
 
-function readProviderCatalogOrder(
-  provider: ProviderPlugin,
-): { ok: true; order: ProviderCatalogOrder } | { ok: false; finding: HealthFinding } {
-  let order: unknown;
-  try {
-    order = provider.staticCatalog?.order ?? "late";
-  } catch (error) {
-    return {
-      ok: false,
-      finding: providerCatalogProjectionFinding(
-        { providerId: provider.id, pluginId: provider.pluginId },
-        `Provider catalog ${provider.id} order cannot be read during doctor validation.`,
-        error,
-      ),
-    };
-  }
-  if (PROVIDER_CATALOG_ORDER_SET.has(order as ProviderCatalogOrder)) {
-    return { ok: true, order: order as ProviderCatalogOrder };
-  }
-  return {
-    ok: false,
-    finding: providerCatalogProjectionFinding(
-      { providerId: provider.id, pluginId: provider.pluginId },
-      `Provider catalog ${provider.id} order is invalid during doctor validation.`,
-      new Error("order must be simple, profile, paired, or late"),
-    ),
-  };
-}
-
 function groupProviderCatalogsForDoctor(providers: readonly ProviderPlugin[]): {
   findings: HealthFinding[];
   byOrder: Record<ProviderCatalogOrder, ProviderPlugin[]>;
@@ -542,13 +500,30 @@ function groupProviderCatalogsForDoctor(providers: readonly ProviderPlugin[]): {
     late: [],
   };
   for (const provider of providers) {
-    const order = readProviderCatalogOrder(provider);
-    if (!order.ok) {
-      findings.push(order.finding);
-      byOrder.late.push(provider);
-      continue;
+    let order: ProviderCatalogOrder = "late";
+    try {
+      const declaredOrder = provider.staticCatalog?.order ?? "late";
+      if (PROVIDER_CATALOG_ORDER_SET.has(declaredOrder)) {
+        order = declaredOrder;
+      } else {
+        findings.push(
+          providerCatalogProjectionFinding(
+            { providerId: provider.id, pluginId: provider.pluginId },
+            `Provider catalog ${provider.id} order is invalid during doctor validation.`,
+            new Error("order must be simple, profile, paired, or late"),
+          ),
+        );
+      }
+    } catch (error) {
+      findings.push(
+        providerCatalogProjectionFinding(
+          { providerId: provider.id, pluginId: provider.pluginId },
+          `Provider catalog ${provider.id} order cannot be read during doctor validation.`,
+          error,
+        ),
+      );
     }
-    byOrder[order.order].push(provider);
+    byOrder[order].push(provider);
   }
   for (const order of PROVIDER_CATALOG_ORDERS) {
     byOrder[order].sort((a, b) => a.label.localeCompare(b.label));

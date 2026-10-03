@@ -58,7 +58,6 @@ import {
   attachExecApprovalReview,
   buildExecForegroundResult,
   createExecHostResolver,
-  createExecProcessSettlement,
   resolveExecElevatedMode,
   resolveExecReviewerDefaults,
 } from "./bash-tools.exec-support.js";
@@ -403,7 +402,7 @@ export function createExecTool(
         });
       }
       let run: ExecProcessHandle;
-      const settlement = createExecProcessSettlement();
+      let settled = false;
       let effectiveTimeout: number;
       try {
         if (elevatedRequested) {
@@ -607,7 +606,9 @@ export function createExecTool(
           onUpdate,
           beforeSpawn: gatewayApproval?.revalidateBeforeExecution,
           assertCurrent: gatewayApproval?.assertCurrent,
-          onSettledBeforeNotify: settlement.settle,
+          onSettledBeforeNotify: () => {
+            settled = true;
+          },
         });
         discardPreparedSandboxWorkdir = null;
       } catch (error) {
@@ -672,7 +673,7 @@ export function createExecTool(
         ]),
       );
       const onYieldNow = () => {
-        if (yielded || toolAborted || run.session.finalizing || settlement.outcome) {
+        if (yielded || toolAborted || run.session.finalizing || settled) {
           return;
         }
         yielded = true;
