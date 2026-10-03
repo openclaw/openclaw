@@ -4,6 +4,7 @@ import {
   admitFollowupRunLifecycle,
   completeFollowupRunLifecycle,
   markFollowupRunEnqueued,
+  releaseBeforeTurnAdoptionRetry,
 } from "./lifecycle.js";
 
 afterEach(() => vi.useRealTimers());
@@ -78,4 +79,84 @@ describe("followup lifecycle heartbeat", () => {
       }
     },
   );
+});
+
+describe("followup lifecycle terminal disposition", () => {
+  const createLifecycle = (abortSignal?: AbortSignal) => ({
+    admission: "exclusive" as const,
+    abortSignal,
+    onAdopted: vi.fn(),
+    onDeferred: vi.fn(),
+    onCancelled: vi.fn(async () => {}),
+    onAbandoned: vi.fn(),
+    onSettled: vi.fn(),
+  });
+
+  it("settles an unadmitted run through onCancelled when it is cancelled", () => {
+    const lifecycle = createLifecycle();
+    completeFollowupRunLifecycle({ turnAdoptionLifecycle: lifecycle }, "cancelled");
+    expect(lifecycle.onCancelled).toHaveBeenCalledOnce();
+    expect(lifecycle.onAbandoned).not.toHaveBeenCalled();
+    expect(lifecycle.onSettled).toHaveBeenCalledOnce();
+  });
+
+  it("treats an already-aborted lifecycle as cancelled", () => {
+    const abort = new AbortController();
+    abort.abort();
+    const lifecycle = createLifecycle(abort.signal);
+    completeFollowupRunLifecycle({ turnAdoptionLifecycle: lifecycle });
+    expect(lifecycle.onCancelled).toHaveBeenCalledOnce();
+    expect(lifecycle.onAbandoned).not.toHaveBeenCalled();
+  });
+
+  it("abandons an unadmitted run that merely finished without the lane", () => {
+    const lifecycle = createLifecycle(new AbortController().signal);
+    completeFollowupRunLifecycle({ turnAdoptionLifecycle: lifecycle });
+    expect(lifecycle.onAbandoned).toHaveBeenCalledOnce();
+    expect(lifecycle.onCancelled).not.toHaveBeenCalled();
+  });
+
+  it("falls back to onAbandoned for a cancelled lifecycle that predates onCancelled", () => {
+    const { onCancelled: _onCancelled, ...legacy } = createLifecycle();
+    completeFollowupRunLifecycle({ turnAdoptionLifecycle: legacy }, "cancelled");
+    expect(legacy.onAbandoned).toHaveBeenCalledOnce();
+  });
+
+  it("never fires a terminal callback for an admitted or consumed run", async () => {
+    const admitted = createLifecycle();
+    const run = { turnAdoptionLifecycle: admitted };
+    await admitFollowupRunLifecycle(run);
+    completeFollowupRunLifecycle(run, "cancelled");
+    expect(admitted.onCancelled).not.toHaveBeenCalled();
+    expect(admitted.onAbandoned).not.toHaveBeenCalled();
+
+    const consumed = createLifecycle();
+    completeFollowupRunLifecycle({ turnAdoptionLifecycle: consumed }, "consumed");
+    expect(consumed.onCancelled).not.toHaveBeenCalled();
+    expect(consumed.onAbandoned).not.toHaveBeenCalled();
+  });
+
+  it("runs a pre-retry release ahead of both terminal callbacks", async () => {
+    const calls: string[] = [];
+    const lifecycle = {
+      onAdopted: vi.fn(),
+      onCancelled: async () => {
+        calls.push("cancelled");
+      },
+      onAbandoned: () => {
+        calls.push("abandoned");
+      },
+    };
+    releaseBeforeTurnAdoptionRetry(lifecycle, () => calls.push("release"));
+    await lifecycle.onCancelled();
+    lifecycle.onAbandoned();
+    expect(calls).toEqual(["release", "cancelled", "release", "abandoned"]);
+
+    const { onCancelled: _onCancelled, ...legacy } = { ...lifecycle };
+    calls.length = 0;
+    releaseBeforeTurnAdoptionRetry(legacy, () => calls.push("release"));
+    expect("onCancelled" in legacy).toBe(false);
+    legacy.onAbandoned?.();
+    expect(calls).toEqual(["release", "release", "abandoned"]);
+  });
 });

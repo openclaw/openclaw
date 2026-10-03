@@ -50,6 +50,7 @@ type InboundDebounceAdmissionLifecycleInput = {
   deferredHeartbeatIntervalMs?: number;
   onAdoptionFinalizing?: () => void;
   onFailed?: (error: unknown) => void | Promise<void>;
+  onCancelled?: () => void | Promise<void>;
   onAbandoned?: () => void | Promise<void>;
 };
 
@@ -62,6 +63,7 @@ type InboundDebounceAdmissionLifecycle = {
   deferredHeartbeatIntervalMs?: number;
   onAdoptionFinalizing: () => void;
   onFailed?: (error: unknown) => Promise<void>;
+  onCancelled?: () => Promise<void>;
   onAbandoned: () => Promise<void>;
 };
 
@@ -106,6 +108,13 @@ function createInboundDebounceFlush(params: {
           } finally {
             markAdmitted();
           }
+        }
+      : undefined,
+    // Cancellation ends the turn before admission exactly like abandonment, but
+    // the durable source settles it without spending retry budget.
+    onCancelled: source?.onCancelled
+      ? async () => {
+          await source.onCancelled?.();
         }
       : undefined,
     onAbandoned: async () => {

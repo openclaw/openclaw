@@ -28,7 +28,8 @@ export type ChannelIngressDispatchLifecycle = {
   onCancelled?: () => void | Promise<void>;
   /**
    * Deferred turn finished without ever owning the reply lane.
-   * Drain releases the claim for retry.
+   * Drain settles the claim through the retry disposition: a real attempt,
+   * bounded by maxAttempts. Intentional cancellation uses onCancelled.
    */
   onAbandoned: () => void | Promise<void>;
 };
@@ -37,8 +38,10 @@ export type ChannelIngressDispatchLifecycle = {
 export function bindIngressLifecycleToReplyOptions(lifecycle: ChannelIngressDispatchLifecycle): {
   turnAdoptionLifecycle: Omit<
     ChannelIngressDispatchLifecycle,
-    "onAdoptionFinalizing" | "onFailed" | "onCancelled"
-  > & { admission: "exclusive" };
+    "onAdoptionFinalizing" | "onFailed"
+  > & {
+    admission: "exclusive";
+  };
 } {
   return {
     turnAdoptionLifecycle: {
@@ -47,6 +50,9 @@ export function bindIngressLifecycleToReplyOptions(lifecycle: ChannelIngressDisp
       onDeferred: lifecycle.onDeferred,
       onDeferredHeartbeat: lifecycle.onDeferredHeartbeat,
       deferredHeartbeatIntervalMs: lifecycle.deferredHeartbeatIntervalMs,
+      // Cancellation is part of the reply-lane terminal contract: a queued turn
+      // dropped before admission must release its claim without spending budget.
+      ...(lifecycle.onCancelled ? { onCancelled: lifecycle.onCancelled } : {}),
       onAbandoned: lifecycle.onAbandoned,
       abortSignal: lifecycle.abortSignal,
     },

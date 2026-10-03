@@ -176,7 +176,11 @@ describe("dispatch retry after queued ingress abandonment", () => {
             expect(lifecycles[0]?.abortSignal.aborted).toBe(true);
           }
           await expect(released).resolves.toBe(true);
-          expect(await queue.listPending()).toMatchObject([{ id: messageId, attempts: 1 }]);
+          // A queue clear relinquishes the turn on purpose, so it cancels the
+          // claim without spending budget; the watchdog timeout is a real attempt.
+          expect(await queue.listPending()).toMatchObject([
+            { id: messageId, attempts: abandonment === "abandon-before-commit" ? 0 : 1 },
+          ]);
           clock += 1_000;
           expect(await drain.drainOnce()).toEqual({ started: 1 });
           await drain.waitForIdle();

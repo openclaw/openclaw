@@ -308,9 +308,10 @@ export function createChannelIngressDrain<
     state.stallTimer.unref?.();
   };
 
-  const releaseUnadopted = async (
+  // One pre-adoption settlement guard; callers choose the claim disposition.
+  const settleUnadopted = async (
     state: ActiveHandlerState<TPayload, TMetadata>,
-    releaseOptions: { lastError?: string; recordAttempt?: boolean },
+    settle: (claim: ChannelIngressQueueClaim<TPayload, TMetadata>) => Promise<void>,
   ) => {
     if (!isPreAdoptionState(state)) {
       return;
@@ -318,7 +319,7 @@ export function createChannelIngressDrain<
     clearStallTimer(state);
     await state
       .settleOnce(async () => {
-        await releaseClaim(state.claim, releaseOptions);
+        await settle(state.claim);
       })
       .catch(() => undefined);
   };
@@ -383,10 +384,16 @@ export function createChannelIngressDrain<
       onCancelled: async () => {
         // Cancellation means ownership ended before delivery, so preserve every
         // prior retry fact while reopening the canonical row for replacement.
-        await releaseUnadopted(state, { recordAttempt: false });
+        await settleUnadopted(state, async (claim) => {
+          await releaseClaim(claim, { recordAttempt: false });
+        });
       },
       onAbandoned: async () => {
-        await releaseUnadopted(state, { lastError: "turn-abandoned" });
+        // Genuine abandonment is a real attempt: settle it through the shared
+        // retry owner so maxAttempts bounds it instead of retrying without end.
+        await settleUnadopted(state, async (claim) => {
+          await applyFailureDisposition(claim, new Error("turn-abandoned"));
+        });
       },
     };
   };

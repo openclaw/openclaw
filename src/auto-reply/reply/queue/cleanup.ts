@@ -167,13 +167,14 @@ export function prepareSessionFollowupCleanup(params: {
       consumeQueueSummaryDelivery(
         queue,
         { sources: summaries, droppedCount: summaries.length },
-        false,
+        "retained",
       );
       const detached = new Set([...pending, ...summaries]);
       removed += detached.size;
       for (const source of detached) {
         try {
-          completeFollowupRunLifecycle(source);
+          // Stop relinquishes queued turns on purpose: cancellation, not abandonment.
+          completeFollowupRunLifecycle(source, "cancelled");
         } catch (error) {
           defaultRuntime.error?.(`followup queue cancellation settlement failed: ${String(error)}`);
         }

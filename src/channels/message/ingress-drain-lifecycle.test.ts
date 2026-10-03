@@ -37,13 +37,17 @@ describe("channel ingress drain lifecycle", () => {
       deferredHeartbeatIntervalMs: 1_234,
     });
     expect("onFailed" in bound.turnAdoptionLifecycle).toBe(false);
-    expect("onCancelled" in bound.turnAdoptionLifecycle).toBe(false);
+    expect("onCancelled" in bound.turnAdoptionLifecycle).toBe(true);
     expect("onAdopted" in bound).toBe(false);
     expect(Object.keys(bound)).toEqual(["turnAdoptionLifecycle"]);
     bound.turnAdoptionLifecycle.onDeferred();
     bound.turnAdoptionLifecycle.onDeferredHeartbeat?.();
     await bound.turnAdoptionLifecycle.onAbandoned();
     expect(calls).toEqual(["deferred", "heartbeat", "abandoned"]);
+    calls.length = 0;
+    bound.turnAdoptionLifecycle.onDeferred();
+    await bound.turnAdoptionLifecycle.onCancelled?.();
+    expect(calls).toEqual(["deferred", "cancelled"]);
     calls.length = 0;
     bound.turnAdoptionLifecycle.onDeferred();
     await bound.turnAdoptionLifecycle.onAdopted();

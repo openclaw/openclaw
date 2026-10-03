@@ -11,7 +11,7 @@ export function consumeQueueSummaryDelivery(
     "summarySources" | "summaryLines" | "summaryElisions" | "droppedCount"
   >,
   delivery: { droppedCount: number; sources: readonly FollowupRun[] },
-  completeLifecycles = true,
+  settlement: "abandoned" | "cancelled" | "retained" = "abandoned",
 ): void {
   let consumedCount = delivery.sources.length === 0 ? delivery.droppedCount : 0;
   for (const source of delivery.sources) {
@@ -40,8 +40,8 @@ export function consumeQueueSummaryDelivery(
         }
       }
     }
-    if (completeLifecycles) {
-      completeFollowupRunLifecycle(source);
+    if (settlement !== "retained") {
+      completeFollowupRunLifecycle(source, settlement === "cancelled" ? "cancelled" : undefined);
     }
   }
   queue.droppedCount = Math.max(0, queue.droppedCount - consumedCount);
