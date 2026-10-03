@@ -13,62 +13,56 @@ describe("managed browser workspace custody", () => {
     cfg: buildConfig(false),
   });
 
-  it("does not restart a browser after authority closes during container inspection", async () => {
-    let current = true;
-    await ensureTestSandboxBrowser({
-      ...browserParams(),
-      scopeKey: "session:revoked-browser",
-      withWorkspace: async (run) => await run(),
-      assertCurrent: () => {
-        if (!current) {
-          throw new Error("browser owner revoked");
+  it.each([false, true])(
+    "rejoins workspace custody for late start (revoked=%s)",
+    async (revoked) => {
+      let current = true;
+      let owned = false;
+      const entered = vi.fn();
+      const withWorkspace = async <T>(run: () => Promise<T>) => {
+        entered();
+        expect(owned).toBe(false);
+        owned = true;
+        try {
+          return await run();
+        } finally {
+          owned = false;
         }
-      },
-    });
-    const starts = dockerMocks.execDocker.mock.calls.filter(([args]) => args[0] === "start").length;
-    const callback =
-      harness.bridgeMocks.startBrowserBridgeServer.mock.calls[0]?.[0].onEnsureAttachTarget;
-    dockerMocks.dockerContainerState.mockImplementation(async () => {
-      await Promise.resolve();
-      current = false;
-      return { exists: true, running: false };
-    });
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("{}"));
-    await expect(callback({})).rejects.toThrow("browser owner revoked");
-    expect(dockerMocks.execDocker.mock.calls.filter(([args]) => args[0] === "start")).toHaveLength(
-      starts,
-    );
-  });
-
-  it("rejoins workspace custody before a late browser start", async () => {
-    let owned = false;
-    const entered = vi.fn();
-    const withWorkspace = async <T>(run: () => Promise<T>) => {
-      entered();
-      expect(owned).toBe(false);
-      owned = true;
-      try {
-        return await run();
-      } finally {
-        owned = false;
+      };
+      const result = await ensureTestSandboxBrowser({
+        ...browserParams(),
+        withWorkspace,
+        assertCurrent: () => {
+          if (!current) {
+            throw new Error("browser owner revoked");
+          }
+        },
+      });
+      expect(result).not.toBeNull();
+      const starts = dockerMocks.execDocker.mock.calls.filter(
+        ([args]) => args[0] === "start",
+      ).length;
+      const callback =
+        harness.bridgeMocks.startBrowserBridgeServer.mock.calls[0]?.[0].onEnsureAttachTarget;
+      expect(callback).toBeTypeOf("function");
+      dockerMocks.dockerContainerState.mockImplementation(async () => {
+        expect(owned).toBe(true);
+        await Promise.resolve();
+        current = !revoked;
+        return { exists: true, running: false };
+      });
+      vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("{}"));
+      if (revoked) {
+        await expect(callback({})).rejects.toThrow("browser owner revoked");
+        expect(
+          dockerMocks.execDocker.mock.calls.filter(([args]) => args[0] === "start"),
+        ).toHaveLength(starts);
+      } else {
+        await callback({});
       }
-    };
-    const result = await ensureTestSandboxBrowser({
-      ...browserParams(),
-      withWorkspace,
-    });
-    expect(result).not.toBeNull();
-    const callback =
-      harness.bridgeMocks.startBrowserBridgeServer.mock.calls[0]?.[0].onEnsureAttachTarget;
-    expect(callback).toBeTypeOf("function");
-    dockerMocks.dockerContainerState.mockImplementation(async () => {
-      expect(owned).toBe(true);
-      return { exists: true, running: false };
-    });
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("{}"));
-    await callback({});
-    expect(entered).toHaveBeenCalledTimes(2);
-  });
+      expect(entered).toHaveBeenCalledTimes(2);
+    },
+  );
 
   it("replaces the browser bridge when a later admitted turn owns its restart callback", async () => {
     harness.bridgeMocks.startBrowserBridgeServer.mockImplementation(async (params) => ({
@@ -105,53 +99,52 @@ describe("managed browser workspace custody", () => {
     await harness.bridgeMocks.startBrowserBridgeServer.mock.calls[1]?.[0].onEnsureAttachTarget({});
   });
 
-  it("retains managed workspace custody when browser startup fails after allocation", async () => {
-    dockerMocks.readDockerPort.mockResolvedValue(null);
-    const entered = vi.fn();
-    const withWorkspace = async <T>(run: () => Promise<T>) => {
-      entered();
-      return await run();
-    };
-    await expect(
-      ensureTestSandboxBrowser({
+  it.each([false, true])(
+    "awaits durable custody before allocation (startup fails=%s)",
+    async (fails) => {
+      if (fails) {
+        dockerMocks.readDockerPort.mockResolvedValue(null);
+      }
+      const started = createDeferred();
+      const acknowledgment = createDeferred();
+      const assertCurrent = vi.fn();
+      const entered = vi.fn();
+      registryMocks.updateBrowserRegistry.mockImplementationOnce(async (_entry, guard) => {
+        expect(guard).toBe(assertCurrent);
+        started.resolve();
+        await acknowledgment.promise;
+      });
+      const operation = ensureTestSandboxBrowser({
         ...browserParams(),
-        withWorkspace,
-      }),
-    ).rejects.toThrow("port mapping");
-    expect(entered).toHaveBeenCalledOnce();
-    const reserved = registryMocks.updateBrowserRegistry.mock.calls[0]?.[0];
-    expect(reserved).toMatchObject({ workspaceDir: harness.testWorkspaceDir, cdpPort: 0 });
-    const reserveOrder = registryMocks.updateBrowserRegistry.mock.invocationCallOrder[0]!;
-    const createIndex = dockerMocks.execDocker.mock.calls.findIndex(
-      ([args]) => args[0] === "create",
-    );
-    expect(createIndex).toBeGreaterThanOrEqual(0);
-    expect(reserveOrder).toBeLessThan(
-      dockerMocks.execDocker.mock.invocationCallOrder[createIndex]!,
-    );
-  });
-
-  it("awaits reservation acknowledgment before allocation and retains the allocation guard", async () => {
-    const started = createDeferred();
-    const acknowledgment = createDeferred();
-    const assertCurrent = vi.fn();
-    registryMocks.updateBrowserRegistry.mockImplementationOnce(async (_entry, guard) => {
-      expect(guard).toBe(assertCurrent);
-      started.resolve();
-      await acknowledgment.promise;
-    });
-    const operation = ensureTestSandboxBrowser({
-      ...browserParams(),
-      withWorkspace: async (run) => await run(),
-      assertCurrent,
-    });
-    try {
-      await awaitGateBeforeSettlement(started.promise, operation, "reservation was not reached");
-      expect(dockerMocks.execDocker.mock.calls.some(([args]) => args[0] === "create")).toBe(false);
-    } finally {
-      acknowledgment.resolve();
-      await operation;
-    }
-    expect(registryMocks.updateBrowserRegistry.mock.calls.at(-1)?.[1]).toBe(assertCurrent);
-  });
+        withWorkspace: async (run) => {
+          entered();
+          return await run();
+        },
+        assertCurrent,
+      });
+      const settled = fails ? expect(operation).rejects.toThrow("port mapping") : operation;
+      try {
+        await awaitGateBeforeSettlement(started.promise, operation, "reservation was not reached");
+        expect(dockerMocks.execDocker.mock.calls.some(([args]) => args[0] === "create")).toBe(
+          false,
+        );
+      } finally {
+        acknowledgment.resolve();
+        await settled;
+      }
+      expect(entered).toHaveBeenCalledOnce();
+      expect(registryMocks.updateBrowserRegistry.mock.calls[0]?.[0]).toMatchObject({
+        workspaceDir: harness.testWorkspaceDir,
+        cdpPort: 0,
+      });
+      const createIndex = dockerMocks.execDocker.mock.calls.findIndex(
+        ([args]) => args[0] === "create",
+      );
+      expect(createIndex).toBeGreaterThanOrEqual(0);
+      expect(registryMocks.updateBrowserRegistry.mock.invocationCallOrder[0]!).toBeLessThan(
+        dockerMocks.execDocker.mock.invocationCallOrder[createIndex]!,
+      );
+      expect(registryMocks.updateBrowserRegistry.mock.calls.at(-1)?.[1]).toBe(assertCurrent);
+    },
+  );
 });
