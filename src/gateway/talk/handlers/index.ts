@@ -90,7 +90,6 @@ import { talkVoiceHandlers } from "./voice.js";
 type TalkSpeakReason =
   | "talk_unconfigured"
   | "talk_provider_unsupported"
-  | "method_unavailable"
   | "synthesis_failed"
   | "invalid_audio_result";
 
@@ -490,10 +489,7 @@ function talkSpeakError(reason: TalkSpeakReason, message: string) {
   return errorShape(ErrorCodes.UNAVAILABLE, message, {
     details: {
       reason,
-      fallbackEligible:
-        reason === "talk_unconfigured" ||
-        reason === "talk_provider_unsupported" ||
-        reason === "method_unavailable",
+      fallbackEligible: reason === "talk_unconfigured" || reason === "talk_provider_unsupported",
     },
   });
 }

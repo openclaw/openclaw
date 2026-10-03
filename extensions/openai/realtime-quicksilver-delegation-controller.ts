@@ -5,7 +5,6 @@ import type {
 } from "openclaw/plugin-sdk/realtime-voice";
 import {
   buildRealtimeVoiceAgentControlSpeechMessage,
-  canonicalizeBase64,
   extractErrorCode,
   readErrorName,
   rawDataToString,
@@ -59,7 +58,6 @@ type OpenAIQuicksilverDelegationControllerOptions = {
   model: string;
   onError?: (error: Error) => void;
   onFatalError: (error: Error) => void;
-  onAudio?: (audio: Buffer) => void;
   onSessionStarted?: (expiresAt: number | undefined) => void;
   onSessionClosed?: (
     reason: Extract<OpenAIQuicksilverInboundEvent, { kind: "session-closed" }>["reason"],
@@ -177,7 +175,13 @@ export class OpenAIQuicksilverDelegationController {
   }
 
   handleEvent(event: OpenAIQuicksilverInboundEvent): void {
-    if (this.stopped || event.kind === "ignored" || event.kind === "audio-cleared") {
+    // Media workers and browser WebRTC own audio; this controller owns delegation events.
+    if (
+      this.stopped ||
+      event.kind === "ignored" ||
+      event.kind === "audio-cleared" ||
+      event.kind === "audio"
+    ) {
       return;
     }
     if (
@@ -229,19 +233,6 @@ export class OpenAIQuicksilverDelegationController {
       } else {
         this.options.onError?.(error);
       }
-      return;
-    }
-    if (event.kind === "audio") {
-      if (!this.options.onAudio) {
-        // Browser and OAuth Gateway sessions negotiate audio over WebRTC.
-        return;
-      }
-      const audio = canonicalizeBase64(event.data);
-      if (!audio) {
-        this.fail(new Error("OpenAI GPT-Live returned malformed base64 audio"));
-        return;
-      }
-      this.options.onAudio(Buffer.from(audio, "base64"));
       return;
     }
     if (this.publicDelegations) {

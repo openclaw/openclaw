@@ -126,6 +126,16 @@ future-attempt artifacts remain invalid.
 
 ### Test runtime selection
 
+CI's `setup-test-bun` action consumes `scripts/lib/openclaw-bun.json` through
+`scripts/stage-openclaw-bun.sh`, the same owner used by the macOS and Tauri apps.
+Every pin bump requires **both** the paired CI Bun-lane replay and Bun-only smoke,
+and the macOS runtime probes plus two-binary test set, against the same published
+fork tag. Neither app nor CI advances if either gate fails; Linux-only runtime
+regressions stop the shared repin too. Preserve the last jointly admitted tag
+and attach exact-tag evidence to the repin PR. Publication alone is not admission.
+Shared pin/stager changes select macOS, Linux companion, and Bun test lanes.
+See [the shared pin schema and regeneration](/platforms/mac/dev-setup#shared-bun-pin-and-repin-gate).
+
 Linux test shards select Bun through `scripts/lib/ci-test-runtime.mts`. The
 ordinary unit-fast lane partitions its existing file inventory: files with known
 Bun failures or additional skips stay on Node, and the compatible remainder runs

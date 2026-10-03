@@ -2639,17 +2639,17 @@ function installControlUiMockGateway(
     },
     deferNext(method, match) {
       deferredMethods.push({ method, match });
+      return exposed.findRequests(method, match).length;
     },
     emit(event, payload) {
       emitGatewayEvent(MockWebSocket.latest, event, payload);
     },
-    findRequests(method, match) {
-      // Capture and deferral must select the same RPC scope; child lists share the roster method.
-      return requests.filter(
+    // Capture and deferral must select the same RPC scope; child lists share the roster method.
+    findRequests: (method, match) =>
+      requests.filter(
         (request) =>
           (!method || request.method === method) && responseFixtures.matches(request.params, match),
-      );
-    },
+      ),
     rejectDeferred(method, error) {
       for (const response of takeDeferredResponses(method)) {
         response.socket.deliver({

@@ -1,3 +1,4 @@
+import type { StopReason } from "../../../packages/llm-core/src/types.js";
 import type { CreateChannelIngressDrainOptions } from "../../channels/message/ingress-drain.js";
 import type { CreateChannelIngressQueueOptions } from "../../channels/message/ingress-queue.types.js";
 import type { ConfigMutationBase } from "../../config/mutation-types.js";
@@ -308,7 +309,7 @@ export type LlmCompleteResult = {
   /** Concrete model identity returned by the provider, when available. */
   responseModel?: string;
   /** Provider terminal reason for direct completions, when available. */
-  stopReason?: "stop" | "length" | "toolUse" | "error" | "aborted";
+  stopReason?: StopReason;
   agentId: string;
   usage: LlmCompleteUsage;
   execution: LlmCompleteExecution;

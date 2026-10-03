@@ -50,10 +50,6 @@ export function fingerprintTokenAuthProfileCacheKey(accessToken: string): string
   return fingerprintAuthCacheKey("token", "auth-profile-token", accessToken);
 }
 
-function fingerprintCodexCliAuthFileApiKeyCacheKey(apiKey: string): string {
-  return fingerprintAuthCacheKey("CODEX_AUTH_JSON", "cli-auth-json-api-key", apiKey);
-}
-
 function fingerprintAuthCacheKey(prefix: string, domain: string, ...parts: string[]): string {
   const hash = createHash("sha256")
     .update(`openclaw:codex:app-server-${domain}:v1\0`)
@@ -106,7 +102,9 @@ function resolveCodexCliAuthFileApiKeyCacheKey(env: NodeJS.ProcessEnv): string |
     const apiKey = parseCodexCliAuthFileApiKey(
       fsSync.readFileSync(resolveCodexCliAuthFilePath(env), "utf8"),
     );
-    return apiKey ? fingerprintCodexCliAuthFileApiKeyCacheKey(apiKey) : undefined;
+    return apiKey
+      ? fingerprintAuthCacheKey("CODEX_AUTH_JSON", "cli-auth-json-api-key", apiKey)
+      : undefined;
   } catch {
     return undefined;
   }

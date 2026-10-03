@@ -21,18 +21,25 @@ function hasAuthenticatedControlUiIdentity(clients: GatewayClientRegistry): bool
   );
 }
 
-/** Projects the live authenticated Control UI identity set independently of TTL presence rows. */
-function createAuthenticatedControlUiPresenceProjection(
-  clients: GatewayClientRegistry,
-  onChanged: (present: boolean) => void,
-) {
+/** Bind live Control UI demand and cleanup before requests and reconciliation start. */
+export async function startWorkerHumanPresence(params: {
+  clients: GatewayClientRegistry;
+  service: Pick<WorkerEnvironmentService, "setHumanPresence">;
+  log: { warn: (message: string) => void };
+  registerSidecar: (sidecar: { stop: () => void }) => void;
+}) {
+  const { clients, service, log } = params;
   let present = hasAuthenticatedControlUiIdentity(clients);
   const invalidationSubscriptions = new Map<GatewayWsClient, () => void>();
   const refresh = () => {
     const next = hasAuthenticatedControlUiIdentity(clients);
     if (next !== present) {
       present = next;
-      onChanged(next);
+      void service
+        .setHumanPresence(next)
+        .catch((error: unknown) =>
+          log.warn(`prepared-pool human presence update failed: ${String(error)}`),
+        );
     }
   };
   const observeClients = () => {
@@ -52,8 +59,7 @@ function createAuthenticatedControlUiPresenceProjection(
   };
   const unsubscribe = clients.subscribe(observeClients);
   observeClients();
-  return {
-    current: () => present,
+  params.registerSidecar({
     stop: () => {
       unsubscribe();
       for (const stop of invalidationSubscriptions.values()) {
@@ -61,27 +67,7 @@ function createAuthenticatedControlUiPresenceProjection(
       }
       invalidationSubscriptions.clear();
     },
-  };
-}
-
-/** Bind pool demand and cleanup before WebSocket requests and reconciliation start. */
-export async function startWorkerHumanPresence(params: {
-  clients: GatewayClientRegistry;
-  service: Pick<WorkerEnvironmentService, "setHumanPresence">;
-  log: { warn: (message: string) => void };
-  registerSidecar: (sidecar: { stop: () => void }) => void;
-}) {
-  const humanPresence = createAuthenticatedControlUiPresenceProjection(
-    params.clients,
-    (present) => {
-      void params.service
-        .setHumanPresence(present)
-        .catch((error: unknown) =>
-          params.log.warn(`prepared-pool human presence update failed: ${String(error)}`),
-        );
-    },
-  );
-  params.registerSidecar({ stop: humanPresence.stop });
+  });
   // Close a crash-left active marker before worker reconciliation starts.
-  await params.service.setHumanPresence(humanPresence.current());
+  await service.setHumanPresence(present);
 }

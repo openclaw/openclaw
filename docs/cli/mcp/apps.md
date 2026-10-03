@@ -95,6 +95,14 @@ Background preview generation consumes the same limits as user-triggered calls.
 
 The extensions use the existing sandbox and permission boundaries below. Server-owned settings and plugin data remain with their existing owners. Raw app state is not a new durable Gateway store, and a reconstructed transcript preview is not a fresh grant to run tools.
 
+## Tool approvals
+
+When an App tool call needs approval, choose **Allow once**, **Allow while this App is open**, or **Deny**. **Allow once** approves only that call. **Allow while this App is open** lets the same requester call that exact server/tool pair again from the same current view without another prompt.
+
+The grant lives only in the view's ten-minute in-memory lease. It ends when the lease is released, expires, or is replaced; relaunching or reconstructing a view does not carry it forward. A different tool, view, session, or requester needs its own approval. The grant never updates configuration or a persistent tool allowlist, and it does not approve model-driven calls.
+
+Current server and session policies still apply and are checked again before execution. Calls that the server's approval mode already permits do not prompt. Calls made before a view exists, such as opening an entrypoint, retain **Allow once** and **Deny**.
+
 ## Behavior and security boundaries
 
 - OpenClaw advertises the `io.modelcontextprotocol/ui` extension only when Apps are enabled.

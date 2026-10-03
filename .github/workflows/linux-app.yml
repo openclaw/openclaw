@@ -4,6 +4,9 @@ on:
   pull_request:
     paths:
       - "apps/linux/**"
+      - "scripts/lib/openclaw-bun.json"
+      - "scripts/stage-openclaw-bun.sh"
+      - "test/scripts/stage-openclaw-bun.test.ts"
       - ".github/workflows/linux-app.yml"
       - ".github/workflows/linux-app-release.yml"
   workflow_dispatch:
@@ -61,6 +64,7 @@ jobs:
             mesa-utils \
             openbox \
             patchelf \
+            unzip \
             pciutils \
             procps \
             psmisc \
@@ -94,7 +98,7 @@ jobs:
           install-bun: "false"
 
       - name: Test native dashboard authentication bridge
-        run: node --test apps/linux/scripts/test-native-control-auth.mjs
+        run: node --test apps/linux/scripts/test-native-control-auth.mjs apps/linux/scripts/stage-runtime.test.mjs
 
       - name: Test packaged runtime ABI scanner
         run: |
@@ -105,6 +109,11 @@ jobs:
         run: |
           PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover \
             -s apps/linux/tests -p 'test_desktop_sharing_reports.py'
+
+      - name: Test native first-run accessibility role matching
+        run: |
+          PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover \
+            -s apps/linux/tests -p 'test_first_run.py'
 
       - name: Check Rust formatting
         working-directory: apps/linux/src-tauri
