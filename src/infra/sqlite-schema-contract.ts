@@ -613,7 +613,7 @@ function isCompatibleAdditiveColumnDefinition(definition: string): boolean {
   );
 }
 
-function collectSqliteIndexContract(
+export function collectSqliteIndexContract(
   database: DatabaseSync,
   index: SqliteIndexListRow,
 ): SqliteIndexContract {
