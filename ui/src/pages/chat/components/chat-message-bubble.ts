@@ -64,7 +64,7 @@ import {
 import { isSentPastedTextAttachment } from "./chat-pasted-text.ts";
 import { renderReplyLine, type ReplyLine } from "./chat-reply-attribution.ts";
 import { isSentCommentAttachment } from "./chat-sent-comments.ts";
-import type { SidebarContent } from "./chat-sidebar.ts";
+import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 import {
   renderToolApprovalReviews,
   renderToolCard,

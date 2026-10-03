@@ -531,14 +531,8 @@ function isRouteOwnedBasePath(basePath: string): boolean {
   if (APP_ROUTE_PATHS.includes(basePath)) {
     return true;
   }
-  const segments = basePath.split("/").filter(Boolean);
-  for (let count = 1; count <= segments.length; count += 1) {
-    const ancestor = `/${segments.slice(0, count).join("/")}`;
-    if (APP_ROUTE_PATHS.some((path) => path.startsWith(`${ancestor}/`))) {
-      return true;
-    }
-  }
-  return false;
+  const [namespace] = basePath.split("/").filter(Boolean);
+  return APP_ROUTE_PATHS.some((path) => path.startsWith(`/${namespace}/`));
 }
 
 export function inferBasePathFromPathname(pathname: string): string {

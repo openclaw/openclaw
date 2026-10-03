@@ -142,7 +142,7 @@ export class SidebarMenusController implements ReactiveController {
     void this.preloadMenuRenderer().catch(() => undefined);
   }
 
-  private closePositionedMenu(menu: PositionedMenu, options: { restoreFocus?: boolean }) {
+  closePositionedMenu(menu: PositionedMenu, options: { restoreFocus?: boolean } = {}) {
     const trigger = this[`${menu}MenuTrigger`];
     this[`${menu}MenuTrigger`] = null;
     this.updateState(`${menu}MenuPosition`, null);
@@ -166,16 +166,16 @@ export class SidebarMenusController implements ReactiveController {
       this.agentMenuPosition ||
       this.identityMenuPosition,
     );
-    this.closeCustomizeMenu();
-    this.closeMoreMenu();
+    this.closePositionedMenu("customize");
+    this.closePositionedMenu("more");
     this.closeSessionMenu();
     this.catalogMenu.close();
-    this.closePeopleFilterMenu();
+    this.closePositionedMenu("peopleFilter");
     this.closeSessionGroupMenu();
-    this.closeSessionSortMenu();
-    this.closeCatalogViewMenu();
+    this.closePositionedMenu("sessionSort");
+    this.closePositionedMenu("catalogView");
     this.closeAgentMenu();
-    this.closeIdentityMenu();
+    this.closePositionedMenu("identity");
     return hadTransientMenu;
   }
 
@@ -210,13 +210,9 @@ export class SidebarMenusController implements ReactiveController {
     this.updateState("customizeMenuPosition", menuPosition(x, y, 240, 420));
   }
 
-  closeCustomizeMenu(options: { restoreFocus?: boolean } = {}) {
-    this.closePositionedMenu("customize", options);
-  }
-
   toggleMoreMenu(trigger: HTMLElement) {
     if (this.moreMenuPosition) {
-      this.closeMoreMenu();
+      this.closePositionedMenu("more");
       return;
     }
     this.loadMenuRenderer();
@@ -224,10 +220,6 @@ export class SidebarMenusController implements ReactiveController {
     this.dismissTransientMenus();
     this.moreMenuTrigger = trigger;
     this.updateState("moreMenuPosition", menuPosition(rect.left, rect.bottom + 4, 240, 420));
-  }
-
-  closeMoreMenu(options: { restoreFocus?: boolean } = {}) {
-    this.closePositionedMenu("more", options);
   }
 
   /** A row outside the current selection retargets before the menu opens. */
@@ -327,7 +319,7 @@ export class SidebarMenusController implements ReactiveController {
 
   togglePeopleFilterMenu(trigger: HTMLElement) {
     if (this.peopleFilterMenuPosition) {
-      this.closePeopleFilterMenu();
+      this.closePositionedMenu("peopleFilter");
       return;
     }
     this.loadMenuRenderer();
@@ -341,13 +333,9 @@ export class SidebarMenusController implements ReactiveController {
     );
   }
 
-  closePeopleFilterMenu(options: { restoreFocus?: boolean } = {}) {
-    this.closePositionedMenu("peopleFilter", options);
-  }
-
   toggleSessionSortMenu(trigger: HTMLElement) {
     if (this.sessionSortMenuPosition) {
-      this.closeSessionSortMenu();
+      this.closePositionedMenu("sessionSort");
       return;
     }
     this.loadMenuRenderer();
@@ -362,7 +350,7 @@ export class SidebarMenusController implements ReactiveController {
 
   toggleCatalogViewMenu(catalogId: string, trigger: HTMLElement) {
     if (this.catalogViewMenuPosition?.catalogId === catalogId) {
-      this.closeCatalogViewMenu();
+      this.closePositionedMenu("catalogView");
       return;
     }
     const rect = trigger.getBoundingClientRect();
@@ -404,14 +392,6 @@ export class SidebarMenusController implements ReactiveController {
     });
   }
 
-  closeCatalogViewMenu(options: { restoreFocus?: boolean } = {}) {
-    this.closePositionedMenu("catalogView", options);
-  }
-
-  closeSessionSortMenu(options: { restoreFocus?: boolean } = {}) {
-    this.closePositionedMenu("sessionSort", options);
-  }
-
   toggleAgentMenu(trigger: HTMLElement) {
     this.clearAgentMenuHoverTimers();
     if (this.agentMenuInteractionState === "open-click") {
@@ -431,14 +411,14 @@ export class SidebarMenusController implements ReactiveController {
     this.loadMenuRenderer();
     const menuWidth = AGENT_MENU_WIDTH_PX;
     const rect = trigger.getBoundingClientRect();
-    this.closeCustomizeMenu();
-    this.closeMoreMenu();
+    this.closePositionedMenu("customize");
+    this.closePositionedMenu("more");
     this.closeSessionMenu();
     this.closeSessionGroupMenu();
-    this.closeSessionSortMenu();
-    this.closeCatalogViewMenu();
-    this.closeIdentityMenu();
-    this.closePeopleFilterMenu();
+    this.closePositionedMenu("sessionSort");
+    this.closePositionedMenu("catalogView");
+    this.closePositionedMenu("identity");
+    this.closePositionedMenu("peopleFilter");
     this.agentMenuTrigger = trigger;
     this.agentMenuFocusBeforeHover =
       interactionState === "open-hover" && document.activeElement instanceof HTMLElement
@@ -550,7 +530,7 @@ export class SidebarMenusController implements ReactiveController {
 
   toggleIdentityMenu(trigger: HTMLElement) {
     if (this.identityMenuPosition) {
-      this.closeIdentityMenu();
+      this.closePositionedMenu("identity");
       return;
     }
     this.loadMenuRenderer();
@@ -563,10 +543,6 @@ export class SidebarMenusController implements ReactiveController {
       bottom: Math.max(8, window.innerHeight - rect.top + 4),
       width: rect.width,
     });
-  }
-
-  closeIdentityMenu(options: { restoreFocus?: boolean } = {}) {
-    this.closePositionedMenu("identity", options);
   }
 
   render() {

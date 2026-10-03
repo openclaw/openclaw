@@ -72,17 +72,6 @@ type RealtimeTalkConfigResult = {
   };
 };
 
-function compactLaunchParams(
-  params: RealtimeTalkLaunchOptions & {
-    sessionKey: string;
-    mode?: string;
-    brain?: string;
-    capabilities?: Array<"camera-frame" | "voice-transcript" | "voice-selection">;
-  },
-): Record<string, unknown> {
-  return Object.fromEntries(Object.entries(params).filter(([, value]) => value !== undefined));
-}
-
 export class RealtimeTalkSession {
   private transport: RealtimeTalkTransport | null = null;
   private selectedTransport: RealtimeTalkLaunchTransport | undefined;
@@ -317,28 +306,27 @@ export class RealtimeTalkSession {
     },
     lifecycleGeneration: number,
   ): Promise<RealtimeTalkSessionResult> {
-    const launchOptions = { ...options };
-    if (launchOptions.voiceChangeId && launchOptions.transport === "gateway-relay") {
-      return this.createRelaySession(launchOptions);
+    if (options.voiceChangeId && options.transport === "gateway-relay") {
+      return this.createRelaySession(options);
     }
     try {
       return await this.client.request<RealtimeTalkSessionResult>(
         "talk.client.create",
-        compactLaunchParams({
+        {
           sessionKey: this.sessionKey,
-          ...launchOptions,
-        }),
+          ...options,
+        },
         { timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS },
       );
     } catch (error) {
       if (
-        launchOptions.voiceChangeId ||
+        options.voiceChangeId ||
         this.closed ||
         this.lifecycleGeneration !== lifecycleGeneration
       ) {
         throw error;
       }
-      let transport = launchOptions.transport;
+      let transport = options.transport;
       if (!transport) {
         let result: RealtimeTalkConfigResult;
         try {
@@ -369,7 +357,7 @@ export class RealtimeTalkSession {
         throw error;
       }
       try {
-        return await this.createRelaySession(launchOptions);
+        return await this.createRelaySession(options);
       } catch {
         throw error;
       }
@@ -379,14 +367,14 @@ export class RealtimeTalkSession {
   private createRelaySession(options: RealtimeTalkLaunchOptions) {
     return this.client.request<RealtimeTalkSessionResult>(
       "talk.session.create",
-      compactLaunchParams({
+      {
         sessionKey: this.sessionKey,
         ...options,
         mode: "realtime",
         transport: "gateway-relay",
         brain: "agent-consult",
         capabilities: ["voice-selection"],
-      }),
+      },
       { timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS },
     );
   }

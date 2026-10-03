@@ -64,7 +64,8 @@
   gap: var(--space-3);
 }
 
-.installed-plugins-card__art {
+.installed-plugins-card__art,
+.plugins-tile {
   width: 40px;
   height: 40px;
   flex: 0 0 40px;
@@ -72,6 +73,9 @@
   place-items: center;
   overflow: hidden;
   border-radius: 10px;
+}
+
+.installed-plugins-card__art {
   background: var(--bg);
 }
 
@@ -664,13 +668,6 @@ h3.settings-row__title {
 }
 
 .plugins-tile {
-  display: grid;
-  width: 40px;
-  height: 40px;
-  flex: 0 0 40px;
-  place-items: center;
-  overflow: hidden;
-  border-radius: 10px;
   background: var(--bg-elevated);
 }
 
