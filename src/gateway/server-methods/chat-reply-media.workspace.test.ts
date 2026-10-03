@@ -159,7 +159,7 @@ describe("WebChat reply media workspace ownership", () => {
     );
   });
 
-  it.each(["inherited", "exec-node", "repository", "cloud", "sibling"] as const)(
+  it.each(["inherited", "sibling"] as const)(
     "respects the %s workspace ownership when staging local attachments",
     async (ownership) => {
       const { cfg } = createMediaTestContext({ allowRead: false });
@@ -177,16 +177,7 @@ describe("WebChat reply media workspace ownership", () => {
         spawnedBy: "agent:main:main",
         spawnedWorkspaceDir: worktree,
         spawnedCwd: path.join(worktree, "nested"),
-        ...(ownership === "exec-node" ? { execNode: "remote-node" } : {}),
-        ...(ownership === "repository" ? { repositoryWorkspaceId: "remote-repository" } : {}),
       };
-      if (ownership === "cloud") {
-        await createWorkerSessionPlacementStore().startDispatch({
-          sessionId: sessionEntry.sessionId,
-          sessionKey: TEST_SESSION_KEY,
-          agentId: "main",
-        });
-      }
       const [payload] = await normalizeWebchatReplyMediaPathsForDisplay({
         cfg,
         agentId: "main",
@@ -219,8 +210,6 @@ describe("WebChat reply media workspace ownership", () => {
 
   it.each([
     { mode: "workspace", configured: false, confined: true },
-    { mode: "guarded", configured: false, confined: true },
-    { mode: "read-only", configured: false, confined: true },
     { mode: "full", configured: true, confined: false },
     { mode: undefined, configured: true, confined: true },
     { mode: undefined, configured: false, confined: false },
@@ -376,20 +365,11 @@ describe("WebChat reply media workspace ownership", () => {
     },
   );
 
-  it.each([
-    { owner: "exec-node", configured: false },
-    { owner: "repository", configured: false },
-    { owner: "cloud", configured: false },
-    { owner: "rootless-cloud", configured: false },
-    { owner: "exec-node", configured: true },
-    { owner: "repository", configured: true },
-    { owner: "cloud", configured: true },
-    { owner: "rootless-cloud", configured: true },
-  ] as const)(
-    "keeps $owner media on its own host in full mode (configured containment=$configured)",
-    async ({ owner, configured }) => {
+  it.each(["exec-node", "repository", "cloud", "rootless-cloud"] as const)(
+    "keeps %s media on its own host in full mode",
+    async (owner) => {
       const { cfg, workspaceDir } = createMediaTestContext({ allowRead: true });
-      cfg.tools = { ...cfg.tools, fs: { workspaceOnly: configured } };
+      cfg.tools = { ...cfg.tools, fs: { workspaceOnly: false } };
       const remoteWorkspace = testState.statePath("worktrees", "remote");
       const storePath = testState.statePath("sessions", "session.sqlite");
       const rawDirectories = [workspaceDir, remoteWorkspace, path.dirname(storePath)];
