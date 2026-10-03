@@ -72,11 +72,12 @@ function ensureWorkerPlacementMoveSchema(db: DatabaseSync): void {
   if (ensuredMoveSchemaHandles.has(db)) {
     return;
   }
+  // sqlite-allow-raw -- Canonical feature-owned additive DDL only.
   db.exec(
     extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "worker_session_placement_moves", {
       errorMessage: "Worker placement move schema marker is missing",
     }),
-  ); // sqlite-allow-raw -- Canonical feature-owned additive DDL only.
+  );
   // Databases that created this table before the column shipped upgrade in place;
   // the column is bare and nullable, so old readers stay compatible.
   ensureColumn(db, "worker_session_placement_moves", "target_machine_class TEXT");
