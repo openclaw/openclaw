@@ -221,7 +221,6 @@ export function buildOpenAILongContextConfig(params: {
       },
       entries: {
         [params.agentId]: {
-          default: true,
           workspace: params.workspace,
           sandbox: { mode: "off" },
         },

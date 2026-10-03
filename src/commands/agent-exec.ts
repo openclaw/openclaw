@@ -489,6 +489,29 @@ export async function agentExecCommand(
   await (temporaryDatabaseScope ? temporaryDatabaseScope.run(stopAudit) : stopAudit()).catch(
     () => undefined,
   );
+  // Delayed worker registration can outlive its lexical maintenance scope. Drain the
+  // exact temporary owners before the scope closes and the filesystem root is removed.
+  if (!cleanupError && temporaryStateDir) {
+    const { closeOpenClawAgentDatabasesAsync } =
+      await import("../state/openclaw-agent-db-lifecycle.js");
+    await closeOpenClawAgentDatabasesAsync(temporaryStateDir).catch((error: unknown) => {
+      cleanupError = error;
+    });
+  }
+  if (!cleanupError && temporaryStateDir) {
+    const [{ closeOpenClawStateDatabaseByPathAsync }, { resolveOpenClawStateSqlitePath }] =
+      await Promise.all([
+        import("../state/openclaw-state-db-cache.js"),
+        import("../state/openclaw-state-db.paths.js"),
+      ]);
+    const temporaryStatePath = resolveOpenClawStateSqlitePath({
+      ...process.env,
+      OPENCLAW_STATE_DIR: temporaryStateDir,
+    });
+    await closeOpenClawStateDatabaseByPathAsync(temporaryStatePath).catch((error: unknown) => {
+      cleanupError = error;
+    });
+  }
   if (!cleanupError) {
     await temporaryDatabaseScope?.close().catch((error: unknown) => {
       cleanupError = error;

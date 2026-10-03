@@ -88,7 +88,12 @@ describe("google prompt cache", () => {
     const carrier = expectDefined(buildRuntimeContextCustomMessage("Current facts"), "carrier");
     const messages: Context["messages"] = [
       { role: "user", content: "Question", timestamp: 1 },
-      { role: "user", content: carrier.content, runtimeContextCarrier: true, timestamp: 2 },
+      {
+        role: "user",
+        content: `OpenClaw runtime context:\n${carrier.content}`,
+        timestamp: 2,
+        runtimeContext: {},
+      },
     ];
     const tools = [{ name: "lookup", description: "Lookup", parameters: Type.Object({}) }];
     for (const suffix of ["Date A", "Date B", "Date B"]) {
@@ -106,7 +111,7 @@ describe("google prompt cache", () => {
         messages[0],
         {
           ...messages[1],
-          content: `<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\n${suffix}\n\nCurrent facts\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>`,
+          content: `OpenClaw runtime context:\n${suffix}\n\nCurrent facts`,
         },
       ]);
     }
@@ -118,7 +123,7 @@ describe("google prompt cache", () => {
     expect(JSON.parse(body).systemInstruction).toEqual({
       parts: [{ text: "Stable policy" }],
     });
-    expect(messages[1]?.content).toBe(carrier.content);
+    expect(messages[1]?.content).toBe(`OpenClaw runtime context:\n${carrier.content}`);
     const restarted = expectDefined(await prepare(structuredClone(entries)), "reloaded wrapper");
     const nextContext = {
       systemPrompt: `Stable policy${SYSTEM_PROMPT_CACHE_BOUNDARY}Date C`,

@@ -987,6 +987,9 @@ const configs: UserConfig[] = [
     true,
   ),
   workerDeployBuildConfig({
+    "worker/code-mode-node.worker": "src/agents/code-mode-node.worker.ts",
+  }),
+  workerDeployBuildConfig({
     "worker/file-tool-planning.worker": "src/worker/worker-deploy-file-tool-planning.ts",
   }),
   workerDeployBuildConfig({

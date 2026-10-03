@@ -13,6 +13,7 @@ import { createAbortError } from "../../infra/abort-signal.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
 import { resolveAgentExplicitRecipientSession } from "../../infra/outbound/agent-delivery.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
+import { labelRuntimeContextText } from "../../llm/types.js";
 import { resolvePluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import {
   classifySessionKeyShape,
@@ -42,11 +43,8 @@ import {
   resolveAgentWorkspaceDir,
 } from "../agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
-import {
-  resolveAcpPromptBody,
-  prependInternalEventContext,
-  resolveInternalEventTranscriptBody,
-} from "../internal-events.js";
+import { resolveAcpPromptBody, resolveInternalEventTranscriptBody } from "../internal-events.js";
+import { projectRuntimeContextFragments } from "../internal-runtime-context.js";
 import { AGENT_LANE_SUBAGENT } from "../lanes.js";
 import type { ModelManifestNormalizationContext } from "../model-ref-shared.js";
 import { buildConfiguredModelCatalog, resolveConfiguredModelRef } from "../model-selection.js";
@@ -72,6 +70,12 @@ export async function prepareAgentCommandExecution(
   runtime: RuntimeEnv,
   runtimeContext?: PreparedAgentCommandRuntimeContext,
 ) {
+  const {
+    abortSignal,
+    assertSourceCurrent,
+    operatorAuthority,
+    lifecycleGeneration: preparationLifecycleGeneration,
+  } = opts;
   const isRawModelRun = opts.modelRun === true || opts.promptMode === "none";
   const message = opts.message ?? "";
   if (!message.trim()) {
@@ -245,13 +249,13 @@ export async function prepareAgentCommandExecution(
   const { getAcpSessionManager } = await loadAcpManagerRuntime();
   const acpManager = getAcpSessionManager();
   const assertAcpPreparationCurrent = () => {
-    if (opts.abortSignal?.aborted) {
-      throw createAbortError("Operation aborted", { cause: opts.abortSignal.reason });
+    if (abortSignal?.aborted) {
+      throw createAbortError("Operation aborted", { cause: abortSignal.reason });
     }
-    opts.assertSourceCurrent?.();
-    opts.operatorAuthority?.assertCurrent();
-    if (opts.lifecycleGeneration !== undefined) {
-      assertAgentRunLifecycleGenerationCurrent(opts.lifecycleGeneration);
+    assertSourceCurrent?.();
+    operatorAuthority?.assertCurrent();
+    if (preparationLifecycleGeneration !== undefined) {
+      assertAgentRunLifecycleGenerationCurrent(preparationLifecycleGeneration);
     }
     assertAgentDatabaseAdmitted(sessionAgentId);
   };
@@ -364,6 +368,7 @@ export async function prepareAgentCommandExecution(
       ensureBootstrapFiles: !agentCfg?.skipBootstrap,
       skipOptionalBootstrapFiles: agentCfg?.skipOptionalBootstrapFiles,
       provisioning: workspaceProvisioning,
+      guard: { assertHost: assertAcpPreparationCurrent },
     });
     const runId = opts.runId?.trim() || sessionId;
     let promptMessage = message;
@@ -410,10 +415,16 @@ export async function prepareAgentCommandExecution(
         promptMessage = expansion.body;
       }
     }
+    const acpRuntimeContext = projectRuntimeContextFragments(opts.runtimeContextFragments ?? []);
     const body =
       !isRawModelRun && acpResolution?.kind === "ready"
-        ? resolveAcpPromptBody(promptMessage, opts.internalEvents, opts.inputProvenance)
-        : prependInternalEventContext(promptMessage, opts.internalEvents, opts.inputProvenance);
+        ? [
+            acpRuntimeContext ? labelRuntimeContextText(acpRuntimeContext) : "",
+            resolveAcpPromptBody(promptMessage, opts.internalEvents, opts.inputProvenance),
+          ]
+            .filter(Boolean)
+            .join("\n\n")
+        : promptMessage;
     const transcriptBody =
       opts.transcriptMessage ??
       resolveInternalEventTranscriptBody(message, opts.internalEvents, opts.inputProvenance);

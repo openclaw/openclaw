@@ -96,7 +96,7 @@ function makePerAgentThinkingOffConfig(): OpenClawConfig {
   const cfg = makeReasoningModelConfig();
   cfg.agents = {
     ...cfg.agents,
-    list: [{ id: "main", thinkingDefault: "off" }],
+    entries: { main: { thinkingDefault: "off" } },
   };
   return cfg;
 }

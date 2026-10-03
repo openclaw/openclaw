@@ -6,7 +6,7 @@ import type { ConfigUiHints } from "../api/types.ts";
 import { icons } from "../components/icons.ts";
 import { t } from "../i18n/index.ts";
 import "../components/tooltip.ts";
-import { REDACTED_SENTINEL } from "../lib/config-form-utils.ts";
+import { isEnvPlaceholder, REDACTED_SENTINEL } from "../lib/config-form-utils.ts";
 import { formatUnknownText } from "../lib/format.ts";
 import { configValuesEqual, isSupportedConfigValueValid } from "./config-form.constraints.ts";
 import { formatConfigFormNumber } from "./config-form.numeric.ts";
@@ -98,6 +98,8 @@ export function resolveConfigFieldPresentation(params: ConfigNodeRenderParams) {
 
 type SensitiveRenderState = {
   isSensitive: boolean;
+  /** The path or hint marks the field sensitive, whether or not it holds a value yet. */
+  isSensitiveField: boolean;
   isMasked: boolean;
   isRedacted: boolean;
   isRevealed: boolean;
@@ -155,16 +157,20 @@ export function getSensitiveRenderState(params: {
     isSensitive &&
     !sentinel &&
     (params.revealSensitive || (params.isSensitivePathRevealed?.(params.path) ?? false));
+  const isSensitiveField =
+    hintForPath(params.path, params.hints)?.sensitive ||
+    isSensitiveConfigPath(configPathKey(params.path));
   return {
     isSensitive,
+    isSensitiveField,
     isMasked:
       params.maskSensitive === true &&
       !params.revealSensitive &&
       !isRevealed &&
       (params.value === undefined || typeof params.value === "string") &&
-      (hintForPath(params.path, params.hints)?.sensitive ||
-        isSensitiveConfigPath(configPathKey(params.path)) ||
-        isSensitive),
+      // An env placeholder such as ${TOKEN} names a variable; it is not a secret to hide.
+      !(typeof params.value === "string" && isEnvPlaceholder(params.value)) &&
+      (isSensitiveField || isSensitive),
     isRedacted: isSensitive && !isRevealed,
     isRevealed,
     canReveal: isSensitive && !sentinel,
@@ -206,12 +212,15 @@ export function renderSensitiveToggleButton(params: {
 }
 
 /* Sensitive fields inset the reveal eye inside the field (settings-secret
- * pattern); non-sensitive fields render the bare control unchanged. */
+ * pattern); non-sensitive fields render the bare control unchanged. A field that
+ * gains its eye once it holds a value keeps the wrapper from the start: a changed
+ * template would replace the input and drop focus mid-typing. */
 export function wrapSensitiveControl(
   control: TemplateResult,
   toggle: TemplateResult | typeof nothing,
+  keepWrapper = false,
 ): TemplateResult {
-  if (toggle === nothing) {
+  if (toggle === nothing && !keepWrapper) {
     return control;
   }
   return html`<span class="settings-secret">${control}${toggle}</span>`;

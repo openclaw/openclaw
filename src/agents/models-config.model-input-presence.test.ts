@@ -45,7 +45,6 @@ function discoveryOptions(providerId: string, discovered: ProviderConfig) {
       entries: [
         {
           provider,
-          result: { provider: discovered },
           providerConfigs: { [providerId]: discovered },
         },
       ],

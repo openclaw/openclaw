@@ -52,7 +52,7 @@ describe("doctor SQLite session transcript header repair", () => {
       prefix: "openclaw-doctor-transcript-headers-",
     });
     cfg = {
-      agents: { list: [{ id: AGENT_ID, workspace: state.workspaceDir }] },
+      agents: { entries: { [AGENT_ID]: { workspace: state.workspaceDir } } },
     };
     transcriptDatabaseOptions = { agentId: AGENT_ID, env: state.env };
     scope = {

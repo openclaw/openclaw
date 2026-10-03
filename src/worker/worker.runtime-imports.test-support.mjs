@@ -160,6 +160,28 @@ try {
           type: "worker-hello-ok",
           toolSurface: {
             generation: "import-surface",
+            presentation: {
+              codeMode: {
+                enabled: false,
+                executor: "node",
+                mode: "only",
+                timeoutMs: 10000,
+                memoryLimitBytes: 67108864,
+                maxOutputBytes: 65536,
+                maxSnapshotBytes: 10485760,
+                maxPendingToolCalls: 16,
+                snapshotTtlSeconds: 900,
+                searchDefaultLimit: 8,
+                maxSearchLimit: 50,
+              },
+              toolSearch: {
+                enabled: false,
+                mode: "tools",
+                searchDefaultLimit: 8,
+                maxSearchLimit: 50,
+              },
+              forceDirectMessageTool: false,
+            },
             tools: [],
             policy: {
               workspaceOnly: false,

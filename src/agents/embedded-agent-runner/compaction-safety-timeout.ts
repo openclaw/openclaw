@@ -2,46 +2,11 @@ import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-co
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { compactionWatchdogResets } from "../../context-engine/compaction-watchdog.js";
 import type { CompactResult, ContextEngine } from "../../context-engine/types.js";
-import { createAbortError } from "../../infra/abort-signal.js";
+import { createAbortError, racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { runAbortableTimeout } from "../../node-host/with-timeout.js";
 import { trackAsyncWork } from "../../shared/async-work-scope.js";
 
 const EMBEDDED_COMPACTION_TIMEOUT_MS = 180_000;
-
-function abortErrorFromSignal(signal: AbortSignal): Error {
-  const reason = signal.reason;
-  if (reason instanceof Error) {
-    return reason;
-  }
-  return createAbortError("aborted", reason ? { cause: reason } : undefined);
-}
-
-async function raceCompactionWithAbortSignal<T>(
-  compact: () => Promise<T>,
-  abortSignal?: AbortSignal,
-  onAbort?: () => void,
-): Promise<T> {
-  if (!abortSignal) {
-    return await compact();
-  }
-  if (abortSignal.aborted) {
-    onAbort?.();
-    throw abortErrorFromSignal(abortSignal);
-  }
-  let abortListener!: () => void;
-  const abortPromise = new Promise<never>((_, reject) => {
-    abortListener = () => {
-      onAbort?.();
-      reject(abortErrorFromSignal(abortSignal));
-    };
-    abortSignal.addEventListener("abort", abortListener, { once: true });
-  });
-  try {
-    return await Promise.race([compact(), abortPromise]);
-  } finally {
-    abortSignal.removeEventListener("abort", abortListener);
-  }
-}
 
 export function resolveCompactionTimeoutMs(cfg?: OpenClawConfig): number {
   return (
@@ -84,10 +49,16 @@ export async function compactWithSafetyTimeout<T>(
       timeoutSignal?.addEventListener("abort", cancel, { once: true });
 
       try {
-        return await raceCompactionWithAbortSignal(
+        return await racePromiseWithAbortSignal(
           () => trackAsyncWork(() => compact(composedAbortSignal, resetTimeout)),
           abortSignal,
-          cancel,
+          (signal) => {
+            cancel();
+            const reason = signal.reason;
+            return reason instanceof Error
+              ? reason
+              : createAbortError("aborted", reason ? { cause: reason } : undefined);
+          },
         );
       } finally {
         timeoutSignal?.removeEventListener("abort", cancel);

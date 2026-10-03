@@ -694,7 +694,7 @@ describe("skills cli commands", () => {
   });
   it("rejects an unknown agent before resolving a skills workspace", async () => {
     mocks.explicitAgent.mockImplementation((_config, agent) =>
-      resolveConfiguredAgentId({ agents: { list: [{ id: "main" }, { id: "writer" }] } }, agent),
+      resolveConfiguredAgentId({ agents: { entries: { main: {}, writer: {} } } }, agent),
     );
     await expect(runCommand(["list", "--agent", "nope-agent"])).rejects.toThrow("__exit__:1");
     expect(mocks.errors).toEqual([

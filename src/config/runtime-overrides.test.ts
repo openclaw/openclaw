@@ -78,7 +78,13 @@ describe("runtime overrides", () => {
 
     for (const runtimeConfig of runtimeConfigs) {
       expect(runtimeConfig.agents).not.toBe(validated.config.agents);
-      expect(runtimeConfig.agents?.list?.map((entry) => entry.id)).toEqual(["jarvis", "worker"]);
+      expect(Object.getOwnPropertyDescriptor(runtimeConfig.agents, "list")).toMatchObject({
+        enumerable: false,
+        value: [
+          { id: "jarvis", workspace: "/tmp/jarvis-workspace" },
+          { id: "worker", workspace: "/tmp/worker-workspace" },
+        ],
+      });
       expect(Object.keys(runtimeConfig.agents ?? {})).not.toContain("list");
       expect(listAgentWorkspaceDirs(runtimeConfig)).toEqual([
         "/tmp/jarvis-workspace",

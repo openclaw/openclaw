@@ -86,6 +86,8 @@ import type {
 } from "./session-entry-read.types.js";
 import type { PublishedSessionTranscriptArchive } from "./session-history-archive-pruning.types.js";
 import type {
+  ChatHistoryPage,
+  ChatHistoryPageParams,
   SessionHistoryWorkerRequest,
   SessionHistoryWorkerResult,
   SessionHistoryDelta,
@@ -443,6 +445,7 @@ type SessionArchivedEvictionCandidatesWorkerInput = Omit<
 > & { archived: ArchivedSessionEvictionQuery };
 
 export type SessionHistoryWorkerInput =
+  | { kind: "cli-process-history"; params: ChatHistoryPageParams }
   | LifecycleArtifactCleanupRequest
   | { kind: "prewarm"; database: { agentId: string; path: string }; env: NodeJS.ProcessEnv }
   | SessionHistoricalEvictionCandidatesWorkerInput
@@ -505,6 +508,7 @@ export type SessionHistoryWorkerPreparedInput =
   PreparedHistoryInput<SessionHistoryDatabaseWorkerInput>;
 
 export type SessionTranscriptWorkerValues = SessionTranscriptInventoryWorkerValues & {
+  "cli-process-history": { kind: "rpc"; page: ChatHistoryPage };
   "conversation-rows": { kind: "conversation-rows"; rows: ConversationRecord[] };
   "conversation-delivery": { kind: "conversation-delivery"; record?: ConversationDeliveryRecord };
   prewarm: { kind: "prewarm" };

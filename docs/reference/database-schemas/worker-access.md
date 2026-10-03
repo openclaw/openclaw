@@ -31,6 +31,13 @@ reviewed overrides instead of shadowing them with worker-module entries. The
 ratchet applies the same classification rules to the base and candidate sources,
 so metadata corrections alone do not offset unrelated T1 growth.
 
+Maintenance overrides require actual boot or one-shot caller evidence. Lazy
+database admission, idle-close cleanup, restart signal/retry paths, and CLI
+commands reused inside a running Gateway remain T1 when runtime-reachable.
+Tests are excluded by path; test-only helpers in production modules have no
+separate tier and retain their conservative classification. Branch-specific
+exceptions that cannot be expressed by an operation or initializer stay T1.
+
 Canonical-repair mutations are T2 Doctor work, but its exact-row reader remains
 runtime debt through the Gateway's legacy-main agent-creation check. Claw
 provenance's counted CLI writes do not cover its raw Gateway SQL reads. Shared
@@ -43,8 +50,22 @@ reviewed worker-only entries. The event recorder's `registeredWatcherKeys`
 initializer is classified separately from its native event/head SQL.
 Creation, compaction, adoption, and child-spawn producers are non-notifying.
 Creation, compaction, child-spawn cursor seeding, and periodic retention use the
-existing signal worker; adoption/native-binding recording remains T1. Placement restart clearing remains T2,
-while synchronous result compatibility readers and transition guards remain T1.
+existing signal worker; adoption/native-binding recording remains T1. Placement restart clearing remains T2.
+The activation-only `activated` initializer and workspace-journal cleanup have
+exact worker-only entries: native prepared binding selects `provisioning`, and
+native move drains omit the manifest that triggers journal cleanup. The shared
+placement update, native drain SQL, synchronous result compatibility readers,
+and pending-result guards remain T1.
+
+Web Push reads, approval delivery operations, and current-subscription cleanup
+have exact worker-only entries; native preferences, subscription upsert/deletion,
+and their shared schema helper remain T1. Prepared-workspace list and mutation
+operations are worker-only, while the synchronous `find` compatibility query
+remains T1. Approval history and unguarded insert, pending-list, expiry, and
+allow-once consumption have exact worker-only entries; guarded native
+compatibility operations retain their existing tiers. Offline full-store reset inventory and
+archive-reset operations are T3 CLI one-shots, including dev bootstrap; Gateway
+session reset and other archive lifecycle operations are classified separately.
 
 Workspace alias registration and snapshot operations retain T2 for their native
 Doctor/migration and relocation-retirement callers alongside worker dispatch.
@@ -370,6 +391,19 @@ callbacks retain their existing owner. Native-binding settlement and incognito
 activation remain separate cutovers. These changes require no schema, durability,
 retention, configuration, or update migration.
 
+Durable entry deletion can carry prepared Agents API and Codex binding participants
+through the same executing worker. Binding deletion still commits in shared state
+before the agent transaction commits, and can veto that transaction. Confirmed agent
+rollback conditionally restores the actual removed binding without replacing a
+successor. Binding renewal continues during queue waits, drains before transaction
+entry, and stays quiesced through settlement. Separate shared-state and agent receipts
+prevent a binding deletion receipt from publishing a successful session deletion.
+Unknown outcomes block reuse of that native generation and never replay the write.
+Initialization facts and ACP finalizers become eligible only after acknowledged agent
+COMMIT. Opaque released SDK callbacks, incognito, and message-cut transactions retain
+their native routes. The existing cross-database crash window, schemas, retention,
+and update behavior are unchanged; no migration is required.
+
 Channel setup awaits a fresh policy read after the agent-selection prompt.
 Deferred plugin migration rows are read by the shared-state worker, and setup
 rechecks its config owner after the read before using the selected agent. Each
@@ -676,6 +710,16 @@ and update behavior are unchanged.
 
 ## Carry facts, publish after commit
 
+Durable progress-card replacements and conditional clears use a narrow adapter
+on the canonical agent writer. The host captures the session, physical store, and
+input before waiting; the worker rereads the current revision and preserves clear
+tombstones in one synchronous transaction. Transaction and commit grants recheck
+current caller authority. Only acknowledged results reach the Gateway broadcast;
+unknown outcomes never replay or fall back to host SQL. The request lifecycle joins
+accepted persistence before database teardown, independently of scheduler
+cancellation. Incognito and atomic reset retain their existing row kernel. No
+schema, SDK, retention, durability, or update migration is required.
+
 Native creation, compaction, and child-spawn signals use the existing shared-state
 writer. Their callers join recording before releasing their lifecycle; embedded
 compaction joins through its subscription event chain. Acknowledged notices precede
@@ -757,6 +801,13 @@ and exact expired-state deletion use the shared-state writer. Read-only snapshot
 retain the existing reader. The host captures the physical database and filesystem
 evidence before waiting, rechecks current authority and workspace identity at
 transaction and commit admission, and validates the evidence after delivery.
+Local preparation, consented bootstrap seeding, sandbox copying, and dev-template
+publication share a FIFO keyed by the canonical filesystem directory. Each caller
+retains its own path identity, options, and authority while waiting; different
+directories remain independent. A predecessor may create an initially absent
+directory, but existing directory identities and alias targets remain pinned.
+The queue holds admitted filesystem and worker operations through settlement.
+Sandbox copying and its following preparation retain the same queue slot.
 Workspace guards separate SQL-free host authority from a serialized recovery-hold
 predicate. The shared recovery reader evaluates that predicate on the worker's
 transaction connection before commit; refusal preserves the caller's duplicate-agent
@@ -1074,6 +1125,16 @@ lifecycle filtering, complete entry metadata, and missing-store behavior. Cold
 configuration reads also use their asynchronous owner. Process-held incognito
 stores retain their existing native reader and remain separate migration work.
 Schemas, stored bytes, retention, public APIs, and update behavior are unchanged.
+
+Durable ACP parent-stream diagnostics use the canonical agent writer. The relay
+captures its child, run, and physical store before delayed flushes, serializes
+events before dispatch, and keeps one batch in flight beside its bounded buffer.
+The worker allocates sequences and inserts the ordered batch atomically, with
+current source checks at transaction and commit admission. Confirmed rollback
+retains bounded retry; uncertain completion never replays a batch. Gateway close
+seals the relay and joins accepted persistence before retiring database workers.
+Diagnostic failures remain isolated from child execution and parent progress.
+Schemas, stored bytes, retention, and update behavior are unchanged.
 
 TUI remembered-session reads and retired-pointer scans use the shared-state
 read worker; writes and per-pointer compare-and-delete transactions use the

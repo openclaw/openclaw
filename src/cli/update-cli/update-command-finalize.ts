@@ -140,7 +140,7 @@ export async function updateFinalizeCommand(
                 }
                 if (resolvedInstallKind === "immutable") {
                   throw new Error(
-                    "Immutable activation and post-update maintenance are not available yet.",
+                    "Use openclaw update recover --root <installation-root> for immutable activation recovery.",
                   );
                 }
                 lifecycle.recordInstallKind(

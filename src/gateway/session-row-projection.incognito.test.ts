@@ -20,7 +20,9 @@ import { resolveGatewaySessionStoreTargetWithStore } from "./session-utils-store
 
 it("reads a private parent once despite multiple durable store candidates", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const cfg = { agents: { entries: { main: { default: true }, work: {} } } };
+    const cfg = {
+      agents: { entries: { main: {}, work: {} }, defaults: { sessionStore: { agentId: "main" } } },
+    };
     for (const storePath of [undefined, state.statePath("extra.sqlite")]) {
       replaceSessionEntrySync(
         {
@@ -103,7 +105,7 @@ it("fences archived incognito rows across resets and physical database replaceme
         touchSessionEntry: false,
       },
     );
-    const cfg = { agents: { list: [{ id: "main", default: true }] } };
+    const cfg = { agents: { entries: { main: {} } } };
     const projection = await createSessionRowProjection({ cfg, getModelCatalog: async () => [] });
     try {
       const original = projection.capture(query)!;

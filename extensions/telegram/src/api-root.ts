@@ -16,22 +16,12 @@ export function normalizeTelegramApiRoot(apiRoot?: string): string {
     return DEFAULT_TELEGRAM_API_ROOT;
   }
 
-  let normalized = trimmed.replace(/\/+$/u, "");
-  try {
-    const url = new URL(normalized);
-    const segments = url.pathname.split("/").filter(Boolean);
-    if (segments.length > 0 && isTelegramBotEndpointSegment(segments[segments.length - 1] ?? "")) {
-      segments.pop();
-      url.pathname = segments.length > 0 ? `/${segments.join("/")}` : "/";
-      url.search = "";
-      url.hash = "";
-      normalized = url.toString().replace(/\/+$/u, "");
-    }
-  } catch {
-    // Config validation catches invalid URLs; keep legacy runtime behavior for
-    // callers that reached this helper with unchecked input.
+  if (hasTelegramBotEndpointApiRoot(trimmed)) {
+    throw new Error(
+      "Telegram apiRoot must be the Bot API root without /bot<TOKEN>. Run openclaw doctor --fix to repair stored config.",
+    );
   }
-  return normalized;
+  return trimmed.replace(/\/+$/u, "");
 }
 
 export function hasTelegramBotEndpointApiRoot(apiRoot: unknown): boolean {

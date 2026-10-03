@@ -384,6 +384,7 @@ describe("normalizeMessagesForLlmBoundary", () => {
       customType: "openclaw.runtime-context",
       content,
       display: false,
+      details: { source: "openclaw-runtime-context", runtimeContextCarrier: true },
       timestamp: 2,
     });
     const active = carrier("current context");

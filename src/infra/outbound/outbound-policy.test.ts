@@ -234,9 +234,8 @@ describe("outbound policy helpers", () => {
       cfg: {
         ...workspaceConfig,
         agents: {
-          list: [
-            {
-              id: "sandbox",
+          entries: {
+            sandbox: {
               tools: {
                 message: {
                   crossContext: {
@@ -245,7 +244,7 @@ describe("outbound policy helpers", () => {
                 },
               },
             },
-          ],
+          },
         },
       } as OpenClawConfig,
       channel: "workspace",

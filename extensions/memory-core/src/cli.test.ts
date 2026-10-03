@@ -247,7 +247,7 @@ describe("memory cli", () => {
     );
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     const cfg: OpenClawConfig = {
-      agents: { defaults: { workspace: workspaceDir }, list: [{ id: "main", default: true }] },
+      agents: { defaults: { workspace: workspaceDir }, entries: { main: {} } },
       memory: {
         search: {
           provider: "none",
@@ -823,9 +823,7 @@ describe("memory cli", () => {
     const agentIds = ["main", ...Array.from({ length: 21 }, (_, index) => `agent-${index + 1}`)];
     getRuntimeConfig.mockReturnValue({
       agents: {
-        entries: Object.fromEntries(
-          agentIds.map((agentId, index) => [agentId, { default: index === 0 }]),
-        ),
+        entries: Object.fromEntries(agentIds.map((agentId) => [agentId, {}])),
       },
     });
     getMemorySearchManager.mockImplementation(async ({ agentId }: { agentId: string }) => ({
@@ -1329,7 +1327,7 @@ describe("memory cli", () => {
       },
       agents: {
         defaults: { workspace: workspaceDir },
-        list: [{ id: "main", default: true }],
+        entries: { main: {} },
       },
       plugins: { enabled: false },
     } as OpenClawConfig;
@@ -1911,7 +1909,7 @@ describe("memory cli", () => {
     );
     getRuntimeConfig.mockReturnValue({
       agents: {
-        list: [{ id: "main", default: true, workspace: workspaceDir, bootstrapMaxChars: 1_400 }],
+        entries: { main: { workspace: workspaceDir, bootstrapMaxChars: 1_400 } },
       },
       plugins: {
         entries: {
@@ -1947,15 +1945,13 @@ describe("memory cli", () => {
       });
       getRuntimeConfig.mockReturnValue({
         agents: {
-          list: [
-            {
-              id: "alpha",
-              default: true,
+          entries: {
+            alpha: {
               workspace: workspaceDir,
               bootstrapMaxChars: 9_000,
             },
-            { id: "beta", workspace: workspaceAliasDir, bootstrapMaxChars: 12_000 },
-          ],
+            beta: { workspace: workspaceAliasDir, bootstrapMaxChars: 12_000 },
+          },
         },
       });
       mockStatusManager({ workspaceDir: workspaceAliasDir });

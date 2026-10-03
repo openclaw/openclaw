@@ -609,3 +609,56 @@ export async function withSessionCostUsageWorkerDatabases<T>(
   }
   return result.value;
 }
+
+/** Process-held sources exchange bounded pages without reopening their memory database. */
+export async function runProcessHeldHistoryTask(
+  params: import("./session-history-types.js").ChatHistoryPageParams,
+  onRequest: NonNullable<WorkerTaskOptions<SessionHistoryWorkerInput>["onRequest"]>,
+  signal?: AbortSignal,
+) {
+  historyLane.pending++;
+  historyClearTimeout(historyLane.idleTimer);
+  historyLane.idleTimer = undefined;
+  refreshDatabaseWorkerPressureSubscription();
+  let sequence = 0;
+  let executionRetired = false;
+  try {
+    await historyLane.rotation;
+    const value = unwrapSessionTranscriptWorkerReply<SessionHistoryWorkerInput["kind"]>(
+      await historyLane.pool.run(
+        () => {
+          sequence = ++historyLane.nativeSequence;
+          return { kind: "cli-process-history", params };
+        },
+        {
+          inputBytes: params.cliHistoryRedaction?.retainedBytes,
+          timeoutMs: 60_000,
+          onRequest,
+          signal,
+          onExecutionSettled: ({ retired }) => {
+            if (retired) {
+              executionRetired = true;
+              releaseRetiredDatabaseCustody(historyLane, sequence);
+            }
+          },
+        },
+      ),
+    );
+    if (typeof value === "boolean" || Array.isArray(value) || value.kind !== "rpc") {
+      throw new Error("Unexpected process-held history reply");
+    }
+    return value.page;
+  } catch (error) {
+    if (sequence > 0 && !executionRetired) {
+      try {
+        await rotateDatabaseWorkers(historyLane);
+      } catch (cleanupError) {
+        throw sessionHistoryCleanupError(error, cleanupError, "worker retirement");
+      }
+    }
+    throw error;
+  } finally {
+    historyLane.pending--;
+    armDatabaseWorkerIdleRetirement(historyLane);
+  }
+}

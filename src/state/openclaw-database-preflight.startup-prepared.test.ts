@@ -35,7 +35,8 @@ function createFleet() {
   const agentIds = ["first", "second", "third"];
   const config: OpenClawConfig = {
     agents: {
-      entries: Object.fromEntries(agentIds.map((id, index) => [id, { default: index === 0 }])),
+      entries: Object.fromEntries(agentIds.map((id) => [id, {}])),
+      defaults: { systemAgent: { agentId: "first" } },
     },
   };
   const paths = agentIds.map((agentId) => openOpenClawAgentDatabase({ agentId, env }).path);

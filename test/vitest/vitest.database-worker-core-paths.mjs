@@ -1,5 +1,6 @@
 // These consumers need the host-owned SQLite broker, which runs in forked processes.
 export const databaseWorkerCoreTestFiles = [
+  "src/agents/subagents/spawn/acp-parent-stream-store.sqlite.test.ts",
   "src/state/openclaw-agent-execution-incognito.compute.test.ts",
   "src/state/openclaw-agent-execution-incognito.lifecycle.test.ts",
   "src/state/openclaw-agent-execution-incognito.history.test.ts",
@@ -284,6 +285,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/auto-reply/reply/get-reply.explicit-owner.test.ts",
   "src/auto-reply/reply/get-reply.fast-path.test.ts",
   "src/auto-reply/reply/get-reply.timeout.test.ts",
+  "src/auto-reply/reply/get-reply.workspace-failure.test.ts",
   "src/auto-reply/reply/restart-recovery-claim.test.ts",
   "src/auto-reply/reply/restart-recovery-claim.lifecycle.test.ts",
   "src/auto-reply/reply/agent-runner-memory.private-transcript.test.ts",

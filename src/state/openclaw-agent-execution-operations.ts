@@ -154,6 +154,21 @@ export async function loadAgentCompoundOperations() {
   } satisfies Handlers;
 }
 
+export async function loadAgentNativeBindingOperations() {
+  const kernel = await import("../config/sessions/session-native-binding.worker.js");
+  return {
+    "session.nativeBindings.delete": kernel.deleteSessionWithNativeBindings,
+  } satisfies Handlers;
+}
+
+export async function prepareAgentNativeBindingOperation(
+  input: import("../config/sessions/session-native-binding.types.js").SessionNativeBindingDeletion,
+  env?: NodeJS.ProcessEnv,
+) {
+  const kernel = await import("../config/sessions/session-native-binding.worker.js");
+  await kernel.prepareSessionNativeBindingDeletion(input, env);
+}
+
 export async function loadAgentTrajectoryOperations() {
   const kernel = await import("../trajectory/runtime-store.sqlite.js");
   return {
@@ -367,6 +382,7 @@ export type RegisteredAgentWorkerOperations = WorkerOperations<
     Awaited<ReturnType<typeof loadAgentEntryReadOperations>> &
     Awaited<ReturnType<typeof loadAgentEntryPatchOperations>> &
     Awaited<ReturnType<typeof loadAgentCompoundOperations>> &
+    Awaited<ReturnType<typeof loadAgentNativeBindingOperations>> &
     Awaited<ReturnType<typeof loadAgentRestartRecoveryOperations>> &
     Awaited<ReturnType<typeof loadAgentTrajectoryOperations>> &
     Awaited<ReturnType<typeof loadAgentArchiveOperations>> &

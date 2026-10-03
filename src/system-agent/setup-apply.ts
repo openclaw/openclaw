@@ -330,11 +330,10 @@ export async function applySystemAgentSetup(
     const allowWorkspaceWrite = params.allowWorkspaceChange || !currentHasRoster;
     let setupBaseConfig = currentBaseConfig;
     if (currentHasRoster) {
-      const { list: _legacyList, ...agents } = setupBaseConfig.agents ?? {};
       setupBaseConfig = {
         ...setupBaseConfig,
         agents: {
-          ...agents,
+          ...setupBaseConfig.agents,
           entries: toAgentEntriesRecord(roster),
         },
       };

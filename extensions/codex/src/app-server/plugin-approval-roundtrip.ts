@@ -8,6 +8,7 @@ import type {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { isApprovalNotFoundError, toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
 import { resolveCodexGatewayTimeoutWithGraceMs } from "./attempt-timeouts.js";
 
 type AgentHarnessHostCapabilities = EmbeddedRunAttemptParams["hostCapabilities"];
@@ -123,25 +124,9 @@ export async function waitForPluginApprovalDecision(params: {
       }
       throw error;
     });
-  if (!params.signal) {
-    return await waitPromise;
-  }
-  let onAbort: (() => void) | undefined;
-  const abortPromise = new Promise<never>((_, reject) => {
-    if (params.signal!.aborted) {
-      reject(toErrorObject(params.signal!.reason, "Non-Error rejection"));
-      return;
-    }
-    onAbort = () => reject(toErrorObject(params.signal!.reason, "Non-Error rejection"));
-    params.signal!.addEventListener("abort", onAbort, { once: true });
-  });
-  try {
-    return await Promise.race([waitPromise, abortPromise]);
-  } finally {
-    if (onAbort) {
-      params.signal.removeEventListener("abort", onAbort);
-    }
-  }
+  return await racePromiseWithAbortSignal(waitPromise, params.signal, ({ reason }) =>
+    toErrorObject(reason, "Non-Error rejection"),
+  );
 }
 
 /** Converts a gateway exec approval decision into the app-server approval outcome enum. */

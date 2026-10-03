@@ -1,5 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
+import type { AgentToolSurfacePresentation } from "../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
 import { normalizeAgentModelRefForConfig } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { modelKey } from "../shared/model-key.js";
@@ -8,10 +9,7 @@ import { resolveAgentConfig } from "./agent-scope-config.js";
 import type { CodeModeFailureCode } from "./code-mode-executor-types.js";
 import type { CodeModeNamespaceRuntime } from "./code-mode-namespaces.js";
 import { CODE_MODE_RESULTS_API_FILE } from "./code-mode-results-api.js";
-import {
-  MAX_CODE_MODE_PENDING_TOOL_CALLS,
-  type CodeModeConfig as CodeModeWorkerConfig,
-} from "./code-mode-worker-types.js";
+import { MAX_CODE_MODE_PENDING_TOOL_CALLS } from "./code-mode-worker-types.js";
 import type { ToolSearchConfig, ToolSearchToolContext } from "./tool-search.js";
 import { asToolParamsRecord, ToolInputError } from "./tools/common.js";
 
@@ -36,14 +34,9 @@ export const DEFAULT_HEADLESS_TOOL_CALLS = 5;
 export const MAX_HEADLESS_TOOL_CALLS = 200;
 
 /** Resolved Code Mode runtime limits. */
-export type CodeModeConfig = CodeModeWorkerConfig & {
+export type CodeModeConfig = Omit<AgentToolSurfacePresentation["codeMode"], "enabled"> & {
   /** Effective activation policy; "auto" follows the model catalog flag. */
   enabled: boolean | "auto";
-  executor: "node" | "quickjs";
-  mode: "only";
-  snapshotTtlSeconds: number;
-  searchDefaultLimit: number;
-  maxSearchLimit: number;
 };
 
 export type {

@@ -13,15 +13,21 @@ import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 import { startOpenClawStateLeaseHeartbeat } from "../state/openclaw-state-lease-heartbeat.js";
 import {
   acquireOpenClawStateLeaseInTransaction,
-  reclaimDeadOpenClawStateLeaseInTransaction,
   releaseOpenClawStateLeaseInTransaction,
 } from "../state/openclaw-state-lease-store.js";
 import { assertOpenClawStateWriteAllowed } from "../state/openclaw-state-ownership.js";
+import {
+  classifyGatewayOwnerProcessNamespace,
+  GATEWAY_OWNER_HEARTBEAT_MS,
+  GatewayLockNamespaceError,
+  readGatewayLockProcessNamespace,
+} from "./gateway-lock-payload.js";
 import { gatewayOwnerKey, readGatewayOwnerLeaseFromDatabase } from "./gateway-owner-lease.read.js";
 import type {
   GatewayOwnerLeaseIdentity,
   GatewayOwnerSupervisor,
 } from "./gateway-owner-lease.types.js";
+import { captureGatewayStateOwner } from "./gateway-state-owner.js";
 import { resolveDiagnosticProcessEnv } from "./process-env.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 import { STARTUP_MIGRATION_LEASE_TTL_MS } from "./startup-migration-checkpoint.js";
@@ -33,6 +39,44 @@ export type GatewayOwnerLease = {
   ready: Promise<void>;
   release: () => Promise<void>;
 };
+
+function readStoppedGatewayOwnerLease(db: DatabaseSync) {
+  const previous = readGatewayOwnerLeaseFromDatabase(db);
+  if (!previous) {
+    return undefined;
+  }
+  if (previous.state === "dead") {
+    return previous;
+  }
+  const namespace = classifyGatewayOwnerProcessNamespace(previous.processNamespace, {
+    ownerHost: previous.host,
+    readHeartbeatAt: () => previous.heartbeatAt,
+  });
+  if (namespace === "dead") {
+    return previous;
+  }
+  if (namespace === "unknown") {
+    throw new GatewayLockNamespaceError();
+  }
+  if (previous.expired && previous.state !== "live") {
+    return previous;
+  }
+  throw new Error("Another Gateway owner lease is still active for this state directory");
+}
+
+/** Physical custody alone must not bypass a fresh, unverifiable lease during maintenance. */
+export function assertGatewayOwnerLeaseStopped(
+  env: NodeJS.ProcessEnv,
+  openStateSchemaReadAdmission?: OpenClawStateSchemaReadAdmission,
+): void {
+  withExistingOpenClawStateDatabaseCurrentReadOnly(
+    ({ db }) => {
+      readStoppedGatewayOwnerLease(db);
+    },
+    { env },
+    openStateSchemaReadAdmission,
+  );
+}
 
 export function readGatewayOwnerLease(
   params: {
@@ -64,10 +108,12 @@ export function acquireGatewayOwnerLease(params: {
 }): GatewayOwnerLease {
   const env = params.env ?? process.env;
   const databasePath = resolveOpenClawStateSqlitePath(env);
+  const custody = captureGatewayStateOwner(databasePath);
   const identity = { ...gatewayOwnerKey, owner: params.owner ?? randomUUID() };
   const processOwner = {
     pid: process.pid,
     host: hostname(),
+    processNamespace: readGatewayLockProcessNamespace(),
     // Retry the native self lookup with its full Windows budget before publication.
     startedAt:
       getFileLockProcessStartTime(process.pid, env) ??
@@ -85,7 +131,10 @@ export function acquireGatewayOwnerLease(params: {
         db,
         () => {
           assertOpenClawStateWriteAllowed({ database: db, databasePath, env });
-          reclaimDeadOpenClawStateLeaseInTransaction(db, identity);
+          const previous = readStoppedGatewayOwnerLease(db);
+          if (previous) {
+            releaseOpenClawStateLeaseInTransaction(db, { ...identity, owner: previous.owner });
+          }
           const acquired = acquireOpenClawStateLeaseInTransaction(
             db,
             identity,
@@ -132,7 +181,7 @@ export function acquireGatewayOwnerLease(params: {
         leaseMs: STARTUP_MIGRATION_LEASE_TTL_MS,
         acquiredAt: expiresAt - STARTUP_MIGRATION_LEASE_TTL_MS,
         expiresAt,
-        heartbeatMs: 30_000,
+        heartbeatMs: GATEWAY_OWNER_HEARTBEAT_MS,
         ...(processOwner.startedAt === null
           ? { processOwner: { identity: processOwner, env: resolveDiagnosticProcessEnv(env) } }
           : {}),
@@ -164,7 +213,16 @@ export function acquireGatewayOwnerLease(params: {
         });
       }
       await heartbeat?.stop();
-      releaseRow();
+      try {
+        // Lost custody may join its worker, but cannot mutate the recorded lease.
+        if (!custody?.signal.aborted) {
+          releaseRow();
+        }
+      } catch (error) {
+        if (!custody?.signal.aborted) {
+          throw error;
+        }
+      }
       released = true;
     },
   };

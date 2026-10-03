@@ -5,7 +5,7 @@ import type {
   ModelsRuntimeChoice,
 } from "openclaw/plugin-sdk/models-provider-runtime";
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
-import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { sliceUtf16Safe, truncateCodePoints } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   Button,
   Container,
@@ -454,8 +454,8 @@ function buildModelRows(
 
   const selectedModelRef = parsedPendingModel ?? parsedCurrentModel;
   const modelOptions: APISelectMenuOption[] = params.modelPage.items.map((model) => ({
-    label: model,
-    value: model,
+    label: truncateCodePoints(model, 100),
+    value: createDiscordModelPickerModelToken(params.modelPage.provider, model),
     default: selectedModelRef
       ? selectedModelRef.provider === params.modelPage.provider && selectedModelRef.model === model
       : false,
@@ -468,7 +468,7 @@ function buildModelRows(
         customId: buildDiscordModelPickerCustomId({
           ...modelViewState,
           ...compactRuntime,
-          action: "model",
+          action: "pick",
         }),
         options: modelOptions,
         placeholder: `Select ${params.modelPage.provider} model`,

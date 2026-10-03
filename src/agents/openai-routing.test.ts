@@ -269,7 +269,7 @@ describe("OpenAI runtime routing policy", () => {
     const config = {
       agents: {
         defaults: { agentRuntime: { id: "openclaw" } },
-        list: [{ id: "worker", agentRuntime: { id: "openclaw" } }],
+        entries: { worker: { agentRuntime: { id: "openclaw" } } },
       },
     } satisfies OpenClawConfig;
 

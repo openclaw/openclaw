@@ -483,16 +483,6 @@ describe("kitchen-sink plugin assertions", () => {
     );
   });
 
-  it("accepts only the candidate memory diagnostic for an authorized frozen target", () => {
-    const result = runAssertInstalled({
-      diagnostics: diagnosticErrors([FROZEN_MEMORY_EMBEDDING_DIAGNOSTIC]),
-      env: { OPENCLAW_FROZEN_PLUGIN_PRERELEASE_FIXTURE_DIALECT: "legacy" },
-      surfaceMode: "conformance",
-    });
-
-    expect(result.status).toBe(0);
-  });
-
   it("rejects the candidate memory diagnostic for an ordinary target", () => {
     const result = runAssertInstalled({
       diagnostics: diagnosticErrors([FROZEN_MEMORY_EMBEDDING_DIAGNOSTIC]),

@@ -267,7 +267,7 @@ describe("task suggestion gateway methods", () => {
       session: { store: "/tmp/shared-sessions.sqlite", scope: "global" },
       agents: {
         ownership: "explicit",
-        list: [{ id: "ops" }, { id: "research" }],
+        entries: { ops: {}, research: {} },
         defaults: { sessionStore: { agentId: "ops" } },
       },
     };
@@ -864,7 +864,7 @@ describe("task suggestion gateway methods", () => {
         agentId: "work",
       },
       vi.fn(),
-      { agents: { list: [{ id: "main" }, { id: "work" }] } },
+      { agents: { entries: { main: {}, work: {} } } },
     );
 
     expect(result.response?.[0]).toBe(false);

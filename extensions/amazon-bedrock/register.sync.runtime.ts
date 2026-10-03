@@ -5,7 +5,7 @@
 import type { BedrockClient } from "@aws-sdk/client-bedrock";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type { Context, Model } from "openclaw/plugin-sdk/llm";
+import { hasRuntimeContextMarker, type Context, type Model } from "openclaw/plugin-sdk/llm";
 import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import type {
   OpenClawPluginApi,
@@ -281,9 +281,7 @@ function injectBedrockCachePoints(
 
   // Unresolved profiles use transient carriers. Conversion has removed their
   // flags, so fallback injection cannot safely select a conversation anchor.
-  if (
-    context.messages.some((message) => message.role === "user" && message.runtimeContextCarrier)
-  ) {
+  if (context.messages.some(hasRuntimeContextMarker)) {
     return;
   }
 

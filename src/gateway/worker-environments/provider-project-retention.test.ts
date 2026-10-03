@@ -21,7 +21,7 @@ describe("prepared project retention compatibility", () => {
     sourceAdmission
       .mockReset()
       .mockRejectedValue(new Error("Retention must not access the repository"));
-    fixture.config.agents = { list: [{ id: "main" }] };
+    fixture.config.agents = { entries: { main: {} } };
     fixture.provider.requiresNodeEnrollment = true;
     fixture.provider.supportsProjectPreparation = () => true;
     fixture.provider.resolvePreparationTarget = () => ({
@@ -261,7 +261,7 @@ describe("prepared project retention compatibility", () => {
       if (mutation === "owner selection") {
         fixture.config.tools = { github: { kind: "oauth", profileId: `ghp_${"a".repeat(32)}` } };
       } else {
-        fixture.config.agents = { list: [{ id: "other" }] };
+        fixture.config.agents = { entries: { other: {} } };
       }
 
       expect(retained?.isCurrent()).toBe(false);

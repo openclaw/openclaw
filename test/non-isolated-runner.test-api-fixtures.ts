@@ -138,7 +138,7 @@ const native = createRequire(import.meta.url)("./native-cron.cjs");
 const workspace = await import(${sourcePath("agents/workspace-legacy-state.ts")});
 const { resetLegacyWorkspaceStateCheckForTest } = await import(${sourcePath("agents/workspace-legacy-state.test-support.ts")});
 function verifyPartialMock() {
-  expect(workspace.LEGACY_WORKSPACE_STATE_DIRNAME).toBe(".openclaw");
+  expect(workspace.LEGACY_WORKSPACE_ATTESTATION_DIRNAME).toBe("workspace-attestations");
   expect(vi.isMockFunction(workspace.prepareLegacyWorkspaceStateReset)).toBe(true);
   expect(() => resetLegacyWorkspaceStateCheckForTest()).not.toThrow();
   expect(nativeCron.registerActiveCronTaskRun).toBe(native.register);
@@ -164,10 +164,10 @@ it("loads a fresh real source after the partial mock retires", () => {
   files["09-j-test-api-mock-only.test.ts"] = `
 /* @vitest-environment jsdom */
 import { expect, it, vi } from "vitest";
-vi.mock(${sourcePath("agents/workspace-legacy-state.ts")}, () => ({ LEGACY_WORKSPACE_STATE_DIRNAME: "mock-only" }));
+vi.mock(${sourcePath("agents/workspace-legacy-state.ts")}, () => ({ LEGACY_WORKSPACE_ATTESTATION_DIRNAME: "mock-only" }));
 const workspace = await import(${sourcePath("agents/workspace-legacy-state.ts")});
 it("does not execute the source behind a mock-only import", () => {
-  expect(workspace.LEGACY_WORKSPACE_STATE_DIRNAME).toBe("mock-only");
+  expect(workspace.LEGACY_WORKSPACE_ATTESTATION_DIRNAME).toBe("mock-only");
   const key = Symbol.for("openclaw.workspaceLegacyStateTestApi");
   expect(Object.hasOwn(globalThis, key)).toBe(false);
   Reflect.set(globalThis, key, "foreign");

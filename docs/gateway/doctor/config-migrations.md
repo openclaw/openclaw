@@ -43,6 +43,16 @@ through before retrying. Retirement must leave persisted source data untouched.
 Legacy normalization belongs to Doctor and migration owners, with the existing
 backup and verification flow. Runtime readers consume canonical state.
 
+### Workspace setup
+
+The nested `<workspace>/.openclaw/workspace-state.json` layout is retired. Its
+last stable writer was `2026.6.8`, published to npm on June 16, 2026. Later
+preservation rewrites wrote `<workspace>/openclaw-workspace-state.json` instead.
+Upgrade through `2026.9.7` and run `openclaw doctor --fix` before updating to
+import the nested file. Current Doctor leaves it untouched.
+The root-level setup file and workspace attestations remain supported migration
+inputs because July releases still wrote them.
+
 ### Session settings
 
 Global and project `settings.json` readers refuse retired settings before
@@ -174,6 +184,7 @@ Doctor also refuses these retired config inputs:
 - `channels.telegram.requireMention`, `channels.feishu.accounts.<id>.botName`,
   and the retired `channels.webchat` section.
 - `channels.telegram.groupMentionsOnly`; use `channels.telegram.groups["*"].requireMention`.
+- `channels.whatsapp.exposeErrorText`, including account overrides.
 - `session.threadBindings.ttlHours` and Discord/LINE/Matrix/Telegram `threadBindings.ttlHours`,
   including per-account settings.
 - Telegram `dm`, `direct.*.threadReplies`, native draft preview settings, and scalar
@@ -190,6 +201,11 @@ succeed. Doctor preserves the config and stops with recovery guidance instead
 of stripping these settings or replacing them with a backup. For an older installation,
 [upgrade through `2026.9.5`](/install/updating#upgrading-very-old-versions)
 and run its Doctor migrations before installing the latest version.
+
+WhatsApp's `exposeErrorText` has been ignored since April 2026. Remove it from
+the reported channel or account path before retrying; removing this no-op does
+not change error delivery. Doctor leaves the authored config unchanged, or you
+can use the intermediate release above to remove it.
 
 OAuth credential sidecars under `credentials/auth-profiles/` are retired. Their
 last writer shipped in `2026.5.16-beta.3` on May 16, 2026; `2026.5.16-beta.4`

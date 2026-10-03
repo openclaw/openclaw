@@ -354,7 +354,17 @@ it.each([
         await expect(retireNotifications.mock.results[0]?.value).rejects.toThrow(
           "retirement write rejected",
         );
-        await settleRootWork(true);
+        await expect(settleRootWork(true)).rejects.toMatchObject({
+          name: "AggregateError",
+          message: "Failed to settle subagent cleanup roots",
+          errors: [
+            {
+              name: "SubagentRegistryWriteError",
+              outcome: "not-committed",
+              cause: { message: "retirement write rejected" },
+            },
+          ],
+        });
         expect(loadSubagentRegistryFromSqlite().get(input.subagent.runId)?.delivery).toEqual(
           receipt,
         );

@@ -18,7 +18,7 @@ vi.mock("../cli-runner/log.js", () => ({
   cliBackendLog: { warn: vi.fn() },
 }));
 
-vi.mock("../../gateway/cli-session-history.js", () => ({
+vi.mock("../../gateway/cli-session-history.claude.js", () => ({
   readClaudeCliFallbackSeed: mocks.readClaudeCliFallbackSeed,
 }));
 
@@ -34,7 +34,9 @@ import { resolveClaudeCliProjectDirForWorkspace } from "./claude-cli-project-dir
 
 function formatClaudeCliFallbackPrelude(
   seed: NonNullable<
-    ReturnType<typeof import("../../gateway/cli-session-history.js").readClaudeCliFallbackSeed>
+    ReturnType<
+      typeof import("../../gateway/cli-session-history.claude.js").readClaudeCliFallbackSeed
+    >
   >,
   options?: { charBudget?: number },
 ) {

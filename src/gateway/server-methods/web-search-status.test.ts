@@ -115,19 +115,45 @@ beforeEach(() => {
 });
 
 describe("Search settings status projection", () => {
-  it.each(["missing-catalog", "unknown-model"])(
-    "keeps model routing unknown for %s while allowing an explicit service probe",
+  it.each(["missing-catalog", "unknown-model", "native"])(
+    "projects the %s model route independently of the explicit service probe",
     async (scenario) => {
       if (scenario === "missing-catalog") {
         mocks.catalog.mockResolvedValue(undefined);
       }
+      if (scenario === "native") {
+        mocks.native.mockReturnValue({
+          kind: "native",
+          provider: "fixture-search",
+          transport: "fixture-responses",
+        });
+      }
+      const params = {
+        modelProvider: "custom",
+        modelId: scenario === "unknown-model" ? "unknown" : "model",
+      };
       const result = await prepareWebSearchStatus(
         context(),
-        scenario === "unknown-model" ? { modelProvider: "custom", modelId: "unknown" } : {},
+        scenario === "missing-catalog" ? {} : params,
       );
       expect(result.status).toMatchObject({
-        model: { runtime: "unknown" },
-        route: { kind: "unavailable", label: "Model search route is not ready", testable: false },
+        model:
+          scenario === "native"
+            ? { provider: "custom", id: "model", runtime: "openclaw" }
+            : { runtime: "unknown" },
+        route:
+          scenario === "native"
+            ? {
+                kind: "native",
+                provider: "fixture-search",
+                label: "Native web search",
+                testable: false,
+              }
+            : {
+                kind: "unavailable",
+                label: "Model search route is not ready",
+                testable: false,
+              },
         testProvider: { id: "example" },
       });
     },
@@ -155,25 +181,42 @@ describe("Search settings status projection", () => {
     });
   });
 
-  it("reports provider configuration and editing metadata without any credential value", async () => {
-    const result = await prepareWebSearchStatus(context(), {});
-    expect(result.status).toMatchObject({
-      provider: "example",
-      route: { kind: "managed", provider: "example", testable: true },
-      testProvider: { id: "example", label: "Example Search" },
-      providers: [
-        {
-          configured: true,
-          installed: true,
-          available: true,
-          credentialSource: "config",
-          credential,
-          configPath: ["plugins", "entries", "example", "config", "webSearch"],
-        },
-      ],
-    });
-    expect(JSON.stringify(result.status)).not.toContain(secret);
-  });
+  it.each(["config", "missing", "secretRef"])(
+    "projects %s credentials without disclosing them",
+    async (source) => {
+      const configured = source !== "missing";
+      const value =
+        source === "config"
+          ? secret
+          : source === "secretRef"
+            ? { source: "file", provider: "vault", id: "/private/secret" }
+            : undefined;
+      mocks.configured.mockReturnValue(configured);
+      mocks.options.mockReturnValue([provider({ getConfiguredCredentialValue: () => value })]);
+      mocks.available.mockReturnValue(mocks.options());
+      const result = await prepareWebSearchStatus(context(), {});
+      expect(result.status).toMatchObject({
+        provider: "example",
+        route: { kind: "managed", provider: "example", testable: true },
+        testProvider: { id: "example", label: "Example Search" },
+        providers: [
+          {
+            configured,
+            installed: true,
+            available: true,
+            credentialSource: source,
+            credential,
+            configPath: ["plugins", "entries", "example", "config", "webSearch"],
+          },
+        ],
+      });
+      expect(JSON.stringify(result.status)).not.toContain(secret);
+      expect(JSON.stringify(result.status)).not.toContain("/private/secret");
+      if (!configured) {
+        expect(result.status?.route.reason).toEqual(expect.stringContaining("credentials"));
+      }
+    },
+  );
 
   it.each([false, true])(
     "keeps key-free setup explicit without using a sibling provider's credential (installed=%s)",
@@ -226,52 +269,4 @@ describe("Search settings status projection", () => {
       expect(mocks.catalog).not.toHaveBeenCalled();
     },
   );
-
-  it("reports a plugin's native owner without a vendor-specific label", async () => {
-    mocks.native.mockReturnValue({
-      kind: "native",
-      provider: "fixture-search",
-      transport: "fixture-responses",
-    });
-    const result = await prepareWebSearchStatus(context(), {
-      modelProvider: "custom",
-      modelId: "model",
-    });
-    expect(result.status).toMatchObject({
-      model: { provider: "custom", id: "model", runtime: "openclaw" },
-      route: {
-        kind: "native",
-        provider: "fixture-search",
-        label: "Native web search",
-        testable: false,
-      },
-    });
-  });
-
-  it("retains missing credentials instead of equating configuration with provider health", async () => {
-    mocks.configured.mockReturnValue(false);
-    mocks.options.mockReturnValue([provider({ getConfiguredCredentialValue: () => undefined })]);
-    mocks.available.mockReturnValue(mocks.options());
-    const result = await prepareWebSearchStatus(context(), {});
-    expect(result.status).toMatchObject({
-      route: { kind: "managed", reason: expect.stringContaining("credentials") },
-      providers: [{ configured: false, credentialSource: "missing" }],
-    });
-  });
-
-  it("does not return credential reference contents", async () => {
-    mocks.options.mockReturnValue([
-      provider({
-        getConfiguredCredentialValue: () => ({
-          source: "file",
-          provider: "vault",
-          id: "/private/secret",
-        }),
-      }),
-    ]);
-    mocks.available.mockReturnValue(mocks.options());
-    const result = await prepareWebSearchStatus(context(), {});
-    expect(result.status?.providers[0]?.credentialSource).toBe("secretRef");
-    expect(JSON.stringify(result.status)).not.toContain("/private/secret");
-  });
 });

@@ -159,13 +159,7 @@ export async function cleanupEmbeddedAttemptSessionPhase(
   // lock release ahead of runtime disposal so the next attempt can recover.
   let cleanupError: unknown;
   try {
-    clearToolSearchCatalog({
-      sessionId: attempt.sessionId,
-      sessionKey: input.sandboxSessionKey,
-      agentId: input.sessionAgentId,
-      runId: attempt.runId,
-      catalogRef: input.toolSearchCatalogRef,
-    });
+    clearToolSearchCatalog({ catalogRef: input.toolSearchCatalogRef });
     await input.transcriptLifecycle.beginCleanup();
     // Cancellation can arrive during trajectory flushing or the transcript drain.
     // Read it only after both waits before deciding whether to wait for idle.

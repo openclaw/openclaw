@@ -31,7 +31,7 @@ afterEach(() => vi.useRealTimers());
 it("settles queued heartbeat cron work before joining its shutdown drain", async () => {
   vi.useFakeTimers();
   const stateDir = tempDirs.make("gateway-close-queued-heartbeat-");
-  const cfg = { cron: { enabled: false }, agents: { list: [{ id: "main" }] } };
+  const cfg = { cron: { enabled: false }, agents: { entries: { main: {} } } };
   const scheduler = createTestGatewayScheduler();
   const { cron } = buildGatewayCronService({
     scheduler,

@@ -68,6 +68,7 @@ type HeldGatewaySuspension = GatewaySuspendCoordinatorEntryBase & {
   deadlineAtMs: number;
   inspect?: Partial<GatewayActiveWorkInspectors>;
   handoff?: GatewaySuspendHandoffOwner;
+  committedStopOwner?: GatewaySuspendHandoffOwner;
   shutdown?: { signal: AbortSignal; phase: "interrupting" | "exiting" };
   commitAdmission?: () => boolean;
   nowMs: () => number;
@@ -76,6 +77,8 @@ type HeldGatewaySuspension = GatewaySuspendCoordinatorEntryBase & {
 /** Private identity of one live process-owning host iteration, never a wire token. */
 export type GatewaySuspendHandoffOwner = {
   isCurrent: () => boolean;
+  /** Transfers a validated suspension into this host's synchronous one-way shutdown. */
+  commitStop?: () => void;
 };
 
 type GatewaySchedulerRecovery = GatewaySuspendCoordinatorEntryBase & {
@@ -444,7 +447,19 @@ function handoffRefusal(held: HeldGatewaySuspension, owner: GatewaySuspendHandof
 export function armGatewaySuspendHandoff(params: {
   suspensionId: string;
   owner: GatewaySuspendHandoffOwner;
+  commit?: true;
 }): Result<GatewaySuspendHandoffResult, string> {
+  const committed = params.commit ? getRestartingSuspension() : undefined;
+  if (
+    committed?.suspensionId === params.suspensionId &&
+    committed.committedStopOwner === params.owner
+  ) {
+    return ok({
+      status: "committed",
+      suspensionId: committed.suspensionId,
+      expiresAtMs: committed.expiresAtMs,
+    });
+  }
   const held = COORDINATOR_STATE.current;
   if (held?.kind !== "held" || held.suspensionId !== params.suspensionId) {
     return resultError("gateway suspension id does not match");
@@ -455,6 +470,44 @@ export function armGatewaySuspendHandoff(params: {
   }
   if (held.handoff && held.handoff !== params.owner) {
     return resultError("gateway suspension already belongs to another host iteration");
+  }
+  if (params.commit) {
+    if (!params.owner.commitStop) {
+      return resultError("gateway host does not support committed suspension stop");
+    }
+    const snapshot = createGatewayActiveWorkSnapshot(held.inspect, {
+      ignoreTerminalSessions: held.terminalPolicy === "terminate",
+    });
+    if (snapshot.writeCustody.some(({ count }) => count > 0)) {
+      return resultError("gateway write custody is still pending");
+    }
+    const changed = handoffRefusal(held, params.owner);
+    if (changed) {
+      return resultError(changed);
+    }
+    held.handoff = params.owner;
+    try {
+      params.owner.commitStop();
+    } catch {
+      // The callback may already have committed shutdown. Never reopen admission
+      // or turn an unknown stop outcome into permission to replay native effects.
+      return resultError("gateway suspension stop commitment outcome is uncertain");
+    }
+    const signal = getGatewayRestartDrainSignal();
+    if (
+      COORDINATOR_STATE.retiredForLifecycleReset !== held ||
+      !signal.aborted ||
+      held.shutdown?.signal !== signal ||
+      !isGatewayRestartDraining()
+    ) {
+      return resultError("gateway suspension stop commitment outcome is uncertain");
+    }
+    held.committedStopOwner = params.owner;
+    return ok({
+      status: "committed",
+      suspensionId: held.suspensionId,
+      expiresAtMs: held.expiresAtMs,
+    });
   }
   held.handoff = params.owner;
   return ok({ status: "armed", suspensionId: held.suspensionId, expiresAtMs: held.expiresAtMs });

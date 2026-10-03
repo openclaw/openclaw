@@ -20,7 +20,7 @@ import { buildExecApprovalPendingToolResult } from "./bash-tools.exec-host-share
 import { resolveCodeModeConfig, toToolSearchConfig } from "./code-mode-runtime.js";
 import { disposeAllCodeModeRuns, waitForPendingBridgeSettlement } from "./code-mode-state.js";
 import { createSubscribedCodeModeHarness as subscribeHarness } from "./code-mode.bridge.lifecycle.test-support.js";
-import { addClientToolsToCodeModeCatalog, applyCodeModeCatalog } from "./code-mode.js";
+import { applyCodeModeCatalog } from "./code-mode.js";
 import {
   fakeTool,
   pluginToolWithExecute,
@@ -35,6 +35,7 @@ import { emitAssistantTextDeltaAndEnd } from "./embedded-agent-subscribe.e2e-har
 import { countActiveToolExecutions } from "./embedded-agent-subscribe.handlers.tools.js";
 import { attachInternalToolExecutionPreparer } from "./runtime/internal-hooks.js";
 import { SessionManager } from "./sessions/session-manager.js";
+import { addClientToolsToToolCatalog } from "./tool-search-catalog.js";
 import { ToolSearchRuntime } from "./tool-search-runtime.js";
 import { clearToolSearchCatalog } from "./tool-search.js";
 import { jsonResult } from "./tools/common.js";
@@ -70,7 +71,7 @@ describe("Code Mode subscribed bridge lifecycle", () => {
       const manager = SessionManager.open(scope);
       manager.appendMessage({ role: "user", content: "Review this format", timestamp: 1 });
       const harness = createSubscribedCodeModeHarness({ name, sessionManager: manager });
-      const config = { agents: { entries: { main: { default: true } } } };
+      const config = { agents: { entries: { main: {} } } };
       const target = createMessageTool({
         config,
         preparedMessageToolCatalog: { version: 0, channels: [], getChannel: () => undefined },
@@ -622,7 +623,8 @@ describe("Code Mode subscribed bridge lifecycle", () => {
     const runId = result.runId as string;
     const initial = expectDefined(testing.activeRuns.get(runId), "initial snapshot");
     expect(applyCodeModeCatalog(owner).catalogReused).toBe(true);
-    addClientToolsToCodeModeCatalog({
+    addClientToolsToToolCatalog({
+      enabled: true,
       ...owner,
       tools: [fakeTool("client_probe", "Client probe")],
     });

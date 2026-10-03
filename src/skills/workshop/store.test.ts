@@ -336,7 +336,7 @@ describe("Skill Workshop SQLite store", () => {
     };
     const recoveryRead = read(recoverable.record.id, store, scope, recoveryOptions);
     recoveryOptions.config = {
-      agents: { list: [{ id: "main", agentDir: testState.path("redirected-agent") }] },
+      agents: { entries: { main: { agentDir: testState.path("redirected-agent") } } },
     };
     await expect
       .soft(recoveryRead)

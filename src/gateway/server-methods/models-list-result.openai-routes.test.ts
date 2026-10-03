@@ -54,39 +54,51 @@ describe("models.list OpenAI routes", () => {
     },
   );
 
-  it("uses the published owner's identity for implicit projection", async () => {
+  it("uses the system-agent owner when no request agent is given", async () => {
     const config: OpenClawConfig = {
       agents: {
-        list: [
-          { id: "main", models: { "openai/gpt-owner": { agentRuntime: { id: "codex" } } } },
-          {
-            id: "worker",
-            default: true,
+        ownership: "explicit",
+        defaults: { systemAgent: { agentId: "worker" } },
+        entries: {
+          main: { models: { "openai/gpt-owner": { agentRuntime: { id: "codex" } } } },
+          worker: {
             models: { "openai/gpt-owner": { agentRuntime: { id: "openclaw" } } },
           },
-        ],
+        },
       },
     };
     const context = createModelsListTestContext({
-      agentId: "main",
+      agentId: "worker",
       cfg: config,
       catalog: [catalogEntry("gpt-owner", "openai-responses")],
+    });
+    const published = expectDefined(
+      await readPreparedCatalog(context, "worker"),
+      "Published catalog fixture must supply the system-agent owner",
+    );
+    const readPrepared = vi.fn(async () => published);
+    registerGatewayModelCatalogPrivateAccess(context.loadGatewayModelCatalogSnapshot, {
+      readPrepared,
+      loadDeferred: async () => {
+        throw new Error("Ordinary inventory acquired models");
+      },
     });
     const result = await buildModelsListResult({
       source: { kind: "gateway", context },
       params: { view: "all" },
     });
+    expect(readPrepared).toHaveBeenCalledExactlyOnceWith({ agentId: "worker" });
     expect(result.models).toEqual([
       expect.objectContaining({
         id: "gpt-owner",
         provider: "openai",
-        agentRuntime: MODEL_CODEX_RUNTIME,
+        agentRuntime: { ...IMPLICIT_OPENCLAW_RUNTIME, source: "model" },
       }),
     ]);
   });
 
   it("passes the resolved default agent to the published reader without acquisition", async () => {
-    const config: OpenClawConfig = { agents: { list: [{ id: "worker", default: true }] } };
+    const config: OpenClawConfig = { agents: { entries: { worker: {} } } };
     const context = createModelsListTestContext({ agentId: "worker", cfg: config, catalog: [] });
     const published = expectDefined(
       await readPreparedCatalog(context, "worker"),
@@ -109,7 +121,7 @@ describe("models.list OpenAI routes", () => {
 
   it("does not project another owner's catalog as an explicitly requested agent", async () => {
     const config: OpenClawConfig = {
-      agents: { list: [{ id: "main", default: true }, { id: "worker" }] },
+      agents: { entries: { main: {}, worker: {} } },
     };
     const context = createModelsListTestContext({
       agentId: "main",
@@ -125,13 +137,15 @@ describe("models.list OpenAI routes", () => {
     ).resolves.toEqual({ models: [] });
   });
 
-  it("accepts a canonical owner for a noncanonical explicit agent request", async () => {
+  it("prefers a noncanonical explicit agent request over the system-agent owner", async () => {
     const config: OpenClawConfig = {
       agents: {
-        list: [
-          { id: "main", default: true },
-          { id: "worker", models: { "openai/gpt-worker": { agentRuntime: { id: "openclaw" } } } },
-        ],
+        ownership: "explicit",
+        defaults: { systemAgent: { agentId: "main" } },
+        entries: {
+          main: {},
+          worker: { models: { "openai/gpt-worker": { agentRuntime: { id: "openclaw" } } } },
+        },
       },
     };
     const context = createModelsListTestContext({

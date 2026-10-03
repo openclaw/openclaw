@@ -66,11 +66,12 @@ export function readGatewayOwnerLeaseFromDatabase(
   return {
     ...processOwner,
     owner: row.owner,
+    heartbeatAt: row.heartbeatAt ?? row.createdAt,
     port: payload.port,
     mode: payload.mode,
     supervisor,
     // Expiry cannot revoke the separate physical Gateway coordinator.
-    state: readStateLeaseProcessOwnerStatus(processOwner),
+    state: readStateLeaseProcessOwnerStatus(processOwner, row.heartbeatAt ?? row.createdAt),
     expired: row.expiresAt === null || row.expiresAt <= Date.now(),
   };
 }

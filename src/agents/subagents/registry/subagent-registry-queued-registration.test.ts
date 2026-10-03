@@ -1,5 +1,7 @@
+import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { resolveStateDir } from "../../../config/paths.js";
 import { replaceSessionEntry } from "../../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import {
@@ -190,19 +192,20 @@ it("rejects and terminalizes an intent superseded while descriptor admission wai
   });
 });
 
-it.each(["recorded child", "configured default"] as const)(
+it.each(["recorded child", "persisted store owner"] as const)(
   "terminalizes a committed intent after a definite descriptor refusal using its %s usage",
   async (owner) => {
     await withQueuedRegistrationFixture(async (f) => {
       const recordedChild = owner === "recorded child";
-      const cfg: OpenClawConfig = {
+      const configuredStoreOwner = recordedChild ? "main" : "research";
+      const cfg = {
+        session: { store: path.join(resolveStateDir(), "queued-registration-sessions.sqlite") },
         agents: {
-          list: [
-            { id: "main", default: recordedChild },
-            { id: "research", default: !recordedChild },
-          ],
+          ownership: "explicit",
+          entries: { main: {}, research: {} },
+          defaults: { sessionStore: { agentId: configuredStoreOwner } },
         },
-      };
+      } satisfies OpenClawConfig;
       f.options.getRuntimeConfig = () => cfg;
       f.registration.childSessionKey = "global";
       f.registration.childAgentId = recordedChild ? "research" : undefined;
@@ -212,7 +215,12 @@ it.each(["recorded child", "configured default"] as const)(
         ["research", 101, 103],
       ] as const) {
         await replaceSessionEntry(
-          { agentId, sessionKey: "global" },
+          {
+            agentId,
+            sessionKey: "global",
+            storePath: cfg.session.store,
+            defaultAgentId: configuredStoreOwner,
+          },
           {
             sessionId: `${agentId}-collector-session`,
             lifecycleRevision: `${agentId}-collector-lifecycle`,
