@@ -1,3 +1,4 @@
+import { MAX_NODE_BOOTSTRAP_TIMEOUT_MS } from "../gateway/worker-environments/bootstrap-timeouts.js";
 import type {
   DeviceBootstrapProfile,
   DeviceBootstrapProfileInput,
@@ -7,8 +8,19 @@ import type {
   DevicePairSetupCompletionRecord,
   PairedDevice,
 } from "./device-pairing.types.js";
+import type { SqliteWorkerCommand } from "./sqlite-worker-contract.js";
 
 export const DEVICE_BOOTSTRAP_TOKEN_TTL_MS = 10 * 60 * 1000;
+
+export function resolveDeviceBootstrapTokenExpiresAtMs(
+  record: Pick<DeviceBootstrapTokenRecord, "issuedAtMs" | "setupId" | "profile">,
+): number {
+  const ttlMs =
+    record.setupId && record.profile?.purpose === "cloud-worker"
+      ? MAX_NODE_BOOTSTRAP_TIMEOUT_MS
+      : DEVICE_BOOTSTRAP_TOKEN_TTL_MS;
+  return record.issuedAtMs + ttlMs;
+}
 
 export type BoundDeviceBootstrapContext = {
   profile: DeviceBootstrapProfile;
@@ -22,9 +34,18 @@ export type DeviceBootstrapBoundContextInput = {
   nowMs: number;
 };
 
+export type CloudWorkerSetupMutationAdmission = {
+  environmentId: string;
+  setupId: string;
+  credentialDigest: string;
+  provisionOperationId: string;
+  ownerEpoch: number;
+};
+
 export type DeviceBootstrapMutationAdmission =
-  | { kind: "bootstrap.consume"; pairedDevice: PairedDevice | null; issuedAtMs: number }
-  | { kind: "bootstrap.token"; issuedAtMs: number };
+  | { kind: "bootstrap.consume"; pairedDevice: PairedDevice | null; expiresAtMs: number }
+  | { kind: "bootstrap.token"; expiresAtMs: number }
+  | ({ kind: "bootstrap.cloudWorkerSetup" } & CloudWorkerSetupMutationAdmission);
 
 export type DeviceBootstrapOperations = {
   "bootstrap.issue": {
@@ -78,9 +99,4 @@ export type DeviceBootstrapOperations = {
   };
 };
 
-export type DeviceBootstrapCommand = {
-  [Key in keyof DeviceBootstrapOperations]: {
-    type: Key;
-    input: DeviceBootstrapOperations[Key]["input"];
-  };
-}[keyof DeviceBootstrapOperations];
+export type DeviceBootstrapCommand = SqliteWorkerCommand<DeviceBootstrapOperations>;

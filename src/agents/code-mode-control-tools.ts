@@ -101,6 +101,10 @@ export function isCodeModeExecTool(tool: AnyAgentTool): boolean {
   );
 }
 
+export function isCodeModeExecToolKind(toolKind: unknown): boolean {
+  return toolKind === CODE_MODE_EXEC_TOOL_KIND;
+}
+
 export function resolveCodeModeExecToolInputKind(
   params: unknown,
 ): CodeModeExecToolInputKind | undefined {
@@ -216,8 +220,5 @@ export function reconcileCodeModeExecBeforeHookParams(params: {
   if (adjustedCodeChanged) {
     return { ...params.adjustedParams, command: adjustedCode };
   }
-  if (adjustedCommandChanged) {
-    return { ...params.adjustedParams, code: adjustedCommand };
-  }
-  return params.adjustedParams;
+  return { ...params.adjustedParams, code: adjustedCommand };
 }

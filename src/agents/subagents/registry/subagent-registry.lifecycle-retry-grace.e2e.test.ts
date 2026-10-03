@@ -239,15 +239,12 @@ describe("subagent registry lifecycle error grace", () => {
     }
   });
 
-  const {
-    flushAsync,
-    waitForCleanupHandledFalse,
-    waitForDeliveredCleanup,
-    waitForFrozenResult,
-    waitForFrozenResultText,
-  } = createLifecycleWaits(MAIN_REQUESTER_SESSION_KEY);
+  const { flushAsync, waitForDeliveredCleanup, waitForFrozenResult, waitForFrozenResultText } =
+    createLifecycleWaits(MAIN_REQUESTER_SESSION_KEY);
 
   const waitForAgentCallCount = (count: number) => agentCallWaits.waitForAgentCallCount(count);
+  const waitForCleanupHandledFalse = (runId: string) =>
+    agentCallWaits.waitForCleanupHandledFalse(runId);
 
   function registerCompletionRun(
     runId: string,
@@ -380,12 +377,12 @@ describe("subagent registry lifecycle error grace", () => {
     const onYield = vi.fn();
     const yieldTool = createSessionsYieldTool({
       sessionId: "sess-main",
-      claimYield: () =>
-        mod.markRequesterTurnYielded({
+      claimYield: async () =>
+        (await mod.markRequesterTurnYielded({
           requesterSessionKey: MAIN_REQUESTER_SESSION_KEY,
           requesterAgentId: "main",
           requesterTurnRunId,
-        }) > 0,
+        })) > 0,
       onYield,
     });
     const yieldResult = await yieldTool.execute("yield-visible-child", {
@@ -453,6 +450,7 @@ describe("subagent registry lifecycle error grace", () => {
       endedAt: Date.now(),
       terminalReply: { disposition: "visible", text: "child complete" },
     });
+    await waitForAgentCallCount(1);
     await waitForDeliveredCleanup(runId, { allowPendingRequesterSettleWake: true });
 
     const completed = mod
@@ -464,7 +462,7 @@ describe("subagent registry lifecycle error grace", () => {
     });
     expect(getAgentCalls()).toHaveLength(1);
     expect(
-      mod.markRequesterTurnYielded({
+      await mod.markRequesterTurnYielded({
         requesterSessionKey: MAIN_REQUESTER_SESSION_KEY,
         requesterTurnRunId,
       }),
@@ -526,7 +524,7 @@ describe("subagent registry lifecycle error grace", () => {
     betaBeforeYield.delivery = { ...betaBeforeYield.delivery, status: "in_progress" };
 
     expect(
-      mod.markRequesterTurnYielded({
+      await mod.markRequesterTurnYielded({
         requesterSessionKey: MAIN_REQUESTER_SESSION_KEY,
         requesterTurnRunId,
       }),
@@ -612,13 +610,13 @@ describe("subagent registry lifecycle error grace", () => {
     setAssistantOutput(liveChildSessionKey, "live child complete", "run-frozen-live-child");
 
     expect(
-      mod.markRequesterTurnYielded({
+      await mod.markRequesterTurnYielded({
         requesterSessionKey: MAIN_REQUESTER_SESSION_KEY,
         requesterTurnRunId,
       }),
     ).toBe(1);
     expect(
-      mod.settleRequesterAfterSessionSpawns({
+      await mod.settleRequesterAfterSessionSpawns({
         requesterSessionKey: MAIN_REQUESTER_SESSION_KEY,
         requesterTurnRunId,
         requesterYielded: true,
@@ -636,6 +634,7 @@ describe("subagent registry lifecycle error grace", () => {
     }
     expect(
       await maybeWakeRequesterAfterAllChildrenSettled({
+        isSourceCurrent: () => true,
         requesterSessionKey: MAIN_REQUESTER_SESSION_KEY,
         settledEntry: liveChild,
         transitionBatch: noop,
@@ -867,6 +866,7 @@ describe("subagent registry lifecycle error grace", () => {
       },
     });
     await flushAsync();
+    await waitForAgentCallCount(1);
     await waitForCleanupHandledFalse("run-refresh-silent");
     await waitForFrozenResultText("run-refresh-silent", "All work complete, final summary");
 
@@ -909,6 +909,7 @@ describe("subagent registry lifecycle error grace", () => {
 
     emitLifecycleEvent("run-capped", { phase: "end", endedAt: Date.now() });
     await flushAsync();
+    await agentCallWaits.settle();
 
     const run = await waitForFrozenResult("run-capped", (resultText) =>
       resultText.includes("[truncated: frozen completion output exceeded 100KB"),
@@ -949,6 +950,7 @@ describe("subagent registry lifecycle error grace", () => {
 
     await vi.advanceTimersByTimeAsync(15_000);
     await flushAsync();
+    await agentCallWaits.settle();
 
     const run = mod
       .listSubagentRunsForRequester(MAIN_REQUESTER_SESSION_KEY)

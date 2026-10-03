@@ -11,6 +11,7 @@ import {
 import { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
 import {
   ACTIVITY_SUMMARY_FORMAT_REVISION,
+  ACTIVITY_SUMMARY_TEXT_FORMAT_REVISION,
   readSessionActivitySummary,
   type SessionActivitySummary,
 } from "../config/sessions/activity-summary.js";
@@ -25,6 +26,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getAgentRunContext } from "../infra/agent-run-registry.js";
 import { computeBackoff } from "../infra/backoff.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import type { GatewayScheduledJob, GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { redactToolPayloadText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -48,6 +50,7 @@ import {
   setSessionActivitySummaryState,
   type ActivitySummaryTarget,
 } from "./session-activity-summary-state.js";
+import { readSessionListSelectionFacts } from "./session-list-target.js";
 import type { SessionObserverEvent } from "./session-observer-contract.js";
 import { defaultCompleteModel, defaultPrepareModel } from "./session-observer-model.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
@@ -62,6 +65,7 @@ const RETRY_BACKOFF = { initialMs: 30_000, maxMs: RETRY_MS, factor: 2, jitter: 0
 const MAX_CALLS_PER_HOUR = 40;
 const HOUR_MS = 3_600_000;
 const MODEL_TIMEOUT_MS = 20_000;
+const OMISSION_NOTICE = "(Some oversized messages were omitted.)";
 const SYSTEM_PROMPT = [
   "Write an Activity recap for someone scanning their tasks: what was done here, and where it stands now.",
   "Use one to three short, plain-language sentences (at most 450 characters). Lead with the concrete result or work performed; finish with whether it is done, still in progress, blocked, or waiting, only as supported by the conversation.",
@@ -83,7 +87,6 @@ type Tracked = ActivitySummaryTarget & {
   failures: number;
   controller?: AbortController;
   inFlight: boolean;
-  queued: boolean;
   dirty: boolean;
   immediate: boolean;
   lastStartedAt: number;
@@ -106,6 +109,7 @@ export type SessionActivitySummaryService = {
 };
 
 export function createSessionActivitySummaries(deps: {
+  scheduler: GatewayScheduler;
   getConfig: () => OpenClawConfig;
   getSessionRowProjection?: () => SessionRowProjection | undefined;
   onChanged: (target: ActivitySummaryTarget & { storePath: string }) => void;
@@ -116,11 +120,10 @@ export function createSessionActivitySummaries(deps: {
   const queue: Tracked[] = [];
   const running = new Set<Promise<void>>();
   const modelBackoffs = new Map<string, { until: number; failures: number }>();
-  let pumpTimer: ReturnType<typeof setTimeout> | undefined;
+  let pumpJob: GatewayScheduledJob | undefined;
   const owner = Symbol("activity-summary-owner");
-  let active = 0;
   let disposed = false;
-  const now = () => Date.now();
+  const now = () => deps.scheduler.now();
   const modelRef = (target: ActivitySummaryTarget) =>
     resolveUtilityModelRefForAgent({ cfg: deps.getConfig(), agentId: target.agentId });
   const scope = (target: ActivitySummaryTarget) => ({
@@ -188,7 +191,7 @@ export function createSessionActivitySummaries(deps: {
       entry.initializationPending ||
       entry.incognito ||
       entry.heartbeatIsolatedBaseSessionKey ||
-      entry.spawnedBy
+      readSessionListSelectionFacts(target.key, entry).isSubagent
     ) {
       return undefined;
     }
@@ -209,7 +212,7 @@ export function createSessionActivitySummaries(deps: {
     }
     if (states.size >= MAX_TRACKED) {
       const evictable = [...states.values()].find(
-        (candidate) => !candidate.inFlight && !candidate.queued,
+        (candidate) => !candidate.inFlight && !queue.includes(candidate),
       );
       if (!evictable) {
         return undefined;
@@ -225,7 +228,6 @@ export function createSessionActivitySummaries(deps: {
       retryPending: false,
       failures: 0,
       inFlight: false,
-      queued: false,
       dirty: false,
       immediate: false,
       lastStartedAt: 0,
@@ -257,6 +259,7 @@ export function createSessionActivitySummaries(deps: {
     if (
       !entry ||
       entry.initializationPending ||
+      readSessionListSelectionFacts(state.key, entry).isSubagent ||
       entry.sessionId !== state.sessionId ||
       entry.lifecycleRevision !== state.lifecycleRevision
     ) {
@@ -277,7 +280,7 @@ export function createSessionActivitySummaries(deps: {
     if (state.inFlight) {
       return;
     }
-    if (!state.queued && !state.retryPending && state.retryAt <= now()) {
+    if (!queue.includes(state) && !state.retryPending && state.retryAt <= now()) {
       state.retryAt = 0;
       state.failures = 0;
     }
@@ -298,8 +301,7 @@ export function createSessionActivitySummaries(deps: {
     publish(state, "updating");
     // Every admitted session occupies at most one queue entry. The tracked-session
     // bound also bounds pending work, so a full Activity page cannot overflow it.
-    if (!state.queued) {
-      state.queued = true;
+    if (!queue.includes(state)) {
       queue.push(state);
     }
     pump();
@@ -335,10 +337,12 @@ export function createSessionActivitySummaries(deps: {
         return;
       }
       const { previous, snapshot, watermark, covered, page, omitted, notes } = source;
-      const restyle = previous && previous.formatRevision !== ACTIVITY_SUMMARY_FORMAT_REVISION;
+      const restyle =
+        previous && (previous.formatRevision ?? 1) < ACTIVITY_SUMMARY_TEXT_FORMAT_REVISION;
       if (
         previous &&
-        !restyle &&
+        previous.formatRevision === ACTIVITY_SUMMARY_FORMAT_REVISION &&
+        previous.omittedContent === omitted &&
         previous.coveredMessages === snapshot.totalMessages &&
         previous.maxSeq === watermark.maxSeq &&
         previous.generation === watermark.generation
@@ -347,6 +351,9 @@ export function createSessionActivitySummaries(deps: {
         return;
       }
       let text = previous?.text ?? "";
+      if (text.endsWith(OMISSION_NOTICE)) {
+        text = text.slice(0, -OMISSION_NOTICE.length).trimEnd();
+      }
       if (notes.length || (restyle && text)) {
         state.lastStartedAt = now();
         state.calls += 1;
@@ -411,9 +418,8 @@ export function createSessionActivitySummaries(deps: {
         }
       }
       assertCurrent(state, ref);
-      if (omitted && text && !text.endsWith("(Some oversized messages were omitted.)")) {
-        const omissionNotice = " (Some oversized messages were omitted.)";
-        text = truncateUtf16Safe(text, 450 - omissionNotice.length) + omissionNotice;
+      if (omitted && text && !text.endsWith(OMISSION_NOTICE)) {
+        text = `${truncateUtf16Safe(text, 449 - OMISSION_NOTICE.length)} ${OMISSION_NOTICE}`;
       }
       const summary: SessionActivitySummary = {
         version: 1,
@@ -481,7 +487,6 @@ export function createSessionActivitySummaries(deps: {
         }
         const failure = resolveModelFallbackError(error);
         const reason = failure.kind === "failover" ? failure.error.reason : undefined;
-        const message = formatErrorMessage(error);
         const transient =
           (reason === "overloaded" ||
             reason === "server_error" ||
@@ -517,7 +522,7 @@ export function createSessionActivitySummaries(deps: {
         publish(state, state.retryPending ? "updating" : "unavailable");
         log.debug("Activity recap deferred", {
           agentId: state.agentId,
-          error: message,
+          error: formatErrorMessage(error),
           retryScheduled: state.retryPending,
         });
       }
@@ -533,12 +538,11 @@ export function createSessionActivitySummaries(deps: {
     }
   };
   const pump = () => {
-    clearTimeout(pumpTimer);
-    pumpTimer = undefined;
-    if (disposed) {
+    pumpJob?.cancel();
+    if (disposed || deps.scheduler.signal.aborted) {
       return;
     }
-    while (active < 2 && queue.length) {
+    while (running.size < 2 && queue.length) {
       let earliest = Infinity;
       const index = queue.findIndex((candidate) => {
         if (!current(candidate)) {
@@ -551,33 +555,38 @@ export function createSessionActivitySummaries(deps: {
       });
       if (index < 0) {
         if (Number.isFinite(earliest)) {
-          pumpTimer = setTimeout(pump, Math.min(earliest - now(), HOUR_MS));
-          pumpTimer.unref?.();
+          pumpJob = deps.scheduler.schedule({
+            id: "session-activity-summary-pump",
+            atMs: earliest,
+            run: async () => {
+              pump();
+              while (running.size > 0) {
+                await Promise.all(running);
+              }
+            },
+          });
         }
         return;
       }
       const state = queue.splice(index, 1)[0]!;
-      state.queued = false;
       if (!current(state)) {
         continue;
       }
-      active += 1;
       const work = run(state)
         .catch((error: unknown) => {
           log.debug("Activity recap background work failed", { error: formatErrorMessage(error) });
         })
         .finally(() => {
-          active -= 1;
           running.delete(work);
           pump();
         });
       running.add(work);
     }
   };
-  const request = (target: ActivitySummaryTarget, immediate: boolean) => {
+  const request = (target: ActivitySummaryTarget) => {
     const state = admit(target);
     if (state) {
-      schedule(state, immediate);
+      schedule(state, true);
     }
     return state;
   };
@@ -608,7 +617,7 @@ export function createSessionActivitySummaries(deps: {
       if (isCronSessionKey(target.key)) {
         return { state: "unavailable" };
       }
-      const state = request(target, true);
+      const state = request(target);
       const projected = projectSessionActivitySummary({
         ...target,
         cfg: deps.getConfig(),
@@ -652,7 +661,7 @@ export function createSessionActivitySummaries(deps: {
         event.agentId ?? runContext?.agentId,
       );
       if (target) {
-        request(target, true);
+        request(target);
       }
     },
     handleLifecycle(event) {
@@ -661,12 +670,12 @@ export function createSessionActivitySummaries(deps: {
       }
       const target = eventTarget(event.sessionKey, event.agentId);
       if (target) {
-        request(target, true);
+        request(target);
       }
     },
     async dispose() {
       disposed = true;
-      clearTimeout(pumpTimer);
+      pumpJob?.cancel();
       modelBackoffs.clear();
       unsubscribeIdentity();
       for (const state of states.values()) {

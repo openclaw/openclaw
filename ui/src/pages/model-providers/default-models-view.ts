@@ -1,6 +1,7 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { splitTrailingAuthProfile } from "../../../../src/agents/model-ref-profile.js";
 import { BASE_THINKING_LEVELS } from "../../../../src/auto-reply/thinking.shared.js";
+import { dedupeByKey } from "../../../../src/shared/dedupe-by-key.js";
 import { formatFastModeValue } from "../../../../src/shared/fast-mode.js";
 import type { FastMode, ModelAuthStatusProvider, ModelAuthStatusResult } from "../../api/types.ts";
 import {
@@ -66,23 +67,6 @@ const FAST_MODE_HELP_ID = "model-providers-fast-mode-help";
 const THINKING_LEVELS = BASE_THINKING_LEVELS.filter((level) => level !== "minimal");
 const THINKING_LEVEL_SET = new Set<string>(THINKING_LEVELS);
 
-function modelOptions(
-  models: ModelPickerEntry[],
-  authProviders: ReadonlyMap<string, ModelAuthStatusProvider>,
-): ModelPickerOption[] {
-  const seen = new Set<string>();
-  const options: ModelPickerOption[] = [];
-  for (const model of models) {
-    const ref = modelCatalogRef(model);
-    if (seen.has(ref)) {
-      continue;
-    }
-    seen.add(ref);
-    options.push(modelOption(model, authProviders));
-  }
-  return options;
-}
-
 function modelOption(
   model: ModelPickerEntry,
   authProviders: ReadonlyMap<string, ModelAuthStatusProvider>,
@@ -135,8 +119,8 @@ function renderHelpTitle(params: {
   `;
 }
 
-function fastModeOptionValue(value: "auto" | "on" | "off"): FastMode {
-  return value === "auto" ? "auto" : value === "on";
+function fastModeOptionValue(value: ReturnType<typeof formatFastModeValue>): FastMode {
+  return value === "auto" || value === "ultrafast" ? value : value === "on";
 }
 
 // Discovery progress does not change the saved selection or disable known models.
@@ -184,7 +168,9 @@ export function renderDefaultModels(props: DefaultModelsViewProps) {
       provider,
     ]),
   );
-  const options = modelOptions(props.models, authProviders);
+  const options = dedupeByKey(props.models, modelCatalogRef).map((model) =>
+    modelOption(model, authProviders),
+  );
   const automaticRef = props.automaticUtilityModel;
   const automaticBaseRef = automaticRef ? splitTrailingAuthProfile(automaticRef).model : "";
   const automaticEntry = props.models.find((model) => modelCatalogRef(model) === automaticBaseRef);
@@ -341,7 +327,7 @@ export function renderDefaultModels(props: DefaultModelsViewProps) {
           `,
         }),
         control: html`
-          ${renderSettingsSegmented<"" | "auto" | "on" | "off">({
+          ${renderSettingsSegmented<"" | ReturnType<typeof formatFastModeValue>>({
             value: fastMode,
             ariaLabel: t("quickSettings.model.fastMode"),
             options: [

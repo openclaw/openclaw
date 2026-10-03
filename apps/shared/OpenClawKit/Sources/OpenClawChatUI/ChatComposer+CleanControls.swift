@@ -11,7 +11,7 @@ extension OpenClawChatComposer {
         }
         .buttonStyle(.plain)
         .controlSize(.small)
-        .help("Add Attachment")
+        .help("Add attachment")
         .accessibilityLabel("Attachments")
         .accessibilityIdentifier("chat-attachment-picker")
         .disabled(!self.isAttachmentInputEnabled)
@@ -55,7 +55,7 @@ extension OpenClawChatComposer {
             Button {
                 self.pickFilesMac()
             } label: {
-                Label("Add Attachment", systemImage: "paperclip")
+                Label("Attach…", systemImage: "paperclip")
             }
             .disabled(!self.isAttachmentInputEnabled)
             Divider()

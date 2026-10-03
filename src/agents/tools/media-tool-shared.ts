@@ -44,6 +44,7 @@ import {
 } from "./common.js";
 import type { decodeDataUrl } from "./image-tool.helpers.js";
 import {
+  capabilityAuthOperation,
   getCurrentCapabilityMetadataSnapshot,
   hasSnapshotCapabilityAvailability,
 } from "./manifest-capability-availability.js";
@@ -70,11 +71,6 @@ type TextToolResult = {
 };
 
 type ParseGenerationModelRef = (raw: string | undefined) => CapabilityModelRef | null;
-
-type TaskRunDetailHandle = {
-  taskId: string;
-  runId: string;
-};
 
 export const REMOTE_MEDIA_READ_IDLE_TIMEOUT_MS = 120_000;
 
@@ -199,12 +195,8 @@ function resolveCapabilityModelCandidatesForTool(params: {
       !modelId ||
       providerDefaults.has(providerId) ||
       !isCapabilityProviderConfigured({
-        providers: params.providers,
+        ...params,
         provider,
-        cfg: params.cfg,
-        workspaceDir: params.workspaceDir,
-        agentDir: params.agentDir,
-        authStore: params.authStore,
       })
     ) {
       continue;
@@ -230,17 +222,7 @@ function resolveCapabilityModelCandidatesForTool(params: {
     ...providerIds.filter(matchesPrimaryProvider),
     ...providerIds.filter((providerId) => !matchesPrimaryProvider(providerId)),
   ];
-  const orderedRefs: string[] = [];
-  const seen = new Set<string>();
-  for (const providerId of orderedProviders) {
-    const entry = providerDefaults.get(providerId);
-    if (!entry || seen.has(entry.ref)) {
-      continue;
-    }
-    seen.add(entry.ref);
-    orderedRefs.push(entry.ref);
-  }
-  return orderedRefs;
+  return uniqueStrings(orderedProviders.flatMap((id) => providerDefaults.get(id)?.ref ?? []));
 }
 
 /**
@@ -264,32 +246,12 @@ export function resolveCapabilityModelConfigForTool(params: {
   }
   const providers = typeof params.providers === "function" ? params.providers() : params.providers;
   return buildToolModelConfigFromCandidates({
+    ...params,
     explicit,
-    cfg: params.cfg,
-    workspaceDir: params.workspaceDir,
-    agentDir: params.agentDir,
-    authStore: params.authStore,
-    candidates: resolveCapabilityModelCandidatesForTool({
-      cfg: params.cfg,
-      workspaceDir: params.workspaceDir,
-      agentDir: params.agentDir,
-      authStore: params.authStore,
-      providers,
-    }),
+    candidates: resolveCapabilityModelCandidatesForTool({ ...params, providers }),
     isProviderConfigured: (providerId) =>
-      isCapabilityProviderConfigured({
-        providers,
-        providerId,
-        cfg: params.cfg,
-        workspaceDir: params.workspaceDir,
-        agentDir: params.agentDir,
-        authStore: params.authStore,
-      }),
+      isCapabilityProviderConfigured({ ...params, providers, providerId }),
   });
-}
-
-export function hasExplicitMediaModel(modelConfig?: AgentModelConfig): boolean {
-  return hasToolModelConfig(coerceToolModelConfig(modelConfig));
 }
 
 export function hasGenerationToolAvailability(params: {
@@ -310,14 +272,7 @@ export function hasGenerationToolAvailability(params: {
   const providers = typeof params.providers === "function" ? params.providers() : params.providers;
   if (providers) {
     return providers.some((provider) =>
-      isCapabilityProviderConfigured({
-        providers,
-        provider,
-        cfg: params.cfg,
-        workspaceDir: params.workspaceDir,
-        agentDir: params.agentDir,
-        authStore: params.authStore,
-      }),
+      isCapabilityProviderConfigured({ ...params, providers, provider }),
     );
   }
   const snapshot =
@@ -350,6 +305,7 @@ export function hasGenerationToolAvailability(params: {
       workspaceDir: params.workspaceDir,
       agentDir: params.agentDir,
       authStore: params.authStore,
+      capability: capabilityAuthOperation(params.providerKey),
     }),
   );
 }
@@ -412,46 +368,28 @@ export function normalizeMediaReferenceList(candidates: string[], dedupe = true)
   return deduped;
 }
 
-export function buildMediaReferenceDetails<T extends { rewrittenFrom?: string }>(params: {
-  entries: readonly T[];
-  singleKey: string;
-  pluralKey: string;
-  getResolvedInput: (entry: T) => string | undefined;
-  singleRewriteKey?: string;
-}): Record<string, unknown> {
-  if (params.entries.length === 1) {
-    const entry = params.entries[0];
-    if (!entry) {
-      return {};
-    }
-    const rewriteKey = params.singleRewriteKey ?? "rewrittenFrom";
+export function buildMediaReferenceDetails(
+  entries: readonly { resolvedInput: string; rewrittenFrom?: string }[],
+  kind: "image" | "video" | "pdf",
+  options?: { includeEmpty?: boolean; singleRewriteKey?: string },
+): Record<string, unknown> {
+  const single = entries.length === 1 ? entries[0] : undefined;
+  if (single) {
+    const rewriteKey = options?.singleRewriteKey ?? "rewrittenFrom";
     return {
-      [params.singleKey]: params.getResolvedInput(entry),
-      ...(entry.rewrittenFrom ? { [rewriteKey]: entry.rewrittenFrom } : {}),
+      [kind]: single.resolvedInput,
+      ...(single.rewrittenFrom ? { [rewriteKey]: single.rewrittenFrom } : {}),
     };
   }
-  if (params.entries.length > 1) {
+  if (entries.length > 1 || options?.includeEmpty) {
     return {
-      [params.pluralKey]: params.entries.map((entry) => ({
-        [params.singleKey]: params.getResolvedInput(entry),
+      [`${kind}s`]: entries.map((entry) => ({
+        [kind]: entry.resolvedInput,
         ...(entry.rewrittenFrom ? { rewrittenFrom: entry.rewrittenFrom } : {}),
       })),
     };
   }
   return {};
-}
-
-export function buildTaskRunDetails(
-  handle: TaskRunDetailHandle | null | undefined,
-): Record<string, unknown> {
-  return handle
-    ? {
-        task: {
-          taskId: handle.taskId,
-          runId: handle.runId,
-        },
-      }
-    : {};
 }
 
 export async function resolveMediaToolReferenceAccess(params: {

@@ -143,15 +143,14 @@ export async function handleFeishuCommentEvent(
     }
     effectiveCfg = currentCfg;
   }
-  let route = core.channel.routing.resolveAgentRoute({
-    cfg: effectiveCfg,
-    channel: "feishu",
-    accountId: account.accountId,
-    peer: {
-      kind: "direct",
-      id: turn.senderId,
-    },
-  });
+  const resolveRoute = (cfg: ClawdbotConfig) =>
+    core.channel.routing.resolveAgentRoute({
+      cfg,
+      channel: "feishu",
+      accountId: account.accountId,
+      peer: { kind: "direct", id: turn.senderId },
+    });
+  let route = resolveRoute(effectiveCfg);
   if (route.matchedBy === "default") {
     const dynamicResult = await maybeCreateDynamicAgent({
       cfg: effectiveCfg,
@@ -177,15 +176,7 @@ export async function handleFeishuCommentEvent(
         return;
       }
       effectiveCfg = dynamicResult.updatedCfg;
-      route = core.channel.routing.resolveAgentRoute({
-        cfg: dynamicResult.updatedCfg,
-        channel: "feishu",
-        accountId: account.accountId,
-        peer: {
-          kind: "direct",
-          id: turn.senderId,
-        },
-      });
+      route = resolveRoute(dynamicResult.updatedCfg);
       if (dynamicResult.created) {
         log(
           `feishu[${account.accountId}]: dynamic agent created for comment flow, route=${route.sessionKey}`,

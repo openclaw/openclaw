@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { withTestDir } from "../test-helpers/temp-dir.js";
 import { createDoctorPrompter, type DoctorPrompter } from "./doctor-prompter.js";
 
 const note = vi.hoisted(() => vi.fn());
@@ -13,10 +14,47 @@ vi.mock("../../packages/terminal-core/src/note.js", () => ({
 }));
 
 import {
+  collectWorkspaceBackupTip,
   maybeRepairWorkspaceMemoryHealth,
   noteWorkspaceMemoryHealth,
   shouldSuggestMemorySystem,
 } from "./doctor-workspace.js";
+
+const WORKSPACE_BACKUP_TIP =
+  "- Tip: back up the agent workspace in a private git repo; keep ~/.openclaw out of git (credentials, sessions). Details: /concepts/agent-workspace#git-backup-recommended-private";
+
+describe("workspace backup tip", () => {
+  it("recognizes direct, deeply nested, and symlinked Git workspaces without duplicate tips", async () => {
+    await withTestDir({ prefix: "openclaw-doctor-workspace-git-" }, async (tempDir) => {
+      const repoRoot = path.join(tempDir, "repo");
+      const nestedWorkspace = path.join(repoRoot, "agents", "direct");
+      const deeplyNestedWorkspace = path.join(
+        repoRoot,
+        ...Array.from({ length: 12 }, (_, index) => `workspace-level-${index}`),
+      );
+      const linkedWorkspace = path.join(tempDir, "linked-workspace");
+      const outsideWorkspace = path.parse(tempDir).root;
+      const missingWorkspace = path.join(tempDir, "missing");
+      await fs.mkdir(path.join(repoRoot, ".git"), { recursive: true });
+      await fs.mkdir(nestedWorkspace, { recursive: true });
+      await fs.mkdir(deeplyNestedWorkspace, { recursive: true });
+      await fs.symlink(
+        nestedWorkspace,
+        linkedWorkspace,
+        process.platform === "win32" ? "junction" : "dir",
+      );
+
+      expect(collectWorkspaceBackupTip(repoRoot)).toBeNull();
+      expect(
+        [nestedWorkspace, deeplyNestedWorkspace, linkedWorkspace]
+          .map((workspaceDir) => collectWorkspaceBackupTip(workspaceDir))
+          .filter((tip) => tip !== null),
+      ).toEqual([]);
+      expect(collectWorkspaceBackupTip(outsideWorkspace)).toBe(WORKSPACE_BACKUP_TIP);
+      expect(collectWorkspaceBackupTip(missingWorkspace)).toBeNull();
+    });
+  });
+});
 
 async function expectPathMissing(targetPath: string): Promise<void> {
   try {

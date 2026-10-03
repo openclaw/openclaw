@@ -111,6 +111,7 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
       isChild: Boolean(resolveSidebarSessionParentKey(row, new Set([mainSessionKey]))),
       pinned: row.pinned === true,
       pinnable,
+      snoozedUntil: row.snoozedUntil ?? null,
       unread: row.unread === true,
       hiddenFromInvolvingMe: row.hiddenFromInvolvingMe,
       archived: row.archived === true,
@@ -320,6 +321,14 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
           }
           break;
         }
+        case "snooze":
+          await operations.snoozeSessionWithUndo(host, session, action.snoozedUntil, scope);
+          break;
+        case "wake":
+          await operations.patchSession(host, session, { snoozedUntil: null }, scope, {
+            sessionScope: true,
+          });
+          break;
         case "toggle-archived":
           if (session.archived) {
             await operations.patchSession(host, session, { archived: false }, scope, {

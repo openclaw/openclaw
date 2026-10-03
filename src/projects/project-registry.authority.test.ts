@@ -56,16 +56,6 @@ vi.mock("../state/openclaw-state-db-cache.js", () => ({
 vi.mock("../state/openclaw-state-db-async-lifecycle.js", () => ({
   getOpenClawDatabaseMaintenanceScope: () => undefined,
 }));
-vi.mock("../infra/state-database-coordinator.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../infra/state-database-coordinator.js")>();
-  return {
-    StateDatabaseCoordinatorContentionError: actual.StateDatabaseCoordinatorContentionError,
-    captureStateDatabaseCoordinatorRuntime: () => ({
-      directory: "/synthetic-coordinator",
-      keepAlive: false,
-    }),
-  };
-});
 vi.mock("../state/openclaw-state-lease-storage.js", () => ({
   acquireLease: async () => ({ kind: "acquired", expiresAt: fixture.expiresAt }),
   prepareLeaseDatabase: fixture.forbiddenNative,
@@ -86,14 +76,6 @@ vi.mock("../state/openclaw-state-lease-storage.js", () => ({
     fixture.release();
   },
   releaseOpenClawStateLease: fixture.release,
-}));
-vi.mock("../state/openclaw-state-lease-exclusion.js", () => ({
-  createOpenClawStateLeaseExclusion: () => ({
-    canRelease: () => true,
-    assertIfExcluded: () => false,
-    runWithOwnerScope: (run: () => Promise<unknown>) => run(),
-    drain: async () => {},
-  }),
 }));
 vi.mock("../state/openclaw-state-lease-heartbeat.js", () => ({
   startOpenClawStateLeaseHeartbeat: fixture.forbiddenNative,

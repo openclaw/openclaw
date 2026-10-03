@@ -9,7 +9,8 @@ import {
   type SessionUpstreamProbe,
 } from "openclaw/plugin-sdk/session-catalog";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { readPiSessionFileBaseline } from "./pi-session-store.js";
+import { safeParseJson } from "openclaw/plugin-sdk/text-utility-runtime";
+import { piMessageText, readPiSessionFileBaseline } from "./pi-session-store.js";
 
 const MAX_PI_UPSTREAM_SCAN_BYTES = 1024 * 1024;
 
@@ -26,35 +27,16 @@ function parseCompletePiRows(tail: Buffer): {
     }
     const line = tail.subarray(lineStart, index).toString("utf8").trim();
     if (line) {
-      try {
-        const value = JSON.parse(line) as unknown;
-        if (!isRecord(value)) {
-          break;
-        }
-        entries.push(value);
-      } catch {
+      const value = safeParseJson<unknown>(line);
+      if (!isRecord(value)) {
         break;
       }
+      entries.push(value);
     }
     classifiedBytes = index + 1;
     lineStart = index + 1;
   }
   return { entries, classifiedBytes };
-}
-
-function textFromContent(content: unknown): string | undefined {
-  if (typeof content === "string") {
-    return content;
-  }
-  if (!Array.isArray(content)) {
-    return undefined;
-  }
-  const text = content
-    .flatMap((part) =>
-      isRecord(part) && part.type === "text" && typeof part.text === "string" ? [part.text] : [],
-    )
-    .join("\n");
-  return text || undefined;
 }
 
 function readFilePath(probe: SessionUpstreamProbe): string | undefined {
@@ -135,7 +117,7 @@ async function checkPiSessionUpstreamActivity(
       if (entry.type !== "message" || !isRecord(entry.message) || entry.message.role !== "user") {
         continue;
       }
-      const text = textFromContent(entry.message.content);
+      const text = piMessageText(entry.message.content);
       if (!isExternalUserText(probe, text)) {
         continue;
       }

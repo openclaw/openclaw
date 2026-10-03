@@ -1,10 +1,10 @@
-/** Recovery helpers for stale ACP persistent session ids and early runtime exits. */
 import { resolveSessionIdentityFromMeta } from "@openclaw/acp-core/runtime/session-identity";
 import type { AcpRuntime } from "@openclaw/acp-core/runtime/types";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
 import type { AcpRuntimeError } from "../runtime/errors.js";
+import type { AcpSessionControlBinding } from "../runtime/session-control-owner.js";
 import type { ManagerRuntimeHandleCache } from "./manager.runtime-handle-cache.js";
 import {
   assertAcpRuntimeOwnerSupport,
@@ -17,23 +17,14 @@ import type {
   WriteManagerSessionMeta,
 } from "./manager.types.js";
 
-/** Detects acpx exits that are safe to retry with a fresh runtime handle. */
 export function isRecoverableManagerAcpxExitError(message: string): boolean {
   return /^acpx exited with (code \d+|signal [a-z0-9]+)/i.test(message.trim());
 }
 
-/** acpx detail code for a persistent session that can no longer be resumed and must be re-created. */
 const SESSION_RESUME_REQUIRED_DETAIL_CODE = "SESSION_RESUME_REQUIRED";
 
-/**
- * Detects a "persistent session can no longer be resumed" failure by acpx's
- * structured detail code, on the error itself or anywhere in its cause chain.
- * Keying on the structured code rather than the human reason text is what makes
- * recovery independent of the backend's wording — Claude reports "Resource not
- * found", Kiro reports "Internal error" (RequestError -32603), but both wrap a
- * SessionResumeRequiredError; matching the reason text missed Kiro and left the
- * thread permanently stuck (#87830).
- */
+// Backends wrap missing-session errors differently; the structured cause code
+// preserves recovery across their wording (#87830).
 function isRecoverableMissingManagerPersistentSessionError(error: AcpRuntimeError): boolean {
   let current: unknown = error;
   // Depth-capped to defend against self-referential cause cycles.
@@ -126,6 +117,8 @@ export async function prepareFreshManagerRuntimeHandleRetry(params: {
 }
 
 async function clearPersistedRuntimeResumeState(params: {
+  assertCommitAllowed?: () => void;
+  expectedControlBinding?: AcpSessionControlBinding;
   cfg: OpenClawConfig;
   sessionKey: string;
   agentId: string;
@@ -135,6 +128,8 @@ async function clearPersistedRuntimeResumeState(params: {
 }): Promise<boolean> {
   const now = Date.now();
   const updated = await params.writeSessionMeta({
+    assertCommitAllowed: params.assertCommitAllowed,
+    expectedControlBinding: params.expectedControlBinding,
     cfg: params.cfg,
     sessionKey: params.sessionKey,
     agentId: params.agentId,
@@ -192,6 +187,8 @@ async function clearPersistedRuntimeResumeState(params: {
 
 /** Clears persisted runtime resume identifiers while preserving the manager session shell. */
 export async function discardPersistedManagerRuntimeState(params: {
+  assertCommitAllowed?: () => void;
+  expectedControlBinding?: AcpSessionControlBinding;
   cfg: OpenClawConfig;
   sessionKey: string;
   agentId: string;
@@ -201,12 +198,7 @@ export async function discardPersistedManagerRuntimeState(params: {
   await clearPersistedRuntimeResumeState({ ...params, discardPersistentState: true });
 }
 
-/**
- * Best-effort fresh-session preparation against a maybe-missing backend.
- * Every non-applied path records why it was skipped: a reset that silently
- * skips this step looks successful while the backend keeps resuming the old
- * conversation, which is the worst failure mode for session resets.
- */
+/** Every skipped reset records why, so retained backend history is visible to the caller. */
 export async function tryPrepareFreshManagerRuntimeSession(params: {
   deps: Pick<AcpSessionManagerDeps, "getRuntimeBackend">;
   cfg: OpenClawConfig;

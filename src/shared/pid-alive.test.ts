@@ -136,6 +136,36 @@ describe.each(["success", "EPERM"])("Linux process liveness (probe=%s)", (probe)
   );
 });
 
+describe.each([
+  { name: "isPidAlive", probe: isPidAlive, dead: false, live: true },
+  { name: "isPidDefinitelyDead", probe: isPidDefinitelyDead, dead: true, live: false },
+])("$name after a failed Linux status read", ({ probe, dead, live }) => {
+  it.each(["ESRCH", "EPERM", "success"] as const)(
+    "requires ESRCH to confirm exit (fresh probe=%s)",
+    (result) => {
+      let statusRead = false;
+      const originalReadFileSync = fsSync.readFileSync;
+      vi.spyOn(fsSync, "readFileSync").mockImplementation((...args) => {
+        if (String(args[0]) !== "/proc/42/status") {
+          return originalReadFileSync(...args);
+        }
+        statusRead = true;
+        throw Object.assign(new Error("process status unavailable"), { code: "ENOENT" });
+      });
+      vi.spyOn(process, "kill").mockImplementation(() => {
+        if (!statusRead || result === "success") {
+          return true;
+        }
+        throw Object.assign(new Error("process probe failed"), { code: result });
+      });
+
+      withMockedPlatform("linux", () => {
+        expect(probe(42)).toBe(result === "ESRCH" ? dead : live);
+      });
+    },
+  );
+});
+
 describe("process start times", () => {
   it("parses linux /proc stat start times and rejects malformed variants", async () => {
     const fakeStatPrefix = "42 (node) S 1 42 42 0 -1 4194304 12345 0 0 0 100 50 0 0 20 0 8 0 ";

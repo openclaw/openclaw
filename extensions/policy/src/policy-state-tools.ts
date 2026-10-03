@@ -1,12 +1,6 @@
-// Policy plugin AGENTS.md Tools-section evidence.
-import { COLLAPSE_HYPHENS, NON_SLUG_CHARS, TRIM_HYPHENS } from "./policy-state-types.js";
 import type { PolicyToolEvidence } from "./policy-state-types.js";
 
-export function scanPolicyTools(raw: string): Promise<readonly PolicyToolEvidence[]> {
-  return Promise.resolve(scanPolicyToolHeaders(raw));
-}
-
-function scanPolicyToolHeaders(raw: string): readonly PolicyToolEvidence[] {
+export function scanPolicyTools(raw: string): readonly PolicyToolEvidence[] {
   const section = markdownSectionLines(raw, "tools");
   if (section.length === 0) {
     return [];
@@ -63,19 +57,6 @@ function scanPolicyToolHeaders(raw: string): readonly PolicyToolEvidence[] {
     if (!id) {
       continue;
     }
-    const entry: {
-      id: string;
-      source: string;
-      line: number;
-      risk?: string;
-      sensitivity?: string;
-      owner?: string;
-      capabilities?: readonly string[];
-    } = {
-      id,
-      source: `oc://AGENTS.md/tools/${id}`,
-      line: section[index]?.line ?? index + 1,
-    };
     const metaLines = [match[2] ?? ""];
     for (let metaIndex = index + 1; metaIndex < section.length; metaIndex += 1) {
       const metaSectionLine = section[metaIndex];
@@ -95,19 +76,15 @@ function scanPolicyToolHeaders(raw: string): readonly PolicyToolEvidence[] {
     const sensitivity = /\bsensitivity\s*:\s*([a-z0-9_-]+)\b/i.exec(meta)?.[1]?.toLowerCase();
     const owner = /\bowner\s*:\s*([^\s#]+)\b/i.exec(meta)?.[1];
     const capabilities = capabilityTokensFromMetaLines(metaLines);
-    if (risk !== undefined) {
-      entry.risk = risk;
-    }
-    if (sensitivity !== undefined) {
-      entry.sensitivity = sensitivity;
-    }
-    if (owner !== undefined) {
-      entry.owner = owner;
-    }
-    if (capabilities.length > 0) {
-      entry.capabilities = capabilities;
-    }
-    tools.push(entry);
+    tools.push({
+      id,
+      source: `oc://AGENTS.md/tools/${id}`,
+      line: section[index]?.line ?? index + 1,
+      ...(risk === undefined ? {} : { risk }),
+      ...(sensitivity === undefined ? {} : { sensitivity }),
+      ...(owner === undefined ? {} : { owner }),
+      ...(capabilities.length === 0 ? {} : { capabilities }),
+    });
   }
   return tools;
 }
@@ -177,9 +154,9 @@ function slugify(text: string): string {
   return text
     .toLowerCase()
     .replace(/_/g, "-")
-    .replace(NON_SLUG_CHARS, "-")
-    .replace(COLLAPSE_HYPHENS, "-")
-    .replace(TRIM_HYPHENS, "");
+    .replace(/[^a-z0-9-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-+|-+$/g, "");
 }
 
 function riskFromMeta(meta: string): string | undefined {

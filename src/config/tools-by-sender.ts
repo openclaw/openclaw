@@ -111,39 +111,14 @@ function parseSenderPolicyKey(rawKey: string): ParsedSenderPolicyKey | undefined
     return { kind: "wildcard" };
   }
   const typed = parseToolsBySenderTypedKey(trimmed);
-  if (typed) {
-    const key = normalizeTypedSenderKey(typed.value, typed.type);
-    if (!key) {
-      return undefined;
-    }
-    return {
-      kind: "typed",
-      type: typed.type,
-      key,
-    };
+  if (!typed) {
+    // Untyped legacy keys match immutable sender IDs only.
+    warnLegacyToolsBySenderKey(trimmed);
   }
-
-  // Backward-compatible fallback: untyped keys now map to immutable sender IDs only.
-  warnLegacyToolsBySenderKey(trimmed);
-  const key = normalizeSenderKey(trimmed, { stripLeadingAt: true });
-  if (!key) {
-    return undefined;
-  }
-  return {
-    kind: "typed",
-    type: "id",
-    key,
-  };
-}
-
-function createSenderPolicyBuckets(): SenderPolicyBuckets {
-  return {
-    channel: new Map<string, GroupToolPolicyConfig>(),
-    id: new Map<string, GroupToolPolicyConfig>(),
-    e164: new Map<string, GroupToolPolicyConfig>(),
-    username: new Map<string, GroupToolPolicyConfig>(),
-    name: new Map<string, GroupToolPolicyConfig>(),
-  };
+  const key = typed
+    ? normalizeTypedSenderKey(typed.value, typed.type)
+    : normalizeSenderKey(trimmed, { stripLeadingAt: true });
+  return key ? { kind: "typed", type: typed?.type ?? "id", key } : undefined;
 }
 
 function resolveCompiledToolsBySenderPolicy(
@@ -158,7 +133,13 @@ function resolveCompiledToolsBySenderPolicy(
     return undefined;
   }
 
-  const buckets = createSenderPolicyBuckets();
+  const buckets: SenderPolicyBuckets = {
+    channel: new Map(),
+    id: new Map(),
+    e164: new Map(),
+    username: new Map(),
+    name: new Map(),
+  };
   let wildcard: GroupToolPolicyConfig | undefined;
   for (const [rawKey, policy] of entries) {
     if (!policy) {

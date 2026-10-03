@@ -74,11 +74,13 @@ describe("Codex plugin inventory", () => {
       appCacheKey: "runtime",
       configCwd: "/repo/project",
       metadataCache,
-      readPluginDetails: false,
       request: async (method: string, requestParams?: unknown) => {
         calls.push({ method, params: requestParams });
         if (method === "plugin/installed") {
           return pluginInstalled([activePlugin("github")]);
+        }
+        if (method === "plugin/read") {
+          return pluginDetail("github", []);
         }
         throw new Error(`unexpected request ${method}`);
       },
@@ -89,14 +91,19 @@ describe("Codex plugin inventory", () => {
 
     expect(first.records[0]?.summary.id).toBe("github");
     expect(second.records[0]?.summary.id).toBe("github");
-    expect(calls).toEqual([{ method: "plugin/installed", params: { cwds: ["/repo/project"] } }]);
+    expect(calls).toEqual([
+      { method: "plugin/installed", params: { cwds: ["/repo/project"] } },
+      ...Array.from({ length: 2 }, () => ({
+        method: "plugin/read",
+        params: { marketplacePath: "/marketplaces/openai-curated", pluginName: "github" },
+      })),
+    ]);
   });
 
   it("reads the curated catalog only for an explicitly requested missing plugin", async () => {
     const calls: Array<{ method: string; params: unknown }> = [];
     const inventory = await readCodexPluginInventory({
       pluginConfig: pluginConfig({ calendar: curatedPlugin("calendar") }),
-      readPluginDetails: false,
       request: async (method, params) => {
         calls.push({ method, params });
         if (method === "plugin/installed") {
@@ -105,6 +112,9 @@ describe("Codex plugin inventory", () => {
         if (method === "plugin/list") {
           return pluginList([pluginSummary("calendar")]);
         }
+        if (method === "plugin/read") {
+          return pluginDetail("calendar", []);
+        }
         throw new Error(`unexpected request ${method}`);
       },
     });
@@ -112,6 +122,10 @@ describe("Codex plugin inventory", () => {
     expect(calls).toEqual([
       { method: "plugin/installed", params: {} },
       { method: "plugin/list", params: {} },
+      {
+        method: "plugin/read",
+        params: { marketplacePath: "/marketplaces/openai-curated", pluginName: "calendar" },
+      },
     ]);
     expect(inventory.records[0]).toMatchObject({
       activationRequired: true,
@@ -267,10 +281,12 @@ describe("Codex plugin inventory", () => {
             },
           },
         },
-        readPluginDetails: false,
         request: async (method) => {
           if (method === "plugin/installed") {
             return pluginInstalled([pluginSummary("github", { installed: true, enabled: true })]);
+          }
+          if (method === "plugin/read") {
+            return pluginDetail("github", []);
           }
           throw new Error(`unexpected request ${method}`);
         },
@@ -371,9 +387,11 @@ describe("Codex plugin inventory", () => {
         workspaceData: workspacePlugin("workspace-data@workspace-directory"),
         workspaceMetrics: workspacePlugin("workspace-metrics@workspace-directory"),
       }),
-      readPluginDetails: false,
       request: async (method, params) => {
         calls.push({ method, params });
+        if (method === "plugin/read") {
+          return pluginDetail("github", []);
+        }
         if (method !== "plugin/installed") {
           throw new Error(`unexpected request ${method}`);
         }
@@ -381,7 +399,13 @@ describe("Codex plugin inventory", () => {
       },
     });
 
-    expect(calls).toStrictEqual([{ method: "plugin/installed", params: {} }]);
+    expect(calls).toStrictEqual([
+      { method: "plugin/installed", params: {} },
+      {
+        method: "plugin/read",
+        params: { marketplacePath: "/marketplaces/openai-curated", pluginName: "github" },
+      },
+    ]);
     expect(inventory.records.map((record) => record.policy.configKey)).toStrictEqual(["github"]);
     expect(
       inventory.diagnostics.map((diagnostic) => ({
@@ -410,7 +434,6 @@ describe("Codex plugin inventory", () => {
         pluginConfig: pluginConfig({
           workspaceData: workspacePlugin("workspace-data@workspace-directory"),
         }),
-        readPluginDetails: false,
         request: async (method) => {
           if (method === "plugin/installed") {
             throw failure;
@@ -516,7 +539,6 @@ describe("Codex plugin inventory", () => {
       appCache,
       appCacheKey: "runtime",
       nowMs: 1,
-      readPluginDetails: false,
       request: async (method) => {
         if (method === "plugin/installed") {
           return pluginInstalled([
@@ -524,6 +546,9 @@ describe("Codex plugin inventory", () => {
               name: "Google Calendar",
             }),
           ]);
+        }
+        if (method === "plugin/read") {
+          return pluginDetail("google-calendar", []);
         }
         throw new Error(`unexpected request ${method}`);
       },

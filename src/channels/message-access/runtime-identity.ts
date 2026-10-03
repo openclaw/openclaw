@@ -4,19 +4,17 @@ import {
   meetsIdentifierAuthentication,
   type IdentifierAuthentication,
 } from "./identifier-authentication.js";
-/**
- * Channel ingress identity adapter helpers.
- *
- * Builds stable sender identity descriptors and normalizes matchable allowlist material.
- */
 import type {
-  ChannelIngressAdapter,
   ChannelIngressIdentityDescriptor,
   ChannelIngressIdentityField,
   ChannelIngressIdentitySubjectInput,
   StableChannelIngressIdentityParams,
 } from "./runtime-types.js";
-import type { NormalizedIngressEntry, NormalizedIngressSubject } from "./types.js";
+import type {
+  InternalChannelIngressAdapter,
+  NormalizedIngressEntry,
+  NormalizedIngressSubject,
+} from "./types.js";
 
 type ResolvedIdentityField = Required<Pick<ChannelIngressIdentityField, "key" | "kind">> &
   Omit<ChannelIngressIdentityField, "key" | "kind">;
@@ -73,10 +71,6 @@ export function identityEntryAuthenticationClassifier(
   };
 }
 
-function defaultNormalize(value: string): string {
-  return value;
-}
-
 function normalizeFieldValue(
   field: ResolvedIdentityField,
   value: string,
@@ -84,9 +78,9 @@ function normalizeFieldValue(
 ): string | null {
   const normalize =
     mode === "entry"
-      ? (field.normalizeEntry ?? field.normalize ?? defaultNormalize)
-      : (field.normalizeSubject ?? field.normalize ?? defaultNormalize);
-  const normalized = normalize(value);
+      ? (field.normalizeEntry ?? field.normalize)
+      : (field.normalizeSubject ?? field.normalize);
+  const normalized = normalize ? normalize(value) : value;
   return normalized == null ? null : normalized.trim() || null;
 }
 
@@ -152,7 +146,7 @@ function adapterEntry(params: {
 
 export function createIdentityAdapter(
   identity: ChannelIngressIdentityDescriptor,
-): ChannelIngressAdapter {
+): InternalChannelIngressAdapter {
   const fields = identityFields(identity);
   const isWildcardEntry = identity.isWildcardEntry ?? ((value: string) => value === "*");
   return {
@@ -214,23 +208,16 @@ export function createIdentityAdapter(
         if (candidates.length === 0) {
           // A legacy positive whole-subject matcher has no exact subject provenance. Preserve
           // its shipped asserted behavior, but never reinterpret it as a stronger claim.
-          return legacyMatch === true
+          return legacyMatch === true || entry.wildcard
             ? [
                 {
                   opaqueEntryId: entry.opaqueEntryId,
-                  opaqueSubjectId: "legacy-subject-match",
+                  opaqueSubjectId:
+                    legacyMatch === true ? "legacy-subject-match" : "wildcard-subject",
                   subjectAuthentication: "asserted" as const,
                 },
               ]
-            : entry.wildcard
-              ? [
-                  {
-                    opaqueEntryId: entry.opaqueEntryId,
-                    opaqueSubjectId: "wildcard-subject",
-                    subjectAuthentication: "asserted" as const,
-                  },
-                ]
-              : [];
+            : [];
         }
         return candidates.map(({ identifier }) => ({
           opaqueEntryId: entry.opaqueEntryId,

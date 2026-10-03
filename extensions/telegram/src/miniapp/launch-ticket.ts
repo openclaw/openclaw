@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 
 const LAUNCH_TICKET_TTL_MS = 5 * 60_000;
 const LAUNCH_TICKET_LIMIT = 1000;
@@ -35,13 +36,7 @@ export function createTelegramMiniAppLaunchTickets(): TelegramMiniAppLaunchTicke
         userId,
         expiresAtMs: Date.now() + LAUNCH_TICKET_TTL_MS,
       });
-      while (tickets.size > LAUNCH_TICKET_LIMIT) {
-        const oldest = tickets.keys().next().value;
-        if (!oldest) {
-          break;
-        }
-        tickets.delete(oldest);
-      }
+      pruneMapToMaxSize(tickets, LAUNCH_TICKET_LIMIT);
       return ticket;
     },
     consume({ ticket, accountId, userId }) {

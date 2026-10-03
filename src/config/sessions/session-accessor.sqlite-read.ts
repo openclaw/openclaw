@@ -1,4 +1,4 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -189,18 +189,25 @@ export function inspectTranscriptEventsSync(scope: SessionTranscriptReadScope): 
   snapshot: SessionStateDeleteSnapshot;
 } {
   const resolved = resolveSqliteTranscriptReadScope(scope);
-  const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
-  return runSqliteDeferredTransactionSync(
-    database.db,
-    () => ({
-      events: readTranscriptSnapshot(database, resolved.sessionId).events,
-      snapshot: readSessionStateDeleteSnapshot(database.db, resolved.sessionId),
-    }),
-    {
-      databaseLabel: database.path,
-      operationLabel: "session transcript inspection",
-    },
+  const result = withOpenClawAgentDatabaseReadOnly(
+    (database) =>
+      runSqliteDeferredTransactionSync(
+        database.db,
+        () => ({
+          events: readTranscriptSnapshot(database, resolved.sessionId).events,
+          snapshot: readSessionStateDeleteSnapshot(database.db, resolved.sessionId),
+        }),
+        {
+          databaseLabel: database.path,
+          operationLabel: "session transcript inspection",
+        },
+      ),
+    toDatabaseOptions(resolved),
   );
+  if (!result.found) {
+    throw new SessionTranscriptStorageUnavailableError(result.reason);
+  }
+  return result.value;
 }
 
 /** Validates a prepared assistant using indexed identities and returns its exact mutation fence. */
@@ -375,7 +382,7 @@ export function loadTranscriptEventsFromDatabase(
 }
 
 export function readTranscriptSnapshot(
-  database: OpenClawAgentDatabase,
+  database: Pick<OpenClawAgentDatabase, "db">,
   sessionId: string,
 ): { events: TranscriptEvent[]; rows: SqliteTranscriptSnapshotRow[] } {
   const rows = readTranscriptEventRows(database, sessionId);
@@ -650,6 +657,55 @@ export function findTranscriptEventInDatabase(
   });
 }
 
+/** Match assistant identity without decoding unrelated message bodies under the writer lock. */
+export function findAssistantTranscriptEventInDatabase(
+  database: Pick<OpenClawAgentDatabase, "db">,
+  sessionId: string,
+  idempotencyKey?: string,
+): { event: TranscriptEvent } | undefined {
+  return readHotSessionTranscriptSnapshot(database, sessionId, "match", () => {
+    const db = getSessionKysely(database.db);
+    const matches = (event: TranscriptEvent) => {
+      const message = readTranscriptEventMessage(event);
+      return (
+        message?.role === "assistant" &&
+        (idempotencyKey === undefined || message.idempotencyKey === idempotencyKey)
+      );
+    };
+    for (const row of iterateSqliteQuerySync(
+      database.db,
+      db
+        .selectFrom("transcript_events")
+        .select(["seq", transcriptEventNavigationSql().as("event_json")])
+        .select((eb) => eb("navigation_json", "is not", null).as("projected"))
+        .where("session_id", "=", sessionId)
+        .orderBy("seq", "desc"),
+    )) {
+      const candidate = findTranscriptEventInRows([row], matches);
+      if (!candidate) {
+        continue;
+      }
+      // Identity TEXT already is the canonical payload, including exceptional JSON.
+      if (!row.projected) {
+        return candidate;
+      }
+      const payload = executeSqliteQueryTakeFirstSync(
+        database.db,
+        db
+          .selectFrom("transcript_events")
+          .select(transcriptEventJsonSql(database.db).as("event_json"))
+          .where("session_id", "=", sessionId)
+          .where("seq", "=", row.seq),
+      );
+      const found = payload && findTranscriptEventInRows([payload], matches);
+      if (found) {
+        return found;
+      }
+    }
+    return undefined;
+  });
+}
+
 function findTranscriptEventInRows(
   rows: Iterable<{ event_json: string }>,
   match: (event: TranscriptEvent) => boolean,
@@ -670,20 +726,11 @@ function findTranscriptEventInRows(
 export function readTranscriptEventMessage(
   event: TranscriptEvent,
 ): Record<string, unknown> | undefined {
-  if (!event || typeof event !== "object" || Array.isArray(event)) {
-    return undefined;
-  }
-  const message = (event as { message?: unknown }).message;
-  return message && typeof message === "object" && !Array.isArray(message)
-    ? (message as Record<string, unknown>)
-    : undefined;
+  return asOptionalRecord(asOptionalRecord(event)?.message);
 }
 
 export function readTranscriptEventId(event: TranscriptEvent): string | undefined {
-  if (!event || typeof event !== "object" || Array.isArray(event)) {
-    return undefined;
-  }
-  const id = (event as { id?: unknown }).id;
+  const id = asOptionalRecord(event)?.id;
   return typeof id === "string" && id.trim() ? id : undefined;
 }
 

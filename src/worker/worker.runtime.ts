@@ -1,12 +1,11 @@
 import { chmod, mkdtemp, realpath, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import {
-  WORKER_PORTAL_PROTOCOL_FEATURE,
-  type WorkerHelloOk,
-} from "../../packages/gateway-protocol/src/schema/worker-admission.js";
+import type { WorkerHelloOk } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
+import { WORKER_GATEWAY_TOOLS_PROTOCOL_FEATURE } from "../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
 import { waitForExecScope } from "../agents/bash-process-registry.js";
 import type { ComputerContextEpoch } from "../agents/tools/computer-tool.js";
+import { DEFAULT_AGENTS_FILENAME, loadWorkspaceBootstrapFiles } from "../agents/workspace.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
@@ -142,24 +141,24 @@ export async function runWorkerDescriptor(
   let turnStarted = false;
   let resultFenceAcked = false;
   let forcedStopTimer: NodeJS.Timeout | undefined;
-  function loadRuntimeImports() {
-    const imports = [
+  function prepareRuntime() {
+    const operations = [
       import("./embedded-agent.runtime.js"),
       import("./inference-stream.runtime.js"),
+      loadWorkspaceBootstrapFiles(workspaceDir, [DEFAULT_AGENTS_FILENAME]),
     ] as const;
-    const ready = Promise.all(imports);
-    // Rejected admission does not await ready; still observe errors and join both
-    // imports before restoring the process environment.
+    const ready = Promise.all(operations);
+    // Rejected admission still joins preparation before restoring the process environment.
     void ready.catch(() => undefined);
-    return { ready, settled: Promise.allSettled(imports) };
+    return { ready, settled: Promise.allSettled(operations) };
   }
-  let runtimeImports: ReturnType<typeof loadRuntimeImports> | undefined;
+  let runtimePreparation: ReturnType<typeof prepareRuntime> | undefined;
   const connection = createWorkerConnection({
     endpoint: descriptor.connectionEndpoint,
     connectParams: buildWorkerConnectParams(descriptor),
     onAdmissionRequestSent: () => {
       if (!abortController.signal.aborted) {
-        runtimeImports ??= loadRuntimeImports();
+        runtimePreparation ??= prepareRuntime();
       }
     },
     onConnectionFailure: (error) => {
@@ -219,8 +218,14 @@ export async function runWorkerDescriptor(
       }
       throw error;
     }
-    const [{ runWorkerEmbeddedTurn }, { createWorkerInferenceStreamAdapter }] =
-      await (runtimeImports ??= loadRuntimeImports()).ready;
+    const [{ runWorkerEmbeddedTurn }, { createWorkerInferenceStreamAdapter }, bootstrapFiles] =
+      await (runtimePreparation ??= prepareRuntime()).ready;
+    if (
+      !hello.protocolFeatures.includes(WORKER_GATEWAY_TOOLS_PROTOCOL_FEATURE) ||
+      !hello.toolSurface
+    ) {
+      throw new Error("Gateway does not support the admitted worker tool surface.");
+    }
     const computerContextEpoch: ComputerContextEpoch = { value: 0 };
     const stream = createWorkerInferenceStreamAdapter({
       client: inference,
@@ -236,7 +241,7 @@ export async function runWorkerDescriptor(
           prepareWorkerGitHubEnvironment({
             binding: descriptor.assignment.github!,
             stateDir,
-            runId: descriptor.assignment.runId,
+            turnId: descriptor.assignment.turnId,
             cwd: workspaceDir,
             signal: abortController.signal,
           }),
@@ -263,15 +268,13 @@ export async function runWorkerDescriptor(
         modelRef: descriptor.assignment.modelRef,
         initialMessages: descriptor.assignment.initialMessages,
         skillResources: descriptor.assignment.skillResources,
-        skillAuthoring: descriptor.assignment.skillAuthoring,
         ...(descriptor.assignment.systemPrompt === undefined
           ? {}
           : { systemPrompt: descriptor.assignment.systemPrompt }),
         inferenceOptions: descriptor.assignment.inferenceOptions,
-        allowedToolNames: descriptor.assignment.toolAuthority.allowedToolNames.filter(
-          (name) =>
-            name !== "portal" || hello.protocolFeatures.includes(WORKER_PORTAL_PROTOCOL_FEATURE),
-        ),
+        allowedToolNames: descriptor.assignment.toolAuthority.allowedToolNames,
+        toolSurface: hello.toolSurface,
+        bootstrapFiles,
         execAuthority: descriptor.assignment.toolAuthority.exec,
         ...(descriptor.assignment.browser ? { browser: descriptor.assignment.browser } : {}),
         ...(descriptor.assignment.computer
@@ -297,7 +300,7 @@ export async function runWorkerDescriptor(
             resultFenceAcked = true;
           },
         },
-        sessions: connection,
+        gatewayTools: connection,
         signal: abortController.signal,
       });
       if (options.signal?.aborted && !options.environmentStateDir) {
@@ -342,7 +345,7 @@ export async function runWorkerDescriptor(
     inference.dispose();
     live.dispose();
     await connection.stop();
-    await runtimeImports?.settled;
+    await runtimePreparation?.settled;
     await environment?.close();
   }
 }

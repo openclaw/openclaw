@@ -16,6 +16,19 @@ import {
 import { hasProviderAuthForTool, resolveDefaultModelRef } from "./model-config.helpers.js";
 import { coercePdfModelConfig } from "./pdf-tool.helpers.js";
 
+export type PdfToolActiveModel = {
+  provider: string;
+  model: string;
+  supportsImages: boolean;
+};
+
+type PdfModelConfigContext = {
+  cfg?: OpenClawConfig;
+  agentDir: string;
+  workspaceDir?: string;
+  authStore?: AuthProfileStore;
+};
+
 function formatProviderModelRef(providerId: string, modelId: string): string {
   const slash = modelId.indexOf("/");
   if (slash > 0 && modelId.slice(0, slash).trim() === providerId) {
@@ -50,13 +63,9 @@ function resolveConfiguredTextModelFromConfig(params: {
   return modelId || undefined;
 }
 
-function resolveImageCandidateRefs(params: {
-  cfg?: OpenClawConfig;
-  agentDir: string;
-  workspaceDir?: string;
-  authStore?: AuthProfileStore;
-  filter?: (providerId: string) => boolean;
-}): string[] {
+function resolveImageCandidateRefs(
+  params: PdfModelConfigContext & { filter?: (providerId: string) => boolean },
+): string[] {
   // Candidate refs only include providers with usable auth so the tool avoids dead fallbacks.
   return resolveAutoMediaKeyProviders({
     capability: "image",
@@ -64,15 +73,7 @@ function resolveImageCandidateRefs(params: {
     workspaceDir: params.workspaceDir,
   })
     .filter((providerId) => !params.filter || params.filter(providerId))
-    .filter((providerId) =>
-      hasProviderAuthForTool({
-        provider: providerId,
-        cfg: params.cfg,
-        workspaceDir: params.workspaceDir,
-        agentDir: params.agentDir,
-        authStore: params.authStore,
-      }),
-    )
+    .filter((providerId) => hasProviderAuthForTool({ ...params, provider: providerId }))
     .map((providerId) => {
       const documentImageModel = resolveDocumentMediaModel({
         cfg: params.cfg,
@@ -101,13 +102,9 @@ function resolveImageCandidateRefs(params: {
     .filter((value): value is string => Boolean(value));
 }
 
-function resolveTextExtractionCandidateRefs(params: {
-  cfg?: OpenClawConfig;
-  primary: { provider: string; model: string };
-  agentDir: string;
-  workspaceDir?: string;
-  authStore?: AuthProfileStore;
-}): string[] {
+function resolveTextExtractionCandidateRefs(
+  params: PdfModelConfigContext & { primary: { provider: string; model: string } },
+): string[] {
   const candidates: string[] = [];
   const addCandidate = (providerId: string, modelId: string) => {
     const provider = providerId.trim();
@@ -130,16 +127,7 @@ function resolveTextExtractionCandidateRefs(params: {
     }),
   ];
   for (const providerId of providerIds) {
-    if (
-      !providerId ||
-      !hasProviderAuthForTool({
-        provider: providerId,
-        cfg: params.cfg,
-        workspaceDir: params.workspaceDir,
-        agentDir: params.agentDir,
-        authStore: params.authStore,
-      })
-    ) {
+    if (!providerId || !hasProviderAuthForTool({ ...params, provider: providerId })) {
       continue;
     }
     const documentTextModel = resolveDocumentMediaModel({
@@ -186,12 +174,9 @@ function resolveTextExtractionCandidateRefs(params: {
   return candidates;
 }
 
-export function resolvePdfModelConfigForTool(params: {
-  cfg?: OpenClawConfig;
-  agentDir: string;
-  workspaceDir?: string;
-  authStore?: AuthProfileStore;
-}): ImageModelConfig | null {
+export function resolvePdfModelConfigForTool(
+  params: PdfModelConfigContext & { activeModel?: PdfToolActiveModel },
+): ImageModelConfig | null {
   const explicitPdf = coercePdfModelConfig(params.cfg);
   if (explicitPdf.primary?.trim() || (explicitPdf.fallbacks?.length ?? 0) > 0) {
     // PDF-specific config wins over generic image model config.
@@ -210,31 +195,27 @@ export function resolvePdfModelConfigForTool(params: {
   }
 
   const primary = resolveDefaultModelRef(params.cfg);
-  const googleOk = hasProviderAuthForTool({
-    provider: "google",
-    cfg: params.cfg,
-    workspaceDir: params.workspaceDir,
-    agentDir: params.agentDir,
-    authStore: params.authStore,
-  });
+  const googleOk = hasProviderAuthForTool({ ...params, provider: "google" });
 
-  const fallbacks: string[] = [];
-  const addFallback = (ref: string) => {
-    const trimmed = ref.trim();
-    if (trimmed && !fallbacks.includes(trimmed)) {
-      fallbacks.push(trimmed);
-    }
-  };
-
+  const activeProvider = params.activeModel?.provider.trim();
+  const activeModel = params.activeModel?.model.trim();
+  const activeFallback =
+    params.activeModel?.supportsImages === true &&
+    activeProvider &&
+    activeModel &&
+    resolveDocumentMediaModel({
+      cfg: params.cfg,
+      workspaceDir: params.workspaceDir,
+      providerId: activeProvider,
+      document: "pdf",
+      mode: "image",
+    }) !== false &&
+    hasProviderAuthForTool({ ...params, provider: activeProvider })
+      ? formatProviderModelRef(activeProvider, activeModel)
+      : null;
   let preferred: string | null = null;
 
-  const providerOk = hasProviderAuthForTool({
-    provider: primary.provider,
-    cfg: params.cfg,
-    workspaceDir: params.workspaceDir,
-    agentDir: params.agentDir,
-    authStore: params.authStore,
-  });
+  const providerOk = hasProviderAuthForTool({ ...params, provider: primary.provider });
   const providerVision = resolveProviderVisionModelFromConfig({
     cfg: params.cfg,
     provider: primary.provider,
@@ -253,10 +234,7 @@ export function resolvePdfModelConfigForTool(params: {
     providerId: primary.provider,
   });
   const nativePdfCandidates = resolveImageCandidateRefs({
-    cfg: params.cfg,
-    agentDir: params.agentDir,
-    workspaceDir: params.workspaceDir,
-    authStore: params.authStore,
+    ...params,
     filter: (providerId) =>
       providerSupportsNativePdfDocument({
         cfg: params.cfg,
@@ -264,19 +242,8 @@ export function resolvePdfModelConfigForTool(params: {
         providerId,
       }),
   });
-  const genericImageCandidates = resolveImageCandidateRefs({
-    cfg: params.cfg,
-    agentDir: params.agentDir,
-    workspaceDir: params.workspaceDir,
-    authStore: params.authStore,
-  });
-  const textExtractionCandidates = resolveTextExtractionCandidateRefs({
-    cfg: params.cfg,
-    primary,
-    agentDir: params.agentDir,
-    workspaceDir: params.workspaceDir,
-    authStore: params.authStore,
-  });
+  const genericImageCandidates = resolveImageCandidateRefs(params);
+  const textExtractionCandidates = resolveTextExtractionCandidateRefs({ ...params, primary });
   const preferPrimaryTextExtraction =
     providerOk && textExtractionCandidates.some((ref) => ref.startsWith(`${primary.provider}/`));
 
@@ -296,13 +263,7 @@ export function resolvePdfModelConfigForTool(params: {
       if (
         !providerId ||
         documentImageModel === false ||
-        !hasProviderAuthForTool({
-          provider: providerId,
-          cfg: params.cfg,
-          workspaceDir: params.workspaceDir,
-          agentDir: params.agentDir,
-          authStore: params.authStore,
-        })
+        !hasProviderAuthForTool({ ...params, provider: providerId })
       ) {
         continue;
       }
@@ -338,14 +299,15 @@ export function resolvePdfModelConfigForTool(params: {
     preferred = fallbackCandidates[0] ?? null;
   }
 
+  // Preserve every existing native/auto candidate decision. The admitted session model
+  // only fills the previous no-model gap when it can inspect images and has usable auth.
+  preferred ??= activeFallback;
+
   if (preferred?.trim()) {
-    for (const candidate of fallbackCandidates) {
-      if (candidate !== preferred) {
-        addFallback(candidate);
-      }
-    }
-    const pruned = fallbacks.filter((ref) => ref !== preferred);
-    return { primary: preferred, ...(pruned.length > 0 ? { fallbacks: pruned } : {}) };
+    const fallbacks = [...new Set(fallbackCandidates.map((ref) => ref.trim()))].filter(
+      (ref) => ref && ref !== preferred,
+    );
+    return { primary: preferred, ...(fallbacks.length > 0 ? { fallbacks } : {}) };
   }
 
   return null;

@@ -310,9 +310,17 @@ describe("loginOpenAICodexDeviceCode", () => {
       const oauthTokenRequest = fetchCall(fetchMock, 3);
       expect(oauthTokenRequest[0]).toBe("https://auth.openai.com/oauth/token");
       expect(oauthTokenRequest[1]?.method).toBe("POST");
-      expect(await new Response(oauthTokenRequest[1]?.body).text()).toBe(
-        "grant_type=authorization_code&code=authorization-code-123&redirect_uri=https%3A%2F%2Fauth.openai.com%2Fdeviceauth%2Fcallback&client_id=app_EMoamEEZ73f0CkXaXp7hrann&code_verifier=code-verifier-123",
-      );
+      expect(
+        Object.fromEntries(
+          new URLSearchParams(await new Response(oauthTokenRequest[1]?.body).text()),
+        ),
+      ).toEqual({
+        grant_type: "authorization_code",
+        code: "authorization-code-123",
+        redirect_uri: "https://auth.openai.com/deviceauth/callback",
+        client_id: "app_EMoamEEZ73f0CkXaXp7hrann",
+        code_verifier: "code-verifier-123",
+      });
       expect(oauthTokenRequest[1]?.signal).toBeInstanceOf(AbortSignal);
       expect(oauthTokenRequest[1]?.headers).toEqual({
         "Content-Type": "application/x-www-form-urlencoded",

@@ -206,7 +206,7 @@ describe("Codex app-server attempt context", () => {
       });
       expect(context.memoryToolRouted).toBe(false);
       expect(context.memoryToolNames).toEqual([]);
-      expect(context.memoryCollaborationInstructions).toBe(
+      expect(context.memoryInstructions).toBe(
         enabled && !lightweight ? "Recall using knowledge_lookup." : undefined,
       );
       if (lightweight) {
@@ -263,8 +263,8 @@ describe("Codex app-server attempt context", () => {
       expect(context.threadDeveloperInstructions).not.toContain(
         path.join(executionDir, "AGENTS.md"),
       );
-      expect(context.turnScopedDeveloperInstructions).toContain("Canonical agent soul");
-      expect(context.turnScopedDeveloperInstructions).not.toContain("Canonical agent instructions");
+      expect(context.personaInstructions).toContain("Canonical agent soul");
+      expect(context.personaInstructions).not.toContain("Canonical agent instructions");
       expect(context.memoryToolRouted).toBe(true);
       expect(context.promptContext).toBeUndefined();
     } finally {
@@ -451,19 +451,6 @@ describe("Codex app-server attempt context", () => {
             inputSchema: {},
           },
         ],
-        sessionKey: "agent:codex-test:main",
-      }),
-    ).toBe(undefined);
-
-    // Lightweight cron turns keep the runtime context byte-for-byte untouched.
-    expect(
-      buildCodexWatchedSessionsContext({
-        attempt: {
-          config: {},
-          bootstrapContextMode: "lightweight",
-          bootstrapContextRunKind: "cron",
-        } as EmbeddedRunAttemptParams,
-        dynamicTools: [],
         sessionKey: "agent:codex-test:main",
       }),
     ).toBe(undefined);

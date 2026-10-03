@@ -47,12 +47,7 @@ import {
 import { createZalouserIngressMonitor, type ZalouserIngressLifecycle } from "./ingress.js";
 import { formatZalouserMessageSidFull, resolveZalouserMessageSid } from "./message-sid.js";
 import { getZalouserRuntime } from "./runtime.js";
-import {
-  sendDeliveredZalouser,
-  sendMessageZalouser,
-  sendSeenZalouser,
-  sendTypingZalouser,
-} from "./send.js";
+import { sendMessageZalouser } from "./send.js";
 import { resolveZalouserDmSessionScope } from "./session-scope.js";
 import type { ResolvedZalouserAccount, ZaloInboundMessage } from "./types.js";
 import {
@@ -60,6 +55,9 @@ import {
   listZaloGroups,
   resolveZaloOwnUserId,
   resolveZaloGroupContext,
+  sendZaloDeliveredEvent,
+  sendZaloSeenEvent,
+  sendZaloTypingEvent,
   startZaloListener,
 } from "./zalo-js.js";
 
@@ -162,44 +160,13 @@ function logVerbose(core: ZalouserCoreRuntime, runtime: RuntimeEnv, message: str
   }
 }
 
-function resolveGroupRequireMention(params: {
-  groupId: string;
-  groupName?: string | null;
-  groups: Record<string, { enabled?: boolean; requireMention?: boolean }>;
-  allowNameMatching?: boolean;
-}): boolean {
-  const entry = findZalouserGroupEntry(
-    params.groups ?? {},
-    buildZalouserGroupCandidates({
-      groupId: params.groupId,
-      groupName: params.groupName,
-      includeGroupIdAlias: true,
-      includeWildcard: true,
-      allowNameMatching: params.allowNameMatching,
-    }),
-  );
-  if (typeof entry?.requireMention === "boolean") {
-    return entry.requireMention;
-  }
-  return true;
-}
-
 async function sendZalouserDeliveryAcks(params: {
   profile: string;
   isGroup: boolean;
   message: NonNullable<ZaloInboundMessage["eventMessage"]>;
 }): Promise<void> {
-  await sendDeliveredZalouser({
-    profile: params.profile,
-    isGroup: params.isGroup,
-    message: params.message,
-    isSeen: true,
-  });
-  await sendSeenZalouser({
-    profile: params.profile,
-    isGroup: params.isGroup,
-    message: params.message,
-  });
+  await sendZaloDeliveredEvent({ ...params, isSeen: true });
+  await sendZaloSeenEvent(params);
 }
 
 async function processMessage(
@@ -276,6 +243,7 @@ async function processMessage(
   const groups = account.config.groups ?? {};
   const routeAllowlistConfigured = Object.keys(groups).length > 0;
   const allowNameMatching = isDangerousNameMatchingEnabled(account.config);
+  let requireMention = false;
   if (isGroup) {
     const groupEntry = findZalouserGroupEntry(
       groups,
@@ -287,6 +255,8 @@ async function processMessage(
         allowNameMatching,
       }),
     );
+    requireMention =
+      typeof groupEntry?.requireMention === "boolean" ? groupEntry.requireMention : true;
     const routeAccess = resolveZalouserRouteAccess({
       groupPolicy,
       configured: routeAllowlistConfigured,
@@ -462,14 +432,6 @@ async function processMessage(
     historyMap: historyState.groupHistories,
   });
 
-  const requireMention = isGroup
-    ? resolveGroupRequireMention({
-        groupId: chatId,
-        groupName,
-        groups,
-        allowNameMatching,
-      })
-    : false;
   const mentionRegexes = core.channel.mentions.buildMentionRegexes(config, route.agentId);
   const explicitMention = {
     hasAnyMention: message.hasAnyMention === true,
@@ -519,11 +481,7 @@ async function processMessage(
               sender: senderName || senderId,
               body: rawBody,
               timestamp: message.timestampMs,
-              messageId: resolveZalouserMessageSid({
-                msgId: message.msgId,
-                cliMsgId: message.cliMsgId,
-                fallback: `${message.timestampMs}`,
-              }),
+              messageId: messageSid,
             }
           : null,
     });
@@ -629,7 +587,7 @@ async function processMessage(
   const replyPipeline = {
     typing: {
       start: async () => {
-        await sendTypingZalouser(chatId, {
+        await sendZaloTypingEvent(chatId, {
           profile: account.profile,
           isGroup,
         });
@@ -671,7 +629,7 @@ async function processMessage(
       }),
       deliver: async (payload) => {
         return await deliverZalouserReply({
-          payload: payload as { text?: string; mediaUrls?: string[]; mediaUrl?: string },
+          payload,
           profile: account.profile,
           mediaMaxBytes: account.mediaMaxBytes,
           chatId,
@@ -810,38 +768,17 @@ export async function monitorZalouserProvider(
     if (allowNameMatching && (allowFromEntries.length > 0 || groupAllowFromEntries.length > 0)) {
       const friends = await listZaloFriends(profile);
       const byName = buildZaloNameIndex(friends, (friend) => friend.displayName);
-      if (allowFromEntries.length > 0) {
-        const { additions, mapping, unresolved } = resolveUserAllowlistEntries(
-          allowFromEntries,
-          byName,
-        );
-        const allowFrom = mergeAllowlist({ existing: account.config.allowFrom, additions });
-        account = {
-          ...account,
-          config: {
-            ...account.config,
-            allowFrom,
-          },
-        };
-        summarizeMapping("zalouser users", mapping, unresolved, runtime);
-      }
-      if (groupAllowFromEntries.length > 0) {
-        const { additions, mapping, unresolved } = resolveUserAllowlistEntries(
-          groupAllowFromEntries,
-          byName,
-        );
-        const groupAllowFrom = mergeAllowlist({
-          existing: account.config.groupAllowFrom,
-          additions,
-        });
-        account = {
-          ...account,
-          config: {
-            ...account.config,
-            groupAllowFrom,
-          },
-        };
-        summarizeMapping("zalouser group users", mapping, unresolved, runtime);
+      account = { ...account, config: { ...account.config } };
+      for (const [key, entries, label] of [
+        ["allowFrom", allowFromEntries, "zalouser users"],
+        ["groupAllowFrom", groupAllowFromEntries, "zalouser group users"],
+      ] as const) {
+        if (entries.length === 0) {
+          continue;
+        }
+        const { additions, mapping, unresolved } = resolveUserAllowlistEntries(entries, byName);
+        account.config[key] = mergeAllowlist({ existing: account.config[key], additions });
+        summarizeMapping(label, mapping, unresolved, runtime);
       }
     }
 

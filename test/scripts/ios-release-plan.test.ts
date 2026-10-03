@@ -24,6 +24,7 @@ function input(overrides: Partial<IosReleasePlanInput> = {}): IosReleasePlanInpu
 describe("resolveIosReleasePlan", () => {
   it("starts a new gateway at revision zero and build one", () => {
     expect(resolveIosReleasePlan(input())).toMatchObject({
+      destination: "app-store",
       appStoreRevision: 0,
       appStoreVersion: "2026.7.20",
       buildNumber: 1,
@@ -85,6 +86,76 @@ describe("resolveIosReleasePlan", () => {
       appStoreVersionState: "PREPARE_FOR_SUBMISSION",
       decision: "resume-editable",
     });
+  });
+
+  it.each(["PREPARE_FOR_SUBMISSION", "IN_REVIEW"])(
+    "continues TestFlight builds alongside a matching %s App Store version",
+    (state) => {
+      const plan = resolveIosReleasePlan(
+        input({
+          destination: "testflight",
+          appStoreVersions: [
+            { id: "public", state: "READY_FOR_DISTRIBUTION", versionString: "2026.7.20" },
+            { id: "store", state, versionString: "2026.7.21" },
+          ],
+          buildUploads: [
+            { buildNumber: "7", shortVersion: "2026.7.21", state: "FAILED" },
+            { buildNumber: "90", shortVersion: "2026.7.20", state: "COMPLETE" },
+          ],
+        }),
+      );
+
+      expect(plan).toMatchObject({
+        destination: "testflight",
+        appStoreRevision: 1,
+        appStoreVersion: "2026.7.21",
+        appStoreVersionId: null,
+        appStoreVersionState: null,
+        buildNumber: 8,
+        decision: "resume-testflight",
+        releaseNotesBaselines: [{ audience: "ios", version: "2026.7.20", build: "5" }],
+      });
+    },
+  );
+
+  it.each(["PREPARE_FOR_SUBMISSION", "IN_REVIEW"])(
+    "retries the TestFlight train while another gateway's App Store version is %s",
+    (state) => {
+      const plan = resolveIosReleasePlan(
+        input({
+          destination: "testflight",
+          appStoreVersions: [{ id: "other", state, versionString: "2026.7.30" }],
+          buildUploads: [
+            { buildNumber: "4", shortVersion: "2026.7.20", state: "PROCESSING" },
+            { buildNumber: "90", shortVersion: "2026.7.30", state: "COMPLETE" },
+          ],
+        }),
+      );
+
+      expect(plan).toMatchObject({
+        destination: "testflight",
+        appStoreRevision: 0,
+        appStoreVersion: "2026.7.20",
+        appStoreVersionId: null,
+        appStoreVersionState: null,
+        buildNumber: 5,
+        decision: "retry-upload",
+      });
+    },
+  );
+
+  it("rejects ambiguous TestFlight revisions across active versions and upload history", () => {
+    expect(() =>
+      resolveIosReleasePlan(
+        input({
+          destination: "testflight",
+          appStoreVersions: [
+            { id: "store", state: "PREPARE_FOR_SUBMISSION", versionString: "2026.7.21" },
+          ],
+          buildUploads: [{ buildNumber: "4", shortVersion: "2026.7.22", state: "COMPLETE" }],
+        }),
+      ),
+    ).toThrow("Multiple unreleased TestFlight revisions");
   });
 
   it("retries an uploaded but unreleased revision after its version record is removed", () => {
@@ -165,26 +236,33 @@ describe("resolveIosReleasePlan", () => {
     ).toThrow("does not belong to gateway 2026.7.2");
   });
 
-  it("rejects multiple active versions and unknown upload states", () => {
-    expect(() =>
-      resolveIosReleasePlan(
-        input({
-          appStoreVersions: [
-            { id: "one", state: "PREPARE_FOR_SUBMISSION", versionString: "2026.7.21" },
-            { id: "two", state: "READY_FOR_REVIEW", versionString: "2026.7.22" },
-          ],
-        }),
-      ),
-    ).toThrow("multiple active iOS versions");
+  it.each(["app-store", "testflight"] as const)(
+    "rejects multiple active versions and unknown upload states for %s",
+    (destination) => {
+      expect(() =>
+        resolveIosReleasePlan(
+          input({
+            destination,
+            appStoreVersions: [
+              { id: "one", state: "PREPARE_FOR_SUBMISSION", versionString: "2026.7.21" },
+              { id: "two", state: "READY_FOR_REVIEW", versionString: "2026.7.22" },
+            ],
+          }),
+        ),
+      ).toThrow("multiple active iOS versions");
 
-    expect(() =>
-      resolveIosReleasePlan(
-        input({
-          buildUploads: [{ buildNumber: "1", shortVersion: "2026.7.20", state: "NEW_APPLE_STATE" }],
-        }),
-      ),
-    ).toThrow("Unknown App Store build upload state");
-  });
+      expect(() =>
+        resolveIosReleasePlan(
+          input({
+            destination,
+            buildUploads: [
+              { buildNumber: "1", shortVersion: "2026.7.20", state: "NEW_APPLE_STATE" },
+            ],
+          }),
+        ),
+      ).toThrow("Unknown App Store build upload state");
+    },
+  );
 
   it("fails after revision 9 is distributed", () => {
     expect(() =>

@@ -55,6 +55,8 @@ export const vitestWorkerDeclarationEntries = {
     "src/wizard/clack-prompter-process-runtime.test-support.ts",
   "extensions/qa-lab/bus-server-runtime.test-support":
     "extensions/qa-lab/src/bus-server-runtime.test-support.ts",
+  "extensions/qa-lab/agent-run-identity-runtime.test-support":
+    "extensions/qa-lab/src/agent-run-identity-runtime.test-support.ts",
   "extensions/memory-core/manager-search-knn-runtime.test-support":
     "extensions/memory-core/src/memory/manager-search-knn-runtime.test-support.ts",
   "test-support/qa-otel-smoke-entrypoint.test-support":
@@ -103,6 +105,10 @@ export const vitestWorkerDeclarationEntries = {
     "extensions/codex/catalog-page-worker-entrypoint.ts",
   "extensions/memory-core/manager-publication-fault-entrypoint.test-support":
     "extensions/memory-core/src/memory/manager-publication-fault-entrypoint.test-support.ts",
+  "extensions/memory-core/memory-forget-fault-entrypoint.test-support":
+    "extensions/memory-core/src/memory-forget-fault-entrypoint.test-support.ts",
+  "extensions/memory-core/memory-forget-planning-observer-entrypoint.test-support":
+    "extensions/memory-core/src/memory-forget-planning-observer-entrypoint.test-support.ts",
   "state/openclaw-agent-worker-store.runtime.test-support":
     "src/state/openclaw-agent-worker-store.runtime.test-support.ts",
   "cli/update-cli/update-command-legacy-finalize-entrypoint.test-support":
@@ -117,6 +123,8 @@ export const vitestWorkerDeclarationEntries = {
     "extensions/workboard/src/sqlite-backend-entrypoint.test-support.ts",
   "infra/update-managed-service-handoff-runtime-assets":
     "src/infra/update-managed-service-handoff-runtime-assets.ts",
+  "infra/package-update-activation-runtime-assets":
+    "src/infra/package-update-activation-runtime-assets.ts",
   "infra/triage-runtime.test-support": "src/infra/triage-runtime.test-support.ts",
   "infra/sqlite-readonly-worker.compile-cache-runtime.test-support":
     "src/infra/sqlite-readonly-worker.compile-cache-runtime.test-support.ts",

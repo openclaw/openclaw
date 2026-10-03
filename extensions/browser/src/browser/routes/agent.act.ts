@@ -2,6 +2,7 @@ import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveExistingSessionActTimeouts } from "../act-policy.js";
+import type { ChromeMcpTargetOperation } from "../chrome-mcp-contracts.js";
 import {
   clickChromeMcpElement,
   clickChromeMcpCoords,
@@ -27,7 +28,6 @@ import {
   assertExistingSessionPostInteractionNavigationAllowed,
   createExistingSessionDeadline,
   waitForExistingSessionCondition,
-  type ExistingSessionOperation,
 } from "./agent.act.existing-session.js";
 import { registerBrowserAgentActHookRoutes } from "./agent.act.hooks.js";
 import { canonicalizeActTargetIds, normalizeActRequest } from "./agent.act.normalize.js";
@@ -216,7 +216,7 @@ export function registerBrowserAgentActRoutes(
                   admission.error,
                 );
               }
-              const existingSessionTarget: ExistingSessionOperation = {
+              const existingSessionTarget: ChromeMcpTargetOperation = {
                 profileName,
                 profile: profileCtx.profile,
                 targetId: tab.targetId,
@@ -232,7 +232,7 @@ export function registerBrowserAgentActRoutes(
                   : new Set<string>();
               const runGuardedAction = async <T>(
                 execute: (
-                  target: ExistingSessionOperation,
+                  target: ChromeMcpTargetOperation,
                   checkDeadline: () => void,
                 ) => Promise<T>,
               ): Promise<T> => {
@@ -423,30 +423,26 @@ export function registerBrowserAgentActRoutes(
             if (action.kind === "close" || result.aborted?.reason === "closed") {
               clearSnapshotKeysForTab(ctx, profileCtx.profile.name, tab.targetId);
             }
-            switch (action.kind) {
-              case "batch":
-                return await jsonOk(
-                  {
-                    results: result.results ?? [],
-                    ...(result.aborted ? { aborted: result.aborted } : {}),
-                    ...(downloads ? { downloads } : {}),
-                  },
-                  {
-                    ...resultTargetOptions,
-                    resolveCurrentTarget: result.aborted?.reason !== "closed",
-                  },
-                );
-              case "evaluate":
-                return await jsonOk(
-                  { result: result.result, ...(downloads ? { downloads } : {}) },
-                  resultTargetOptions,
-                );
-              case "resize":
-              case "close":
-                return await jsonOk(downloads ? { downloads } : undefined);
-              default:
-                return await jsonOk(downloads ? { downloads } : undefined, resultTargetOptions);
+            if (action.kind === "batch") {
+              return await jsonOk(
+                {
+                  results: result.results ?? [],
+                  ...(result.aborted ? { aborted: result.aborted } : {}),
+                  ...(downloads ? { downloads } : {}),
+                },
+                {
+                  ...resultTargetOptions,
+                  resolveCurrentTarget: result.aborted?.reason !== "closed",
+                },
+              );
             }
+            return await jsonOk(
+              {
+                ...(action.kind === "evaluate" ? { result: result.result } : {}),
+                ...(downloads ? { downloads } : {}),
+              },
+              action.kind === "resize" || action.kind === "close" ? undefined : resultTargetOptions,
+            );
           } catch (error) {
             verificationDeadline?.throwIfAborted();
             requestDeadline?.throwIfAborted();

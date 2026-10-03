@@ -23,7 +23,7 @@ export function registerLocalProvidersCommand<T>(
   parent: Command,
   description: string,
   collect: (cfg: OpenClawConfig, agentId: string) => T | Promise<T>,
-  format: (value: T) => string,
+  format?: (value: T) => string,
 ): void {
   parent
     .command("providers")

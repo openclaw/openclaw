@@ -56,6 +56,36 @@ class ChatMessageContentParsingTest {
   }
 
   @Test
+  fun browserPresentationRequiresSuccessfulBrowserResultAndCompleteRoute() {
+    val host = """{"target":"host","profile":"openclaw","targetId":"t1","title":"Travel checklist","url":"https://example.test/travel"}"""
+    val node = """{"target":"node","node":"workstation","profile":"work","targetId":"t2"}"""
+
+    fun parse(
+      tab: String,
+      name: String = "browser",
+      type: String = "toolResult",
+      error: Boolean = false,
+    ) = parseChatMessageContent(
+      Json.parseToJsonElement("""{"type":"$type","toolName":"$name","toolCallId":"browser-1","isError":$error,"details":{"browserTab":$tab},"content":"https://example.test/travel"}"""),
+    )?.toolActivity?.browserTab
+
+    assertEquals(ChatBrowserTab("host", null, "openclaw", "t1", "https://example.test/travel", "Travel checklist"), parse(host))
+    assertEquals(ChatBrowserTab("node", "workstation", "work", "t2", null, null), parse(node))
+    for (invalid in listOf(
+      """{"target":"host","targetId":"t1"}""",
+      """{"target":"node","profile":"work","targetId":"t1"}""",
+      """{"target":"host","node":"workstation","profile":"work","targetId":"t1"}""",
+      """{"target":"host","profile":"work","targetId":" "}""",
+      """{"target":"sandbox","profile":"work","targetId":"t1"}""",
+    )) {
+      assertNull(parse(invalid))
+    }
+    assertNull(parse(host, name = "web_fetch"))
+    assertNull(parse(host, type = "toolCall"))
+    assertNull(parse(host, error = true))
+  }
+
+  @Test
   fun preservesUnnamedResultsForMatchingWithoutInventingCallIdentity() {
     val parsed =
       parseChatMessageContent(

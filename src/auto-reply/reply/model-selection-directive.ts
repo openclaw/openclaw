@@ -1,4 +1,3 @@
-// Normalizes model selection directives into provider and model ids.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { modelKey } from "../../agents/model-ref-shared.js";
@@ -64,14 +63,7 @@ function scoreFuzzyMatch(params: {
   aliasIndex: ModelAliasIndex;
   defaultProvider: string;
   defaultModel: string;
-}): {
-  score: number;
-  isDefault: boolean;
-  variantCount: number;
-  variantMatchCount: number;
-  modelLength: number;
-  key: string;
-} {
+}) {
   const provider = normalizeProviderId(params.provider);
   const model = params.model;
   const fragment = normalizeLowercaseStringOrEmpty(params.fragment);
@@ -87,17 +79,13 @@ function scoreFuzzyMatch(params: {
     if (!fragment) {
       return 0;
     }
-    let score = 0;
     if (value === fragment) {
-      score = Math.max(score, weights.exact);
+      return weights.exact;
     }
     if (value.startsWith(fragment)) {
-      score = Math.max(score, weights.starts);
+      return weights.starts;
     }
-    if (value.includes(fragment)) {
-      score = Math.max(score, weights.includes);
-    }
-    return score;
+    return value.includes(fragment) ? weights.includes : 0;
   };
 
   let score = 0;
@@ -140,12 +128,7 @@ function scoreFuzzyMatch(params: {
   if (fragmentVariants.length === 0 && variantCount > 0) {
     score -= variantCount * 30;
   } else if (fragmentVariants.length > 0) {
-    if (variantMatchCount > 0) {
-      score += variantMatchCount * 40;
-    }
-    if (variantMatchCount === 0) {
-      score -= 20;
-    }
+    score += variantMatchCount > 0 ? variantMatchCount * 40 : -20;
   }
 
   const defaultProvider = normalizeProviderId(params.defaultProvider);
@@ -206,10 +189,10 @@ export function resolveModelDirectiveSelection(params: {
   const resolveFuzzy = (paramsLocal: {
     provider?: string;
     fragment: string;
-  }): { selection?: ModelDirectiveSelection; error?: string } => {
+  }): ModelDirectiveSelection | undefined => {
     const fragment = normalizeLowercaseStringOrEmpty(paramsLocal.fragment);
     if (!fragment) {
-      return {};
+      return undefined;
     }
 
     const providerFilter = paramsLocal.provider
@@ -248,49 +231,35 @@ export function resolveModelDirectiveSelection(params: {
     }
 
     const scored = candidates
-      .map((candidate) => {
-        const details = scoreFuzzyMatch({
-          provider: candidate.provider,
-          model: candidate.model,
-          fragment,
-          aliasIndex,
-          defaultProvider,
-          defaultModel,
-        });
-        return Object.assign({ candidate }, details);
-      })
-      .toSorted((a, b) => {
-        // Tie-break deterministically so repeated prompts pick the same model.
-        if (b.score !== a.score) {
-          return b.score - a.score;
-        }
-        if (a.isDefault !== b.isDefault) {
-          return a.isDefault ? -1 : 1;
-        }
-        if (a.variantMatchCount !== b.variantMatchCount) {
-          return b.variantMatchCount - a.variantMatchCount;
-        }
-        if (a.variantCount !== b.variantCount) {
-          return a.variantCount - b.variantCount;
-        }
-        if (a.modelLength !== b.modelLength) {
-          return a.modelLength - b.modelLength;
-        }
-        return a.key.localeCompare(b.key);
-      });
+      .map((candidate) =>
+        Object.assign(
+          { candidate },
+          scoreFuzzyMatch({
+            provider: candidate.provider,
+            model: candidate.model,
+            fragment,
+            aliasIndex,
+            defaultProvider,
+            defaultModel,
+          }),
+        ),
+      )
+      .toSorted(
+        (a, b) =>
+          // Tie-break deterministically so repeated prompts pick the same model.
+          b.score - a.score ||
+          Number(b.isDefault) - Number(a.isDefault) ||
+          b.variantMatchCount - a.variantMatchCount ||
+          a.variantCount - b.variantCount ||
+          a.modelLength - b.modelLength ||
+          a.key.localeCompare(b.key),
+      );
 
     const bestScored = scored[0];
-    const best = bestScored?.candidate;
-    if (!best || !bestScored) {
-      return {};
-    }
-
     const minScore = providerFilter ? 90 : 120;
-    if (bestScored.score < minScore) {
-      return {};
-    }
-
-    return { selection: buildSelection(best.provider, best.model) };
+    return bestScored && bestScored.score >= minScore
+      ? buildSelection(bestScored.candidate.provider, bestScored.candidate.model)
+      : undefined;
   };
 
   const resolved = resolveModelRefFromString({
@@ -303,8 +272,8 @@ export function resolveModelDirectiveSelection(params: {
 
   if (!resolved) {
     const fuzzy = resolveFuzzy({ fragment: rawTrimmed });
-    if (fuzzy.selection || fuzzy.error) {
-      return fuzzy;
+    if (fuzzy) {
+      return { selection: fuzzy };
     }
     return {
       error: `Unrecognized model "${rawTrimmed}". Use /models to list providers, or /models <provider> to list models.`,
@@ -347,15 +316,15 @@ export function resolveModelDirectiveSelection(params: {
     const provider = normalizeProviderId(rawTrimmed.slice(0, slash).trim());
     const fragment = rawTrimmed.slice(slash + 1).trim();
     const fuzzy = resolveFuzzy({ provider, fragment });
-    if (fuzzy.selection || fuzzy.error) {
-      return fuzzy;
+    if (fuzzy) {
+      return { selection: fuzzy };
     }
   }
 
   // Otherwise, try fuzzy matching across allowlisted models.
   const fuzzy = resolveFuzzy({ fragment: rawTrimmed });
-  if (fuzzy.selection || fuzzy.error) {
-    return fuzzy;
+  if (fuzzy) {
+    return { selection: fuzzy };
   }
 
   if (permitted) {

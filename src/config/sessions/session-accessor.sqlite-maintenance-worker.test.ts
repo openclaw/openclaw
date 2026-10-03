@@ -3,11 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync, StatementSync as NativeStatement } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
-import { requireNodeSqlite, resolveNodeSqliteLocation } from "../../infra/node-sqlite.js";
-import {
-  captureStateDatabaseCoordinatorRuntime,
-  resolveStateDatabaseCoordinatorPath,
-} from "../../infra/state-database-coordinator.js";
+import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import {
   beginSessionWorkAdmission,
   runExclusiveSessionLifecycleMutation,
@@ -19,7 +15,6 @@ import {
   closeOpenClawAgentDatabaseByPathAsync,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
-import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { readSessionArchiveContentSync } from "./archive-compression.js";
 import {
@@ -34,6 +29,7 @@ import * as ageFacts from "./session-accessor.sqlite-maintenance-age.js";
 import * as maintenanceKick from "./session-accessor.sqlite-maintenance-kick.js";
 import * as maintenance from "./session-accessor.sqlite-maintenance.js";
 import * as reclamationCommit from "./session-accessor.sqlite-reclamation-commit.js";
+import * as reclamationRun from "./session-accessor.sqlite-reclamation-run.js";
 import * as reclamationWorker from "./session-accessor.sqlite-reclamation-worker.js";
 import * as reclamation from "./session-accessor.sqlite-reclamation.js";
 import { registerSessionMaintenancePreserveKeysProvider } from "./store-maintenance-preserve.js";
@@ -87,13 +83,6 @@ it.each(["cold", "warm", "warm-cap", "removal"] as const)(
       if (scenario === "removal") {
         seedStale(1);
       }
-      const coordinatorPath = resolveNodeSqliteLocation(
-        resolveStateDatabaseCoordinatorPath({
-          databasePath: resolveOpenClawStateSqlitePath(state.env),
-          runtimeDirectory: captureStateDatabaseCoordinatorRuntime().directory,
-          uid: process.getuid?.(),
-        }),
-      );
       const policy = resolveMaintenanceConfigFromInput({
         mode: "enforce",
         maxEntries: scenario === "warm-cap" ? 1 : 100,
@@ -120,8 +109,6 @@ it.each(["cold", "warm", "warm-cap", "removal"] as const)(
       const counts = { prepare: 0, exec: 0, get: 0, all: 0, run: 0, iterate: 0 };
       const preparedSql: string[] = [];
       const executedSql: string[] = [];
-      const executions: Array<{ database: DatabaseSync; location: string | null; sql: string }> =
-        [];
       // oxlint-disable-next-line typescript/unbound-method -- Forward the native operation with its exact database receiver.
       const originalPrepare = DatabaseSync.prototype.prepare;
       const prepare = vi.spyOn(DatabaseSync.prototype, "prepare").mockImplementation(
@@ -142,7 +129,6 @@ it.each(["cold", "warm", "warm-cap", "removal"] as const)(
           apply(target, receiver: DatabaseSync, args) {
             if (observation.getStore()) {
               counts.exec += 1;
-              executions.push({ database: receiver, location: receiver.location(), sql: args[0] });
             }
             return Reflect.apply(target, receiver, args);
           },
@@ -184,12 +170,7 @@ it.each(["cold", "warm", "warm-cap", "removal"] as const)(
         ),
       ).toEqual([]);
       if (!remove) {
-        // Worker admission retains a separate lifecycle lock. Planning must still
-        // perform no parent SQL against session data or any other database.
-        const coordinatorExecutions = executions.filter(
-          ({ location }) => resolveNodeSqliteLocation(location ?? "") === coordinatorPath,
-        );
-        expect({ ...counts, exec: counts.exec - coordinatorExecutions.length }).toEqual({
+        expect(counts).toEqual({
           prepare: 0,
           exec: 0,
           get: 0,
@@ -197,11 +178,6 @@ it.each(["cold", "warm", "warm-cap", "removal"] as const)(
           run: 0,
           iterate: 0,
         });
-        expect(coordinatorExecutions.map(({ sql }) => sql)).toEqual([
-          "PRAGMA busy_timeout = 0; PRAGMA journal_mode = MEMORY; BEGIN EXCLUSIVE;",
-          "ROLLBACK",
-        ]);
-        expect(new Set(coordinatorExecutions.map(({ database }) => database)).size).toBe(1);
         expect(preservation).not.toHaveBeenCalled();
       }
       expect(loadSessionEntry(active)?.label).toBe("updated");
@@ -263,8 +239,8 @@ it.runIf(process.platform !== "win32")(
           return current;
         },
       );
-      const reclaim = reclamation.runSqliteSessionReclamation;
-      vi.spyOn(reclamation, "runSqliteSessionReclamation").mockImplementation(async (params) => {
+      const reclaim = reclamationRun.runSqliteSessionReclamation;
+      vi.spyOn(reclamationRun, "runSqliteSessionReclamation").mockImplementation(async (params) => {
         const result = await reclaim(params);
         if (!injected && result.kind === "maintenance-plan") {
           injected = true;
@@ -557,8 +533,8 @@ it.each(
           ),
       );
       const adoptedAfterMutation: Array<ageFacts.SessionEntryMaintenanceAgeFact | undefined> = [];
-      const reclaim = reclamation.runSqliteSessionReclamation;
-      vi.spyOn(reclamation, "runSqliteSessionReclamation").mockImplementation((params) =>
+      const reclaim = reclamationRun.runSqliteSessionReclamation;
+      vi.spyOn(reclamationRun, "runSqliteSessionReclamation").mockImplementation((params) =>
         reclaim({
           ...params,
           onWorkerResult: (result, committedDatabaseIdentity) => {
@@ -654,7 +630,7 @@ it("publishes exact archived keys without worktrees after Worker planning", asyn
     const unsubscribe = sessionChanges.subscribe((change) => published.push(change));
     const diagnostics = {};
     try {
-      const result = await reclamation.runSqliteSessionReclamation({
+      const result = await reclamationRun.runSqliteSessionReclamation({
         diagnostics,
         forceInProcess: false,
         plan: reclamation.createSessionMaintenancePlanningOperation({
@@ -714,7 +690,7 @@ it("publishes only committed removal keys after Worker finalization", async () =
     const unsubscribe = sessionChanges.subscribe((change) => published.push(change));
     const diagnostics = {};
     try {
-      const result = await reclamation.runSqliteSessionReclamation({
+      const result = await reclamationRun.runSqliteSessionReclamation({
         diagnostics,
         forceInProcess: false,
         plan,
@@ -783,7 +759,7 @@ it.each(["no-op", "preservation", "statistics", "empty-finalization"] as const)(
       const completed = vi.fn();
       const diagnostics = {};
       try {
-        const result = await reclamation.runSqliteSessionReclamation({
+        const result = await reclamationRun.runSqliteSessionReclamation({
           diagnostics,
           forceInProcess: false,
           onWorkerResult: completed,
@@ -839,7 +815,7 @@ it.each(["retired predicate", "parent reload failure"] as const)(
         execute(sql);
       });
       const first: SqliteSessionReclamationDiagnostics = {};
-      const result = await reclamation.runSqliteSessionReclamation({
+      const result = await reclamationRun.runSqliteSessionReclamation({
         assertCommitAllowed: () => {
           if (!current) {
             throw fault;
@@ -864,7 +840,7 @@ it.each(["retired predicate", "parent reload failure"] as const)(
       reload.mockRestore();
       const second: SqliteSessionReclamationDiagnostics = {};
       await expect(
-        reclamation.runSqliteSessionReclamation({
+        reclamationRun.runSqliteSessionReclamation({
           diagnostics: second,
           forceInProcess: false,
           plan: reclamation.createSessionMaintenanceStatisticsOperation(databaseOptions),
@@ -888,8 +864,8 @@ it("replans incognito preservation discovery after rollback without a Worker", a
     replaceSessionEntrySync(active, { sessionId: "active", updatedAt: Date.now() });
     replaceSessionEntrySync(victim, { sessionId: "victim", updatedAt: 1 });
     const results: string[] = [];
-    const reclaim = reclamation.runSqliteSessionReclamation;
-    vi.spyOn(reclamation, "runSqliteSessionReclamation").mockImplementation(async (params) => {
+    const reclaim = reclamationRun.runSqliteSessionReclamation;
+    vi.spyOn(reclamationRun, "runSqliteSessionReclamation").mockImplementation(async (params) => {
       const result = await reclaim(params);
       results.push(result.kind);
       return result;

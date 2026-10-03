@@ -97,6 +97,8 @@ Channel-specific runtime helpers, available when a channel plugin is loaded. Par
   </Accordion>
 </AccordionGroup>
 
+Reply options accept `onVisibleWorkSessions(sessions)` to receive accepted visible work sessions before final reply delivery, including when the settled run failed. Each descriptor carries `sessionKey`, the canonical `url`, and an optional `label`; descriptors are deduplicated by session key in acceptance order.
+
 ## Awaited conversation binding mutations
 
 Import routing and service helpers from
@@ -117,6 +119,53 @@ returning its route. Prepare ownership facts with
 projection performs no storage access. Inspection preserves the distinction
 between a missing binding and an unavailable adapter without creating a missing
 store or pruning expired rows.
+
+`inspectRuntimeConversationBindingRoute` and the synchronous
+`resolveRuntimeConversationBindingRoute` also accept a deferred `resolveRoute` callback
+instead of a completed `route`.
+Pass exactly one of `route` or `resolveRoute`; the input type rejects supplying both
+or neither. Existing callers can keep passing a completed route.
+The callback receives `{ inspection, bindingOwnerAvailable, bindingRecord, boundAgentId }`
+after the owner has classified the binding, before ordinary agent selection:
+
+```ts
+const result = inspectRuntimeConversationBindingRoute({
+  inspection,
+  resolveRoute: ({ bindingOwnerAvailable, boundAgentId }) => {
+    if (!bindingOwnerAvailable) {
+      throw new Error("Conversation binding owner is unavailable; retry the message.");
+    }
+    return resolveAgentRoute({
+      channel: "acme-chat",
+      accountId,
+      peer,
+      cfg: boundAgentId ? { session: cfg.session } : cfg,
+      defaultAgentId: boundAgentId,
+    });
+  },
+});
+```
+
+Import `resolveAgentRoute` from `openclaw/plugin-sdk/routing`. A bound agent can
+therefore supply the route even when the ordinary roster requires an explicit
+selection. Agent-scoped session keys take precedence over metadata; unscoped
+targets can use `metadata.agentId`. Missing, ignored cron-run, and plugin-owned
+bindings do not supply a bound agent. An unscoped target without a nonblank metadata
+agent ID also leaves `boundAgentId` undefined; it does not invent a default agent.
+Plugin bindings retain their record so a
+channel can distinguish a plugin fallback from an unbound parent lookup.
+`inspection` retains the prepared conversation identity for composing a thread
+observation before its selected parent without reading the binding store again.
+The callback owns route construction; core still projects the selected session
+and ownership facts. If an agent-owned binding selects a different agent, core
+rebuilds `mainSessionKey` for that agent while preserving the base route's main-key
+name, then derives `lastRoutePolicy` against the bound agent's main session. This
+also applies to completed-route inputs and leaves the ordinary route unchanged
+for channel-specific stale-binding comparison.
+Preserve those facts through context construction so reply
+admission can reject a revoked, reassigned, or unavailable owner. When activity
+must retain a captured selection, await the scoped `touchAsync` after projection
+and keep that route for admission rather than silently selecting a replacement.
 
 Adapters provide `inspectByConversationAsync` for read-only inspection and
 `resolveByConversationAsync` for ordinary lookup. The host service exposes both

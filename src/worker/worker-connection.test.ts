@@ -4,7 +4,10 @@ import net from "node:net";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { Value } from "typebox/value";
 import { describe, expect, it, vi } from "vitest";
-import { WebSocket, WebSocketServer } from "ws";
+import {
+  WebSocket,
+  WebSocketServer,
+} from "../../packages/gateway-client/src/websocket.test-support.js";
 import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
@@ -22,6 +25,7 @@ import type {
 } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../test/helpers/tls-fixture.js";
+import { PRESENCE_QUERY_TIMEOUT_MS } from "../agents/tools/presence-tool-contract.js";
 import {
   WorkerAdmissionDeadlineExceededError,
   WorkerAdmissionError,
@@ -30,6 +34,7 @@ import {
 } from "./worker-connection-contract.js";
 import { WorkerConnectionEndpointError } from "./worker-connection-endpoint.js";
 import { WorkerConnectionFrameDispatcher } from "./worker-connection-frames.js";
+import { registerWorkerGatewayToolTransportTests } from "./worker-connection-gateway-tools.suite.js";
 import { createWorkerConnection, type WorkerConnectionState } from "./worker-connection.js";
 
 const FRAME_CONNECT_PARAMS: WorkerConnectParams = {
@@ -195,6 +200,52 @@ async function createAdmissionWriteFixture(onAdmissionRequestSent: () => void) {
 }
 
 describe("worker admission write completion", () => {
+  it("keeps a presence read pending through both cold geolocation download windows", async () => {
+    const f = await createAdmissionWriteFixture(() => {});
+    try {
+      const attempt = await f.first;
+      attempt.completeWrite();
+      sendWorkerHello(attempt.peer, attempt.id, FRAME_CONNECT_PARAMS.admission);
+      await f.starting;
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const received = once(attempt.peer, "message");
+      const pending = f.connection.invokeGatewayTool(
+        {
+          generation: "presence-surface",
+          toolId: "presence",
+          toolCallId: "cold-presence",
+          arguments: { action: "list", include: ["location"] },
+        },
+        { timeoutMs: PRESENCE_QUERY_TIMEOUT_MS },
+      );
+      let settled = false;
+      void pending.then(
+        () => {
+          settled = true;
+        },
+        () => {
+          settled = true;
+        },
+      );
+      const [data] = await received;
+      const frame = JSON.parse(rawDataToString(data));
+      await vi.advanceTimersByTimeAsync(240_001);
+      expect(settled).toBe(false);
+      attempt.peer.send(
+        JSON.stringify({
+          type: "res",
+          id: frame.id,
+          ok: true,
+          payload: { content: [], details: { status: "ok" } },
+        }),
+      );
+      await expect(pending).resolves.toMatchObject({ ok: true });
+    } finally {
+      vi.useRealTimers();
+      await f.close();
+    }
+  });
+
   it.each([false, true])(
     "notifies only after the request write completes, isolating observer failure: %s",
     async (throws) => {
@@ -950,3 +1001,5 @@ describe("WorkerConnection inference listener isolation", () => {
     expect(observed).toEqual([1, 2]);
   });
 });
+
+registerWorkerGatewayToolTransportTests(FRAME_CONNECT_PARAMS);

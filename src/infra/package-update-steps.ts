@@ -1,4 +1,3 @@
-// Runs package update move, inventory, and cleanup steps.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { validRange } from "semver";
@@ -14,6 +13,7 @@ import type { LocalPackageOverridesResult } from "./package-local-overrides.js";
 import { readPackageVersionIfPresent } from "./package-update-integrity.js";
 import type { PackageUpdateStepRunner } from "./package-update-lifecycle.js";
 import {
+  createStagedPackageInstall,
   discardPackageUpdateStage,
   resolveNpmUpdateLifecyclePolicy,
   runPackageUpdateLifecycle,
@@ -27,6 +27,7 @@ import {
   validatePnpmIsolatedUpdate,
 } from "./package-update-manager-preflight.js";
 import { prepareNpmGitSourceInstallSpec } from "./package-update-npm-pack.js";
+import type { PackageActivationOptions } from "./package-update-swap-contract.js";
 import {
   PackageUpdateActivationError,
   removePackageUpdatePath,
@@ -49,7 +50,6 @@ import {
   collectInstalledGlobalPackageErrors,
   cleanupGlobalRenameDirs,
   globalInstallArgs,
-  globalInstallFallbackArgs,
   listActivePnpmIsolatedGlobalPackages,
   resolveExpectedInstalledVersionFromSpec,
   verifyPackageUpdateRecovery,
@@ -63,7 +63,6 @@ import {
 import {
   readPackageManagerProbeValue,
   resolveNpmGlobalPrefixLayoutFromGlobalRoot,
-  resolveNpmGlobalPrefixLayoutFromPrefix,
 } from "./update-npm-prefix.js";
 import type { UpdateRecovery } from "./update-recovery.js";
 import { isFailedUpdateStep } from "./update-run-step.js";
@@ -105,35 +104,6 @@ function isRegistrySourceInstallSpec(spec: string): boolean {
     !archive.test(selector) &&
     (validRange(selector, true) !== null || encodeURIComponent(selector) === selector)
   );
-}
-
-async function createStagedPackageInstall(
-  installTarget: ResolvedGlobalInstallTarget,
-  packageName: string,
-): Promise<StagedPackageInstall> {
-  const targetLayout = resolveNpmGlobalPrefixLayoutFromGlobalRoot(installTarget.globalRoot, {
-    allowDirectNodeModulesRoot: installTarget.directNodeModulesRoot === true,
-  });
-  if (!targetLayout) {
-    throw new Error(
-      `The ${installTarget.manager} global install layout cannot prepare the update. Reinstall with ${installTarget.manager} into its default global layout, then retry the update.`,
-    );
-  }
-  await fs.mkdir(targetLayout.globalRoot, { recursive: true });
-  // Active stages must stay outside cleanupGlobalRenameDirs' disposable ".openclaw-" namespace.
-  const prefix = await fs.mkdtemp(path.join(targetLayout.globalRoot, ".openclaw.update-stage-"));
-  const layout = resolveNpmGlobalPrefixLayoutFromPrefix(prefix);
-  return {
-    prefix,
-    layout,
-    packageRoot: path.join(layout.globalRoot, packageName),
-    installTarget: {
-      manager: "npm",
-      command: installTarget.command,
-      globalRoot: layout.globalRoot,
-      packageRoot: path.join(layout.globalRoot, packageName),
-    },
-  };
 }
 
 async function prepareStagedPackageInstall(
@@ -225,7 +195,9 @@ export async function runGlobalPackageUpdateSteps(params: {
   validateCandidate?: (packageRoot: string) => Promise<UpdateStepResult[]>;
   beforeActivate?: () => Promise<void>;
   assertCurrent?: () => void;
+  reserveInstallSlot?: (root: string) => void;
   onTransaction?: (transaction: PackageUpdateTransaction) => void | Promise<void>;
+  getActivation?: () => PackageActivationOptions | undefined;
   expectedGitCheckout?: GitRuntimeIdentity;
   activateGitRoot?: string;
   localOverrides?: { reapply: boolean; env?: NodeJS.ProcessEnv };
@@ -245,7 +217,11 @@ export async function runGlobalPackageUpdateSteps(params: {
   let packageRollbackVerified: boolean | undefined;
   const steps: UpdateStepResult[] = [];
   const cleanupStage = async (): Promise<UpdateStepResult | null> => {
-    if (!stagedInstall || stagedInstall === uncertainLifecycleStage) {
+    if (
+      !stagedInstall ||
+      stagedInstall === uncertainLifecycleStage ||
+      stagedInstall.activationCustody
+    ) {
       return null;
     }
     const cleanup = await discardPackageUpdateStage({
@@ -384,8 +360,11 @@ export async function runGlobalPackageUpdateSteps(params: {
     const stageNative = params.installTarget.manager !== "npm";
     let globalBinDir = pnpmPreflight.globalBinDir ?? undefined;
     if (stageNative && !globalBinDir) {
+      // Do not spread params: its accessors are gated on candidate admission.
       const bin = await runPnpmPreflightProbe({
-        ...params,
+        installTarget: params.installTarget,
+        runCommand: params.runCommand,
+        timeoutMs: params.timeoutMs,
         env: effectiveInstallEnv,
         args: params.installTarget.manager === "bun" ? ["pm", "bin", "-g"] : ["bin", "-g"],
         name: `${params.installTarget.manager}-staging-preflight`,
@@ -420,7 +399,9 @@ export async function runGlobalPackageUpdateSteps(params: {
       ] as const) {
         const args = [probeName, "-g", ...stage.configArgs];
         const probe = await runPnpmPreflightProbe({
-          ...params,
+          installTarget: params.installTarget,
+          runCommand: params.runCommand,
+          timeoutMs: params.timeoutMs,
           args,
           cwd: stage.projectRoot,
           env: stage.env,
@@ -516,21 +497,20 @@ export async function runGlobalPackageUpdateSteps(params: {
         return await packageUpdateFailure(preparedFallbackInstall.failedStep, steps);
       }
       stagedInstall = preparedFallbackInstall.stagedInstall;
-      const fallbackArgv = globalInstallFallbackArgs(
-        stagedInstall.installTarget,
-        preparedSpec.installSpec,
-        undefined,
-        stagedInstall.prefix,
-        preparedSpec.installCwd,
-        npmPreflight.policy ?? undefined,
-      );
-      if (!fallbackArgv) {
-        return await packageUpdateFailure(updateStep, steps);
-      }
       const fallbackStep = await classifyPackageUpdatePermissionFailure(
         await params.runStep({
           name: "package-install-omit-optional",
-          argv: fallbackArgv,
+          argv: [
+            ...globalInstallArgs(
+              stagedInstall.installTarget,
+              preparedSpec.installSpec,
+              undefined,
+              stagedInstall.prefix,
+              preparedSpec.installCwd,
+              npmPreflight.policy ?? undefined,
+            ),
+            "--omit=optional",
+          ],
           ...(preparedSpec.installCwd ? { cwd: preparedSpec.installCwd } : {}),
           ...installEnv,
           timeoutMs: workTimeoutMs,
@@ -703,10 +683,12 @@ export async function runGlobalPackageUpdateSteps(params: {
         postVerifyStep: params.postVerifyStep,
         beforeActivate: params.beforeActivate,
         assertCurrent: params.assertCurrent,
+        reserveInstallSlot: params.reserveInstallSlot,
         onLiveMutation: () => {
           liveTreeMutated = true;
         },
         onTransaction: params.onTransaction,
+        activation: params.getActivation?.(),
         localOverrides: params.expectedGitCheckout ? undefined : params.localOverrides,
         onLocalOverrides: (result) => {
           localOverrides = result;

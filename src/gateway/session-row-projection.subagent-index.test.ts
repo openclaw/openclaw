@@ -153,6 +153,7 @@ it.each(["existing", "new"] as const)(
               sessionKeys: [],
             }),
             (selection) => selection.runIds,
+            { sessionKeys: [previous.childSessionKey], descendants: true },
           ).then(
             (value) => ({ value }),
             (error: unknown) => ({ error }),
@@ -254,6 +255,8 @@ it.each(["exact", "bulk"] as const)(
             return {
               placements: new Map(),
               moves: new Map(),
+              pendingResults: new Map(),
+              workspaceJournalOwnerSessionIds: new Set(),
               environments: new Map(),
               workspaceResultReconcilingSessionIds: new Set(),
               workspaceRecoveryPendingSessionIds: new Set(),

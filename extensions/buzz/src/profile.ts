@@ -1,4 +1,9 @@
 import { compareEvents, finalizeEvent, type Event, type Relay } from "nostr-tools";
+import {
+  asNonArrayRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { safeParseJson } from "openclaw/plugin-sdk/text-utility-runtime";
 import { queryBuzzRelaySnapshot } from "./relay-subscription.js";
 
 const PROFILE_KIND = 0;
@@ -9,17 +14,7 @@ const CHANNEL_ADD_POLICIES = new Set(["anyone", "owner_only", "nobody"]);
 type BuzzProfileSyncResult = { status: "unchanged" } | { status: "published"; eventId: string };
 
 function parseProfileContent(event: Event | undefined): Record<string, unknown> {
-  if (!event) {
-    return {};
-  }
-  try {
-    const parsed: unknown = JSON.parse(event.content);
-    return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
-      ? { ...parsed }
-      : {};
-  } catch {
-    return {};
-  }
+  return asNonArrayRecord(event ? safeParseJson<unknown>(event.content) : undefined);
 }
 
 function resolveProfileTags(event: Event | undefined, authTag: string[] | undefined): string[][] {
@@ -39,11 +34,6 @@ function hasConfiguredAuthTag(event: Event | undefined, authTag: string[] | unde
   }
   const authTags = event?.tags.filter((tag) => tag[0] === "auth") ?? [];
   return authTags.length === 1 && JSON.stringify(authTags[0]) === JSON.stringify(authTag);
-}
-
-function readNonEmptyString(content: Record<string, unknown>, key: string): string | undefined {
-  const value = content[key];
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 async function queryCurrentProfiles(params: {
@@ -120,9 +110,9 @@ export async function syncBuzzProfile(params: {
   const metadataContent = parseProfileContent(currentMetadata);
   const agentContent = parseProfileContent(currentAgentProfile);
   const resolvedDisplayName =
-    readNonEmptyString(metadataContent, "display_name") ??
-    readNonEmptyString(agentContent, "display_name") ??
-    readNonEmptyString(agentContent, "name") ??
+    normalizeOptionalString(metadataContent.display_name) ??
+    normalizeOptionalString(agentContent.display_name) ??
+    normalizeOptionalString(agentContent.name) ??
     displayName;
   const events: Event[] = [];
 
@@ -143,11 +133,11 @@ export async function syncBuzzProfile(params: {
   }
 
   let agentProfileChanged = false;
-  if (!readNonEmptyString(agentContent, "name")) {
+  if (!normalizeOptionalString(agentContent.name)) {
     agentContent.name = resolvedDisplayName;
     agentProfileChanged = true;
   }
-  if (!readNonEmptyString(agentContent, "display_name")) {
+  if (!normalizeOptionalString(agentContent.display_name)) {
     agentContent.display_name = resolvedDisplayName;
     agentProfileChanged = true;
   }

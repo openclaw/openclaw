@@ -37,6 +37,11 @@ import {
   ensureCodexAppServerClientRuntime,
   recordCodexAppServerAuthHandoff,
 } from "./client-runtime.js";
+import {
+  resolveRemainingAcquireTimeout,
+  withCodexWebSocketOpenRetry,
+  withCodexAppServerAcquireDeadline,
+} from "./client-startup-retry.js";
 import { CodexAppServerClient, isUnsupportedCodexAppServerVersionError } from "./client.js";
 import type { CodexAppServerStartOptions } from "./config-contracts.js";
 import {
@@ -81,7 +86,6 @@ import {
   type CodexAppServerClientProcessIdentity,
 } from "./spawn-identity.js";
 import { CodexAdoptedThreadActiveError } from "./thread-lifecycle-errors.js";
-import { withTimeout } from "./timeout.js";
 
 export type { CodexAppServerPreparedAuth } from "./auth-bridge.js";
 
@@ -95,27 +99,25 @@ const SHARED_CODEX_APP_SERVER_CLIENT_DISPOSER = codexBuildSymbol(
   "openclaw.codexAppServerClientDisposer",
 );
 
-type CodexAppServerClientStartupOptions = {
-  lifetime: CodexAppServerStartupLifetime;
-  requestedStartOptions: CodexAppServerStartOptions;
-  startOptions: CodexAppServerStartOptions;
-  desktopGeneration?: CodexDesktopGeneration;
-  pluginConfig?: unknown;
-  agentDir?: string;
-  authProfileId: string | null | undefined;
-  authProfileStore?: AuthProfileStore;
-  runtimeArtifactMode?: "capture";
-  expectedRuntimeArtifact?: AgentHarnessRuntimeArtifactBinding;
-  preparedAuth?: CodexAppServerResolvedPreparedAuth;
-  authRequirement?: CodexAppServerAuthRequirement;
-  config?: CodexAppServerClientOptions["config"];
-  timeoutMs?: number;
-  abandonSignal?: AbortSignal;
-  onStartingClient?: (starting: Promise<CodexAppServerClient>) => void;
-  onStartedClient?: (client: CodexAppServerClient) => void;
-  onInitializedClient?: () => void;
-  assertCurrent?: () => void;
-};
+type CodexAppServerClientStartupOptions = Omit<
+  Awaited<ReturnType<typeof resolveCodexAppServerClientStartContext>>,
+  "usesNativeAuth" | "authProfileId"
+> &
+  Pick<
+    CodexAppServerClientOptions,
+    | "runtimeArtifactMode"
+    | "expectedRuntimeArtifact"
+    | "config"
+    | "timeoutMs"
+    | "abandonSignal"
+    | "onStartedClient"
+    | "assertCurrent"
+  > & {
+    lifetime: CodexAppServerStartupLifetime;
+    authProfileId: string | null | undefined;
+    onStartingClient?: (starting: Promise<CodexAppServerClient>) => void;
+    onInitializedClient?: () => void;
+  };
 
 const CODEX_APP_SERVER_INITIALIZE_TIMEOUT_MESSAGE = "codex app-server initialize timed out";
 
@@ -298,22 +300,7 @@ export type CodexAppServerClientFactory = (
   options?: CodexAppServerClientOptions,
 ) => Promise<CodexAppServerClient>;
 
-type ResolvedCodexAppServerClientStartContext = {
-  agentDir?: string;
-  usesNativeAuth: boolean;
-  authProfileId: string | undefined;
-  authProfileStore: AuthProfileStore | undefined;
-  preparedAuth: CodexAppServerResolvedPreparedAuth | undefined;
-  authRequirement: CodexAppServerAuthRequirement | undefined;
-  requestedStartOptions: CodexAppServerStartOptions;
-  startOptions: CodexAppServerStartOptions;
-  desktopGeneration?: CodexDesktopGeneration;
-  pluginConfig?: unknown;
-};
-
-async function resolveCodexAppServerClientStartContext(
-  options?: CodexAppServerClientOptions,
-): Promise<ResolvedCodexAppServerClientStartContext> {
+async function resolveCodexAppServerClientStartContext(options?: CodexAppServerClientOptions) {
   const requestedStartOptions =
     options?.startOptions ??
     resolveCodexAppServerRuntimeOptions({ pluginConfig: options?.pluginConfig }).start;
@@ -751,33 +738,6 @@ async function acquireSharedCodexAppServerClient(
   }
 }
 
-async function withCodexAppServerAcquireDeadline<T>(
-  timeoutMs: number, // First: fail before the caller starts its promise argument.
-  promise: Promise<T>,
-  signal?: AbortSignal,
-  timeoutMessage = CODEX_APP_SERVER_INITIALIZE_TIMEOUT_MESSAGE,
-  timeoutErrorFactory?: () => CodexAppServerStartupError,
-): Promise<T> {
-  if (signal?.aborted) {
-    throw new CodexAppServerStartupError("aborted", "codex app-server initialize aborted");
-  }
-  const timed = withTimeout(
-    promise,
-    timeoutMs,
-    timeoutMessage,
-    () => timeoutErrorFactory?.() ?? new CodexAppServerStartupError("timed_out", timeoutMessage),
-  );
-  if (!signal) {
-    return await timed;
-  }
-  return await new Promise<T>((resolve, reject) => {
-    const onAbort = () =>
-      reject(new CodexAppServerStartupError("aborted", "codex app-server initialize aborted"));
-    signal.addEventListener("abort", onAbort, { once: true });
-    timed.then(resolve, reject).finally(() => signal.removeEventListener("abort", onAbort));
-  });
-}
-
 function buildCodexAppServerInitializeTimeoutError(
   client: CodexAppServerClient | undefined,
 ): CodexAppServerStartupError {
@@ -788,17 +748,6 @@ function buildCodexAppServerInitializeTimeoutError(
       ? `${CODEX_APP_SERVER_INITIALIZE_TIMEOUT_MESSAGE}; stderr=${JSON.stringify(stderr)}`
       : CODEX_APP_SERVER_INITIALIZE_TIMEOUT_MESSAGE,
   );
-}
-
-function resolveRemainingAcquireTimeout(timeoutMs: number, startedAt: number): number {
-  if (!(timeoutMs > 0)) {
-    return timeoutMs;
-  }
-  const remaining = timeoutMs - (performance.now() - startedAt);
-  if (remaining <= 0) {
-    throw new CodexAppServerStartupError("timed_out", "codex app-server initialize timed out");
-  }
-  return remaining;
 }
 
 function createSharedCodexAppServerClientStartup(
@@ -888,23 +837,29 @@ export async function createIsolatedCodexAppServerClient(
       abandonSignal,
       assertCurrent: options?.assertCurrent,
       onStartedClient: (client) => {
-        trackIsolatedCodexAppServerClient(client);
+        const state = getSharedCodexAppServerClientState();
+        state.isolatedClients.add(client);
+        client.addTransportExitHandler((exitedClient) => {
+          state.isolatedClients.delete(exitedClient);
+          notifyDesktopGenerationDrainChecks(state);
+        });
         options?.onStartedClient?.(client);
       },
     }),
   );
 }
 
-function trackIsolatedCodexAppServerClient(client: CodexAppServerClient): void {
-  const state = getSharedCodexAppServerClientState();
-  state.isolatedClients.add(client);
-  client.addTransportExitHandler((exitedClient) => {
-    state.isolatedClients.delete(exitedClient);
-    notifyDesktopGenerationDrainChecks(state);
+function startInitializedCodexAppServerClient(params: CodexAppServerClientStartupOptions) {
+  return withCodexWebSocketOpenRetry({
+    timeoutMs: params.timeoutMs ?? 0,
+    signal: params.abandonSignal
+      ? AbortSignal.any([params.lifetime.controller.signal, params.abandonSignal])
+      : params.lifetime.controller.signal,
+    start: (timeoutMs) => startInitializedCodexAppServerClientOnce({ ...params, timeoutMs }),
   });
 }
 
-async function startInitializedCodexAppServerClient(
+async function startInitializedCodexAppServerClientOnce(
   params: CodexAppServerClientStartupOptions,
 ): Promise<CodexAppServerClient> {
   const acquireStartedAt = performance.now();
@@ -1066,7 +1021,9 @@ async function startInitializedCodexAppServerClient(
         );
       } catch (error) {
         if (
-          shouldTryManagedFallbackStartOption(error, startOptions, index, startOptionsCandidates)
+          startOptions.commandSource === "resolved-managed" &&
+          index < startOptionsCandidates.length - 1 &&
+          isUnsupportedCodexAppServerVersionError(error)
         ) {
           continue;
         }
@@ -1215,19 +1172,6 @@ function resolveManagedFallbackStartOptions(
   return candidates;
 }
 
-function shouldTryManagedFallbackStartOption(
-  error: unknown,
-  startOptions: CodexAppServerStartOptions,
-  index: number,
-  startOptionsCandidates: readonly CodexAppServerStartOptions[],
-): boolean {
-  return (
-    startOptions.commandSource === "resolved-managed" &&
-    index < startOptionsCandidates.length - 1 &&
-    isUnsupportedCodexAppServerVersionError(error)
-  );
-}
-
 export function resetSharedCodexAppServerClientForTests(): void {
   const state = getSharedCodexAppServerClientState();
   state.startup.controller.abort();
@@ -1337,13 +1281,8 @@ function createOlderDesktopGenerationDrainWait(params: {
     return { promise: Promise.resolve(), cancel: () => undefined };
   }
   const state = getSharedCodexAppServerClientState();
-  let settled = false;
   const { promise, resolve: resolveWait } = createDeferred<void>();
   const cancel = () => {
-    if (settled) {
-      return;
-    }
-    settled = true;
     state.desktopGenerationDrainChecks.delete(check);
     resolveWait();
   };
@@ -1370,7 +1309,12 @@ function hasLiveOlderDesktopGenerationClient(params: {
 }): boolean {
   for (const clients of [params.state.liveClients, params.state.isolatedClients]) {
     for (const client of clients) {
-      if (isOlderDesktopGenerationClientForHome(client, params.generation, params.targetHome)) {
+      const metadata = params.state.startMetadata.get(client);
+      if (
+        metadata?.desktopGeneration &&
+        metadata.desktopGeneration.epoch < params.generation.epoch &&
+        resolveCodexNativeConfigFenceKey({ client }) === params.targetHome
+      ) {
         return true;
       }
     }
@@ -1378,25 +1322,9 @@ function hasLiveOlderDesktopGenerationClient(params: {
   return false;
 }
 
-function isOlderDesktopGenerationClientForHome(
-  client: CodexAppServerClient,
-  generation: CodexDesktopGeneration,
-  targetHome: string,
-): boolean {
-  const metadata = getSharedCodexAppServerClientState().startMetadata.get(client);
-  return Boolean(
-    metadata?.desktopGeneration &&
-    metadata.desktopGeneration.epoch < generation.epoch &&
-    resolveCodexNativeConfigFenceKey({ client }) === targetHome,
-  );
-}
-
 export async function clearSharedCodexAppServerClientIfCurrentAndWait(
   client: CodexAppServerClient | undefined,
-  options?: {
-    exitTimeoutMs?: number;
-    forceKillDelayMs?: number;
-  },
+  options?: Parameters<CodexAppServerClient["closeAndWait"]>[0],
 ): Promise<boolean> {
   if (!client) {
     return false;
@@ -1411,10 +1339,9 @@ export async function clearSharedCodexAppServerClientIfCurrentAndWait(
   return true;
 }
 
-export async function clearSharedCodexAppServerClientAndWait(options?: {
-  exitTimeoutMs?: number;
-  forceKillDelayMs?: number;
-}): Promise<void> {
+export async function clearSharedCodexAppServerClientAndWait(
+  options?: Parameters<CodexAppServerClient["closeAndWait"]>[0],
+): Promise<void> {
   const state = getSharedCodexAppServerClientState();
   const lifetime = state.startup;
   lifetime.controller.abort();

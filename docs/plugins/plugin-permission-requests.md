@@ -204,6 +204,67 @@ targets, configure `approvals.plugin`:
 forwarding does not route plugin approval prompts, and enabling plugin approval
 forwarding does not change host exec policy.
 
+For Slack decisions, `approvals.plugin.slack` can restrict reviewers without
+changing the bot's message access list. The default `approvers` list applies to
+all plugin approvals. A `plugins` entry overrides it for one selected native
+tool plugin. A tool entry overrides that plugin's
+list for one exact tool:
+
+```json5
+{
+  approvals: {
+    plugin: {
+      slack: {
+        approvers: ["team:T12345678:user:U12345678"],
+        plugins: {
+          "catalog-tools": {
+            approvers: ["team:T12345678:user:U23456789"],
+            tools: {
+              "create%20issue": {
+                approvers: ["team:T12345678:user:U34567890"],
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+For native OpenClaw tools, use the tool registration's plugin ID and a tool key
+of `encodeURIComponent(rawToolName)`. Only the exact matching list applies:
+tool, then plugin, then default. Slack reviewers accept raw `U…`/`W…` user IDs
+within the selected Slack account, or workspace-qualified IDs as shown above.
+Decisions are bound to the bot's authenticated workspace; qualified reviewers
+from a different workspace do not receive approval DMs. An explicit empty list denies
+Slack decisions at that level. If the default `approvers` field is omitted,
+requests with a known selected owner and no matching override retain the existing
+Slack account `allowFrom` or `defaultTo` authorization. A missing selected owner
+denies Slack decisions when plugin overrides exist. These lists authorize Slack
+card buttons and `/approve`, while authenticated Gateway approval clients still
+use their own scopes. The card buttons work for a listed reviewer even without
+ordinary bot DM access; typed `/approve` still requires that access. A tool
+card can show the plugin-provided request title and description even when the
+reviewer cannot read the source DM or private channel; choose reviewers with
+that visibility in mind. A tool override requires an exact selected tool match;
+the request cannot inherit a broader reviewer list when that identity is unavailable.
+An effective nonempty reviewer list enables native Slack delivery for that
+request, independently of native exec approvals and plugin forwarding. Native
+tool lists apply only when a policy or hook requests approval for that tool;
+setting reviewers does not itself prompt for approval.
+When a Slack reviewer list is selected, Slack delivers the card only through
+native reviewer DMs. Generic `approvals.plugin.targets` Slack forwarding cannot
+enforce that recipient list, even when the target names a reviewer. If the
+native Slack handler is unavailable, generic forwarding will not send a card;
+connect the bot or an approval-capable Gateway client and retry.
+
+Reviewer lists are checked when routing a new request and again when accepting
+an approval decision. Changing the list does not retract existing cards or
+cancel messages already queued for delivery. A former reviewer may still see
+such a card, but cannot approve it after losing access. Cards for expired or
+cancelled requests cannot authorize an action.
+
 When a prompt includes manual approval text, resolve it with one of the offered
 decisions:
 

@@ -1,4 +1,8 @@
 import { isDeepStrictEqual } from "node:util";
+import {
+  withArtifactPreservingStateReads,
+  withSynchronousArtifactPreservingStateSnapshot,
+} from "../state/openclaw-state-db-readonly.js";
 import { isInternalMessageChannel } from "../utils/message-channel.js";
 import { resolveInstallationTarget } from "./installation-target-context.js";
 import type { UpdateRecoveryFence } from "./update-run-recovery.js";
@@ -105,50 +109,55 @@ async function captureManagedUpdateRequester(
   const authorizationSource = requester.authorizationSource ?? "configured-owner";
   const admittedRequester = Object.freeze({ ...requester });
   try {
-    const authorityEnv = { ...env };
-    const target = resolveInstallationTarget(authorityEnv);
-    const [
-      {
-        isConfiguredCommandOwner,
-        resolveCommandOwnerAuthority,
-        resolveUpdateRequesterIdentityAuthority,
-      },
-      { readCurrentConfigForPolicyCheck },
-      { ensureCliPluginRegistryLoaded },
-    ] = await Promise.all([
-      import("../auto-reply/command-auth.js"),
-      // Keep synchronous authority checks on the reader loaded at admission.
-      import("../config/io.js"),
-      import("../cli/plugin-registry-loader.js"),
-    ]);
-    const readCurrentConfig = () =>
-      readCurrentConfigForPolicyCheck({
-        env: authorityEnv,
-        configPath: target.configPath,
+    return await withArtifactPreservingStateReads(async () => {
+      const authorityEnv = { ...env };
+      const target = resolveInstallationTarget(authorityEnv);
+      const [
+        {
+          isConfiguredCommandOwner,
+          resolveCommandOwnerAuthority,
+          resolveUpdateRequesterIdentityAuthority,
+        },
+        { readCurrentConfigForPolicyCheck },
+        { ensureCliPluginRegistryLoaded },
+      ] = await Promise.all([
+        import("../auto-reply/command-auth.js"),
+        // Keep synchronous authority checks on the reader loaded at admission.
+        import("../config/io.js"),
+        import("../cli/plugin-registry-loader.js"),
+      ]);
+      const readCurrentConfig = () =>
+        readCurrentConfigForPolicyCheck({
+          env: authorityEnv,
+          configPath: target.configPath,
+        });
+      await ensureCliPluginRegistryLoaded({
+        scope: "configured-channels",
+        routeLogsToStderr: true,
+        config: readCurrentConfig(),
       });
-    await ensureCliPluginRegistryLoaded({
-      scope: "configured-channels",
-      routeLogsToStderr: true,
-      config: readCurrentConfig(),
-    });
-    const authority =
-      authorizationSource === "configured-owner"
-        ? undefined
-        : selectResolver({ resolveCommandOwnerAuthority, resolveUpdateRequesterIdentityAuthority })(
-            readCurrentConfig(),
-            admittedRequester,
-            {
+      const authority =
+        authorizationSource === "configured-owner"
+          ? undefined
+          : selectResolver({
+              resolveCommandOwnerAuthority,
+              resolveUpdateRequesterIdentityAuthority,
+            })(readCurrentConfig(), admittedRequester, {
               env: authorityEnv,
+            });
+      return Object.freeze({
+        requester: admittedRequester,
+        isCurrent: () =>
+          withSynchronousArtifactPreservingStateSnapshot(
+            () => {
+              const config = readCurrentConfig();
+              return authorizationSource === "configured-owner"
+                ? isConfiguredCommandOwner(config, admittedRequester)
+                : authority?.source === authorizationSource && authority.isCurrent(config);
             },
-          );
-    return Object.freeze({
-      requester: admittedRequester,
-      isCurrent: () => {
-        const config = readCurrentConfig();
-        return authorizationSource === "configured-owner"
-          ? isConfiguredCommandOwner(config, admittedRequester)
-          : authority?.source === authorizationSource && authority.isCurrent(config);
-      },
+            { current: { env: authorityEnv } },
+          ),
+      });
     });
   } catch (error) {
     // Admission and worker startup precede run failure reporting. Surface failed

@@ -1,3 +1,4 @@
+import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import {
   asOptionalObjectRecord,
   asOptionalRecord,
@@ -204,10 +205,7 @@ function collectPayloadOutcomeMediaUrls(
   const urls = new Set<string>();
   for (const outcome of outcomes) {
     const record = asOptionalRecord(outcome);
-    if (!record) {
-      continue;
-    }
-    if (!statuses(record)) {
+    if (!record || !statuses(record)) {
       continue;
     }
     const index =
@@ -347,10 +345,6 @@ export function getAutomaticDeliveryEvidence(
   return { mayHaveSent, suppressionReason };
 }
 
-function hasPositiveNumber(value: unknown): boolean {
-  return typeof value === "number" && Number.isFinite(value) && value > 0;
-}
-
 /** Extracts a gateway result payload when the response carries delivery evidence fields. */
 export function getGatewayAgentResult(response: unknown): AgentDeliveryEvidence | null {
   const record = asOptionalObjectRecord(response);
@@ -487,7 +481,7 @@ export function hasVisibleOutboundDeliveryEvidence(result: AgentDeliveryEvidence
       result.messagingToolSentMediaUrls === undefined &&
       result.messagingToolSentTargets === undefined) ||
     hasAcceptedSessionSpawnEvidence(result.acceptedSessionSpawns) ||
-    hasPositiveNumber(result.successfulCronAdds)
+    asPositiveFiniteNumber(result.successfulCronAdds) !== undefined
   );
 }
 
@@ -496,7 +490,7 @@ export function hasCommittedOutboundDeliveryEvidence(result: AgentDeliveryEviden
   return (
     hasMessagingToolDeliveryEvidence(result) ||
     hasAcceptedSessionSpawnEvidence(result.acceptedSessionSpawns) ||
-    hasPositiveNumber(result.successfulCronAdds)
+    asPositiveFiniteNumber(result.successfulCronAdds) !== undefined
   );
 }
 
@@ -504,7 +498,7 @@ export function hasCommittedOutboundDeliveryEvidence(result: AgentDeliveryEviden
 export function hasOutboundDeliveryEvidence(result: AgentDeliveryEvidence): boolean {
   return (
     hasCommittedOutboundDeliveryEvidence(result) ||
-    hasPositiveNumber(result.meta?.toolSummary?.calls)
+    asPositiveFiniteNumber(result.meta?.toolSummary?.calls) !== undefined
   );
 }
 

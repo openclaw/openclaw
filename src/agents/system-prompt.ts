@@ -47,7 +47,7 @@ import {
 import { buildCredentialSafetyPrompt } from "./credential-safety-prompt.js";
 import { buildTemporalContextSection } from "./date-time.js";
 import { buildDelegationGuidanceSection } from "./delegation-guidance.js";
-import type { EmbeddedContextFile } from "./embedded-agent-helpers.js";
+import type { EmbeddedContextFile } from "./embedded-agent-helpers/context-file.js";
 import type {
   EmbeddedFullAccessBlockedReason,
   EmbeddedSandboxInfo,
@@ -72,7 +72,11 @@ import type {
 } from "./system-prompt-contribution.js";
 import { buildMessagingSection } from "./system-prompt-messaging.js";
 import { buildSystemPromptToolLines } from "./system-prompt-tool-list.js";
-import type { PromptMode, SilentReplyPromptMode } from "./system-prompt.types.js";
+import type {
+  PromptMode,
+  SilentReplyPromptMode,
+  SystemPromptRuntimeInfo,
+} from "./system-prompt.types.js";
 import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";
 import { buildUiPresentationPrompt } from "./ui-presentation-prompt.js";
 import { buildProactiveSubagentOrchestrationSection } from "./ultra-orchestration.js";
@@ -84,27 +88,6 @@ import {
 type OwnerIdDisplay = "raw" | "hash";
 
 const SYSTEM_PROMPT_STABLE_PREFIX_CACHE_LIMIT = 64;
-
-export type SystemPromptRuntimeInfo = {
-  agentId?: string;
-  agentName?: string;
-  sessionKey?: string;
-  sessionId?: string;
-  sessionUrl?: string;
-  gitCoauthorPrompt?: string;
-  host?: string;
-  os?: string;
-  arch?: string;
-  node?: string;
-  model?: string;
-  defaultModel?: string;
-  shell?: string;
-  channel?: string;
-  chatType?: string;
-  capabilities?: string[];
-  repoRoot?: string;
-  activeNode?: string;
-};
 
 const stablePromptPrefixCache = new Map<string, string>();
 
@@ -968,15 +951,13 @@ export function buildAgentSystemPrompt(params: {
       ...skillsSection,
       ...skillWorkshopSection,
       ...memorySection,
-      params.modelAliasLines && params.modelAliasLines.length > 0 && !isMinimal
-        ? "## Model Aliases"
-        : "",
-      params.modelAliasLines && params.modelAliasLines.length > 0 && !isMinimal
-        ? "Model override: aliases are shortcuts for unqualified model requests. Use explicit provider/model references verbatim; do not substitute an alias or another provider."
-        : "",
-      params.modelAliasLines && params.modelAliasLines.length > 0 && !isMinimal
-        ? params.modelAliasLines.join("\n")
-        : "",
+      ...(params.modelAliasLines && params.modelAliasLines.length > 0 && !isMinimal
+        ? [
+            "## Model Aliases",
+            "Model override: aliases are shortcuts for unqualified model requests. Use explicit provider/model references verbatim; do not substitute an alias or another provider.",
+            params.modelAliasLines.join("\n"),
+          ]
+        : []),
       ...directorySection,
       workspaceOnlyGuidance,
       ...workspaceNotes,
@@ -1014,17 +995,11 @@ export function buildAgentSystemPrompt(params: {
               : elevated
                 ? "Elevated exec is unavailable for this session."
                 : "",
-            elevated?.allowed && elevated.fullAccessAvailable
-              ? "User can toggle with /elevated on|off|ask|full."
+            elevated?.allowed
+              ? `User can toggle with /elevated on|off|ask${elevated.fullAccessAvailable ? "|full" : ""}.`
               : "",
-            elevated?.allowed && !elevated.fullAccessAvailable
-              ? "User can toggle with /elevated on|off|ask."
-              : "",
-            elevated?.allowed && elevated.fullAccessAvailable
-              ? "You may also send /elevated on|off|ask|full when needed."
-              : "",
-            elevated?.allowed && !elevated.fullAccessAvailable
-              ? "You may also send /elevated on|off|ask when needed."
+            elevated?.allowed
+              ? `You may also send /elevated on|off|ask${elevated.fullAccessAvailable ? "|full" : ""} when needed.`
               : "",
             elevated?.fullAccessAvailable === false
               ? `Auto-approved /elevated full is unavailable here (${fullAccessBlockedReasonLabel}).`
@@ -1227,6 +1202,7 @@ function buildRuntimeLine(
     runtimeInfo?.activeNode
       ? `active_node=${sanitizeForPromptLiteral(runtimeInfo.activeNode)}`
       : "",
+    runtimeInfo?.activeNodeIdentity ? `active_node_identity=${runtimeInfo.activeNodeIdentity}` : "",
     runtimeInfo?.model ? `model=${runtimeInfo.model}` : "",
     runtimeInfo?.defaultModel ? `default_model=${runtimeInfo.defaultModel}` : "",
     runtimeInfo?.shell ? `shell=${runtimeInfo.shell}` : "",

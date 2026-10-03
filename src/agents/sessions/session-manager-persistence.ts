@@ -1,3 +1,4 @@
+import type { DatabaseSync } from "node:sqlite";
 import {
   ensureSessionEntrySync,
   type TranscriptEntryAnchor,
@@ -21,6 +22,7 @@ import {
   withOwnedSessionTranscriptWriterFence,
   type InitialSessionTranscriptWriter,
 } from "../../config/sessions/transcript-write-context.js";
+import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
 import { copyPreparedModelVisibleToolText } from "../../logging/redact-internal.js";
 import { runInDetachedAsyncContext } from "../../shared/async-work-scope.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
@@ -407,6 +409,34 @@ export class SessionManagerPersistence extends SessionManagerCore {
     const scope = this.persistenceTarget;
     const initialWriter = this.#initialWriter;
     const persistCompaction = getSessionCompactionPersistence(this);
+    const sessionId = this.sessionId;
+    const isCurrentView = () =>
+      this.sessionId === sessionId &&
+      sameSessionTranscriptTargetBinding(scope, this.persistenceTarget);
+    const onPendingTransaction = (database: DatabaseSync) => {
+      if (!isCurrentView()) {
+        return;
+      }
+      const previous = this.captureTranscriptView(true);
+      stageSqliteTransactionState(database, {
+        stage: () => {},
+        commit: () => {},
+        rollback: () => {
+          if (isCurrentView()) {
+            Object.assign(this, previous);
+          }
+        },
+      });
+    };
+    const viewGuard = {
+      assertCurrent: () => {
+        this.assertTranscriptViewAvailable();
+        if (!isCurrentView()) {
+          throw new SessionTranscriptWriterClaimReboundError();
+        }
+      },
+      onPendingTransaction,
+    };
     if (persistCompaction && isIndexedSessionEntry(entry) && entry.type === "compaction") {
       // Atomic accounting accepts exactly one boundary, never lazy transcript initialization.
       if (this.persistenceHeaderPending) {
@@ -468,6 +498,8 @@ export class SessionManagerPersistence extends SessionManagerCore {
             : this.transcriptMutationAt !== undefined
               ? { expectedMutationAt: this.transcriptMutationAt }
               : {},
+          undefined,
+          viewGuard,
         ),
         "Session transcript header was not persisted",
       ).after;
@@ -486,6 +518,8 @@ export class SessionManagerPersistence extends SessionManagerCore {
           scope,
           entry,
           expectedMutationAt !== undefined ? { expectedMutationAt } : {},
+          undefined,
+          viewGuard,
         ),
         `Session transcript leaf control was not persisted: ${leafEntry.id}`,
       ).after;
@@ -497,12 +531,18 @@ export class SessionManagerPersistence extends SessionManagerCore {
     }
     if (entry.type !== "message") {
       const loadedVersion = this.transcriptVersion;
-      const outcome = appendTranscriptEventSnapshotSync(scope, entry, {
-        ...(options?.appendIntent === "active-branch"
-          ? { appendIntent: options.appendIntent }
-          : {}),
-        ...(expectedMutationAt !== undefined ? { expectedMutationAt } : {}),
-      });
+      const outcome = appendTranscriptEventSnapshotSync(
+        scope,
+        entry,
+        {
+          ...(options?.appendIntent === "active-branch"
+            ? { appendIntent: options.appendIntent }
+            : {}),
+          ...(expectedMutationAt !== undefined ? { expectedMutationAt } : {}),
+        },
+        undefined,
+        viewGuard,
+      );
       const committed = requireTranscriptEventAppendSnapshot(
         outcome,
         `Session transcript entry was not persisted: ${entry.id}`,
@@ -540,7 +580,13 @@ export class SessionManagerPersistence extends SessionManagerCore {
       ...(options?.appendIntent === "active-branch" ? { appendIntent: options.appendIntent } : {}),
     } satisfies Parameters<typeof appendTranscriptMessageSnapshotSync>[1]);
     const loadedVersion = this.transcriptVersion;
-    const outcome = appendTranscriptMessageSnapshotSync(scope, appendOptions, preparedMessage);
+    const outcome = appendTranscriptMessageSnapshotSync(
+      scope,
+      appendOptions,
+      preparedMessage,
+      undefined,
+      viewGuard,
+    );
     if (!outcome.ok) {
       throw new Error(`Session transcript message was not persisted: ${entry.id}`, {
         cause: outcome.error,
@@ -579,10 +625,7 @@ export class SessionManagerPersistence extends SessionManagerCore {
       }
       throw new Error(`Session transcript parent entry was not persisted: ${entry.id}`);
     }
-    if (
-      options?.idempotencyLookup === "caller-checked" &&
-      (!result?.appended || result.messageId !== entry.id)
-    ) {
+    if (options?.idempotencyLookup === "caller-checked" && !result.appended) {
       throw new Error(`Session transcript append was not persisted: ${entry.id}`);
     }
     if (result.effectiveParentId === undefined) {

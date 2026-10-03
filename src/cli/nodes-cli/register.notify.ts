@@ -1,4 +1,3 @@
-// Local notification command for paired nodes.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { type Command, Option } from "commander";
 import { defaultRuntime } from "../../runtime.js";

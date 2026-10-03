@@ -1,15 +1,13 @@
-import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
+import { registerListener } from "../../../../src/shared/listeners.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
   AgentsFilesGetResult,
   AgentsFilesListResult,
   AgentsListResult,
-  ModelCatalogEntry,
-  SessionsListResult,
   ToolsCatalogResult,
-  ToolsEffectiveResult,
 } from "../../api/types.ts";
-import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import { formatUiError } from "../format-error.ts";
 import {
   createGatewayConnectionLifecycle,
@@ -19,41 +17,29 @@ import {
   formatMissingOperatorReadScopeMessage,
   isMissingOperatorReadScopeError,
 } from "../gateway-errors.ts";
-import type { SessionCapability } from "../sessions/index.ts";
 import type { AgentsPanel } from "./panels.ts";
 import {
   buildToolsEffectiveRequestKey,
   loadToolsEffective as loadToolsEffectiveShared,
   refreshVisibleToolsEffectiveForCurrentSession,
   resetToolsEffectiveState,
+  type ToolsEffectiveState,
 } from "./tools-effective.ts";
 
 export type { AgentsPanel } from "./panels.ts";
 export { watchAgentScope } from "./watch-agent-scope.ts";
 
-export type AgentsState = {
-  client: GatewayBrowserClient | null;
-  connected: boolean;
-  requestGeneration: number;
-  agentsLoading: boolean;
-  agentsError: string | null;
-  agentsList: AgentsListResult | null;
-  agentsSelectedId: string | null;
-  sessions: Pick<SessionCapability, "state">;
-  toolsCatalogLoading: boolean;
-  toolsCatalogLoadingAgentId?: string | null;
-  toolsCatalogError: string | null;
-  toolsCatalogResult: ToolsCatalogResult | null;
-  toolsEffectiveLoading: boolean;
-  toolsEffectiveLoadingKey?: string | null;
-  toolsEffectiveResultKey?: string | null;
-  toolsEffectiveError: string | null;
-  toolsEffectiveResult: ToolsEffectiveResult | null;
-  sessionKey?: string;
-  sessionsResult?: SessionsListResult | null;
-  chatModelCatalog?: ModelCatalogEntry[];
-  agentsPanel?: AgentsPanel;
-};
+export type AgentsState = ToolsEffectiveState &
+  AgentCapabilityState & {
+    requestGeneration: number;
+    agentsSelectedId: string | null;
+    toolsCatalogLoading: boolean;
+    toolsCatalogLoadingAgentId?: string | null;
+    toolsCatalogError: string | null;
+    toolsCatalogResult: ToolsCatalogResult | null;
+    sessionKey?: string;
+    agentsPanel?: AgentsPanel;
+  };
 
 type AgentToolsState = Omit<AgentsState, "agentsLoading" | "agentsError">;
 
@@ -63,14 +49,9 @@ type AgentsConfigCapability = {
   stageDefaultAgent: (agentId: string) => boolean;
 };
 
-type AgentGatewaySnapshot = GatewayConnectionSnapshot &
-  Pick<ApplicationGatewaySnapshot, "selfUser">;
-
 type AgentGateway = {
-  readonly connection?: { gatewayUrl: string };
-  readonly connectionRevision?: number;
-  readonly snapshot: AgentGatewaySnapshot;
-  subscribe: (listener: (snapshot: AgentGatewaySnapshot) => void) => () => void;
+  readonly snapshot: GatewayConnectionSnapshot;
+  subscribe: (listener: (snapshot: GatewayConnectionSnapshot) => void) => () => void;
 };
 
 type AgentFilesStatus = {
@@ -85,7 +66,6 @@ type AgentCapabilityState = {
   agentsLoading: boolean;
   agentsError: string | null;
   agentsList: AgentsListResult | null;
-  agentsListCached: boolean;
 };
 
 export type AgentCapability = {
@@ -105,9 +85,9 @@ function hasSelectedAgentMismatch(state: AgentToolsState, agentId: string): bool
   return Boolean(state.agentsSelectedId && state.agentsSelectedId !== agentId);
 }
 
-function resolveToolsErrorMessage(
+function resolveAgentReadErrorMessage(
   err: unknown,
-  target: "tools catalog" | "effective tools",
+  target: "agent list" | "tools catalog" | "effective tools",
 ): string {
   return isMissingOperatorReadScopeError(err)
     ? formatMissingOperatorReadScopeMessage(target)
@@ -148,7 +128,7 @@ export async function loadToolsCatalog(state: AgentToolsState, agentId: string) 
     if (shouldIgnoreResponse()) {
       return;
     }
-    state.toolsCatalogError = resolveToolsErrorMessage(err, "tools catalog");
+    state.toolsCatalogError = resolveAgentReadErrorMessage(err, "tools catalog");
   } finally {
     if (
       state.client === client &&
@@ -178,7 +158,7 @@ export async function loadToolsEffective(
       state.client === client && state.connected && state.requestGeneration === generation,
     ignoreResponse: (agentId, requestKey) =>
       state.toolsEffectiveLoadingKey !== requestKey || hasSelectedAgentMismatch(state, agentId),
-    onError: (err) => resolveToolsErrorMessage(err, "effective tools"),
+    onError: (err) => resolveAgentReadErrorMessage(err, "effective tools"),
   });
 }
 
@@ -192,12 +172,10 @@ export async function setDefaultAgent(
     return;
   }
   const hadPendingConfigDraft = config.state.configFormDirty;
-  if (config.stageDefaultAgent(agentId)) {
-    if (!hadPendingConfigDraft && config.state.configFormDirty) {
-      const saved = await config.save({ canDispatch });
-      if (saved && canDispatch()) {
-        await refreshAgents();
-      }
+  if (config.stageDefaultAgent(agentId) && !hadPendingConfigDraft && config.state.configFormDirty) {
+    const saved = await config.save({ canDispatch });
+    if (saved && canDispatch()) {
+      await refreshAgents();
     }
   }
 }
@@ -227,29 +205,14 @@ function emptyAgentFilesStatus(): AgentFilesStatus {
   return { list: null, loading: false, error: null };
 }
 
-function readOptionalAgentId(agentId: string | null | undefined): string | null {
-  const normalized = agentId?.trim();
-  return normalized ? normalized : null;
-}
-
-export function createAgentCapability(
-  gateway: AgentGateway,
-  options: { cachedList?: AgentsListResult | null; cachedProfileId?: string | null } = {},
-): AgentCapability {
-  let cachedList = options.cachedList ?? null;
-  const cachedProfileId = options.cachedProfileId ?? null;
-  const cachedConnectionRevision = gateway.connectionRevision;
-  const cachedScope = gateway.connection
-    ? gatewayCredentialScope(gateway.connection.gatewayUrl)
-    : null;
+export function createAgentCapability(gateway: AgentGateway): AgentCapability {
   const lifecycle = createGatewayConnectionLifecycle(gateway.snapshot);
   const state: AgentCapabilityState = {
     client: gateway.snapshot.client,
     connected: gateway.snapshot.phase === "connected",
     agentsLoading: false,
     agentsError: null,
-    agentsList: cachedList,
-    agentsListCached: cachedList !== null,
+    agentsList: null,
   };
   const files = new Map<string, AgentFilesStatus>();
   const fileRequests = new Map<string, Promise<AgentsFilesListResult | null>>();
@@ -290,7 +253,7 @@ export function createAgentCapability(
     if (agentsRequest && !force) {
       return agentsRequest;
     }
-    if (state.agentsList && !state.agentsListCached && !force) {
+    if (state.agentsList && !force) {
       return state.agentsList;
     }
     const revision = ++listRevision;
@@ -302,21 +265,15 @@ export function createAgentCapability(
       .then((result) => {
         const current = lifecycle.isCurrent(scope) && listRevision === revision;
         if (current) {
-          // Refresh an existing warm fallback without reviving a retired scope or profile.
-          if (cachedList) {
-            cachedList = result;
-          }
           state.agentsList = result;
-          state.agentsListCached = false;
           state.agentsError = null;
         }
         return current ? result : null;
       })
       .catch((err: unknown) => {
         if (lifecycle.isCurrent(scope) && listRevision === revision) {
-          state.agentsError = isMissingOperatorReadScopeError(err)
-            ? formatMissingOperatorReadScopeMessage("agent list")
-            : formatUiError(err);
+          state.agentsList = null;
+          state.agentsError = resolveAgentReadErrorMessage(err, "agent list");
         }
         return null;
       })
@@ -338,7 +295,7 @@ export function createAgentCapability(
     rawAgentId: string,
     force: boolean,
   ): Promise<AgentsFilesListResult | null> => {
-    const agentId = readOptionalAgentId(rawAgentId);
+    const agentId = normalizeOptionalString(rawAgentId);
     const scope = lifecycle.capture();
     if (!agentId || !scope) {
       return agentId ? (files.get(agentId)?.list ?? null) : null;
@@ -388,14 +345,6 @@ export function createAgentCapability(
     const clientChanged = state.client !== snapshot.client;
     const connected = snapshot.phase === "connected";
     const connectionChanged = lifecycle.transition(snapshot);
-    const scopeMismatch =
-      gateway.connectionRevision !== cachedConnectionRevision ||
-      (cachedScope !== null &&
-        gateway.connection !== undefined &&
-        gatewayCredentialScope(gateway.connection.gatewayUrl) !== cachedScope);
-    if (scopeMismatch) {
-      cachedList = null;
-    }
     state.client = snapshot.client;
     state.connected = connected;
     if (connectionChanged && (clientChanged || !connected)) {
@@ -405,19 +354,10 @@ export function createAgentCapability(
         status.loading = false;
       }
       files.clear();
-      state.agentsList = cachedList;
-      state.agentsListCached = cachedList !== null;
+      state.agentsList = null;
       state.agentsError = null;
     }
-    const cacheMismatch =
-      state.agentsListCached &&
-      (scopeMismatch || (connected && (snapshot.selfUser?.id ?? null) !== cachedProfileId));
-    if (cacheMismatch) {
-      cachedList = null;
-      state.agentsList = null;
-      state.agentsListCached = false;
-    }
-    if (connectionChanged || cacheMismatch) {
+    if (connectionChanged) {
       publish();
     }
   });
@@ -429,17 +369,14 @@ export function createAgentCapability(
     ensureList: () => loadList(false),
     refreshList: () => loadList(true),
     files(agentId) {
-      const normalized = readOptionalAgentId(agentId);
+      const normalized = normalizeOptionalString(agentId);
       return normalized
         ? (files.get(normalized) ?? emptyAgentFilesStatus())
         : emptyAgentFilesStatus();
     },
     invalidateFiles(agentIds) {
       let changed = false;
-      const normalizedIds = new Set(
-        agentIds.map(readOptionalAgentId).filter((agentId): agentId is string => agentId !== null),
-      );
-      for (const agentId of normalizedIds) {
+      for (const agentId of normalizeUniqueTrimmedStringList(agentIds)) {
         changed = files.delete(agentId) || changed;
         changed = fileRequests.delete(agentId) || changed;
       }
@@ -474,8 +411,7 @@ export function createAgentCapability(
       publish();
     },
     subscribe(listener) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
+      return registerListener(listeners, listener);
     },
     dispose() {
       disposed = true;

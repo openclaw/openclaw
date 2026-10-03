@@ -72,7 +72,8 @@ describe("repository checkpoint workflow authority", () => {
       expect(writes()).toEqual([]);
       expect(f.repository.runtime.effects).toEqual([]);
       expect(
-        getSessionRepositoryWorkspaceStore().get(f.repository.workspace.workspaceId)?.checkpointRef,
+        (await getSessionRepositoryWorkspaceStore().get(f.repository.workspace.workspaceId))
+          ?.checkpointRef,
       ).toBe(saved.ref);
       const calls = mocks.runCommand.mock.calls.length;
       expect(await f.coordinator.requestForSession(f.request(operation, f.guest))).toEqual(result);
@@ -133,7 +134,8 @@ describe("repository checkpoint workflow authority", () => {
     ).toMatchObject(rejected);
     expect(writes()).toHaveLength(effectCount);
     expect(
-      getSessionRepositoryWorkspaceStore().get(f.repository.workspace.workspaceId)?.checkpointRef,
+      (await getSessionRepositoryWorkspaceStore().get(f.repository.workspace.workspaceId))
+        ?.checkpointRef,
     ).toBe(saved.ref);
   });
 
@@ -161,7 +163,8 @@ describe("repository checkpoint workflow authority", () => {
     expect(f.readRequester(accepted.requestId)).toEqual(original);
     expect(f.externalWrites).toEqual([]);
     expect(
-      getSessionRepositoryWorkspaceStore().get(f.repository.workspace.workspaceId)?.checkpointRef,
+      (await getSessionRepositoryWorkspaceStore().get(f.repository.workspace.workspaceId))
+        ?.checkpointRef,
     ).toBe(saved.ref);
   });
 

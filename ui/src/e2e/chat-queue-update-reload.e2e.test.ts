@@ -1,6 +1,5 @@
 import { expect, it } from "vitest";
 import {
-  startControlUiE2eServer,
   installMockGateway,
   createControlUiMockSameOriginGatewayScript,
 } from "../test-helpers/control-ui-e2e.ts";
@@ -11,7 +10,6 @@ import {
 const suite = createControlUiE2eSuite({
   name: "Queued correction update recovery",
   trackBrowserContexts: true,
-  startServer: () => startControlUiE2eServer(undefined, { source: true }),
 });
 suite.define(() => {
   it.each([

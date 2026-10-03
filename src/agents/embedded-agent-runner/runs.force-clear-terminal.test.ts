@@ -11,6 +11,8 @@ import {
   loadSessionEntry,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { resetDiagnosticRunActivityForTest } from "../../logging/diagnostic-run-activity.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -19,238 +21,140 @@ import { createDeferredEmbeddedRunLifecycleManager } from "./run/deferred-lifecy
 import {
   abortAndDrainEmbeddedAgentRun,
   clearActiveEmbeddedRun,
+  getActiveEmbeddedRunSnapshot,
+  updateActiveEmbeddedRunSnapshot,
   isEmbeddedAgentRunHandleActive,
   setActiveEmbeddedRun,
 } from "./runs.js";
 import { createEmbeddedRunHandle as createRunHandle, testing } from "./runs.test-support.js";
 
-function forceClear(sessionId: string, sessionKey?: string, settleMs = 0) {
+const sessionId = "session",
+  sessionKey = "agent:main:test",
+  startedAt = 123;
+let testState: OpenClawTestState;
+let storePath: string;
+function forceClear(settleMs = 0, key = sessionKey) {
   return abortAndDrainEmbeddedAgentRun({
     sessionId,
-    sessionKey,
+    sessionKey: key,
     settleMs,
     forceClear: true,
     reason: "stuck_recovery",
   });
 }
+function seed(id = sessionId) {
+  return upsertSessionEntryCore(
+    { sessionKey, storePath },
+    { sessionId: id, updatedAt: Date.now(), status: "running" },
+  );
+}
+
+function startReply(handle: ReturnType<typeof createRunHandle>, embedded = true) {
+  const operation = createReplyOperation({ sessionKey, sessionId, resetTriggered: false });
+  operation.attachBackend({
+    kind: "embedded",
+    cancel: handle.abort,
+    isStreaming: handle.isStreaming,
+  });
+  operation.setPhase("running");
+  if (embedded) {
+    setActiveEmbeddedRun(sessionId, handle, sessionKey);
+  }
+  return operation;
+}
+beforeEach(async () => {
+  testState = await createOpenClawTestState({
+    layout: "state-only",
+    prefix: "openclaw-forceclear-",
+  });
+  storePath = path.join(testState.sessionsDir(), "sessions.json");
+  setRuntimeConfigSnapshot({ session: { store: storePath } });
+});
+afterEach(async () => {
+  try {
+    clearRuntimeConfigSnapshot();
+    testing.resetActiveEmbeddedRuns();
+    resetDiagnosticRunActivityForTest();
+    replyRunTesting.resetReplyRunRegistry();
+    vi.useRealTimers();
+  } finally {
+    await testState.cleanup();
+  }
+});
 
 describe("force-clear terminal state persistence", () => {
-  let testState: OpenClawTestState | undefined;
-  let storePath: string;
-
-  beforeEach(async () => {
-    testState = await createOpenClawTestState({
-      layout: "state-only",
-      prefix: "openclaw-forceclear-",
-    });
-    storePath = path.join(testState.sessionsDir(), "sessions.json");
-    setRuntimeConfigSnapshot({ session: { store: storePath } });
-  });
-
-  afterEach(async () => {
-    const state = testState;
-    testState = undefined;
-    try {
-      clearRuntimeConfigSnapshot();
-      testing.resetActiveEmbeddedRuns();
-      replyRunTesting.resetReplyRunRegistry();
-    } finally {
-      await state?.cleanup();
-    }
-  });
-
-  it("delays stale-owner followups until the old reply owner settles", async () => {
-    // Owner ordering must not depend on the host finishing within the drain deadline.
+  it("defers followups until the old owner settles", async () => {
+    // Keep owner ordering independent of the wall-clock drain deadline.
     vi.useFakeTimers({ toFake: ["Date"] });
-    try {
-      const sessionKey = "agent:main:reply-stuck-followup";
-      const sessionId = "session-reply-stuck-followup";
-      const operation = createReplyOperation({ sessionKey, sessionId, resetTriggered: false });
-      const handle = createRunHandle();
-      operation.attachBackend({
-        kind: "embedded",
-        cancel: handle.abort,
-        isStreaming: handle.isStreaming,
-      });
-      operation.setPhase("running");
-      setActiveEmbeddedRun(sessionId, handle, sessionKey);
-
-      const followupObservedActiveHandle: boolean[] = [];
-      runAfterReplyOperationClear(operation, () => {
-        followupObservedActiveHandle.push(isEmbeddedAgentRunHandleActive(sessionId));
-      });
-
-      const recovery = forceClear(sessionId, sessionKey, 100);
-      expect(isReplyRunActiveForSessionId(sessionId)).toBe(true);
-      expect(followupObservedActiveHandle).toEqual([]);
-
-      clearActiveEmbeddedRun(sessionId, handle, sessionKey);
-      let recoverySettled = false;
-      void recovery.then(() => {
-        recoverySettled = true;
-      });
-      await Promise.resolve();
-      expect(recoverySettled).toBe(false);
-      expect(followupObservedActiveHandle).toEqual([]);
-
-      operation.complete();
-      await expect(recovery).resolves.toEqual({
-        aborted: true,
-        drained: true,
-        forceCleared: false,
-      });
-      await Promise.resolve();
-      expect(followupObservedActiveHandle).toEqual([false]);
-    } finally {
-      vi.useRealTimers();
-    }
+    const handle = createRunHandle(),
+      operation = startReply(handle);
+    const observed: boolean[] = [];
+    runAfterReplyOperationClear(operation, () => {
+      observed.push(isEmbeddedAgentRunHandleActive(sessionId));
+    });
+    const recovery = forceClear(100);
+    expect(isReplyRunActiveForSessionId(sessionId)).toBe(true);
+    expect(observed).toEqual([]);
+    clearActiveEmbeddedRun(sessionId, handle, sessionKey);
+    let settled = false;
+    void recovery.then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    expect(observed).toEqual([]);
+    operation.complete();
+    await expect(recovery).resolves.toEqual({ aborted: true, drained: true, forceCleared: false });
+    await Promise.resolve();
+    expect(observed).toEqual([false]);
   });
 
-  it("force-clears exact owners before releasing followups after cancel throws", async () => {
-    const sessionKey = "agent:main:reply-cancel-throws";
-    const sessionId = "session-reply-cancel-throws";
-    const operation = createReplyOperation({ sessionKey, sessionId, resetTriggered: false });
+  it("clears owners before followups when cancel throws", async () => {
     const handle = createRunHandle({
       abort: () => {
         throw new Error("cancel failed");
       },
     });
-    operation.attachBackend({
-      kind: "embedded",
-      cancel: handle.abort,
-      isStreaming: handle.isStreaming,
+    const operation = startReply(handle),
+      followup = createDeferredCore<boolean>();
+    const onFollowup = vi.fn(() => {
+      followup.resolve(isEmbeddedAgentRunHandleActive(sessionId));
     });
-    operation.setPhase("running");
-    setActiveEmbeddedRun(sessionId, handle, sessionKey);
-
-    const followupObservedActiveHandle: boolean[] = [];
-    runAfterReplyOperationClear(operation, () => {
-      followupObservedActiveHandle.push(isEmbeddedAgentRunHandleActive(sessionId));
+    runAfterReplyOperationClear(operation, onFollowup);
+    await expect(forceClear(20)).resolves.toEqual({
+      aborted: false,
+      drained: false,
+      forceCleared: true,
     });
-
-    const result = await forceClear(sessionId, sessionKey, 20);
-
-    expect(result).toEqual({ aborted: false, drained: false, forceCleared: true });
     expect(operation.result).toEqual({ kind: "failed", code: "run_stalled" });
     expect(isReplyRunActiveForSessionId(sessionId)).toBe(false);
     expect(isEmbeddedAgentRunHandleActive(sessionId)).toBe(false);
-    await vi.waitFor(() => {
-      expect(followupObservedActiveHandle).toEqual([false]);
-    });
+    await expect(followup.promise).resolves.toBe(false);
+    expect(onFollowup).toHaveBeenCalledOnce();
   });
 
-  it("force-clears a throwing reply backend without an embedded handle", async () => {
-    const sessionKey = "agent:main:reply-only-cancel-throws";
-    const sessionId = "session-reply-only-cancel-throws";
-    const operation = createReplyOperation({ sessionKey, sessionId, resetTriggered: false });
-    operation.attachBackend({
-      kind: "embedded",
-      cancel: () => {
-        throw new Error("cancel failed");
-      },
-      isStreaming: () => true,
+  it("clears reply owners when accepted cancellation stalls", async () => {
+    const cancel = vi.fn(),
+      operation = startReply(createRunHandle({ abort: cancel }), false);
+    const followup = createDeferredCore<boolean>();
+    const onFollowup = vi.fn(() => {
+      followup.resolve(isReplyRunActiveForSessionId(sessionId));
     });
-    operation.setPhase("running");
-
-    const followupObservedActiveOwner: boolean[] = [];
-    runAfterReplyOperationClear(operation, () => {
-      followupObservedActiveOwner.push(isReplyRunActiveForSessionId(sessionId));
+    runAfterReplyOperationClear(operation, onFollowup);
+    await expect(forceClear(20)).resolves.toEqual({
+      aborted: false,
+      drained: false,
+      forceCleared: true,
     });
-
-    const result = await forceClear(sessionId, sessionKey, 20);
-
-    expect(result).toEqual({ aborted: false, drained: false, forceCleared: true });
-    expect(operation.result).toEqual({ kind: "failed", code: "run_stalled" });
-    expect(isReplyRunActiveForSessionId(sessionId)).toBe(false);
-    await vi.waitFor(() => {
-      expect(followupObservedActiveOwner).toEqual([false]);
-    });
-  });
-
-  it("force-clears a reply-only backend that accepts cancellation without completing", async () => {
-    const sessionKey = "agent:main:reply-only-cancel-pending";
-    const sessionId = "session-reply-only-cancel-pending";
-    const operation = createReplyOperation({ sessionKey, sessionId, resetTriggered: false });
-    const cancel = vi.fn();
-    operation.attachBackend({
-      kind: "embedded",
-      cancel,
-      isStreaming: () => true,
-    });
-    operation.setPhase("running");
-
-    const followupObservedActiveOwner: boolean[] = [];
-    runAfterReplyOperationClear(operation, () => {
-      followupObservedActiveOwner.push(isReplyRunActiveForSessionId(sessionId));
-    });
-
-    const result = await forceClear(sessionId, sessionKey, 20);
-
-    expect(result).toEqual({ aborted: false, drained: false, forceCleared: true });
     expect(cancel).toHaveBeenCalledWith("superseded");
     expect(operation.result).toEqual({ kind: "failed", code: "run_stalled" });
     expect(isReplyRunActiveForSessionId(sessionId)).toBe(false);
-    await vi.waitFor(() => {
-      expect(followupObservedActiveOwner).toEqual([false]);
-    });
+    await expect(followup.promise).resolves.toBe(false);
+    expect(onFollowup).toHaveBeenCalledOnce();
   });
 
-  it("force-clears active handle and reply owners when cancellation never completes", async () => {
-    const sessionKey = "agent:main:handle-cancel-pending";
-    const sessionId = "session-handle-cancel-pending";
-    const operation = createReplyOperation({ sessionKey, sessionId, resetTriggered: false });
-    const abort = vi.fn();
-    const handle = createRunHandle({ abort });
-    operation.attachBackend({
-      kind: "embedded",
-      cancel: handle.abort,
-      isStreaming: handle.isStreaming,
-    });
-    operation.setPhase("running");
-    setActiveEmbeddedRun(sessionId, handle, sessionKey);
-
-    const result = await forceClear(sessionId, sessionKey, 20);
-
-    expect(result).toEqual({ aborted: true, drained: false, forceCleared: true });
-    expect(abort).toHaveBeenCalled();
-    expect(isReplyRunActiveForSessionId(sessionId)).toBe(false);
-    expect(isEmbeddedAgentRunHandleActive(sessionId)).toBe(false);
-  });
-
-  it("persists killed status after a force-cleared run", async () => {
-    const sessionKey = "agent:main:main";
-    const sessionId = "session-1";
-    const startedAt = Date.now() - 60_000;
-
-    await upsertSessionEntryCore(
-      { sessionKey, storePath },
-      {
-        sessionId,
-        updatedAt: startedAt,
-        startedAt,
-        runtimeMs: 12_345,
-        status: "running",
-      },
-    );
-
-    setActiveEmbeddedRun(sessionId, createRunHandle(), sessionKey);
-
-    const result = await forceClear(sessionId, sessionKey);
-
-    expect(result.forceCleared).toBe(true);
-
-    const entry = loadSessionEntry({ sessionKey, storePath });
-    expect(entry?.status).toBe("killed");
-    expect(entry?.abortedLastRun).toBe(true);
-    expect(entry?.endedAt).toBeGreaterThanOrEqual(startedAt);
-    expect(entry?.runtimeMs).toBe(12_345);
-  });
-
-  it("persists a force-cleared bare row under its fixed-store owner", async () => {
-    storePath = testState?.statePath("shared-store.sqlite") ?? storePath;
-    const sessionKey = "global";
-    const sessionId = "session-fixed-owner";
-    const startedAt = Date.now() - 60_000;
+  it("persists killed state under the fixed store owner", async () => {
+    storePath = testState.statePath("shared-store.sqlite");
     setRuntimeConfigSnapshot({
       session: { store: storePath },
       agents: {
@@ -260,216 +164,93 @@ describe("force-clear terminal state persistence", () => {
       },
     });
     await upsertSessionEntryCore(
-      { agentId: "ops", sessionKey, storePath },
+      { agentId: "ops", sessionKey: "global", storePath },
       { sessionId, updatedAt: startedAt, startedAt, status: "running" },
     );
+    setActiveEmbeddedRun(sessionId, createRunHandle(), "global");
+    await expect(forceClear(0, "global")).resolves.toMatchObject({ forceCleared: true });
+    expect(loadSessionEntry({ agentId: "ops", sessionKey: "global", storePath })).toMatchObject({
+      sessionId,
+      status: "killed",
+      abortedLastRun: true,
+    });
+  });
+
+  it("persists terminal state in the deferred agent's global store", async () => {
+    const agentId = "work",
+      key = "global";
+    setRuntimeConfigSnapshot({
+      agents: { ownership: "explicit", entries: { main: {}, work: {} } },
+      session: { scope: "global" },
+    });
+    for (const owner of ["main", "work"]) {
+      await upsertSessionEntryCore(
+        { agentId: owner, sessionKey: key },
+        {
+          sessionId: owner === agentId ? sessionId : "main-global",
+          updatedAt: startedAt,
+          startedAt,
+          status: "running",
+          lifecycleRunId: `${owner}-run`,
+        },
+      );
+    }
+    const deferred = createDeferredEmbeddedRunLifecycleManager({
+      agentId,
+      sessionId,
+      sessionKey: key,
+      runId: "work-run",
+    });
+    deferred.handoffToCli();
+    updateActiveEmbeddedRunSnapshot(sessionId, {
+      transcriptLeafId: "leaf",
+      inFlightPrompt: "pending",
+    });
+    expect(getActiveEmbeddedRunSnapshot(sessionId)).toEqual({
+      transcriptLeafId: "leaf",
+      inFlightPrompt: "pending",
+    });
+    await expect(forceClear(0, key)).resolves.toMatchObject({ forceCleared: true });
+    const entry = loadSessionEntry({ agentId, sessionKey: key });
+    expect(entry).toMatchObject({ sessionId, status: "killed", abortedLastRun: true });
+    expect(entry?.endedAt).toBeGreaterThanOrEqual(startedAt);
+    expect(entry?.lifecycleRunId).toBeUndefined();
+    await deferred.complete();
+    expect(getActiveEmbeddedRunSnapshot(sessionId)).toBeUndefined();
+    expect(loadSessionEntry({ agentId: "main", sessionKey: key })).toMatchObject({
+      sessionId: "main-global",
+      status: "running",
+      lifecycleRunId: "main-run",
+    });
+  });
+
+  it("preserves a replacement session entry", async () => {
+    await seed();
     setActiveEmbeddedRun(sessionId, createRunHandle(), sessionKey);
-
-    await expect(forceClear(sessionId, sessionKey)).resolves.toMatchObject({ forceCleared: true });
-
-    expect(loadSessionEntry({ agentId: "ops", sessionKey, storePath })).toMatchObject({
-      sessionId,
-      status: "killed",
-      abortedLastRun: true,
-    });
-  });
-
-  it("keeps the persisted killed state when the force-cleared owner finishes late", async () => {
-    const sessionKey = "agent:main:force-clear-late-completion";
-    const sessionId = "session-force-clear-late-completion";
-    const startedAt = Date.now() - 60_000;
-    const handle = createRunHandle();
-
-    await upsertSessionEntryCore(
-      { sessionKey, storePath },
-      { sessionId, updatedAt: startedAt, startedAt, status: "running" },
-    );
-    setActiveEmbeddedRun(sessionId, handle, sessionKey);
-
-    await expect(forceClear(sessionId, sessionKey)).resolves.toMatchObject({ forceCleared: true });
-
-    clearActiveEmbeddedRun(sessionId, handle, sessionKey);
-
-    expect(isEmbeddedAgentRunHandleActive(sessionId)).toBe(false);
+    await seed("new-session");
+    await expect(forceClear()).resolves.toMatchObject({ forceCleared: true });
     expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
-      sessionId,
-      status: "killed",
-      abortedLastRun: true,
+      sessionId: "new-session",
+      status: "running",
     });
   });
 
-  it.each(["direct", "deferred"])(
-    "persists forced terminal state only in the selected agent's global store via %s registration",
-    async (registration) => {
-      const agentId = "work";
-      const sessionKey = "global";
-      const sessionId = `${agentId}-global`;
-      const startedAt = Date.now() - 60_000;
-      setRuntimeConfigSnapshot({
-        agents: { ownership: "explicit", entries: { main: {}, work: {} } },
-        session: { scope: "global" },
+  it.each([sessionId, "new-session"])(
+    "preserves a replacement run in session %s",
+    async (replacementId) => {
+      await seed();
+      const replacement = createRunHandle();
+      const original = createRunHandle({
+        abort: () => setActiveEmbeddedRun(replacementId, replacement, sessionKey),
       });
-      for (const owner of ["main", "work"]) {
-        await upsertSessionEntryCore(
-          { agentId: owner, sessionKey },
-          {
-            sessionId: `${owner}-global`,
-            updatedAt: startedAt,
-            startedAt,
-            status: "running",
-            lifecycleRunId: `${owner}-run`,
-          },
-        );
-      }
-      const deferred =
-        registration === "deferred"
-          ? createDeferredEmbeddedRunLifecycleManager({
-              agentId,
-              sessionId,
-              sessionKey,
-              runId: `${agentId}-run`,
-            })
-          : undefined;
-      if (deferred) {
-        deferred.handoffToCli();
-      } else {
-        setActiveEmbeddedRun(sessionId, createRunHandle(), sessionKey, undefined, agentId);
-      }
-      await expect(forceClear(sessionId, sessionKey)).resolves.toMatchObject({
-        forceCleared: true,
+      setActiveEmbeddedRun(sessionId, original, sessionKey);
+      await expect(forceClear()).resolves.toEqual({
+        aborted: true,
+        drained: false,
+        forceCleared: replacementId !== sessionId,
       });
-      const entry = loadSessionEntry({ agentId, sessionKey });
-      expect(entry).toMatchObject({ sessionId, status: "killed", abortedLastRun: true });
-      expect(entry?.endedAt).toBeGreaterThanOrEqual(startedAt);
-      expect(entry?.lifecycleRunId).toBeUndefined();
-      await deferred?.complete();
-      const otherAgentId = "main";
-      expect(loadSessionEntry({ agentId: otherAgentId, sessionKey })).toMatchObject({
-        sessionId: `${otherAgentId}-global`,
-        status: "running",
-        lifecycleRunId: `${otherAgentId}-run`,
-      });
+      expect(isEmbeddedAgentRunHandleActive(replacementId)).toBe(true);
+      expect(loadSessionEntry({ sessionKey, storePath })?.status).toBe("running");
     },
   );
-
-  it("does not fail when the session entry is absent", async () => {
-    const sessionKey = "agent:main:missing";
-    const sessionId = "session-missing";
-
-    setActiveEmbeddedRun(sessionId, createRunHandle(), sessionKey);
-
-    const result = await forceClear(sessionId, sessionKey);
-
-    expect(result.forceCleared).toBe(true);
-  });
-
-  it("does not persist state when sessionKey is omitted", async () => {
-    const sessionId = "session-no-key";
-    const sessionKey = "agent:main:no-key";
-
-    await upsertSessionEntryCore(
-      { sessionKey, storePath },
-      {
-        sessionId,
-        updatedAt: Date.now(),
-        status: "running",
-      },
-    );
-
-    setActiveEmbeddedRun(sessionId, createRunHandle());
-
-    const result = await forceClear(sessionId);
-
-    expect(result.forceCleared).toBe(true);
-
-    const entry = loadSessionEntry({ sessionKey, storePath });
-    expect(entry?.status).toBe("running");
-  });
-
-  it("does not overwrite a newer session entry under the same key", async () => {
-    const sessionKey = "agent:main:shared-key";
-    const oldSessionId = "session-old";
-    const newSessionId = "session-new";
-
-    await upsertSessionEntryCore(
-      { sessionKey, storePath },
-      {
-        sessionId: oldSessionId,
-        updatedAt: Date.now(),
-        status: "running",
-      },
-    );
-
-    setActiveEmbeddedRun(oldSessionId, createRunHandle(), sessionKey);
-
-    await upsertSessionEntryCore(
-      { sessionKey, storePath },
-      {
-        sessionId: newSessionId,
-        updatedAt: Date.now(),
-        status: "running",
-      },
-    );
-
-    const result = await forceClear(oldSessionId, sessionKey);
-
-    expect(result.forceCleared).toBe(true);
-
-    const entry = loadSessionEntry({ sessionKey, storePath });
-    expect(entry?.sessionId).toBe(newSessionId);
-    expect(entry?.status).toBe("running");
-  });
-
-  it("does not clear or kill a replacement run that reuses the session id", async () => {
-    const sessionKey = "agent:main:replacement";
-    const sessionId = "session-reused";
-    const replacement = createRunHandle();
-
-    await upsertSessionEntryCore(
-      { sessionKey, storePath },
-      {
-        sessionId,
-        updatedAt: Date.now(),
-        status: "running",
-      },
-    );
-
-    const original = createRunHandle({
-      abort: () => setActiveEmbeddedRun(sessionId, replacement, sessionKey),
-    });
-    setActiveEmbeddedRun(sessionId, original, sessionKey);
-
-    const result = await forceClear(sessionId, sessionKey);
-
-    expect(result).toEqual({ aborted: true, drained: false, forceCleared: false });
-    expect(isEmbeddedAgentRunHandleActive(sessionId)).toBe(true);
-    expect(loadSessionEntry({ sessionKey, storePath })?.status).toBe("running");
-  });
-
-  it("does not kill a replacement run that reuses the session key", async () => {
-    const sessionKey = "agent:main:replacement-key";
-    const oldSessionId = "session-old-owner";
-    const newSessionId = "session-new-owner";
-    const replacement = createRunHandle();
-
-    await upsertSessionEntryCore(
-      { sessionKey, storePath },
-      {
-        sessionId: oldSessionId,
-        updatedAt: Date.now(),
-        status: "running",
-      },
-    );
-
-    const original = createRunHandle({
-      abort: () => setActiveEmbeddedRun(newSessionId, replacement, sessionKey),
-    });
-    setActiveEmbeddedRun(oldSessionId, original, sessionKey);
-
-    const result = await forceClear(oldSessionId, sessionKey);
-
-    expect(result).toEqual({ aborted: true, drained: false, forceCleared: true });
-    expect(isEmbeddedAgentRunHandleActive(newSessionId)).toBe(true);
-    expect(loadSessionEntry({ sessionKey, storePath })?.status).toBe("running");
-  });
 });

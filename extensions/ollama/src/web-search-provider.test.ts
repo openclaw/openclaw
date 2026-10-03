@@ -245,20 +245,34 @@ describe("ollama web search provider", () => {
     expect(fetchRequest().init.signal).toBeUndefined();
   });
 
-  it("does not start fallback attempts after caller cancellation", async () => {
-    mockSuccessfulSearchResponse();
-    const tool = createOllamaWebSearchProvider().createTool({ config: createOllamaConfig() });
-    if (!tool) {
-      throw new Error("Expected tool definition");
-    }
-    const controller = new AbortController();
-    controller.abort(new Error("Ollama caller canceled"));
+  it.each(["before dispatch", "between attempts"] as const)(
+    "does not start requests after caller cancellation: %s",
+    async (phase) => {
+      const controller = new AbortController();
+      const reason = new Error("Ollama caller canceled");
+      const firstRelease = vi.fn(async () => controller.abort(reason));
+      fetchWithSsrFGuardMock
+        .mockResolvedValueOnce(guardedResponse("not found", { status: 404 }, firstRelease))
+        .mockResolvedValueOnce(searchResponse());
+      const tool = createOllamaWebSearchProvider().createTool({ config: createOllamaConfig() });
+      if (!tool) {
+        throw new Error("Expected tool definition");
+      }
+      if (phase === "before dispatch") {
+        controller.abort(reason);
+      }
 
-    await expect(
-      tool.execute({ query: "ollama pre-canceled" }, { signal: controller.signal }),
-    ).rejects.toThrow("Ollama caller canceled");
-    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
-  });
+      await expect(
+        tool.execute({ query: "ollama cancellation" }, { signal: controller.signal }),
+      ).rejects.toBe(reason);
+      const expectedCalls = phase === "before dispatch" ? 0 : 1;
+      expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(expectedCalls);
+      expect(firstRelease).toHaveBeenCalledTimes(expectedCalls);
+      if (phase === "between attempts") {
+        expect(fetchRequest().url).toBe("http://ollama.local:11434/api/experimental/web_search");
+      }
+    },
+  );
 
   it.each<[string, () => OpenClawConfig, string]>([
     [

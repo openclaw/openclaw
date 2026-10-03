@@ -2,6 +2,7 @@ import { html, nothing, type TemplateResult } from "lit";
 import { cache } from "lit/directives/cache.js";
 import type { SystemAgentSetupDetectResult } from "../../api/types.ts";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
+import { shellLayoutTraits } from "../../app/shell-layout-traits.ts";
 import { icons } from "../../components/icons.ts";
 import { renderLearnMoreLink } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
@@ -126,14 +127,23 @@ function renderEmptyState(props: ModelSetupViewProps, result: SystemAgentSetupDe
   `;
 }
 
-function renderAuthRow(props: ModelSetupViewProps, option: AuthOption) {
+function renderSetupActionRow(
+  props: ModelSetupViewProps,
+  option: AuthOption | ModelSetupPrepareOption,
+) {
+  const auth = "kind" in option;
+  const groupLabel = auth ? option.groupLabel : undefined;
   return html`
-    <div class="model-setup__row" data-auth-choice=${option.id}>
+    <div
+      class="model-setup__row"
+      data-auth-choice=${auth ? option.id : nothing}
+      data-prepare-choice=${auth ? nothing : option.id}
+    >
       <div class="model-setup__provider-copy">
         ${renderProviderIcon(props, option)}
         <div>
           <strong>${option.label}</strong>
-          ${option.groupLabel ? html`<div class="muted">${option.groupLabel}</div>` : nothing}
+          ${groupLabel ? html`<div class="muted">${groupLabel}</div>` : nothing}
           ${option.hint ? html`<div class="muted">${option.hint}</div>` : nothing}
         </div>
       </div>
@@ -141,14 +151,18 @@ function renderAuthRow(props: ModelSetupViewProps, option: AuthOption) {
         type="button"
         class="btn"
         ?disabled=${props.actionsDisabled || props.detecting}
-        @click=${() => props.onStartAuth(option)}
+        @click=${() => (auth ? props.onStartAuth(option) : props.onStartPrepare(option))}
       >
         ${
-          option.kind === "install"
-            ? t("modelSetup.signIn.install")
-            : option.kind === "custom"
-              ? t("modelSetup.signIn.custom")
-              : t("modelSetup.signIn.verify")
+          auth
+            ? t(
+                option.kind === "install"
+                  ? "modelSetup.signIn.install"
+                  : option.kind === "custom"
+                    ? "modelSetup.signIn.custom"
+                    : "modelSetup.signIn.verify",
+              )
+            : (option.actionLabel ?? t("modelSetup.prepare.ollamaButton"))
         }
       </button>
     </div>
@@ -166,13 +180,14 @@ function renderSignIn(props: ModelSetupViewProps, result: SystemAgentSetupDetect
     (option) => option.featured || option.kind === "install" || option.kind === "custom",
   );
   const more = options.filter((option) => !featured.includes(option));
+  const renderOption = (option: AuthOption) => renderSetupActionRow(props, option);
   return html`
     <section class="settings-section">
       <div class="settings-section__header">
         <h2>${t("modelSetup.signIn.title")}</h2>
         <p>${t("modelSetup.signIn.description")}</p>
       </div>
-      <div class="model-setup__rows">${featured.map((option) => renderAuthRow(props, option))}</div>
+      <div class="model-setup__rows">${featured.map(renderOption)}</div>
       ${
         more.length
           ? html`<details
@@ -182,9 +197,7 @@ function renderSignIn(props: ModelSetupViewProps, result: SystemAgentSetupDetect
                 props.onMoreSignInToggle((event.currentTarget as HTMLDetailsElement).open)}
             >
               <summary>${t("modelSetup.signIn.more")}</summary>
-              <div class="model-setup__rows">
-                ${more.map((option) => renderAuthRow(props, option))}
-              </div>
+              <div class="model-setup__rows">${more.map(renderOption)}</div>
             </details>`
           : nothing
       }
@@ -207,37 +220,10 @@ function renderPrepare(props: ModelSetupViewProps, result: SystemAgentSetupDetec
       </div>
       <p class="muted">${t("modelSetup.prepare.intro")}</p>
       <div class="model-setup__rows">
-        ${options.map(
-          (option) => html`
-            <div class="model-setup__row" data-prepare-choice=${option.id}>
-              <div class="model-setup__provider-copy">
-                ${renderProviderIcon(props, option)}
-                <div>
-                  <strong>${option.label}</strong>
-                  ${option.hint ? html`<div class="muted">${option.hint}</div>` : nothing}
-                </div>
-              </div>
-              <button
-                type="button"
-                class="btn"
-                ?disabled=${props.actionsDisabled || props.detecting}
-                @click=${() => props.onStartPrepare(option)}
-              >
-                ${option.actionLabel ?? t("modelSetup.prepare.ollamaButton")}
-              </button>
-            </div>
-          `,
-        )}
+        ${options.map((option) => renderSetupActionRow(props, option))}
       </div>
     </section>
   `;
-}
-
-function isManualConnectionChoice(
-  props: ModelSetupViewProps,
-  provider: SystemAgentSetupDetectResult["manualProviders"][number],
-): boolean {
-  return props.embedded === true && props.credentialChoices?.includes(provider.id) === true;
 }
 
 function renderManual(props: ModelSetupViewProps, detected: SystemAgentSetupDetectResult) {
@@ -245,7 +231,7 @@ function renderManual(props: ModelSetupViewProps, detected: SystemAgentSetupDete
     ? {
         ...detected,
         manualProviders: detected.manualProviders.filter(
-          (provider) => !isManualConnectionChoice(props, provider),
+          (provider) => !props.credentialChoices?.includes(provider.id),
         ),
       }
     : detected;
@@ -560,7 +546,7 @@ export function renderModelSetup(props: ModelSetupViewProps): TemplateResult {
     `;
   }
   return html`
-    <section class="content-header">
+    <section class="content-header" ${shellLayoutTraits({ toolbarHeader: true })}>
       <div>
         <div class="page-title">${titleForRoute("model-setup")}</div>
         <div class="page-subtitle">

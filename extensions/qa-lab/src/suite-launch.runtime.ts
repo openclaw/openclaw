@@ -20,8 +20,8 @@ import {
 import { isQaFastModeEnabled } from "./model-selection.js";
 import { resolveQaRuntimeModelPair } from "./model-selection.runtime.js";
 import { DEFAULT_QA_PROVIDER_MODE } from "./providers/index.js";
+import { QA_CHANNEL_DEFAULT_SUITE_CONCURRENCY } from "./qa-channel-transport.js";
 import {
-  defaultQaSuiteConcurrencyForTransport,
   normalizeQaTransportId,
   prepareQaTransportAdapterFactories,
   type QaTransportDriver,
@@ -119,7 +119,6 @@ const ISOLATED_FLOW_WORKER_START_STAGGER_MS = 1_500;
 const CREDENTIAL_POOL_UNAVAILABLE_CODES = new Set(["NO_CREDENTIAL_AVAILABLE", "POOL_EXHAUSTED"]);
 
 type QaUnifiedPartitionResult = {
-  evidenceSummaries: QaEvidenceSummaryJson[];
   scenarioResults: Array<{
     result: QaSuiteScenarioResult;
     scenarioId: string;
@@ -129,11 +128,8 @@ type QaUnifiedPartitionResult = {
 };
 
 type QaUnifiedPartitionTask = {
-  channel?: string;
-  channelId: string;
   exclusiveKey?: string;
   run: () => Promise<QaUnifiedPartitionResult>;
-  scenarios: readonly QaSeedScenarioWithSource[];
   weight: number;
   evidenceOwners: QaPartitionEvidenceOwner[];
 };
@@ -202,11 +198,7 @@ function createQaPartitionEvidenceOwner(params: {
       const input = child.childInput(index);
       next.importChild(index, input);
       if (anchor.scenario?.kind === "instance") {
-        if (anchor.scenario.resultOccurrenceId === null) {
-          next.select(index, null);
-        } else {
-          next.select(index, anchor.scenario.resultOccurrenceId);
-        }
+        next.select(index, anchor.scenario.resultOccurrenceId);
       }
     }
     current = next.snapshot(options());
@@ -475,7 +467,6 @@ function summarizeQaEvidenceChannel(
 
 type QaFlowChannelGroup = {
   channel: string | undefined;
-  channelId: string | undefined;
   exclusiveKey?: string;
   isolatesAdapterInstances?: boolean;
   scenarios: QaSeedScenarioWithSource[];
@@ -565,7 +556,6 @@ async function resolveQaFlowChannelGroups(
     );
     return [...groups].map(([channel, groupedScenarios]) => ({
       channel,
-      channelId: channel,
       isolatesAdapterInstances: isolatesInstances(channel),
       scenarios: groupedScenarios,
     }));
@@ -574,7 +564,6 @@ async function resolveQaFlowChannelGroups(
     return [
       {
         channel: runParams?.channelId,
-        channelId: runParams?.channelId,
         scenarios: [...scenarios],
       },
     ];
@@ -597,7 +586,6 @@ async function resolveQaFlowChannelGroups(
     );
     return [...groups].map(([channel, groupedScenarios]) => ({
       channel,
-      channelId: channel,
       scenarios: groupedScenarios,
     }));
   }
@@ -611,7 +599,6 @@ async function resolveQaFlowChannelGroups(
     return [
       {
         channel: singleChannel,
-        channelId: singleChannel,
         scenarios: [...scenarios],
       },
     ];
@@ -620,7 +607,6 @@ async function resolveQaFlowChannelGroups(
   // launch one flow partition per channel and aggregate them at this owner.
   return channels.map((channel) => ({
     channel,
-    channelId: channel,
     scenarios: scenarios.filter(
       (scenario) =>
         (normalizeQaSuiteScenarioChannel(scenario) ?? OPENCLAW_CRABLINE_DEFAULT_CHANNEL) ===
@@ -654,7 +640,7 @@ async function resolveSuiteExecutionPlan(
     (group) => group.scenarios.length > 0,
   );
   for (const group of channelGroups) {
-    const channelId = group.channelId;
+    const channelId = group.channel;
     const usesContributedChannelDriver =
       params?.channelDriver === "live" &&
       channelId !== undefined &&
@@ -663,7 +649,7 @@ async function resolveSuiteExecutionPlan(
       (params?.channelDriver === "crabline" || usesContributedChannelDriver) &&
       !group.isolatesAdapterInstances
     ) {
-      group.exclusiveKey = `channel:${group.channel ?? group.channelId ?? "default"}`;
+      group.exclusiveKey = `channel:${group.channel ?? "default"}`;
     }
   }
   const expectedCells = [
@@ -685,7 +671,7 @@ async function resolveSuiteExecutionPlan(
     channelGroups.length > 1 ||
     channelGroups.some((group) => group.exclusiveKey !== undefined && group.scenarios.length > 1) ||
     channelGroups.some(
-      (group) => group.channelId !== undefined && group.channelId !== params?.channelId,
+      (group) => group.channel !== undefined && group.channel !== params?.channelId,
     ) ||
     flowScenarios.some(
       (scenario) => scenario.execution.kind === "flow" && scenario.execution.runtime !== undefined,
@@ -769,14 +755,6 @@ function rejectFlowOnlySuiteOptionsForUnifiedRun(runParams: QaSuiteRunParams | u
   if (runParams?.captureRuntimeParityCell) {
     throw new Error("runtime parity capture requires execution.kind: flow scenarios.");
   }
-}
-
-function suitePartitionOutputDir(outputDir: string, kind: "flow" | QaTestFileExecutionKind) {
-  return path.join(outputDir, kind);
-}
-
-function flowSuitePartitionOutputDir(outputDir: string, partition: string) {
-  return path.join(suitePartitionOutputDir(outputDir, "flow"), partition);
 }
 
 function partitionSharedFlowScenarios(
@@ -1033,9 +1011,7 @@ async function runUnifiedQaSuite(params: {
       : isQaFastModeEnabled({ primaryModel, alternateModel });
   const transportId = normalizeQaTransportId(params.runParams?.transportId);
   const defaultConcurrency =
-    params.runParams?.channelDriver === "crabline"
-      ? 1
-      : defaultQaSuiteConcurrencyForTransport(transportId);
+    params.runParams?.channelDriver === "crabline" ? 1 : QA_CHANNEL_DEFAULT_SUITE_CONCURRENCY;
   const failFast = params.runParams?.failFast === true;
   const concurrency = failFast
     ? 1
@@ -1176,15 +1152,15 @@ async function runUnifiedQaSuite(params: {
         ]
           .filter((part): part is string => Boolean(part))
           .join("-");
-        const taskChannelId = channelGroup.channelId ?? channelGroup.channel ?? transportId;
-        const partitionOutputDir = partitionName
-          ? flowSuitePartitionOutputDir(outputDir, partitionName)
-          : suitePartitionOutputDir(outputDir, "flow");
-        const owner = createOwner(partition.scenarios, taskChannelId, partitionOutputDir);
+        const partitionOutputDir = path.join(outputDir, "flow", partitionName);
+        const owner = createOwner(
+          partition.scenarios,
+          channelGroup.channel ?? transportId,
+          partitionOutputDir,
+        );
         const buildCredentialUnavailableResult = (details: string): QaUnifiedPartitionResult => {
           const blockedResults = owner.failure(details, true, "blocked");
           return {
-            evidenceSummaries: [owner.summary()],
             scenarioResults: blockedResults.map(({ scenarioId, instanceId, result }) => ({
               scenarioId,
               instanceId,
@@ -1201,17 +1177,14 @@ async function runUnifiedQaSuite(params: {
           };
         };
         const task = {
-          channel: channelGroup.channel,
-          channelId: taskChannelId,
           // One channel's credential and Gateway state stay serial unless each adapter create()
           // owns an isolated runtime. Distinct channels may always run together.
           exclusiveKey: flowExclusiveKey,
-          scenarios: partition.scenarios,
           evidenceOwners: [owner],
           weight: partition.concurrency,
           run: async () => {
-            const unavailableDetails = channelGroup.channelId
-              ? unavailableChannelCredentialDetails.get(channelGroup.channelId)
+            const unavailableDetails = channelGroup.channel
+              ? unavailableChannelCredentialDetails.get(channelGroup.channel)
               : undefined;
             if (unavailableDetails) {
               return buildCredentialUnavailableResult(unavailableDetails);
@@ -1239,7 +1212,7 @@ async function runUnifiedQaSuite(params: {
                   ? (partition.scenarios[0].execution.runtime ?? params.runParams?.forcedRuntime)
                   : params.runParams?.forcedRuntime,
               concurrency: partition.concurrency,
-              channelId: channelGroup.channelId,
+              channelId: channelGroup.channel,
               workerStartStaggerMs: isolatedPartition
                 ? (params.runParams?.workerStartStaggerMs ??
                   resolveQaSuiteWorkerStartStaggerMs(
@@ -1250,18 +1223,18 @@ async function runUnifiedQaSuite(params: {
                 : params.runParams?.workerStartStaggerMs,
               scenarioIds: partition.scenarios.map((scenario) => scenario.id),
             }).catch((error: unknown) => {
-              if (!isChannelCredentialPoolUnavailable(error, channelGroup.channelId)) {
+              if (!isChannelCredentialPoolUnavailable(error, channelGroup.channel)) {
                 throw error;
               }
               // Preserve other channels' evidence, but keep the suite failed: maturity
               // docs must not publish until every required channel can run.
               const details = `channel credential unavailable: ${formatErrorMessage(error)}`;
-              if (flowExclusiveKey && channelGroup.channelId) {
-                unavailableChannelCredentialDetails.set(channelGroup.channelId, details);
+              if (flowExclusiveKey && channelGroup.channel) {
+                unavailableChannelCredentialDetails.set(channelGroup.channel, details);
               }
               return buildCredentialUnavailableResult(details);
             });
-            if ("evidenceSummaries" in result) {
+            if ("startedInstanceIds" in result) {
               return result;
             }
             const scenarioResults: QaUnifiedPartitionResult["scenarioResults"] = [];
@@ -1309,7 +1282,6 @@ async function runUnifiedQaSuite(params: {
               channelGroup.channel,
             );
             return {
-              evidenceSummaries: [],
               scenarioResults: normalized,
               startedInstanceIds: owner.startedInstanceIds(),
             };
@@ -1326,16 +1298,13 @@ async function runUnifiedQaSuite(params: {
   const createTestFilePartitionTask = (
     scenariosByKind: ReadonlyMap<QaTestFileExecutionKind, QaTestFileScenario[]>,
   ) => {
-    const taskScenarios = [...scenariosByKind.values()].flat();
     const owners = new Map(
       [...scenariosByKind].map(([kind, scenarios]) => [
         kind,
-        createOwner(scenarios, null, suitePartitionOutputDir(outputDir, kind)),
+        createOwner(scenarios, null, path.join(outputDir, kind)),
       ]),
     );
     return {
-      channelId: transportId,
-      scenarios: taskScenarios,
       weight: 1,
       evidenceOwners: [...owners.values()],
       run: async () => {
@@ -1356,7 +1325,7 @@ async function runUnifiedQaSuite(params: {
               ...params.runParams,
               ...owner.input(),
               adapterFactories,
-              outputDir: suitePartitionOutputDir(outputDir, kind),
+              outputDir: path.join(outputDir, kind),
               writeEvidenceFile: false,
               providerMode,
               primaryModel,
@@ -1392,7 +1361,6 @@ async function runUnifiedQaSuite(params: {
           }
         }
         return {
-          evidenceSummaries: [],
           scenarioResults: testFileScenarioResults,
           startedInstanceIds: testFileStartedInstanceIds,
         };
@@ -1456,7 +1424,7 @@ async function runUnifiedQaSuite(params: {
     return partition.startedInstanceIds.some((id) => !returnedInstances.has(id));
   };
   const capturePartitionFailure = (
-    task: Pick<QaUnifiedPartitionTask, "channelId" | "scenarios" | "evidenceOwners">,
+    task: Pick<QaUnifiedPartitionTask, "evidenceOwners">,
     error: unknown,
     started = true,
     final = true,
@@ -1466,7 +1434,6 @@ async function runUnifiedQaSuite(params: {
       owner.active || !started ? owner.failure(details, final) : [],
     );
     return {
-      evidenceSummaries: [],
       scenarioResults,
       startedInstanceIds: started
         ? task.evidenceOwners.flatMap((owner) => owner.startedInstanceIds())
@@ -1532,8 +1499,6 @@ async function runUnifiedQaSuite(params: {
     } catch (error) {
       scriptPreparationFailure = capturePartitionFailure(
         {
-          channelId: transportId,
-          scenarios: scriptScenarios,
           evidenceOwners: [...serialScriptPartitionTasks, ...parallelScriptPartitionTasks].flatMap(
             (task) => task.evidenceOwners,
           ),

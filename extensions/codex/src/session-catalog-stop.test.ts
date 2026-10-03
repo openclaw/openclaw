@@ -7,10 +7,8 @@ import {
   createCodexSessionCatalogControlFactory,
 } from "./session-catalog.test-helpers.js";
 
-it("retires the resident refresh loop when its catalog owner stops", async () => {
-  vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
-  commandRpcMocks.codexControlRequest.mockResolvedValue({ data: [] });
-  const factory = createCodexSessionCatalogControlFactory({
+function createFactory() {
+  return createCodexSessionCatalogControlFactory({
     getPluginConfig: () => ({
       appServer: {
         transport: "websocket",
@@ -20,6 +18,12 @@ it("retires the resident refresh loop when its catalog owner stops", async () =>
     }),
     getRuntimeConfig: () => undefined,
   });
+}
+
+it("retires the resident refresh loop when its catalog owner stops", async () => {
+  vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
+  commandRpcMocks.codexControlRequest.mockResolvedValue({ data: [] });
+  const factory = createFactory();
   const source = (await factory.homesForAgent("main"))[0]!;
   const control = factory.forRequest("main", source);
   try {
@@ -45,16 +49,7 @@ it("does not publish a late launch advisory after its catalog owner stops", asyn
   const started = createDeferred<void>();
   const pending = createDeferred<unknown>();
   const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => {});
-  const factory = createCodexSessionCatalogControlFactory({
-    getPluginConfig: () => ({
-      appServer: {
-        transport: "websocket",
-        url: "wss://retired-catalog.example.test/codex",
-        authToken: "synthetic-catalog-token",
-      },
-    }),
-    getRuntimeConfig: () => undefined,
-  });
+  const factory = createFactory();
   const failure = describeCodexSpawnError(
     Object.assign(new Error("spawn failed"), {
       errno: -86,

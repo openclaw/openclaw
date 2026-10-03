@@ -95,11 +95,9 @@ async function syncSandboxSkillsToWorkspace(params: {
 async function ensureSandboxWorkspaceLayout(
   params: ResolveSandboxContextParams,
   selected: Awaited<ReturnType<typeof prepareSandboxWorkspaceSelection>>,
-  execOverrides?: ExecPolicyOverrides,
 ): Promise<{
   agentWorkspaceDir: string;
   scopeKey: string;
-  sandboxWorkspaceDir: string;
   skillsWorkspaceDir: string;
   skillsEligibility?: SkillEligibilityContext;
   skillUsagePaths?: SkillUsagePath[];
@@ -135,14 +133,13 @@ async function ensureSandboxWorkspaceLayout(
     config: params.config,
     agentId: runtime.agentId,
     rawSessionKey,
-    execOverrides,
+    execOverrides: params.execOverrides,
     skillsSnapshot: params.skillsSnapshot,
   });
 
   return {
     agentWorkspaceDir,
     scopeKey,
-    sandboxWorkspaceDir,
     skillsWorkspaceDir,
     ...(syncedSkills.eligibility ? { skillsEligibility: syncedSkills.eligibility } : {}),
     ...(syncedSkills.skillUsagePaths ? { skillUsagePaths: syncedSkills.skillUsagePaths } : {}),
@@ -302,7 +299,7 @@ async function resolveProvisionedSandboxContext(
     skillUsagePaths,
     skillsWorkspaceDir,
     workspaceDir,
-  } = await ensureSandboxWorkspaceLayout(params, selected, params.execOverrides);
+  } = await ensureSandboxWorkspaceLayout(params, selected);
   localWorkspace?.assertCurrent();
 
   const docker = await resolveSandboxDockerUser({
@@ -392,22 +389,20 @@ async function resolveProvisionedSandboxContext(
   if (resolvedCfg.browser.enabled && backend.capabilities?.browser !== true) {
     throw new Error(`Sandbox backend "${backend.id}" does not support browser sandboxes yet.`);
   }
-  const provisionBrowser = () =>
-    ensureSandboxBrowser({
-      scopeKey,
-      workspaceDir,
-      agentWorkspaceDir,
-      skillsWorkspaceDir,
-      cfg: resolvedCfg,
-      evaluateEnabled,
-      bridgeAuth,
-      ssrfPolicy: resolvedBrowserConfig?.ssrfPolicy,
-      withWorkspace: localWorkspace?.provision,
-      assertCurrent: localWorkspace?.assertCurrent,
-    });
   const browser =
     resolvedCfg.browser.enabled && backend.capabilities?.browser === true
-      ? await provisionBrowser()
+      ? await ensureSandboxBrowser({
+          scopeKey,
+          workspaceDir,
+          agentWorkspaceDir,
+          skillsWorkspaceDir,
+          cfg: resolvedCfg,
+          evaluateEnabled,
+          bridgeAuth,
+          ssrfPolicy: resolvedBrowserConfig?.ssrfPolicy,
+          withWorkspace: localWorkspace?.provision,
+          assertCurrent: localWorkspace?.assertCurrent,
+        })
       : null;
 
   const sandboxContext: SandboxContext = {

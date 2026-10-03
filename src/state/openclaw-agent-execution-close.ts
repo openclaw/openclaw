@@ -1,4 +1,4 @@
-import { createSqliteLifecycleAggregateError } from "../infra/sqlite-coordinator.js";
+import { throwSqliteLifecycleErrors } from "../infra/sqlite-lifecycle-errors.js";
 import { sqliteReaderDatabasePathKey } from "../infra/sqlite-reader-lifecycle.js";
 import {
   onSqliteWalCheckpoint,
@@ -36,6 +36,7 @@ export function closeAgentDatabaseExecution({
           checkpoint = {
             health: observation.health,
             observedAtNs: observation.observedAtNs,
+            lastCompletedAtNs: observation.lastCompletedAtNs,
           };
         }
       });
@@ -54,12 +55,7 @@ export function closeAgentDatabaseExecution({
       errors.push(error);
     }
   }
-  if (errors.length === 1) {
-    throw errors[0];
-  }
-  if (errors.length > 1) {
-    throw createSqliteLifecycleAggregateError(errors, "Agent database cleanup failed", errors[0]);
-  }
+  throwSqliteLifecycleErrors(errors, "Agent database cleanup failed");
   if (identity && checkpoint) {
     return {
       identity: {

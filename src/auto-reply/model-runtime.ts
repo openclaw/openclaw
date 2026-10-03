@@ -1,4 +1,3 @@
-// Model reference formatting helpers for auto-reply runtime status.
 import {
   buildModelCatalogRef,
   parseProviderModelRef,

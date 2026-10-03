@@ -19,6 +19,11 @@ import "../../../components/tooltip.ts";
 import "../../../components/workspace-icon.ts";
 import { t } from "../../../i18n/index.ts";
 import { formatRelativeTimestamp } from "../../../lib/format.ts";
+import {
+  clearCompositionEnd,
+  isComposingKeyboardEvent,
+  recordCompositionEnd,
+} from "../../../lib/ime.ts";
 import { resolveSessionDisplayName } from "../../../lib/session-display.ts";
 import {
   areUiSessionKeysEquivalent,
@@ -61,18 +66,11 @@ type ChatPaneHeaderProps = {
   actionsDisabled?: boolean;
   panelActions: TemplateResult | typeof nothing;
   panelLayoutActions: TemplateResult | typeof nothing;
-  discussionAction: TemplateResult | typeof nothing;
-  diffAction: TemplateResult | typeof nothing;
-  backgroundTasksAction: TemplateResult | typeof nothing;
-  sessionRailAction: TemplateResult | typeof nothing;
-  workspaceAction: TemplateResult | typeof nothing;
   presence?: TemplateResult | typeof nothing;
-  faceControl?: TemplateResult | typeof nothing;
   sharingControl?: TemplateResult | typeof nothing;
   publicAccessIndicator?: TemplateResult | typeof nothing;
   placementControl?: TemplateResult | typeof nothing;
   sessionMenuAction: TemplateResult | typeof nothing;
-  onboarding?: boolean;
   onBeginRename: () => void;
   onRenameInput: (value: string) => void;
   onCommitRename: () => void;
@@ -167,8 +165,10 @@ function renderSessionCrumb(props: ChatPaneHeaderProps) {
       placeholder=${t("chat.sessionHeader.renameInputPlaceholder")}
       @input=${(event: InputEvent) =>
         props.onRenameInput((event.currentTarget as HTMLInputElement).value)}
+      @compositionend=${recordCompositionEnd}
+      @keyup=${clearCompositionEnd}
       @keydown=${(event: KeyboardEvent) => {
-        if (event.isComposing || event.keyCode === 229) {
+        if (isComposingKeyboardEvent(event)) {
           return;
         }
         if (event.key === "Enter") {
@@ -179,7 +179,10 @@ function renderSessionCrumb(props: ChatPaneHeaderProps) {
           props.onCancelRename();
         }
       }}
-      @blur=${props.onCommitRename}
+      @blur=${(event: FocusEvent) => {
+        clearCompositionEnd(event);
+        props.onCommitRename();
+      }}
     />`;
   }
   return props.catalog || !props.session || props.renameDisabledReason
@@ -294,12 +297,11 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
   const copied = props.copiedAction === "copy-path" || props.copiedAction === "copy-branch";
   const drawerLabel = props.navDrawerOpen ? t("nav.collapse") : t("nav.expand");
   const compactSessionActions = props.narrow && props.sessionMenuAction !== nothing;
-  const hasFaceControl = props.faceControl !== undefined && props.faceControl !== nothing;
   const hasSharingControl = props.sharingControl !== undefined && props.sharingControl !== nothing;
 
   return html`
     <div
-      class="chat-pane__header ${hasFaceControl ? "chat-pane__header--centered" : ""}"
+      class="chat-pane__header "
       role="group"
       aria-label=${props.title}
       tabindex="-1"
@@ -375,11 +377,6 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
         }
         ${props.placementControl ?? nothing} ${props.presence ?? nothing}
       </div>
-      ${
-        hasFaceControl
-          ? html`<div class="chat-pane__header-center">${props.faceControl}</div>`
-          : nothing
-      }
       <div class="chat-pane__header-trailing">
         ${
           !props.catalog && props.branches.length > 1
@@ -454,13 +451,6 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
           ${props.panelLayoutActions}
           <fieldset class="chat-pane__actions" ?disabled=${props.actionsDisabled}>
             ${compactSessionActions ? nothing : props.panelActions}
-            ${compactSessionActions ? nothing : props.discussionAction}
-            ${
-              props.catalog || compactSessionActions
-                ? nothing
-                : html`${props.diffAction} ${props.backgroundTasksAction} ${props.workspaceAction}
-                  ${props.sessionRailAction}`
-            }
             ${(
               [
                 [

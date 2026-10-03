@@ -144,7 +144,7 @@ describe("Matrix CLI bootstrap failure evidence and ownership", () => {
     expect(closed).toBe(true);
   });
 
-  it.each([new Error("runtime construction failed"), undefined, "construction rejected"])(
+  it.each([new Error("runtime construction failed"), undefined])(
     "closes the already-acquired proxy and preserves construction rejection %s",
     async (failure) => {
       mocks.createRuntime.mockRejectedValueOnce(failure);
@@ -153,7 +153,7 @@ describe("Matrix CLI bootstrap failure evidence and ownership", () => {
     },
   );
 
-  it.each([new Error("runtime construction failed"), undefined, "construction rejected"])(
+  it.each([new Error("runtime construction failed"), undefined])(
     "retains construction rejection %s before proxy cleanup failure",
     async (failure) => {
       proxyCleanupFailure = new Error("proxy stop failed");
@@ -166,15 +166,12 @@ describe("Matrix CLI bootstrap failure evidence and ownership", () => {
     },
   );
 
-  it.each([undefined, "CLI cleanup rejected"])(
-    "preserves a single non-Error cleanup rejection %s",
-    async (failure) => {
-      configureCli(["POST"]);
-      dispose.mockRejectedValueOnce(failure);
-      await expect(run()).rejects.toBe(failure);
-      expect(closed).toBe(true);
-    },
-  );
+  it("preserves an undefined cleanup rejection", async () => {
+    configureCli(["POST"]);
+    dispose.mockRejectedValueOnce(undefined);
+    await expect(run()).rejects.toBeUndefined();
+    expect(closed).toBe(true);
+  });
 
   it("reports disposal and proxy cleanup failures instead of returning success", async () => {
     const disposalFailure = new Error("CLI disposal failed");

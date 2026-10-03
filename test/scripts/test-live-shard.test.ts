@@ -121,6 +121,7 @@ describe("scripts/test-live-shard", () => {
       ],
       "native-live-src-infra": [
         "src/cli/update-cli/update-command-node-runtime.live.test.ts",
+        "src/commands/doctor-config-preflight.legacy-driver.live.test.ts",
         "src/infra/fixture.live.test.ts",
       ],
       "native-live-test": ["test/fixture.live.test.ts"],
@@ -420,6 +421,38 @@ describe("scripts/test-live-shard", () => {
     ["src/skills/workshop/experience-review.live.test.ts", "OPENCLAW_LIVE_SKILL_EXPERIENCE_REVIEW"],
     ["src/agents/subagent-announce.live.test.ts", "OPENCLAW_LIVE_SUBAGENT_E2E"],
     ["src/agents/subagents/announce/subagent-announce.live.test.ts", "OPENCLAW_LIVE_SUBAGENT_E2E"],
+    [
+      "src/agents/subagents/announce/subagent-continuation.live.test.ts",
+      "OPENCLAW_LIVE_SUBAGENT_E2E",
+    ],
+    [
+      "src/agents/subagents/announce/subagent-late-reply.live.test.ts",
+      "OPENCLAW_LIVE_SUBAGENT_STRESS",
+    ],
+    [
+      "src/agents/subagents/announce/subagent-yield-resume.live.test.ts",
+      "OPENCLAW_LIVE_SUBAGENT_STRESS",
+    ],
+    ["src/agents/tools/sessions-send-peer.live.test.ts", "OPENCLAW_LIVE_SUBAGENT_STRESS"],
+    ["extensions/anthropic/cli-output.compaction.live.test.ts", "OPENCLAW_LIVE_CLAUDE_COMPACTION"],
+    [
+      "extensions/codex/src/app-server/approval-requester.real-binary.live.test.ts",
+      "OPENCLAW_LIVE_CODEX_APPROVAL_REQUESTER",
+    ],
+    [
+      "extensions/codex/src/app-server/async-questions.real-binary.live.test.ts",
+      "OPENCLAW_LIVE_CODEX_ASYNC_QUESTIONS",
+    ],
+    [
+      "extensions/codex/src/app-server/thread-lifecycle.restricted-mcp.real-binary.live.test.ts",
+      "OPENCLAW_LIVE_CODEX_RESTRICTED_MCP",
+    ],
+    ["extensions/ollama/ollama.live.test.ts", "OPENCLAW_LIVE_OLLAMA"],
+    ["extensions/twitch/src/plugin.live.test.ts", "TWITCH_LIVE_TEST"],
+    [
+      "src/agents/cli-runner/execute.compaction-watchdog.claude.live.test.ts",
+      "OPENCLAW_LIVE_CLAUDE_COMPACTION",
+    ],
     [
       "src/agents/sessions/agent-session.openai-compaction.live.test.ts",
       "OPENCLAW_LIVE_OPENAI_COMPACTION",

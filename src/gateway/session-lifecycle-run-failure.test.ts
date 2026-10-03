@@ -1,5 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { assert, describe, expect, it, vi } from "vitest";
+import { assert, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { prepareSystemAgentRunAdmission } from "../agents/admitted-run-context.js";
 import {
@@ -27,6 +27,7 @@ import {
   clearAgentRunTerminalWriteContext,
   drainAgentRunTerminalWrites,
 } from "../infra/agent-run-terminal-writes.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { abortChatRunById, registerChatAbortController, type ChatAbortOps } from "./chat-abort.js";
 import { createChatRunState } from "./server-chat-state.js";
@@ -233,7 +234,7 @@ describe("durable pre-reply run failure", () => {
         {
           type: "custom_message",
           customType: "run-failed-before-reply",
-          content: `This turn ended before a reply: ${error}`,
+          content: `Your request couldn't be completed: ${error}`,
           display: true,
           details: { runId, error },
         },
@@ -265,7 +266,7 @@ describe("durable pre-reply run failure", () => {
       const [report] = await reports();
       expect(report).toMatchObject({
         content: expect.stringMatching(
-          /^This turn ended before a reply: ⚠️ Authentication failed \(provider returned HTTP 401\)/,
+          /^Your request couldn't be completed: ⚠️ Authentication failed \(provider returned HTTP 401\)/,
         ),
         details: { runId, error: expect.stringMatching(/^⚠️ Authentication failed/) },
       });
@@ -317,7 +318,7 @@ describe("durable pre-reply run failure", () => {
           {
             type: "custom_message",
             customType: "run-failed-before-reply",
-            content: `This turn ended before a reply: ${reason}`,
+            content: `Your request couldn't be completed: ${reason}`,
             details: { runId, error: reason },
           },
         ]);
@@ -479,7 +480,9 @@ async function createCliHistoryFixture() {
       timestamp: 1_000,
     });
   });
-  const owner = createSessionLifecyclePersistenceOwner();
+  const scheduler = createTestGatewayScheduler();
+  onTestFinished(() => scheduler.stop());
+  const owner = createSessionLifecyclePersistenceOwner(scheduler);
   const captured = captureAgentRunTerminalWriteContext(cliRunId);
   if (!captured) {
     throw new Error("Expected the admitted runtime's terminal write context");
@@ -539,7 +542,9 @@ describe("CLI history through Gateway terminal persistence", () => {
         }
         const context = await f.laterContext("account-a");
         expect(JSON.stringify(context.reseedMessages)).toContain("Prior account-owned request");
-        expect(context.durableContext).toContain("This turn ended before a reply: Run timed out");
+        expect(context.durableContext).toContain(
+          "Your request couldn't be completed: Run timed out",
+        );
         const transcript = await loadTranscriptEvents(f.cliTarget);
         expect(
           transcript.filter((entry) => isRecord(entry) && entry.type === "custom_message"),

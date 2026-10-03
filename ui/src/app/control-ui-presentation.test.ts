@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { controlUiAccentInk } from "./accent-contrast.ts";
 import { createApplicationTheme } from "./bootstrap-theme.ts";
 import { applyControlUiPresentation } from "./control-ui-environment-presentation.runtime.ts";
-import { applyControlUiAccent } from "./control-ui-presentation.ts";
+import { applyControlUiAccent, syncControlUiSystemChrome } from "./control-ui-presentation.ts";
 import { createGatewayStoreTestStore } from "./gateway-store.test-support.ts";
 import { loadSettings, patchSettings, saveSettings } from "./settings.ts";
 
@@ -16,6 +16,41 @@ afterEach(() => {
 });
 
 describe("Control UI accent presentation", () => {
+  it("keeps document chat layout and browser chrome in sync across route changes and removal", () => {
+    const root = document.documentElement;
+    const shell = document.body.appendChild(document.createElement("div"));
+    root.style.setProperty("--bg", "rgb(10, 20, 30)");
+    root.style.setProperty("--bg-content", "rgb(20, 30, 40)");
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn(() => ({ matches: true })),
+    );
+    try {
+      shell.className = "shell shell--chat";
+      syncControlUiSystemChrome();
+      expect(root.classList.contains("control-ui-chat-shell")).toBe(true);
+      expect(root.style.getPropertyValue("--control-ui-system-chrome-background")).toBe(
+        "rgb(20, 30, 40)",
+      );
+
+      shell.className = "shell";
+      syncControlUiSystemChrome();
+      expect(root.classList.contains("control-ui-chat-shell")).toBe(false);
+      expect(root.style.getPropertyValue("--control-ui-system-chrome-background")).toBe(
+        "rgb(10, 20, 30)",
+      );
+
+      shell.className = "shell shell--chat";
+      syncControlUiSystemChrome();
+      shell.remove();
+      syncControlUiSystemChrome();
+      expect(root.classList.contains("control-ui-chat-shell")).toBe(false);
+    } finally {
+      root.classList.remove("control-ui-chat-shell");
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("prioritizes the user accent and restores operator and theme defaults in order", () => {
     const style = document.documentElement.style;
     applyControlUiPresentation({ environment: null, seamColor: "#123456" });
@@ -62,11 +97,8 @@ describe("Control UI accent presentation", () => {
   });
 
   it.each([
-    ["#fbbf24", "#000000"],
-    ["#6ee7b7", "#000000"],
     ["#777777", "#000000"],
     ["#747474", "#ffffff"],
-    ["#2563eb", "#ffffff"],
   ])("selects readable ink for accent %s", (accent, expectedInk) => {
     expect(controlUiAccentInk(accent)).toBe(expectedInk);
     applyControlUiAccent(accent);

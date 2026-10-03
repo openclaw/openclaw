@@ -264,7 +264,7 @@ struct ChatCompletedWorkTests {
             let marker = encoded.dictionaryValue?["openclawStreamFallback"]?.dictionaryValue
             #expect(marker?["itemId"]?.stringValue == "first")
             #expect(marker?["runId"]?.stringValue == "active")
-            let roundTrip = try ChatPayloadDecoding.decode(encoded, as: OpenClawChatMessage.self)
+            let roundTrip = try GatewayPayloadDecoding.decode(encoded, as: OpenClawChatMessage.self)
             #expect(Self.work(in: Self.collapse([failed, roundTrip])).isEmpty)
         }
         let final = Self.message("assistant", "The first read failed; the next file is ready.", at: 5000)

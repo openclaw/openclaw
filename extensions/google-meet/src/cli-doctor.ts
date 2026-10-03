@@ -1,6 +1,9 @@
-import type { GoogleMeetCliCommandContext } from "./cli-command-context.js";
 import {
-  callGoogleMeetGateway,
+  addGoogleMeetOAuthOptions,
+  callGoogleMeetRuntime,
+  type GoogleMeetCliCommandContext,
+} from "./cli-command-context.js";
+import {
   parseOptionalNumber,
   type DoctorOptions,
   writeDoctorStatus,
@@ -8,9 +11,8 @@ import {
   writeStdoutLine,
 } from "./cli-shared.js";
 import type { GoogleMeetConfig } from "./config.js";
-import { createGoogleMeetSpace, fetchGoogleMeetSpace } from "./meet.js";
+import { createGoogleMeetSpace, fetchGoogleMeetSpace } from "./meet-api.js";
 import { resolveGoogleMeetAccessToken } from "./oauth.js";
-import type { GoogleMeetRuntime } from "./runtime.js";
 
 type OAuthDoctorCheck = {
   id: string;
@@ -158,25 +160,25 @@ function writeOAuthDoctorReport(report: OAuthDoctorReport): void {
 }
 
 export function registerGoogleMeetDoctorCommand(context: GoogleMeetCliCommandContext): void {
-  const params = context;
-  const { root, callGateway } = context;
+  const { root } = context;
 
-  root
-    .command("doctor")
-    .description("Show human-readable Meet session/browser/realtime health")
-    .argument("[session-id]", "Meet session ID")
-    .option("--oauth", "Verify Google Meet OAuth token refresh without printing secrets", false)
-    .option("--meeting <value>", "Also verify spaces.get for a Meet URL, code, or spaces/{id}")
-    .option("--create-space", "Also verify spaces.create by creating a throwaway Meet space", false)
-    .option("--access-token <token>", "Access token override")
-    .option("--refresh-token <token>", "Refresh token override")
-    .option("--client-id <id>", "OAuth client id override")
-    .option("--client-secret <secret>", "OAuth client secret override")
-    .option("--expires-at <ms>", "Cached access token expiry as unix epoch milliseconds")
+  addGoogleMeetOAuthOptions(
+    root
+      .command("doctor")
+      .description("Show human-readable Meet session/browser/realtime health")
+      .argument("[session-id]", "Meet session ID")
+      .option("--oauth", "Verify Google Meet OAuth token refresh without printing secrets", false)
+      .option("--meeting <value>", "Also verify spaces.get for a Meet URL, code, or spaces/{id}")
+      .option(
+        "--create-space",
+        "Also verify spaces.create by creating a throwaway Meet space",
+        false,
+      ),
+  )
     .option("--json", "Print JSON output", false)
     .action(async (sessionId: string | undefined, options: DoctorOptions) => {
       if (options.oauth) {
-        const report = await buildOAuthDoctorReport(params.config, options);
+        const report = await buildOAuthDoctorReport(context.config, options);
         if (options.json) {
           writeStdoutJson(report);
           return;
@@ -184,18 +186,12 @@ export function registerGoogleMeetDoctorCommand(context: GoogleMeetCliCommandCon
         writeOAuthDoctorReport(report);
         return;
       }
-      const delegated = await callGoogleMeetGateway({
-        callGateway,
-        method: "googlemeet.status",
-        payload: { sessionId },
-      });
-      let status: Awaited<ReturnType<GoogleMeetRuntime["status"]>>;
-      if (delegated.ok) {
-        status = delegated.payload as Awaited<ReturnType<GoogleMeetRuntime["status"]>>;
-      } else {
-        const rt = await params.ensureRuntime();
-        status = await rt.status(sessionId);
-      }
+      const status = await callGoogleMeetRuntime(
+        context,
+        "googlemeet.status",
+        { sessionId },
+        (rt) => rt.status(sessionId),
+      );
       if (options.json) {
         writeStdoutJson(status);
         return;

@@ -93,8 +93,11 @@ runtime fallbacks.
 
 When a plugin migration is deferred, the verified import receipt also captures
 unreferenced JSONL inputs. Completing the plugin migration archives those originals
-with the same identity and byte checks as indexed transcripts. Files created after
-capture and changed originals are verified separately before settlement.
+with the same identity and byte checks as indexed transcripts. A transcript's
+`.trajectory-path.json` pointer moves with it. If an earlier settlement archived the
+transcript but left its receipt-verified pointer behind, the next `doctor --fix`
+archives the pointer too. Files created after capture and changed originals are
+verified separately before settlement.
 File-era session path repair preserves those originals until their verified import
 receipts finish archival, even after the pending plugin migration records clear.
 Retries and read-only checks reuse the verified receipt, including transcripts
@@ -126,6 +129,15 @@ without recreating `sessions.json` or replaying session metadata. Hash-matching
 sources continue through import; changed or unverifiable sources remain protected
 and are listed by path. Preserve those files for inspection.
 
+A session directory does not need a legacy `sessions.json` to recover its history.
+Doctor derives session ownership from verified transcript headers and SQLite. For
+a configured agent with a pending plugin migration, it records a source index in
+the existing import receipt without creating a new JSON index. For unconfigured
+agents, it imports valid conversations and moves the original history into the
+protected migration archive, recording each move. Trajectory-only directories are
+preserved there too, without creating an empty agent database. Pending migrations
+for other agents do not block this archival.
+
 A restored copy with the recorded SHA-256 and size remains valid even when its
 inode or modification time differs. `--session-sqlite recover` records its current
 identity in the existing receipt, including when no failed migration manifest exists.
@@ -139,7 +151,10 @@ migration archive with their validation error and recovery path in the report.
 For changed indexes, Doctor compares session keys and IDs with canonical SQLite and
 names differing metadata fields in per-session warnings. This comparison does not
 authorize replaying old values or accepting changed bytes as the original import.
-Snapshot-path repair leaves these historical inputs unchanged.
+Snapshot, model-route, and integrity repairs leave these historical inputs unchanged,
+including after the plugin obligation completes while its source receipt remains.
+Canonical SQLite repairs continue. A new index appearing after an indexless import
+is preserved as conflicting input; it cannot inherit the earlier receipt's authority.
 
 A retained plugin source conflict does not prevent Gateway readiness after the
 core import completed. Doctor owns the repair and the Gateway keeps serving SQLite.
@@ -191,7 +206,7 @@ for cleanup. Preserve the remaining originals and migration manifests for recove
 `historical_transcript_deferred` can report that an archived session registry no
 longer matches its migration receipt. The receipt identifies the original file by
 device, inode, modification time, size, and SHA-256; it is not an agent or install
-ID. Historical archive discovery and recovery cleanup accept a device-number
+ID. Historical archive discovery, restore, and recovery cleanup accept a device-number
 change after a volume remount; inode, modification time, size, and SHA-256 must
 still match. Copying, replacing, touching, or editing an archive can invalidate
 that receipt.

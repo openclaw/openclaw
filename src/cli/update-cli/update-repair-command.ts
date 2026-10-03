@@ -14,12 +14,14 @@ import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js"
 import { readBuiltGatewayBuildId } from "../../infra/update-git-runtime.js";
 import {
   inspectUpdateRepairDriverAdmission,
+  inspectNewerRecoveryHistory,
+  needsPostCoreRepair,
   isFreshUnacknowledgedAbandonedUpdateRun,
 } from "../../infra/update-run-activity.js";
 import {
   acknowledgeAbandonedUpdateRun,
   listUpdateRuns,
-  reconcileAbandonedUpdateRuns,
+  reconcileAbandonedUpdateRunsAsync,
   reconcilePackageOwnerRefusal,
   recordUpdateRunRepairContinuation,
 } from "../../infra/update-run-ledger.js";
@@ -27,7 +29,6 @@ import {
   isAbandonedUpdateRun,
   isAcknowledgedAbandonedUpdateRun,
   isUnacknowledgedPackageOwnerRefusal,
-  type UpdateRunRecord,
 } from "../../infra/update-run-record.js";
 import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
 import { DEFAULT_UPDATE_STEP_TIMEOUT_MS } from "../../infra/update-run-timeouts.js";
@@ -40,8 +41,9 @@ import {
   resolveGatewayRestartProbeContext,
   waitForGatewayHttpReadiness,
 } from "../daemon-cli/restart-health-probe.js";
+import { refuseHostOwnedUpdate } from "./host-owned.js";
 import {
-  parseTimeoutMsOrExit,
+  parseUpdateTimeoutMs,
   resolveUpdateRoot,
   resolveTargetVersion,
   type UpdateFinalizeOptions,
@@ -49,44 +51,12 @@ import {
 import { updateFinalizeCommand } from "./update-command-finalize.js";
 import { resolveServiceRefreshEnv } from "./update-command-service-env.js";
 
-const POST_CORE_PHASES = new Set(["activating", "restarting", "verifying"]);
-
-function needsPostCoreRepair(run: UpdateRunRecord): boolean {
-  // Reconciliation finishes phase steps but does not prove post-core convergence.
-  return (
-    POST_CORE_PHASES.has(run.phase) ||
-    run.steps.some(
-      (step) =>
-        POST_CORE_PHASES.has(step.step) ||
-        step.step === "post-update verification" ||
-        step.step.startsWith("finalize:"),
-    )
-  );
-}
-
-function inspectNewerRecoveryHistory(recoveryRuns: UpdateRunRecord[], history: UpdateRunRecord[]) {
-  if (!recoveryRuns.length) {
-    return { postCoreRuns: [], incomplete: false };
-  }
-  const oldestRecovery = Math.min(...recoveryRuns.map((run) => run.createdAtMs));
-  const postCoreRuns = history.filter(
-    (run) =>
-      run.createdAtMs >= oldestRecovery &&
-      run.status === "failed" &&
-      !isAcknowledgedAbandonedUpdateRun(run) &&
-      needsPostCoreRepair(run),
-  );
-  // A bounded prefix cannot prove absence of interrupted work beyond its tail.
-  const incomplete = history.length === 100 && (history.at(-1)?.createdAtMs ?? 0) >= oldestRecovery;
-  return { postCoreRuns, incomplete };
-}
-
 /** Public repair can clear a stale ledger without entering post-core maintenance. */
 export async function updateRepairCommand(opts: UpdateFinalizeOptions): Promise<void> {
-  const timeoutMs = parseTimeoutMsOrExit(opts.timeout);
-  if (timeoutMs === null) {
-    return;
-  }
+  // Recovery refusal precedes discovery; later mutation checks still revalidate.
+  await assertUpdateRecoveryAdmission({ env: process.env });
+  await refuseHostOwnedUpdate(await resolveUpdateRoot(), opts);
+  const timeoutMs = parseUpdateTimeoutMs(opts.timeout);
   const env = resolveServiceRefreshEnv(process.env, tryProcessCwd());
   const options = { env, busyTimeoutMs: timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS };
   assertConfigWriteAllowedInCurrentMode({ env });
@@ -141,7 +111,7 @@ export async function updateRepairCommand(opts: UpdateFinalizeOptions): Promise<
       const targetVersion =
         lastRun.target.version ??
         (lastRun.target.tag
-          ? await resolveTargetVersion(lastRun.target.tag, timeoutMs, { env })
+          ? (await resolveTargetVersion(lastRun.target.tag, timeoutMs, { env })).version
           : (await resolveNpmChannelTag({ channel, timeoutMs, env })).version);
       await assertUpdateRecoveryAdmission(options);
       // Registry resolution awaited I/O; inspect the installed version again before recording recovery.
@@ -165,7 +135,10 @@ export async function updateRepairCommand(opts: UpdateFinalizeOptions): Promise<
     : lastRun && isFreshUnacknowledgedAbandonedUpdateRun(lastRun)
       ? [lastRun]
       : [];
-  const history = inspectNewerRecoveryHistory(recoveryRuns, recentRuns);
+  const recoverySinceMs = recoveryRuns.length
+    ? Math.min(...recoveryRuns.map((run) => run.createdAtMs))
+    : undefined;
+  const history = inspectNewerRecoveryHistory(recoverySinceMs, recentRuns);
   const recoveryRunIds = [
     ...new Set(
       [...recoveryRuns, ...historicalRuns, ...history.postCoreRuns].map((run) => run.runId),
@@ -175,7 +148,7 @@ export async function updateRepairCommand(opts: UpdateFinalizeOptions): Promise<
   if (
     opts.channel !== undefined ||
     opts.acceptCapabilities ||
-    recoveryRuns.length === 0 ||
+    recoverySinceMs === undefined ||
     recoveryRunIds.length !== recoveryRuns.length ||
     recoveryRuns.some(needsPostCoreRepair) ||
     history.postCoreRuns.length > 0 ||
@@ -231,7 +204,7 @@ export async function updateRepairCommand(opts: UpdateFinalizeOptions): Promise<
     throw new Error(currentAdmission.message);
   }
   const currentHistory = inspectNewerRecoveryHistory(
-    recoveryRuns,
+    recoverySinceMs,
     listUpdateRuns({ limit: 100 }, options),
   );
   if (
@@ -244,8 +217,13 @@ export async function updateRepairCommand(opts: UpdateFinalizeOptions): Promise<
     );
   }
   const reconciled = activeRuns.length
-    ? reconcileAbandonedUpdateRuns(
-        { explicit: true, runIds: activeRuns.map((run) => run.runId), requireAllActive: true },
+    ? await reconcileAbandonedUpdateRunsAsync(
+        {
+          explicit: true,
+          runIds: activeRuns.map((run) => run.runId),
+          requireAllActive: true,
+          repairHistorySinceMs: recoverySinceMs,
+        },
         options,
       )
     : [];

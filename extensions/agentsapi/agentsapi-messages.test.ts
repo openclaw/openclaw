@@ -2,7 +2,8 @@ import type { Turn as SDKTurn } from "openai/resources/beta/agents/sessions/turn
 import type { AgentHarnessAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { describe, expect, it } from "vitest";
 import type { AgentsApiEvent, AgentsApiItem } from "./agentsapi-client.js";
-import { createAgentsApiMessageProjection } from "./agentsapi-messages.js";
+import { AgentsApiMessageProjection } from "./agentsapi-messages.js";
+import { createModel } from "./agentsapi.test-support.js";
 
 type AgentEvent = Parameters<NonNullable<AgentHarnessAttemptParamsV2["onAgentEvent"]>>[0];
 
@@ -142,7 +143,7 @@ function createProjection() {
   const events: AgentEvent[] = [];
   // Observation needs no auth or transcript operations; final accounting receives the model.
   const params = {} as AgentHarnessAttemptParamsV2;
-  const projection = createAgentsApiMessageProjection(
+  const projection = new AgentsApiMessageProjection(
     params,
     "session-fixture",
     (event) => {
@@ -169,18 +170,7 @@ function createTurn(id: string, usage: typeof observedUsageA) {
   } satisfies SDKTurn;
 }
 
-const usageModel = {
-  id: "model-fixture",
-  name: "Fixture Model",
-  api: "openai-responses",
-  provider: "openai",
-  baseUrl: "https://api.openai.com/v1",
-  reasoning: true,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  contextWindow: 1024,
-  maxTokens: 512,
-} satisfies AgentHarnessAttemptParamsV2["model"];
+const usageModel = createModel({ id: "model-fixture", reasoning: true });
 
 const observedUsageA = {
   input_tokens: 100,

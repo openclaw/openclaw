@@ -40,9 +40,12 @@ describe("existing-schema shared-state workers", () => {
 
     await withExistingOpenClawStateSchema({ path: databasePath }, async () => {
       const captured = captureOpenClawStateWorkerContext({ path: databasePath, env });
-      for (const ownerKey of ["agent:main:first", "agent:main:second"]) {
+      for (let attempt = 0; attempt < 2; attempt += 1) {
         expect(
-          await executeOpenClawStateWorker(captured, { type: "flows.list", input: { ownerKey } }),
+          await executeOpenClawStateWorker(captured, {
+            type: "plugins.conversationBindingApprovals.read",
+            input: undefined,
+          }),
         ).toEqual([]);
         expect(readAppVersion(databasePath)).toBe("synthetic-installed-runtime");
       }
@@ -60,8 +63,8 @@ describe("existing-schema shared-state workers", () => {
     ).rejects.toThrow("schema policy changed");
     expect(
       await executeOpenClawStateWorker(ordinary, {
-        type: "flows.list",
-        input: { ownerKey: "agent:main:ordinary" },
+        type: "plugins.conversationBindingApprovals.read",
+        input: undefined,
       }),
     ).toEqual([]);
     expect(readAppVersion(databasePath)).toBe("synthetic-installed-runtime");
@@ -82,8 +85,8 @@ describe("existing-schema shared-state workers", () => {
       expect(
         await outsideScope(() =>
           executeOpenClawStateWorker(context, {
-            type: "flows.list",
-            input: { ownerKey: "agent:main:queued" },
+            type: "plugins.conversationBindingApprovals.read",
+            input: undefined,
           }),
         ),
       ).toEqual([]);
@@ -93,8 +96,8 @@ describe("existing-schema shared-state workers", () => {
 
     await expect(
       executeOpenClawStateWorker(captured, {
-        type: "flows.list",
-        input: { ownerKey: "agent:main:expired" },
+        type: "plugins.conversationBindingApprovals.read",
+        input: undefined,
       }),
     ).rejects.toThrow("schema admission has ended");
     expect(readAppVersion(databasePath)).toBe("synthetic-installed-runtime");

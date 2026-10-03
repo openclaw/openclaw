@@ -172,13 +172,6 @@ function retireIdleScopedCommandLane(state: LaneState): void {
   }
 }
 
-function normalizeTaskTimeoutMs(value: number | undefined): number | undefined {
-  if (value === undefined || !Number.isFinite(value) || value <= 0) {
-    return undefined;
-  }
-  return clampPositiveTimerTimeoutMs(value);
-}
-
 function resolveQueuePriority(priority: CommandQueueEnqueueOptions["priority"]): QueuePriority {
   switch (priority) {
     case "foreground":
@@ -190,24 +183,18 @@ function resolveQueuePriority(priority: CommandQueueEnqueueOptions["priority"]):
   }
 }
 
-function enqueueLaneEntry(state: LaneState, entry: QueueEntry): void {
-  entry.queuedAheadAtEnqueue = enqueueLaneQueue(state.queue, entry);
-  entry.activeAheadAtEnqueue = state.activeTaskIds.size;
-}
-
 async function runQueueEntryTask(
   lane: string,
   entry: QueueEntry,
   marker: CommandLaneTaskMarker,
 ): Promise<unknown> {
   const taskPromise = Promise.resolve().then(() => entry.task(marker));
-  const taskTimeoutMs = normalizeTaskTimeoutMs(entry.taskTimeoutMs);
+  const taskTimeoutMs = entry.taskTimeoutMs;
   if (taskTimeoutMs === undefined) {
     return await taskPromise;
   }
 
-  const taskTimeoutAbortGraceMs =
-    normalizeTaskTimeoutMs(entry.taskTimeoutAbortGraceMs) ?? taskTimeoutMs;
+  const taskTimeoutAbortGraceMs = entry.taskTimeoutAbortGraceMs ?? taskTimeoutMs;
   const startedAtMs = Date.now();
   const readLastProgressAtMs = () => {
     let value: number | undefined;
@@ -567,15 +554,17 @@ export function enqueueCommandInLane<T>(
       queuedAheadAtEnqueue: 0,
       activeAheadAtEnqueue: 0,
       taskIdentity: opts?.taskIdentity ? { ...opts.taskIdentity } : undefined,
-      taskTimeoutMs: normalizeTaskTimeoutMs(opts?.taskTimeoutMs),
+      sessionTarget: opts?.sessionTarget ? { ...opts.sessionTarget } : undefined,
+      taskTimeoutMs: clampPositiveTimerTimeoutMs(opts?.taskTimeoutMs),
       taskTimeoutProgressAtMs: opts?.taskTimeoutProgressAtMs,
       taskTimeoutSubscribe: opts?.taskTimeoutSubscribe,
       taskTimeoutAbortSignal: opts?.taskTimeoutAbortSignal,
-      taskTimeoutAbortGraceMs: normalizeTaskTimeoutMs(opts?.taskTimeoutAbortGraceMs),
+      taskTimeoutAbortGraceMs: clampPositiveTimerTimeoutMs(opts?.taskTimeoutAbortGraceMs),
       taskTimeoutReleaseSignal: opts?.taskTimeoutReleaseSignal,
       onWait: opts?.onWait,
     };
-    enqueueLaneEntry(state, entry);
+    entry.queuedAheadAtEnqueue = enqueueLaneQueue(state.queue, entry);
+    entry.activeAheadAtEnqueue = state.activeTaskIds.size;
     const signal = opts?.abortSignal;
     if (signal) {
       const onAbort = () => {
@@ -605,10 +594,7 @@ export function enqueueCommandInLane<T>(
 export function getQueueSize(lane: string = CommandLane.Main) {
   const resolved = normalizeLane(lane);
   const state = getQueueState().lanes.get(resolved);
-  if (!state) {
-    return 0;
-  }
-  return getLaneDepth(state);
+  return state ? getLaneDepth(state) : 0;
 }
 
 export function getCommandLaneSnapshot(lane: string = CommandLane.Main): CommandLaneSnapshot {
@@ -673,11 +659,41 @@ export function getTotalQueueSize() {
   return total;
 }
 
-export function clearCommandLane(lane: string = CommandLane.Main) {
+type CommandLaneEntryFilter = (target: CommandQueueEnqueueOptions["sessionTarget"]) => boolean;
+
+function selectQueuedCommandEntries(state: LaneState, matches: CommandLaneEntryFilter) {
+  const entries: QueueEntry[] = [];
+  for (const queue of [state.queue.foreground, state.queue.normal, state.queue.background]) {
+    for (let entry = queue.head; entry; entry = entry.next) {
+      if (matches(entry.sessionTarget)) {
+        entries.push(entry);
+      }
+    }
+  }
+  return entries;
+}
+
+export function countQueuedCommandsInLane(lane: string, matches: CommandLaneEntryFilter): number {
+  const state = getQueueState().lanes.get(normalizeLane(lane));
+  return state ? selectQueuedCommandEntries(state, matches).length : 0;
+}
+
+export function clearCommandLane(
+  lane: string = CommandLane.Main,
+  matches?: CommandLaneEntryFilter,
+) {
   const cleaned = normalizeLane(lane);
   const state = getQueueState().lanes.get(cleaned);
   if (!state) {
     return 0;
+  }
+  if (matches) {
+    const entries = selectQueuedCommandEntries(state, matches);
+    for (const entry of entries) {
+      removeLaneQueueEntry(state.queue, entry);
+      entry.reject(new CommandLaneClearedError(cleaned));
+    }
+    return entries.length;
   }
   const removed = state.queue.length;
   let entry: QueueEntry | undefined;

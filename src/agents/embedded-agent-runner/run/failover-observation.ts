@@ -1,6 +1,3 @@
-/**
- * Logs redacted failover decisions for embedded-agent attempts.
- */
 import { redactIdentifier } from "@openclaw/normalization-core/node-crypto";
 import type { AuthProfileFailureReason } from "../../auth-profiles.js";
 import { sanitizeForConsole } from "../../console-sanitize.js";
@@ -8,10 +5,9 @@ import {
   buildApiErrorObservationFields,
   shouldSuppressRawErrorConsoleSuffix,
 } from "../../embedded-agent-error-observation.js";
-import type { FailoverReason } from "../../embedded-agent-helpers.js";
+import type { FailoverReason } from "../../failover/signal.js";
 import { log } from "../logger.js";
 
-/** Structured fields emitted whenever embedded run failover chooses an action. */
 type FailoverDecisionLoggerInput = {
   stage: "prompt" | "assistant";
   decision:
@@ -39,14 +35,9 @@ type FailoverDecisionLoggerInput = {
   attemptCount?: number;
 };
 
-/** Stable context captured before a concrete failover decision is known. */
 type FailoverDecisionLoggerBase = Omit<FailoverDecisionLoggerInput, "decision" | "status">;
 
-/**
- * Captures sanitized failover context and returns a decision logger. The closure
- * keeps prompt/assistant failover branches consistent while still allowing the
- * final decision and HTTP status to be supplied at the action point.
- */
+/** Capture sanitized attempt context before the decision and status are known. */
 export function createFailoverDecisionLogger(
   base: FailoverDecisionLoggerBase,
 ): (

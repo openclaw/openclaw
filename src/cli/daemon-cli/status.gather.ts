@@ -1,4 +1,3 @@
-// Collects daemon status from service files, config snapshots, ports, probes, and plugin drift.
 import fs from "node:fs/promises";
 import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
 import JSON5 from "json5";
@@ -306,7 +305,8 @@ async function gatherDaemonStatusImpl(
   });
   const { service, state: serviceState } = await readDaemonServiceStatus({
     env: process.env,
-    timeoutMs,
+    timeoutMs:
+      process.platform === "win32" && opts.rpc.timeout === undefined ? undefined : timeoutMs,
   });
   const { command, env: serviceEnv, loadState, runtime } = serviceState;
   const loaded = loadState.status === "loaded";
@@ -404,7 +404,7 @@ async function gatherDaemonStatusImpl(
             deep: true,
           }),
         )
-        .then((services) =>
+        .then(({ services }) =>
           services.filter(
             (extra) =>
               extra.platform !== "linux" ||

@@ -35,6 +35,7 @@ import {
   normalizeCompatibilityConfig as normalizeTelegramCompatibilityConfig,
 } from "./doctor-contract.js";
 import { resolveTelegramPreviewStreamMode } from "./preview-streaming.js";
+import { telegramWebhookHost } from "./webhook-legacy.js";
 
 type TelegramAllowFromInvalidHit = { path: string; entry: string };
 type TelegramMalformedGroupsHit = { path: string; actualType: string };
@@ -414,17 +415,9 @@ async function maybeRepairTelegramAllowFromUsernames(cfg: OpenClawConfig): Promi
       ],
     };
   }
-  const resolveUserId = async (raw: string): Promise<string | null> => {
-    const trimmed = normalizeOptionalString(raw) ?? "";
-    if (!trimmed) {
+  const resolveUserId = async (normalized: string): Promise<string | null> => {
+    if (/\s/.test(normalized)) {
       return null;
-    }
-    const normalized = normalizeTelegramAllowFromEntry(trimmed);
-    if (!normalized || normalized === "*") {
-      return null;
-    }
-    if (isNumericTelegramSenderUserId(normalized) || /\s/.test(normalized)) {
-      return isNumericTelegramSenderUserId(normalized) ? normalized : null;
     }
     const username = normalized.startsWith("@") ? normalized : `@${normalized}`;
     for (const accountId of resolverAccountIds) {
@@ -469,7 +462,7 @@ async function maybeRepairTelegramAllowFromUsernames(cfg: OpenClawConfig): Promi
         out.push(normalized);
         continue;
       }
-      const resolved = await resolveUserId(String(entry));
+      const resolved = await resolveUserId(normalized);
       if (resolved) {
         out.push(resolved);
         replaced.push({ from: normalizeOptionalString(String(entry)) ?? "", to: resolved });
@@ -621,6 +614,15 @@ export const telegramDoctor: ChannelDoctorAdapter = {
         continue;
       }
       const destination = `Gateway port ${resolveGatewayPort(cfg, env)}${path}`;
+      if (!telegramWebhookHost.getWebhookLegacyListener) {
+        // The shipped host collects warningNotes, but does not render infoNotes.
+        warningNotes.push(
+          legacyListener
+            ? `Telegram account "${accountId}": the 2026.9.6 compatibility listener ${legacyListener.host}:${legacyListener.port} serves this account directly. This host cannot share a legacy port across accounts; use distinct endpoints or move the reverse proxy for ${config.webhookUrl} to ${destination}, verify delivery, then set legacyWebhook: false.`
+            : `Telegram account "${accountId}": legacyWebhook: false disables the 2026.9.6 compatibility listener. Route ${config.webhookUrl} to ${destination}.`,
+        );
+        continue;
+      }
       infoNotes.push(
         legacyListener
           ? `Telegram account "${accountId}": legacy listener ${legacyListener.host}:${legacyListener.port} forwards to ${destination}. Move the reverse proxy for ${config.webhookUrl} to that Gateway route, verify delivery, then set legacyWebhook: false to disable legacy forwarding for this account.`

@@ -65,6 +65,11 @@ export type PluginLoadOptions = {
   /** Staged Gateway candidates expose runtime APIs only after publication or owner preparation. */
   runtimeSideEffects?: boolean;
   previousRegistry?: PluginRegistry;
+  /**
+   * Live runtime registry whose unchanged records a non-activating load lists without
+   * loading its own copies. The lender keeps custody and retirement of those instances.
+   */
+  borrowRegistry?: PluginRegistry;
   replacePluginIds?: readonly string[];
   moduleRecoveries?: ReadonlyMap<string, PluginRuntimeRecovery>;
   /** Preserve host cleanup hooks before failed registration removes its contributions. */

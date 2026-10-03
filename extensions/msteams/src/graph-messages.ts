@@ -10,17 +10,13 @@ import {
   fetchGraphJson,
   mutateGraphJson,
   resolveGraphToken,
+  type GraphResponse,
 } from "./graph.js";
 import { getMSTeamsReactionEmoji, resolveMSTeamsReactionEmoji } from "./reaction-types.js";
 
 type GraphPinnedMessage = {
   id?: string;
   message?: GraphMessage;
-};
-
-type GraphPinnedMessagesResponse = {
-  value?: GraphPinnedMessage[];
-  "@odata.nextLink"?: string;
 };
 
 function stripTargetPrefix(raw: string): string {
@@ -202,7 +198,7 @@ export async function listPinsMSTeams(
   const path = `${conv.basePath}/pinnedMessages?$expand=message`;
   const allPins: ListPinsMSTeamsResult["pins"] = [];
 
-  let res = await fetchGraphJson<GraphPinnedMessagesResponse>({ token, path });
+  let res = await fetchGraphJson<GraphResponse<GraphPinnedMessage>>({ token, path });
   let pages = 1;
 
   while (true) {
@@ -220,7 +216,7 @@ export async function listPinsMSTeams(
       break;
     }
 
-    res = await fetchGraphAbsoluteUrl<GraphPinnedMessagesResponse>({ token, url: nextLink });
+    res = await fetchGraphAbsoluteUrl<GraphResponse<GraphPinnedMessage>>({ token, url: nextLink });
     pages++;
   }
 
@@ -346,11 +342,6 @@ const SEARCH_MAX_LIMIT = 50;
 const SEARCH_PAGE_SIZE = 50;
 const SEARCH_MAX_PAGES = 10;
 
-type GraphMessagesPage = {
-  value?: GraphMessage[];
-  "@odata.nextLink"?: string;
-};
-
 function normalizeSearchText(message: GraphMessage): string {
   const content = message.body?.content ?? "";
   return message.body?.contentType?.toLowerCase() === "html"
@@ -391,9 +382,9 @@ export async function searchMessagesMSTeams(
   let truncated = false;
 
   for (let page = 0; page < SEARCH_MAX_PAGES; page++) {
-    const response: GraphMessagesPage = nextUrl
-      ? await fetchGraphAbsoluteUrl<GraphMessagesPage>({ token, url: nextUrl })
-      : await fetchGraphJson<GraphMessagesPage>({
+    const response: GraphResponse<GraphMessage> = nextUrl
+      ? await fetchGraphAbsoluteUrl<GraphResponse<GraphMessage>>({ token, url: nextUrl })
+      : await fetchGraphJson<GraphResponse<GraphMessage>>({
           token,
           path: `${basePath}/messages?$top=${SEARCH_PAGE_SIZE}`,
         });

@@ -746,13 +746,8 @@ class RoomChatCommandOutbox internal constructor(
       val scope = ChatOutboxScope(sessionKey = key, ownerAgentId = owner)
       ensureBranchScopeLocked(gateway, scope)
       val branchEpoch = checkNotNull(readBranchStateLocked(gateway, scope)).epoch
-      insertDeliveryStateLocked(
-        commandId = entity.id,
-        attemptVersion = 1,
-        branchEpoch = branchEpoch,
-        parkedWasAccepted = false,
-        hadUnacknowledgedSend = false,
-      )
+      val delivery = DeliveryState(1, branchEpoch, parkedWasAccepted = false, hadUnacknowledgedSend = false)
+      insertDeliveryStateLocked(entity.id, delivery)
       val storedAttachments =
         attachments.mapIndexed { position, payload ->
           val attachmentEntity =
@@ -786,7 +781,7 @@ class RoomChatCommandOutbox internal constructor(
       ChatOutboxEnqueueResult.Queued(
         entity.toItem(
           attachments = storedAttachments,
-          deliveryState = DeliveryState(1, branchEpoch, parkedWasAccepted = false, hadUnacknowledgedSend = false),
+          deliveryState = delivery,
           scopeBranchEpoch = branchEpoch,
         ),
       )
@@ -827,10 +822,11 @@ class RoomChatCommandOutbox internal constructor(
       if (updated > 0) {
         insertDeliveryStateLocked(
           commandId = id,
-          attemptVersion = expectedAttemptVersion + if (status == ChatOutboxStatus.Queued) 1 else 0,
-          branchEpoch = state.branchEpoch,
-          parkedWasAccepted = state.parkedWasAccepted,
-          hadUnacknowledgedSend = true,
+          state =
+            state.copy(
+              attemptVersion = expectedAttemptVersion + if (status == ChatOutboxStatus.Queued) 1 else 0,
+              hadUnacknowledgedSend = true,
+            ),
         )
       }
       updated
@@ -887,13 +883,7 @@ class RoomChatCommandOutbox internal constructor(
         "cannot pin into an unreconciled branch scope"
       }
       dao.updateSessionKey(id = id, sessionKey = key)
-      insertDeliveryStateLocked(
-        commandId = id,
-        attemptVersion = delivery.attemptVersion,
-        branchEpoch = nextBranch.epoch,
-        parkedWasAccepted = delivery.parkedWasAccepted,
-        hadUnacknowledgedSend = delivery.hadUnacknowledgedSend,
-      )
+      insertDeliveryStateLocked(id, delivery.copy(branchEpoch = nextBranch.epoch))
     }
   }
 
@@ -944,7 +934,7 @@ class RoomChatCommandOutbox internal constructor(
           queuedStatus = ChatOutboxStatus.Queued.dbValue,
           failedStatus = ChatOutboxStatus.Failed.dbValue,
           gatedEpoch = gatedEpoch,
-          ownerAgentId = owner.ifEmpty { null },
+          ownerAgentId = owner,
         )
       if (changed == 0) {
         return@withWriteTransaction 0
@@ -953,10 +943,13 @@ class RoomChatCommandOutbox internal constructor(
       deleteDeliveryStateLocked(id)
       insertDeliveryStateLocked(
         commandId = nextId,
-        attemptVersion = if (needsFreshIdentity) 1 else expectedAttemptVersion + 1,
-        branchEpoch = branchEpoch,
-        parkedWasAccepted = false,
-        hadUnacknowledgedSend = false,
+        state =
+          DeliveryState(
+            attemptVersion = if (needsFreshIdentity) 1 else expectedAttemptVersion + 1,
+            branchEpoch = branchEpoch,
+            parkedWasAccepted = false,
+            hadUnacknowledgedSend = false,
+          ),
       )
       for (successor in rows) {
         val follows =
@@ -1342,10 +1335,7 @@ class RoomChatCommandOutbox internal constructor(
 
   private suspend fun PooledConnection.insertDeliveryStateLocked(
     commandId: String,
-    attemptVersion: Int,
-    branchEpoch: Int,
-    parkedWasAccepted: Boolean,
-    hadUnacknowledgedSend: Boolean,
+    state: DeliveryState,
   ) {
     usePrepared(
       "INSERT OR REPLACE INTO outbox_delivery_state(" +
@@ -1353,10 +1343,10 @@ class RoomChatCommandOutbox internal constructor(
         ") VALUES (?, ?, ?, ?, ?)",
     ) { statement ->
       statement.bindText(1, commandId)
-      statement.bindInt(2, attemptVersion)
-      statement.bindInt(3, branchEpoch)
-      statement.bindBoolean(4, parkedWasAccepted)
-      statement.bindBoolean(5, hadUnacknowledgedSend)
+      statement.bindInt(2, state.attemptVersion)
+      statement.bindInt(3, state.branchEpoch)
+      statement.bindBoolean(4, state.parkedWasAccepted)
+      statement.bindBoolean(5, state.hadUnacknowledgedSend)
       statement.step()
     }
   }
@@ -1455,26 +1445,18 @@ class RoomChatCommandOutbox internal constructor(
     return database.withWriteTransaction {
       ensureBranchStorageLocked()
       ensureBranchScopeLocked(gateway, normalized)
-      if (lease == null) {
-        usePrepared(
-          "UPDATE outbox_branch_scopes SET switchPendingSinceMs = NULL, needsReconciliation = ?, revision = revision + 1 " +
-            "WHERE gatewayId = ? AND sessionKey = ? AND ownerAgentId = ?",
-        ) { statement ->
-          statement.bindBoolean(1, needsReconciliation)
-          statement.bindScope(gateway, normalized, startIndex = 2)
-          statement.step()
-        }
-      } else {
-        usePrepared(
-          "UPDATE outbox_branch_scopes SET switchPendingSinceMs = NULL, needsReconciliation = ?, revision = revision + 1 " +
-            "WHERE gatewayId = ? AND sessionKey = ? AND ownerAgentId = ? AND revision = ? AND switchPendingSinceMs = ?",
-        ) { statement ->
-          statement.bindBoolean(1, needsReconciliation)
-          statement.bindScope(gateway, normalized, startIndex = 2)
+      val leaseFilter = lease?.let { " AND revision = ? AND switchPendingSinceMs = ?" }.orEmpty()
+      usePrepared(
+        "UPDATE outbox_branch_scopes SET switchPendingSinceMs = NULL, needsReconciliation = ?, revision = revision + 1 " +
+          "WHERE gatewayId = ? AND sessionKey = ? AND ownerAgentId = ?$leaseFilter",
+      ) { statement ->
+        statement.bindBoolean(1, needsReconciliation)
+        statement.bindScope(gateway, normalized, startIndex = 2)
+        if (lease != null) {
           statement.bindInt(5, lease.revision)
           statement.bindLong(6, lease.startedAtMs)
-          statement.step()
         }
+        statement.step()
       }
       if (changedRowsLocked() == 0) return@withWriteTransaction null
       val state = readBranchStateLocked(gateway, normalized) ?: return@withWriteTransaction null

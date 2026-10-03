@@ -5,11 +5,6 @@
 const DISALLOWED_CHAT_CONTROL_RANGE = `${String.fromCharCode(0x00)}-${String.fromCharCode(0x08)}${String.fromCharCode(0x0b)}${String.fromCharCode(0x0c)}${String.fromCharCode(0x0e)}-${String.fromCharCode(0x1f)}${String.fromCharCode(0x7f)}`;
 const DISALLOWED_CHAT_CONTROL_RE = new RegExp(`[${DISALLOWED_CHAT_CONTROL_RANGE}]`, "g");
 
-/** Drop disallowed control characters while preserving tab, line breaks, and Unicode. */
-function stripDisallowedChatControlChars(message: string): string {
-  return message.replace(DISALLOWED_CHAT_CONTROL_RE, "");
-}
-
 /** Normalize chat text and reject null bytes before routing to channels. */
 export function sanitizeChatSendMessageInput(
   message: string,
@@ -18,5 +13,5 @@ export function sanitizeChatSendMessageInput(
   if (normalized.includes("\u0000")) {
     return { ok: false, error: "message must not contain null bytes" };
   }
-  return { ok: true, message: stripDisallowedChatControlChars(normalized) };
+  return { ok: true, message: normalized.replace(DISALLOWED_CHAT_CONTROL_RE, "") };
 }

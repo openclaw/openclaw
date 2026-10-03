@@ -3,9 +3,9 @@ import type { messagingApi } from "@line/bot-sdk";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import {
-  datetimePickerAction,
   messageAction,
   normalizeLineAction,
+  normalizeLineMessage,
   postbackAction,
   truncateLineActionLabel,
   uriAction,
@@ -24,13 +24,16 @@ import {
   createMediaPlayerCard,
 } from "./flex-templates/media-control-cards.js";
 import { createEventCard } from "./flex-templates/schedule-cards.js";
-import {
-  buildTemplateMessageFromPayload,
-  createConfirmTemplate,
-  createButtonTemplate,
-  createTemplateCarousel,
-  createCarouselColumn,
-} from "./template-messages.js";
+import { buildTemplateMessageFromPayload } from "./template-messages.js";
+import type { LineTemplateMessagePayload } from "./types.js";
+
+function renderTemplate(payload: LineTemplateMessagePayload): messagingApi.TemplateMessage {
+  const message = buildTemplateMessageFromPayload(payload);
+  if (message?.type !== "template") {
+    throw new Error(`Expected a LINE template, received ${message?.type ?? "nothing"}`);
+  }
+  return message;
+}
 
 const expectedUnavailableCallbackAction = {
   type: "message",
@@ -83,22 +86,37 @@ const lineTemplateMessageScenarios = [
   {
     kind: "confirm",
     create: (altText: string) =>
-      createConfirmTemplate("q".repeat(300), messageAction("Yes"), messageAction("No"), altText),
+      renderTemplate({
+        type: "confirm",
+        text: "q".repeat(300),
+        confirmLabel: "Yes",
+        confirmData: "Yes",
+        cancelLabel: "No",
+        cancelData: "No",
+        altText,
+      }),
     bodyLimit: 240,
   },
   {
     kind: "buttons",
     create: (altText: string) =>
-      createButtonTemplate("Menu", "b".repeat(200), [messageAction("Open")], { altText }),
+      renderTemplate({
+        type: "buttons",
+        title: "Menu",
+        text: "b".repeat(200),
+        actions: [{ type: "message", label: "Open" }],
+        altText,
+      }),
     bodyLimit: 60,
   },
   {
     kind: "carousel",
     create: (altText: string) =>
-      createTemplateCarousel(
-        [createCarouselColumn({ text: "c".repeat(150), actions: [messageAction("Open")] })],
-        { altText },
-      ),
+      renderTemplate({
+        type: "carousel",
+        columns: [{ text: "c".repeat(150), actions: [{ type: "message", label: "Open" }] }],
+        altText,
+      }),
     bodyLimit: 120,
   },
 ] as const;
@@ -136,132 +154,97 @@ function cardButtons(component: messagingApi.FlexComponent | undefined): messagi
   return component?.type === "button" ? [component] : [];
 }
 
-describe("createConfirmTemplate", () => {
-  it("drops a surrogate-pair emoji from fallback altText instead of splitting it", () => {
-    const template = createConfirmTemplate(
-      `${"x".repeat(1499)}😀`,
-      messageAction("Yes"),
-      messageAction("No"),
-    );
-
-    expect(template.altText).toBe("x".repeat(1499));
-    expect(loneHighSurrogate.test(template.altText)).toBe(false);
-  });
-});
-
-describe("createButtonTemplate", () => {
-  it("omits a blank optional title", () => {
-    const template = createButtonTemplate(undefined, "Text", [messageAction("OK")]);
-    expect(template).toMatchObject({
-      altText: "Text",
-      template: { type: "buttons", text: "Text" },
+describe("LINE template payload limits", () => {
+  it("keeps the fallback confirm alt text Unicode-safe", () => {
+    const message = renderTemplate({
+      type: "confirm",
+      text: `${"x".repeat(1499)}😀`,
+      confirmLabel: "Yes",
+      confirmData: "Yes",
+      cancelLabel: "No",
+      cancelData: "No",
     });
-    expect(template.template).not.toHaveProperty("title");
+    expect(message.altText).toBe("x".repeat(1499));
+    expect(loneHighSurrogate.test(message.altText)).toBe(false);
   });
 
-  it("uses the titleless 160-character text limit for an empty title", () => {
-    const template = createButtonTemplate("", "x".repeat(160), [messageAction("OK")]);
-    expect(template.template).toMatchObject({ text: "x".repeat(160) });
+  it.each([undefined, ""])("caps titleless buttons text when the title is %s", (title) => {
+    const message = renderTemplate({
+      type: "buttons",
+      title,
+      text: "x".repeat(200),
+      actions: [{ type: "message", label: "OK" }],
+    });
+    expect(message.template).toMatchObject({ text: "x".repeat(160) });
+    expect(message.template).not.toHaveProperty("title");
+    expect(message.altText).toBe("x".repeat(200));
   });
 
-  it("limits actions to 4", () => {
-    const actions = Array.from({ length: 6 }, (_, i) => messageAction(`Button ${i}`));
-    const template = createButtonTemplate("Title", "Text", actions);
-
-    expect((template.template as { actions: unknown[] }).actions.length).toBe(4);
-  });
-
-  it("drops a surrogate-pair emoji from the title instead of splitting it", () => {
-    // 39 chars + an emoji land the truncation boundary inside the surrogate pair;
-    // a raw code-unit slice would keep only the lone high surrogate.
-    const template = createButtonTemplate(`${"x".repeat(39)}😀`, "Text", [messageAction("OK")]);
-    const title = (template.template as { title: string }).title;
-
-    expect(title).toBe("x".repeat(39));
-    expect(loneHighSurrogate.test(title)).toBe(false);
-  });
-});
-
-describe("createCarouselColumn", () => {
-  it("limits actions to 3", () => {
-    const column = createCarouselColumn({
+  it("caps buttons actions at four", () => {
+    const message = renderTemplate({
+      type: "buttons",
+      title: "Title",
       text: "Text",
-      actions: [
-        messageAction("A1"),
-        messageAction("A2"),
-        messageAction("A3"),
-        messageAction("A4"),
-        messageAction("A5"),
-      ],
+      actions: Array.from({ length: 6 }, (_, index) => ({
+        type: "message",
+        label: `Button ${index}`,
+      })),
     });
-
-    expect(column.actions.length).toBe(3);
+    if (message.template.type !== "buttons") {
+      throw new Error("Expected buttons template");
+    }
+    expect(message.template.actions).toHaveLength(4);
   });
 
-  it("drops a surrogate-pair emoji from the title instead of splitting it", () => {
-    const column = createCarouselColumn({
+  it("bounds a button title without splitting its Unicode text", () => {
+    const message = renderTemplate({
+      type: "buttons",
       title: `${"x".repeat(39)}😀`,
       text: "Text",
-      actions: [messageAction("OK")],
+      actions: [{ type: "message", label: "OK" }],
     });
-
-    expect(column.title).toBe("x".repeat(39));
-    expect(loneHighSurrogate.test(column.title ?? "")).toBe(false);
+    expect(message.template).toMatchObject({ title: "x".repeat(39) });
   });
 
-  it("does not split an emoji grapheme at the 60-code-unit boundary", () => {
-    const text = `${"x".repeat(59)}👨‍👩‍👧‍👦after`;
-    const column = createCarouselColumn({
-      title: "Title",
-      text,
-      actions: [messageAction("OK")],
-    });
-
-    expect(column.text).toBe("x".repeat(59));
-  });
-
-  it("keeps required text when the first grapheme exceeds the limit", () => {
-    const text = `😀${"\u0301".repeat(59)}`;
-    const column = createCarouselColumn({
-      title: "Title",
-      text,
-      actions: [messageAction("OK")],
-    });
-
-    expect(column.text.length).toBe(60);
-    expect(column.text.startsWith("😀")).toBe(true);
-  });
-
-  it("uses the compact limit when a whitespace-only title is present", () => {
-    const column = createCarouselColumn({
-      title: " ",
-      text: "x".repeat(150),
-      actions: [messageAction("OK")],
-    });
-
-    expect(column.text).toBe("x".repeat(60));
-  });
-
-  it("truncates text to 60 characters when a thumbnail image is set", () => {
-    const longText = "x".repeat(150);
-    const column = createCarouselColumn({
-      text: longText,
+  it.each([
+    { title: " ", thumbnailImageUrl: undefined, text: "x".repeat(150), expected: "x".repeat(60) },
+    {
+      title: undefined,
       thumbnailImageUrl: "https://example.com/thumb.jpg",
-      actions: [messageAction("OK")],
+      text: "x".repeat(150),
+      expected: "x".repeat(60),
+    },
+    {
+      title: "Title",
+      thumbnailImageUrl: undefined,
+      text: `${"x".repeat(59)}👨‍👩‍👧‍👦after`,
+      expected: "x".repeat(59),
+    },
+    {
+      title: "Title",
+      thumbnailImageUrl: undefined,
+      text: `😀${"\u0301".repeat(59)}`,
+      expected: `😀${"\u0301".repeat(58)}`,
+    },
+  ])(
+    "bounds carousel text with title $title and image $thumbnailImageUrl",
+    ({ title, thumbnailImageUrl, text, expected }) => {
+      const message = renderTemplate({
+        type: "carousel",
+        columns: [{ title, thumbnailImageUrl, text, actions: [{ type: "message", label: "OK" }] }],
+      });
+      expect(message.template).toMatchObject({ columns: [{ text: expected }] });
+    },
+  );
+
+  it("bounds carousel titles without splitting a surrogate pair", () => {
+    const message = renderTemplate({
+      type: "carousel",
+      columns: [
+        { title: `${"x".repeat(39)}😀`, text: "Text", actions: [{ type: "message", label: "OK" }] },
+      ],
     });
-
-    expect(column.text.length).toBe(60);
-  });
-});
-
-describe("carousel column limits", () => {
-  it("limits columns to 10", () => {
-    const template = createTemplateCarousel(
-      Array.from({ length: 15 }, () =>
-        createCarouselColumn({ text: "Text", actions: [messageAction("OK")] }),
-      ),
-    );
-    expect((template.template as { columns: unknown[] }).columns.length).toBe(10);
+    expect(message.template).toMatchObject({ columns: [{ title: "x".repeat(39) }] });
   });
 });
 
@@ -368,12 +351,27 @@ describe("action label/data surrogate-safe truncation", () => {
     expect(withoutDisplay.displayText).toBeUndefined();
   });
 
-  it("datetimePickerAction preserves valid grapheme labels but disables overlong callback data", () => {
+  it("datetime picker normalization preserves labels and disables overlong callback data", () => {
     const exactData = `${"d".repeat(298)}😀`;
     const overlongData = `${"d".repeat(299)}😀`;
-    const action = datetimePickerAction(labelWithEmoji, "data", "datetime") as { label: string };
-    const exact = datetimePickerAction("Pick", exactData, "datetime") as { data: string };
-    const unavailable = datetimePickerAction("Pick", overlongData, "datetime");
+    const action = normalizeLineAction({
+      type: "datetimepicker",
+      label: labelWithEmoji,
+      data: "data",
+      mode: "datetime",
+    }) as { label: string };
+    const exact = normalizeLineAction({
+      type: "datetimepicker",
+      label: "Pick",
+      data: exactData,
+      mode: "datetime",
+    }) as { data: string };
+    const unavailable = normalizeLineAction({
+      type: "datetimepicker",
+      label: "Pick",
+      data: overlongData,
+      mode: "datetime",
+    });
 
     expect(exactData).toHaveLength(300);
     expect(overlongData).toHaveLength(301);
@@ -564,7 +562,7 @@ describe("action label/data surrogate-safe truncation", () => {
     expect(buttonsTemplate.actions[0]).toEqual(expectedUnavailableCallbackAction);
   });
 
-  it("normalizes raw actions at exported template builder boundaries", () => {
+  it("normalizes raw template actions at the outbound message boundary", () => {
     const oversizedPostback: Action = {
       type: "postback",
       label: "Open",
@@ -576,26 +574,41 @@ describe("action label/data surrogate-safe truncation", () => {
       uri: `https://e.example/?q=${"x".repeat(1200)}`,
     };
 
-    const buttons = createButtonTemplate(undefined, "Pick", [oversizedPostback], {
-      defaultAction: oversizedUri,
-    }).template as {
-      actions: Action[];
-      defaultAction?: Action;
-    };
-    expect(buttons.actions).toEqual([expectedUnavailableCallbackAction]);
-    expect(buttons.defaultAction).toEqual(expectedUnavailableLink);
-
-    const carousel = createTemplateCarousel([
-      {
+    const buttons = normalizeLineMessage({
+      type: "template",
+      altText: "Pick",
+      template: {
+        type: "buttons",
         text: "Pick",
         actions: [oversizedPostback],
         defaultAction: oversizedUri,
       },
-    ]).template as {
-      columns: Array<{ actions: Action[]; defaultAction?: Action }>;
-    };
-    expect(carousel.columns[0]?.actions).toEqual([expectedUnavailableCallbackAction]);
-    expect(carousel.columns[0]?.defaultAction).toEqual(expectedUnavailableLink);
+    });
+    expect(buttons).toMatchObject({
+      template: {
+        actions: [expectedUnavailableCallbackAction],
+        defaultAction: expectedUnavailableLink,
+      },
+    });
+
+    const carousel = normalizeLineMessage({
+      type: "template",
+      altText: "Pick",
+      template: {
+        type: "carousel",
+        columns: [{ text: "Pick", actions: [oversizedPostback], defaultAction: oversizedUri }],
+      },
+    });
+    expect(carousel).toMatchObject({
+      template: {
+        columns: [
+          {
+            actions: [expectedUnavailableCallbackAction],
+            defaultAction: expectedUnavailableLink,
+          },
+        ],
+      },
+    });
   });
 
   it("normalizes every length-constrained raw action field", () => {

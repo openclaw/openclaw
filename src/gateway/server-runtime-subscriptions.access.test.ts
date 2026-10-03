@@ -6,7 +6,6 @@ import {
   applySessionEntryLifecycleMutation,
   loadSessionEntry,
   patchSessionEntryCore,
-  persistSessionResetLifecycle,
   replaceSessionEntrySync,
   resetSessionEntryLifecycle,
   upsertSessionEntryCore,
@@ -74,7 +73,6 @@ async function withAccessFixture(
         subscription.heartbeatUnsub();
         subscription.transcriptUnsub();
         subscription.lifecycleUnsub();
-        await subscription.taskUnsub();
       }
     }
   });
@@ -189,12 +187,18 @@ it.each([false, true])(
         BEGIN SELECT RAISE(ABORT, 'injected reset failure'); END;`);
       }
       try {
-        const reset = persistSessionResetLifecycle({
-          ...scope,
-          previousEntry: entry,
-          nextEntry: { ...entry, lifecycleRevision: "after", updatedAt: 2 },
-          nextSessionFile: scope.sessionKey,
-          workspaceDir,
+        const reset = applySessionEntryLifecycleMutation({
+          agentId: scope.agentId,
+          activeSessionKey: scope.sessionKey,
+          storePath: scope.storePath,
+          upserts: [
+            {
+              sessionKey: scope.sessionKey,
+              entry: { ...entry, lifecycleRevision: "after", updatedAt: 2 },
+              resetBoundary: { context: "preserve-tail", reason: "reset", cwd: workspaceDir },
+            },
+          ],
+          skipMaintenance: true,
         });
         if (rollback) {
           await expect(reset).rejects.toThrow("injected reset failure");
@@ -329,7 +333,6 @@ it("retires the identity listener with the Gateway lifecycle and installs one on
     first.heartbeatUnsub();
     first.transcriptUnsub();
     first.lifecycleUnsub();
-    await first.taskUnsub();
     const stopped = readGatewayAccessRevision();
     replaceSessionEntrySync(scope, { sessionId: "stopped", updatedAt: 3 });
     expect(readGatewayAccessRevision()).toBe(stopped);

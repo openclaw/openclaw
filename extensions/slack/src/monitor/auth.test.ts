@@ -1,5 +1,7 @@
 import { WebAPIPlatformError, WebAPIRequestError } from "@slack/web-api";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
+import { addChannelAllowFromStoreEntry } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { setSlackRuntime } from "../runtime.js";
 import type { SlackMonitorContext } from "./context.js";
@@ -528,6 +530,50 @@ describe("authorizeSlackSystemEventSender", () => {
 });
 
 describe("resolveSlackCommandIngress", () => {
+  it.each(["allowFrom", "pairing approval"] as const)(
+    "matches an uppercase native sender against a lowercase %s entry",
+    async (source) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        const actual = await vi.importActual<
+          typeof import("openclaw/plugin-sdk/channel-ingress-runtime")
+        >("openclaw/plugin-sdk/channel-ingress-runtime");
+        readChannelIngressStoreAllowFromForDmPolicyMock.mockImplementation(
+          actual.readChannelIngressStoreAllowFromForDmPolicy,
+        );
+        const ctx = makeAuthorizeCtx({
+          allowFrom: source === "allowFrom" ? ["u123"] : [],
+          dmPolicy: "pairing",
+        });
+        if (source === "pairing approval") {
+          await addChannelAllowFromStoreEntry({
+            channel: "slack",
+            accountId: ctx.accountId,
+            entry: "u123",
+          });
+        }
+        const allowFrom = await resolveSlackEffectiveAllowFrom(ctx, { includePairingStore: true });
+        expect(allowFrom).toEqual(["u123"]);
+        for (const [senderId, authorized] of [
+          ["U123", true],
+          ["U999", false],
+        ] as const) {
+          const ingress = await resolveSlackCommandIngress({
+            ctx,
+            senderId,
+            senderAuthentication: "verified",
+            channelId: "D123",
+            channelType: "im",
+            ownerAllowFromLower: allowFrom,
+            allowTextCommands: true,
+            hasControlCommand: true,
+          });
+          expect(ingress.commandAccess.authorized).toBe(authorized);
+          expect(ingress.commandAccess.shouldBlockControlCommand).toBe(!authorized);
+        }
+      });
+    },
+  );
+
   it("matches a slugged allowlist entry against a spaced sender name", async () => {
     const result = await resolveSlackCommandIngress({
       ctx: makeAuthorizeCtx({ allowNameMatching: true }),

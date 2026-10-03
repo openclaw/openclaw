@@ -25,6 +25,7 @@ vi.mock("../runtime-api.js", () => ({
 }));
 
 vi.mock("./runtime.js", () => ({
+  getOptionalMSTeamsRuntime: () => null,
   getMSTeamsRuntime: getMSTeamsRuntimeMock,
 }));
 
@@ -112,7 +113,6 @@ describe("createMSTeamsReplyDispatcher", () => {
       runtime: { error: vi.fn() } as never,
       log: { debug: vi.fn(), error: vi.fn(), warn: vi.fn() } as never,
       app: { send: vi.fn(async () => ({})) } as never,
-      appId: "app",
       conversationRef: {
         conversation: { id: "conv", conversationType },
         user: { id: "user" },

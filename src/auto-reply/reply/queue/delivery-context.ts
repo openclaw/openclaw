@@ -3,6 +3,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { readToolAllowlistIntersection } from "../../../agents/tool-policy.js";
 import { normalizeChatType } from "../../../channels/chat-type.js";
 import { combineChannelAdmissionEvidence } from "../../../channels/message-access/admission-evidence.js";
+import { combineGatewayLocalUserIngress } from "../../../gateway/local-user-ingress.js";
 import { channelRouteDedupeKey } from "../../../plugin-sdk/channel-route.js";
 import { resolveGlobalSingleton } from "../../../shared/global-singleton.js";
 import { normalizeMessageChannel } from "../../../utils/message-channel.js";
@@ -62,7 +63,7 @@ function resolveTurnAdoptionLifecycleDeliveryKey(
 // Fields like authProfileId, elevatedLevel, ownerNumbers, and config are
 // intentionally excluded because they are session-level or not consulted in
 // per-message authorization checks.
-function resolveFollowupAuthorizationKey(run: FollowupRun): string {
+export function resolveFollowupAuthorizationKey(run: FollowupRun): string {
   const execution = run.run;
   return JSON.stringify([
     resolveReplyOperatorAuthorityKey(run.operatorAuthority),
@@ -189,6 +190,7 @@ type FollowupRuntimeMetadata = Pick<
   | "currentInboundContext"
   | "explicitSkillSelections"
   | "channelAdmissionEvidence"
+  | "gatewayLocalUserIngress"
   | "toolsAllow"
   | "disableTools"
   | "abortSignal"
@@ -274,6 +276,9 @@ export function collectRuntimeMetadata(
     channelAdmissionEvidence: combineChannelAdmissionEvidence(
       items.map((item) => item.channelAdmissionEvidence),
     ),
+    gatewayLocalUserIngress: combineGatewayLocalUserIngress(
+      items.map((item) => item.gatewayLocalUserIngress),
+    ),
     toolsAllow: authoritySource?.toolsAllow,
     disableTools: authoritySource?.disableTools,
     abortSignal,
@@ -283,6 +288,15 @@ export function collectRuntimeMetadata(
     replyOperationRunStates: items.flatMap((item) => item.replyOperationRunStates ?? []),
     queuedFollowupReplyDisposition: items.at(-1)?.queuedFollowupReplyDisposition,
   };
+}
+
+export function resolveOverflowSummaryInboundEventKind(
+  sources: FollowupRun[],
+): "room_event" | undefined {
+  return sources.length > 0 &&
+    sources.every((source) => source.currentInboundEventKind === "room_event")
+    ? "room_event"
+    : undefined;
 }
 
 export function createOverflowSummaryRetrySource(source: FollowupRun): FollowupRun {
@@ -302,6 +316,7 @@ export function createOverflowSummaryRetrySource(source: FollowupRun): FollowupR
     imageOrder: source.imageOrder,
     media: source.media,
     channelAdmissionEvidence: source.channelAdmissionEvidence,
+    gatewayLocalUserIngress: source.gatewayLocalUserIngress,
     messageId: source.messageId,
     summaryLine: source.summaryLine,
     enqueuedAt: source.enqueuedAt,

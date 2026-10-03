@@ -4,6 +4,7 @@ import type {
   SessionOwner,
   SessionsAssignOwnerParams,
   SessionsDeleteResult,
+  SessionsDescribeParams,
   SessionsPatchManyParams,
   SessionsPatchManyResult,
   SessionsRecoverResult,
@@ -73,6 +74,8 @@ export type SessionListOptions = {
   involvingMe?: boolean;
   offset?: number;
   limit?: number;
+  /** Physical read size for a managed window that needs every page enriched. */
+  pageSize?: number;
   includeGlobal?: boolean;
   includeUnknown?: boolean;
   configuredAgentsOnly?: boolean;
@@ -81,6 +84,7 @@ export type SessionListOptions = {
   excludeSystem?: boolean;
   includeDerivedTitles?: boolean;
   includeLastMessage?: boolean;
+  includeOwnerSessionCounts?: boolean;
   archivedFilter?: SessionArchivedFilter;
   append?: boolean;
 };
@@ -205,6 +209,10 @@ export type SessionCapability = {
     ) => GitHubPublicationBinding | null;
   };
   readonly state: SessionState;
+  /** Broad observer outage, independent of query and operation errors; changes notify subscribers. */
+  readonly eventSubscriptionError: string | null;
+  /** Advances for every publication, including pending facts outside state. */
+  readonly revision: number;
   /** Memory-only roster presentation; never authority for mutations or live row observations. */
   readonly presentation: Pick<SessionState, "result" | "agentId" | "resultCached">;
   /** Advances only when a canonical sessions.list result is published. */
@@ -214,6 +222,11 @@ export type SessionCapability = {
   captureConnectionScope: () => SessionConnectionScope | null;
   /** Whether a captured read-only request still belongs to the active connection. */
   isConnectionScopeCurrent: (scope: SessionConnectionScope) => boolean;
+  /** Shares descriptor reads, including agent-implied scopes, until the session changes; refresh supersedes earlier reads. */
+  describe: (
+    params: SessionsDescribeParams,
+    options?: { refresh?: boolean; timeoutMs?: number; client?: SessionRequestClient },
+  ) => Promise<{ session?: GatewaySessionRow | null }>;
   list: (options?: SessionListOptions) => Promise<SessionsListResult | null>;
   listSnapshot: (scope: SessionListScope) => SessionListSnapshot;
   subscribeList: (
@@ -334,7 +347,7 @@ export type SessionCapability = {
   ) => Promise<SessionWorkspaceSetResult | null>;
   subscribeMessages: (
     key: string,
-    options?: { agentId?: string | null; includeApprovals?: boolean },
+    options?: { agentId?: string | null; includeApprovals?: boolean; mode?: "narration" },
   ) => Promise<SessionMessageSubscription>;
   unsubscribeMessages: (subscription: SessionMessageSubscription) => Promise<void>;
   rewind: (

@@ -28,6 +28,7 @@ import {
 } from "./config-form.constraints.ts";
 import { renderMapField } from "./config-form.node.collection-map.ts";
 import {
+  configChildRenderOptions,
   renderCollectionDefaultDescription,
   renderFieldRow,
   type ConfigNodeRenderer,
@@ -45,22 +46,7 @@ const UNSET_ARRAY_SOURCE_IDENTITY = Symbol("unset-array-source");
 const UNSET_MAP_SOURCE_IDENTITY = Symbol("unset-map-source");
 
 export function resolveConfigObjectFields(params: ConfigNodeRenderParams) {
-  const {
-    schema,
-    value,
-    path,
-    hints,
-    unsupported,
-    disabled,
-    onPatch,
-    onRemove,
-    rawAvailable,
-    maskSensitive,
-    revealSensitive,
-    isSensitivePathRevealed,
-    onToggleSensitivePath,
-    searchCriteria,
-  } = params;
+  const { schema, value, path, hints, onPatch, onRemove, searchCriteria } = params;
   const selfMatched =
     searchCriteria && hasSearchCriteria(searchCriteria)
       ? matchesNodeSelf({ schema, path, hints, criteria: searchCriteria })
@@ -129,26 +115,16 @@ export function resolveConfigObjectFields(params: ConfigNodeRenderParams) {
   return {
     fields: sorted.map(([propertyKey, node]) => {
       const hasInheritedChild = inherited && Object.hasOwn(objectValue, propertyKey);
-      return {
+      return Object.assign(configChildRenderOptions(params), {
         schema: hasInheritedChild ? { ...node, default: objectValue[propertyKey] } : node,
         value: inherited ? undefined : objectValue[propertyKey],
         path: [...path, propertyKey],
-        hints,
-        rawAvailable,
-        maskSensitive,
-        unsupported,
-        disabled,
-        compact: params.compact,
-        commitOnBlur: params.commitOnBlur,
         isRequired: requiredKeys.has(propertyKey),
         sourceIdentity: inherited ? undefined : objectValue[propertyKey],
         controlIdentity: params.controlIdentity ?? objectValue,
         searchCriteria: childSearchCriteria,
-        revealSensitive,
-        isSensitivePathRevealed,
-        onToggleSensitivePath,
         onPatch: patchObjectChild,
-      } satisfies ConfigNodeRenderParams;
+      }) satisfies ConfigNodeRenderParams;
     }),
     additional: allowExtra
       ? {
@@ -226,21 +202,7 @@ function renderArrayContent(
   renderNode: ConfigNodeRenderer,
   rows: ConfigFormArrayIdentity,
 ): TemplateResult {
-  const {
-    schema,
-    value,
-    path,
-    hints,
-    unsupported,
-    disabled,
-    onPatch,
-    searchCriteria,
-    rawAvailable,
-    maskSensitive,
-    revealSensitive,
-    isSensitivePathRevealed,
-    onToggleSensitivePath,
-  } = params;
+  const { schema, value, path, hints, disabled, onPatch, searchCriteria } = params;
   const showLabel = params.showLabel ?? true;
   const showHeaderMeta = params.showHeaderMeta ?? showLabel;
   const { label, help } = resolveFieldMeta(path, schema, hints);
@@ -262,16 +224,13 @@ function renderArrayContent(
   }
 
   const inherited = value === undefined && Array.isArray(schema.default);
-  const arrayValue = Array.isArray(value)
+  const arraySource = Array.isArray(value)
     ? value
     : Array.isArray(schema.default)
       ? schema.default
-      : [];
-  const arraySourceIdentity = Array.isArray(value)
-    ? value
-    : Array.isArray(schema.default)
-      ? schema.default
-      : UNSET_ARRAY_SOURCE_IDENTITY;
+      : undefined;
+  const arrayValue = arraySource ?? [];
+  const arraySourceIdentity = arraySource ?? UNSET_ARRAY_SOURCE_IDENTITY;
   const defaultDescription = renderCollectionDefaultDescription(params, arrayValue);
   const rowIdentities = rows.read(arrayValue);
   const patch = (nextValue: unknown[], identities: readonly symbol[]) =>
@@ -475,24 +434,15 @@ function renderArrayContent(
                       </button>
                     </openclaw-tooltip>`;
                     const valueControl = renderNode({
+                      ...configChildRenderOptions(params),
                       schema: inherited ? { ...itemSchema, default: item } : itemSchema,
                       value: inherited ? undefined : item,
                       path: [...path, index],
-                      hints,
-                      rawAvailable,
-                      maskSensitive,
-                      unsupported,
-                      disabled,
-                      compact: params.compact,
-                      commitOnBlur: params.commitOnBlur,
                       isRequired: true,
                       sourceIdentity: inherited ? undefined : item,
                       controlIdentity: arrayValue,
                       searchCriteria: childSearchCriteria,
                       showLabel: false,
-                      revealSensitive,
-                      isSensitivePathRevealed,
-                      onToggleSensitivePath,
                       // Keep inherited source identity until an edit materializes the
                       // complete effective array through its parent owner.
                       onPatch: patchArrayItem,

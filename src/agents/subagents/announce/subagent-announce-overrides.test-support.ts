@@ -30,8 +30,10 @@ type OutputTestDeps = Pick<
 
 export type SubagentAnnounceDeliveryTestDeps = AnnounceTestDeps & {
   getRequesterSessionActivity: typeof deliveryRuntime.getSubagentRequesterSessionActivity;
+  isEmbeddedAgentRunActive: typeof embeddedRuns.isEmbeddedAgentRunActive;
   resolveRequesterSessionAbandonment: typeof deliveryRuntime.resolveSubagentRequesterSessionAbandonment;
   loadSessionEntry: typeof sessionAccessor.loadSessionEntryReadOnly;
+  loadSessionEntryByKey: typeof deliveryRuntime.loadSessionEntryByKey;
   loadRequesterSessionEntry: typeof deliveryRuntime.loadRequesterSessionEntry;
   queueEmbeddedAgentMessageWithOutcome: (
     ...args: Parameters<typeof embeddedRuns.queueEmbeddedAgentMessageWithOutcomeAsync>
@@ -189,11 +191,25 @@ function replaceOverrides(scope: Scope, overrides?: Overrides) {
       current.loadRequesterSessionEntry,
     );
   }
+  if (current.loadSessionEntryByKey) {
+    install(
+      deliveryRuntime.loadSessionEntryByKey,
+      () => vi.spyOn(deliveryRuntime, "loadSessionEntryByKey"),
+      current.loadSessionEntryByKey,
+    );
+  }
   if (current.getRequesterSessionActivity) {
     install(
       deliveryRuntime.getSubagentRequesterSessionActivity,
       () => vi.spyOn(deliveryRuntime, "getSubagentRequesterSessionActivity"),
       current.getRequesterSessionActivity,
+    );
+  }
+  if (current.isEmbeddedAgentRunActive) {
+    install(
+      embeddedRuns.isEmbeddedAgentRunActive,
+      () => vi.spyOn(embeddedRuns, "isEmbeddedAgentRunActive"),
+      current.isEmbeddedAgentRunActive,
     );
   }
   if (current.resolveRequesterSessionAbandonment) {

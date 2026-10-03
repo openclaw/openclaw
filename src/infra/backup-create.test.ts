@@ -17,7 +17,6 @@ import {
   createColdPluginConfig,
   createColdPluginFixture,
 } from "../plugins/test-helpers/cold-plugin-fixtures.js";
-import type { RuntimeEnv } from "../runtime.js";
 import * as backupRunRecords from "../state/backup-run-records.js";
 import { registerOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
@@ -43,8 +42,7 @@ import {
 } from "./backup-create.test-support.js";
 import { classifyBackupSqliteSource } from "./backup-sqlite-snapshot.js";
 import { writeTarArchiveWithRetry } from "./backup-tar-retry.js";
-import { isVolatileBackupPath } from "./backup-volatile-filter.js";
-import { createBackupVolatileStatCache } from "./backup-volatile-stat-cache.js";
+import * as backupTarWalk from "./backup-tar-walk.js";
 import { acquireGatewayLock } from "./gateway-lock.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 
@@ -491,42 +489,42 @@ describe("writeTarArchiveWithRetry", () => {
   });
 });
 
-describe("createBackupVolatileStatCache", () => {
-  it("lets tar filter a volatile file that disappears before lstat", async () => {
-    await withBackupState("openclaw-backup-volatile-stat-cache-", async (state) => {
+describe("volatile archive traversal", () => {
+  it("filters a volatile file removed after directory discovery", async () => {
+    await withBackupState("openclaw-backup-volatile-traversal-", async (state) => {
       const volatilePath = await state.writeText("logs/gateway.log", "live log\n");
       await state.writeText("settings.json", '{"keep":true}\n');
-      const archivePath = state.path("volatile-stat-cache.tar.gz");
-      const volatilePlan = { stateDirs: [state.stateDir] };
-      const isVolatile = (entryPath: string) => isVolatileBackupPath(entryPath, volatilePlan);
-      const statCache = createBackupVolatileStatCache(isVolatile);
-      const getCachedStat = statCache.get.bind(statCache);
+      const readdir = fs.readdir;
+      const walk = backupTarWalk.walkBackupTar;
+      let archiving = false;
       let removedBeforeStat = false;
-
-      statCache.get = (key: string) => {
-        if (path.resolve(key) === path.resolve(volatilePath)) {
+      const traversal = vi.spyOn(backupTarWalk, "walkBackupTar").mockImplementation((params) => {
+        archiving = true;
+        return walk(params);
+      });
+      const discovery = vi.spyOn(fs, "readdir").mockImplementation(async (...args) => {
+        const entries = await readdir(...args);
+        // Earlier discovery also lists logs; remove only after the payload walker lists its name.
+        if (archiving && args[0] === path.dirname(volatilePath)) {
           rmSync(volatilePath, { force: true });
           removedBeforeStat = true;
         }
-        return getCachedStat(key);
-      };
-
-      await tar.c(
-        {
-          file: archivePath,
-          gzip: true,
-          portable: true,
-          preservePaths: true,
-          statCache,
-          filter: (entryPath) => !isVolatile(entryPath),
-        },
-        [state.stateDir],
-      );
-
-      const entries = await listArchiveEntries(archivePath);
-      expect(removedBeforeStat).toBe(true);
-      expect(entries.some((entry) => entry.endsWith("/settings.json"))).toBe(true);
-      expect(entries.some((entry) => entry.endsWith("/logs/gateway.log"))).toBe(false);
+        return entries;
+      });
+      try {
+        const archive = await createBackupArchive({
+          output: state.path("backup.tar.gz"),
+          includeWorkspace: false,
+        });
+        const entries = await listArchiveEntries(archive.archivePath);
+        expect(removedBeforeStat).toBe(true);
+        expect(archive.skippedVolatileCount).toBe(1);
+        expect(entries.some((entry) => entry.endsWith("/settings.json"))).toBe(true);
+        expect(entries.some((entry) => entry.endsWith("/logs/gateway.log"))).toBe(false);
+      } finally {
+        discovery.mockRestore();
+        traversal.mockRestore();
+      }
     });
   });
 });
@@ -689,7 +687,7 @@ describe("createBackupArchive", () => {
       expect(entries.some((entry) => entry.endsWith("/state/._directory.sqlite/keep.txt"))).toBe(
         true,
       );
-      const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+      const runtime = createTestRuntime();
       await expect(
         backupVerifyCommand(runtime, { archive: result.archivePath }),
       ).resolves.toMatchObject({ ok: true });
@@ -1228,7 +1226,7 @@ describe("createBackupArchive", () => {
           ).toBe(true);
         }
 
-        const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+        const runtime = createTestRuntime();
         const restore = await backupRestoreCommand(runtime, {
           archive: archive.archivePath,
           target: state.path("restored"),
@@ -1495,51 +1493,40 @@ describe("createBackupArchive", () => {
     });
   });
 
-  it("falls back when injected nowMs is outside Date range", async () => {
-    await withBackupState("openclaw-backup-invalid-now-", async (state) => {
-      const outputDir = state.path("backups");
-      await fs.mkdir(outputDir, { recursive: true });
-      const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(Date.UTC(2026, 4, 30, 12, 0, 0));
-
-      try {
-        const result = await createBackupArchive({
-          output: outputDir,
-          dryRun: true,
-          includeWorkspace: false,
-          nowMs: 8_640_000_000_000_001,
-        });
-
-        expect(result.createdAt).toBe("2026-05-30T12:00:00.000Z");
-        expect(path.basename(result.archivePath)).toContain("openclaw-backup.tar.gz");
-        expect(path.basename(result.archivePath)).not.toContain("NaN");
-      } finally {
-        dateNowSpy.mockRestore();
-      }
-    });
-  });
-
-  it("falls back to epoch when injected nowMs and Date.now are outside Date range", async () => {
-    await withBackupState("openclaw-backup-invalid-fallback-now-", async (state) => {
-      const outputDir = state.path("backups");
-      await fs.mkdir(outputDir, { recursive: true });
-      const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_001);
-
-      try {
-        const result = await createBackupArchive({
-          output: outputDir,
-          dryRun: true,
-          includeWorkspace: false,
-          nowMs: 8_640_000_000_000_001,
-        });
-
-        expect(result.createdAt).toBe("1970-01-01T00:00:00.000Z");
-        expect(path.basename(result.archivePath)).toContain("openclaw-backup.tar.gz");
-        expect(path.basename(result.archivePath)).not.toContain("NaN");
-      } finally {
-        dateNowSpy.mockRestore();
-      }
-    });
-  });
+  it.each([
+    {
+      fallback: "Date.now",
+      dateNow: Date.UTC(2026, 4, 30, 12, 0, 0),
+      createdAt: "2026-05-30T12:00:00.000Z",
+    },
+    {
+      fallback: "epoch when Date.now is also outside Date range",
+      dateNow: 8_640_000_000_000_001,
+      createdAt: "1970-01-01T00:00:00.000Z",
+    },
+  ])(
+    "falls back to $fallback when injected nowMs is outside Date range",
+    async ({ dateNow, createdAt }) => {
+      await withBackupState("openclaw-backup-invalid-now-", async (state) => {
+        const outputDir = state.path("backups");
+        await fs.mkdir(outputDir, { recursive: true });
+        const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(dateNow);
+        try {
+          const result = await createBackupArchive({
+            output: outputDir,
+            dryRun: true,
+            includeWorkspace: false,
+            nowMs: 8_640_000_000_000_001,
+          });
+          expect(result.createdAt).toBe(createdAt);
+          expect(path.basename(result.archivePath)).toContain("openclaw-backup.tar.gz");
+          expect(path.basename(result.archivePath)).not.toContain("NaN");
+        } finally {
+          dateNowSpy.mockRestore();
+        }
+      });
+    },
+  );
 
   it("skips current live volatile state files while preserving workspace locks", async () => {
     await withOpenClawTestState(
@@ -1620,7 +1607,7 @@ describe("createBackupArchive", () => {
         includeWorkspace: false,
         nowMs: Date.UTC(2026, 4, 9, 8, 10, 0),
       });
-      const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+      const runtime = createTestRuntime();
 
       await expect(
         backupVerifyCommand(runtime, { archive: result.archivePath }),
@@ -1774,7 +1761,13 @@ describe("createBackupArchive", () => {
 
       const sqlite = requireNodeSqlite();
       const database = new sqlite.DatabaseSync(resolveOpenClawStateSqlitePath(state.env));
+      let originalUserVersion: unknown;
+      let originalSchemaMetadata: unknown;
       try {
+        originalUserVersion = database.prepare("PRAGMA user_version").get();
+        originalSchemaMetadata = database
+          .prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'")
+          .get();
         database.exec("PRAGMA foreign_keys = OFF;");
         database
           .prepare("INSERT INTO task_delivery_state (task_id) VALUES (?)")
@@ -1805,6 +1798,12 @@ describe("createBackupArchive", () => {
           { task_id: "missing-task" },
         ]);
         expect(unchanged.prepare("PRAGMA foreign_key_check").all()).toHaveLength(1);
+        expect(unchanged.prepare("PRAGMA user_version").get()).toEqual(originalUserVersion);
+        expect(
+          unchanged
+            .prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'")
+            .get(),
+        ).toEqual(originalSchemaMetadata);
       } finally {
         unchanged.close();
       }
@@ -1936,7 +1935,7 @@ describe("createBackupArchive", () => {
           ),
         ).toBe(false);
 
-        const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+        const runtime = createTestRuntime();
         await expect(
           backupVerifyCommand(runtime, { archive: result.archivePath }),
         ).resolves.toMatchObject({ ok: true });
@@ -2664,7 +2663,7 @@ describe("createBackupArchive", () => {
         ).toBe(true);
         expect(entries.some((entry) => entry.includes(`/${path.basename(lockDir)}/`))).toBe(false);
 
-        const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+        const runtime = createTestRuntime();
         await expect(
           backupVerifyCommand(runtime, { archive: result.archivePath }),
         ).resolves.toMatchObject({ ok: true });
@@ -2963,7 +2962,7 @@ describe("createBackupArchive", () => {
           ).toBe(false);
         }
 
-        const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+        const runtime = createTestRuntime();
         await expect(
           backupVerifyCommand(runtime, { archive: result.archivePath }),
         ).resolves.toMatchObject({ ok: true });
@@ -3136,7 +3135,7 @@ describe("createBackupArchive", () => {
       ).toBe(true);
       expect(entries.some((entry) => entry.includes("/SingletonSocket"))).toBe(false);
       expect(entries.some((entry) => entry.includes("/sandbox/skills-workspaces/"))).toBe(false);
-      const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+      const runtime = createTestRuntime();
       await expect(
         backupVerifyCommand(runtime, { archive: result.archivePath }),
       ).resolves.toMatchObject({ ok: true });
@@ -3167,7 +3166,7 @@ describe("createBackupArchive", () => {
       expect(
         entries.find((entry) => entry.path.endsWith("/state/plugins/dedicated/linked.sqlite")),
       ).toMatchObject({ type: "SymbolicLink" });
-      const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+      const runtime = createTestRuntime();
       await expect(backupVerifyCommand(runtime, { archive: result.archivePath })).resolves.toEqual(
         expect.objectContaining({ ok: true, symlinkCount: 1 }),
       );
@@ -3297,7 +3296,7 @@ describe("createBackupArchive", () => {
           }
         }
 
-        const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+        const runtime = createTestRuntime();
         const verification = await backupVerifyCommand(runtime, { archive: result.archivePath });
         expect(verification.ok).toBe(true);
       } finally {
@@ -3415,7 +3414,7 @@ describe("createBackupArchive", () => {
         expect(db.prepare("SELECT COUNT(*) AS count FROM state_leases").get()).toEqual({
           count: 1,
         });
-        const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+        const runtime = createTestRuntime();
         await expect(
           backupVerifyCommand(runtime, { archive: result.archivePath }),
         ).resolves.toMatchObject({ ok: true });
@@ -3572,7 +3571,7 @@ describe("createBackupArchive", () => {
       );
       expect(pluginNodeModuleEntries).toStrictEqual([]);
 
-      const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+      const runtime = createTestRuntime();
       const verification = await backupVerifyCommand(runtime, { archive: result.archivePath });
       expect(verification.ok).toBe(true);
     });
@@ -3720,7 +3719,7 @@ describe("createBackupArchive", () => {
           }),
         );
 
-        const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+        const runtime = createTestRuntime();
         await expect(
           backupVerifyCommand(runtime, { archive: result.archivePath }),
         ).resolves.toMatchObject({ ok: true });
@@ -3754,7 +3753,7 @@ describe("createBackupArchive", () => {
         entries.some((entry) => entry.path.endsWith("/@esbuild/darwin-arm64/bin/esbuild")),
       ).toBe(true);
 
-      const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+      const runtime = createTestRuntime();
       const verification = await backupVerifyCommand(runtime, { archive: result.archivePath });
       expect(verification.ok).toBe(true);
     });
@@ -3781,7 +3780,7 @@ describe("createBackupArchive", () => {
         );
         expect(rootManifestEntries).toHaveLength(1);
 
-        const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+        const runtime = createTestRuntime();
         const verification = await backupVerifyCommand(runtime, { archive: result.archivePath });
         expect(verification.ok).toBe(true);
       } finally {
@@ -3838,7 +3837,7 @@ describe("createBackupArchive", () => {
           archivedDb.close();
         }
 
-        const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+        const runtime = createTestRuntime();
         const verification = await backupVerifyCommand(runtime, { archive: result.archivePath });
         expect(verification.ok).toBe(true);
       } finally {

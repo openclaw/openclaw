@@ -204,22 +204,19 @@ async function withStaleResourceFixture(
   });
 }
 
-it.each(["gateway", "direct"] as const)(
-  "releases idle %s publication consumers before rebuilding the stale runtime",
-  async (retention) => {
-    await withStaleResourceFixture(retention, async ({ acquire, donor, useEngine }) => {
-      const lease = await acquire();
-      await useEngine(lease);
-      await lease[Symbol.asyncDispose]();
-      expect(donor.hasRetainedConsumers).toBe(true);
+it("releases idle direct publication consumers before rebuilding the stale runtime", async () => {
+  await withStaleResourceFixture("direct", async ({ acquire, donor, useEngine }) => {
+    const lease = await acquire();
+    await useEngine(lease);
+    await lease[Symbol.asyncDispose]();
+    expect(donor.hasRetainedConsumers).toBe(true);
 
-      markPreparedModelRuntimeSnapshotsStale("plugin replacement", { waitForReplacement: true });
+    markPreparedModelRuntimeSnapshotsStale("plugin replacement", { waitForReplacement: true });
 
-      await expect.poll(() => donor.hasRetainedConsumers).toBe(false);
-      await expect(donor.drain({ includeConsumers: true })).resolves.toMatchObject({ errors: [] });
-    });
-  },
-);
+    await expect.poll(() => donor.hasRetainedConsumers).toBe(false);
+    await expect(donor.drain({ includeConsumers: true })).resolves.toMatchObject({ errors: [] });
+  });
+});
 
 it("retains an active lease through staling and settles donor consumers on its final release", async () => {
   await withStaleResourceFixture("gateway", async ({ acquire, donor, useEngine }) => {

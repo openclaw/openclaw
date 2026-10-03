@@ -190,30 +190,6 @@ function resolveLineMessagingAccount(opts: LineClientOpts): {
   return { account, token };
 }
 
-function createLineMessagingClient(opts: LineClientOpts): {
-  account: ReturnType<typeof resolveLineAccount>;
-  client: messagingApi.MessagingApiClient;
-} {
-  const { account, token } = resolveLineMessagingAccount(opts);
-  return {
-    account,
-    client: new messagingApi.MessagingApiClient({ channelAccessToken: token }),
-  };
-}
-
-function createLinePushContext(
-  to: string,
-  opts: LineClientOpts,
-): {
-  account: ReturnType<typeof resolveLineAccount>;
-  token: string;
-  chatId: string;
-} {
-  const { account, token } = resolveLineMessagingAccount(opts);
-  const chatId = normalizeTarget(to);
-  return { account, token, chatId };
-}
-
 type LineProviderRequest = messagingApi.PushMessageRequest | messagingApi.ReplyMessageRequest;
 type LineProviderResponse = messagingApi.PushMessageResponse | messagingApi.ReplyMessageResponse;
 
@@ -304,10 +280,6 @@ async function postLineProviderMessages(
     // LINE accepted this exact request before its receipt became unreadable; retrying duplicates it.
     throw createChannelPartialDeliveryError(error, { messageIds: [], visibleReplySent: true });
   }
-}
-
-function createTextMessage(text: string): TextMessage {
-  return { type: "text", text };
 }
 
 function isValidLineLocation(location: LineLocation): boolean {
@@ -409,7 +381,8 @@ async function pushLineMessages(
     throw new Error("Message must be non-empty for LINE sends");
   }
 
-  const { account, token, chatId } = createLinePushContext(to, opts);
+  const { account, token } = resolveLineMessagingAccount(opts);
+  const chatId = normalizeTarget(to);
   const normalizedMessages = applyLineQuoteToken(messages, opts.quoteToken).map(
     normalizeLineMessage,
   );
@@ -504,7 +477,7 @@ export async function sendMessageLine(
   }
 
   if (text?.trim()) {
-    messages.push(createTextMessage(text.trim()));
+    messages.push({ type: "text", text: text.trim() });
   }
 
   if (messages.length === 0) {
@@ -581,22 +554,6 @@ export function createFlexMessage(
   };
 }
 
-export async function pushImageMessage(
-  to: string,
-  originalContentUrl: string,
-  previewImageUrl: string | undefined,
-  opts: LinePushOpts,
-): Promise<LineSendResult> {
-  const message = await buildLineMediaMessage(
-    originalContentUrl,
-    { mediaKind: "image", previewImageUrl },
-    to,
-  );
-  return pushLineMessages(to, [message], opts, {
-    verboseMessage: (chatId) => `line: pushed image to ${chatId}`,
-  });
-}
-
 export async function pushLocationMessage(
   to: string,
   location: LineLocation,
@@ -635,11 +592,12 @@ export async function pushTextMessageWithQuickReplies(
   quickReplyLabels: string[],
   opts: LinePushOpts,
 ): Promise<LineSendResult> {
-  const message = createTextMessageWithQuickReplies(text, quickReplyLabels);
-
-  return pushLineMessages(to, [message], opts, {
-    verboseMessage: (chatId) => `line: pushed message with quick replies to ${chatId}`,
-  });
+  return pushLineMessages(
+    to,
+    [{ type: "text", text, quickReply: createQuickReplyItems(quickReplyLabels) }],
+    opts,
+    { verboseMessage: (chatId) => `line: pushed message with quick replies to ${chatId}` },
+  );
 }
 
 export function createQuickReplyItems(labels: string[]): QuickReply {
@@ -650,22 +608,12 @@ export function createQuickReplyItems(labels: string[]): QuickReply {
   return { items };
 }
 
-export function createTextMessageWithQuickReplies(
-  text: string,
-  quickReplyLabels: string[],
-): TextMessage & { quickReply: QuickReply } {
-  return {
-    type: "text",
-    text,
-    quickReply: createQuickReplyItems(quickReplyLabels),
-  };
-}
-
 export async function showLoadingAnimation(
   chatId: string,
   opts: LineClientOpts & { loadingSeconds?: number },
 ): Promise<void> {
-  const { client } = createLineMessagingClient(opts);
+  const { token } = resolveLineMessagingAccount(opts);
+  const client = new messagingApi.MessagingApiClient({ channelAccessToken: token });
 
   try {
     await client.showLoadingAnimation({

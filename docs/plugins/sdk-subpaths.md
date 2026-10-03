@@ -59,6 +59,63 @@ host and view types). The contract and Control UI subpaths are browser safe;
 | `plugin-sdk/health`                 | Doctor health-check registration, detection, repair, selection, severity, and finding types for bundled health consumers                                                                                |
 | `plugin-sdk/channel-entry-contract` | Bundled channel entry and setup-entry contracts, feature declarations, and lazy module-loading helpers                                                                                                  |
 
+### Control UI conversation dock
+
+`ControlUiHost` from `openclaw/plugin-sdk/control-ui` has this optional member:
+
+```typescript
+dock?: {
+  /** Dock a conversation beside the current page; replaces a conversation dock already open. */
+  openSession: (params: {
+    sessionKey: string;
+    agentId: string;
+    label: string;
+    context?: { page: string; detail?: Readonly<Record<string, string>> };
+  }) => void;
+  close: () => void;
+  readonly openSessionKey: string | null;
+};
+```
+
+Check `host.dock` before presenting a dock action. Supply both `sessionKey`
+and `agentId` for the intended conversation; `label` is its dock tab title.
+`openSession` reuses the Home chat pane, drafts, attachments, placement and
+size persistence, and close and placement controls. It replaces Home, Ask
+OpenClaw, or a previously docked conversation. `close()` leaves no dock open
+and does not restore the previous conversation.
+
+Navigation keeps the dock open, except that it hides while the same session
+and agent are open as the Chat or Dashboard page. Leaving that page reveals
+the dock again. `openSessionKey` is the visible plugin-opened session key,
+or `null` when there is none, including while hidden or showing Home or Ask
+OpenClaw. `host.subscribe(...)` listeners fire when that value changes.
+
+The plugin activation owns the opened dock. Disposing a mounted view retires
+its host handles but keeps the dock open during navigation. Disposing the
+activation closes the dock only if it still belongs to that activation;
+it does not close a replacement opened by another activation. Retained dock
+operations reject after their view or activation ends.
+
+The normal chat pane enforces the viewer's access. Read-only viewers can open
+the dock and receive the existing read-only composer behavior. A session the
+viewer cannot open displays the pane's normal error state. Docking grants no
+additional session access.
+
+The optional `context` supplies an untrusted ambient hint. `page` can name a
+plugin page; `detail` is a flat record of string fields. The host retains up
+to four detail fields in sorted key order, omits empty or oversized keys,
+and bounds each escaped key to 32 characters and each JSON-encoded value to
+128 characters. These limits include escaping; the value limit includes its
+JSON quotes. The page uses the existing 64-character work-context limit.
+When `context` is omitted, the host builds the current page's reference as it
+does for Home.
+
+The operator can remove the reference before sending. At send time the host
+captures a snapshot and formats it as quoted reference data, never
+instructions or permission to access another session. Sent messages retain
+the **Context attached** presentation; **Technical details** includes the
+plugin fields. Queues and retries keep the captured snapshot.
+
 ### Capability catalog entry
 
 A manifest's `capabilityCatalogEntry` default export satisfies
@@ -342,7 +399,7 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
     | `plugin-sdk/runtime-env` | Narrow runtime env, logger, timeout, retry, and backoff helpers |
     | `plugin-sdk/browser-cdp` | Private host runtime; `parseBrowserHttpUrl` and `redactCdpUrl` for Browser URL handling. JavaScript-only package export, not a typed third-party SDK contract. |
     | `plugin-sdk/browser-config` | Private-local after July 2026; Supported browser config facade for normalized profile/defaults, CDP URL parsing, and browser-control auth helpers |
-    | `plugin-sdk/agent-harness-task-runtime` | Private-local after July 2026; Generic task lifecycle and completion delivery helpers for harness-backed agents using a host-issued task scope |
+    | `plugin-sdk/agent-harness-completion` | Private-local JavaScript-only host runtime for official harness plugins; native completion delivery using a host-issued requester scope, retained completion custody, and a source-bound event sink; no generic Task lifecycle |
     | `plugin-sdk/agent-harness-session-runtime` | Private-local JavaScript-only host runtime for official harness plugins; binding leases, generation admission, initialization rollback, and transactional deletion; not a third-party plugin API |
     | `plugin-sdk/agent-harness-attempt-runtime` | Private-local JavaScript-only host runtime for official harness plugins; execution/settlement deadlines, cancellation, and lifecycle/event publication; not a third-party plugin API |
     | `plugin-sdk/agent-harness-runtime` | Agent-harness runtime helpers, including the bounded `agentHarnessStructuredInput` form/URL compilation and execution surface. `acquireSessionWriteLock`, `resolveSessionWriteLockAcquireTimeoutMs`, `resolveSessionWriteLockOptions`, and `SessionWriteLockAcquireTimeoutConfig` are deprecated no-op compatibility exports scheduled for removal in the 2026.10 release train. They no longer block or create lock sidecars; harnesses should rely on OpenClaw's per-session lane plus the durable writer claim and in-transaction fence. |
@@ -416,7 +473,7 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
     | `plugin-sdk/acp-binding-resolve-runtime` | Private-local after July 2026; Read-only ACP binding resolution without lifecycle startup imports |
     | `plugin-sdk/boolean-param` | Loose boolean param reader |
     | `plugin-sdk/dangerous-name-runtime` | Private-local after July 2026; Dangerous-name matching resolution helpers |
-    | `plugin-sdk/device-bootstrap` | Device bootstrap and pairing token helpers, including `BOOTSTRAP_HANDOFF_OPERATOR_SCOPES` |
+    | `plugin-sdk/device-bootstrap` | Device bootstrap and pairing token helpers, including `BOOTSTRAP_HANDOFF_OPERATOR_SCOPES`. Async `resolvePairingGatewayUrl(config, options)` resolves the advertised WebSocket endpoint without issuing credentials and returns `{ url, source }` or `{ error }`. Pass `env`, `networkInterfaces`, optional `publicUrl` for the pairing override, and an optional `runCommandWithTimeout` for Tailscale discovery. Default `publicOriginPreference: "fallback"` preserves device routes: `publicUrl`, preferred remote URL, Tailscale, non-preferred remote URL, bind-derived address, then `gateway.publicOrigin` before the loopback-only error. Cloud enrollment passes `publicOriginPreference: "prefer"` to select `publicOrigin` after `publicUrl` and before discovery. `preferRemoteUrl` moves the remote URL ahead of Tailscale; `useLocalGateway` omits it. Default `urlPathMode: "preserve"` keeps context paths in fully qualified URLs for join codes, QR setup, and cloud enrollment; `/pair` passes `urlPathMode: "origin-only"` to retain its prior URL mapping. The shared lazy runtime binder defers loading the resolver until invocation. |
     | `plugin-sdk/extension-shared` | Shared passive-channel, status, and ambient proxy helper primitives |
     | `plugin-sdk/models-provider-runtime` | `/models` command/provider reply helpers. Display `ModelsProviderData.refreshWarning` alongside usable choices, and use `MODEL_PICKER_CHANGED_MESSAGE` when a saved menu choice is no longer available. |
     | `plugin-sdk/skill-commands-runtime` | Synchronous Skill command listing. Remote workspaces expose Gateway-owned Skills only; menus do not wait for the Harness. |
@@ -488,14 +545,14 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
     | `plugin-sdk/speech-settings` | Lightweight TTS config resolution and normalization primitives without provider registries or synthesis runtime |
     | `plugin-sdk/realtime-transcription` | Private-local after July 2026; Realtime transcription provider types, registry helpers, and shared WebSocket session helper |
     | `plugin-sdk/realtime-transcription-session` | Private-local JavaScript-only host runtime for official plugins; shared WebSocket session construction and types without loading the host provider registry. Use this for provider implementation imports. |
-    | `plugin-sdk/realtime-bootstrap-context` | Private-local after July 2026; Realtime profile bootstrap helper for bounded `IDENTITY.md`, `USER.md`, and `SOUL.md` context injection |
+    | `plugin-sdk/realtime-bootstrap-context` | Private-local after July 2026; `resolveRealtimeBootstrapContextInstructions` loads bounded profile context, with optional workspace-relative `files: readonly string[]` and `maxChars` (default `12000`). `resolveRealtimeVoiceAgentContextInstructions` adds the always-present agent-context paragraph and configured identity when `includeIdentity: true` (default `false`). Default profile names and their type remain available as `REALTIME_BOOTSTRAP_CONTEXT_FILE_NAMES` and `RealtimeBootstrapContextFileName`. |
     | `plugin-sdk/realtime-voice-audio-queue` | Private-local JavaScript-only host runtime for bundled or separately published official plugins; narrow bounded audio queue seam for lazy realtime voice provider facades without importing the broader realtime voice runtime; not for third-party plugins |
     | `plugin-sdk/realtime-voice-playback` | Private official-plugin facade for audio audibility and output activity tracking. Source workers avoid session runtimes; published plugins use the established `realtime-voice` host binding for compatibility. |
     | `plugin-sdk/realtime-voice-provider` | Private-local JavaScript-only host runtime for official plugins; provider types, audio formats/codecs, audio energy and output activity, response outcomes, and connection lifecycle primitives without host provider registries or agent-consult execution. Media workers use this surface to keep host session runtimes off their startup path. |
     | `plugin-sdk/realtime-voice-activation` | Private-local; dependency-light realtime-voice activation-name helpers (normalize, match, word-count, sort) for doctor contract closures and other control-plane paths that must not load the realtime voice runtime |
     | `plugin-sdk/realtime-voice` | Private-local after July 2026; Realtime voice provider types, registry helpers, shared audio-energy/speech-onset gates, and realtime voice behavior helpers, including the transport-independent session harness, output activity tracking, and `registerRealtimeVoiceSelection` for a channel-owned call. Bind each agent run to the exact call and current speaker authority; release its binding after the turn and unregister when the call closes. Replacements must revalidate the supplied request before adopting a ready connection. For official runtime consumers, sender-auth contract revision 1 forwards ingress-authenticated `senderId` and `senderIsOwner` unchanged; ingress owns authentication, and consumers requiring the handoff must fail closed on other revisions. |
     | `plugin-sdk/meeting-page-script-runtime` | Private-local JavaScript-only host runtime for official browser-meeting plugins; shared transcript and leave page-script source builders; not a third-party plugin API |
-    | `plugin-sdk/meeting-runtime` | Browser-meeting session runtime, realtime audio engines/transports, `MeetingPlatformAdapter`, browser/node control, agent-consult, voice-call delegation, setup checks, and SoX command helpers |
+    | `plugin-sdk/meeting-runtime` | Browser-meeting session runtime, realtime audio engines/transports, `MeetingPlatformAdapter` and its declarative `defineBrowserMeetingPlugin` factory, browser/node control, agent-consult, voice-call delegation, setup checks, and SoX command helpers |
     | `plugin-sdk/image-generation` | Private-local after July 2026; Image generation provider types plus image asset/data URL helpers and the OpenAI-compatible image provider builder |
     | `plugin-sdk/image-generation-core` | Private-local after July 2026; Shared image-generation types, failover, auth, and registry helpers |
     | `plugin-sdk/music-generation` | Private-local after July 2026; Music generation provider/request/result types |

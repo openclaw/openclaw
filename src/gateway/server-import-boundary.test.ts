@@ -178,9 +178,6 @@ describe("gateway startup import boundaries", () => {
       'from "./config-reload.js"',
     );
     expect(serverImpl).not.toContain('from "../plugins/hook-runner-global.js"');
-    expect(serverImpl).not.toContain('from "../tasks/task-registry.js"');
-    expect(serverImpl).not.toContain('from "../tasks/task-registry.maintenance.js"');
-    expect(serverImpl).toContain('import("../tasks/task-registry.maintenance.js")');
     expect(serverImpl).not.toContain('from "../secrets/runtime.js"');
     expect(readSource("src/gateway/server-reload-managed.ts")).not.toContain(
       'from "../secrets/runtime.js"',
@@ -248,10 +245,7 @@ describe("gateway startup import boundaries", () => {
     const workerStartup = readSource("src/gateway/server-worker-environment-startup.ts");
     const runtimeLoad = "loadWorkerEnvironmentRuntimeModule()";
     const prepareStart = workerStartup.indexOf("const prepareInstallation = async");
-    const serviceStart = workerStartup.indexOf(
-      "const workerEnvironmentServiceBase =",
-      prepareStart,
-    );
+    const serviceStart = workerStartup.indexOf("createWorkerEnvironmentService({", prepareStart);
     const identityStart = workerStartup.indexOf("resolveSshIdentity: async", serviceStart);
     const bootstrapStart = workerStartup.indexOf("bootstrapWorker: async", serviceStart);
     const loggerStart = workerStartup.indexOf("logger: workerEnvironmentLog", bootstrapStart);
@@ -286,6 +280,6 @@ describe("gateway startup import boundaries", () => {
     expect(workerStartup).toContain(
       "const loadWorkerSessionToolExecutorModule = createLazyRuntimeModule(",
     );
-    expect(workerStartup).toContain("loadWorkerSessionToolExecutorModule().then(");
+    expect(workerStartup).toContain("await loadWorkerSessionToolExecutorModule()");
   });
 });

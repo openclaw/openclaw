@@ -1,8 +1,5 @@
-// The lobster pet's art locker: every static SVG sprite the look renderer
-// and scene composer draw from - accessories, rare-palette geometry, retro
-// homage parts, ledge visitors, and the bottle. Pure presentation; all
-// selection logic stays in lobster-pet-look.ts.
-import { svg, type TemplateResult } from "lit";
+import { svg, type SVGTemplateResult, type TemplateResult } from "lit";
+import { LOBSTER_HAT_SPRITES } from "./lobster-hat-sprites.ts";
 import type {
   LobsterPetAccessory,
   LobsterPetAntennae,
@@ -16,12 +13,7 @@ import {
 } from "./lobster-pet-sprites-wild.ts";
 
 export const ACCESSORY_SPRITES: Record<Exclude<LobsterPetAccessory, "none">, TemplateResult> = {
-  crown: svg`
-    <path
-      d="M46 12 L46 2 L53 8 L60 0 L67 8 L74 2 L74 12 Q60 8 46 12 Z"
-      fill="#f6c945"
-    />
-  `,
+  crown: LOBSTER_HAT_SPRITES.crown,
   sprout: svg`
     <g>
       <path d="M60 12 Q58 4 63 1" stroke="#3f9d63" stroke-width="3" stroke-linecap="round" fill="none" />
@@ -34,28 +26,9 @@ export const ACCESSORY_SPRITES: Record<Exclude<LobsterPetAccessory, "none">, Tem
       <circle cx="75" cy="32" r="9" fill="#101820" />
     </g>
   `,
-  santa: svg`
-    <g>
-      <path d="M47 10 Q54 1 68 3 L72 9 Z" fill="#e0312f" />
-      <circle cx="71" cy="3.5" r="3.5" fill="#f5f7fa" />
-      <ellipse cx="59" cy="10.5" rx="15" ry="3.5" fill="#f5f7fa" />
-    </g>
-  `,
-  pumpkin: svg`
-    <g>
-      <ellipse cx="60" cy="6.5" rx="8.5" ry="5.5" fill="#e8871e" />
-      <path d="M56 2.5 Q56 6.5 56 10.5 M64 2.5 Q64 6.5 64 10.5" stroke="#c96a10" stroke-width="1.5" fill="none" />
-      <path d="M60 1.5 Q60.5 0 63 0.5" stroke="#4c9a4c" stroke-width="2.5" stroke-linecap="round" fill="none" />
-    </g>
-  `,
-  party: svg`
-    <g>
-      <path d="M52 11 L60 0.5 L68 11 Z" fill="#7c5cff" />
-      <path d="M55.5 6.5 L64.5 6.5" stroke="#ffd166" stroke-width="2" />
-      <circle cx="60" cy="1" r="2.4" fill="#ff5c8a" />
-    </g>
-  `,
-  // Elder wear: a patient little colony riding the shell's shoulder.
+  santa: LOBSTER_HAT_SPRITES.santa,
+  pumpkin: LOBSTER_HAT_SPRITES.pumpkin,
+  party: LOBSTER_HAT_SPRITES.party,
   barnacle: svg`
     <g class="lob-barnacles">
       <path d="M32 22 L36.5 13 L41 22 Z" fill="#cfd8de" />
@@ -65,7 +38,6 @@ export const ACCESSORY_SPRITES: Record<Exclude<LobsterPetAccessory, "none">, Tem
       <circle cx="45.5" cy="15" r="0.9" fill="#8a949d" />
     </g>
   `,
-  // National Lobster Day formal wear: gold rim, chain, no further questions.
   monocle: svg`
     <g class="lob-monocle" fill="none" stroke="#f4b840">
       <circle cx="75" cy="32" r="8.5" stroke-width="2.5" />
@@ -74,8 +46,6 @@ export const ACCESSORY_SPRITES: Record<Exclude<LobsterPetAccessory, "none">, Tem
   `,
 };
 
-// Light speckle trait; skipped on palettes whose identity is already
-// pattern-driven (see renderLobsterSvg).
 export const FRECKLE_SPOTS = svg`
   <g class="lob-freckles" fill="#ffffff" opacity="0.3">
     <circle cx="42" cy="45" r="1.6" />
@@ -432,8 +402,6 @@ export const TAIL_FAN = svg`
   </g>
 `;
 
-// Moving-day bindle: a stick over the shoulder with a polka-dot bundle,
-// carried for the whole first load after a gateway upgrade.
 export const BINDLE = svg`
   <g class="lob-bindle">
     <path d="M70 62 L99 30" stroke="#8a5a2b" stroke-width="3.5" stroke-linecap="round" />
@@ -463,7 +431,6 @@ export const SAILOR_CAP = svg`
   </g>
 `;
 
-// Shown while grumpy (poked too much): angry brows and a frown.
 export const GRUMPY_FACE = svg`
   <g stroke="#0a1014" stroke-linecap="round" fill="none">
     <path d="M37 24 L51 28" stroke-width="3.5" />
@@ -487,15 +454,20 @@ export const ANTENNAE_SPRITES: Record<LobsterPetAntennae, TemplateResult> = {
   `,
 };
 
-// Not a lobster. Wide shell, eye stalks, walks sideways across the ledge,
-// and the Lobsterdex refuses to acknowledge it.
-const CRAB_SPRITE = svg`
-  <svg
-    class="lobster-pet__svg"
-    viewBox="0 0 120 105"
-    preserveAspectRatio="none"
-    aria-hidden="true"
-  >
+function passerSprite(content: SVGTemplateResult): SVGTemplateResult {
+  return svg`
+    <svg
+      class="lobster-pet__svg"
+      viewBox="0 0 120 105"
+      preserveAspectRatio="none"
+      aria-hidden="true"
+    >
+      ${content}
+    </svg>
+  `;
+}
+
+const CRAB_SPRITE = passerSprite(svg`
     <g stroke="#a63a2e" stroke-width="4" stroke-linecap="round" fill="none">
       <path d="M22 78 L8 88" />
       <path d="M28 88 L16 99" />
@@ -521,18 +493,9 @@ const CRAB_SPRITE = svg`
       fill="#d95f4b"
     />
     <path d="M48 82 Q60 90 72 82" stroke="#7e2a20" stroke-width="3" stroke-linecap="round" fill="none" />
-  </svg>
-`;
+`);
 
-// Also not a lobster. Crosses the ledge on its own schedule, which is to
-// say: eventually.
-const SNAIL_SPRITE = svg`
-  <svg
-    class="lobster-pet__svg"
-    viewBox="0 0 120 105"
-    preserveAspectRatio="none"
-    aria-hidden="true"
-  >
+const SNAIL_SPRITE = passerSprite(svg`
     <path
       d="M14 96 Q32 84 58 88 L96 88 Q110 90 112 97 Q112 103 102 103 L24 103 Q14 103 14 96 Z"
       fill="#c9a06a"
@@ -553,18 +516,9 @@ const SNAIL_SPRITE = svg`
       stroke-linecap="round"
       fill="none"
     />
-  </svg>
-`;
+`);
 
-// The rubber duck: patron saint of debugging. It floats through, listens,
-// and leaves without judging anyone's architecture.
-const DUCK_SPRITE = svg`
-  <svg
-    class="lobster-pet__svg"
-    viewBox="0 0 120 105"
-    preserveAspectRatio="none"
-    aria-hidden="true"
-  >
+const DUCK_SPRITE = passerSprite(svg`
     <path d="M30 82 Q20 74 27 65 Q30 76 40 79 Z" fill="#f0b52e" />
     <ellipse cx="58" cy="85" rx="34" ry="17" fill="#ffd23e" />
     <circle cx="82" cy="50" r="18" fill="#ffd23e" />
@@ -572,18 +526,9 @@ const DUCK_SPRITE = svg`
     <circle cx="86" cy="44" r="3.6" fill="#0a1014" />
     <circle cx="87" cy="43" r="1.3" fill="#ffffff" />
     <path d="M44 82 Q58 72 72 82 Q58 93 44 82 Z" fill="#f0b52e" opacity="0.75" />
-  </svg>
-`;
+`);
 
-// A jellyfish drifting past above the ledge, pulsing gently, thinking about
-// nothing at all.
-const JELLYFISH_SPRITE = svg`
-  <svg
-    class="lobster-pet__svg"
-    viewBox="0 0 120 105"
-    preserveAspectRatio="none"
-    aria-hidden="true"
-  >
+const JELLYFISH_SPRITE = passerSprite(svg`
     <g class="lob-jelly-tentacles" stroke="#9f7dfa" stroke-width="2.5" stroke-linecap="round" fill="none" opacity="0.8">
       <path d="M40 58 Q35 74 42 90" />
       <path d="M54 61 Q52 78 57 96" />
@@ -598,8 +543,7 @@ const JELLYFISH_SPRITE = svg`
     <ellipse cx="47" cy="37" rx="12" ry="6" fill="#ffffff" opacity="0.25" />
     <circle cx="52" cy="45" r="2.6" fill="#0a1014" />
     <circle cx="66" cy="45" r="2.6" fill="#0a1014" />
-  </svg>
-`;
+`);
 
 export const PASSER_SPRITES: Record<"crab" | "snail" | "duck" | "jellyfish", TemplateResult> = {
   crab: CRAB_SPRITE,

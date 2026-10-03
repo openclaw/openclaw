@@ -37,6 +37,75 @@ The table compares eleven successful B1/R1 main runs with five later successful 
 
 Independent hosted checks reached at most 664 seconds in this sample. Artifact builds reached 898 seconds before the shared preflight and gate; they retain Blacksmith. Only the gate depends on `build-artifacts`: the workflow does not contain a serial build-to-test job dependency.
 
+The package-boundary check now requests the existing Blacksmith 32-class when
+its unchanged routing policy selects Blacksmith. In successful PR run
+`36248684656`, its 16-class allocation delivered four CPUs and the existing
+two-CPU reservation admitted two compilers. The 527-second check comprised
+257 seconds of declaration preparation and 268 seconds compiling all 125
+plugins. The 32-class delivers eight CPUs, allowing four compilers under that
+same policy. It adds no jobs or registrations. At the observed 569-second job
+duration, doubling the class would add 151.7 class-vCPU-minutes, or 1.17% of
+that run's 12,921.2 total. The later complete green run `36269840991` measured
+301 seconds and 160.5 class-vCPU-minutes with all 125 plugins checked. Upstream
+compiler optimization also contributed, so this is not an isolated runner
+speedup. Hosted, retry, trust, and cache policies remain unchanged.
+
+Exact plugin envelopes and unsplit two-worker command envelopes now feed the
+existing timing owner using config, complete file inventory, and worker-bound
+identities. Plugin row ordinals never identify a workload. Static plugin rates
+remain the fallback for unmeasured selections, and the refitter still requires
+two independent runs before replacing a price. Conservative single-run floors
+are explicitly labeled in the committed timing provenance. An exact measured
+multi-file core child above 300 seconds can split again without repricing its
+siblings or combining unlike capacity samples into a parent. A single-file
+overrun remains visible.
+
+Gateway methods prefer measurements for the current scope and worker policy,
+then the full owner at that policy. Until those exist, the matching older-worker
+scope and full-owner measurements remain admission floors. Changing both key
+qualifiers must not discard the existing owner measurement.
+
+Process-bounded plugin owners also retain per-file invocation prices across
+envelope changes. These prices have distinct keys from whole-envelope walls;
+shared wrapper overhead is charged once. Only complete successful serial receipts
+with one declared file per process qualify. Other process owners and missing
+measurements keep their existing estimates.
+
+### Telegram process overlap
+
+Source-only Telegram database-worker envelopes with at least two singleton
+processes can overlap two inner processes on current self-hosted Linux runners.
+Admission requires an explicit current target (`FROZEN_TARGET=false`), one unchanged
+Node invocation from the canonical runtime selector (including `bun-compatible`),
+two workers, one outer plan, scheduler-owned caches, at least two actual CPUs, and
+7.5 GiB of effective memory. Effective memory is the smaller
+of physical memory and a positive finite process constraint. Other selections or
+insufficient capacity retain one inner process. Each test file keeps its own
+process, and focused CI still stops admitting new work after failure while
+joining admitted peers.
+
+The executor reports actual inner concurrency, including serial fallback. Its
+value participates in the existing environment-bound timing identity. Parallel
+receipts supply only the complete envelope wall; overlapping file durations are
+never summed and subtracted to derive wrapper overhead. Until that exact policy
+has qualified measurements, placement retains the conservative serial estimate.
+
+A 199-case envelope measured 184.40 seconds serially and 147.31 seconds with two
+processes on a Linux Testbox constrained to two CPUs and 7.65 GiB. Three further
+qualified replays took 147.46, 146.13 and 149.34 seconds. Peak aggregate memory
+stayed below 4.51 GiB, with no OOM events and the same cases. Whole-row budgets
+still need qualification from naturally occurring CI runs.
+
+Storage balancing additionally uses 36 config-scoped module-work hints from an
+unchanged two-worker replay of the exact tested merge. Setup, collection, and
+suite elapsed time guide placement; the longest file is never divided by the
+worker count. A separate 20-second allowance covers compiler and wrapper work
+once per child. These conservative four-CPU Testbox hints are not eight-CPU
+native CI file walls. Existing whole-envelope observations remain authoritative
+floors, unknown files retain their prior estimates, and worker policies stay
+unchanged. Heavy storage children retain their measured 32-class allocation
+when splitting leaves them alone; isolation does not imply a smaller runner.
+
 | Test family                               | Available complete-job evidence                                                    | Placement and remaining measurement                                                        |
 | ----------------------------------------- | ---------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
 | Compact large, baseline bin 13            | Blacksmith 932 [967]s across five runs                                             | Retain Blacksmith; correct underestimated serial packing                                   |
@@ -87,8 +156,8 @@ That chain spends 130 seconds in hosted queueing, two in creation, 632 executing
 and 16 in Blacksmith queueing. No test depends on the artifact build in either
 chain. Changing matrix shape would not remove the gate's serial queue.
 
-Trusted hybrid first attempts therefore request the 16-class for the heavier
-first packed core-lint row, the 8-class for the second, and the 4-class for the gate. The logical lint partitions, single
+Trusted hybrid first attempts therefore request the 16-class for both
+packed core-lint rows and the 4-class for the gate. The logical lint partitions, single
 lint thread, extension-lint rows, main parity slots,
 workflow dependencies, and deadlines stay unchanged. Hosted remains the route
 for independent cheap work. RunsOn's cron evidence does not qualify lint or a
@@ -100,12 +169,14 @@ their execution slack without changing API deadlines or test coverage.
 The first native candidate used the 8-class for both lint rows. Its PR run
 `35813098351` passed in 785 seconds, but core lint 1 took 621 seconds (568 in
 lint itself), versus the 398-second hosted baseline (350 in lint). Core lint 2
-took 353 seconds versus 323 hosted. Retaining four actual CPUs only for the
-heavier row avoids spending the queue saving on slower execution. At the
+took 353 seconds versus 323 hosted. That revision retained four actual CPUs only for the
+heavier row to avoid spending the queue saving on slower execution. At the
 historical list rates and old hosted runtimes held constant, the 16/8 split
 costs about $0.2984 instead of $0.1923 for two 8-class rows. These unrounded
 estimates exclude minimum billing and ancillary charges; native measurements,
 rather than that forecast, own the final cost and wall comparison.
+
+The second packed row later exhausted its 15-minute limit in run `36422187813`. A controlled four-CPU, 16-GiB-capped lease completed its unchanged stripes 3, 4, and 5 in 137.37 seconds with the existing larger-runner Go policy. Both rows now request the 16-class. The promotion adds no jobs or registrations; at the full 15-minute deadline, the second row adds at most 120 class-vCPU-minutes versus the 8-class. The lease measurement is not a native CI timing result.
 
 The revised PR run `35814962786` measured core lint 1 at 275 seconds on the
 16-class and core lint 2 at 385 seconds on the 8-class. The heavier row's
@@ -119,12 +190,12 @@ qualification.
 The change adds three actual Blacksmith registrations on ordinary hybrid main
 and same-repository PRs. Trusted fork PRs using the logical GitHub profile emit
 five core-lint rows, so their increase can be six including the gate. A fresh
-current-source audit totals 70 potentially self-hosted non-Node rows across the
+current-source audit totals 71 potentially self-hosted non-Node rows across the
 supported automatic main/PR profiles. This conservative union includes five
 core-lint rows, five core-type rows, five Windows rows, and thirteen UI E2E rows;
 its profile maxima do not all coexist. The six extension-lint rows stay hosted.
 
-Retain an 84-row non-Node allowance, leaving fourteen rows reserved above that
+Retain an 84-row non-Node allowance, leaving thirteen rows reserved above that
 union. With the unchanged 70/130 Node caps and four-main/21-PR arrival envelope,
 `4 × (70 + 84) + 21 × (130 + 84) = 5,110`. That leaves 890 below the 6,000
 operating target from the reported 10,000-per-five-minute registration limit.
@@ -132,6 +203,58 @@ This replaces the stale historical `80 + 3 + 1` explanation without spending
 headroom or changing matrix caps. Manual/frozen release jobs and other workflows
 are outside this conditional arrival envelope; it does not establish complete
 organization-wide usage.
+
+## Ratchet admission and Node tests
+
+Selected baseline ratchets and Node rows start independently after preflight.
+The final gate still requires every selected ratchet to pass. This preserves the
+landed parallel admission path and avoids moving ratchet setup into preflight.
+
+The five newest broad green PR runs at the September 26 sampling cutoff
+(`36208949888`, `36208857347`, `36208617238`, `36208552952`, and `36208291831`)
+spent 148–173 seconds in hosted `checks-fast-baseline-ratchets`. Checkout took
+31–33 seconds, dependency setup 27–52 seconds, and the ratchets 73–111 seconds.
+Those historical Node rows waited for this job. Current Node rows start alongside it.
+Preflight took 89–120 seconds, including 48–83 seconds of manifest planning;
+these hybrid runs already skipped preflight's exact dependency restore.
+
+Trusted same-repository hybrid PR first attempts, automatic main runs, and admitted qualification dispatches
+now request the existing Blacksmith 4-class for the ratchet job. Nearby default-Blacksmith runs `36208877388` and
+`36209067188` measured complete ratchet jobs of 85 and 91 seconds. Their setup
+took 12–15 seconds and ratchets 39–40 seconds. These different-head observations
+project 57–88 seconds less ratchet wall; they do not prove current whole-workflow savings.
+
+Using the slower 91-second observation, the route adds at most a modeled
+`4 × 91 / 60 = 6.07` Blacksmith vCPU-minutes per eligible run. It adds no jobs
+and one actual hybrid Blacksmith registration. The job already belonged to the
+potentially self-hosted non-Node union under the default backend, so the existing
+84-row allowance and 5,110-registration envelope stay unchanged. Hosted routing
+remains for the GitHub override, hybrid retries, ordinary manual or frozen targets, untrusted
+contributors, and noncanonical repositories. Ratchet checks, merge-tree
+validation, parallel Node admission, dependency reconciliation, and deadlines are unchanged.
+
+The same five runs spent 165–209 seconds in the separate `check-plan` prerequisite.
+Its compiler inventory queries took most of the 93–154-second materialization
+step; every narrowed type/lint row waits for that result. Those runs' central
+test-type checks finished 629–667 seconds after workflow start, so advancing only
+Node admission cannot meet the ten-minute PR objective.
+
+`check-plan` therefore uses the existing 4-class under the same hybrid
+admission, restoring exact dependencies only for eligible same-repository jobs
+on an actual self-hosted runner. The route adds one Blacksmith registration
+within the existing non-Node reserve. Keeping the full observed 209-second
+hosted wall as its conservative cost estimate adds 13.93 vCPU-minutes, or 20
+vCPU-minutes with the ratchet estimate. No planner speedup is assumed in this
+cost bound. Native proof must establish the materialization and whole-workflow
+wall; compiler coverage, selected graphs, and all hosted fallbacks remain intact.
+
+The broad fallback PR qualification does not select `check-plan`. Its observed
+wall can validate the broad Node path, but cannot establish the new narrowed
+type/lint critical-path improvement. That claim needs a separate native run
+whose changed-file plan selects this prerequisite.
+
+These two control-job changes apply only to the hybrid backend. RunsOn retains
+hosted ratchets and check planning, including qualification dispatches.
 
 ## RunsOn remains unqualified
 

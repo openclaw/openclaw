@@ -2,6 +2,7 @@ import { html, nothing } from "lit";
 import { property } from "lit/decorators.js";
 import { formatApprovalDisplayPath } from "../../../src/infra/approval-display-paths.ts";
 import type { ApprovalScope } from "../../../src/infra/approval-scope.ts";
+import { normalizeCommandSpans } from "../../../src/shared/exec-approval-command-spans.ts";
 import type { GatewaySessionRow } from "../api/types.ts";
 import { compactApprovalCommand } from "../app/approval-presentation.ts";
 import type {
@@ -98,22 +99,11 @@ function renderMetaRow(label: string, value?: string | null, opts?: { path?: boo
 }
 
 function renderCommandWithSpans(request: ExecApprovalRequestPayload) {
-  const spans = [...(request.commandSpans ?? [])]
-    .filter(
-      (span) =>
-        Number.isSafeInteger(span.startIndex) &&
-        Number.isSafeInteger(span.endIndex) &&
-        span.startIndex >= 0 &&
-        span.endIndex > span.startIndex &&
-        span.endIndex <= request.command.length,
-    )
-    .toSorted((a, b) => a.startIndex - b.startIndex || b.endIndex - a.endIndex);
+  const spans =
+    normalizeCommandSpans([...(request.commandSpans ?? [])], request.command.length) ?? [];
   const parts = [];
   let cursor = 0;
   for (const span of spans) {
-    if (span.startIndex < cursor) {
-      continue;
-    }
     if (span.startIndex > cursor) {
       parts.push(request.command.slice(cursor, span.startIndex));
     }

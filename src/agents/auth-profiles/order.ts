@@ -17,6 +17,7 @@ import {
   resolveTokenExpiryState,
   type AuthCredentialReasonCode,
 } from "./credential-state.js";
+import { resolveExplicitAuthOrderSelection } from "./explicit-order.js";
 import { isPendingOAuthRefreshFence } from "./oauth-refresh-marker.js";
 import { dedupeProfileIds } from "./profile-list.js";
 import { isSetupCredentialAccessible } from "./setup-access.js";
@@ -26,6 +27,8 @@ import {
   isProfileInCooldown,
   resolveProfileUnusableUntil,
 } from "./usage-state.js";
+
+export { resolveExplicitAuthOrderSelection };
 
 /** Reason a profile is or is not eligible for provider auth. */
 export type AuthProfileEligibilityReasonCode =
@@ -104,24 +107,6 @@ function listProfilesCompatibleWithAuthProvider(params: {
     .map(([profileId]) => profileId);
 }
 
-function resolveProviderAuthMode(
-  cfg: OpenClawConfig | undefined,
-  provider: string,
-): string | undefined {
-  const providers = cfg?.models?.providers;
-  if (!providers) {
-    return undefined;
-  }
-  const entry = findNormalizedProviderValue(providers, provider);
-  const auth = entry?.auth;
-  return typeof auth === "string" ? auth : undefined;
-}
-
-function providerAllowsAwsSdkAuth(cfg: OpenClawConfig | undefined, provider: string): boolean {
-  const authMode = resolveProviderAuthMode(cfg, provider);
-  return authMode === "aws-sdk";
-}
-
 /** Returns true when config declares an aws-sdk auth profile for a provider. */
 export function isConfiguredAwsSdkAuthProfileForProvider(params: {
   cfg?: OpenClawConfig;
@@ -146,7 +131,9 @@ export function isConfiguredAwsSdkAuthProfileForProvider(params: {
   ) {
     return false;
   }
-  return providerAllowsAwsSdkAuth(params.cfg, providerAuthKey);
+  return (
+    findNormalizedProviderValue(params.cfg?.models?.providers, providerAuthKey)?.auth === "aws-sdk"
+  );
 }
 
 /** Resolves whether a profile can be used for a provider right now. */
@@ -263,29 +250,6 @@ export function prependAuthProfilePin(
         profileIds: [profileId, ...resolution.profileIds.filter((id) => id !== profileId)],
       }
     : resolution;
-}
-
-/** Shares stored-over-config order precedence with CLI runtime selection. */
-export function resolveExplicitAuthOrderSelection(params: {
-  storeOrder: AuthProfileStore["order"] | undefined;
-  configuredOrder: Record<string, string[]> | undefined;
-  providerKey: string;
-  providerAuthKey: string;
-}): {
-  order: string[] | undefined;
-  fromStore: boolean;
-} {
-  const { storeOrder, configuredOrder, providerKey, providerAuthKey } = params;
-  const stored =
-    findNormalizedProviderValue(storeOrder, providerAuthKey) ??
-    findNormalizedProviderValue(storeOrder, providerKey);
-  return {
-    order:
-      stored ??
-      findNormalizedProviderValue(configuredOrder, providerAuthKey) ??
-      findNormalizedProviderValue(configuredOrder, providerKey),
-    fromStore: stored !== undefined,
-  };
 }
 
 /** Resolves ordered usable auth profiles plus whether an explicit order owns selection. */
@@ -420,18 +384,10 @@ function orderProfilesByMode(order: string[], store: AuthProfileStore, now: numb
     return { profileId, typeScore, expiryScore, lastUsed };
   });
 
-  // Primary sort: type preference (oauth > token > api_key).
   return scored
-    .toSorted((a, b) => {
-      // First by type (oauth > token > api_key)
-      if (a.typeScore !== b.typeScore) {
-        return a.typeScore - b.typeScore;
-      }
-      if (a.expiryScore !== b.expiryScore) {
-        return a.expiryScore - b.expiryScore;
-      }
-      // Then by lastUsed (oldest first)
-      return a.lastUsed - b.lastUsed;
-    })
+    .toSorted(
+      (a, b) =>
+        a.typeScore - b.typeScore || a.expiryScore - b.expiryScore || a.lastUsed - b.lastUsed,
+    )
     .map((entry) => entry.profileId);
 }

@@ -1,11 +1,7 @@
 /** Recursive spawn authority must survive the real Gateway and agent-command admission path. */
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
-import {
-  cleanupPreparedModelRuntimeHarness,
-  getPreparedModelRuntimeMocks,
-  resetPreparedModelRuntimeHarness,
-} from "../../prepared-model-runtime.test-harness.js";
+import { cleanupPreparedModelRuntimeHarness, getPreparedModelRuntimeMocks, resetPreparedModelRuntimeHarness } from "../../prepared-model-runtime.test-harness.js";
 import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -32,9 +28,6 @@ import { withTimeout } from "../../../infra/fs-safe.js";
 import { getActivePluginRegistry } from "../../../plugins/runtime.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../../plugins/runtime/gateway-request-scope.js";
 import { beginSessionWorkAdmission } from "../../../sessions/session-lifecycle-admission.js";
-import { resetTaskFlowRegistryForTests } from "../../../tasks/task-flow-registry.test-support.js";
-import { findTaskByRunId } from "../../../tasks/task-registry.js";
-import { resetTaskRegistryForTests } from "../../../tasks/task-registry.test-support.js";
 import { createTestRegistry } from "../../../test-utils/channel-plugins.js";
 import {
   createOpenClawTestState,
@@ -55,8 +48,10 @@ import {
 import { callInProcessGatewayTool } from "../../tools/in-process-gateway.js";
 import { runSubagentAnnounceFlow } from "../announce/subagent-announce.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
+import { observeRootWork } from "../registry/subagent-registry.browser-cleanup.test-support.js";
 import { settleSubagentRegistryPersistenceWork } from "../registry/subagent-registry.persistence.test-support.js";
 import { resetSubagentRegistryForTests } from "../registry/subagent-registry.test-helpers.js";
+import { resolveSubagentSessionStatus } from "../registry/subagent-session-metrics.js";
 import {
   activateSwarmRun,
   closeSwarmScheduler,
@@ -68,11 +63,13 @@ import {
 import { cleanupProvisionalSession } from "./subagent-spawn-cleanup.js";
 import { callSubagentGateway } from "./subagent-spawn-gateway.js";
 import { registerNativeCancellationCases } from "./subagent-spawn.cancellation.test-support.js";
+import { registerParticipantSpawnCases } from "./subagent-spawn.participants.test-support.js";
 import {
   createBoundSpawnInvocation,
   createBoundWorker,
   createSpawnBoundaryParent,
   createSpawnOperatorSource,
+  registerYieldedRequesterBatchCase,
 } from "./subagent-spawn.production-boundary.test-support.js";
 import { registerOperatorSpawnRollbackCases } from "./subagent-spawn.rollback.test-support.js";
 
@@ -85,14 +82,16 @@ const runEmbeddedAgent = vi.hoisted(() =>
 );
 
 vi.mock("../../embedded-agent.js", async () => {
-  const { abortEmbeddedAgentRun, isEmbeddedAgentRunActive, waitForEmbeddedAgentRunEnd } =
-    await import("../../embedded-agent-runner/runs.js");
+  const lifecycle = await import("../../embedded-agent-runner/runs.js");
+  const { resolveEmbeddedSessionLane } = await import("../../embedded-agent-runner/lanes.js");
+  const { resolveActiveEmbeddedRunSessionId } =
+    await import("../../embedded-agent-runner/active-run-projections.js");
   return {
-    abortEmbeddedAgentRun,
-    isEmbeddedAgentRunActive,
+    ...lifecycle,
+    resolveActiveEmbeddedRunSessionId,
+    resolveEmbeddedSessionLane,
     runEmbeddedAgent,
-    waitForEmbeddedAgentRunEnd,
-  };
+  } satisfies typeof import("../../embedded-agent.runtime.js");
 });
 
 const parentSessionKey = "agent:main:subagent:production-boundary-parent";
@@ -102,6 +101,7 @@ const COLD_MODEL_ENTRY_TIMEOUT_MS = 60_000;
 let state: OpenClawTestState;
 let stateDir = "";
 let runtimeConfig: OpenClawConfig;
+let settleRootWork: ReturnType<typeof observeRootWork>;
 
 async function writeTestConfig() {
   const config = {
@@ -172,8 +172,6 @@ beforeEach(async () => {
     routeVariants: [model],
   });
   resetSubagentRegistryForTests({ persist: false });
-  resetTaskRegistryForTests({ persist: false });
-  resetTaskFlowRegistryForTests({ persist: false });
   preparedRuntime.loadAgentRuntimePluginRegistryHandle.mockImplementation(
     () => getActivePluginRegistry() ?? createTestRegistry([]),
   );
@@ -186,13 +184,16 @@ beforeEach(async () => {
       return { status: "pending" } as T;
     },
   );
+  settleRootWork = observeRootWork();
 });
 
 afterEach(async ({ task }) => {
-  await settleSubagentRegistryPersistenceWork();
+  // Join finite completion tails before asserting that their registry roots retired.
+  await settleSubagentRegistryPersistenceWork(() => settleRootWork());
+  // Retire workspace observers before fixture cleanup removes their roots.
+  const { closeSkillsWatchers } = await import("../../../skills/runtime/refresh.js");
+  await closeSkillsWatchers(true);
   resetSubagentRegistryForTests({ persist: false });
-  resetTaskRegistryForTests({ persist: false });
-  resetTaskFlowRegistryForTests({ persist: false });
   vi.mocked(runSubagentAnnounceFlow).mockReset();
   vi.mocked(callGateway).mockReset();
   clearRuntimeConfigSnapshot();
@@ -216,12 +217,14 @@ async function createBoundGateway(bound: Awaited<ReturnType<typeof createBoundPa
     { createGatewayInstanceRuntime },
     { createRequestGatewayMethodRegistry },
     { refreshPreparedModelRuntimeSnapshots },
+    { loadGatewayModelCatalogSnapshot, readPreparedGatewayModelCatalog },
   ] = await Promise.all([
     import("../../../gateway/agent-runtime-execution-lineage.js"),
     import("../../../gateway/agent-runtime-approval-authority.js"),
     import("../../../gateway/server-instance-runtime.js"),
     import("../../../gateway/server-methods.js"),
     import("../../prepared-model-runtime.js"),
+    import("../../../gateway/server-model-catalog.js"),
   ]);
   await refreshPreparedModelRuntimeSnapshots(bound.cfg, {
     gatewayLifecycle: true,
@@ -230,6 +233,14 @@ async function createBoundGateway(bound: Awaited<ReturnType<typeof createBoundPa
   });
   const context = bound.context as unknown as GatewayRequestContext;
   context.resolveGatewayContext = () => bound.gatewayBinding.current;
+  context.addChatRun = context.chatRunState.registry.add;
+  context.removeChatRun = context.chatRunState.registry.remove;
+  context.loadGatewayModelCatalogSnapshot = (request) =>
+    loadGatewayModelCatalogSnapshot({ ...request, getConfig: () => bound.cfg });
+  context.loadGatewayModelCatalog = async (request) =>
+    (await context.loadGatewayModelCatalogSnapshot(request)).entries;
+  context.readPreparedGatewayModelCatalog = (request) =>
+    readPreparedGatewayModelCatalog({ ...request, getConfig: () => bound.cfg });
   const validateRuntimeAuthority = createAgentRuntimeApprovalAuthorityValidator();
   const identities: AgentRuntimeIdentity[] = [];
   context.validateAgentRuntimeApprovalAuthority = (identity) => {
@@ -281,13 +292,10 @@ function readBoundExecutionState(
     controllerAborted: controller?.controller.signal.aborted,
     executionStarted: controller?.executionStarted,
     executionStatus: label(execution?.status, ["queued", "running", "interrupted", "terminal"]),
-    taskStatus: label(childRunId ? findTaskByRunId(childRunId)?.status : undefined, [
-      "queued",
-      "running",
-      "completed",
-      "failed",
-      "cancelled",
-    ]),
+    runStatus: label(
+      childRunId ? resolveSubagentSessionStatus(subagentRuns.get(childRunId)) : undefined,
+      ["queued", "running", "done", "failed", "killed", "timeout"],
+    ),
     queuedLaunchPresent: collector?.queuedLaunch !== undefined,
     collectorCleanupPending: collector?.collectorLaunchCleanupPending === true,
     collectorKillPending: collector?.killIntent !== undefined,
@@ -301,15 +309,16 @@ async function waitForEmbeddedRun(
   bound: Awaited<ReturnType<typeof createBoundParent>>,
   childRunId: string,
   started?: Promise<void>,
+  calls = 1,
 ) {
   try {
     if (started) {
       await withTimeout(started, COLD_MODEL_ENTRY_TIMEOUT_MS, {
         message: "embedded execution entry timed out",
       });
-      expect(runEmbeddedAgent).toHaveBeenCalledOnce();
+      expect(runEmbeddedAgent).toHaveBeenCalledTimes(calls);
     } else {
-      await vi.waitFor(() => expect(runEmbeddedAgent).toHaveBeenCalledOnce(), {
+      await vi.waitFor(() => expect(runEmbeddedAgent).toHaveBeenCalledTimes(calls), {
         timeout: 15_000,
       });
     }
@@ -377,6 +386,21 @@ function throwBoundFailures(failures: unknown[]) {
 }
 
 describe("recursive spawn production boundary", () => {
+  registerParticipantSpawnCases({
+    createBoundParent,
+    createBoundGateway,
+    runEmbeddedAgent,
+    parentSessionKey,
+    parentRunId,
+  });
+  registerYieldedRequesterBatchCase({
+    createBoundParent,
+    createBoundGateway,
+    closeBoundGateway,
+    waitForEmbeddedRun,
+    runEmbeddedAgent,
+    throwBoundFailures,
+  });
   registerOperatorSpawnRollbackCases({
     createBoundParent,
     createBoundGateway,
@@ -394,22 +418,7 @@ describe("recursive spawn production boundary", () => {
     assertNoModelExecution: () => expect(runEmbeddedAgent).not.toHaveBeenCalled(),
   });
 
-  it.each([
-    {
-      name: "configured child model",
-      configuredChildModel: true,
-      storedParentModel: "test-model",
-      requesterModel: { provider: "custom", model: "test-model" },
-    },
-    { name: "parent session model", configuredChildModel: false, storedParentModel: "child-model" },
-    {
-      name: "active parent turn model",
-      configuredChildModel: false,
-      storedParentModel: "test-model",
-      requesterModel: { provider: "custom", model: "child-model" },
-    },
-  ])("admits a descendant using the $name", async (scenario) => {
-    const { configuredChildModel, storedParentModel, requesterModel } = scenario;
+  it("admits a descendant using the active parent turn model", async () => {
     const customProvider = expectDefined(
       runtimeConfig.models?.providers?.custom,
       "custom provider fixture",
@@ -422,7 +431,6 @@ describe("recursive spawn production boundary", () => {
         ...runtimeConfig.agents,
         defaults: {
           ...runtimeConfig.agents?.defaults,
-          ...(configuredChildModel ? { subagents: { model: "custom/child-model" } } : {}),
           modelPolicy: { allow: ["custom/manual-only"] },
         },
       },
@@ -454,7 +462,7 @@ describe("recursive spawn production boundary", () => {
       { storePath: bound.storePath, sessionKey: parentSessionKey },
       {
         providerOverride: "custom",
-        modelOverride: storedParentModel,
+        modelOverride: "test-model",
         modelOverrideSource: "user",
       },
     );
@@ -469,7 +477,10 @@ describe("recursive spawn production boundary", () => {
     let childRunId: string | undefined;
     const failures: unknown[] = [];
     try {
-      const result = await createBoundSpawnInvocation(bound, undefined, requesterModel)();
+      const result = await createBoundSpawnInvocation(bound, undefined, {
+        provider: "custom",
+        model: "child-model",
+      })();
       expect(result.details, JSON.stringify(result)).toMatchObject({
         status: "accepted",
         childSessionKey: expect.any(String),
@@ -662,7 +673,7 @@ describe("recursive spawn production boundary", () => {
             aborted: true,
             runIds: [parentRunId],
           });
-          expect(findTaskByRunId(childRunId)?.status).toBe("cancelled");
+          expect(resolveSubagentSessionStatus(subagentRuns.get(childRunId))).toBe("killed");
         }
         if (parentState === "operator-revoked") {
           const queued = expectDefined(holdQueuedSwarmRun(childRunId), "queued collector");

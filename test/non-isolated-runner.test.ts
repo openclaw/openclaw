@@ -247,7 +247,7 @@ it("retires gateway admission before the next file", async () => {
   expect(getActiveGatewayRootWorkCount()).toBe(0);
   expect(isGatewayRestartDraining()).toBe(false);
   if (!prior?.continuation) throw new Error("expected prior gateway continuation");
-  await expect(prior.pending).rejects.toThrow("Gateway is draining");
+  await expect(prior.pending).rejects.toMatchObject({ name: "GatewayDrainingError" });
   await expect(prior.continuation.run(async () => true)).rejects.toThrow("no longer active");
   const admission = tryBeginGatewayRootWorkAdmission();
   expect(admission).not.toBeNull();
@@ -478,8 +478,8 @@ async function assertCompletion(
   const report: JsonTestResults = JSON.parse(await fs.readFile(expected.reportPath, "utf8"));
   expect(report.testResults.map((file) => file.name).toSorted()).toEqual(expected.files);
   expect(report).toMatchObject({
-    numTotalTests: 53,
-    numPassedTests: 52,
+    numTotalTests: 51,
+    numPassedTests: 50,
     numPendingTests: 1,
     numFailedTests: 0,
     numTodoTests: 0,

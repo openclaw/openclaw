@@ -1468,6 +1468,26 @@
     "target": "Zoom 会议插件"
   },
   {
+    "source": "Slack huddles plugin",
+    "target": "Slack 快速通话插件"
+  },
+  {
+    "source": "Slack huddles plugin reference",
+    "target": "Slack 快速通话插件参考"
+  },
+  {
+    "source": "slack-huddles",
+    "target": "slack-huddles"
+  },
+  {
+    "source": "Slack channel",
+    "target": "Slack 频道"
+  },
+  {
+    "source": "Transcripts CLI",
+    "target": "转录 CLI"
+  },
+  {
     "source": "Voice call plugin",
     "target": "语音通话插件"
   },
@@ -3800,8 +3820,8 @@
     "target": "OpenAI 覆盖范围与费用"
   },
   {
-    "source": "OpenAI image and video generation",
-    "target": "OpenAI 图像与视频生成"
+    "source": "OpenAI image generation",
+    "target": "OpenAI 图像生成"
   },
   {
     "source": "OpenAI voice and speech",

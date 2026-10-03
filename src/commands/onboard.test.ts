@@ -24,6 +24,7 @@ type ProviderAuthMethodNonInteractiveValidationContext = Parameters<
 >[0];
 
 const mocks = vi.hoisted(() => ({
+  loadedSetupRuntimes: new Set<string>(),
   runInteractiveSetup: vi.fn(async () => {}),
   runGuidedOnboarding: vi.fn(async () => {}),
   runNonInteractiveSetup: vi.fn(async () => {}),
@@ -87,17 +88,20 @@ const mocks = vi.hoisted(() => ({
   ),
 }));
 
-vi.mock("./onboard-interactive.js", () => ({
-  runInteractiveSetup: mocks.runInteractiveSetup,
-}));
+vi.mock("./onboard-interactive.js", () => {
+  mocks.loadedSetupRuntimes.add("classic");
+  return { runInteractiveSetup: mocks.runInteractiveSetup };
+});
 
-vi.mock("./onboard-guided.js", () => ({
-  runGuidedOnboarding: mocks.runGuidedOnboarding,
-}));
+vi.mock("./onboard-guided.js", () => {
+  mocks.loadedSetupRuntimes.add("guided");
+  return { runGuidedOnboarding: mocks.runGuidedOnboarding };
+});
 
-vi.mock("./onboard-non-interactive.js", () => ({
-  runNonInteractiveSetup: mocks.runNonInteractiveSetup,
-}));
+vi.mock("./onboard-non-interactive.js", () => {
+  mocks.loadedSetupRuntimes.add("non-interactive");
+  return { runNonInteractiveSetup: mocks.runNonInteractiveSetup };
+});
 
 vi.mock("./onboard-interactive-runner.js", () => ({
   hasInteractiveOnboardingTty: mocks.hasInteractiveOnboardingTty,
@@ -154,6 +158,8 @@ const localResetProviderCases = [
   { providerId: "lmstudio", methodId: "custom" },
 ] as const;
 
+const eagerlyLoadedSetupRuntimes = [...mocks.loadedSetupRuntimes];
+
 function mockLocalResetPreflight(params: {
   providerId: (typeof localResetProviderCases)[number]["providerId"];
   methodId: (typeof localResetProviderCases)[number]["methodId"];
@@ -196,6 +202,10 @@ describe("setupWizardCommand", () => {
     vi.clearAllMocks();
     mocks.hasInteractiveOnboardingTty.mockReturnValue(true);
     mocks.readConfigFileSnapshot.mockResolvedValue({ exists: false, valid: false, config: {} });
+  });
+
+  it("defers loading setup runtimes until a flow is selected", () => {
+    expect(eagerlyLoadedSetupRuntimes).toEqual([]);
   });
 
   it.each(["Robby!"])("accepts valid first-agent name %s", async (agentName) => {
@@ -497,6 +507,13 @@ describe("setupWizardCommand", () => {
 
   it.each([
     ["unsupported flow", { flow: "bogus" as never }, "Invalid --flow"],
+    ["out-of-range Gateway port", { gatewayPort: 70_000 }, "Invalid --gateway-port"],
+    ["unsupported Gateway auth", { gatewayAuth: "bogus" as never }, "Invalid --gateway-auth"],
+    [
+      "malformed Gateway token reference",
+      { gatewayTokenRefEnv: "not-an-env-name" },
+      "Invalid --gateway-token-ref-env",
+    ],
     ...([false, true] as const).map(
       (json) =>
         [

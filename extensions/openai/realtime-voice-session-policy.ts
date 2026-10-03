@@ -21,6 +21,8 @@ import {
   asFiniteNumber,
   asFiniteNumberInRange,
   asSafeIntegerInRange,
+  asOptionalObjectRecord,
+  normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveOpenAIChatGptSubscriptionAuth } from "./realtime-auth.js";
@@ -63,24 +65,13 @@ export type OpenAIRealtimeVoiceProviderConfig = {
   azureApiVersion?: string;
 };
 
-export type OpenAIRealtimeVoiceBridgeConfig = RealtimeVoiceBridgeCreateRequest & {
-  apiKey?: string;
-  callId?: string;
-  gaSessionPolicy?: RealtimeGaSessionPolicy;
-  model?: string;
-  voice?: OpenAIRealtimeVoice;
-  temperature?: number;
-  vadThreshold?: number;
-  silenceDurationMs?: number;
-  prefixPaddingMs?: number;
-  interruptResponseOnInputAudio?: boolean;
-  minBargeInAudioEndMs?: number;
-  reasoningEffort?: string;
-  azureEndpoint?: string;
-  azureDeployment?: string;
-  azureApiVersion?: string;
-  logger: Pick<import("openclaw/plugin-sdk/plugin-entry").PluginLogger, "warn">;
-};
+export type OpenAIRealtimeVoiceBridgeConfig = RealtimeVoiceBridgeCreateRequest &
+  Omit<OpenAIRealtimeVoiceProviderConfig, "voice"> & {
+    callId?: string;
+    gaSessionPolicy?: RealtimeGaSessionPolicy;
+    voice?: OpenAIRealtimeVoice;
+    logger: Pick<import("openclaw/plugin-sdk/plugin-entry").PluginLogger, "warn">;
+  };
 
 export const OPENAI_REALTIME_DEFAULT_MODEL = "gpt-realtime-2.1";
 // Picker suggestions surfaced through talk.catalog. Free-form model values are still accepted.
@@ -142,13 +133,8 @@ export const OPENAI_REALTIME_VOICES = [
 ] as const;
 
 export function normalizeOpenAIRealtimeVoice(value: unknown): OpenAIRealtimeVoice | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const normalized = value.trim().toLowerCase();
-  return OPENAI_REALTIME_VOICES.includes(normalized as OpenAIRealtimeVoice)
-    ? (normalized as OpenAIRealtimeVoice)
-    : undefined;
+  const normalized = normalizeOptionalLowercaseString(value);
+  return OPENAI_REALTIME_VOICES.find((voice) => voice === normalized);
 }
 
 export type RealtimeEvent = {
@@ -179,7 +165,6 @@ export type RealtimeEvent = {
   error?: unknown;
 };
 
-export type RealtimeTurnDetectionConfig = ReturnType<typeof buildOpenAIRealtimeTurnDetectionConfig>;
 type RealtimeGaSessionPolicy = ReturnType<typeof buildOpenAIRealtimeGaSessionPolicy>;
 
 export function normalizeProviderConfig(
@@ -193,7 +178,7 @@ export function normalizeProviderConfig(
     }),
     model: normalizeOptionalString(raw?.model),
     // Session creation selects the effective model; an earlier family fallback loses overrides.
-    voice: normalizeOptionalString(raw?.speakerVoice ?? raw?.voice)?.toLowerCase(),
+    voice: normalizeOptionalLowercaseString(raw?.speakerVoice ?? raw?.voice),
     temperature: asFiniteNumber(raw?.temperature),
     vadThreshold: asFiniteNumberInRange(raw?.vadThreshold, { min: 0, max: 1 }),
     silenceDurationMs: asSafeIntegerInRange(raw?.silenceDurationMs, { min: 0 }),
@@ -232,8 +217,7 @@ export function isDirectOpenAIRealtimeWebSocketUrl(value: string): boolean {
 }
 
 export function isOpenAIRealtimeStartupAuthFailure(error: unknown): boolean {
-  const record =
-    typeof error === "object" && error !== null ? (error as Record<string, unknown>) : undefined;
+  const record = asOptionalObjectRecord(error);
   const status = record?.status ?? record?.statusCode;
   const rawCode = record?.code ?? record?.errorCode;
   const code = typeof rawCode === "string" ? rawCode.toLowerCase() : "";
@@ -476,11 +460,7 @@ export async function resolveOpenAIRealtimePlatformAuth(
 }
 
 export async function requireOpenAIRealtimePlatformAuth(
-  params: {
-    configuredApiKey: string | undefined;
-    cfg: RealtimeVoiceBrowserSessionCreateRequest["cfg"] | undefined;
-    agentId?: string;
-  },
+  params: Parameters<typeof resolveOpenAIRealtimePlatformAuth>[0],
   runtime: OpenAIRealtimeHost,
 ): Promise<Extract<OpenAIRealtimeApiKeyResolution, { status: "available" }>> {
   const resolved = await resolveOpenAIRealtimePlatformAuth(params, runtime);
@@ -491,10 +471,7 @@ export async function requireOpenAIRealtimePlatformAuth(
 }
 
 export async function resolveOpenAIQuicksilverBridgeAuth(
-  params: {
-    configuredApiKey: string | undefined;
-    cfg: RealtimeVoiceBridgeCreateRequest["cfg"] | undefined;
-    agentId?: string;
+  params: Parameters<typeof resolveOpenAIRealtimePlatformAuth>[0] & {
     model: string;
   },
   runtime: OpenAIRealtimeHost,
@@ -532,11 +509,7 @@ export async function resolveOpenAIQuicksilverBridgeAuth(
 }
 
 export function hasOpenAIRealtimePlatformAuthInput(
-  params: {
-    configuredApiKey: string | undefined;
-    cfg: RealtimeVoiceBrowserSessionCreateRequest["cfg"] | undefined;
-    agentId?: string;
-  },
+  params: Parameters<typeof resolveOpenAIRealtimePlatformAuth>[0],
   {
     isProviderAuthProfileConfigured,
     resolveAgentDir,
@@ -573,6 +546,7 @@ export function hasOpenAIChatGptSubscriptionAuthInput(
 ): boolean {
   return isProviderAuthProfileConfigured({
     provider: "openai",
+    capability: "realtime-voice",
     cfg: params.cfg,
     agentDir:
       params.cfg && params.agentId ? resolveAgentDir(params.cfg, params.agentId) : undefined,
@@ -587,14 +561,6 @@ export function isOpenAIRealtimeMaxSessionDurationError(detail: string): boolean
     normalized.includes("session") &&
     normalized.includes(OPENAI_REALTIME_MAX_SESSION_DURATION_FRAGMENT)
   );
-}
-
-export function readRealtimeErrorEventId(error: unknown): string | undefined {
-  if (!error || typeof error !== "object") {
-    return undefined;
-  }
-  const eventId = (error as Record<string, unknown>).event_id;
-  return typeof eventId === "string" ? eventId : undefined;
 }
 
 export function parsePlaybackMarkSequence(markName: string): number | undefined {

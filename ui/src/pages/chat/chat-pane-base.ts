@@ -68,7 +68,7 @@ import { getTranscriptState } from "./components/chat-thread-interactions.ts";
 import { ChatTranscriptController } from "./components/chat-transcript-controller.ts";
 import type { SessionDiscussionPanelConfig } from "./components/session-discussion-panel.ts";
 import { hasDirectSessionRun } from "./run-lifecycle.ts";
-import { handleChatScrollTakeover } from "./scroll.ts";
+import { canAutoFollowChat, handleChatScrollTakeover } from "./scroll.ts";
 import type { ChatMessageCache } from "./session-message-cache.ts";
 import { resolveChatSnapshotKey } from "./session-snapshot-key.ts";
 import type { SessionSnapshotStore } from "./session-snapshot-store.ts";
@@ -148,6 +148,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
   protected context!: ApplicationContext;
   @property({ attribute: false }) paneId = "single";
+  @property({ attribute: false }) paneLabel?: string;
   @property({ attribute: false }) presentationId = "single";
   @property({ attribute: false }) chatMessagesBySession?: ChatMessageCache;
   @property({ attribute: false }) sessionSnapshotStore?: SessionSnapshotStore;
@@ -349,7 +350,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   protected readonly transcript = new ChatTranscriptController(this, () => this.paneId, {
     visuallyPresented: () => this.visuallyPresented,
     onViewportResize: () => this.chatState.handleTranscriptResize(),
-    canFollowEnd: () => this.state !== undefined && !this.state.chatFollowLocked,
+    canFollowEnd: () => this.state !== undefined && canAutoFollowChat(this.state),
     onReaderScroll: (towardEnd) => this.state && handleChatScrollTakeover(this.state, towardEnd),
   });
   protected readonly progressCard = new SessionProgressCardController(this, {
@@ -540,9 +541,8 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
     observeNativeGateway(this);
     void new SubscriptionsController(this)
       .effect(() => this.ownerDocument, installChatComposerPickerDismissal)
-      .watch(
+      .watchStore(
         () => this.context && chatInputOwnerForContext(this.context),
-        (owner, notify) => owner.subscribe(notify),
         () => this.activeChanged(this.active),
       )
       .watch(
@@ -563,14 +563,8 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
             notify();
           }),
       )
-      .watch(
-        () => this.context?.theme,
-        (theme, notify) => theme.subscribe(notify),
-      )
-      .watch(
-        () => this.context?.plugins,
-        (plugins, notify) => plugins.subscribe(notify),
-      )
+      .watchStore(() => this.context?.theme)
+      .watchStore(() => this.context?.plugins)
       .watch(
         () => this.resolveBoardProvider(),
         (provider, notify) => {

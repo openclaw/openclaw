@@ -1,4 +1,3 @@
-// Gateway status probe helper used by `gateway status` service diagnostics.
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { isGatewayProtocolResponseError } from "../../../packages/gateway-client/src/protocol-request.js";
 import {
@@ -8,6 +7,7 @@ import {
 } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import type { HelloOk } from "../../../packages/gateway-protocol/src/schema/frames.js";
 import type { OpenClawConfig } from "../../config/types.js";
+import { resolveGatewayProbeTarget } from "../../gateway/probe-target.js";
 import type { GatewayProbeAuthSummary, GatewayProbeServerSummary } from "../../gateway/probe.js";
 import { isGatewayTransportError } from "../../gateway/transport-error.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -114,6 +114,17 @@ export async function probeGatewayStatus(opts: {
         const { probeGateway } = await probeGatewayModuleLoader.load();
         return await probeGateway({
           url: opts.url,
+          configuredRemote:
+            !opts.urlOverride &&
+            opts.localPortOverride === undefined &&
+            opts.url !== process.env.OPENCLAW_GATEWAY_URL?.trim() &&
+            resolveGatewayProbeTarget(opts.config ?? {}).mode === "remote",
+          ...(opts.urlOverride ||
+          (opts.localPortOverride === undefined &&
+            (resolveGatewayProbeTarget(opts.config ?? {}).mode === "remote" ||
+              opts.url === process.env.OPENCLAW_GATEWAY_URL?.trim()))
+            ? { originScopedDeviceAuth: true }
+            : {}),
           ...(opts.config ? { config: opts.config } : {}),
           auth: {
             token: opts.token,

@@ -1,9 +1,6 @@
-/**
- * Finalizes post-turn state, abort resources, and terminal trajectory artifacts.
- * It may assume stream execution and transcript writes are settled.
- */
 import { readActiveTranscriptEntryAnchor } from "../../../config/sessions/session-accessor.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../../context-engine/host-compat.js";
+import { createAbortError } from "../../../infra/abort-signal.js";
 import { freezeDiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { projectNestedToolActivityForHooks } from "../../../sessions/nested-tool-activity.js";
@@ -59,7 +56,6 @@ type FinalizeEmbeddedAttemptParams = {
   deferredLifecycleOwner?: EmbeddedAttemptDeferredLifecycleOwner;
 };
 
-/** Classifies the completed attempt and records its terminal trajectory artifacts. */
 export function finalizeEmbeddedAttempt(
   params: FinalizeEmbeddedAttemptParams,
 ): EmbeddedRunAttemptResult {
@@ -121,7 +117,7 @@ export function finalizeEmbeddedAttempt(
     promptError,
   };
 
-  trajectoryRecorder.recordEvent("model.completed", {
+  const modelFields = {
     ...terminalFields,
     promptErrorSource: terminalState.promptErrorSource,
     terminalError: terminal.terminalError,
@@ -131,21 +127,17 @@ export function finalizeEmbeddedAttempt(
     assistantTexts: result.assistantTexts,
     stopReason,
     finalPromptText: result.finalPromptText,
+  };
+  trajectoryRecorder.recordEvent("model.completed", {
+    ...modelFields,
     messagesSnapshot: result.messagesSnapshot,
   });
   trajectoryRecorder.recordEvent(
     "trace.artifacts",
     buildTrajectoryArtifacts({
       status: terminal.status,
-      ...terminalFields,
-      promptErrorSource: terminalState.promptErrorSource,
-      terminalError: terminal.terminalError,
-      usage: result.attemptUsage,
-      promptCache: result.promptCache,
+      ...modelFields,
       compactionCount: result.compactionCount ?? 0,
-      assistantTexts: result.assistantTexts,
-      stopReason,
-      finalPromptText: result.finalPromptText,
       itemLifecycle: result.itemLifecycle,
       toolMetas: result.toolMetas,
       didSendViaMessagingTool: result.didSendViaMessagingTool,
@@ -171,7 +163,6 @@ export function finalizeEmbeddedAttempt(
   return result;
 }
 
-/** Runs post-stream context-engine, transcript, cache, and lifecycle work. */
 export async function completeEmbeddedAttemptAfterTurn(
   input: EmbeddedAttemptExecutionPhaseInput,
   settled: Awaited<ReturnType<typeof settleEmbeddedAttemptStream>>,
@@ -380,10 +371,6 @@ export async function completeEmbeddedAttemptAfterTurn(
   }
 }
 
-/**
- * Releases attempt resources when an embedded-agent run aborts.
- */
-
 type AbortLog = {
   warn(message: string): void;
 };
@@ -395,9 +382,7 @@ function createAttemptAbortError(signal: AbortSignal): Error {
   if (signal.reason instanceof Error) {
     return signal.reason;
   }
-  const error = new Error("request aborted", { cause: signal.reason });
-  error.name = "AbortError";
-  return error;
+  return createAbortError("request aborted", { cause: signal.reason });
 }
 
 function createTimeoutAbortReason(): Error {

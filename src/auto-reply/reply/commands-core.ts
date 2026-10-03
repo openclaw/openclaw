@@ -1,4 +1,3 @@
-// Dispatches chat commands to registered handlers and formats their results.
 import { resolveAgentDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { shouldHandleTextCommands } from "../commands-registry.js";

@@ -50,7 +50,7 @@ export function createAgentsApiSession(options: {
   let admittedMessageCount = submitted ? 1 : 0;
   let baselineTurnId: string | undefined;
   let baselineCaptured = submitted;
-  const observedInputItems = new Set<string>();
+  let observedInputItems = new Set<string>();
   const coordinatorTurnIds = new Set<string>();
   const excludedTurnIds = new Set<string>();
   const itemTurnIds = new Map<string, string>();
@@ -117,11 +117,6 @@ export function createAgentsApiSession(options: {
   };
   signal.addEventListener("abort", onAbort, { once: true });
 
-  const assertSessionUsable = (session: { status: string; error: string | null }) => {
-    if (session.status === "failed") {
-      throw new Error(session.error ?? "Agents API session failed");
-    }
-  };
   const readAdmittedTurns = async (readClient: AgentsApiClient, readSignal: AbortSignal) => {
     const turns = await readClient.turns(sessionId, readSignal, baselineTurnId);
     readSignal.throwIfAborted();
@@ -164,9 +159,6 @@ export function createAgentsApiSession(options: {
     for (const turn of turns) {
       const items = itemsByTurn.get(turn.id) ?? [];
       for (const item of items) {
-        if (item.turn_id && item.turn_id !== turn.id) {
-          throw new Error("Agents API saved item belongs to a different turn");
-        }
         rememberItemTurn(item.id, turn.id);
         if (item.type === "message" && item.role === "user") {
           inputItems.add(item.id);
@@ -174,10 +166,7 @@ export function createAgentsApiSession(options: {
       }
       entries.push({ turn, items });
     }
-    observedInputItems.clear();
-    for (const id of inputItems) {
-      observedInputItems.add(id);
-    }
+    observedInputItems = inputItems;
     return { turns, entries, itemsByTurn };
   };
   const projectSavedState = async (
@@ -441,7 +430,9 @@ export function createAgentsApiSession(options: {
         assertCurrent();
         const session = await client.session(sessionId, signal);
         assertCurrent();
-        assertSessionUsable(session);
+        if (session.status === "failed") {
+          throw new Error(session.error ?? "Agents API session failed");
+        }
         if (session.status === "requires_action") {
           await relayFunctions();
           if (settled) {
@@ -646,9 +637,6 @@ export function createAgentsApiSession(options: {
           }
           if (event.type === "agent.session.requires_action") {
             await relayFunctions();
-            if (settled) {
-              break;
-            }
             continue;
           }
           if (["agent.session.failed", "agent.session.environment.failed"].includes(event.type)) {

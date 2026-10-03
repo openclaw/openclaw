@@ -43,7 +43,7 @@ const defaultWarnState: WarnState = { warned: false };
 export const DEFAULT_MODEL_ALIASES: Readonly<Record<string, string>> = {
   // Anthropic (shared model runtime catalog uses "latest" ids without date suffix)
   opus: "anthropic/claude-opus-5-5",
-  sonnet: "anthropic/claude-sonnet-5",
+  sonnet: "anthropic/claude-sonnet-5-5",
 
   // OpenAI
   gpt: "openai/gpt-5.4",
@@ -409,9 +409,6 @@ export function applyModelDefaults(
 
   const existingAgent = nextAgents?.defaults;
   if (!existingAgent) {
-    if (!mutated) {
-      return cfg;
-    }
     return nextAgents === nextCfg.agents ? nextCfg : { ...nextCfg, agents: nextAgents };
   }
 

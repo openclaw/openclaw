@@ -1,4 +1,3 @@
-// Configured hook helpers combine config and install records into active hooks.
 import type { HookInstallRecord } from "../config/types.hooks.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readConfigMachineState } from "../state/config-machine-state.js";

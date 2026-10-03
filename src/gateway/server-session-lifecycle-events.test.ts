@@ -54,7 +54,9 @@ describe("createLifecycleEventBroadcastHandler", () => {
       reason,
       ...(["swarm", "swarm-note", "run-capacity"].includes(reason)
         ? { scope: "runtime" as const }
-        : {}),
+        : reason === "participants"
+          ? { scope: "session-entry" as const }
+          : {}),
     });
     expect(broadcastToConnIds.mock.calls[0]?.[1]).not.toHaveProperty("scope");
     expect(broadcastToConnIds.mock.calls[0]?.[1]).toMatchObject({
@@ -95,6 +97,11 @@ describe("createLifecycleEventBroadcastHandler", () => {
         return { isCurrent: () => generation === observed, dispose() {} };
       }) satisfies SessionRowProjection["observeGeneration"],
       snapshot,
+      describe: () => {
+        const row = snapshot().row;
+        return row ? { materialized: { row } } : undefined;
+      },
+      present: (record: Parameters<SessionRowProjection["present"]>[0]) => record.materialized.row,
     } as unknown as SessionRowProjection;
     const broadcastToConnIds = vi.fn();
     const handler = createLifecycleEventBroadcastHandler({
@@ -195,7 +202,7 @@ describe("createLifecycleEventBroadcastHandler", () => {
         text: "Research",
       }),
       new Set(["conn-1"]),
-      { dropIfSlow: true },
+      { dropIfSlow: true, prepareSessionProjection: expect.any(Function) },
     );
   });
 
@@ -260,7 +267,7 @@ describe("createLifecycleEventBroadcastHandler", () => {
         activeRunIds: ["run-before-finalize"],
       }),
       new Set(["conn-1"]),
-      { dropIfSlow: true },
+      { dropIfSlow: true, prepareSessionProjection: expect.any(Function) },
     );
     const payload = broadcastToConnIds.mock.calls[0]?.[1];
     if (agentId) {

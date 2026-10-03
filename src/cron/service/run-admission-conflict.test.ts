@@ -1,4 +1,5 @@
 import { expect, it, vi } from "vitest";
+import { observeCronStoreCommits } from "../../../test/helpers/cron/runtime-mutation.js";
 import {
   createCronRegressionState,
   createDueIsolatedJob,
@@ -8,38 +9,43 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
-import { findTaskByRunId } from "../../tasks/task-executor.js";
-import { readCronRunHistoryPageForTests } from "../run-history.test-support.js";
+import {
+  findCronRunForTests,
+  readCronRunHistoryPageForTests,
+} from "../run-history.test-support.js";
 import { loadCronStore, saveCronJobsStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
 import {
-  claimCronRunReceiptInDatabase,
-  finishCronRunReceipt,
+  finishCronRunReceiptAsync,
   isCronRunReceiptOwnerStale,
   prepareCronRunReceiptClaim,
   releaseLocalCronRunReceiptOwnership,
 } from "../store/run-receipt-store.js";
+import { claimCronRunReceiptInDatabaseForTest } from "../store/run-receipt-store.test-support.js";
 import { start, stop } from "./ops-lifecycle.js";
 import { list } from "./ops-read.js";
+import { run } from "./ops-run.js";
 import {
   cleanupQueuedCronRunReservations,
   persistQueuedCronRunReservations,
   reserveQueuedCronRun,
 } from "./run-admission.js";
-import { tryCreateCronTaskRunHandle } from "./task-runs.js";
+import { createCronRunHandle } from "./run-history.js";
+import * as runtimeMutation from "./runtime-mutation.js";
 import { onTimer } from "./timer.test-support.js";
 
 const fixtures = setupCronRegressionFixtures({ prefix: "cron-admission-conflict-" });
 
 function claimReceipt(storePath: string, job: ReturnType<typeof createDueIsolatedJob>, at: number) {
   const prepared = prepareCronRunReceiptClaim({
+    observed: undefined,
     storePath,
     job,
     agentId: job.agentId ?? "main",
     startedAtMs: at,
   });
   return runOpenClawStateWriteTransaction(({ db }) =>
-    claimCronRunReceiptInDatabase({
+    claimCronRunReceiptInDatabaseForTest({
       database: db,
       prepared,
       resolveAgentId: (current) => current.agentId ?? "main",
@@ -102,7 +108,7 @@ it("recovers a dead running owner on timer refresh without an admission conflict
     runIsolatedAgentJob,
     onEvent,
   });
-  const taskRun = tryCreateCronTaskRunHandle({
+  const taskRun = createCronRunHandle({
     state: sibling,
     job,
     startedAt: now,
@@ -120,7 +126,7 @@ it("recovers a dead running owner on timer refresh without an admission conflict
   expect(reclaimed?.state.runningAtMs).toBeUndefined();
   expect(reclaimed?.state.nextRunAtMs).toBeUndefined();
   expect(reclaimed?.state.startupCatchupAtMs).toBeUndefined();
-  expect(findTaskByRunId(taskRun.runId)).toMatchObject({
+  expect(findCronRunForTests(taskRun.runId)).toMatchObject({
     status: "failed",
     error: "cron: job interrupted by gateway restart",
   });
@@ -156,7 +162,7 @@ it("recovers a dead running owner on timer refresh without an admission conflict
   stop(sibling);
 });
 
-it("preserves foreign state while retrying an unrelated reservation", async () => {
+it("preserves a foreign claim committed before worker admission while reserving an unrelated job", async () => {
   const store = fixtures.makeStorePath();
   const now = Date.parse("2026-08-13T16:00:00.000Z");
   const foreignJob = createDueIsolatedJob({
@@ -182,27 +188,36 @@ it("preserves foreign state while retrying an unrelated reservation", async () =
   foreignRunning.state.runningAtMs = startedAtMs;
   foreignRunning.state.lastError = "foreign owner committed";
   const prepared = prepareCronRunReceiptClaim({
+    observed: undefined,
     storePath: store.storePath,
     job: foreignRunning,
     agentId: foreignRunning.agentId ?? "main",
     startedAtMs,
   });
-  let receipt: ReturnType<typeof claimCronRunReceiptInDatabase> | undefined;
-  await saveCronJobsStore(
-    store.storePath,
-    { version: 1, jobs: [foreignRunning, pendingJob] },
-    {
-      transactionHooks: {
-        beforeWrite: (database) => {
-          receipt = claimCronRunReceiptInDatabase({
-            database,
-            prepared,
-            resolveAgentId: (job) => job.agentId ?? "main",
-          });
-        },
-      },
-    },
-  );
+  let receipt: ReturnType<typeof claimCronRunReceiptInDatabaseForTest> | undefined;
+  const execute = runtimeMutation.runCronRuntimeMutation;
+  const reader = vi
+    .spyOn(runtimeMutation, "runCronRuntimeMutation")
+    .mockImplementation(async (params) => {
+      if (params.type === "cron.reserveRuns" && !receipt) {
+        await saveCronJobsStore(
+          store.storePath,
+          { version: 1, jobs: [foreignRunning, pendingJob] },
+          {
+            transactionHooks: {
+              beforeWrite: (database) => {
+                receipt = claimCronRunReceiptInDatabaseForTest({
+                  database,
+                  prepared,
+                  resolveAgentId: (job) => job.agentId ?? "main",
+                });
+              },
+            },
+          },
+        );
+      }
+      return execute(params);
+    });
 
   let reserved: Awaited<ReturnType<typeof persistQueuedCronRunReservations>> = [];
   try {
@@ -223,15 +238,16 @@ it("preserves foreign state while retrying an unrelated reservation", async () =
     ).toBeUndefined();
     expect(persisted.jobs.find((job) => job.id === pendingJob.id)?.state.queuedAtMs).toBe(now + 2);
   } finally {
+    reader.mockRestore();
     for (const reservation of reserved) {
-      finishCronRunReceipt({
+      await finishCronRunReceiptAsync({
         handle: reservation.runReceipt,
         status: "skipped",
         finishedAtMs: now + 3,
       });
     }
     if (receipt) {
-      finishCronRunReceipt({
+      await finishCronRunReceiptAsync({
         handle: receipt,
         status: "interrupted",
         finishedAtMs: now + 3,
@@ -304,6 +320,7 @@ it("terminalizes an owned reservation after another gateway deletes the job", as
   }
   const reservationIdentity = reserveQueuedCronRun(state, job.id, now, {
     runReceipt: reservation.runReceipt,
+    runReceiptContext: reservation.runReceiptContext,
   });
   await saveCronStore(store.storePath, { version: 1, jobs: [] });
 
@@ -337,14 +354,15 @@ it("retires a reservation when its row disappears during the post-commit reload"
   });
   await list(state);
   const database = openOpenClawStateDatabase().db;
-  database.exec(`
-    CREATE TEMP TRIGGER delete_reserved_job_before_reload
-    AFTER UPDATE OF state_json ON cron_jobs
-    WHEN NEW.job_id = '${job.id}' AND json_extract(NEW.state_json, '$.queuedAtMs') IS NOT NULL
-    BEGIN
-      DELETE FROM cron_jobs WHERE store_key = NEW.store_key AND job_id = NEW.job_id;
-    END;
-  `);
+  let deleted = false;
+  const stopObserving = observeCronStoreCommits(store.storePath, () => {
+    const result = database
+      .prepare(
+        "DELETE FROM cron_jobs WHERE store_key = ? AND job_id = ? AND json_extract(state_json, '$.queuedAtMs') IS NOT NULL",
+      )
+      .run(cronStoreKey(store.storePath), job.id);
+    deleted ||= result.changes > 0;
+  });
 
   try {
     const reservations = await persistQueuedCronRunReservations({
@@ -354,6 +372,7 @@ it("retires a reservation when its row disappears during the post-commit reload"
     });
 
     expect(reservations).toEqual([]);
+    expect(deleted).toBe(true);
     const receipt = database
       .prepare(
         "SELECT receipt_id AS receiptId, status FROM cron_run_receipts WHERE store_key = ? AND job_id = ?",
@@ -374,8 +393,10 @@ it("retires a reservation when its row disappears during the post-commit reload"
         startedAtMs: now,
       }),
     ).toBe(true);
+    await expect(run(state, job.id, "force")).rejects.toThrow("unknown cron job id");
+    expect(state.deps.runIsolatedAgentJob).not.toHaveBeenCalled();
   } finally {
-    database.exec("DROP TRIGGER IF EXISTS delete_reserved_job_before_reload");
+    stopObserving();
     stop(state);
   }
 });

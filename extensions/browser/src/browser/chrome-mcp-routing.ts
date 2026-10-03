@@ -21,10 +21,7 @@ import {
   type NormalizedChromeMcpProfileOptions,
 } from "./chrome-mcp-contracts.js";
 import { redactChromeMcpProfileLabelForDiagnostic } from "./chrome-mcp-diagnostics.js";
-import {
-  chromeMcpProfileOptionsFromParams,
-  normalizeChromeMcpOptions,
-} from "./chrome-mcp-options.js";
+import { normalizeChromeMcpOptions } from "./chrome-mcp-options.js";
 import {
   extractChromeMcpToolError,
   extractStructuredPages,
@@ -139,11 +136,7 @@ function updateChromeMcpTargetMappings(
 function validateChromeMcpSnapshotRefs(root: ChromeMcpSnapshotNode) {
   const documents = new Map<string, { document: ChromeMcpSnapshotNode; documentUid?: string }>();
   const pending = [{ node: root, document: root, documentUid: normalizeOptionalString(root.id) }];
-  while (pending.length > 0) {
-    const current = pending.pop();
-    if (!current) {
-      break;
-    }
+  for (let current = pending.pop(); current; current = pending.pop()) {
     const role = current.node.role?.trim().toLowerCase();
     const document = role === "rootwebarea" ? current.node : current.document;
     const documentUid =
@@ -185,11 +178,13 @@ export function registerChromeMcpSnapshot(
   const wrappedByUid = new Map<string, string>();
   const refs = new Map<string, { uid: string; documentUid?: string }>();
 
-  const wrapNode = (node: ChromeMcpSnapshotNode): ChromeMcpSnapshotNode => {
+  // Copy and rewrite iteratively; the renderer owns depth truncation.
+  const wrappedRoot = { ...root };
+  const stack = [wrappedRoot];
+  for (let node = stack.pop(); node; node = stack.pop()) {
     const rawUid = normalizeOptionalString(node.id);
-    let id: string | undefined;
     if (rawUid) {
-      id = wrappedByUid.get(rawUid);
+      let id = wrappedByUid.get(rawUid);
       if (!id) {
         id = `${CHROME_MCP_SNAPSHOT_REF_PREFIX}${routing.sessionNonce}:${routing.nextSnapshotRefId}`;
         routing.nextSnapshotRefId += 1;
@@ -199,46 +194,22 @@ export function registerChromeMcpSnapshot(
           documentUid: documents.get(rawUid)?.documentUid,
         });
       }
+      node.id = id;
     }
-    return {
-      ...node,
-      ...(id ? { id } : {}),
-    };
-  };
-
-  // Keep ref rewriting iterative; the renderer owns depth truncation.
-  let wrappedRoot: ChromeMcpSnapshotNode | undefined;
-  const stack: Array<{
-    source: ChromeMcpSnapshotNode;
-    parent?: ChromeMcpSnapshotNode[];
-    index?: number;
-  }> = [{ source: root }];
-  while (stack.length > 0) {
-    const current = stack.pop();
-    if (!current) {
-      break;
-    }
-    const wrapped = wrapNode(current.source);
-    if (current.parent && current.index !== undefined) {
-      current.parent[current.index] = wrapped;
-    } else {
-      wrappedRoot = wrapped;
-    }
-    const sourceChildren = current.source.children;
+    const sourceChildren = node.children;
     if (!sourceChildren) {
       continue;
     }
     const wrappedChildren: ChromeMcpSnapshotNode[] = [];
-    wrapped.children = wrappedChildren;
+    node.children = wrappedChildren;
     for (let index = sourceChildren.length - 1; index >= 0; index -= 1) {
       const child = sourceChildren[index];
       if (child) {
-        stack.push({ source: child, parent: wrappedChildren, index });
+        const wrapped = { ...child };
+        wrappedChildren[index] = wrapped;
+        stack.push(wrapped);
       }
     }
-  }
-  if (!wrappedRoot) {
-    throw new Error("Chrome MCP snapshot did not contain a root node");
   }
   routing.snapshotsByTarget.set(targetId, { documentUid, refs });
   return { root: wrappedRoot, documentUid };
@@ -428,10 +399,9 @@ export async function withChromeMcpTarget<T>(
   params: ChromeMcpTargetOperation,
   operation: (target: ChromeMcpPinnedTarget) => Promise<T>,
 ): Promise<T> {
-  const profileOptions = chromeMcpProfileOptionsFromParams(params);
   return await withChromeMcpLease(
     params.profileName,
-    profileOptions,
+    params.profile ?? params.userDataDir,
     params,
     async (lease, normalizedProfileOptions) => {
       const routing = getChromeMcpRoutingState(lease.session);

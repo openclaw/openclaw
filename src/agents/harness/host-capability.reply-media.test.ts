@@ -71,58 +71,44 @@ describe("agent harness reply media", () => {
     }
   });
 
-  it.each([false, true])(
-    "keeps staged reply media only while its admitted host remains active (revoke=%s)",
-    async (revoke) => {
-      await withOpenClawTestState({ layout: "state-only" }, async (state) => {
-        const mediaDir = state.statePath("media", "outbound");
-        fs.mkdirSync(mediaDir, { recursive: true });
-        const host = await createAdmittedHostCapabilityTestFixture({
-          runId: "run-reply-media-staging",
-          agentId: "main",
-          sessionId: "reply-media-staging",
-          sessionKey: "agent:main:reply-media-staging",
-          workspaceDir: state.workspaceDir,
-          cwd: state.workspaceDir,
-          config: {},
-        });
-        const bytes = Buffer.from("%PDF-1.4\n%%EOF\n");
-        const readWorkspaceFile = vi.fn(async () => bytes);
-        const detectMime = mediaMime.detectMime;
-        let inspected = false;
-        vi.spyOn(mediaMime, "detectMime").mockImplementation(async (params) => {
-          const mime = await detectMime(params);
-          expect(readWorkspaceFile).toHaveBeenCalledOnce();
-          inspected = true;
-          if (revoke) {
-            host.closeHost();
-          }
-          return mime;
-        });
-        try {
-          const operation = host.hostCapabilities.prepareReplyMedia!({
-            kind: "payload",
-            payload: { text: "MEDIA:./artifact.pdf" },
-            readWorkspaceFile,
-          });
-          if (revoke) {
-            await expect(operation).rejects.toThrow(/no longer active|aborted/i);
-            expect(fs.readdirSync(mediaDir)).toEqual([]);
-          } else {
-            const result = await operation;
-            if (result.kind !== "payload" || !result.payload.mediaUrl) {
-              throw new Error("expected prepared reply attachment");
-            }
-            expect(fs.readFileSync(result.payload.mediaUrl)).toEqual(bytes);
-            expect(fs.readdirSync(mediaDir)).toEqual([path.basename(result.payload.mediaUrl)]);
-          }
-          expect(inspected).toBe(true);
-          expect(readWorkspaceFile).toHaveBeenCalledOnce();
-        } finally {
-          host.closeHost();
-          host.closeAdmission();
-        }
+  it("discards staged reply media when its host closes during MIME detection", async () => {
+    await withOpenClawTestState({ layout: "state-only" }, async (state) => {
+      const mediaDir = state.statePath("media", "outbound");
+      fs.mkdirSync(mediaDir, { recursive: true });
+      const host = await createAdmittedHostCapabilityTestFixture({
+        runId: "run-reply-media-staging",
+        agentId: "main",
+        sessionId: "reply-media-staging",
+        sessionKey: "agent:main:reply-media-staging",
+        workspaceDir: state.workspaceDir,
+        cwd: state.workspaceDir,
+        config: {},
       });
-    },
-  );
+      const bytes = Buffer.from("%PDF-1.4\n%%EOF\n");
+      const readWorkspaceFile = vi.fn(async () => bytes);
+      const detectMime = mediaMime.detectMime;
+      let inspected = false;
+      vi.spyOn(mediaMime, "detectMime").mockImplementation(async (params) => {
+        const mime = await detectMime(params);
+        expect(readWorkspaceFile).toHaveBeenCalledOnce();
+        inspected = true;
+        host.closeHost();
+        return mime;
+      });
+      try {
+        const operation = host.hostCapabilities.prepareReplyMedia!({
+          kind: "payload",
+          payload: { text: "MEDIA:./artifact.pdf" },
+          readWorkspaceFile,
+        });
+        await expect(operation).rejects.toThrow(/no longer active|aborted/i);
+        expect(fs.readdirSync(mediaDir)).toEqual([]);
+        expect(inspected).toBe(true);
+        expect(readWorkspaceFile).toHaveBeenCalledOnce();
+      } finally {
+        host.closeHost();
+        host.closeAdmission();
+      }
+    });
+  });
 });

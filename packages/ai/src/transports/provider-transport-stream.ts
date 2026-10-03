@@ -1,8 +1,3 @@
-/**
- * Transport-aware stream factory selection.
- *
- * Routes models that need OpenClaw-managed proxy/TLS/local-service semantics onto built-in transport implementations.
- */
 import type { Api, Model, StreamFn } from "@openclaw/llm-core";
 import { getAiTransportHost } from "../host.js";
 import { createAnthropicMessagesTransportStreamFn } from "./anthropic-transport-stream.js";
@@ -124,9 +119,6 @@ export function createOpenClawTransportStreamFnForModel(
   // transport semantics regardless of the default embedded-runner strategy.
   // Native OpenAI HTTP still depends on this path for strict tool shaping,
   // attribution, cache-boundary stripping, and runtime credential injection.
-  if (!SUPPORTED_TRANSPORT_APIS.has(model.api)) {
-    return undefined;
-  }
   return createSupportedTransportStreamFn(model, ctx);
 }
 
@@ -136,9 +128,6 @@ export function createBoundaryAwareStreamFnForModel(
 ): StreamFn | undefined {
   // Default embedded-runner fallback. Keep OpenAI-family APIs here while native
   // HTTP streams preserve the same OpenClaw request contract.
-  if (!SUPPORTED_TRANSPORT_APIS.has(model.api)) {
-    return undefined;
-  }
   return createSupportedTransportStreamFn(model, ctx);
 }
 

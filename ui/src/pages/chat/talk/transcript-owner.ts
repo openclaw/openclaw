@@ -1,4 +1,5 @@
 import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "@openclaw/gateway-client/browser";
+import { sleepWithAbort } from "@openclaw/retry";
 import type { BoundedSerialQueue } from "../../../../../src/shared/bounded-serial-queue.js";
 import { createDeferredCore } from "../../../../../src/shared/deferred.js";
 import {
@@ -327,26 +328,6 @@ function transcriptPersistenceAbortError(): Error {
   return error;
 }
 
-async function waitForTranscriptRetry(delayMs: number, signal: AbortSignal): Promise<void> {
-  if (signal.aborted) {
-    throw transcriptPersistenceAbortError();
-  }
-  if (delayMs <= 0) {
-    return;
-  }
-  await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => {
-      signal.removeEventListener("abort", onAbort);
-      resolve();
-    }, delayMs);
-    const onAbort = () => {
-      clearTimeout(timer);
-      reject(transcriptPersistenceAbortError());
-    };
-    signal.addEventListener("abort", onAbort, { once: true });
-  });
-}
-
 export async function retryVoiceTranscriptPersistence(
   signal: AbortSignal,
   operation: () => Promise<unknown>,
@@ -356,12 +337,13 @@ export async function retryVoiceTranscriptPersistence(
   // Transcript writes and logical close share retry timing, but retain their
   // separate owner deadlines so accepted writes drain before close is attempted.
   for (const delayMs of [0, 500, 2_000]) {
-    if (delayMs > 0) {
-      await waitForTranscriptRetry(delayMs, signal);
-    } else if (signal.aborted) {
+    if (signal.aborted) {
       throw transcriptPersistenceAbortError();
     }
     try {
+      if (delayMs > 0) {
+        await sleepWithAbort(delayMs, signal);
+      }
       await operation();
       return;
     } catch (error) {

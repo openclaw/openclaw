@@ -237,6 +237,31 @@ describe("createMantleAnthropicStreamFn", () => {
   });
 
   it.each([
+    { reasoning: "max" as const, thinkingBudgets: undefined, expectedBudget: 16384 },
+    { reasoning: "max" as const, thinkingBudgets: { max: 4096 }, expectedBudget: 4096 },
+    { reasoning: "xhigh" as const, thinkingBudgets: { high: 4096 }, expectedBudget: 16384 },
+    {
+      reasoning: "xhigh" as const,
+      thinkingBudgets: { high: 4096, xhigh: 6144 },
+      expectedBudget: 6144,
+    },
+    { reasoning: "high" as const, thinkingBudgets: { high: 4096 }, expectedBudget: 4096 },
+  ])(
+    "preserves Mantle's $reasoning legacy budget $expectedBudget",
+    ({ reasoning, thinkingBudgets, expectedBudget }) => {
+      const options = captureStreamOptions(
+        createReasoningModel("claude-haiku-4-5", "Claude Haiku 4.5"),
+        { reasoning, thinkingBudgets, maxTokens: 2048 },
+      );
+      expect(options).toMatchObject({
+        maxTokens: 2048 + expectedBudget,
+        thinkingEnabled: true,
+        thinkingBudgetTokens: expectedBudget,
+      });
+    },
+  );
+
+  it.each([
     { reasoning: undefined, effort: "high" },
     { reasoning: "off" as const, effort: "low" },
     { reasoning: "max" as const, effort: "max" },

@@ -6,11 +6,9 @@ import ai.openclaw.app.GatewayConnectionProblem
 import ai.openclaw.app.GatewayNodeCapabilityApproval
 import ai.openclaw.app.gateway.normalizeGatewayApprovalRequestId
 import ai.openclaw.app.i18n.nativeString
-import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.os.Build
-import android.widget.Toast
 
 /** App version label shared by diagnostics and gateway-facing Android metadata. */
 internal fun openClawAndroidVersionLabel(): String {
@@ -110,7 +108,7 @@ internal fun gatewayStatusLooksLikePairing(statusText: String): Boolean {
 /** Maps structured gateway auth failures to the compact labels used by status surfaces. */
 internal fun gatewayAuthRecoveryLabel(problem: GatewayConnectionProblem?): String? =
   when (problem?.code) {
-    "AUTH_BOOTSTRAP_TOKEN_INVALID" -> nativeString("Setup code expired")
+    "AUTH_BOOTSTRAP_TOKEN_INVALID" -> nativeString("Setup code no longer valid")
     "AUTH_TOKEN_MISSING" -> nativeString("Gateway token needed")
     "AUTH_TOKEN_NOT_CONFIGURED" -> nativeString("Gateway token not configured")
     "AUTH_PASSWORD_MISSING" -> nativeString("Gateway password needed")
@@ -194,6 +192,5 @@ internal fun copyGatewayDiagnosticsReport(
 ) {
   val clipboard = context.getSystemService(ClipboardManager::class.java) ?: return
   val report = buildGatewayDiagnosticsReport(screen = screen, gatewayAddress = gatewayAddress, statusText = statusText)
-  clipboard.setPrimaryClip(ClipData.newPlainText("OpenClaw gateway diagnostics", report))
-  Toast.makeText(context, nativeString("Copied gateway diagnostics"), Toast.LENGTH_SHORT).show()
+  clipboard.copyTextWithConfirmation(context, "OpenClaw gateway diagnostics", report, nativeString("Copied gateway diagnostics"))
 }

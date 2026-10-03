@@ -1,7 +1,9 @@
-import type {
-  SessionSuggestionEvent,
-  SessionTypingEvent,
-  TaskSuggestionEvent,
+import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  validateSessionReactionEvent,
+  type SessionSuggestionEvent,
+  type SessionTypingEvent,
+  type TaskSuggestionEvent,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { chatInputOwnerForContext } from "../../app/chat-input-owner.ts";
 import { availableLinkReaders } from "../../app/link-reader-routing.ts";
@@ -63,8 +65,8 @@ import {
 } from "./chat-state-refresh.ts";
 import { resetChatViewState } from "./chat-view-state.ts";
 import { publishChatWorkContext } from "./chat-work-context.ts";
-import { dismissConfirmedActionPopovers } from "./components/chat-message.ts";
-import { resetTaskDetail } from "./components/chat-task-detail-state.ts";
+import { resolveChatAttachmentLimits } from "./components/chat-attachment-admission.ts";
+import { dismissConfirmedActionPopovers } from "./components/chat-message-confirmation.ts";
 import { CHAT_COMPOSER_DRAFT_STORAGE_ERROR } from "./composer-persistence.ts";
 import { exportChatMarkdown } from "./export.ts";
 import { admitChatSubmission } from "./history-merge.ts";
@@ -159,7 +161,16 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
 
   /** Receives one complete browser annotation without mixing generated context into the user's draft. */
   protected receiveBrowserAnnotation(event: Event): void {
-    if (!admitBrowserAnnotation(this.state, this.active && this.presented, event)) {
+    if (
+      !admitBrowserAnnotation(
+        this.state,
+        this.active && this.presented,
+        event,
+        this.chatState.attachmentReads.pendingBytes(
+          resolveChatAttachmentLimits(this.state?.hello?.policy),
+        ),
+      )
+    ) {
       return;
     }
     // A null mount binds only when its first annotation ownership begins.
@@ -271,7 +282,6 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
     );
     pageState.chatMetadataIsPresented = () =>
       this.presented && document.visibilityState !== "hidden";
-    pageState.chatSecondaryReadsReady = (explicit) => this.secondarySessionReadsReady(explicit);
     const refreshPresentedReads = () => {
       this.requestUpdate();
       if (pageState.chatMetadataIsPresented?.()) {
@@ -420,10 +430,20 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
     this.subscribeSessionRepositoryContext();
     chatState.addCleanup(
       this.context.gateway.subscribeEvents((event) => {
+        const state = this.state;
+        if (
+          state &&
+          event.event === "sessions.changed" &&
+          asNonArrayRecord(event.payload).reason === "sharing"
+        ) {
+          // Revoked readers receive only a redacted catalog invalidation. Retire
+          // preview admission before the roster refresh can publish access loss.
+          state.mediaPolicyEpoch = (state.mediaPolicyEpoch ?? 0) + 1;
+          state.requestUpdate?.();
+        }
         if (event.event === "sessions.changed" || event.event === "session.message") {
           return;
         }
-        const state = this.state;
         if (event.event === "presence") {
           const hadMultipleIdentities = this.hasMultipleIdentities();
           const presence = readPresenceEntries(event.payload);
@@ -451,6 +471,9 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
           }
           if (event.event === "session.suggestion" && event.payload) {
             this.handleSessionSuggestionEvent(event.payload as SessionSuggestionEvent);
+          }
+          if (event.event === "session.reaction" && validateSessionReactionEvent(event.payload)) {
+            this.handleSessionReactionEvent(event.payload);
           }
           if (event.event === "session.typing" && event.payload) {
             this.handleSessionTypingEvent(event.payload as SessionTypingEvent);
@@ -558,6 +581,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
     ) {
       this.state.handleChatDraftChange(this.draft, []);
     }
+    this.syncSessionReactions();
   }
 
   override updated(changedProperties: Map<PropertyKey, unknown> = new Map()) {
@@ -622,7 +646,6 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
     if (this.state) {
       cancelChatModelRecovery(this.state);
       retireInitialChatSnapshot(this.state);
-      resetTaskDetail(this.state);
       chatAvatars.invalidateChatAvatarCache(this.state);
       retireChatMetadataRequests(this.state);
       if (this.suppressStagedAttachmentHandoffOnDisconnect) {
@@ -656,6 +679,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
     this.taskSuggestionBusyIds.clear();
     this.taskSuggestionOperations.clear();
     this.resetSessionSuggestions();
+    this.resetSessionReactions();
     this.clearTypingActors();
     this.resetSessionPullRequests();
     this.resetOlderMessagesViewport();

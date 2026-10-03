@@ -15,15 +15,17 @@ import {
   readToolStringParam,
   type AnyAgentTool,
 } from "./common.js";
-import { createDefaultMediaGenerateBackgroundScheduler } from "./media-generate-background-shared.js";
+import {
+  createDefaultMediaGenerateBackgroundScheduler,
+  type MediaGenerationTaskHandle,
+} from "./media-generate-background-shared.js";
 import {
   musicGenerationTaskLifecycle,
   prepareMediaGenerationTask,
   resolveMediaGenerateToolContext,
   type MediaGenerateToolOptions,
-  type MusicGenerationTaskHandle,
 } from "./media-generate-background.js";
-import { acquireMusicGenerationToolProviders } from "./media-generation-tool-providers.js";
+import { acquireMediaGenerationToolProviders } from "./media-generation-tool-providers.js";
 import {
   buildMediaReferenceDetails,
   loadMediaToolReferences,
@@ -43,7 +45,6 @@ import {
 
 const log = createSubsystemLogger("agents/tools/music-generate");
 const MAX_INPUT_IMAGES = 10;
-const SUPPORTED_OUTPUT_FORMATS = new Set<MusicGenerationOutputFormat>(["mp3", "wav"]);
 
 const MusicGenerateToolSchema = Type.Object({
   action: Type.Optional(
@@ -97,13 +98,11 @@ const MusicGenerateToolSchema = Type.Object({
 });
 
 function normalizeOutputFormat(raw: string | undefined): MusicGenerationOutputFormat | undefined {
-  const normalized = normalizeOptionalLowercaseString(raw) as
-    | MusicGenerationOutputFormat
-    | undefined;
+  const normalized = normalizeOptionalLowercaseString(raw);
   if (!normalized) {
     return undefined;
   }
-  if (SUPPORTED_OUTPUT_FORMATS.has(normalized)) {
+  if (normalized === "mp3" || normalized === "wav") {
     return normalized;
   }
   throw new ToolInputError('format must be one of "mp3" or "wav"');
@@ -128,7 +127,7 @@ export function createMusicGenerateTool(options?: MediaGenerateToolOptions): Any
     name: "music_generate",
     displaySummary: "Generate music",
     description:
-      "Create song/jingle/beat/loop/soundtrack/anthem/instrumental. Make/generate music => call; lyrics-only request => text only. prompt: style/genre/mood/tempo/instruments/purpose; lyrics: exact sung words; image/images condition on reference image(s). action=list discovers providers/models. Session chat background: call once/request, await, then visible reply + structured media. status checks active task.",
+      "Create song/jingle/beat/loop/soundtrack/anthem/instrumental. Make/generate music => call; lyrics-only request => text only. prompt: style/genre/mood/tempo/instruments/purpose; lyrics: exact sung words; image/images condition on reference image(s). action=list discovers providers/models. Session chat background: call once/request; result returns as a later turn that sends the media. This turn: short ack at most, then end; no poll/yield. status checks active task.",
     parameters: MusicGenerateToolSchema,
     execute: async (_toolCallId, rawArgs, signal) => {
       const args = rawArgs as Record<string, unknown>;
@@ -160,7 +159,7 @@ export function createMusicGenerateTool(options?: MediaGenerateToolOptions): Any
         findDuplicate: createMusicGenerateDuplicateGuardResult,
         acquire: async (config) =>
           options?.preparedModelRuntime?.acquireMediaCapabilityProviders
-            ? acquireMusicGenerationToolProviders({
+            ? acquireMediaGenerationToolProviders("musicGenerationProviders", {
                 cfg: config,
                 prepared: options.preparedModelRuntime,
               })
@@ -270,19 +269,13 @@ export function createMusicGenerateTool(options?: MediaGenerateToolOptions): Any
               prompt,
               requestKey,
               providerId: selectedProviderId,
-              config: effectiveCfg,
               scheduleBackgroundWork,
               onAsyncTaskStarted: options?.onAsyncTaskStarted,
               onFailure: (message: string, meta?: Record<string, unknown>) =>
                 log.warn(message, meta),
               messages: [timeout.message],
               detailExtras: {
-                ...buildMediaReferenceDetails({
-                  entries: loadedReferenceImages,
-                  singleKey: "image",
-                  pluralKey: "images",
-                  getResolvedInput: (entry) => entry.resolvedInput,
-                }),
+                ...buildMediaReferenceDetails(loadedReferenceImages, "image"),
                 ...(model ? { model } : {}),
                 ...(lyrics ? { requestedLyrics: lyrics } : {}),
                 ...(typeof instrumental === "boolean" ? { instrumental } : {}),
@@ -298,7 +291,7 @@ export function createMusicGenerateTool(options?: MediaGenerateToolOptions): Any
                     }
                   : {}),
               },
-              run: (taskHandle: MusicGenerationTaskHandle | null) =>
+              run: (taskHandle: MediaGenerationTaskHandle | null) =>
                 executeMusicGenerationJob({
                   effectiveCfg,
                   prompt,

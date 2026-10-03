@@ -878,7 +878,10 @@ esac
         expect(exhausted.recoveryError).toContain(JSON.stringify(entry));
         expect(await processState(entry.pid)).toMatch(/^T/u);
       }
-      await expect(quiescence.resume()).rejects.toThrow(exhausted.recoveryError);
+      // The caller normalizes display whitespace; the persisted PID/start evidence stays raw.
+      await expect(quiescence.resume()).rejects.toThrow(
+        exhausted.recoveryError.replace(/\s+/gu, " ").trim(),
+      );
       await fs.unlink(stallPath);
       await quiescence.resume();
       await expect(fs.stat(leaseFile)).rejects.toThrow();

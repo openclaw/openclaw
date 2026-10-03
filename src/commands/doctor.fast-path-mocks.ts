@@ -133,6 +133,7 @@ vi.mock("./doctor-platform-notes.js", () => ({
 
 vi.mock("./doctor-sandbox.js", () => ({
   maybeRepairSandboxImages: vi.fn(async (cfg: unknown) => cfg),
+  noteCodexBwrapNamespaceWarnings: vi.fn(),
   maybeRepairSandboxRegistryFiles: vi.fn().mockResolvedValue(undefined),
   noteSandboxScopeWarnings: vi.fn(),
 }));
@@ -158,9 +159,12 @@ vi.mock("./doctor-skills.js", () => ({
 }));
 
 vi.mock("./doctor-state-integrity.js", () => ({
-  collectWorkspaceBackupTip: vi.fn(() => null),
   noteStateIntegrity: vi.fn().mockResolvedValue(undefined),
-  noteWorkspaceBackupTip: vi.fn(),
+}));
+
+vi.mock("./doctor-workspace.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./doctor-workspace.js")>()),
+  collectWorkspaceBackupTip: vi.fn(() => null),
 }));
 
 vi.mock("./doctor-ui.js", () => ({

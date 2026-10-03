@@ -14,6 +14,15 @@ import {
 
 export { buildAgentMainSessionKey, DEFAULT_MAIN_KEY };
 export const DEFAULT_AGENT_ID = "main";
+const DEFAULT_MAIN_SESSION_KEY = buildAgentMainSessionKey({
+  agentId: DEFAULT_AGENT_ID,
+  mainKey: DEFAULT_MAIN_KEY,
+});
+
+// Normalization depends only on the input string. Bound retention across roster churn;
+// clearing at 4,096 entries needs no clock or session/config invalidation.
+const comparisonKeys = new Map<string, string>();
+const COMPARISON_KEY_CACHE_LIMIT = 4_096;
 
 export type UiSessionDefaultsHost = {
   assistantAgentId?: string | null;
@@ -88,6 +97,22 @@ export function isPinnableUiSessionRow(row: {
 }
 
 export function normalizeSessionKeyForUiComparison(sessionKey: string | undefined | null): string {
+  if (sessionKey == null) {
+    return "";
+  }
+  const cached = comparisonKeys.get(sessionKey);
+  if (cached !== undefined) {
+    return cached;
+  }
+  const normalized = normalizeComparisonKey(sessionKey);
+  if (comparisonKeys.size >= COMPARISON_KEY_CACHE_LIMIT) {
+    comparisonKeys.clear();
+  }
+  comparisonKeys.set(sessionKey, normalized);
+  return normalized;
+}
+
+function normalizeComparisonKey(sessionKey: string): string {
   const raw = normalizeOptionalString(sessionKey);
   if (!raw) {
     return "";
@@ -348,15 +373,16 @@ export function normalizeDefaultMainSessionAliasForUi(
   sessionKey: string | undefined | null,
 ): string {
   const normalized = normalizeSessionKeyForUiComparison(sessionKey);
-  return normalized === DEFAULT_MAIN_KEY
-    ? buildAgentMainSessionKey({ agentId: DEFAULT_AGENT_ID, mainKey: DEFAULT_MAIN_KEY })
-    : normalized;
+  return normalized === DEFAULT_MAIN_KEY ? DEFAULT_MAIN_SESSION_KEY : normalized;
 }
 
 export function areUiSessionKeysEquivalent(
   left: string | undefined | null,
   right: string | undefined | null,
 ): boolean {
+  if (left === right) {
+    return Boolean(left?.trim());
+  }
   const normalizedLeft = normalizeDefaultMainSessionAliasForUi(left);
   const normalizedRight = normalizeDefaultMainSessionAliasForUi(right);
   return Boolean(normalizedLeft && normalizedRight && normalizedLeft === normalizedRight);

@@ -3,12 +3,11 @@
  */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { sanitizeGoogleAssistantFirstOrdering } from "../../shared/google-turn-ordering.js";
 import { sliceUtf16Safe, truncateUtf16Safe } from "../../utils.js";
 import { resolveAgentConfig } from "../agent-scope.js";
-import type { AgentMessage } from "../runtime/index.js";
 import type { WorkspaceBootstrapFile } from "../workspace.js";
 import type { EmbeddedContextFile } from "./context-file.js";
+export { sanitizeGoogleAssistantFirstOrdering as sanitizeGoogleTurnOrdering } from "../../shared/google-turn-ordering.js";
 
 type ContentBlockWithSignature = {
   thought_signature?: unknown;
@@ -156,14 +155,6 @@ export function resolveBootstrapTotalMaxChars(
   );
 }
 
-function isAgentsBootstrapFile(fileName: string | undefined): boolean {
-  return fileName?.toLowerCase() === AGENTS_BOOTSTRAP_FILENAME.toLowerCase();
-}
-
-function isUserBootstrapFile(fileName: string | undefined): boolean {
-  return fileName?.toLowerCase() === USER_BOOTSTRAP_FILENAME.toLowerCase();
-}
-
 function isPolicyDigestCandidate(line: string): boolean {
   if (/^(?:#{1,6}|\s*[-*+]|\s*\d+[.)])\s+\S/u.test(line)) {
     return true;
@@ -297,7 +288,7 @@ function trimBootstrapContent(
       originalLength: trimmed.length,
     };
   }
-  if (isAgentsBootstrapFile(fileName)) {
+  if (fileName?.toLowerCase() === AGENTS_BOOTSTRAP_FILENAME.toLowerCase()) {
     return trimAgentsBootstrapContent(trimmed, maxChars);
   }
 
@@ -316,14 +307,12 @@ function trimBootstrapContent(
     [head, markerContent, tail]
       .filter((part) => part.length > 0)
       .join(markerContent.includes("\n") ? "\n" : "");
-  const resolveMarkerTemplate = () => {
-    const fullMarker = markerTemplate(0, 0);
-    const fullContentBudget = maxChars - fullMarker.length - separatorCharsFor(1, 1, fullMarker);
-    return fullContentBudget >= MIN_BOOTSTRAP_TRIMMED_CONTENT_CHARS
+  const fullMarker = markerTemplate(0, 0);
+  const fullContentBudget = maxChars - fullMarker.length - separatorCharsFor(1, 1, fullMarker);
+  const resolvedMarkerTemplate =
+    fullContentBudget >= MIN_BOOTSTRAP_TRIMMED_CONTENT_CHARS
       ? markerTemplate
       : compactMarkerTemplate;
-  };
-  const resolvedMarkerTemplate = resolveMarkerTemplate();
   let headChars = 0;
   let tailChars = 0;
   let marker = resolvedMarkerTemplate(headChars, tailChars);
@@ -385,9 +374,6 @@ function trimBootstrapContent(
 }
 
 function clampToBudget(content: string, budget: number): string {
-  if (budget <= 0) {
-    return "";
-  }
   if (content.length <= budget) {
     return content;
   }
@@ -399,7 +385,7 @@ function clampToBudget(content: string, budget: number): string {
 }
 
 export function buildBootstrapContextFiles(
-  files: WorkspaceBootstrapFile[],
+  files: (Omit<WorkspaceBootstrapFile, "name"> & { name: string })[],
   opts?: { warn?: (message: string) => void; maxChars?: number; totalMaxChars?: number },
 ): EmbeddedContextFile[] {
   const maxChars = opts?.maxChars ?? DEFAULT_BOOTSTRAP_MAX_CHARS;
@@ -439,9 +425,10 @@ export function buildBootstrapContextFiles(
       );
       break;
     }
-    const fileBudget = isUserBootstrapFile(file.name)
-      ? Math.min(maxChars, USER_BOOTSTRAP_MAX_CHARS)
-      : maxChars;
+    const fileBudget =
+      file.name?.toLowerCase() === USER_BOOTSTRAP_FILENAME.toLowerCase()
+        ? Math.min(maxChars, USER_BOOTSTRAP_MAX_CHARS)
+        : maxChars;
     const fileMaxChars = Math.max(1, Math.min(fileBudget, remainingTotalChars));
     // Personal instructions are indivisible: never turn a cut-off directive into new policy.
     if (file.personalUser && (file.content ?? "").trimEnd().length > fileMaxChars) {
@@ -466,8 +453,4 @@ export function buildBootstrapContextFiles(
     });
   }
   return result;
-}
-
-export function sanitizeGoogleTurnOrdering(messages: AgentMessage[]): AgentMessage[] {
-  return sanitizeGoogleAssistantFirstOrdering(messages);
 }

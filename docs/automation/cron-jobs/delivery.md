@@ -21,6 +21,12 @@ Where a finished run sends its output, what happens when a run or a delivery fai
 
 A successful primary webhook run with no nonblank summary intentionally skips the POST and records `deliverySuppressionReason: "empty"`, matching announce delivery's optional-output contract. Execution errors still send the error event even without a summary.
 
+Primary webhooks record delivery after an HTTP 2xx acknowledgment. An HTTP rejection
+records **Not delivered**. If the request may have reached the receiver but its
+response is lost or times out, delivery stays **Unknown**; the transport does not
+retry that ambiguous send. Required delivery also leaves completion unknown,
+while best-effort delivery can complete successfully without claiming delivery.
+
 When `gateway.publicOrigin` is configured and the Control UI is enabled, chat
 notifications include an `Inspect` link into the Control UI. Command and script
 completion announcements open the automation run; isolated agent announcements
@@ -96,9 +102,14 @@ Implicit announce delivery uses configured channel allowlists to validate and re
 
 ### Failure notifications
 
+Failure-alert webhooks stay **Unknown** when the request may have reached the
+receiver but its response is lost. An explicit HTTP rejection or a failure proven
+to precede sending records **Not delivered** and allows the in-app fallback
+notification. An unknown outcome does not trigger that fallback.
+
 Execution failures use one scheduler-owned threshold and cooldown policy. A job with an existing failure route is covered by default after 2 consecutive failures with a 1-hour cooldown. The route can be a resolved failure destination or the job's primary announce target. Jobs with no such route stay quiet unless a per-job or global `failureAlert` object explicitly activates the policy.
 
-Repeated failures with the same cause form one incident and do not send repeated alerts, even after the cooldown expires or the Gateway restarts. A changed cause or destination can send a new alert after the cooldown. Once an alerted automation completes successfully, it sends one recovery notice and clears the incident. Skipped runs and unknown delivery outcomes do not establish recovery. A successful quiet trigger check can recover a trigger failure, but cannot establish that a previously failed payload has recovered.
+Repeated failures with the same cause form one incident and do not send repeated alerts, even after the cooldown expires or the Gateway restarts. A changed cause or destination can send a new alert after the cooldown. A successful run clears the incident and its cooldown without sending a notification, so the next failure can alert again; the recovery stays visible in automation history. Skipped runs and unknown delivery outcomes do not establish recovery. A successful quiet trigger check can recover a trigger failure, but cannot establish that a previously failed payload has recovered.
 
 Startup recovery reconciles incidents from saved run outcomes without sending historical notifications. A saved successful run clears the old incident even if its job-state update was interrupted, so a later recurrence can alert again.
 
@@ -118,10 +129,20 @@ Failure notification routes resolve in this order:
 
 In the Control UI, custom failure alerts show stored threshold, cooldown, and mode overrides. An omitted channel displays the neutral `last` choice without storing it. Leave the threshold or cooldown blank, or choose **Inherit global setting** for alert mode, to use the Gateway's normal global and routing defaults. Cooldowns accept decimal seconds with millisecond precision, including `0` for no cooldown; for example, `1.001` seconds preserves `1001` milliseconds. Editing other job fields or cloning a job preserves its alert policy, including the skipped-run setting.
 
-A required completion-delivery failure is distinct from an execution failure: a run can record `status: "ok"` with `completionStatus: "failed"`. It does not increment the execution-failure streak or backoff. A delivery-failure alert can notify through a resolved alternate failure destination without waiting for `failureAlert.after`. Repeated delivery failures also form one incident. Alerts for changed failures, including the first delivery failure after an execution alert, honor the shared job/global `failureAlert.cooldownMs` (default 1 hour); suppressed alerts still leave the delivery failure in run history. Skipped runs and quiet trigger checks do not clear a delivery incident or its cooldown; successful completion does. Recovery notices do not wait for the cooldown. The scheduler never retries the already-failed primary route for an alert.
+A required completion-delivery failure is distinct from an execution failure: a run can record `status: "ok"` with `completionStatus: "failed"`. It does not increment the execution-failure streak or backoff. A delivery-failure alert can notify through a resolved alternate failure destination without waiting for `failureAlert.after`. Repeated delivery failures also form one incident. Alerts for changed failures, including the first delivery failure after an execution alert, honor the shared job/global `failureAlert.cooldownMs` (default 1 hour); suppressed alerts still leave the delivery failure in run history. Skipped runs and quiet trigger checks do not clear a delivery incident or its cooldown; successful completion does. The scheduler never retries the already-failed primary route for an alert.
 
 Chat failure notifications include the run start time in the agent's configured user timezone. When `gateway.publicOrigin` is configured and the Control UI is enabled, they also include an `Inspect` link to the automation run. Webhook message text stays stable; integrations can read the same instant from the structured `runAtMs` field and construct their own links.
 Chat notifications show normalized failure causes or allowlisted producer facts for known command and script failures. Arbitrary commands, paths, provider bodies, secrets, delivery errors, skip reasons, diagnostics, and stack/error text remain in automation history. Failure webhooks retain the structured raw error for diagnostic integrations.
+
+#### Owner-conversation repair
+
+Repair is on by default. Upgrading changes what you see for owned automations that alert in chat: the first failure alert of a streak becomes a repair request in the conversation that created the job, and the alert is the fallback. A job with `failureAlert: false` gets neither.
+
+When a job created from a conversation (it has an owner session) reaches its execution-failure alert threshold and the alert would go to chat (`announce` mode), OpenClaw sends a repair request to that owner conversation instead of the alert. The request names the job and includes its schedule, name, payload, and last error; the name, payload, and error are marked as untrusted data. Command jobs and on-exit or stream schedules are operator-only and alert as before.
+
+The conversation handles the request as an ordinary agent turn, as if it had received a message: it runs in that conversation's session, with its transcript, workspace, and tool policy, and the reply goes to the conversation's own route, including its thread or topic. Heartbeat settings do not apply. A transient outage gets no reply, a problem it can fix in the workspace (for example the helper script or instructions file the job follows) gets fixed with a one-line note, and otherwise it asks you for exactly what it needs. The request does not carry your sender identity, so owner-only tools such as automation control stay unavailable; changing the job itself happens in your reply turn.
+
+Each failure streak gets at most one repair request. The alert is sent as before when the job has no owner conversation. If the job fails again after the request, you get the normal failure alert once, noting that a repair was requested. A successful run clears the streak silently.
 
 Script setup refreshes retired tools after a plugin reload before execution begins. If that recovery fails, the alert explains that tools could not be refreshed and the script did not run, then points to automation history and plugin status. A monitor that could not run has no new evidence about the system it monitors.
 

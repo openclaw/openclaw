@@ -7,6 +7,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { isPathInside } from "../infra/path-guards.js";
+import { createSqliteLifecycleAggregateError } from "../infra/sqlite-lifecycle-errors.js";
 import { escapeRegExp } from "../shared/regexp.js";
 import {
   retainLoadedPluginSourceCapture,
@@ -131,6 +132,8 @@ export function createPluginNativeDependencyScopes(
 export function capturePluginDependencies(params: {
   root: string;
   manifestFile?: string;
+  /** Nested manifests nobody selected (benchmarks, examples) keep their declarations optional. */
+  incidental?: boolean;
   references: ReadonlyMap<string, ReadonlySet<string>>;
   resolve: ReturnType<typeof createPluginDependencyResolver>;
   capture: (name: string, dependency: PluginDependencyResolution) => void;
@@ -158,6 +161,7 @@ export function capturePluginDependencies(params: {
     if (!dependency) {
       if (
         !params.manifestFile ||
+        params.incidental ||
         name in (manifest.optionalDependencies ?? {}) ||
         name in (manifest.peerDependencies ?? {})
       ) {
@@ -619,10 +623,26 @@ export function createPluginSourceCapture(execute?: <T>(run: () => T) => T) {
     directory = fs.realpathSync(created);
     fs.chmodSync(directory, 0o700);
   } catch (error) {
-    if (created) {
-      fs.rmSync(created, { recursive: true, force: true });
+    const cleanupErrors: unknown[] = [];
+    try {
+      if (created) {
+        fs.rmSync(created, { recursive: true, force: true });
+      }
+    } catch (cleanupError) {
+      cleanupErrors.push(cleanupError);
     }
-    instance?.release();
+    try {
+      instance?.release();
+    } catch (cleanupError) {
+      cleanupErrors.push(cleanupError);
+    }
+    if (cleanupErrors.length > 0) {
+      throw createSqliteLifecycleAggregateError(
+        [error, ...cleanupErrors],
+        "Plugin source capture setup and cleanup failed",
+        error,
+      );
+    }
     throw error;
   }
   const inputs = new Map<string, PluginSourceInput>();

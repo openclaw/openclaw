@@ -25,6 +25,7 @@ import {
   resolveSlackReplyDeliveryMessages,
   type SlackReplyDeliveryMessage,
 } from "./reply-blocks.js";
+import { formatSlackTarget, parseSlackTarget, resolveSlackChannelId } from "./target-parsing.js";
 import { resolveSlackThreadTsValue } from "./thread-ts.js";
 import { countSlackTextUtf8Bytes } from "./truncate.js";
 
@@ -91,19 +92,19 @@ export async function handleSlackMessageAction(params: {
   providerId: string;
   ctx: ChannelMessageActionContext;
   invoke: SlackActionInvoke;
-  normalizeChannelId?: (channelId: string) => string;
-  includeReadThreadId?: boolean;
 }): Promise<AgentToolResult<unknown>> {
-  const { providerId, ctx, invoke, normalizeChannelId, includeReadThreadId = false } = params;
+  const { providerId, ctx, invoke } = params;
   const { action, cfg, params: actionParams } = ctx;
   const accountId = ctx.accountId ?? undefined;
   const invokeSlackAction = (request: Record<string, unknown>, toolContext = ctx.toolContext) =>
     invoke({ ...request, accountId }, cfg, toolContext);
   const resolveChannelId = () => {
-    const channelId =
+    const raw =
       readStringParam(actionParams, "channelId") ??
       readStringParam(actionParams, "to", { required: true });
-    return normalizeChannelId ? normalizeChannelId(channelId) : channelId;
+    const target = parseSlackTarget(raw, { defaultKind: "channel" });
+    const channelId = resolveSlackChannelId(raw);
+    return formatSlackTarget({ teamId: target?.teamId, kind: "channel", id: channelId });
   };
 
   if (action === "conversation-open") {
@@ -217,7 +218,7 @@ export async function handleSlackMessageAction(params: {
       before: readStringParam(actionParams, "before"),
       after: readStringParam(actionParams, "after"),
       messageId: readStringParam(actionParams, "messageId"),
-      ...(includeReadThreadId ? { threadId: readStringParam(actionParams, "threadId") } : {}),
+      threadId: readStringParam(actionParams, "threadId"),
     });
   }
 

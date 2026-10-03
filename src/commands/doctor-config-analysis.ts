@@ -95,30 +95,29 @@ function collectInvalidHookTransformsDirWarnings(
 }
 
 function collectUnsupportedInternalHookEntryWarnings(cfg: OpenClawConfig): string[] {
-  const unsupportedKeysByEntry = Object.entries(cfg.hooks?.internal?.entries ?? {})
-    .filter(([, entry]) => entry && typeof entry === "object" && !Array.isArray(entry))
-    .map(([hookKey, entry]) => {
-      const unsupportedKeys = ["handler", "module", "extraDirs", "installs"].filter((key) =>
-        Object.hasOwn(entry, key),
-      );
-      return { hookKey, unsupportedKeys };
-    })
-    .filter(({ unsupportedKeys }) => unsupportedKeys.length > 0);
-
-  return unsupportedKeysByEntry.map(
-    ({ hookKey, unsupportedKeys }) =>
-      `- hooks.internal.entries.${hookKey}: unsupported loader key${unsupportedKeys.length === 1 ? "" : "s"} ${unsupportedKeys.join(", ")} will not load hook modules. Use bootstrap-extra-files for session bootstrap content, or create a managed/workspace hook directory with HOOK.md + handler.js. Doctor cannot rewrite this automatically because per-hook entry keys are open-ended hook configuration.`,
-  );
+  return Object.entries(cfg.hooks?.internal?.entries ?? {}).flatMap(([hookKey, entry]) => {
+    if (!isRecord(entry)) {
+      return [];
+    }
+    const keys = ["handler", "module", "extraDirs", "installs"].filter((key) =>
+      Object.hasOwn(entry, key),
+    );
+    return keys.length > 0
+      ? [
+          `- hooks.internal.entries.${hookKey}: unsupported loader key${keys.length === 1 ? "" : "s"} ${keys.join(", ")} will not load hook modules. Use bootstrap-extra-files for session bootstrap content, or create a managed/workspace hook directory with HOOK.md + handler.js. Doctor cannot rewrite this automatically because per-hook entry keys are open-ended hook configuration.`,
+        ]
+      : [];
+  });
 }
 
 export function noteDoctorHookConfigWarnings(cfg: OpenClawConfig, configPath: string): void {
-  const hookTransformsDirWarnings = collectInvalidHookTransformsDirWarnings(cfg, configPath);
-  if (hookTransformsDirWarnings.length > 0) {
-    note(sanitizeDoctorNote(hookTransformsDirWarnings.join("\n")), "Doctor warnings");
-  }
-  const unsupportedInternalHookEntryWarnings = collectUnsupportedInternalHookEntryWarnings(cfg);
-  if (unsupportedInternalHookEntryWarnings.length > 0) {
-    note(sanitizeDoctorNote(unsupportedInternalHookEntryWarnings.join("\n")), "Doctor warnings");
+  for (const warnings of [
+    collectInvalidHookTransformsDirWarnings(cfg, configPath),
+    collectUnsupportedInternalHookEntryWarnings(cfg),
+  ]) {
+    if (warnings.length > 0) {
+      note(sanitizeDoctorNote(warnings.join("\n")), "Doctor warnings");
+    }
   }
 }
 
@@ -137,9 +136,6 @@ export function noteMissingDefaultAgentOwner(cfg: OpenClawConfig): void {
 
 /** Formats a parsed config issue path into a user-facing dotted path. */
 export function formatConfigKeyPath(parts: Array<string | number>): string {
-  if (parts.length === 0) {
-    return "<root>";
-  }
   let out = "";
   for (const part of parts) {
     if (typeof part === "number") {
@@ -165,21 +161,12 @@ export function resolveConfigPathTarget(root: unknown, pathLocal: Array<string |
       current = current[part];
       continue;
     }
-    if (!current || typeof current !== "object" || Array.isArray(current)) {
+    if (!isRecord(current) || !(part in current)) {
       return null;
     }
-    const record = current as Record<string, unknown>;
-    if (!(part in record)) {
-      return null;
-    }
-    current = record[part];
+    current = current[part];
   }
   return current;
-}
-
-function isUpdateInProgress(): boolean {
-  const value = process.env.OPENCLAW_UPDATE_IN_PROGRESS;
-  return value === "1" || value === "true";
 }
 
 const STRIP_PROTECTED_KEYS: Record<string, Set<string>> = {
@@ -196,7 +183,8 @@ export function stripUnknownConfigKeys(config: OpenClawConfig): {
   config: OpenClawConfig;
   removed: string[];
 } {
-  if (isUpdateInProgress()) {
+  const updating = process.env.OPENCLAW_UPDATE_IN_PROGRESS;
+  if (updating === "1" || updating === "true") {
     return { config, removed: [] };
   }
 
@@ -213,16 +201,14 @@ export function stripUnknownConfigKeys(config: OpenClawConfig): {
     }
     const issuePath = issue.path.filter((part) => typeof part !== "symbol");
     const target = resolveConfigPathTarget(next, issuePath);
-    if (!target || typeof target !== "object" || Array.isArray(target)) {
+    if (!isRecord(target)) {
       continue;
     }
-    const record = target as Record<string, unknown>;
     const parentKey =
       issuePath.length === 1 && typeof issuePath[0] === "string" ? issuePath[0] : undefined;
-    const protectedSet =
-      issuePath.length === 0 ? undefined : parentKey ? STRIP_PROTECTED_KEYS[parentKey] : undefined;
+    const protectedSet = parentKey ? STRIP_PROTECTED_KEYS[parentKey] : undefined;
     for (const key of issue.keys) {
-      if (typeof key !== "string" || !(key in record)) {
+      if (!(key in target)) {
         continue;
       }
       // $include is authored parser syntax at every object depth, not a schema field.
@@ -233,7 +219,7 @@ export function stripUnknownConfigKeys(config: OpenClawConfig): {
       if (protectedSet?.has(key)) {
         continue;
       }
-      delete record[key];
+      delete target[key];
       removed.push(formatConfigKeyPath([...issuePath, key]));
     }
   }
@@ -289,22 +275,20 @@ function isImplicitFallbackClobber(model: unknown): boolean {
   if (typeof model === "string") {
     return primary !== undefined;
   }
-  if (model !== null && typeof model === "object" && !Array.isArray(model)) {
-    const obj = model as Record<string, unknown>;
+  if (isRecord(model)) {
     // Object with primary but no fallbacks key — intent is ambiguous; warn.
     // Object with fallbacks: [] — explicit no-fallbacks; no warn.
     return (
-      Object.hasOwn(obj, "primary") && !Object.hasOwn(obj, "fallbacks") && primary !== undefined
+      Object.hasOwn(model, "primary") && !Object.hasOwn(model, "fallbacks") && primary !== undefined
     );
   }
   return false;
 }
 
-/** Collects warnings for agent model shapes that unintentionally drop default fallbacks. */
-function collectImplicitFallbackClobberWarnings(cfg: OpenClawConfig): string[] {
+export function noteImplicitFallbackClobberWarnings(cfg: OpenClawConfig): void {
   const defaultFallbacks = resolveAgentModelFallbackValues(cfg.agents?.defaults?.model);
   if (defaultFallbacks.length === 0) {
-    return [];
+    return;
   }
   const warnings: string[] = [];
   for (const { entry: agent, source } of listAgentEntriesWithSource(cfg)) {
@@ -330,16 +314,9 @@ function collectImplicitFallbackClobberWarnings(cfg: OpenClawConfig): string[] {
       ].join("\n"),
     );
   }
-  return warnings;
-}
-
-/** Emits doctor notes for model fallback clobber warnings. */
-export function noteImplicitFallbackClobberWarnings(cfg: OpenClawConfig): void {
-  const warnings = collectImplicitFallbackClobberWarnings(cfg);
-  if (warnings.length === 0) {
-    return;
+  if (warnings.length > 0) {
+    note(warnings.join("\n"), "Doctor warnings");
   }
-  note(warnings.join("\n"), "Doctor warnings");
 }
 
 /** Emits a config include warning when an include path escapes the config directory. */
@@ -369,11 +346,6 @@ function noteIncludeConfinementWarning(snapshot: {
 
 /** Warns when a trusted-proxy gateway has no public sandbox origin for widget/MCP-app frames. */
 export function noteSandboxOriginProxyWarning(cfg: OpenClawConfig): void {
-  // trusted-proxy auth means the Control UI is reached through a reverse proxy
-  // or tunnel. Widget and MCP-app frames load from a separate sandbox listener
-  // (gateway port + 1); without mcp.apps.sandboxOrigin the browser derives that
-  // URL by port substitution, which such proxies do not route, and every
-  // pinned widget fails to render.
   if (cfg.gateway?.auth?.mode !== "trusted-proxy" || cfg.mcp?.apps?.sandboxOrigin) {
     return;
   }

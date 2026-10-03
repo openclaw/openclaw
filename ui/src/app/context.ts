@@ -18,12 +18,14 @@ import type { reviewPrivateComposerDraft } from "../pages/chat/components/privat
 import type { NewSessionDraftHandoff } from "../pages/new-session/draft-persistence.ts";
 import type { ControlUiPluginCapability } from "../plugins/control-ui-capability.ts";
 import type { AgentSelectionCapability } from "./agent-selection.ts";
+import type { AssistantDock } from "./assistant-dock.ts";
 import type { ApplicationChatSubmissions } from "./chat-submissions.ts";
 import type { ApplicationConfigCapability } from "./config.ts";
 import type { ConnectionBootstrapCoordinator } from "./connection-bootstrap.ts";
 import type { ScopeUpgradeCapability } from "./device-scope-upgrade.ts";
 import type { ApplicationGateway } from "./gateway.ts";
 import type { NativeChatDrafts } from "./native-bridge.ts";
+import type { NativeConversationBridge } from "./native-conversation-types.ts";
 import type { NativeDeviceSettingsCapability } from "./native-device-settings.ts";
 import type { NativeNotificationsCapability } from "./native-notifications.ts";
 import type { ApplicationOverlays } from "./overlays-types.ts";
@@ -139,10 +141,12 @@ export type ApplicationContext<TRouteId extends string = RouteId> = {
   readonly sessions: SessionCapability;
   readonly placementStartup: ApplicationPlacementStartup;
   readonly plugins: ControlUiPluginCapability;
+  readonly assistantDock: AssistantDock;
   readonly overlays: ApplicationOverlays;
   readonly navigation: ApplicationNavigationPreferences;
   readonly theme: ApplicationTheme;
   readonly nativeChatDrafts: NativeChatDrafts;
+  readonly nativeConversation?: NativeConversationBridge | null;
   readonly nativeDeviceSettings: NativeDeviceSettingsCapability | null;
   readonly nativeNotifications: NativeNotificationsCapability | null;
   readonly webPush: WebPushCapability;

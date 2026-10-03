@@ -145,15 +145,18 @@ export async function compileNativeProject({
           // emit result for declaration errors without a second preflight.
           noEmitOnError: false,
           noCheck: false,
+          // Parallel emit can give shared inferred properties different readonly modifiers.
+          ...(emit ? { singleThreaded: true } : {}),
         },
       }),
     );
-    const nativeSnapshot = await api.updateSnapshot({
+    const nativeSnapshot = await api.createSnapshot({
       openProjects: [config],
-      fileChanges: { changed: [config] },
+      fileNotifications: { changed: [config] },
+      ensurePrograms: true,
     });
     view.assertValid();
-    const project = nativeSnapshot.getProject(config);
+    const project = nativeSnapshot.getConfiguredProject(config);
     if (!project) {
       throw new Error(`Native TypeScript did not open ${config}`);
     }
@@ -193,7 +196,13 @@ export async function compileNativeProject({
       }
     }
     for (const file of await project.program.getSourceFileNames()) {
-      view.inputs.add(admit(file));
+      const accepted = admit(file);
+      if (assertInput && !view.inputs.has(accepted)) {
+        throw new Error(
+          `Native compiler source was not observed through its filesystem: ${accepted}`,
+        );
+      }
+      view.inputs.add(accepted);
     }
     view.assertValid();
     await api.close();
@@ -205,7 +214,7 @@ export async function compileNativeProject({
     }
     const after = snapshot();
     after.seal(admittedConfig, args, inputs, before, preparationStartedAt, stage, producedFiles);
-    return { inputs, outputFiles };
+    return { inputs, outputFiles, lookups: view.getLookups() };
   } catch (error) {
     view?.assertValid();
     throw error;

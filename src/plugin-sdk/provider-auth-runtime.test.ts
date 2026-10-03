@@ -3,10 +3,48 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { saveAuthProfileStore } from "../agents/auth-profiles/store-runtime.js";
-import { getFreePort } from "../test-utils/ports.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import { acquireTestPortBlock, type TestPortClaim } from "../test-utils/port-claims.js";
 import * as providerAuthRuntime from "./provider-auth-runtime.js";
+
+const portClaims: TestPortClaim[] = [];
+const callbacks: Array<{ controller: AbortController; settled: Promise<void> }> = [];
+
+afterEach(async () => {
+  const pending = callbacks.splice(0);
+  for (const { controller } of pending) {
+    controller.abort();
+  }
+  await Promise.all(pending.map(({ settled }) => settled));
+  await Promise.all(portClaims.splice(0).map((claim) => claim.release()));
+});
+
+async function getClaimedPort(): Promise<number> {
+  const claim = await acquireTestPortBlock({ offsets: [0] });
+  portClaims.push(claim);
+  return claim.port;
+}
+
+function startCallback(
+  params: Omit<
+    Parameters<typeof providerAuthRuntime.waitForLocalOAuthCallback>[0],
+    "signal" | "onProgress"
+  >,
+  controller = new AbortController(),
+) {
+  const { promise: ready, resolve, reject } = createDeferredCore();
+  const callback = providerAuthRuntime.waitForLocalOAuthCallback({
+    ...params,
+    signal: controller.signal,
+    onProgress: () => resolve(),
+  });
+  callbacks.push({ controller, settled: callback.then(() => undefined, reject) });
+  // Cancellation does not await readiness; startup failure must still be observed.
+  void ready.catch(() => undefined);
+  return { callback, ready };
+}
 
 describe("plugin-sdk provider-auth-runtime", () => {
   it("exports the runtime-ready auth helper", () => {
@@ -66,8 +104,8 @@ describe("plugin-sdk provider-auth-runtime", () => {
   });
 
   it("allows browser IdP pages to probe the localhost callback with CORS", async () => {
-    const port = await getFreePort();
-    const callback = providerAuthRuntime.waitForLocalOAuthCallback({
+    const port = await getClaimedPort();
+    const { callback, ready } = startCallback({
       expectedState: "state-1",
       timeoutMs: 5_000,
       port,
@@ -78,6 +116,7 @@ describe("plugin-sdk provider-auth-runtime", () => {
       corsOriginAllowlist: ["auth.x.ai", "accounts.x.ai"],
     });
 
+    await ready;
     const preflight = await fetch(`http://127.0.0.1:${port}/callback`, {
       method: "OPTIONS",
       headers: {
@@ -107,17 +146,19 @@ describe("plugin-sdk provider-auth-runtime", () => {
 
   it("closes a pending localhost callback when its owner cancels", async () => {
     const controller = new AbortController();
-    const port = await getFreePort();
-    const callback = providerAuthRuntime.waitForLocalOAuthCallback({
-      expectedState: "state-1",
-      timeoutMs: 5_000,
-      port,
-      callbackPath: "/callback",
-      redirectUri: `http://127.0.0.1:${port}/callback`,
-      hostname: "127.0.0.1",
-      successTitle: "OAuth complete",
-      signal: controller.signal,
-    });
+    const port = await getClaimedPort();
+    const { callback } = startCallback(
+      {
+        expectedState: "state-1",
+        timeoutMs: 5_000,
+        port,
+        callbackPath: "/callback",
+        redirectUri: `http://127.0.0.1:${port}/callback`,
+        hostname: "127.0.0.1",
+        successTitle: "OAuth complete",
+      },
+      controller,
+    );
 
     controller.abort();
 
@@ -125,8 +166,8 @@ describe("plugin-sdk provider-auth-runtime", () => {
   });
 
   it("binds the redirect host when the public hostname option is omitted", async () => {
-    const port = await getFreePort();
-    const callback = providerAuthRuntime.waitForLocalOAuthCallback({
+    const port = await getClaimedPort();
+    const { callback, ready } = startCallback({
       expectedState: "state-1",
       timeoutMs: 5_000,
       port,
@@ -135,18 +176,15 @@ describe("plugin-sdk provider-auth-runtime", () => {
       successTitle: "OAuth complete",
     });
 
+    await ready;
     const response = await fetch(`http://127.0.0.1:${port}/callback?code=code-1&state=state-1`);
     expect(response.status).toBe(200);
     await expect(callback).resolves.toEqual({ code: "code-1", state: "state-1" });
   });
 
   it("keeps an explicit localhost bind compatible with an IPv4 redirect", async () => {
-    const port = await getFreePort();
-    let markReady!: () => void;
-    const ready = new Promise<void>((resolve) => {
-      markReady = resolve;
-    });
-    const callback = providerAuthRuntime.waitForLocalOAuthCallback({
+    const port = await getClaimedPort();
+    const { callback, ready } = startCallback({
       expectedState: "state-1",
       timeoutMs: 5_000,
       port,
@@ -154,7 +192,6 @@ describe("plugin-sdk provider-auth-runtime", () => {
       redirectUri: `http://127.0.0.1:${port}/callback`,
       hostname: "localhost",
       successTitle: "OAuth complete",
-      onProgress: markReady,
     });
 
     await ready;
@@ -164,8 +201,8 @@ describe("plugin-sdk provider-auth-runtime", () => {
   });
 
   it("does not echo CORS for unallowlisted callback origins but keeps waiting", async () => {
-    const port = await getFreePort();
-    const callback = providerAuthRuntime.waitForLocalOAuthCallback({
+    const port = await getClaimedPort();
+    const { callback, ready } = startCallback({
       expectedState: "state-1",
       timeoutMs: 5_000,
       port,
@@ -176,6 +213,7 @@ describe("plugin-sdk provider-auth-runtime", () => {
       corsOriginAllowlist: ["auth.x.ai"],
     });
 
+    await ready;
     const preflight = await fetch(`http://127.0.0.1:${port}/callback`, {
       method: "OPTIONS",
       headers: {
@@ -204,8 +242,8 @@ describe("plugin-sdk provider-auth-runtime", () => {
   });
 
   it("preserves legacy permissive CORS behavior when no allowlist is passed", async () => {
-    const port = await getFreePort();
-    const callback = providerAuthRuntime.waitForLocalOAuthCallback({
+    const port = await getClaimedPort();
+    const { callback, ready } = startCallback({
       expectedState: "state-1",
       timeoutMs: 5_000,
       port,
@@ -215,6 +253,7 @@ describe("plugin-sdk provider-auth-runtime", () => {
       successTitle: "OAuth complete",
     });
 
+    await ready;
     const preflight = await fetch(`http://127.0.0.1:${port}/callback`, {
       method: "OPTIONS",
       headers: {
@@ -233,23 +272,19 @@ describe("plugin-sdk provider-auth-runtime", () => {
   });
 
   it("clamps oversized OAuth callback timeouts before scheduling", async () => {
-    const port = await getFreePort();
+    const port = await getClaimedPort();
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
     try {
-      let callback!: Promise<providerAuthRuntime.OAuthCallbackResult>;
-      const listening = new Promise<void>((resolve) => {
-        callback = providerAuthRuntime.waitForLocalOAuthCallback({
-          expectedState: "state-1",
-          timeoutMs: Number.MAX_SAFE_INTEGER,
-          port,
-          callbackPath: "/callback",
-          redirectUri: `http://127.0.0.1:${port}/callback`,
-          hostname: "127.0.0.1",
-          successTitle: "OAuth complete",
-          onProgress: () => resolve(),
-        });
+      const { callback, ready } = startCallback({
+        expectedState: "state-1",
+        timeoutMs: Number.MAX_SAFE_INTEGER,
+        port,
+        callbackPath: "/callback",
+        redirectUri: `http://127.0.0.1:${port}/callback`,
+        hostname: "127.0.0.1",
+        successTitle: "OAuth complete",
       });
-      await listening;
+      await ready;
 
       const response = await fetch(`http://127.0.0.1:${port}/callback?code=code-1&state=state-1`);
 

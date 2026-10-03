@@ -17,6 +17,22 @@ import {
 
 const LIVE_TEST_SUFFIX = ".live.test.ts";
 const OPTIONAL_LIVE_SHARD_FILE_ENVS = new Map([
+  // Whole-file opt-in gates: without the flag every case skips, so the file has no pass evidence.
+  ["extensions/anthropic/cli-output.compaction.live.test.ts", ["OPENCLAW_LIVE_CLAUDE_COMPACTION"]],
+  [
+    "extensions/codex/src/app-server/approval-requester.real-binary.live.test.ts",
+    ["OPENCLAW_LIVE_CODEX_APPROVAL_REQUESTER"],
+  ],
+  [
+    "extensions/codex/src/app-server/async-questions.real-binary.live.test.ts",
+    ["OPENCLAW_LIVE_CODEX_ASYNC_QUESTIONS"],
+  ],
+  [
+    "extensions/codex/src/app-server/thread-lifecycle.restricted-mcp.real-binary.live.test.ts",
+    ["OPENCLAW_LIVE_CODEX_RESTRICTED_MCP"],
+  ],
+  ["extensions/ollama/ollama.live.test.ts", ["OPENCLAW_LIVE_OLLAMA"]],
+  ["extensions/twitch/src/plugin.live.test.ts", ["TWITCH_LIVE_TEST"]],
   [
     "extensions/codex/src/app-server/native-subagent-monitor.live.test.ts",
     ["OPENCLAW_LIVE_CODEX_NATIVE_SUBAGENT"],
@@ -27,6 +43,10 @@ const OPTIONAL_LIVE_SHARD_FILE_ENVS = new Map([
   ],
   ["src/agents/agent-mcp-style.cache.live.test.ts", ["OPENCLAW_LIVE_CACHE_TEST"]],
   ["src/agents/cli-runner/bundle-mcp.gemini.live.test.ts", ["OPENCLAW_LIVE_CLI_MCP_GEMINI"]],
+  [
+    "src/agents/cli-runner/execute.compaction-watchdog.claude.live.test.ts",
+    ["OPENCLAW_LIVE_CLAUDE_COMPACTION"],
+  ],
   ["src/agents/embedded-agent-runner.cache.live.test.ts", ["OPENCLAW_LIVE_CACHE_TEST"]],
   ["src/agents/live-cache-regression.live.test.ts", ["OPENCLAW_LIVE_CACHE_TEST"]],
   ["src/agents/provider-headers.live.test.ts", ["OPENCLAW_LIVE_CACHE_TEST"]],
@@ -37,6 +57,19 @@ const OPTIONAL_LIVE_SHARD_FILE_ENVS = new Map([
     ["OPENCLAW_LIVE_OPENAI_COMPACTION"],
   ],
   ["src/agents/subagents/announce/subagent-announce.live.test.ts", ["OPENCLAW_LIVE_SUBAGENT_E2E"]],
+  [
+    "src/agents/subagents/announce/subagent-continuation.live.test.ts",
+    ["OPENCLAW_LIVE_SUBAGENT_E2E"],
+  ],
+  [
+    "src/agents/subagents/announce/subagent-late-reply.live.test.ts",
+    ["OPENCLAW_LIVE_SUBAGENT_STRESS"],
+  ],
+  [
+    "src/agents/subagents/announce/subagent-yield-resume.live.test.ts",
+    ["OPENCLAW_LIVE_SUBAGENT_STRESS"],
+  ],
+  ["src/agents/tools/sessions-send-peer.live.test.ts", ["OPENCLAW_LIVE_SUBAGENT_STRESS"]],
   ["src/agents/tools/image-tool.ollama.live.test.ts", ["OPENCLAW_LIVE_OLLAMA_IMAGE"]],
   ["src/agents/tools/image-tool.providers.live.test.ts", ["OPENCLAW_LIVE_IMAGE_TOOL_TEST"]],
   ["extensions/openai/realtime-meeting.live.test.ts", ["OPENCLAW_LIVE_GPT_LIVE"]],
@@ -312,7 +345,12 @@ export function selectLiveShardFiles(shard: string, files = collectAllLiveTestFi
     case "native-live-src-gateway-backends":
       return files.filter(isGatewayBackendLiveTest);
     case "native-live-src-infra":
-      return files.filter((file) => file.startsWith("src/infra/") || file.startsWith("src/cli/"));
+      return files.filter(
+        (file) =>
+          file.startsWith("src/infra/") ||
+          file.startsWith("src/cli/") ||
+          file.startsWith("src/commands/"),
+      );
     case "native-live-test":
       return files.filter((file) => file.startsWith("test/"));
     case "native-live-extensions-a-k":
@@ -480,19 +518,6 @@ function normalizeReportFilePath(value: unknown, repoRoot = process.cwd()) {
   return repoRelative.split(path.sep).join("/");
 }
 
-function collectReportedLiveTestFiles(payload: unknown, repoRoot = process.cwd()) {
-  if (!isUnknownRecord(payload) || !Array.isArray(payload.testResults)) {
-    return null;
-  }
-  return new Set(
-    payload.testResults
-      .map((result) =>
-        normalizeReportFilePath(isUnknownRecord(result) ? result.name : undefined, repoRoot),
-      )
-      .filter((name) => name.length > 0),
-  );
-}
-
 function isDisabledOptInAssertion(assertion: Record<string, unknown>) {
   if (assertion.status !== "passed") {
     return false;
@@ -638,38 +663,33 @@ export function validateLiveShardReportPayload(
     return { ok: false, reason: "Vitest report has no passing live tests." };
   }
   if (expectedFiles.length > 0) {
-    const reportedFiles = collectReportedLiveTestFiles(payload, repoRoot);
     const fileEvidence = collectReportedLiveTestFileEvidence(payload, repoRoot);
-    if (!reportedFiles || !fileEvidence) {
+    if (!fileEvidence) {
       return { ok: false, reason: "Vitest report is missing testResults file evidence." };
     }
-    const missingFiles = expectedFiles
-      .map((file) => normalizeReportFilePath(file, repoRoot))
-      .filter((file) => !reportedFiles.has(file));
+    const normalizedFiles = expectedFiles.map((file) => normalizeReportFilePath(file, repoRoot));
+    const missingFiles = normalizedFiles.filter((file) => !fileEvidence.has(file));
     if (missingFiles.length > 0) {
       return {
         ok: false,
         reason: `Vitest report missing selected live test file evidence: ${missingFiles.join(", ")}`,
       };
     }
-    const enabledPassFiles = expectedFiles
-      .map((file) => normalizeReportFilePath(file, repoRoot))
-      .filter((file) => countEnabledLivePasses(file, fileEvidence.get(file), env) > 0);
-    if (enabledPassFiles.length === 0) {
+    if (
+      !normalizedFiles.some((file) => countEnabledLivePasses(file, fileEvidence.get(file), env) > 0)
+    ) {
       return {
         ok: false,
         reason: "Vitest report has no enabled selected live test files with passing assertions.",
       };
     }
-    const noPassFiles = expectedFiles
-      .map((file) => normalizeReportFilePath(file, repoRoot))
-      .filter((file) => {
-        const evidence = fileEvidence.get(file);
-        return (
-          countEnabledLivePasses(file, evidence, env) < 1 &&
-          !isDisabledOptionalLiveShardFile(file, evidence, env)
-        );
-      });
+    const noPassFiles = normalizedFiles.filter((file) => {
+      const evidence = fileEvidence.get(file);
+      return (
+        countEnabledLivePasses(file, evidence, env) < 1 &&
+        !isDisabledOptionalLiveShardFile(file, evidence, env)
+      );
+    });
     if (noPassFiles.length > 0) {
       return {
         ok: false,

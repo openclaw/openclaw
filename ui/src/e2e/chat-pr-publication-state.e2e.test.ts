@@ -159,6 +159,116 @@ suite.define(() => {
     });
   });
 
+  it("keeps a failed publication attempt separate from a merged PR with readable recovery", async () => {
+    await suite.withPage(publicationContextOptions(), async ({ page }) => {
+      const failure = {
+        requestId: "3a9d86d9-87fb-4aa1-afc3-e98df3b2cb56",
+        status: "failed",
+        code: "unavailable",
+        publisher: { source: "agent-override", accountId: 3, login: "agent-bot" },
+        message: "GitHub publication failed.",
+        nextAction:
+          "The pull request base or its Git history could not be verified. Check repository read access, connectivity, and local Git objects before retrying publication.",
+      };
+      const gateway = await installMockGateway(page, {
+        communityInvite: false,
+        featureMethods: publicationMethods,
+        methodResponses: {
+          [SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD]: { subscribed: true },
+          "sessions.github.options": {
+            ...publicationOptions,
+            latestShared: { result: failure, confirmation: null },
+          },
+        },
+      });
+      await page.goto(suite.server.baseUrl + "chat");
+      const key = await waitForWatchedSessionKey(gateway);
+      await page.getByText(failure.message, { exact: true }).waitFor();
+      await gateway.emitGatewayEvent(CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT, {
+        sessions: {
+          [key]: {
+            pullRequests: [
+              {
+                owner: "synthetic",
+                repo: "publication-demo",
+                number: 45,
+                branch: "feature/finished-task",
+                title: "Completed task",
+                url: "https://github.com/synthetic/publication-demo/pull/45",
+                state: "merged",
+              },
+            ],
+            rateLimited: false,
+            status: "ready",
+          },
+        },
+      });
+      const surface = page.locator(".chat-prs");
+      const merged = surface.locator('article[data-state="merged"]');
+      await merged.waitFor();
+      // Capture the actual baseline before the regression assertion as well as the repaired state.
+      if (captureUiProof) {
+        await writeFile(
+          path.join(suite.artifactDir, "failed-publication-merged.png"),
+          await takeControlUiViewportScreenshot(page, surface, [merged]),
+        );
+      }
+      expect(await merged.textContent()).not.toContain(failure.message);
+      expect(await merged.locator("[data-publication-account]").count()).toBe(0);
+      const history = surface.locator("details.chat-pr__publication-history");
+      expect(await history.count()).toBe(1);
+      expect(await history.evaluate((element) => element.closest("article") === null)).toBe(true);
+      expect(await history.getAttribute("open")).toBeNull();
+      const summary = history.locator("summary").first();
+      expect((await summary.textContent())?.trim()).toBe("Publication attempt failed");
+      const guidance = history.getByText(failure.nextAction, { exact: true });
+      expect(await guidance.isVisible()).toBe(false);
+      await summary.click();
+      await guidance.waitFor();
+      expect(await history.getByText(failure.message, { exact: true }).isVisible()).toBe(true);
+      const account = history.locator("[data-publication-account]");
+      expect(await account.textContent()).toContain("Publish as @agent-bot");
+      expect(await account.textContent()).toContain("Agent override");
+      const refresh = history.getByRole("button", { name: "Refresh publication" });
+      const tokens = await history.evaluate((element) => {
+        const probe = document.createElement("span");
+        element.append(probe);
+        const resolve = (token: string) => {
+          probe.style.color = `var(${token})`;
+          return getComputedStyle(probe).color;
+        };
+        const colors = {
+          danger: resolve("--danger"),
+          muted: resolve("--muted"),
+          text: resolve("--text"),
+        };
+        probe.remove();
+        return colors;
+      });
+      expect(await summary.evaluate((element) => getComputedStyle(element).color)).toBe(
+        tokens.danger,
+      );
+      for (const neutral of [account, guidance, refresh]) {
+        const color = await neutral.evaluate((element) => getComputedStyle(element).color);
+        expect(color).not.toBe(tokens.danger);
+        expect([tokens.muted, tokens.text]).toContain(color);
+      }
+      if (captureUiProof) {
+        await writeFile(
+          path.join(suite.artifactDir, "failed-publication-expanded.png"),
+          await takeControlUiViewportScreenshot(page, surface, [merged, guidance, refresh]),
+        );
+      }
+      const readsBefore = (await gateway.getRequests("sessions.github.options")).length;
+      await refresh.click();
+      await gateway.waitForRequest("sessions.github.options", { after: readsBefore });
+      await refresh.waitFor();
+      expect(await merged.textContent()).toContain("Merged");
+      expect(await gateway.getRequests("sessions.github.publish")).toHaveLength(0);
+      expect(await gateway.getRequests("sessions.github.confirm")).toHaveLength(0);
+    });
+  });
+
   it("recovers shared receipts and observes committed status without publishing", async () => {
     await suite.withPage(publicationContextOptions(), async ({ page }) => {
       const repository = { owner: "synthetic", repo: "publication-demo" };

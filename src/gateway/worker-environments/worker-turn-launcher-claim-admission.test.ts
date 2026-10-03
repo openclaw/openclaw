@@ -15,6 +15,9 @@ import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import type { WorkerTurnTunnelHandle } from "./tunnel-contract.js";
 import { waitForPendingWorkerResult } from "./worker-turn-admission.js";
 import {
+  createWorkerTurnTunnel,
+  reconcileUnchangedLocalWorkspace,
+  acknowledgeCompletedWorkerTurn,
   ENVIRONMENT_ID,
   MANIFEST_REF,
   OWNER_EPOCH,
@@ -25,7 +28,6 @@ import {
   database,
   createWorkerSessionTurnPlacementProvider,
   credential,
-  measureLaunchTurn,
   openSessionManager,
   placements,
   seedActivePlacement,
@@ -198,7 +200,7 @@ describe("worker turn launcher claim admission", () => {
     expect(waitForRelease).toHaveBeenCalledWith(SESSION_ID, {});
     expect(placements.get(SESSION_ID)?.turnClaim?.runId).toBe(priorClaim.runId);
 
-    placements.updateWorkspaceBaseManifest({ claim: priorClaim, manifestRef: MANIFEST_REF });
+    await placements.updateWorkspaceBaseManifest({ claim: priorClaim, manifestRef: MANIFEST_REF });
     placements.acceptWorkspaceResult(priorClaim);
     placements.completeWorkspaceResultAndReleaseTurn(priorClaim);
     await expect(replacement).rejects.toThrow(
@@ -217,7 +219,10 @@ describe("worker turn launcher claim admission", () => {
         owner: { kind: "local", environmentId: ENVIRONMENT_ID, ownerEpoch: OWNER_EPOCH },
       });
       placements.markWorkspaceResultPending(priorClaim);
-      placements.recordStagedWorkspaceResult(priorClaim, "refs/openclaw/worker-results/missing");
+      await placements.recordStagedWorkspaceResult(
+        priorClaim,
+        "refs/openclaw/worker-results/missing",
+      );
       placements.clearLocalTurnClaimsAfterRestart();
       const pending = placements.listPendingWorkspaceResults();
       expect(pending).toMatchObject([
@@ -326,7 +331,7 @@ describe("worker turn launcher claim admission", () => {
     expect(waitForRelease).toHaveBeenCalledWith(SESSION_ID, {});
     expect(placements.get(SESSION_ID)?.turnClaim?.runId).toBe(priorClaim.runId);
 
-    placements.updateWorkspaceBaseManifest({ claim: priorClaim, manifestRef: MANIFEST_REF });
+    await placements.updateWorkspaceBaseManifest({ claim: priorClaim, manifestRef: MANIFEST_REF });
     placements.acceptWorkspaceResult(priorClaim);
     placements.completeWorkspaceResultAndReleaseTurn(priorClaim);
     await expect(replacement).rejects.toThrow(
@@ -355,7 +360,10 @@ describe("worker turn launcher claim admission", () => {
     placements.markWorkspaceResultPending(priorClaim);
     placements.startWorkspaceResultDrain(priorClaim);
     vi.spyOn(placements, "waitForTurnClaimRelease").mockImplementationOnce(async () => {
-      placements.updateWorkspaceBaseManifest({ claim: priorClaim, manifestRef: MANIFEST_REF });
+      await placements.updateWorkspaceBaseManifest({
+        claim: priorClaim,
+        manifestRef: MANIFEST_REF,
+      });
       placements.acceptWorkspaceResult(priorClaim);
       completeReclaimedWorkspaceTeardown({
         placements,
@@ -419,55 +427,18 @@ describe("worker turn launcher claim admission", () => {
           timestamp: 41,
         }),
       );
-      createWorkerSessionPlacementGate(placements).updateAckCursors({
-        claim: request.turnClaim,
-        transcriptSeq: 2,
-        liveSeq: 1,
-      });
-      return {
-        stdout: JSON.stringify({
-          status: "completed",
-          transcriptLeafId: leafId,
-          transcriptNextSeq: (placements.get(SESSION_ID)?.lastTranscriptAckCursor ?? 0) + 1,
-        }),
-        stderr: "",
-        code: 0,
-        signal: null,
-        killed: false,
-        termination: "exit",
-      };
+      return acknowledgeCompletedWorkerTurn(request.turnClaim, leafId);
     });
     const environments: WorkerTurnEnvironmentService = {
       get: vi.fn(() => attachedEnvironment()),
       acquireTurnCredential: vi.fn(async () => credential(String(launchCount + 1).repeat(43))),
       acknowledgeCredentialDelivery: vi.fn(async () => true),
-      startTunnel: vi.fn(async () => ({
-        environmentId: ENVIRONMENT_ID,
-        ownerEpoch: OWNER_EPOCH,
-        quiesceWorkspace: vi.fn(async () => ({
-          assertActive: vi.fn(async () => {}),
-          resume: vi.fn(async () => {}),
-        })),
-        runWorkspaceCommand: vi.fn(),
-        measureLaunchTurn,
-        launchTurn,
-        syncWorkspace: vi.fn(async () => {
-          throw new Error("unexpected workspace sync");
+      startTunnel: vi.fn(async () =>
+        createWorkerTurnTunnel({
+          launchTurn,
+          reconcileWorkspace: vi.fn(reconcileUnchangedLocalWorkspace),
         }),
-        reconcileWorkspace: vi.fn(async (request) => {
-          if (request.source.kind !== "local") {
-            throw new Error("expected a local workspace source");
-          }
-          request.source.journal.commit(MANIFEST_REF);
-          return {
-            manifestRef: MANIFEST_REF,
-            changed: false,
-            verifyStable: async () => {},
-            verifyLocalStable: async () => {},
-          };
-        }),
-        stop: vi.fn(async () => {}),
-      })),
+      ),
       stopTunnel,
       destroy,
     };
@@ -582,33 +553,12 @@ describe("worker turn launcher claim admission", () => {
       supportsNodePortal: vi.fn(async () => portalAvailable),
       acquireTurnCredential: vi.fn(async () => credential()),
       acknowledgeCredentialDelivery: vi.fn(async () => true),
-      startTunnel: vi.fn(async () => ({
-        environmentId: ENVIRONMENT_ID,
-        ownerEpoch: OWNER_EPOCH,
-        quiesceWorkspace: vi.fn(async () => ({
-          assertActive: vi.fn(async () => {}),
-          resume: vi.fn(async () => {}),
-        })),
-        runWorkspaceCommand: vi.fn(),
-        measureLaunchTurn,
-        launchTurn,
-        syncWorkspace: vi.fn(async () => {
-          throw new Error("unexpected workspace sync");
+      startTunnel: vi.fn(async () =>
+        createWorkerTurnTunnel({
+          launchTurn,
+          reconcileWorkspace: vi.fn(reconcileUnchangedLocalWorkspace),
         }),
-        reconcileWorkspace: vi.fn(async (request) => {
-          if (request.source.kind !== "local") {
-            throw new Error("expected a local workspace source");
-          }
-          request.source.journal.commit(MANIFEST_REF);
-          return {
-            manifestRef: MANIFEST_REF,
-            changed: false,
-            verifyStable: async () => {},
-            verifyLocalStable: async () => {},
-          };
-        }),
-        stop: vi.fn(async () => {}),
-      })),
+      ),
       stopTunnel: vi.fn(async () => {}),
       destroy: vi.fn(async () => attachedEnvironment()),
     };
@@ -736,94 +686,57 @@ describe("worker turn launcher claim admission", () => {
       get: vi.fn(() => attachedEnvironment()),
       acquireTurnCredential: vi.fn(async () => credential(String(launchCount + 1).repeat(43))),
       acknowledgeCredentialDelivery: vi.fn(async () => true),
-      startTunnel: vi.fn(async () => ({
-        environmentId: ENVIRONMENT_ID,
-        ownerEpoch: OWNER_EPOCH,
-        quiesceWorkspace: vi.fn(async () => ({
-          assertActive: vi.fn(async () => {}),
-          resume: vi.fn(async () => {}),
-        })),
-        runWorkspaceCommand: vi.fn(),
-        measureLaunchTurn,
-        launchTurn: vi.fn(async (request): Promise<SpawnResult> => {
-          request.onDispatchReady?.();
-          launchCount += 1;
-          const descriptor = completeWorkerLaunchDescriptor(structuredClone(request.plan), {
-            kind: "unix",
-            socketPath: "/worker/gateway.sock",
-          });
-          turnIds.push(descriptor.assignment.turnId);
-          if (launchCount === 1) {
+      startTunnel: vi.fn(async () =>
+        createWorkerTurnTunnel({
+          launchTurn: vi.fn(async (request): Promise<SpawnResult> => {
+            request.onDispatchReady?.();
+            launchCount += 1;
+            const descriptor = completeWorkerLaunchDescriptor(structuredClone(request.plan), {
+              kind: "unix",
+              socketPath: "/worker/gateway.sock",
+            });
+            turnIds.push(descriptor.assignment.turnId);
+            if (launchCount === 1) {
+              const completed = openSessionManager();
+              const leafId = completed.appendMessage(
+                makeAgentAssistantMessage({
+                  content: [{ type: "text", text: "Remote model failed" }],
+                  stopReason: "error",
+                  errorMessage: "Cloud worker turn failed",
+                  timestamp: 31,
+                }),
+              );
+              createWorkerSessionPlacementGate(placements).updateAckCursors({
+                claim: request.turnClaim,
+                transcriptSeq: 2,
+                liveSeq: 1,
+              });
+              return {
+                stdout: JSON.stringify({
+                  status: "failed",
+                  reason: "turn-failed",
+                  transcriptLeafId: leafId,
+                  transcriptNextSeq: (placements.get(SESSION_ID)?.lastTranscriptAckCursor ?? 0) + 1,
+                }),
+                stderr: "",
+                code: 0,
+                signal: null,
+                killed: false,
+                termination: "exit",
+              };
+            }
             const completed = openSessionManager();
             const leafId = completed.appendMessage(
               makeAgentAssistantMessage({
-                content: [{ type: "text", text: "Remote model failed" }],
-                stopReason: "error",
-                errorMessage: "Cloud worker turn failed",
-                timestamp: 31,
+                content: [{ type: "text", text: "Recovered worker reply" }],
+                timestamp: 41,
               }),
             );
-            createWorkerSessionPlacementGate(placements).updateAckCursors({
-              claim: request.turnClaim,
-              transcriptSeq: 2,
-              liveSeq: 1,
-            });
-            return {
-              stdout: JSON.stringify({
-                status: "failed",
-                reason: "turn-failed",
-                transcriptLeafId: leafId,
-                transcriptNextSeq: (placements.get(SESSION_ID)?.lastTranscriptAckCursor ?? 0) + 1,
-              }),
-              stderr: "",
-              code: 0,
-              signal: null,
-              killed: false,
-              termination: "exit",
-            };
-          }
-          const completed = openSessionManager();
-          const leafId = completed.appendMessage(
-            makeAgentAssistantMessage({
-              content: [{ type: "text", text: "Recovered worker reply" }],
-              timestamp: 41,
-            }),
-          );
-          createWorkerSessionPlacementGate(placements).updateAckCursors({
-            claim: request.turnClaim,
-            transcriptSeq: 2,
-            liveSeq: 1,
-          });
-          return {
-            stdout: JSON.stringify({
-              status: "completed",
-              transcriptLeafId: leafId,
-              transcriptNextSeq: (placements.get(SESSION_ID)?.lastTranscriptAckCursor ?? 0) + 1,
-            }),
-            stderr: "",
-            code: 0,
-            signal: null,
-            killed: false,
-            termination: "exit",
-          };
+            return acknowledgeCompletedWorkerTurn(request.turnClaim, leafId);
+          }),
+          reconcileWorkspace: vi.fn(reconcileUnchangedLocalWorkspace),
         }),
-        syncWorkspace: vi.fn(async () => {
-          throw new Error("unexpected workspace sync");
-        }),
-        reconcileWorkspace: vi.fn(async (request) => {
-          if (request.source.kind !== "local") {
-            throw new Error("expected a local workspace source");
-          }
-          request.source.journal.commit(MANIFEST_REF);
-          return {
-            manifestRef: MANIFEST_REF,
-            changed: false,
-            verifyStable: async () => {},
-            verifyLocalStable: async () => {},
-          };
-        }),
-        stop: vi.fn(async () => {}),
-      })),
+      ),
       stopTunnel,
       destroy,
     };

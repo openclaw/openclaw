@@ -1,7 +1,3 @@
-/**
- * Gateway loop for polling ClickClack backlog events, opening the realtime
- * websocket, and dispatching user messages into OpenClaw.
- */
 import type { ChannelGatewayContext } from "openclaw/plugin-sdk/channel-contract";
 import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
 import type { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";

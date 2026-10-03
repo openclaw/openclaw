@@ -3,6 +3,7 @@ import path from "node:path";
 import type { Worker } from "node:worker_threads";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, expect, it, vi } from "vitest";
+import { encodeSessionArchiveContent } from "../config/sessions/archive-compression.js";
 import {
   replaceSessionEntry,
   replaceTranscriptEvents,
@@ -24,6 +25,7 @@ import {
 } from "../config/sessions/session-transcript-worker-resources.js";
 import {
   prepareSessionEntryPresenceRead,
+  prewarmSessionHistoryWorker,
   withSessionHistoryWorkerDatabase,
 } from "../config/sessions/session-transcript-worker-runtime.js";
 import { DEFAULT_WORKER_PENDING_BYTES } from "../infra/worker-task-capacity.js";
@@ -46,11 +48,13 @@ import {
   closeOpenClawStateDatabaseAsync,
 } from "../state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import * as stateReadWorker from "../state/openclaw-state-read-worker.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { readChatHistoryPage } from "./server-methods/chat-history-pages.js";
+import { createArchivedSessionTranscriptSource } from "./session-end-transcript-reader.js";
 import { readChatHistoryMessageId } from "./session-history-tail.js";
 
 const observed = vi.hoisted(() => ({
@@ -69,7 +73,7 @@ vi.mock("node:worker_threads", async (importOriginal) => {
       override postMessage(...args: Parameters<Worker["postMessage"]>): void {
         const kind = asOptionalRecord(asOptionalRecord(args[0])?.input)?.kind;
         if (
-          (kind === "history-page" || kind === "session-row-presence") &&
+          (kind === "prewarm" || kind === "history-page" || kind === "session-row-presence") &&
           !observed.workers.includes(this)
         ) {
           observed.workers.push(this);
@@ -175,15 +179,61 @@ it("retains the prepared metadata target when caller scope and environment chang
   });
 });
 
+it("reads an exact ended-session archive in the history worker", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const sessionId = "deleted-session-archive";
+    const fixture = await seed(state, "main", sessionId);
+    const content = [
+      { type: "session", version: 3, id: sessionId },
+      {
+        type: "message",
+        id: "archived-message",
+        parentId: null,
+        message: { role: "user", content: "archived content" },
+      },
+    ]
+      .map((event) => JSON.stringify(event))
+      .join("\n");
+    const encoded = encodeSessionArchiveContent(`${content}\n`);
+    const archivePath = state.path(
+      `deleted.jsonl.deleted.2026-09-29T00-00-00.000Z${encoded.suffix}`,
+    );
+    fs.writeFileSync(archivePath, encoded.bytes);
+    const source = createArchivedSessionTranscriptSource({
+      agentId: "main",
+      archivedPath: archivePath,
+      sessionId,
+      storePath: fixture.target.storePath,
+    });
+    if (!source.available) {
+      throw new Error("expected an available archive source");
+    }
+    const workersBefore = observed.workers.length;
+
+    await expect(source.readTail({ maxBytes: 64 * 1_024, maxMessages: 10 })).resolves.toMatchObject(
+      {
+        messages: [expect.objectContaining({ role: "user", content: "archived content" })],
+        totalMessages: 1,
+      },
+    );
+
+    expect(observed.workers.length).toBeGreaterThan(workersBefore);
+    expect(observed.workers.at(-1)?.threadId).toBeGreaterThan(0);
+  });
+});
+
 it("keeps fresh fixture roots isolated while reusing idle reader execution", async () => {
   let previousWorker: Worker | undefined;
   for (const sessionId of ["first-fixture", "second-fixture"]) {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const fixture = await seed(state, "main", sessionId);
+      await prewarmSessionHistoryWorker({ agentId: "main", path: fixture.path, env: state.env });
+      const prewarmedWorker = observed.workers.at(-1);
       expect((await fixture.read()).messages.map(readChatHistoryMessageId)).toEqual([
         `${sessionId}-message`,
       ]);
       const worker = observed.workers.at(-1)!;
+      expect(worker).toBe(prewarmedWorker);
       if (previousWorker) {
         if (process.versions.bun) {
           expect(previousWorker.threadId).toBe(-1);
@@ -317,6 +367,63 @@ it.each(["message-by-id", "message-count"] as const)(
   },
 );
 
+it.each(["message-by-id", "message-count"] as const)(
+  "rejects a completed native %s reply after primary file replacement",
+  async (kind) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const sessionId = "replaced-primary-read";
+      const fixture = await seed(state, "main", sessionId);
+      await closeOpenClawAgentDatabaseByPathAsync(fixture.path, "main");
+      fs.copyFileSync(fixture.path, `${fixture.path}.replacement`);
+      const originalInode = fs.statSync(fixture.path, { bigint: true }).ino;
+      const nativeReply = createDeferredCore<unknown>();
+      const releaseReply = createDeferredCore();
+      const run = historyLane.pool.run;
+      const read = vi.spyOn(historyLane.pool, "run").mockImplementation(async (...args) => {
+        const reply = await run(...args);
+        if (reply.ok && asOptionalRecord(reply.value)?.kind === kind) {
+          nativeReply.resolve(reply.value);
+          await releaseReply.promise;
+        }
+        return reply;
+      });
+      const pending =
+        kind === "message-by-id"
+          ? readSessionHistoryPageInWorker({
+              kind,
+              params: { target: fixture.target, messageId: `${sessionId}-message` },
+            })
+          : readSessionHistoryPageInWorker({ kind, params: { target: fixture.target } });
+      try {
+        const completed = await Promise.race([
+          nativeReply.promise,
+          pending.then(() => {
+            throw new Error("History read completed before its native reply was released");
+          }),
+        ]);
+        expect(completed).toMatchObject(
+          kind === "message-by-id"
+            ? { kind, result: { found: true, message: { role: "user", content: sessionId } } }
+            : { kind, count: 1 },
+        );
+        // Release the settled native reader for Windows replacement without revoking host custody.
+        await historyLane.pool.closeResources(JSON.stringify([{ path: fixture.path }]));
+        fs.renameSync(fixture.path, `${fixture.path}.previous`);
+        fs.renameSync(`${fixture.path}.replacement`, fixture.path);
+        expect(fs.statSync(fixture.path, { bigint: true }).ino).not.toBe(originalInode);
+        releaseReply.resolve();
+        await expect(pending).rejects.toThrow(
+          "Session store changed while preparing its metadata. Retry the request.",
+        );
+      } finally {
+        releaseReply.resolve();
+        await pending.catch(() => undefined);
+        read.mockRestore();
+      }
+    });
+  },
+);
+
 it.each([
   { phase: "discovery", mode: "no-commit" },
   { phase: "discovery", mode: "metadata-refresh" },
@@ -358,12 +465,34 @@ it.each([
         if (mode === "metadata-refresh") {
           registerOpenClawAgentDatabase(
             { agentId: "other", path: b.path, env: state.env },
-            (receipt) => registration.recordCommitted(receipt),
+            { committed: (receipt) => registration.recordCommitted(receipt) },
           );
         }
         registration.finish();
         finished = true;
       };
+      const captureSource = stateReadWorker.captureOpenClawStateReadSource;
+      const registryReads = vi
+        .spyOn(stateReadWorker, "captureOpenClawStateReadSource")
+        .mockImplementation(() => {
+          const source = captureSource();
+          return {
+            ...source,
+            createTransport(command) {
+              const transport = source.createTransport(command);
+              if (command.type !== "agentDatabaseRegistry.read") {
+                return transport;
+              }
+              return {
+                ...transport,
+                startRead(...args) {
+                  observed.dispatch?.({ input: { command } });
+                  return transport.startRead(...args);
+                },
+              };
+            },
+          };
+        });
       try {
         expect((await a.read()).messages.map(readChatHistoryMessageId)).toEqual([
           "registration-a-message",
@@ -371,6 +500,7 @@ it.each([
         expect(started && finished).toBe(true);
       } finally {
         observed.dispatch = undefined;
+        registryReads.mockRestore();
         registration.finish();
       }
     });

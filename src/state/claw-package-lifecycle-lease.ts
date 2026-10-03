@@ -68,7 +68,6 @@ export function acquireClawPackageLifecycleLease(
   const expiresAt = nowMs + LEASE_TTL_MS;
   const owner = options.owner ?? randomUUID();
   const leaseKey = packageLeaseKey(artifact);
-  let acquired = false;
 
   try {
     runOpenClawStateWriteTransaction(
@@ -108,7 +107,6 @@ export function acquireClawPackageLifecycleLease(
             updated_at: nowMs,
           }),
         );
-        acquired = true;
       },
       { env, path: databasePath },
     );
@@ -119,9 +117,6 @@ export function acquireClawPackageLifecycleLease(
     return null;
   }
 
-  if (!acquired) {
-    return null;
-  }
   return {
     heartbeat: (heartbeatNowMs = Date.now()) => {
       const heartbeatExpiresAt = heartbeatNowMs + LEASE_TTL_MS;
@@ -207,24 +202,20 @@ export async function withClawPackageLifecycleLease<T>(
   const maintained = maintainClawPackageLifecycleLease(lease);
   // CLI failures call process.exit(), which skips async finally blocks. Release
   // synchronously on exit so the next package command is not blocked until TTL.
-  const releaseOnExit = () => {
-    try {
-      maintained.release();
-    } catch {
-      // Expiry recovers a lease whose exit cleanup loses a database race.
-    }
-  };
-  process.once("exit", releaseOnExit);
-  try {
-    const result = await operation();
-    maintained.assertCurrent();
-    return result;
-  } finally {
-    process.removeListener("exit", releaseOnExit);
+  const release = () => {
     try {
       maintained.release();
     } catch {
       // Expiry recovers a lease whose cleanup cannot reach the shared database.
     }
+  };
+  process.once("exit", release);
+  try {
+    const result = await operation();
+    maintained.assertCurrent();
+    return result;
+  } finally {
+    process.removeListener("exit", release);
+    release();
   }
 }

@@ -56,8 +56,8 @@ function parseOptionalPositiveInt(value: unknown, fallback: number): number {
   return parsed !== undefined && Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
-function clampInt(value: number | undefined, fallback: number, min: number, max: number): number {
-  return resolveIntegerOption(value, fallback, { min, max });
+function resolveChoice<T extends string>(value: unknown, choices: readonly T[], fallback: T): T {
+  return choices.find((choice) => choice === value) ?? fallback;
 }
 
 function normalizeTranscriptDir(value: unknown): string {
@@ -91,12 +91,12 @@ function resolveDefaultToolsAllow(cfg: OpenClawConfig | undefined): string[] {
     : [...DEFAULT_ACTIVE_MEMORY_TOOLS_ALLOW];
 }
 
-function hasDeprecatedModelFallbackPolicy(pluginConfig: unknown): boolean {
+export function hasDeprecatedModelFallbackPolicy(pluginConfig: unknown): boolean {
   const raw = asOptionalRecord(pluginConfig);
   return raw ? Object.hasOwn(raw, "modelFallbackPolicy") : false;
 }
 
-function resolveSafeTranscriptDir(baseSessionsDir: string, transcriptDir: string): string {
+export function resolveSafeTranscriptDir(baseSessionsDir: string, transcriptDir: string): string {
   const normalized = transcriptDir.trim();
   if (!normalized || normalized.includes(":") || path.isAbsolute(normalized)) {
     return path.resolve(baseSessionsDir, DEFAULT_TRANSCRIPT_DIR);
@@ -109,27 +109,21 @@ function resolveSafeTranscriptDir(baseSessionsDir: string, transcriptDir: string
   return candidate;
 }
 
-function toSafeTranscriptAgentDirName(agentId: string): string {
-  const encoded = encodeURIComponent(agentId.trim());
-  return encoded ? encoded : "unknown-agent";
-}
-
-function resolvePersistentTranscriptBaseDir(api: OpenClawPluginApi, agentId: string): string {
+export function resolvePersistentTranscriptBaseDir(
+  api: OpenClawPluginApi,
+  agentId: string,
+): string {
   return path.join(
     api.runtime.state.resolveStateDir(),
     "plugins",
     "active-memory",
     "transcripts",
     "agents",
-    toSafeTranscriptAgentDirName(agentId),
+    encodeURIComponent(agentId.trim()) || "unknown-agent",
   );
 }
 
-function formatRuntimeToolsAllowSource(toolsAllow: readonly string[]): string {
-  return `runtime toolsAllow: ${toolsAllow.join(", ")}`;
-}
-
-function isMissingRegisteredMemoryToolsError(
+export function isMissingRegisteredMemoryToolsError(
   error: unknown,
   toolsAllow: readonly string[] = DEFAULT_ACTIVE_MEMORY_TOOLS_ALLOW,
 ): boolean {
@@ -144,15 +138,14 @@ function isMissingRegisteredMemoryToolsError(
     return false;
   }
   const sources = message.slice(prefix.length, -suffix.length);
-  const runtimeSource = formatRuntimeToolsAllowSource(toolsAllow);
   const sourceParts = sources
     .split(";")
     .map((source) => source.trim())
     .filter(Boolean);
-  return sourceParts.includes(runtimeSource);
+  return sourceParts.includes(`runtime toolsAllow: ${toolsAllow.join(", ")}`);
 }
 
-function normalizePluginConfig(
+export function normalizePluginConfig(
   pluginConfig: unknown,
   cfg?: OpenClawConfig,
 ): ResolvedActiveRecallPluginConfig {
@@ -167,69 +160,87 @@ function normalizePluginConfig(
     : [];
   return {
     enabled: raw.enabled !== false,
-    mode:
-      raw.mode === "always" || raw.mode === "off" || raw.mode === "escalate"
-        ? raw.mode
-        : DEFAULT_ACTIVE_MEMORY_MODE,
+    mode: resolveChoice(raw.mode, ["always", "off", "escalate"], DEFAULT_ACTIVE_MEMORY_MODE),
     agents: Array.isArray(raw.agents) ? normalizeStringEntries(raw.agents) : [],
     model: normalizeOptionalString(raw.model),
     modelFallback: normalizeOptionalString(raw.modelFallback),
     allowedChatTypes: allowedChatTypes.length > 0 ? allowedChatTypes : ["direct"],
     allowedChatIds: normalizeIdentifierList(raw.allowedChatIds),
     deniedChatIds: normalizeIdentifierList(raw.deniedChatIds),
-    thinking: resolveThinkingLevel(raw.thinking),
+    thinking: resolveChoice<ActiveMemoryThinkingLevel>(
+      raw.thinking,
+      ["off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max"],
+      "off",
+    ),
     fastMode: normalizeActiveMemoryFastMode(raw.fastMode),
-    promptStyle: resolvePromptStyle(raw.promptStyle, raw.queryMode),
+    promptStyle: resolveChoice<ActiveMemoryPromptStyle>(
+      raw.promptStyle,
+      ["balanced", "strict", "contextual", "recall-heavy", "precision-heavy", "preference-only"],
+      raw.queryMode === "message" ? "strict" : raw.queryMode === "full" ? "contextual" : "balanced",
+    ),
     toolsAllow: normalizeConfiguredToolsAllow(raw.toolsAllow) ?? resolveDefaultToolsAllow(cfg),
     promptOverride: normalizeOptionalString(raw.promptOverride),
     promptAppend: normalizeOptionalString(raw.promptAppend),
-    timeoutMs: clampInt(
+    timeoutMs: resolveIntegerOption(
       parseOptionalPositiveInt(raw.timeoutMs, DEFAULT_TIMEOUT_MS),
       DEFAULT_TIMEOUT_MS,
-      minimumTimeoutMs,
-      MAX_TIMEOUT_MS,
+      { min: minimumTimeoutMs, max: MAX_TIMEOUT_MS },
     ),
     timeoutMsIsDefault: raw.timeoutMs === undefined || raw.timeoutMs === null,
-    setupGraceTimeoutMs: clampInt(
-      raw.setupGraceTimeoutMs,
-      setupGraceTimeoutMs,
-      0,
-      MAX_SETUP_GRACE_TIMEOUT_MS,
+    setupGraceTimeoutMs: resolveIntegerOption(raw.setupGraceTimeoutMs, setupGraceTimeoutMs, {
+      min: 0,
+      max: MAX_SETUP_GRACE_TIMEOUT_MS,
+    }),
+    queryMode: resolveChoice(raw.queryMode, ["message", "recent", "full"], DEFAULT_QUERY_MODE),
+    maxSummaryChars: resolveIntegerOption(raw.maxSummaryChars, DEFAULT_MAX_SUMMARY_CHARS, {
+      min: 40,
+      max: 1000,
+    }),
+    recentUserTurns: resolveIntegerOption(raw.recentUserTurns, DEFAULT_RECENT_USER_TURNS, {
+      min: 0,
+      max: 4,
+    }),
+    recentAssistantTurns: resolveIntegerOption(
+      raw.recentAssistantTurns,
+      DEFAULT_RECENT_ASSISTANT_TURNS,
+      {
+        min: 0,
+        max: 3,
+      },
     ),
-    queryMode:
-      raw.queryMode === "message" || raw.queryMode === "recent" || raw.queryMode === "full"
-        ? raw.queryMode
-        : DEFAULT_QUERY_MODE,
-    maxSummaryChars: clampInt(raw.maxSummaryChars, DEFAULT_MAX_SUMMARY_CHARS, 40, 1000),
-    recentUserTurns: clampInt(raw.recentUserTurns, DEFAULT_RECENT_USER_TURNS, 0, 4),
-    recentAssistantTurns: clampInt(raw.recentAssistantTurns, DEFAULT_RECENT_ASSISTANT_TURNS, 0, 3),
-    recentUserChars: clampInt(raw.recentUserChars, DEFAULT_RECENT_USER_CHARS, 40, 1000),
-    recentAssistantChars: clampInt(
+    recentUserChars: resolveIntegerOption(raw.recentUserChars, DEFAULT_RECENT_USER_CHARS, {
+      min: 40,
+      max: 1000,
+    }),
+    recentAssistantChars: resolveIntegerOption(
       raw.recentAssistantChars,
       DEFAULT_RECENT_ASSISTANT_CHARS,
-      40,
-      1000,
+      {
+        min: 40,
+        max: 1000,
+      },
     ),
     logging: raw.logging === true,
-    cacheTtlMs: clampInt(raw.cacheTtlMs, DEFAULT_CACHE_TTL_MS, 1000, 120_000),
-    circuitBreakerMaxTimeouts: clampInt(
+    cacheTtlMs: resolveIntegerOption(raw.cacheTtlMs, DEFAULT_CACHE_TTL_MS, {
+      min: 1000,
+      max: 120_000,
+    }),
+    circuitBreakerMaxTimeouts: resolveIntegerOption(
       raw.circuitBreakerMaxTimeouts,
       DEFAULT_CIRCUIT_BREAKER_MAX_TIMEOUTS,
-      1,
-      20,
+      { min: 1, max: 20 },
     ),
-    circuitBreakerCooldownMs: clampInt(
+    circuitBreakerCooldownMs: resolveIntegerOption(
       raw.circuitBreakerCooldownMs,
       DEFAULT_CIRCUIT_BREAKER_COOLDOWN_MS,
-      5000,
-      600_000,
+      { min: 5000, max: 600_000 },
     ),
     persistTranscripts: raw.persistTranscripts === true,
     transcriptDir: normalizeTranscriptDir(raw.transcriptDir),
   };
 }
 
-function readActiveMemoryConfig(api: OpenClawPluginApi): OpenClawConfig {
+export function readActiveMemoryConfig(api: OpenClawPluginApi): OpenClawConfig {
   try {
     return (api.runtime.config?.current?.() as OpenClawConfig | undefined) ?? api.config;
   } catch {
@@ -237,70 +248,25 @@ function readActiveMemoryConfig(api: OpenClawPluginApi): OpenClawConfig {
   }
 }
 
-function resolveThinkingLevel(thinking: unknown): ActiveMemoryThinkingLevel {
-  if (
-    thinking === "off" ||
-    thinking === "minimal" ||
-    thinking === "low" ||
-    thinking === "medium" ||
-    thinking === "high" ||
-    thinking === "xhigh" ||
-    thinking === "adaptive" ||
-    thinking === "max"
-  ) {
-    return thinking;
-  }
-  return "off";
-}
-
-function normalizeActiveMemoryFastMode(fastMode: unknown): ActiveMemoryFastMode | undefined {
+export function normalizeActiveMemoryFastMode(fastMode: unknown): ActiveMemoryFastMode | undefined {
   return fastMode === true || fastMode === false || fastMode === "auto" ? fastMode : undefined;
 }
 
-function resolvePromptStyle(
-  promptStyle: unknown,
-  queryMode: ActiveRecallPluginConfig["queryMode"],
-): ActiveMemoryPromptStyle {
-  if (
-    promptStyle === "balanced" ||
-    promptStyle === "strict" ||
-    promptStyle === "contextual" ||
-    promptStyle === "recall-heavy" ||
-    promptStyle === "precision-heavy" ||
-    promptStyle === "preference-only"
-  ) {
-    return promptStyle;
-  }
-  if (queryMode === "message") {
-    return "strict";
-  }
-  if (queryMode === "full") {
-    return "contextual";
-  }
-  return "balanced";
-}
-
-function resetActiveMemoryConfigForTests(): void {
+export function resetActiveMemoryConfigForTests(): void {
   minimumTimeoutMs = DEFAULT_MIN_TIMEOUT_MS;
   setupGraceTimeoutMs = DEFAULT_SETUP_GRACE_TIMEOUT_MS;
 }
 
-function setMinimumTimeoutMsForTests(value: number): void {
+export function setMinimumTimeoutMsForTests(value: number): void {
   minimumTimeoutMs = value;
 }
 
-function setSetupGraceTimeoutMsForTests(value: number): void {
+export function setSetupGraceTimeoutMsForTests(value: number): void {
   setupGraceTimeoutMs = Math.max(0, Math.floor(value));
 }
 
-/**
- * Recalls eligible for CLI-backend dispatch run a fresh CLI process, which
- * measured runs place at 9-20s — over the plain 15s default. Eligibility is
- * the runner's own dispatch decision (route, registered backend, stored
- * credential mode), so API-key setups that keep the direct passthrough also
- * keep the plain default. Explicit operator timeoutMs config always wins.
- */
-function applyCliRuntimeRecallTimeoutDefault(
+// The runner owns CLI eligibility; explicit timeouts and direct API runs retain their budgets.
+export function applyCliRuntimeRecallTimeoutDefault(
   config: ResolvedActiveRecallPluginConfig,
   cliDispatchEligible: boolean,
 ): ResolvedActiveRecallPluginConfig {
@@ -311,18 +277,3 @@ function applyCliRuntimeRecallTimeoutDefault(
     ? { ...config, timeoutMs: DEFAULT_CLI_RUNTIME_RECALL_TIMEOUT_MS }
     : config;
 }
-
-export {
-  applyCliRuntimeRecallTimeoutDefault,
-  clampInt,
-  hasDeprecatedModelFallbackPolicy,
-  isMissingRegisteredMemoryToolsError,
-  normalizeActiveMemoryFastMode,
-  normalizePluginConfig,
-  resetActiveMemoryConfigForTests,
-  readActiveMemoryConfig,
-  resolvePersistentTranscriptBaseDir,
-  resolveSafeTranscriptDir,
-  setMinimumTimeoutMsForTests,
-  setSetupGraceTimeoutMsForTests,
-};

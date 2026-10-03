@@ -1,6 +1,6 @@
 import { isParentOwnedBackgroundAcpSession } from "@openclaw/acp-core/session-interaction-mode";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
-import { readAcpSessionEntry } from "../../acp/runtime/session-meta.js";
+import { readAcpSessionEntryAsync } from "../../acp/runtime/session-meta.js";
 import { logVerbose } from "../../globals.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
@@ -9,7 +9,6 @@ import {
   setReplyPayloadMetadata,
   type ReplyPayload,
 } from "../reply-payload.js";
-import { resolveRoutedPolicyConversationType } from "./dispatch-from-config.context.js";
 import type { PluginBindingTranscriptOwner } from "./dispatch-from-config.events.js";
 import type { GatherDispatchRequestReadyState } from "./dispatch-from-config.gather.js";
 import { hasAskUserPayload } from "./dispatch-from-config.payloads.js";
@@ -17,6 +16,7 @@ import {
   loadReplyMediaPathsRuntime,
   loadRouteReplyRuntime,
 } from "./dispatch-from-config.runtime-loaders.js";
+import { resolveReplyPolicyConversationType } from "./get-reply-conversation-type.js";
 import type { ReplyDispatchKind, ReplyDispatchOperation } from "./reply-dispatcher.types.js";
 import {
   createReplyDeliveryContext,
@@ -36,16 +36,22 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
     sessionStoreEntry,
     turnLedger,
   } = state;
+  const assertPreparationCurrent = () => {
+    state.getPreDispatchAbortSignal()?.throwIfAborted();
+    state.params.replyOptions?.operatorAuthority?.assertCurrent();
+  };
   // Gather awaits runtime preparation after its first row read. Reread ACP
   // metadata with the same owner to preserve current lifecycle fences and
   // recovery from an earlier store-read failure.
   const currentAcpSession = sessionStoreEntry.sessionKey
-    ? readAcpSessionEntry({
+    ? await readAcpSessionEntryAsync({
         cfg,
         agentId: sessionStoreEntry.agentId,
         sessionKey: sessionStoreEntry.sessionKey,
+        assertCurrent: assertPreparationCurrent,
       })
     : undefined;
+  assertPreparationCurrent();
   const sessionEntryWithAcp = currentAcpSession?.entry
     ? { ...currentAcpSession.entry, acp: currentAcpSession.acp }
     : undefined;
@@ -175,7 +181,7 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
       sessionKey: agentRuntimeSessionKey,
       policySessionKey:
         options?.sessionKey ?? resolveCommandTurnTargetSessionKey(ctx) ?? ctx.SessionKey,
-      policyConversationType: resolveRoutedPolicyConversationType(ctx),
+      policyConversationType: resolveReplyPolicyConversationType(ctx),
       accountId: replyContextAccountId,
       requesterSenderId: ctx.SenderId,
       requesterSenderName: ctx.SenderName,
@@ -237,8 +243,10 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
     });
     if (result && !result.ok) {
       logVerbose(`dispatch-from-config: route-reply failed: ${result.error ?? "unknown error"}`);
-      if (deliveryIntentId) {
-        throw new Error(result.error ?? "durable block reply delivery failed");
+      if (deliveryIntentId && result.queueCustody !== "held") {
+        throw new Error(result.error ?? "durable block reply delivery failed", {
+          cause: result.cause,
+        });
       }
     }
     if (hasAskUserPayload(payload) && !effectiveAbortSignal?.aborted && !result?.delivered) {

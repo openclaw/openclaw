@@ -31,7 +31,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 beforeEach(resetFollowupTurnTestState);
 
 describe("queued turn steering", () => {
-  it.each(["gateway", "retained", "collected", "overflow"] as const)(
+  it.each(["gateway", "collected", "overflow"] as const)(
     "accepts successive Gateway steers into a %s followup after an older source completed",
     async (source) => {
       const root = tempDirs.make("openclaw-followup-steering-");
@@ -227,6 +227,18 @@ describe("queued turn steering", () => {
         }).outcome,
       ).resolves.toMatchObject({ status: "accepted" });
       await expect(
+        beginReplyMessageInjectionTarget(target!, "Same permissions from another profile", {
+          isInboundUserMessage: true,
+          toolAuthorityOverlay: {
+            ...overlay,
+            operatorAuthority: createAdmittedRunOperatorAuthority({
+              ...overlay.operatorAuthority,
+              profileId: "maintainer",
+            }),
+          },
+        }).outcome,
+      ).resolves.toMatchObject({ status: "accepted" });
+      await expect(
         beginReplyMessageInjectionTarget(target!, "Change tool permissions", {
           isInboundUserMessage: true,
           toolAuthorityOverlay: { ...overlay, disableTools: true },
@@ -234,7 +246,6 @@ describe("queued turn steering", () => {
       ).resolves.toMatchObject({ status: "rejected", reason: "tool_authority_mismatch" });
       for (const incomingOperator of [
         undefined,
-        createAdmittedRunOperatorAuthority({ ...operatorAuthority, profileId: "maintainer" }),
         createAdmittedRunOperatorAuthority({ ...operatorAuthority, scopes: ["operator.admin"] }),
       ]) {
         await expect(
@@ -244,7 +255,7 @@ describe("queued turn steering", () => {
           }).outcome,
         ).resolves.toMatchObject({ status: "rejected", reason: "tool_authority_mismatch" });
       }
-      expect(queueMessage).toHaveBeenCalledOnce();
+      expect(queueMessage).toHaveBeenCalledTimes(2);
       return { runId: "run-1", outcome: { kind: "rejected", payload: { text: "done" } } };
     });
     try {

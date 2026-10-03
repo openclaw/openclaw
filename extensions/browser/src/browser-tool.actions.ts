@@ -5,6 +5,7 @@ import {
   readPositiveIntegerParam,
 } from "openclaw/plugin-sdk/param-readers";
 import { formatErrorMessage } from "openclaw/plugin-sdk/security-runtime";
+import { textResult } from "openclaw/plugin-sdk/tool-results";
 import type { BrowserProxyRequest } from "./browser-node-proxy.js";
 import {
   browserAct,
@@ -79,24 +80,11 @@ function withLocalActTimeout(
   }
 }
 
-type BrowserTabLike = {
-  suggestedTargetId?: unknown;
-  tabId?: unknown;
-  webExtensionTabId?: unknown;
-  label?: unknown;
-  title?: unknown;
-  url?: unknown;
-  urlUnavailableReason?: unknown;
-  type?: unknown;
-  targetId?: unknown;
-  wsUrl?: unknown;
-};
-
 function formatAgentTab(tab: unknown): Record<string, unknown> {
   if (!tab || typeof tab !== "object") {
     return { value: tab };
   }
-  const source = tab as BrowserTabLike;
+  const source = tab as Record<string, unknown>;
   const targetId = readStringValue(source.targetId);
   const tabId = readStringValue(source.tabId);
   const webExtensionTabId =
@@ -128,24 +116,18 @@ function formatTabsToolResult(result: {
   running: boolean;
   tabs: unknown[];
 }): AgentToolResult<unknown> {
-  const formattedTabs = result.tabs.map((tab) => formatAgentTab(tab));
+  const formattedTabs = result.tabs.map(formatAgentTab);
   const wrapped = wrapBrowserExternalJson({
     kind: "tabs",
     payload: { running: result.running, tabs: formattedTabs },
     includeWarning: false,
   });
-  const content: AgentToolResult<unknown>["content"] = [
-    { type: "text", text: wrapped.wrappedText },
-  ];
-  return {
-    content,
-    details: {
-      ...wrapped.safeDetails,
-      running: result.running,
-      tabCount: formattedTabs.length,
-      tabs: formattedTabs,
-    },
-  };
+  return textResult(wrapped.wrappedText, {
+    ...wrapped.safeDetails,
+    running: result.running,
+    tabCount: formattedTabs.length,
+    tabs: formattedTabs,
+  });
 }
 
 /** Protect page-controlled model text while preserving the shipped structured result contract. */
@@ -160,31 +142,7 @@ export function formatBrowserExternalToolResult(params: {
   });
   // The Browser tool already marks the turn as network-tainted, and replay
   // strips details; changing this public structured payload breaks callers.
-  return {
-    content: [{ type: "text", text: wrapped.wrappedText }],
-    details: params.payload,
-  };
-}
-
-function formatConsoleToolResult(result: {
-  targetId?: string;
-  url?: string;
-  messages?: unknown[];
-}): AgentToolResult<unknown> {
-  const wrapped = wrapBrowserExternalJson({
-    kind: "console",
-    payload: result,
-    includeWarning: false,
-  });
-  return {
-    content: [{ type: "text" as const, text: wrapped.wrappedText }],
-    details: {
-      ...wrapped.safeDetails,
-      targetId: readStringValue(result.targetId),
-      url: readStringValue(result.url),
-      messageCount: Array.isArray(result.messages) ? result.messages.length : undefined,
-    },
-  };
+  return textResult(wrapped.wrappedText, params.payload);
 }
 
 function isChromeStaleTargetError(usesChromeMcp: boolean, err: unknown): boolean {
@@ -193,16 +151,6 @@ function isChromeStaleTargetError(usesChromeMcp: boolean, err: unknown): boolean
   const msg = String(err);
   const isTabNotFound = (status === 404 || msg.includes("404:")) && msg.includes("tab not found");
   return usesChromeMcp && isTabNotFound;
-}
-
-function replaceStaleTargetIdInActRequest(
-  request: BrowserActRequest,
-  targetId: string,
-): BrowserActRequest | null {
-  if (!normalizeOptionalString(request.targetId) || !targetId) {
-    return null;
-  }
-  return { ...request, targetId };
 }
 
 function canRetryChromeActAfterSoleTargetRefresh(request: BrowserActRequest): boolean {
@@ -285,16 +233,23 @@ export async function executeConsoleAction(params: {
   signal?: AbortSignal;
 }): Promise<AgentToolResult<unknown>> {
   const { input, baseUrl, profile, proxyRequest } = params;
-  const query = {
+  const result = await browserConsoleMessages(proxyRequest ?? baseUrl, {
     level: normalizeOptionalString(input.level),
     targetId: normalizeOptionalString(input.targetId),
-  };
-  const result = await browserConsoleMessages(proxyRequest ?? baseUrl, {
-    ...query,
     profile,
     signal: params.signal,
   });
-  return formatConsoleToolResult(result);
+  const wrapped = wrapBrowserExternalJson({
+    kind: "console",
+    payload: result,
+    includeWarning: false,
+  });
+  return textResult(wrapped.wrappedText, {
+    ...wrapped.safeDetails,
+    targetId: readStringValue(result.targetId),
+    url: readStringValue(result.url),
+    messageCount: Array.isArray(result.messages) ? result.messages.length : undefined,
+  });
 }
 
 /** Read browser debug logs, keeping counts aligned with the bounded payload. */
@@ -352,16 +307,13 @@ export async function executeTextAction(
       ? "Page text was truncated. Retry with a narrower selector."
       : undefined,
   });
-  return {
-    content: [{ type: "text", text: wrapped.text }],
-    details: {
-      ok: result.ok,
-      targetId: result.targetId,
-      url: result.url,
-      truncated: result.truncated || wrapped.truncated,
-      externalContent: { untrusted: true, source: "browser", kind: "text", wrapped: true },
-    },
-  };
+  return textResult(wrapped.text, {
+    ok: result.ok,
+    targetId: result.targetId,
+    url: result.url,
+    truncated: result.truncated || wrapped.truncated,
+    externalContent: { untrusted: true, source: "browser", kind: "text", wrapped: true },
+  });
 }
 
 /** Apply settings in order and pin later changes to the first resolved tab. */
@@ -403,15 +355,12 @@ export async function executeEmulateAction(
 }
 
 /** Execute explicit Browser download operations through the local or node-host path. */
-export async function executeDownloadAction(params: {
-  action: "download" | "waitfordownload";
-  input: Record<string, unknown>;
-  baseUrl?: string;
-  profile?: string;
-  proxyRequest: BrowserProxyRequest | null;
-  signal?: AbortSignal;
-  onTabActivity?: (targetId: string | undefined) => void;
-}): Promise<AgentToolResult<unknown>> {
+export async function executeDownloadAction(
+  params: Parameters<typeof executeConsoleAction>[0] & {
+    action: "download" | "waitfordownload";
+    onTabActivity?: (targetId: string | undefined) => void | Promise<void>;
+  },
+): Promise<AgentToolResult<unknown>> {
   const { action, input, baseUrl, profile, proxyRequest } = params;
   const targetId = normalizeOptionalString(input.targetId);
   const timeoutMs = normalizePositiveTimeoutMs(input.timeoutMs);
@@ -427,7 +376,9 @@ export async function executeDownloadAction(params: {
           ...options,
           path: readStringParam(input, "path"),
         });
-  params.onTabActivity?.(readStringValue((result as { targetId?: unknown }).targetId) ?? targetId);
+  await params.onTabActivity?.(
+    readStringValue((result as { targetId?: unknown }).targetId) ?? targetId,
+  );
   return formatBrowserExternalToolResult({ kind: "download", payload: result });
 }
 
@@ -439,8 +390,8 @@ export async function executeActAction(params: {
   usesChromeMcp: boolean;
   proxyRequest: BrowserProxyRequest | null;
   signal?: AbortSignal;
-  onTabActivity?: (targetId: string | undefined) => void;
-  onTabClose?: (targetId: string | undefined) => void;
+  onTabActivity?: (targetId: string | undefined) => void | Promise<void>;
+  onTabClose?: (targetId: string | undefined) => void | Promise<void>;
 }): Promise<AgentToolResult<unknown>> {
   const { request, baseUrl, profile, proxyRequest } = params;
   if ("timeoutMs" in request && request.timeoutMs !== undefined) {
@@ -457,7 +408,7 @@ export async function executeActAction(params: {
       effectiveRequest.kind === "close" || aborted?.reason === "closed"
         ? params.onTabClose
         : params.onTabActivity;
-    onTabResult?.(resolvedTargetId);
+    await onTabResult?.(resolvedTargetId);
     const formatted = formatActToolResult(result, aborted);
     if (!actObservedNavigation(result, aborted)) {
       return formatted;
@@ -473,19 +424,21 @@ export async function executeActAction(params: {
       signal: params.signal,
     });
   };
-  const dispatchAndFinishAct = async (actionRequest: BrowserActRequest) => {
+  const dispatchAct = async (actionRequest: BrowserActRequest) => {
     const result = await browserAct(proxyRequest ?? baseUrl, actionRequest, {
       profile,
       signal: params.signal,
     });
-    return await finishActResult(
+    return {
       result,
-      readStringValue((result as { targetId?: unknown }).targetId) ??
+      targetId:
+        readStringValue((result as { targetId?: unknown }).targetId) ??
         readStringValue(actionRequest.targetId),
-    );
+    };
   };
+  let dispatched: Awaited<ReturnType<typeof dispatchAct>>;
   try {
-    return await dispatchAndFinishAct(effectiveRequest);
+    dispatched = await dispatchAct(effectiveRequest);
   } catch (err) {
     const proxyRoute = proxyRequest?.route();
     const usesChromeMcp = proxyRequest
@@ -508,18 +461,16 @@ export async function executeActAction(params: {
         tabs.length === 1
           ? readStringValue((tabs[0] as { targetId?: unknown } | undefined)?.targetId)
           : undefined;
-      const retryRequest = freshTargetId
-        ? replaceStaleTargetIdInActRequest(effectiveRequest, freshTargetId)
-        : null;
+      const retryRequest =
+        freshTargetId && normalizeOptionalString(effectiveRequest.targetId)
+          ? { ...effectiveRequest, targetId: freshTargetId }
+          : null;
       // This is same-agent continuity, not identity recovery: only target-independent
       // waits may retry, against the one freshly listed tab. Ref-scoped and scripted
       // operations require explicit fresh selection (and a fresh snapshot for refs).
-      if (
-        retryRequest &&
-        canRetryChromeActAfterSoleTargetRefresh(effectiveRequest) &&
-        tabs.length === 1
-      ) {
-        return await dispatchAndFinishAct(retryRequest);
+      if (retryRequest && canRetryChromeActAfterSoleTargetRefresh(effectiveRequest)) {
+        const retried = await dispatchAct(retryRequest);
+        return await finishActResult(retried.result, retried.targetId);
       }
       if (tabRefreshError) {
         throw new Error(
@@ -546,6 +497,7 @@ export async function executeActAction(params: {
     }
     throw err;
   }
+  return await finishActResult(dispatched.result, dispatched.targetId);
 }
 
 function formatActToolResult(

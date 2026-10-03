@@ -1,4 +1,3 @@
-// Builds OpenAI-compatible embedding provider entries for plugins.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
@@ -112,11 +111,6 @@ function normalizeDimensions(value: number | undefined): number | undefined {
     throw new Error("openai-compatible embeddings: dimensions must be a positive integer.");
   }
   return value;
-}
-
-function normalizeOptionalInputType(value: string | undefined): string | undefined {
-  const inputType = value?.trim();
-  return inputType ? inputType : undefined;
 }
 
 function resolveRequestInputType(
@@ -388,9 +382,9 @@ async function createOpenAICompatibleEmbeddingClient(
   const providerOwnsDestination =
     providerBaseUrl !== undefined && embeddingProviderOwnsDestination({ baseUrl, providerBaseUrl });
   const model = normalizeModel(options.model, options.provider);
-  const inputType = normalizeOptionalInputType(options.inputType);
-  const queryInputType = normalizeOptionalInputType(options.queryInputType);
-  const documentInputType = normalizeOptionalInputType(options.documentInputType);
+  const inputType = normalizeOptionalString(options.inputType);
+  const queryInputType = normalizeOptionalString(options.queryInputType);
+  const documentInputType = normalizeOptionalString(options.documentInputType);
   const headers = buildHeaders({
     apiKey: normalizeResolvedSecretInputString({
       value: options.remote?.apiKey,

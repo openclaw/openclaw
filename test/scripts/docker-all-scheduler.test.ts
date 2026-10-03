@@ -17,9 +17,11 @@ import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { parse } from "yaml";
 import {
+  DEFAULT_PARALLELISM,
   DEFAULT_RESOURCE_LIMITS,
   resolveDockerE2ePlan,
 } from "../../scripts/lib/docker-e2e-plan.mts";
+import { isUpdateFirstHopCompatLane } from "../../scripts/lib/update-first-hop-lanes.mjs";
 import {
   appendBoundedShellCapture,
   buildLaneRerunCommand,
@@ -1129,6 +1131,52 @@ process.exit(0);
     ).toBe(true);
   });
 
+  it.each([
+    { firstHops: 0, survivor: false, admitted: true },
+    { firstHops: 1, survivor: false, admitted: true },
+    { firstHops: 2, survivor: false, admitted: false },
+    { firstHops: 0, survivor: true, admitted: true },
+    { firstHops: 1, survivor: true, admitted: false },
+  ])(
+    "bounds self-upgrade admission with $firstHops first hops and survivor=$survivor",
+    ({ firstHops, survivor, admitted }) => {
+      const { orderedLanes } = resolveDockerE2ePlan({
+        includeOpenWebUI: false,
+        liveMode: "all",
+        orderLanes: (lanes) => lanes,
+        planReleaseAll: false,
+        profile: "release-path",
+        releaseChunk: "package-update-self-upgrade",
+        selectedLaneNames: [],
+      });
+      const hops = orderedLanes.filter((lane) => isUpdateFirstHopCompatLane(lane.name));
+      const running = [
+        ...hops.slice(0, firstHops),
+        ...orderedLanes.filter((lane) => survivor && lane.name === "upgrade-survivor"),
+      ];
+      const active = activePool();
+      for (const lane of running) {
+        active.count += 1;
+        active.weight += lane.weight;
+        for (const resource of new Set(["docker", ...lane.resources])) {
+          active.resources.set(resource, (active.resources.get(resource) ?? 0) + lane.weight);
+        }
+      }
+
+      expect(hops.length).toBeGreaterThan(2);
+      expect(running).toHaveLength(firstHops + Number(survivor));
+      for (const candidate of hops.slice(firstHops)) {
+        expect(
+          canStartSchedulerLane(candidate, active, DEFAULT_PARALLELISM, {
+            resourceLimits: DEFAULT_RESOURCE_LIMITS,
+            weightLimit: DEFAULT_PARALLELISM,
+          }),
+          candidate.name,
+        ).toBe(admitted);
+      }
+    },
+  );
+
   it("preserves the parallelism count cap", () => {
     expect(
       canStartSchedulerLane(
@@ -1220,6 +1268,49 @@ postgres Created
       rmSync(root, { force: true, recursive: true });
     }
   });
+
+  posixIt.each(["extra field", "oversized", "two receipts", "injected phase"])(
+    "never promotes logs or invalid %s metadata into an annotation",
+    async (kind) => {
+      const root = tempDirs.make("docker-failure-metadata-");
+      const logFile = path.join(root, "lane.log");
+      const metadata = { phase: "update-candidate", exitStatus: 7, signal: null };
+      const valid = JSON.stringify(metadata);
+      const payload =
+        kind === "oversized"
+          ? "x".repeat(1025)
+          : kind === "two receipts"
+            ? valid + valid
+            : JSON.stringify(
+                kind === "extra field"
+                  ? { ...metadata, secret: "PRIVATE_ENV_BYTES" }
+                  : { ...metadata, phase: "update\n::error::PRIVATE_LOG_BYTES" },
+              );
+      const program = [
+        "const fs = require('node:fs');",
+        "console.error(" + JSON.stringify(valid) + ");",
+        "fs.writeSync(3," + JSON.stringify(payload) + ");",
+        "process.exitCode = 7;",
+      ].join("\n");
+      const entry = path.join(root, "metadata.cjs");
+      writeFileSync(entry, program);
+      const error = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        const result = await runShellCommand({
+          command: JSON.stringify(process.execPath) + " " + JSON.stringify(entry),
+          env: { ...process.env, GITHUB_ACTIONS: "true" },
+          label: "metadata",
+          logFile,
+          captureUpgradeFailure: true,
+        });
+        expect(result).toMatchObject({ status: 7, timedOut: false, noOutputTimedOut: false });
+        expect(error.mock.calls.some(([text]) => String(text).startsWith("::error"))).toBe(false);
+        expect(readFileSync(logFile, "utf8")).toContain(valid);
+      } finally {
+        error.mockRestore();
+      }
+    },
+  );
 
   posixIt("clamps oversized shell command timers before scheduling", async () => {
     const result = await runShellCommand({
@@ -1475,7 +1566,15 @@ await runShellCommand({
         cwd: process.cwd(),
         stdio: ["ignore", "ignore", "pipe"],
       });
+      let runnerStderr = "";
+      runner.stderr?.setEncoding("utf8").on("data", (chunk: string) => {
+        runnerStderr += chunk;
+      });
       await waitFor(() => {
+        // A runner that fails to load never becomes ready; report its error, not a timeout.
+        if (runner?.exitCode !== null) {
+          throw new Error(`runner exited before readiness:\n${runnerStderr}`);
+        }
         grandchildPid = readCompletePidFile(grandchildPidPath) ?? 0;
         return existsSync(readyPath) && grandchildPid > 0;
       });

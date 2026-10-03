@@ -51,8 +51,7 @@ const loadMSTeamsSdkWithAuth = vi.hoisted(() =>
 
 vi.mock("@microsoft/teams.apps", () => ({ ExpressAdapter: vi.fn() }));
 vi.mock("./monitor-handler.js", () => ({
-  isCardActionInvokeAuthorized: vi.fn(async () => true),
-  isSigninInvokeAuthorized: vi.fn(async () => true),
+  isMSTeamsInvokeAuthorized: vi.fn(async () => true),
   createMSTeamsActivityHandler,
 }));
 vi.mock("./file-consent-invoke.js", () => ({
@@ -80,6 +79,7 @@ vi.mock("./sdk.js", () => ({
   }),
 }));
 vi.mock("./runtime.js", () => ({
+  getOptionalMSTeamsRuntime: () => null,
   getMSTeamsRuntime: () => ({
     logging: {
       getChildLogger: () => ({

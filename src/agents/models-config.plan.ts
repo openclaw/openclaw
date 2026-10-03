@@ -60,11 +60,7 @@ export type PreparedModelsConfigContext = Readonly<{
  */
 type ModelsJsonPlan =
   | {
-      action: "skip";
-      pluginCatalogWrites?: Record<string, string>;
-    }
-  | {
-      action: "noop";
+      action: "skip" | "noop";
       pluginCatalogWrites?: Record<string, string>;
     }
   | {
@@ -197,13 +193,9 @@ function resolveProvidersForMode(params: {
   if (!isRecord(existing) || !isRecord(existing.providers)) {
     return params.providers;
   }
-  const existingProviders = existing.providers as Record<
-    string,
-    NonNullable<ModelsConfig["providers"]>[string]
-  >;
   return mergeWithExistingProviderSecrets({
     nextProviders: params.providers,
-    existingProviders: existingProviders as Record<string, ExistingProviderConfig>,
+    existingProviders: existing.providers as Record<string, ExistingProviderConfig>,
     secretRefManagedProviders: params.secretRefManagedProviders,
   });
 }

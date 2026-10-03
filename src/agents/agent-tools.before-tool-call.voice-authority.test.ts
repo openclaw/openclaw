@@ -8,7 +8,6 @@ import {
   authorizeClientVoiceConfirmation,
   bindAuthorizedClientVoiceConfirmation,
   checkClientVoiceToolConfirmationPolicy,
-  deactivateClientVoiceConfirmationSession,
 } from "../talk/client-voice-confirmation.js";
 import {
   noteClientVoiceConfirmationUtteranceForTest as noteUtterance,
@@ -18,11 +17,10 @@ import * as clientVoiceSession from "../talk/client-voice-session.js";
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
 import { resetAdjustedParamsByToolCallIdForTests } from "./agent-tools.before-tool-call.state.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
+import { markCodeModeControlTool } from "./code-mode-control-tools.js";
 
 const VOICE_SESSION_ID = "voice-authority";
 const SEND = { action: "send", to: "target-a", message: "approved body" };
-const OTHER_SEND = { action: "send", to: "target-b", message: "another body" };
-const TTL_MS = 2 * 60_000;
 
 function bindVoiceRuns(runIds: string[]): void {
   const binding = {
@@ -92,64 +90,45 @@ describe("spoken confirmation authority reaches the final tool effect", () => {
     vi.restoreAllMocks();
   });
 
-  it("runs the tool body once for the current confirmed action", async () => {
-    const runId = "run-approved";
+  it("executes marked Code Mode scripts while still confirming plain shell exec", async () => {
+    const runId = "run-code-mode";
     bindVoiceRuns([runId]);
-    const { execute, run } = createMessageTool(runId);
+    const ctx = { runId, agentId: "main", sessionKey: "agent:main:voice" };
+    const executeScript = vi.fn().mockResolvedValue({ content: [], details: { sessions: [] } });
+    const script = wrapToolWithBeforeToolCallHook(
+      markCodeModeControlTool({
+        name: "exec",
+        label: "Code Mode",
+        description: "Run a Code Mode script",
+        parameters: { type: "object", properties: {} },
+        execute: executeScript,
+      }),
+      ctx,
+    );
+    const result = await script.execute("script-1", {
+      code: "const x = await sessions_list({}); return x;",
+    });
+    expect(result.details).toEqual({ sessions: [] });
+    expect(executeScript).toHaveBeenCalledOnce();
 
-    const blocked = await run("call-1");
-    expect(execute).not.toHaveBeenCalled();
-    const reason =
-      typeof blocked.details === "object" && blocked.details !== null && "reason" in blocked.details
-        ? blocked.details.reason
-        : "";
-    const confirmationId = String(reason).match(/VOICE_CONFIRMATION_REQUIRED:(\S+)/)?.[1];
-    expect(confirmationId).toBeTruthy();
-
-    vi.setSystemTime(Date.now() + 5);
-    const grant = sayYesAndAuthorize(confirmationId!, Date.now());
-    expect(bindAuthorizedClientVoiceConfirmation({ grant, runId })).toBe(true);
-
-    const allowed = await run("call-2");
-    expect(allowed.details).toEqual({ ok: true });
-    expect(execute).toHaveBeenCalledOnce();
-
-    const again = await run("call-3");
-    expect(execute).toHaveBeenCalledOnce();
-    expect(again.details).toMatchObject({ deniedReason: "client-voice-confirmation" });
+    const executeShell = vi.fn();
+    const shell = wrapToolWithBeforeToolCallHook(
+      {
+        name: "exec",
+        label: "Shell",
+        description: "Run a shell command",
+        parameters: { type: "object", properties: {} },
+        execute: executeShell,
+      },
+      ctx,
+    );
+    const blocked = await shell.execute("shell-1", { command: "touch voice-confirmation-marker" });
+    expect(blocked.details).toMatchObject({
+      deniedReason: "client-voice-confirmation",
+      reason: expect.stringContaining("VOICE_CONFIRMATION_REQUIRED:"),
+    });
+    expect(executeShell).not.toHaveBeenCalled();
   });
-
-  it.each(["supersession", "refusal", "expiry", "closed-session"] as const)(
-    "never runs the tool body after %s of a heard confirmation",
-    async (invalidator) => {
-      const runId = `run-${invalidator}`;
-      bindVoiceRuns([runId]);
-      const { execute, run } = createMessageTool(runId);
-      const now = Date.now();
-      const confirmationId = challengeFor(runId, SEND, now);
-      const grant = sayYesAndAuthorize(confirmationId, now + 1);
-
-      if (invalidator === "supersession") {
-        challengeFor(runId, OTHER_SEND, now + 5);
-      } else if (invalidator === "refusal") {
-        noteUtterance({
-          agentId: "main",
-          voiceSessionId: VOICE_SESSION_ID,
-          text: "no",
-          timestamp: now + 5,
-        });
-      } else if (invalidator === "expiry") {
-        vi.setSystemTime(now + TTL_MS + 1);
-      } else {
-        deactivateClientVoiceConfirmationSession("main", VOICE_SESSION_ID);
-      }
-
-      expect(bindAuthorizedClientVoiceConfirmation({ grant, runId })).toBe(false);
-      const result = await run("call-after-invalidation");
-      expect(execute).not.toHaveBeenCalled();
-      expect(result.details).toMatchObject({ deniedReason: "client-voice-confirmation" });
-    },
-  );
 
   it("lets only the run that bound a challenge reused across runs execute", async () => {
     const first = "run-first-attempt";

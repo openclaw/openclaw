@@ -1,7 +1,14 @@
+import { textResult } from "openclaw/plugin-sdk/tool-results";
 import { Type } from "typebox";
 import type { AnyAgentTool, OpenClawPluginToolContext } from "../api.js";
 import { VisitorAccessError } from "./errors.js";
 import { visitorRuntimeStore } from "./runtime.js";
+import {
+  visitorInviteDetailsSchema,
+  visitorListDetailsSchema,
+  visitorRevokeDetailsSchema,
+  visitorToolErrorSchema,
+} from "./tool-results.js";
 import type { VisitorAccessService } from "./visitors.js";
 
 const identityFields = {
@@ -49,6 +56,7 @@ export function createVisitorTools(context: OpenClawPluginToolContext<2>): AnyAg
         },
         { additionalProperties: false },
       ),
+      outputSchema: Type.Union([visitorInviteDetailsSchema, visitorToolErrorSchema]),
       run: (service: VisitorAccessService, raw: unknown) =>
         service.invite(raw, { assertCurrent, invitedVia: context.sessionKey ?? context.agentId }),
     },
@@ -58,6 +66,7 @@ export function createVisitorTools(context: OpenClawPluginToolContext<2>): AnyAg
       description:
         "Remove visitor access by email or GitHub login. GitHub login removes all recorded grants for that login. Explicit email can also remove an unmanaged policy entry. Already absent grants are a no-op.",
       parameters: Type.Object(identityFields, { additionalProperties: false }),
+      outputSchema: Type.Union([visitorRevokeDetailsSchema, visitorToolErrorSchema]),
       run: (service: VisitorAccessService, raw: unknown) => service.revoke(raw, assertCurrent),
     },
     {
@@ -66,36 +75,34 @@ export function createVisitorTools(context: OpenClawPluginToolContext<2>): AnyAg
       description:
         "List recorded visitor grants, current Gateway access, invitation and expiry dates, and drift from the Access policy. Grant expiry does not describe independent staff access. Unmanaged policy emails are reported and retained; missing policy emails are never automatically restored.",
       parameters: Type.Object({}, { additionalProperties: false }),
+      outputSchema: Type.Union([visitorListDetailsSchema, visitorToolErrorSchema]),
       run: (service: VisitorAccessService) => service.list(assertCurrent),
     },
   ];
-  return definitions.map(({ name, label, description, parameters, run }) => ({
+  return definitions.map(({ name, label, description, parameters, outputSchema, run }) => ({
     name,
     label,
     description,
     parameters,
+    outputSchema,
     async execute(_id, raw) {
       // Bind once; a retained tool cannot inherit a replacement service's lifetime.
       runtime ??= visitorRuntimeStore.tryGetRuntime();
       if (!runtime) {
         return {
-          content: [
-            {
-              type: "text",
-              text: "Start the Gateway with visitor-access enabled before managing visitors.",
-            },
-          ],
-          details: { error: true },
+          ...textResult("Start the Gateway with visitor-access enabled before managing visitors.", {
+            error: true,
+          }),
           isError: true,
         };
       }
       try {
         assertCurrent();
-        return { content: [{ type: "text", text: await run(runtime.service, raw) }], details: {} };
+        const { text, details } = await run(runtime.service, raw);
+        return textResult(text, details);
       } catch (error) {
         return {
-          content: [{ type: "text", text: runtime.errorText(error) }],
-          details: { error: true },
+          ...textResult(runtime.errorText(error), { error: true }),
           isError: true,
         };
       }

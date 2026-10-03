@@ -12,6 +12,7 @@ import { writeQaSuiteArtifacts } from "./suite-artifacts.js";
 import { createQaSuiteEvidenceInvocation, rebaseQaSuiteEvidence } from "./suite-evidence.js";
 import { mapQaSuiteWithConcurrency, resolveQaSuiteWorkerStartStaggerMs } from "./suite-planning.js";
 import { createQaSuiteProgressController } from "./suite-progress.js";
+import { completeQaSuiteRun } from "./suite-run-completion.js";
 import { buildQaIsolatedScenarioWorkerParams } from "./suite-support.js";
 import type {
   QaSuiteResolvedRunContext,
@@ -145,7 +146,6 @@ export async function runQaFlowSuiteIsolated(
   let isolatedRunFailed = false;
   let isolatedRunError: unknown;
   let parentTransportCleaned = false;
-  let completionProgress: string | undefined;
   let terminalScenarios: QaSuiteScenarioResult[] | undefined;
   let transportArtifacts: QaRunnerTransportArtifacts | undefined;
   try {
@@ -187,6 +187,19 @@ export async function runQaFlowSuiteIsolated(
           );
           imported = true;
           return selected;
+        };
+        const completeScenario = (
+          scenarioResult: QaSuiteScenarioResult,
+          status = scenarioResult.status,
+        ) => {
+          progress.recordScenarioResult(index, scenarioResult);
+          writeQaSuiteProgress(
+            progressEnabled,
+            `scenario ${status} (${index + 1}/${selectedScenarios.length}): ${scenarioIdForLog}${formatQaScenarioFailureSuffix(scenarioResult)}`,
+          );
+          completedScenarioResults[index] = scenarioResult;
+          writePartialArtifacts();
+          return scenarioResult;
         };
         try {
           const workerParams = markQaSuiteNestedRun(
@@ -251,14 +264,7 @@ export async function runQaFlowSuiteIsolated(
             });
           }
           dispatchCompleted = true;
-          progress.recordScenarioResult(index, scenarioResult);
-          writeQaSuiteProgress(
-            progressEnabled,
-            `scenario ${scenarioResult.status} (${index + 1}/${selectedScenarios.length}): ${scenarioIdForLog}${formatQaScenarioFailureSuffix(scenarioResult)}`,
-          );
-          completedScenarioResults[index] = scenarioResult;
-          writePartialArtifacts();
-          return scenarioResult;
+          return completeScenario(scenarioResult);
         } catch (error) {
           // A failed evidence write is not a child failure and must not retry
           // the same exclusive artifact name or mask its original error.
@@ -287,14 +293,7 @@ export async function runQaFlowSuiteIsolated(
             failure,
             { diagnostic: true },
           );
-          progress.recordScenarioResult(index, scenarioResult);
-          writeQaSuiteProgress(
-            progressEnabled,
-            `scenario fail (${index + 1}/${selectedScenarios.length}): ${scenarioIdForLog}${formatQaScenarioFailureSuffix(scenarioResult)}`,
-          );
-          completedScenarioResults[index] = scenarioResult;
-          writePartialArtifacts();
-          return scenarioResult;
+          return completeScenario(scenarioResult, "fail");
         }
       },
       {
@@ -306,7 +305,6 @@ export async function runQaFlowSuiteIsolated(
     await artifactWriteQueue;
     transportArtifacts = await transport.captureArtifacts?.({ outputDir });
     terminalScenarios = scenarios;
-    completionProgress = "run complete";
   } catch (error) {
     isolatedRunFailed = true;
     isolatedRunError = error;
@@ -331,38 +329,26 @@ export async function runQaFlowSuiteIsolated(
       scenarios: terminalScenarios,
     });
   }
-  if (!terminalScenarios || !completionProgress) {
+  if (!terminalScenarios) {
     throw new Error("QA suite completed without terminal result metadata");
   }
   const terminalFinishedAt = new Date();
-  const { evidence, evidencePath, report, reportPath, summaryPath } = await writeQaSuiteArtifacts({
-    ...artifactParams,
-    finishedAt: terminalFinishedAt,
-    scenarios: terminalScenarios,
-    scenarioDefinitions: selectedScenarios,
-    recordedEvidence: recording.snapshot(),
-    transportArtifacts,
-    writeEvidenceFile: params?.writeEvidenceFile,
-  });
-  lab.setLatestReport({
-    outputPath: reportPath,
-    markdown: report,
-    generatedAt: terminalFinishedAt.toISOString(),
-  } satisfies QaLabLatestReport);
-  progress.complete([], terminalFinishedAt.toISOString());
-  const result = {
-    outputDir,
-    evidence,
-    evidencePath,
-    reportPath,
-    summaryPath,
-    report,
-    scenarios: terminalScenarios,
-    startedScenarioIds: selectedScenarios
+  const result = await completeQaSuiteRun(
+    {
+      ...artifactParams,
+      finishedAt: terminalFinishedAt,
+      scenarios: terminalScenarios,
+      scenarioDefinitions: selectedScenarios,
+      recordedEvidence: recording.snapshot(),
+      transportArtifacts,
+      writeEvidenceFile: params?.writeEvidenceFile,
+    },
+    lab,
+    progress,
+    selectedScenarios
       .filter((_scenario, index) => startedScenarioIndexes.has(index))
       .map((scenario) => scenario.id),
-    watchUrl: lab.baseUrl,
-  } satisfies QaSuiteResult;
-  writeQaSuiteProgress(progressEnabled, completionProgress);
+  );
+  writeQaSuiteProgress(progressEnabled, "run complete");
   return result;
 }

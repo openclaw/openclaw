@@ -4,13 +4,20 @@ import path from "node:path";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import {
   parsePackageOpenClawSchemaVersions,
   type OpenClawSchemaVersions,
 } from "../state/openclaw-schema-versions.js";
 import { hasErrnoCode } from "./errno.js";
 import { executeGitCommand, gitNullConfigPath, normalizeGitPathForFilesystem } from "./git-exec.js";
-import { DEV_BRANCH, isBetaTag, isStableTag, type UpdateChannel } from "./update-channels.js";
+import {
+  DEV_BRANCH,
+  isBetaTag,
+  isStableTag,
+  selectNpmChannelVersion,
+  type UpdateChannel,
+} from "./update-channels.js";
 import { compareSemverStrings } from "./update-check.js";
 import type { DevUpdateTarget } from "./update-dev-target.js";
 import { cleanupUpdateTemporaryDirectory } from "./update-maintenance.js";
@@ -106,6 +113,7 @@ export async function withGitTargetInspectionRoot<T>(
     timeoutMs: number;
     work?: { timeoutMs?: number };
     onWarning: (step: UpdateStepResult) => void;
+    retainCleanup?: (cleanup: () => Promise<boolean>) => boolean;
   },
   inspect: (root: string, runCommand: CommandRunner) => Promise<T>,
 ): Promise<T> {
@@ -133,6 +141,7 @@ export async function withGitTargetInspectionRoot<T>(
     }
     return result.stdout;
   };
+  let cleanupUncertain = false;
   try {
     const head = (await command(params.root, ["rev-parse", "HEAD"])).trim();
     const headRef = (await command(params.root, ["symbolic-ref", "-q", "HEAD"], true)).trim();
@@ -260,14 +269,29 @@ export async function withGitTargetInspectionRoot<T>(
           : options,
       );
     return await inspect(inspectionRoot, runInspectionCommand);
+  } catch (error) {
+    cleanupUncertain = hasCommandProcessCleanupError(error);
+    throw error;
   } finally {
     // Only this invocation's private inspection repository, never the installed checkout.
-    await cleanupUpdateTemporaryDirectory({
-      directory: temporaryRoot,
-      root: params.root,
-      name: "git-target-inspection-cleanup",
-      onWarning: params.onWarning,
-    });
+    if (!cleanupUncertain) {
+      const cleanup = async () => {
+        let removed = true;
+        await cleanupUpdateTemporaryDirectory({
+          directory: temporaryRoot,
+          root: params.root,
+          name: "git-target-inspection-cleanup",
+          onWarning: (warning) => {
+            removed = false;
+            return params.onWarning(warning);
+          },
+        });
+        return removed;
+      };
+      if (!params.retainCleanup?.(cleanup)) {
+        await cleanup();
+      }
+    }
   }
 }
 
@@ -667,16 +691,10 @@ export function selectChannelTag(
     return comparison == null ? right.localeCompare(left) : -comparison;
   });
   if (channel === "beta") {
-    const betaTag = orderedTags.find((tag) => isBetaTag(tag)) ?? null;
-    const stableTag = orderedTags.find((tag) => isStableTag(tag)) ?? null;
-    if (!betaTag) {
-      return stableTag;
-    }
-    if (!stableTag) {
-      return betaTag;
-    }
-    const comparison = compareSemverStrings(betaTag, stableTag);
-    return comparison != null && comparison < 0 ? stableTag : betaTag;
+    return selectNpmChannelVersion(
+      { version: orderedTags.find(isBetaTag) ?? null },
+      { version: orderedTags.find(isStableTag) ?? null },
+    ).version;
   }
-  return orderedTags.find((tag) => isStableTag(tag)) ?? null;
+  return orderedTags.find(isStableTag) ?? null;
 }

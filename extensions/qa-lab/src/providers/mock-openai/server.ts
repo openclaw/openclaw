@@ -4,13 +4,11 @@ import { once } from "node:events";
 import { createServer } from "node:http";
 import { setTimeout as sleep } from "node:timers/promises";
 import { format as formatUrl } from "node:url";
-import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   closeQaHttpServer,
   dispatchQaHttpRequest,
   writeQaRequestBodyLimitError,
 } from "../../bus-server.js";
-import { resolveQaDebugRequestCursor } from "../shared/debug-request-cursor.js";
 import { writeJson } from "../shared/http-json.js";
 import {
   listMockCodexModelInfos,
@@ -25,6 +23,7 @@ import {
 import { adaptAnthropicToolCallIds } from "./mock-anthropic-wire.js";
 import {
   buildAssistantText,
+  buildImageInspectionReply,
   readForkedContextCompletion,
   isCanonicalCompactionRetryWriteResult,
   QA_COMPACTION_RETRY_FINAL_MARKER,
@@ -32,9 +31,7 @@ import {
 import {
   type ResponsesInputItem,
   type StreamEvent,
-  type MockOpenAiRequestSnapshot,
   type MockOpenAiRequestSnapshotBase,
-  type MockOpenAiRequestSnapshotInput,
   type MockOpenAiRequestKind,
   type MockCompactionSummaryFaultMode,
   type AnthropicMessagesRequest,
@@ -53,6 +50,9 @@ import {
   QA_REPEATED_REQUEST_RECOVERY_PROMPT_RE,
   QA_REPEATED_REQUEST_QUEUED_REPLY_PROMPT_RE,
   QA_REPEATED_REQUEST_QUEUED_REPLY_MARKER,
+  QA_STALLED_TURN_RECOVERY_PROMPT_RE,
+  QA_STALLED_TURN_RECOVERY_NEEDLE,
+  QA_STALLED_TURN_RECOVERY_MARKER,
   QA_STREAMING_PROMPT_RE,
   QA_FINAL_ONLY_MARKER_STREAMING_PROMPT_RE,
   QA_BLOCK_STREAMING_PROMPT_RE,
@@ -73,6 +73,10 @@ import {
   QA_MESSAGE_DECISION_SEND_PROMPT_RE,
   QA_SUBAGENT_DIRECT_FALLBACK_PROMPT_RE,
   QA_SUBAGENT_DIRECT_FALLBACK_WORKER_RE,
+  QA_YIELD_REJECTION_ACK_MARKER,
+  QA_YIELD_REJECTION_IMAGE_DELAY_MS,
+  QA_YIELD_REJECTION_IMAGE_PROMPT,
+  QA_YIELD_REJECTION_PROMPT_RE,
   QA_SUBAGENT_EMPTY_PARENT_VISIBLE_MARKER,
   QA_SUBAGENT_EMPTY_PARENT_VISIBLE_PROMPT_RE,
   QA_SUBAGENT_EMPTY_WORKER_NO_OUTPUT_PROMPT_RE,
@@ -108,7 +112,6 @@ import {
   sourceDiscoveryReadPathForProvider,
   subagentHandoffTaskForProvider,
   subagentFanoutTaskForProvider,
-  MOCK_OPENAI_DEBUG_REQUEST_LIMIT,
   readBody,
   parseJsonObjectBody,
   transcriptionTextForAudioRequest,
@@ -118,13 +121,12 @@ import {
   extractEmbeddingInputTexts,
   buildDeterministicEmbedding,
 } from "./mock-openai-contracts.js";
+import { planCronFailureRepairTurn } from "./mock-openai-cron-failure-repair.js";
 import {
   extractExactReplyDirective,
   extractExactMarkerDirective,
   resolveWhatsAppStructuredReply,
   extractBlockStreamingMarkerDirectives,
-  extractSlackProgressCommentaryDirectives,
-  QA_SLACK_PROGRESS_COMMENTARY_MARKER_RE,
   hasDeclaredTool,
   hasToolDefinition,
   findNamedToolDefinition,
@@ -159,12 +161,11 @@ import {
   splitMockConversationContext,
   hasToolOutput,
   extractToolOutput,
-  extractToolOutputValue,
   extractToolOutputStructuredError,
   extractToolOutputCallId,
-  extractLatestToolOutput,
   extractAllToolOutputText,
-  extractUserTextAfterLatestToolOutput,
+  extractFollowthroughEvidenceText,
+  normalizeResponsesInput,
   buildSlackMpimHistoryReply,
   extractUserTurnTexts,
   extractInstructionsText,
@@ -175,25 +176,24 @@ import {
   buildWhatsAppGroupDispatchReply,
   buildWhatsAppBatchedReply,
   countImageInputs,
-  extractCurrentImageRequest,
   parseToolOutputJson,
 } from "./mock-openai-input.js";
+import { createMockOpenAiRequestLog } from "./mock-openai-request-log.js";
 import { attachQaMockResponsesWebSocketServer } from "./mock-openai-responses-websocket.js";
+import {
+  buildSlackOwnedRequesterEvents,
+  readSlackProgressTurn,
+} from "./mock-openai-slack-requester.js";
 import { resolveMockSubagentHandoff } from "./mock-openai-subagent-completion.js";
 import {
   QA_CODE_MODE_TARGET_MARKER,
-  stringifyScenarioToolOutput,
   encodeCodeModeTarget,
   resolveCodeModeExecSurface,
   canCallScenarioTool,
-  readScenarioCompletedToolName,
   readProgressCommand,
-  unwrapScenarioCatalogOutput,
+  readScenarioToolCompletion,
   resolveCurrentToolDeclarationSurface,
-  findToolCallByCallId,
-  parseNativeCodeModeOutput,
   readRestartCheckpointProgress,
-  isCodeModeControlToolOutput,
   buildScenarioToolCallEvents,
   extractScenarioPlannedTool,
 } from "./mock-openai-tool-routing.js";
@@ -333,16 +333,10 @@ const QA_TELEGRAM_VISIBLE_PARTIAL_FAILURE_MARKER = "TELEGRAM-VISIBLE-PARTIAL-BEF
 const QA_REPEATED_REQUEST_RESPONSE_PAUSE_MS = 80_000;
 const QA_REPEATED_REQUEST_STALLED_RESPONSE_PAUSE_MS = 180_000;
 const QA_REPEATED_REQUEST_STALL_ATTEMPT = 5;
-
-function normalizeResponsesInput(value: unknown): ResponsesInputItem[] {
-  if (Array.isArray(value)) {
-    return value.map(asOptionalRecord).filter((item) => item !== undefined);
-  }
-  if (typeof value === "string") {
-    return [{ role: "user", content: [{ type: "input_text", text: value }] }];
-  }
-  return [];
-}
+// Stalled-turn recovery mirrors the repeated-request e2e timings: short failing
+// retries, then one held request the QA-tuned stuck detector must abort.
+const QA_STALLED_TURN_RESPONSE_PAUSE_MS = 8_000;
+const QA_STALLED_TURN_STALLED_RESPONSE_PAUSE_MS = 90_000;
 
 function resolveCompactionSummaryFaultMode(params: {
   allInputText: string;
@@ -382,12 +376,6 @@ function buildMemoryGetArgs(result: Record<string, unknown>) {
         ? Math.max(1, result.endLine)
         : 1;
   return { path: result.path, from, lines: 4 };
-}
-
-function extractFollowthroughEvidenceText(input: ResponsesInputItem[]): string {
-  return [extractAllToolOutputText(input), extractUserTextAfterLatestToolOutput(input)]
-    .filter(Boolean)
-    .join("\n");
 }
 
 const PERSONAL_FOLLOWTHROUGH_FIXTURES = [
@@ -473,22 +461,17 @@ async function buildResponsesPayload(
   const toolDeclarationBody = resolveCurrentToolDeclarationSurface(body, input);
   const prompt = extractLastUserText(input);
   const hasCompletedToolOutput = hasToolOutput(input);
-  const rawToolOutput = extractToolOutput(input);
-  const codeModeSurface = resolveCodeModeExecSurface(toolDeclarationBody);
-  const hasCodeModeControlOutput = isCodeModeControlToolOutput(toolDeclarationBody, input);
-  const codeModeControlJson = hasCodeModeControlOutput
-    ? codeModeSurface === "native"
-      ? parseNativeCodeModeOutput(extractToolOutputValue(input))
-      : parseToolOutputJson(rawToolOutput)
-    : null;
-  const toolOutput =
-    codeModeControlJson?.status === "completed" && Object.hasOwn(codeModeControlJson, "value")
-      ? stringifyScenarioToolOutput(codeModeControlJson.value)
-      : codeModeSurface === "native" && hasCodeModeControlOutput
-        ? ""
-        : unwrapScenarioCatalogOutput(input, rawToolOutput);
-  const completedToolCall = findToolCallByCallId(input, extractToolOutputCallId(input));
-  const completedToolName = readScenarioCompletedToolName(completedToolCall);
+  const allInputText = extractAllRequestTexts(input, body);
+  const {
+    rawToolOutput,
+    hasCodeModeControlOutput,
+    codeModeControlJson,
+    toolOutput,
+    completedToolName,
+    scenarioToolOutput,
+    toolJson,
+    hasCompletedStructuredWrite,
+  } = readScenarioToolCompletion(toolDeclarationBody, input, allInputText);
   const buildToolCallEventsWithArgs = (name: string, args: Record<string, unknown>) =>
     buildScenarioToolCallEvents(toolDeclarationBody, name, args);
   const pendingCommandProgress = (
@@ -514,7 +497,6 @@ async function buildResponsesPayload(
       ? buildAssistantEvents("BUG-TOOL-FAILED")
       : null;
   };
-  const allInputText = extractAllRequestTexts(input, body);
   const hasCompactionRetryDurableContext = allInputText.includes(
     QA_COMPACTION_RETRY_DURABLE_MARKER,
   );
@@ -550,13 +532,10 @@ async function buildResponsesPayload(
   }
   const compactionRetryScenarioActive =
     scenarioState.compactionRetryActive || hasCompactionRetryMarker;
-  const scenarioToolOutput =
-    toolOutput ||
-    (/thread memory check|session memory ranking check|memory tools check|repo contract followthrough check/i.test(
-      allInputText,
-    )
-      ? extractLatestToolOutput(input)
-      : "");
+  const cronFailureRepairTurn = planCronFailureRepairTurn(prompt, input);
+  if (cronFailureRepairTurn) {
+    return cronFailureRepairTurn;
+  }
   // The queued followup carries the stalled prompt in transcript history, so
   // current-turn dispatch must win before the persistent recovery fixture.
   if (QA_REPEATED_REQUEST_QUEUED_REPLY_PROMPT_RE.test(prompt)) {
@@ -571,7 +550,11 @@ async function buildResponsesPayload(
   if (QA_REPEATED_REQUEST_RECOVERY_PROMPT_RE.test(allInputText)) {
     return buildFailedResponseEvents();
   }
-  const toolJson = parseToolOutputJson(scenarioToolOutput);
+  if (QA_STALLED_TURN_RECOVERY_PROMPT_RE.test(allInputText)) {
+    return allInputText.includes(QA_STALLED_TURN_RECOVERY_NEEDLE)
+      ? buildAssistantEvents(QA_STALLED_TURN_RECOVERY_MARKER)
+      : buildFailedResponseEvents();
+  }
   // The hard-kill fixture shares the first real checkpoint below, but recovery
   // must settle without scheduling the repeated-restart fixture's later waits.
   if (
@@ -692,7 +675,6 @@ async function buildResponsesPayload(
   const exactReplyDirective = promptExactReplyDirective ?? extractExactReplyDirective(allInputText);
   const exactMarkerDirective =
     promptExactMarkerDirective ?? extractExactMarkerDirective(allInputText);
-  const currentImageRequest = extractCurrentImageRequest(input, body);
   const blockStreamingPrompt = scenarioFamilyPrompt || prompt || allInputText;
   const blockStreamingMarkers = extractBlockStreamingMarkerDirectives(blockStreamingPrompt);
   const isGroupChat = allInputText.includes('"is_group_chat": true');
@@ -714,15 +696,12 @@ async function buildResponsesPayload(
     QA_EMPTY_RESPONSE_SIDE_EFFECT_PROMPT_RE.exec(sideEffectPrompt)?.[1]?.toLowerCase();
   const canCallSessionsSpawn = canCallScenarioTool(toolDeclarationBody, "sessions_spawn");
   const canCallSessionsYield = canCallScenarioTool(toolDeclarationBody, "sessions_yield");
-  const canCallMessage = canCallScenarioTool(toolDeclarationBody, "message");
-  const slackProgressTurn = extractLastMatchingUserTurn(
-    input,
-    QA_SLACK_PROGRESS_COMMENTARY_MARKER_RE,
-  );
-  const slackProgressDirectives = slackProgressTurn
-    ? extractSlackProgressCommentaryDirectives(slackProgressTurn.text)
-    : null;
-  const slackProgressInput = slackProgressTurn ? input.slice(slackProgressTurn.index) : [];
+  const canCallMessage = canCallScenarioTool(toolDeclarationBody, "message", true);
+  const { slackProgressDirectives, slackProgressInput } = readSlackProgressTurn(input);
+  const slackRequester = buildSlackOwnedRequesterEvents(toolDeclarationBody, input, currentPrompt);
+  if (slackRequester) {
+    return slackRequester;
+  }
   if (QA_TOOL_LOOP_GLOBAL_BREAKER_PROMPT_RE.test(allInputText)) {
     if (!hasCompletedToolOutput) {
       scenarioState.toolLoopReadAttempts = 0;
@@ -765,16 +744,6 @@ async function buildResponsesPayload(
       typeof plannedArgs.input === "string"
     ) {
       return buildToolCallEventsWithArgs(targetTool, plannedArgs);
-    }
-    if (!hasCompletedToolOutput && targetTool && hasDeclaredTool(body, "tool_search_code")) {
-      return buildToolCallEventsWithArgs("tool_search_code", {
-        code: [
-          `const hits = await openclaw.tools.search(${JSON.stringify(targetTool)}, { limit: 1 });`,
-          "const match = hits.find((tool) => tool.name === " + JSON.stringify(targetTool) + ");",
-          "if (!match) throw new Error('target tool not found');",
-          `return await openclaw.tools.call(match.id, ${JSON.stringify(plannedArgs)});`,
-        ].join("\n"),
-      });
     }
     if (
       !hasCompletedToolOutput &&
@@ -1053,6 +1022,40 @@ async function buildResponsesPayload(
       });
     }
   }
+  if (QA_YIELD_REJECTION_PROMPT_RE.test(allInputText)) {
+    // The completion turn stays empty so the generated-media fallback delivers
+    // the image; retries must not restart the chain.
+    if (
+      allInputText.includes("[Internal task completion event]") ||
+      hasEmptyResponseRetryInstruction ||
+      hasReasoningOnlyRetryInstruction
+    ) {
+      return buildAssistantEvents("");
+    }
+    if (!hasCompletedToolOutput && canCallScenarioTool(toolDeclarationBody, "image_generate")) {
+      return buildToolCallEventsWithArgs("image_generate", {
+        prompt: QA_YIELD_REJECTION_IMAGE_PROMPT,
+        filename: "qa-detached-image.png",
+        size: "1024x1024",
+      });
+    }
+    if (completedToolName === "image_generate" && canCallSessionsYield) {
+      return buildToolCallEventsWithArgs("sessions_yield", {
+        message: "Waiting for the QA yield rejection image.",
+      });
+    }
+    if (
+      completedToolName === "sessions_yield" &&
+      canCallScenarioTool(toolDeclarationBody, "message")
+    ) {
+      return buildToolCallEventsWithArgs("message", {
+        action: "send",
+        message: QA_YIELD_REJECTION_ACK_MARKER,
+        final: false,
+      });
+    }
+    return buildAssistantEvents("");
+  }
   if (/remember this fact/i.test(prompt)) {
     return buildAssistantEvents(buildAssistantText(input, body));
   }
@@ -1094,21 +1097,9 @@ async function buildResponsesPayload(
   if (/fanout worker beta/i.test(prompt)) {
     return buildAssistantEvents("BETA-OK");
   }
-  if (
-    /roundtrip image inspection check/i.test(currentImageRequest.text) &&
-    currentImageRequest.imageInputCount > 0
-  ) {
-    return buildAssistantEvents(
-      "Protocol note: the generated attachment shows the same QA lighthouse scene from the previous step.",
-    );
-  }
-  if (
-    /image understanding check/i.test(currentImageRequest.text) &&
-    currentImageRequest.imageInputCount > 0
-  ) {
-    return buildAssistantEvents(
-      "Protocol note: the attached image is split horizontally, with red on top and blue on the bottom.",
-    );
+  const imageReply = buildImageInspectionReply(input, body);
+  if (imageReply) {
+    return buildAssistantEvents(imageReply);
   }
   if (QA_REASONING_ONLY_RECOVERY_PROMPT_RE.test(allInputText)) {
     if (!scenarioToolOutput) {
@@ -1157,20 +1148,18 @@ async function buildResponsesPayload(
   if (QA_THINKING_VISIBILITY_OFF_PROMPT_RE.test(prompt)) {
     return buildAssistantEvents("THINKING-OFF-OK");
   }
-  if (QA_EMPTY_RESPONSE_RECOVERY_PROMPT_RE.test(allInputText)) {
+  if (
+    QA_EMPTY_RESPONSE_RECOVERY_PROMPT_RE.test(allInputText) ||
+    QA_EMPTY_RESPONSE_EXHAUSTION_PROMPT_RE.test(allInputText)
+  ) {
     if (!hasCompletedToolOutput) {
       return buildToolCallEventsWithArgs("read", { path: "QA_KICKOFF_TASK.md" });
     }
-    if (!hasEmptyResponseRetryInstruction) {
-      return buildAssistantEvents("");
-    }
-    return buildAssistantEvents("EMPTY-RECOVERED-OK");
-  }
-  if (QA_EMPTY_RESPONSE_EXHAUSTION_PROMPT_RE.test(allInputText)) {
-    if (!hasCompletedToolOutput) {
-      return buildToolCallEventsWithArgs("read", { path: "QA_KICKOFF_TASK.md" });
-    }
-    return buildAssistantEvents("");
+    return buildAssistantEvents(
+      QA_EMPTY_RESPONSE_RECOVERY_PROMPT_RE.test(allInputText) && hasEmptyResponseRetryInstruction
+        ? "EMPTY-RECOVERED-OK"
+        : "",
+    );
   }
   const channelStreamingEvents = buildChannelStreamingFixtureEvents({
     currentPrompt,
@@ -1180,21 +1169,13 @@ async function buildResponsesPayload(
   if (channelStreamingEvents) {
     return channelStreamingEvents;
   }
-  const whatsAppPendingHistoryReply = buildWhatsAppPendingHistoryReply(prompt, input);
-  if (whatsAppPendingHistoryReply) {
-    return buildAssistantEvents(whatsAppPendingHistoryReply);
-  }
-  const whatsAppBroadcastReply = buildWhatsAppBroadcastReply(allInputText);
-  if (whatsAppBroadcastReply) {
-    return buildAssistantEvents(whatsAppBroadcastReply);
-  }
-  const whatsAppGroupDispatchReply = buildWhatsAppGroupDispatchReply(allInputText);
-  if (whatsAppGroupDispatchReply) {
-    return buildAssistantEvents(whatsAppGroupDispatchReply);
-  }
-  const whatsAppBatchedReply = buildWhatsAppBatchedReply(prompt);
-  if (whatsAppBatchedReply) {
-    return buildAssistantEvents(whatsAppBatchedReply);
+  const whatsAppReply =
+    buildWhatsAppPendingHistoryReply(prompt, input) ||
+    buildWhatsAppBroadcastReply(allInputText) ||
+    buildWhatsAppGroupDispatchReply(allInputText) ||
+    buildWhatsAppBatchedReply(prompt);
+  if (whatsAppReply) {
+    return buildAssistantEvents(whatsAppReply);
   }
   const slackChartMatch = QA_SLACK_CHART_PRESENTATION_PROMPT_RE.exec(allInputText);
   if (slackChartMatch?.[1] && slackChartMatch[2]) {
@@ -1221,25 +1202,21 @@ async function buildResponsesPayload(
       return buildAssistantEvents(slackChartMatch[2]);
     }
   }
-  if (QA_MESSAGE_DECISION_SUPPRESSION_PROMPT_RE.test(allInputText)) {
+  const suppressMessageDecision = QA_MESSAGE_DECISION_SUPPRESSION_PROMPT_RE.test(allInputText);
+  if (suppressMessageDecision || QA_MESSAGE_DECISION_SEND_PROMPT_RE.test(allInputText)) {
     if (!hasCompletedToolOutput && hasDeclaredTool(body, "message")) {
       return buildToolCallEventsWithArgs("message", {
         action: "send",
-        message:
-          "Delivery: Final assistant text is not automatically delivered in this run. Use the `message` tool to send user-visible output.",
-      });
-    }
-    if (hasCompletedToolOutput) {
-      return buildAssistantEvents("NO_REPLY");
-    }
-  }
-  if (QA_MESSAGE_DECISION_SEND_PROMPT_RE.test(allInputText)) {
-    if (!hasCompletedToolOutput && hasDeclaredTool(body, "message")) {
-      return buildToolCallEventsWithArgs("message", {
-        action: "send",
-        message: "QA-MESSAGE-DELIVERY-OK",
-        final: true,
-        presentation: { blocks: [{ type: "text", text: "QA-MESSAGE-DELIVERY-OK" }] },
+        ...(suppressMessageDecision
+          ? {
+              message:
+                "Delivery: Final assistant text is not automatically delivered in this run. Use the `message` tool to send user-visible output.",
+            }
+          : {
+              message: "QA-MESSAGE-DELIVERY-OK",
+              final: true,
+              presentation: { blocks: [{ type: "text", text: "QA-MESSAGE-DELIVERY-OK" }] },
+            }),
       });
     }
     if (hasCompletedToolOutput) {
@@ -1452,17 +1429,15 @@ async function buildResponsesPayload(
   if (slackMpimHistoryReply !== undefined) {
     return buildAssistantEvents(slackMpimHistoryReply);
   }
-  if (/\bmarker\b/i.test(prompt) && promptExactMarkerDirective) {
-    return buildAssistantEvents(promptExactMarkerDirective);
-  }
-  if (/\bmarker\b/i.test(prompt) && promptExactReplyDirective) {
-    return buildAssistantEvents(promptExactReplyDirective);
+  const promptMarkerReply = promptExactMarkerDirective ?? promptExactReplyDirective;
+  if (/\bmarker\b/i.test(prompt) && promptMarkerReply) {
+    return buildAssistantEvents(promptMarkerReply);
   }
   const isTelegramCurrentSessionStatusTurn =
     QA_TELEGRAM_CURRENT_SESSION_STATUS_PROMPT_RE.test(prompt) ||
     (hasCompletedToolOutput && QA_TELEGRAM_CURRENT_SESSION_STATUS_PROMPT_RE.test(allInputText));
   if (isTelegramCurrentSessionStatusTurn) {
-    if (!hasCompletedToolOutput && hasDeclaredTool(body, "session_status")) {
+    if (!hasCompletedToolOutput && canCallScenarioTool(toolDeclarationBody, "session_status")) {
       return buildToolCallEventsWithArgs("session_status", { sessionKey: "current" });
     }
     const sessionKey = extractSessionStatusSessionKey(toolJson, toolOutput);
@@ -1472,14 +1447,10 @@ async function buildResponsesPayload(
         : `QA-TELEGRAM-CURRENT-SESSION-BAD ${sessionKey || "missing-session-key"}`,
     );
   }
-  if (/\bmarker\b/i.test(allInputText) && promptExactReplyDirective) {
-    return buildAssistantEvents(promptExactReplyDirective);
-  }
-  if (/\bmarker\b/i.test(allInputText) && userExactMarkerDirective) {
-    return buildAssistantEvents(userExactMarkerDirective);
-  }
-  if (/\bmarker\b/i.test(allInputText) && userExactReplyDirective) {
-    return buildAssistantEvents(userExactReplyDirective);
+  const historyMarkerReply =
+    promptExactReplyDirective ?? userExactMarkerDirective ?? userExactReplyDirective;
+  if (/\bmarker\b/i.test(allInputText) && historyMarkerReply) {
+    return buildAssistantEvents(historyMarkerReply);
   }
   if (QA_SKILL_WORKSHOP_REVIEW_PROMPT_RE.test(allInputText)) {
     return buildAssistantEvents(
@@ -1545,7 +1516,10 @@ async function buildResponsesPayload(
     const evidence = fixture.includeUserFollowup
       ? extractFollowthroughEvidenceText(input)
       : extractAllToolOutputText(input);
-    if (/successfully (?:wrote|created|updated|replaced)/i.test(evidence)) {
+    if (
+      hasCompletedStructuredWrite ||
+      /successfully (?:wrote|created|updated|replaced)/i.test(evidence)
+    ) {
       return buildAssistantEvents(fixture.reply);
     }
     const hasRequest = evidence.includes(fixture.requestMarker);
@@ -1909,6 +1883,7 @@ async function buildResponsesPayload(
   if (/repo contract followthrough check/i.test(allInputText)) {
     const repoEvidenceText = extractFollowthroughEvidenceText(input);
     if (
+      hasCompletedStructuredWrite ||
       /successfully (?:wrote|created|updated|replaced)/i.test(repoEvidenceText) ||
       /status:\s*complete/i.test(repoEvidenceText)
     ) {
@@ -1945,7 +1920,10 @@ async function buildResponsesPayload(
   }
   if (/personal task followthrough check/i.test(allInputText)) {
     const taskEvidenceText = extractFollowthroughEvidenceText(input);
-    if (/successfully (?:wrote|created|updated|replaced)/i.test(taskEvidenceText)) {
+    if (
+      hasCompletedStructuredWrite ||
+      /successfully (?:wrote|created|updated|replaced)/i.test(taskEvidenceText)
+    ) {
       return buildAssistantEvents(
         [
           "Pending: maintainer feedback before publishing",
@@ -2030,18 +2008,7 @@ export async function startQaMockOpenAiServer(params?: QaMockOpenAiServerOptions
   const terminalRequesterSettleGate = createTerminalRequesterSettleGate();
   const servedCompactionSummaryFaultMarkers = new Set<string>();
   const scenarioStateFor = createQaMockScenarioStateStore();
-  let lastRequest: MockOpenAiRequestSnapshot | null = null;
-  const requests: MockOpenAiRequestSnapshot[] = [];
-  let nextRequestCursor = 1;
-  const recordRequest = (snapshot: MockOpenAiRequestSnapshotInput) => {
-    const recorded = { ...snapshot, cursor: nextRequestCursor++ };
-    lastRequest = recorded;
-    requests.push(recorded);
-    if (requests.length > MOCK_OPENAI_DEBUG_REQUEST_LIMIT) {
-      requests.splice(0, requests.length - MOCK_OPENAI_DEBUG_REQUEST_LIMIT);
-    }
-    return recorded;
-  };
+  const requestLog = createMockOpenAiRequestLog();
   const inflightRequests = new Map<number, { prompt: string; allInputText: string }>();
   let nextInflightRequestId = 1;
   const imageGenerationRequests: Array<Record<string, unknown>> = [];
@@ -2108,7 +2075,7 @@ export async function startQaMockOpenAiServer(params?: QaMockOpenAiServerOptions
       !scenarioState.compactionOverflowInjected
     ) {
       scenarioState.compactionOverflowInjected = true;
-      recordRequest({
+      requestLog.record({
         ...requestSnapshotBase,
         outcome: "error",
         errorCode: "context_length_exceeded",
@@ -2201,7 +2168,7 @@ export async function startQaMockOpenAiServer(params?: QaMockOpenAiServerOptions
             retryAfterSeconds: 120,
           }
         : undefined);
-    recordRequest({
+    const recorded = requestLog.record({
       ...requestSnapshotBase,
       outcome:
         failure || events.some((event) => event.type === "response.failed") ? "error" : "success",
@@ -2226,6 +2193,16 @@ export async function startQaMockOpenAiServer(params?: QaMockOpenAiServerOptions
     if (repeatedRequestRecovery) {
       scenarioState.repeatedRequestRecoveryAttempts += 1;
     }
+    const stalledTurnAttempt =
+      QA_STALLED_TURN_RECOVERY_PROMPT_RE.test(allInputText) &&
+      !allInputText.includes(QA_STALLED_TURN_RECOVERY_NEEDLE);
+    if (stalledTurnAttempt) {
+      scenarioState.stalledTurnRecoveryAttempts += 1;
+    }
+    const held = requestLog.waitForContinuation(recorded);
+    if (held) {
+      await held;
+    }
     return {
       events,
       model,
@@ -2248,6 +2225,14 @@ export async function startQaMockOpenAiServer(params?: QaMockOpenAiServerOptions
               scenarioState.repeatedRequestRecoveryAttempts === QA_REPEATED_REQUEST_STALL_ATTEMPT
                 ? repeatedRequestStalledResponsePauseMs
                 : repeatedRequestResponsePauseMs,
+          }
+        : {}),
+      ...(stalledTurnAttempt
+        ? {
+            responsePauseMs:
+              scenarioState.stalledTurnRecoveryAttempts === QA_REPEATED_REQUEST_STALL_ATTEMPT
+                ? QA_STALLED_TURN_STALLED_RESPONSE_PAUSE_MS
+                : QA_STALLED_TURN_RESPONSE_PAUSE_MS,
           }
         : {}),
     };
@@ -2277,34 +2262,7 @@ export async function startQaMockOpenAiServer(params?: QaMockOpenAiServerOptions
         });
         return;
       }
-      if (req.method === "GET" && url.pathname === "/debug/last-request") {
-        writeJson(res, 200, lastRequest ?? { ok: false, error: "no request recorded" });
-        return;
-      }
-      if (req.method === "GET" && url.pathname === "/debug/request-cursor") {
-        writeJson(res, 200, { cursor: nextRequestCursor - 1 });
-        return;
-      }
-      if (req.method === "GET" && url.pathname === "/debug/requests") {
-        const afterText = url.searchParams.get("after");
-        if (afterText === null) {
-          writeJson(res, 200, requests);
-          return;
-        }
-        const after = resolveQaDebugRequestCursor(
-          afterText,
-          requests[0]?.cursor ?? nextRequestCursor,
-          nextRequestCursor - 1,
-        );
-        if (typeof after !== "number") {
-          writeJson(res, after.status, after.body);
-          return;
-        }
-        writeJson(
-          res,
-          200,
-          requests.filter((request) => request.cursor > after),
-        );
+      if (req.method === "GET" && requestLog.handleGet(url, res)) {
         return;
       }
       if (req.method === "GET" && url.pathname === "/debug/inflight-requests") {
@@ -2357,6 +2315,10 @@ export async function startQaMockOpenAiServer(params?: QaMockOpenAiServerOptions
         imageGenerationRequests.push(body);
         if (imageGenerationRequests.length > 20) {
           imageGenerationRequests.splice(0, imageGenerationRequests.length - 20);
+        }
+        // Keep the detached media run pending after the originating turn ends.
+        if (body.prompt === QA_YIELD_REJECTION_IMAGE_PROMPT) {
+          await sleep(QA_YIELD_REJECTION_IMAGE_DELAY_MS);
         }
         writeJson(res, 200, {
           data: [
@@ -2459,9 +2421,11 @@ export async function startQaMockOpenAiServer(params?: QaMockOpenAiServerOptions
     baseUrl,
     sessionObserverUrl,
     terminalRequesters: { settle: terminalRequesterSettleGate.settle },
+    holdNextContinuation: requestLog.holdNextContinuation,
     async stop() {
       unregisterSessionObserver();
       terminalRequesterSettleGate.stop();
+      requestLog.stop();
       await responsesWebSocket.close();
       await closeQaHttpServer(server);
     },

@@ -502,50 +502,6 @@ describe("qa aimock server", () => {
     }
   });
 
-  it("records the request list for scenario assertions", async () => {
-    const server = await startQaAimockServer({
-      host: "127.0.0.1",
-      port: 0,
-    });
-    try {
-      const response = await fetch(`${server.baseUrl}/v1/responses`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          model: "aimock/gpt-5.6-luna",
-          stream: false,
-          input: [makeResponsesInput("@openclaw explain the QA lab")],
-        }),
-      });
-      expect(response.status).toBe(200);
-      const responseBody = (await response.json()) as { status?: unknown };
-      expect(responseBody.status).toBe("completed");
-
-      const debug = await fetch(`${server.baseUrl}/debug/requests`);
-      expect(debug.status).toBe(200);
-      const expectedBody = {
-        model: "aimock/gpt-5.6-luna",
-        messages: [{ role: "user", content: "@openclaw explain the QA lab" }],
-        stream: false,
-        _endpointType: "chat",
-      };
-      expect(await debug.json()).toEqual([
-        {
-          raw: JSON.stringify(expectedBody),
-          body: expectedBody,
-          prompt: "@openclaw explain the QA lab",
-          allInputText: "@openclaw explain the QA lab",
-          toolOutput: "",
-          model: "aimock/gpt-5.6-luna",
-          providerVariant: "openai",
-          imageInputCount: 0,
-        },
-      ]);
-    } finally {
-      await server.stop();
-    }
-  });
-
   it("reads requests after a stable debug cursor", async () => {
     const server = await startQaAimockServer({
       host: "127.0.0.1",

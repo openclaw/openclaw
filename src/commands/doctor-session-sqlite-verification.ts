@@ -3,6 +3,10 @@ import fs from "node:fs";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveLegacyTranscriptPaths } from "../config/sessions/legacy-store-inspection.js";
 import { getSessionKysely } from "../config/sessions/session-accessor.sqlite-scope.js";
+import {
+  attachSessionEntrySnapshots,
+  sessionEntrySnapshotColumns,
+} from "../config/sessions/session-entry-snapshots.js";
 import { normalizeStoreSessionKey } from "../config/sessions/store-entry.js";
 import type { SessionStoreTarget } from "../config/sessions/targets.js";
 import { readFileDescriptorBoundedSync } from "../infra/boundary-file-read.js";
@@ -143,16 +147,20 @@ export function verifyHistoricalMigrationArtifact(params: {
           db
             .selectFrom("session_nodes")
             .select(["current_session_id", "entry_json"])
+            .select(sessionEntrySnapshotColumns)
             .where("session_key", "=", key),
         );
         if (!row || row.current_session_id !== raw.sessionId) {
           return false;
         }
         const current: unknown = JSON.parse(row.entry_json);
+        if (!isRecord(current)) {
+          return false;
+        }
+        attachSessionEntrySnapshots(current, row);
         const entry = { ...raw, sessionId, updatedAt: raw.updatedAt };
         const normalized = migrateLegacySessionCreator(normalizeLegacySessionEntryDelivery(entry));
         if (
-          !isRecord(current) ||
           Object.entries(normalized).some(
             ([field, value]) =>
               field !== "sessionFile" && JSON.stringify(current[field]) !== JSON.stringify(value),

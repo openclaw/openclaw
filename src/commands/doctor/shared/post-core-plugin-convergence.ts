@@ -160,16 +160,9 @@ async function repairInstalledOpenClawHostLinks(params: {
       throw effectFailure.error;
     }
     beforePersistentEffect?.();
-    const message = `Failed to repair installed OpenClaw host peer links: ${err instanceof Error ? err.message : String(err)}`;
     return {
       changes: [],
-      warnings: [
-        {
-          reason: message,
-          message,
-          guidance: [REPAIR_GUIDANCE],
-        },
-      ],
+      warnings: [formatPeerLinkPackageReadWarning({ error: err })],
       packageReadFailures,
     };
   }

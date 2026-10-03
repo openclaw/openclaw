@@ -8,7 +8,7 @@ const SHA_PATTERN = /^[a-f0-9]{40}$/u;
 const RELEASE_PUBLISH_REF_PATTERN = /^release-publish\/([a-f0-9]{12})-([1-9][0-9]*)$/u;
 const RELEASE_CI_REF_PATTERN = /^release-ci\/([a-f0-9]{12})-([1-9][0-9]*)$/u;
 const DIRECT_WORKFLOW_REF_PATTERN =
-  /^(?:main|release\/[0-9]{4}\.(?:[1-9]|1[0-2])\.[1-9][0-9]*|extended-stable\/[0-9]{4}\.(?:[1-9]|1[0-2])\.33|tideclaw\/alpha\/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z)$/u;
+  /^(?:main|release\/[0-9]{4}\.(?:[1-9]|1[0-2])\.[1-9][0-9]*|extended-stable\/[0-9]{4}\.(?:[1-9]|1[0-2])\.33)$/u;
 const RELEASE_PUBLISH_PARENT_STATE_POLICIES = new Set([
   "active",
   "active-or-failure",
@@ -82,6 +82,9 @@ export function resolveReleaseToolingIdentity({
   }
   const ref = requiredString(workflowRef, "workflow ref");
   const fullRef = requiredString(workflowFullRef, "workflow full ref");
+  if (ref.includes("tideclaw/alpha/") || fullRef.includes("tideclaw/alpha/")) {
+    fail("Alpha releases are retired; use a beta prerelease instead.");
+  }
   const sha = requiredSha(workflowSha, "workflow SHA");
   const directRoute = fullRef === `refs/heads/${ref}` && DIRECT_WORKFLOW_REF_PATTERN.test(ref);
   const releaseCiMatch = fullRef === `refs/heads/${ref}` ? RELEASE_CI_REF_PATTERN.exec(ref) : null;
@@ -102,9 +105,6 @@ export function resolveReleaseToolingIdentity({
     ? parseIdentityJson(requestedIdentityJson)
     : undefined;
   if (!requested) {
-    if (contract !== "1" && contract !== "2") {
-      fail(`release tooling contract ${contract} requires explicit trusted workflow identity.`);
-    }
     if (!directRoute) {
       fail("release-ci and protected-tag workflows require explicit trusted workflow identity.");
     }
@@ -133,6 +133,9 @@ export function resolveReleaseToolingIdentity({
 function classifyIdentity({ allowPrevalidatedRef, workflowFullRef, workflowRef, workflowSha }) {
   const ref = requiredString(workflowRef, "release tooling ref");
   const fullRef = requiredString(workflowFullRef, "release tooling full ref");
+  if (ref.includes("tideclaw/alpha/") || fullRef.includes("tideclaw/alpha/")) {
+    fail("Alpha releases are retired; use a beta prerelease instead.");
+  }
   const sha = requiredSha(workflowSha, "release tooling SHA");
   const protectedMatch = RELEASE_PUBLISH_REF_PATTERN.exec(ref);
 
@@ -408,8 +411,10 @@ export function verifyReleaseToolingIdentity({
     workflowSha,
   });
 
+  let tagRef;
+  let branchRef;
+  let mainComparisonStatus;
   if (identity.route === "protected-tag") {
-    let tagRef;
     try {
       tagRef = parseJson(
         runGh([
@@ -423,27 +428,7 @@ export function verifyReleaseToolingIdentity({
     } catch (error) {
       throw new Error("protected release tooling tag is missing or unreadable.", { cause: error });
     }
-    const validated = validateReleaseToolingIdentity({
-      allowPrevalidatedRef,
-      tagRef,
-      workflowFullRef,
-      workflowRef,
-      workflowSha,
-    });
-    validateParentRunIfRequested({
-      identity: validated,
-      releasePublishFullRef,
-      releasePublishParentStatePolicy,
-      releasePublishRef,
-      releasePublishRunAttempt,
-      releasePublishRunId,
-      repository: normalizedRepository,
-      runGh,
-    });
-    return validated;
-  }
-
-  if (identity.route === "main") {
+  } else if (identity.route === "main") {
     let comparison;
     try {
       comparison = parseJson(
@@ -461,45 +446,29 @@ export function verifyReleaseToolingIdentity({
     } catch (error) {
       throw new Error("main release tooling ancestry could not be verified.", { cause: error });
     }
-    const validated = validateReleaseToolingIdentity({
-      allowPrevalidatedRef,
-      mainComparisonStatus: isRecord(comparison) ? comparison.status : undefined,
-      workflowFullRef,
-      workflowRef,
-      workflowSha,
-    });
-    validateParentRunIfRequested({
-      identity: validated,
-      releasePublishFullRef,
-      releasePublishParentStatePolicy,
-      releasePublishRef,
-      releasePublishRunAttempt,
-      releasePublishRunId,
-      repository: normalizedRepository,
-      runGh,
-    });
-    return validated;
-  }
-
-  let branchRef;
-  try {
-    branchRef = parseJson(
-      runGh([
-        "api",
-        `repos/${normalizedRepository}/git/ref/heads/${identity.ref}`,
-        "--method",
-        "GET",
-      ]),
-      "prevalidated release tooling branch",
-    );
-  } catch (error) {
-    throw new Error("prevalidated release tooling branch is missing or unreadable.", {
-      cause: error,
-    });
+    mainComparisonStatus = isRecord(comparison) ? comparison.status : undefined;
+  } else {
+    try {
+      branchRef = parseJson(
+        runGh([
+          "api",
+          `repos/${normalizedRepository}/git/ref/heads/${identity.ref}`,
+          "--method",
+          "GET",
+        ]),
+        "prevalidated release tooling branch",
+      );
+    } catch (error) {
+      throw new Error("prevalidated release tooling branch is missing or unreadable.", {
+        cause: error,
+      });
+    }
   }
   const validated = validateReleaseToolingIdentity({
     allowPrevalidatedRef,
     branchRef,
+    tagRef,
+    mainComparisonStatus,
     workflowFullRef,
     workflowRef,
     workflowSha,

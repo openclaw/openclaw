@@ -1,0 +1,170 @@
+title: Stalled channel turn auto-recovery
+
+scenario:
+  id: stalled-turn-auto-recovery
+  surface: runtime
+  coverage:
+    primary:
+      - agent-runtime.failure-recovery
+    secondary:
+      - agent-runtime.failure-recovery-retry-policy
+      - agent-runtime.progress-visibility-failure-recovery
+      - agent-runtime.session-dm
+  objective: Verify a DM turn aborted by the stuck-session detector before producing output continues automatically for its own sender, even when another sender's DM is queued in the same main session.
+  successCriteria:
+    - Scenario is mock-openai only so live lanes do not pick it up implicitly.
+    - The first turn loops on failing model requests until the QA-tuned stuck detector aborts it.
+    - Exactly one model request carries the stalled-turn recovery context, and it runs before the other sender's queued request.
+    - The stalled sender's DM receives the recovered answer marker exactly once.
+    - The other sender's queued request runs without the recovery context and its DM receives only its own reply.
+    - Neither DM receives the "stopped making progress. Please try again" notice once the session settles idle.
+  docsRefs:
+    - docs/help/testing.md
+    - docs/concepts/queue.md
+  codeRefs:
+    - extensions/qa-lab/src/providers/mock-openai/server.ts
+    - src/logging/diagnostic-session-attention.ts
+    - src/auto-reply/reply
+  gatewayConfigPatch:
+    diagnostics:
+      enabled: true
+    session:
+      # Both senders share the main DM session, so one follow-up queue.
+      dmScope: main
+    messages:
+      queue:
+        mode: followup
+    models:
+      providers:
+        mock-openai:
+          # Matches the repeated-request e2e allowance so the held request stays
+          # abortable by stuck recovery rather than timing out first.
+          timeoutSeconds: 45
+  gatewayRuntime:
+    env:
+      # Minimum QA-accepted stuck-session abort bound (production uses minutes).
+      QA_DIAGNOSTIC_STUCK_SESSION_ABORT_MS: "30000"
+  execution:
+    kind: flow
+    summary: Verify a stuck-detector-aborted DM turn auto-recovers for its own sender while another sender's queued DM stays separate.
+    suiteIsolation: isolated
+    isolationReason: Needs QA-tuned stuck-session diagnostics and a shorter provider allowance on a fresh gateway.
+    retryCount: 0
+    config:
+      requiredProviderMode: mock-openai
+      requiredProvider: mock-openai
+      conversationId: qa-stalled-traveler
+      bystanderConversationId: qa-stalled-bystander
+      promptSnippet: Stalled turn recovery QA check
+      prompt: "Stalled turn recovery QA check: I'm travelling to Lisbon next week. What should I pack? Include the exact marker STALLED-TURN-RECOVERED-OK."
+      expectedReply: STALLED-TURN-RECOVERED-OK
+      bystanderSnippet: Repeated request queued reply Gateway QA check
+      bystanderPrompt: Repeated request queued reply Gateway QA check. Reply with the fixture marker.
+      bystanderReply: GATEWAY_REPEATED_REQUEST_QUEUED_OK
+      recoveryNeedle: previous turn stopped making progress
+      forbiddenNotices:
+        - Please try again
+        - stopped making progress
+
+flow:
+  steps:
+    - name: recovers a stalled DM turn for its own sender
+      actions:
+        - assert:
+            expr: "env.providerMode === 'mock-openai'"
+            message: this seeded scenario is mock-openai only
+        - call: waitForGatewayHealthy
+          args:
+            - ref: env
+            - 60000
+        - resetTransport: true
+        - set: outboundStartIndex
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
+        - set: requestCursorBefore
+          value:
+            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor"
+        - set: outboundFor
+          value:
+            expr: "(conversationId) => state.getSnapshot().messages.filter((message) => message.direction === 'outbound').slice(outboundStartIndex).filter((message) => message.conversation.id === conversationId).map((message) => String(message.text ?? ''))"
+        - sendInbound:
+            conversation:
+              id:
+                ref: config.conversationId
+              kind: direct
+            senderId:
+              ref: config.conversationId
+            senderName: QA Traveler
+            text:
+              ref: config.prompt
+        # Queue the other sender only once the stalled turn owns the session.
+        - call: waitForCondition
+          args:
+            - lambda:
+                expr: "(async () => (await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`)).some((request) => String(request.prompt ?? '').includes(config.promptSnippet)) || undefined)()"
+            - 60000
+            - 250
+        - sendInbound:
+            conversation:
+              id:
+                ref: config.bystanderConversationId
+              kind: direct
+            senderId:
+              ref: config.bystanderConversationId
+            senderName: QA Bystander
+            text:
+              ref: config.bystanderPrompt
+        # Settle on both replies; a regressed notice fails fast.
+        - call: waitForCondition
+          args:
+            - lambda:
+                expr: "(() => { const traveler = outboundFor(config.conversationId); const bystander = outboundFor(config.bystanderConversationId); if ([...traveler, ...bystander].some((text) => config.forbiddenNotices.some((needle) => text.includes(needle)))) { throw new Error(`stalled-turn notice sent instead of recovery: ${JSON.stringify({ traveler, bystander })}`); } return traveler.some((text) => text.includes(config.expectedReply)) && bystander.some((text) => text.includes(config.bystanderReply)) ? true : undefined; })()"
+            - 300000
+            - 250
+        # Assert only once the recovery and queued runs have drained and the session is idle.
+        - call: waitForCondition
+          args:
+            - lambda:
+                expr: "(async () => { const last = (await env.gateway.call('diagnostics.stability', { type: 'session.state', limit: 20 })).events.at(-1); return last?.outcome === 'idle' && last.queueDepth === 0 ? true : undefined; })()"
+            - 60000
+            - 250
+        - set: travelerOutbound
+          value:
+            expr: "outboundFor(config.conversationId)"
+        - set: bystanderOutbound
+          value:
+            expr: "outboundFor(config.bystanderConversationId)"
+        - assert:
+            expr: "![...travelerOutbound, ...bystanderOutbound].some((text) => config.forbiddenNotices.some((notice) => text.includes(notice)))"
+            message:
+              expr: "`a DM received the stalled-turn retry notice: ${JSON.stringify({ travelerOutbound, bystanderOutbound })}`"
+        - assert:
+            expr: "travelerOutbound.filter((text) => text.includes(config.expectedReply)).length === 1 && !bystanderOutbound.some((text) => text.includes(config.expectedReply))"
+            message:
+              expr: "`expected exactly one recovered answer, only in the stalled sender's DM: ${JSON.stringify({ travelerOutbound, bystanderOutbound })}`"
+        - assert:
+            expr: "bystanderOutbound.filter((text) => text.includes(config.bystanderReply)).length === 1 && !travelerOutbound.some((text) => text.includes(config.bystanderReply))"
+            message:
+              expr: "`expected the other sender's reply only in its own DM: ${JSON.stringify({ travelerOutbound, bystanderOutbound })}`"
+        # Classify by the request's own prompt: shared-session history repeats the others.
+        - set: scenarioRequests
+          value:
+            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`)).map((request) => { const prompt = String(request.prompt ?? ''); return { cursor: request.cursor, outcome: request.outcome, kind: prompt.includes(config.recoveryNeedle) ? 'recovery' : prompt.includes(config.bystanderSnippet) ? 'bystander' : prompt.includes(config.promptSnippet) ? 'stalled' : 'other' }; })"
+        - set: stalledRequests
+          value:
+            expr: "scenarioRequests.filter((request) => request.kind === 'stalled')"
+        - set: recoveryRequests
+          value:
+            expr: "scenarioRequests.filter((request) => request.kind === 'recovery')"
+        - set: bystanderRequests
+          value:
+            expr: "scenarioRequests.filter((request) => request.kind === 'bystander')"
+        - assert:
+            expr: "stalledRequests.length >= 5 && stalledRequests.every((request) => request.outcome === 'error')"
+            message:
+              expr: "`expected the first turn to loop on failing model requests before recovery: ${JSON.stringify(scenarioRequests)}`"
+        - assert:
+            expr: "recoveryRequests.length === 1 && recoveryRequests[0].outcome === 'success' && bystanderRequests.length === 1 && recoveryRequests[0].cursor < bystanderRequests[0].cursor"
+            message:
+              expr: "`expected one recovery request before the other sender's unguided request: ${JSON.stringify(scenarioRequests)}`"
+      detailsExpr: "`traveler=${JSON.stringify(travelerOutbound)}\\nbystander=${JSON.stringify(bystanderOutbound)}\\nstalledRequests=${String(stalledRequests.length)} recoveryRequests=${String(recoveryRequests.length)} bystanderRequests=${String(bystanderRequests.length)}`"

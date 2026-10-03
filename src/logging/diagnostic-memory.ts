@@ -88,7 +88,6 @@ const state: DiagnosticMemoryState = {
   lastPressureAtByKey: new Map(),
 };
 
-// Convert Node's runtime shape into the diagnostic event contract.
 function normalizeMemoryUsage(memory: NodeJS.MemoryUsage): DiagnosticMemoryUsage {
   return {
     rssBytes: memory.rss,
@@ -238,25 +237,20 @@ function pickGrowthPressure(params: {
   }
   const windowMs = minimum.ts - growth.baseline.ts;
   const rssGrowthBytes = minimum.memory.rssBytes - growth.baseline.memory.rssBytes;
-  if (rssGrowthBytes >= thresholds.rssGrowthCriticalBytes) {
-    return {
-      level: "critical",
-      reason: "rss_growth",
-      memory: current.memory,
-      thresholdBytes: thresholds.rssGrowthCriticalBytes,
-      rssGrowthBytes,
-      windowMs,
-    };
-  }
-  if (rssGrowthBytes >= thresholds.rssGrowthWarningBytes) {
-    return {
-      level: "warning",
-      reason: "rss_growth",
-      memory: current.memory,
-      thresholdBytes: thresholds.rssGrowthWarningBytes,
-      rssGrowthBytes,
-      windowMs,
-    };
+  for (const [level, thresholdBytes] of [
+    ["critical", thresholds.rssGrowthCriticalBytes],
+    ["warning", thresholds.rssGrowthWarningBytes],
+  ] as const) {
+    if (rssGrowthBytes >= thresholdBytes) {
+      return {
+        level,
+        reason: "rss_growth",
+        memory: current.memory,
+        thresholdBytes,
+        rssGrowthBytes,
+        windowMs,
+      };
+    }
   }
   return null;
 }
@@ -439,7 +433,6 @@ export function emitDiagnosticMemorySample(options?: {
   return memory;
 }
 
-/** Clears process-local memory diagnostic state for isolated tests. */
 export function resetDiagnosticMemoryForTest(): void {
   state.growth = null;
   state.lastPressureAtByKey.clear();

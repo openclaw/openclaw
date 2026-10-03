@@ -1,14 +1,8 @@
-import { findScenarioOutcome, statusDotClass } from "./ui-render-scenario.js";
+import { findScenarioOutcome } from "./ui-render-scenario.js";
 import { badgeHtml, esc, formatIso } from "./ui-render-utils.js";
-import type { RunnerSelection, TabId, UiState } from "./ui-types.js";
+import type { TabId, UiState } from "./ui-types.js";
 
 const MOCK_MODELS = ["mock-openai/gpt-5.6-luna", "mock-openai/gpt-5.6-luna-alt"];
-
-function deriveSelection(state: UiState): RunnerSelection | null {
-  return state.runnerDraft ?? state.bootstrap?.runner.selection ?? null;
-}
-
-/* ===== Render: Header ===== */
 
 export function renderHeader(state: UiState): string {
   const runner = state.bootstrap?.runner ?? null;
@@ -34,8 +28,6 @@ export function renderHeader(state: UiState): string {
       </div>
     </header>`;
 }
-
-/* ===== Render: Sidebar ===== */
 
 function renderModelSelect(params: {
   id: string;
@@ -64,7 +56,7 @@ function renderModelSelect(params: {
 
 export function renderSidebar(state: UiState): string {
   const scenarios = state.bootstrap?.scenarios ?? [];
-  const selection = deriveSelection(state);
+  const selection = state.runnerDraft ?? state.bootstrap?.runner.selection ?? null;
   const runner = state.bootstrap?.runner ?? null;
   const run = state.scenarioRun;
   const isRunning = runner?.status === "running";
@@ -204,7 +196,7 @@ export function renderSidebar(state: UiState): string {
                       return `
                         <label class="scenario-item">
                           <input type="checkbox" data-scenario-toggle-id="${esc(s.id)}"${selectedIds.has(s.id) ? " checked" : ""}${isRunning ? " disabled" : ""} />
-                          <span class="${statusDotClass(status)}"></span>
+                          <span class="scenario-item-dot scenario-item-dot-${status}"></span>
                           <div class="scenario-item-info">
                             <span class="scenario-item-title">${esc(s.title)}</span>
                             <span class="scenario-item-meta">${esc(s.surface)} · ${esc(s.execution?.kind ?? "flow")} · ${esc(s.id)}</span>
@@ -264,8 +256,6 @@ function renderRunStatus(state: UiState): string {
     </div>`;
 }
 
-/* ===== Render: Tab bar ===== */
-
 export function renderTabBar(state: UiState): string {
   const tabs: Array<{ id: TabId; label: string }> = [
     { id: "chat", label: "Chat" },
@@ -286,5 +276,3 @@ export function renderTabBar(state: UiState): string {
       <div class="tab-spacer"></div>
     </nav>`;
 }
-
-/* ===== Render: Chat tab ===== */

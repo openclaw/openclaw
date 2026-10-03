@@ -30,6 +30,7 @@ import {
 
 const ROW_SNAPSHOT_REASONS = new Set([
   "patch",
+  "participants",
   "placement",
   "send",
   "steer",
@@ -314,6 +315,8 @@ export type ManagedSessionList = ObservedSessionList & {
   key: string;
   query: ReturnType<typeof normalizeManagedSessionListQuery>;
   retainedLimit: number;
+  /** Invalidation retires remaining pages without cancelling the correlated RPC. */
+  readGeneration: number;
   coordinator: ReturnType<typeof createSessionEventRefreshCoordinator>;
   pending: Promise<void> | null;
   queued: ManagedSessionListRefresh | null;
@@ -332,6 +335,7 @@ export function isPrimarySessionListQuery(options: SessionListScope): boolean {
     !query.search &&
     !query.ownerId &&
     query.involvingMe !== true &&
+    query.includeOwnerSessionCounts !== true &&
     query.excludeSubagents !== true &&
     query.excludeCron !== true &&
     query.excludeSystem !== true &&

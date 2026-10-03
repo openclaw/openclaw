@@ -27,21 +27,6 @@ import {
   resolveSandboxRuntimeStatus,
 } from "./subagent-spawn.runtime.js";
 
-function buildResolvedSubagentModelMetadata(resolvedModel?: string): {
-  resolvedModel?: string;
-  resolvedProvider?: string;
-} {
-  const modelRef = resolvedModel?.trim();
-  if (!modelRef) {
-    return {};
-  }
-  const { provider } = splitModelRef(modelRef);
-  return {
-    resolvedModel: modelRef,
-    ...(provider ? { resolvedProvider: provider } : {}),
-  };
-}
-
 export async function resolveSubagentChildPlan(params: {
   request: SpawnSubagentParams;
   ctx: SpawnSubagentContext;
@@ -188,7 +173,7 @@ export async function resolveSubagentChildPlan(params: {
   }
   const { resolvedModel } = modelPlan;
   if (params.swarmEnabled && params.request.fastMode === undefined) {
-    modelPlan.initialSessionPatch.fastMode = await readRequesterFastMode({
+    const fastMode = await readRequesterFastMode({
       cfg: params.cfg,
       requesterInternalKey: params.requesterInternalKey,
       requesterAgentId: params.requesterAgentId,
@@ -197,6 +182,9 @@ export async function resolveSubagentChildPlan(params: {
       assertActive: params.ctx.assertActive,
     });
     params.ctx.assertActive?.();
+    if (fastMode !== undefined) {
+      modelPlan.initialSessionPatch.fastMode = fastMode;
+    }
   }
   const resolvedLaunchModel = splitModelRef(resolvedModel);
   const launchAuthorization: SubagentLaunchAuthorization | undefined =
@@ -223,7 +211,10 @@ export async function resolveSubagentChildPlan(params: {
       targetAgentDir,
       modelPlan,
       launchAuthorization,
-      resolvedModelMetadata: buildResolvedSubagentModelMetadata(resolvedModel),
+      resolvedModelMetadata: {
+        resolvedModel: resolvedModel.trim(),
+        ...(resolvedLaunchModel.provider ? { resolvedProvider: resolvedLaunchModel.provider } : {}),
+      },
     },
   };
 }

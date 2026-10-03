@@ -4,16 +4,28 @@ import {
 } from "openclaw/plugin-sdk/test-fixtures";
 import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { describe, expect, it, vi } from "vitest";
-import { zoomMeetingsConfig } from "./config.js";
+import { zoomMeetingsPlugin } from "../index.js";
 
-const resolveZoomMeetingsConfig = zoomMeetingsConfig.resolveConfig;
+const resolveZoomMeetingsConfig = zoomMeetingsPlugin.config.resolveConfig;
 const testState = useMeetingTestState(createOpenClawTestState);
 
 const realtimeMocks = vi.hoisted(() => ({
   healths: [] as Array<{ bridgeClosed: boolean }>,
   speak: vi.fn(),
   startAgent: vi.fn(async ({ transport }: { transport: { stop(): Promise<void> } }) => {
-    const health = { bridgeClosed: false };
+    const health = {
+      realtimeTranscriptLines: 0,
+      recentRealtimeTranscript: [],
+      providerConnected: true,
+      realtimeReady: true,
+      audioInputActive: true,
+      audioOutputActive: false,
+      lastInputBytes: 0,
+      lastOutputBytes: 0,
+      suppressedInputBytes: 0,
+      recentTalkEvents: [],
+      bridgeClosed: false,
+    };
     realtimeMocks.healths.push(health);
     return {
       getHealth: () => health,
@@ -26,13 +38,12 @@ const realtimeMocks = vi.hoisted(() => ({
 
 vi.mock("openclaw/plugin-sdk/meeting-runtime", async (importOriginal) => {
   const original = await importOriginal<typeof import("openclaw/plugin-sdk/meeting-runtime")>();
-  return {
-    ...original,
-    MeetingPlatformAdapter: {
-      ...original.MeetingPlatformAdapter,
-      createChromeRuntimeBindings: () => ({
-        createBindings: original.createMeetingRealtimeEngineBindings,
-        createLocalAudioTransport: original.createLocalMeetingRealtimeAudioTransport,
+  const adapter = original.MeetingPlatformAdapter;
+  const defineBrowserMeetingPlugin: typeof adapter.defineBrowserMeetingPlugin = (spec) =>
+    adapter.defineBrowserMeetingPlugin({
+      ...spec,
+      chromeRuntime: {
+        ...adapter.createChromeRuntimeBindings(),
         createNodeAudioTransport: () => ({
           clearOutput: vi.fn(async () => {}),
           dispose: vi.fn(async () => {}),
@@ -42,13 +53,13 @@ vi.mock("openclaw/plugin-sdk/meeting-runtime", async (importOriginal) => {
           writeOutput: vi.fn(async () => {}),
         }),
         startAgentRealtimeEngine: realtimeMocks.startAgent,
-        startRealtimeEngine: original.startMeetingRealtimeEngine,
-      }),
-    },
+      },
+    });
+  return {
+    ...original,
+    MeetingPlatformAdapter: { ...adapter, defineBrowserMeetingPlugin },
   };
 });
-
-import { ZoomMeetingsRuntime } from "./runtime.js";
 
 const URL = "https://zoom.us/j/12345678903?pwd=node";
 
@@ -79,7 +90,7 @@ describe("Zoom meetings node realtime recovery", () => {
     });
     harness.state.inCall = false;
     const logger = { debug: vi.fn(), error: vi.fn(), info: vi.fn(), warn: vi.fn() };
-    const runtime = new ZoomMeetingsRuntime({
+    const runtime = new zoomMeetingsPlugin.Runtime({
       config: resolveZoomMeetingsConfig({
         chrome: { waitForInCallMs: 1 },
         chromeNode: { node: "node-1" },

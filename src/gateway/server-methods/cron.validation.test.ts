@@ -6,7 +6,6 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import {
   bindCronManagementGrant,
   runWithCronCreatorAuthorityCapability,
@@ -25,6 +24,7 @@ import { CronService } from "../../cron/service.js";
 import { createCronStoreHarness, createNoopLogger } from "../../cron/service.test-harness.js";
 import { loadCronStore, saveCronStore } from "../../cron/store.js";
 import { cronStoreKey } from "../../cron/store/key.js";
+import type { CronRunRecord } from "../../cron/store/run-history.types.js";
 import type { CronDelivery, CronJob } from "../../cron/types.js";
 import {
   claimAgentRunDelegatedAuthority,
@@ -47,8 +47,17 @@ import { getGatewayProcessInstanceId } from "../process-instance.js";
 import * as cronCallerScope from "./cron-caller-scope.js";
 import {
   createCronTestContext,
+  createCronTestInvoker,
+  createCronCallerClient as callerClient,
   createCronJob,
   setCronValidationTestRegistry,
+  pluginEntries,
+  telegramConfig,
+  telegramSlackConfig,
+  telegramDisabledAccountConfig,
+  msteamsConfig,
+  slackSynologyConfig,
+  slackConfig,
 } from "./cron.validation.test-support.js";
 import type { GatewayClient } from "./types.js";
 
@@ -73,7 +82,13 @@ const loadGatewaySessionEntry = vi.hoisted(() =>
     } => ({ canonicalKey: sessionKey, entry: undefined }),
   ),
 );
-const cronRunRecordsOverride = vi.hoisted(() => vi.fn());
+const cronRunRecordsOverride = vi.hoisted(() =>
+  vi.fn<
+    (
+      ...args: Parameters<typeof import("../../cron/store/read-only.js").readCronRunRecords>
+    ) => Promise<CronRunRecord[]> | undefined
+  >(),
+);
 const resolveCronDeliveryPreview = vi.hoisted(() =>
   vi.fn(async () => ({ label: "not requested", detail: "not requested" })),
 );
@@ -121,37 +136,7 @@ function createCronContext(currentJobs?: CronJob | CronJob[]) {
   return createCronTestContext(currentJobs, getRuntimeConfig);
 }
 
-type CronMethod = keyof typeof cronHandlers;
-
-async function invokeCron(
-  method: CronMethod,
-  params: Record<string, unknown>,
-  options: {
-    currentJob?: CronJob;
-    context?: ReturnType<typeof createCronContext>;
-    client?: GatewayClient;
-    respond?: ReturnType<typeof vi.fn>;
-    sessionMutationCommitGuard?: () => void;
-    hasCurrentClientAuthority?: () => boolean;
-  } = {},
-) {
-  const context = options.context ?? createCronContext(options.currentJob);
-  const respond = options.respond ?? vi.fn();
-  await expectDefined(
-    cronHandlers[method],
-    "cronHandlers[method] test invariant",
-  )({
-    req: {} as never,
-    params: params as never,
-    respond: respond as never,
-    context: context as never,
-    client: options.client ?? null,
-    sessionMutationCommitGuard: options.sessionMutationCommitGuard,
-    hasCurrentClientAuthority: options.hasCurrentClientAuthority,
-    isWebchatConnect: () => false,
-  });
-  return { context, respond };
-}
+const invokeCron = createCronTestInvoker(cronHandlers, getRuntimeConfig);
 
 async function invokeCronAdd(
   params: Record<string, unknown>,
@@ -204,42 +189,6 @@ async function invokeWake(params: Record<string, unknown>, client?: GatewayClien
   return await invokeCron("wake", params, { client });
 }
 
-function callerClient(
-  agentId: string,
-  accountId?: string,
-  sessionKey?: string,
-  currentJobId?: string,
-  currentJobExpiresAtMs = Date.now() + 60_000,
-): GatewayClient {
-  const operationalRunInstance = createOperationalRunInstanceRef("run-cron-validation");
-  return {
-    connect: {} as GatewayClient["connect"],
-    internal: {
-      agentRuntimeIdentity: {
-        kind: "agentRuntime",
-        agentId,
-        sessionKey: sessionKey ?? `agent:${agentId}:main`,
-        operationalRunInstance,
-        delegatedAuthority: {
-          kind: "local",
-          operationalRunInstance,
-          lifecycleGeneration: "test-generation",
-          claimId: "test-claim",
-        },
-        ...(accountId ? { turnSourceAccountId: accountId } : {}),
-        ...(currentJobId
-          ? {
-              cronSelfManagementContext: {
-                jobId: currentJobId,
-                expiresAtMs: currentJobExpiresAtMs,
-              },
-            }
-          : {}),
-      },
-    },
-  };
-}
-
 function callerClientWithCronCreatorAuthority(grant: CronCreatorAuthorityGrant): GatewayClient {
   const client = callerClient("ops");
   client.internal!.agentRuntimeIdentity!.cronToolsAllowCapture = "final-executable-surface";
@@ -264,92 +213,6 @@ function telegramDeliveryWithSlackFailure(overrides: Partial<CronDelivery> = {})
 
 function setRuntimeConfig(config: OpenClawConfig): void {
   getRuntimeConfig.mockReturnValue(config);
-}
-
-function pluginEntries(...ids: string[]): OpenClawConfig["plugins"] {
-  return {
-    entries: Object.fromEntries(ids.map((id) => [id, { enabled: true }])),
-  };
-}
-
-function telegramConfig(): OpenClawConfig {
-  return {
-    channels: {
-      telegram: {
-        botToken: "telegram-token",
-      },
-    },
-    plugins: pluginEntries("telegram"),
-  } as OpenClawConfig;
-}
-
-function telegramSlackConfig(params: { includeMainSession?: boolean } = {}): OpenClawConfig {
-  return {
-    ...(params.includeMainSession ? { session: { mainKey: "main" } } : {}),
-    channels: {
-      telegram: {
-        botToken: "telegram-token",
-      },
-      slack: {
-        botToken: "xoxb-slack-token",
-        appToken: "xapp-slack-token",
-      },
-    },
-    plugins: pluginEntries("telegram", "slack"),
-  } as OpenClawConfig;
-}
-
-function telegramDisabledAccountConfig(): OpenClawConfig {
-  return {
-    channels: {
-      telegram: {
-        accounts: {
-          primary: { botToken: "telegram-token-primary" },
-          retired: { botToken: "telegram-token-retired", enabled: false },
-        },
-      },
-    },
-    plugins: pluginEntries("telegram"),
-  } as OpenClawConfig;
-}
-
-function msteamsConfig(): OpenClawConfig {
-  return {
-    channels: {
-      msteams: {
-        botToken: "teams-token",
-      },
-    },
-    plugins: pluginEntries("msteams"),
-  } as OpenClawConfig;
-}
-
-function slackSynologyConfig(): OpenClawConfig {
-  return {
-    channels: {
-      slack: {
-        botToken: "xoxb-slack-token",
-        appToken: "xapp-slack-token",
-      },
-      "synology-chat": {
-        token: "synology-token",
-      },
-    },
-    plugins: pluginEntries("slack", "synology-chat"),
-  } as OpenClawConfig;
-}
-
-function slackConfig(params: { includeMainSession?: boolean } = {}): OpenClawConfig {
-  return {
-    ...(params.includeMainSession ? { session: { mainKey: "main" } } : {}),
-    channels: {
-      slack: {
-        botToken: "xoxb-slack-token",
-        appToken: "xapp-slack-token",
-      },
-    },
-    plugins: pluginEntries("slack"),
-  } as OpenClawConfig;
 }
 
 function agentTurnCronParams(overrides: Record<string, unknown> = {}) {
@@ -535,7 +398,7 @@ describe("cron method validation", () => {
   );
   beforeEach(() => {
     getRuntimeConfig.mockReset().mockReturnValue({} as OpenClawConfig);
-    cronRunRecordsOverride.mockReset().mockReturnValue(undefined);
+    cronRunRecordsOverride.mockReset();
     resolveCronDeliveryPreview
       .mockReset()
       .mockResolvedValue({ label: "not requested", detail: "not requested" });
@@ -4324,7 +4187,10 @@ describe("cron method validation", () => {
       {
         id: "deleted-cron-history",
         jobId: "deleted-cron",
+        runId: "cron:deleted-cron:1:receipt",
+        agentId: "main",
         createdAt: 1,
+        startedAt: 1,
         endedAt: 1,
         status: "succeeded",
         detail: cronRunLogEntryToDetail(
@@ -4340,7 +4206,21 @@ describe("cron method validation", () => {
     expect(context.cron.list).not.toHaveBeenCalled();
     expect(respond).toHaveBeenCalledWith(
       true,
-      expect.objectContaining({ entries: expect.any(Array) }),
+      {
+        entries: [
+          expect.objectContaining({
+            jobId: "deleted-cron",
+            action: "finished",
+            status: "ok",
+            ts: 1,
+          }),
+        ],
+        total: 1,
+        offset: 0,
+        limit: 50,
+        hasMore: false,
+        nextOffset: null,
+      },
       undefined,
     );
   });

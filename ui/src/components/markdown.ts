@@ -108,7 +108,7 @@ const progressSanitizeOptions = {
   ALLOWED_ATTR: [...allowedAttrs, "value", "max"],
 };
 
-let hooksInstalled = false;
+const sanitizers = new Map<typeof sanitizeOptions, ReturnType<typeof DOMPurify>>();
 const MARKDOWN_CHAR_LIMIT = 140_000;
 // Covers several message-heavy sessions during rapid switching. Only inputs
 // up to 50k characters enter this 500-entry LRU, keeping memory bounded.
@@ -335,27 +335,6 @@ const APP_RESOURCE_PATH_PREFIXES = [
 ];
 const markdownCache = new Map<string, string>();
 
-function getCachedMarkdown(key: string): string | null {
-  const cached = markdownCache.get(key);
-  if (cached === undefined) {
-    return null;
-  }
-  markdownCache.delete(key);
-  markdownCache.set(key, cached);
-  return cached;
-}
-
-function setCachedMarkdown(key: string, value: string) {
-  markdownCache.set(key, value);
-  if (markdownCache.size <= MARKDOWN_CACHE_LIMIT) {
-    return;
-  }
-  const oldest = markdownCache.keys().next().value;
-  if (oldest) {
-    markdownCache.delete(oldest);
-  }
-}
-
 function normalizeStreamingMarkdownInput(markdownLocal: string, streamKey?: string): string {
   const source = stripUnsupportedCitationControlMarkers(markdownLocal);
   const state = streamingMarkdownState(streamKey);
@@ -414,10 +393,6 @@ function stripCurrentControlUiBasePath(pathname: string): string[] {
   return segments.slice(baseSegments.length);
 }
 
-function segmentsStartWith(segments: string[], prefix: string[]): boolean {
-  return prefix.every((segment, index) => segments[index] === segment);
-}
-
 function isControlUiResourcePath(segments: string[]): boolean {
   if (segments.includes("__openclaw__") || segments.includes("__openclaw")) {
     return true;
@@ -426,7 +401,9 @@ function isControlUiResourcePath(segments: string[]): boolean {
   if (!segment || APP_RESOURCE_ROOT_SEGMENTS.has(segment)) {
     return true;
   }
-  return APP_RESOURCE_PATH_PREFIXES.some((prefix) => segmentsStartWith(segments, prefix));
+  return APP_RESOURCE_PATH_PREFIXES.some((prefix) =>
+    prefix.every((prefixSegment, index) => segments[index] === prefixSegment),
+  );
 }
 
 function isDocsRootPath(normalizedPath: string, segments: string[]): boolean {
@@ -456,10 +433,7 @@ function normalizeDocsRootHref(href: string): string {
     if (isControlUiResourcePath(resourceSegments)) {
       return href;
     }
-    if (isDocsRootPath(normalizedPath, segments)) {
-      return url.href;
-    }
-    return href;
+    return isDocsRootPath(normalizedPath, segments) ? url.href : href;
   } catch {
     return href;
   }
@@ -493,13 +467,17 @@ function hasMarkdownContentName(node: Node): boolean {
   return [...node.childNodes].some(hasMarkdownContentName);
 }
 
-function installHooks() {
-  if (hooksInstalled) {
-    return;
+function markdownSanitizer(options = sanitizeOptions) {
+  const cached = sanitizers.get(options);
+  if (cached) {
+    return cached;
   }
-  hooksInstalled = true;
+  // Persistent configs ignore per-call options; each allowlist owns its instance
+  // so progress markup cannot widen ordinary Markdown or other sanitizer users.
+  const sanitizer = DOMPurify(window);
+  sanitizer.setConfig(options);
 
-  DOMPurify.addHook("afterSanitizeAttributes", (node) => {
+  sanitizer.addHook("afterSanitizeAttributes", (node) => {
     if (!(node instanceof HTMLAnchorElement)) {
       return;
     }
@@ -551,6 +529,8 @@ function installHooks() {
     node.setAttribute("rel", "noreferrer noopener");
     node.setAttribute("target", "_blank");
   });
+  sanitizers.set(options, sanitizer);
+  return sanitizer;
 }
 
 function appendMarkdownTruncationNotice(truncated: {
@@ -577,10 +557,9 @@ function renderSanitizedMarkdown(
   renderOptions: MarkdownRenderEnv,
   blockArt?: boolean,
 ): string {
-  installHooks();
-  const activeSanitizeOptions = renderOptions.progressBars
-    ? progressSanitizeOptions
-    : sanitizeOptions;
+  const sanitizer = markdownSanitizer(
+    renderOptions.progressBars ? progressSanitizeOptions : sanitizeOptions,
+  );
   const documentMode = renderOptions.mode === "document";
   const truncated = documentMode
     ? { text: renderInput, truncated: false, total: renderInput.length }
@@ -589,16 +568,15 @@ function renderSanitizedMarkdown(
     ? stripProgressCardRawContentBlocks(appendMarkdownTruncationNotice(truncated))
     : appendMarkdownTruncationNotice(truncated);
   if (blockArt ?? isMarkdownBlockArtText(truncated.text)) {
-    return DOMPurify.sanitize(
+    return sanitizer.sanitize(
       renderMarkdownCodeBlock(input, "", renderOptions, { blockArt: true }),
-      activeSanitizeOptions,
     );
   }
   if (!documentMode && truncated.text.length > MARKDOWN_PARSE_LIMIT) {
     // Large plain-text replies should stay readable without inheriting the
     // capped code-block chrome, while still preserving whitespace for logs
     // and other structured text that commonly trips the parse guard.
-    return DOMPurify.sanitize(toPlainTextElement(input, renderOptions), activeSanitizeOptions);
+    return sanitizer.sanitize(toPlainTextElement(input, renderOptions));
   }
   let rendered: string | HTMLDivElement;
   try {
@@ -608,21 +586,21 @@ function renderSanitizedMarkdown(
     console.warn("[markdown] md.render failed, falling back to plain text:", err);
     rendered = toPlainTextElement(input, renderOptions);
   }
-  return DOMPurify.sanitize(rendered, activeSanitizeOptions);
+  return sanitizer.sanitize(rendered);
 }
 
 // Bare JSON bypasses Markdown normalization, which can alter literal Unicode separators.
 // Both inputs still use the same code-block renderer and sanitizer boundary.
 export function toSanitizedJsonHtml(json: MarkdownJson, options: MarkdownRenderOptions): string {
-  installHooks();
-  return DOMPurify.sanitize(
-    // HTML parsing normalizes literal CRs; character references survive both
-    // sanitizer parsing and the final unsafeHTML commit without changing Raw.
-    renderMarkdownCodeBlock(json.text, "json", normalizeMarkdownRenderOptions(options), {
-      json,
-    }).replaceAll("\r", "&#13;"),
-    sanitizeOptions,
-  ).replaceAll("\r", "&#13;");
+  return markdownSanitizer()
+    .sanitize(
+      // HTML parsing normalizes literal CRs; character references survive both
+      // sanitizer parsing and the final unsafeHTML commit without changing Raw.
+      renderMarkdownCodeBlock(json.text, "json", normalizeMarkdownRenderOptions(options), {
+        json,
+      }).replaceAll("\r", "&#13;"),
+    )
+    .replaceAll("\r", "&#13;");
 }
 
 export function toSanitizedMarkdownHtml(
@@ -649,12 +627,16 @@ export function toSanitizedMarkdownHtml(
     return renderSanitizedMarkdown(renderInput, renderOptions);
   }
   const cacheKey = `${markdownRenderKey(renderOptions)}\0${renderInput}`;
-  const cached = getCachedMarkdown(cacheKey);
-  if (cached !== null) {
-    return cached;
+  const sanitized =
+    markdownCache.get(cacheKey) ?? renderSanitizedMarkdown(renderInput, renderOptions);
+  markdownCache.delete(cacheKey);
+  markdownCache.set(cacheKey, sanitized);
+  if (markdownCache.size > MARKDOWN_CACHE_LIMIT) {
+    const oldest = markdownCache.keys().next().value;
+    if (oldest) {
+      markdownCache.delete(oldest);
+    }
   }
-  const sanitized = renderSanitizedMarkdown(renderInput, renderOptions);
-  setCachedMarkdown(cacheKey, sanitized);
   return sanitized;
 }
 
@@ -666,7 +648,6 @@ function toPlainTextElement(value: string, options: MarkdownRenderEnv): HTMLDivE
   return createAssistantTranscriptPlainTextFallback(
     restoreMarkdownHumanMentions(normalizeMarkdownLineBreaks(value), options.humanMentionTokens),
     options.assistantTranscriptRoleHeaders,
-    () => t("sessionsView.assistant"),
   );
 }
 

@@ -17,6 +17,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { startSmsGatewayAccount } from "./gateway.js";
 import type { SmsChannelRuntime } from "./inbound.js";
 import type { ResolvedSmsAccount } from "./types.js";
+import { createSmsTestAccount } from "./webhook.test-support.js";
 
 const enqueueSmsIngress = vi.hoisted(() =>
   vi.fn(async (_form: Record<string, string>) => ({ kind: "accepted" as const, duplicate: false })),
@@ -46,24 +47,6 @@ type HeldRequest = {
   finish: () => void;
   result: Promise<HttpResult>;
 };
-
-function createAccount(): ResolvedSmsAccount {
-  return {
-    accountId: "boundary",
-    enabled: true,
-    accountSid: "AC123",
-    authToken: "secret",
-    fromNumber: "+15557654321",
-    messagingServiceSid: "",
-    defaultTo: "",
-    webhookPath: "/webhooks/sms",
-    publicWebhookUrl: "https://gateway.example.com/webhooks/sms",
-    dangerouslyDisableSignatureValidation: false,
-    dmPolicy: "pairing",
-    allowFrom: [],
-    textChunkLimit: 1500,
-  };
-}
 
 function readResponse(req: ClientRequest): Promise<HttpResult> {
   return new Promise((resolve, reject) => {
@@ -175,7 +158,7 @@ describe("SMS webhook real route boundary", () => {
   });
 
   it("closes overflow uploads and recovers capacity for a signed callback", async () => {
-    const account = createAccount();
+    const account = createSmsTestAccount({ accountId: "boundary" });
     const registry = createEmptyPluginRegistry();
     const previousRegistry = getActivePluginRegistry();
     setActivePluginRegistry(registry);

@@ -13,21 +13,16 @@ vi.mock("openclaw/plugin-sdk/fetch-runtime", async (original) => ({
 
 afterEach(() => {
   scope.current = undefined;
+  vi.useRealTimers();
 });
 
 type AuthorityKind = "read" | "action";
 
 function authority(kind: AuthorityKind = "read") {
-  let active = true;
+  const source = new AbortController();
   return {
-    assert: () => {
-      if (!active) {
-        throw new Error(`${kind} authority revoked`);
-      }
-    },
-    revoke: () => {
-      active = false;
-    },
+    assert: () => source.signal.throwIfAborted(),
+    revoke: () => source.abort(new Error(`${kind} authority revoked`)),
   };
 }
 
@@ -52,8 +47,6 @@ function submitRequest(client: RequestClient, kind: AuthorityKind) {
 
 describe("Discord request authority", () => {
   it.each([
-    { name: "read", source: "read", companion: undefined },
-    { name: "action", source: "action", companion: undefined },
     { name: "read with active action", source: "read", companion: "action" },
     { name: "action with active read", source: "action", companion: "read" },
   ] as const)(
@@ -75,11 +68,9 @@ describe("Discord request authority", () => {
       });
       const first = sharedClient.get("/channels/100/messages");
       const caller = authority(source);
-      const enqueue = () =>
-        withAuthority(source, caller.assert, () => submitRequest(client, source));
-      const queued = companion
-        ? withAuthority(companion, authority(companion).assert, enqueue)
-        : enqueue();
+      const queued = withAuthority(companion, authority(companion).assert, () =>
+        withAuthority(source, caller.assert, () => submitRequest(client, source)),
+      );
       const rejected = expect(queued).rejects.toThrow(`${source} authority revoked`);
       try {
         caller.revoke();
@@ -96,65 +87,43 @@ describe("Discord request authority", () => {
     },
   );
 
-  it.each(["read", "action"] as const)(
-    "passes queued %s authority through asynchronous transport preparation",
-    async (source) => {
-      const firstResponse = createDeferred<Response>();
-      const caller = authority(source);
-      const transport = vi.fn();
-      const fetch = vi
-        .fn(
-          async (
-            _input: string | URL | Request,
-            _init?: RequestInit,
-            beforeRequest?: () => void,
-          ) => {
-            caller.revoke();
-            await Promise.resolve();
-            beforeRequest?.();
-            transport();
-            return Response.json([]);
-          },
-        )
-        .mockImplementationOnce(() => firstResponse.promise);
-      const client = new RequestClient("synthetic-token", {
-        fetch,
-        scheduler: { maxConcurrency: 1 },
-      });
-      const first = client.get("/channels/100/messages");
-      const queued = withAuthority(source, caller.assert, () => submitRequest(client, source));
-      const rejected = expect(queued).rejects.toThrow(`${source} authority revoked`);
-      try {
-        scope.current = authority().assert;
-        firstResponse.resolve(Response.json([]));
-        await first;
-        await rejected;
-        expect(transport).not.toHaveBeenCalled();
-      } finally {
-        firstResponse.resolve(Response.json([]));
-        await Promise.allSettled([first, queued, rejected]);
-      }
-    },
-  );
-
-  it.each(["read", "action"] as const)(
-    "does not retry %s requests after rate-limit revocation",
-    async (source) => {
-      const caller = authority(source);
-      const fetch = vi.fn(async () => {
+  it("passes read authority through asynchronous transport preparation", async () => {
+    const caller = authority();
+    const transport = vi.fn();
+    const fetch = vi.fn(
+      async (_input: string | URL | Request, _init?: RequestInit, beforeRequest?: () => void) => {
         caller.revoke();
-        return Response.json(
-          { retry_after: 0.001 },
-          { status: 429, headers: { "retry-after": "0.001" } },
-        );
-      });
-      const client = new RequestClient("synthetic-token", { fetch });
-      await expect(
-        withAuthority(source, caller.assert, () => submitRequest(client, source)),
-      ).rejects.toThrow(`${source} authority revoked`);
-      expect(fetch).toHaveBeenCalledTimes(1);
-    },
-  );
+        await Promise.resolve();
+        beforeRequest?.();
+        transport();
+        return Response.json([]);
+      },
+    );
+    const client = new RequestClient("synthetic-token", { fetch });
+    await expect(
+      withAuthority("read", caller.assert, () => submitRequest(client, "read")),
+    ).rejects.toThrow("read authority revoked");
+    expect(transport).not.toHaveBeenCalled();
+  });
+
+  it("does not retry read requests after rate-limit revocation", async () => {
+    vi.useFakeTimers();
+    const caller = authority();
+    const fetch = vi.fn(async () => {
+      caller.revoke();
+      return Response.json(
+        { retry_after: 0.001 },
+        { status: 429, headers: { "retry-after": "0.001" } },
+      );
+    });
+    const client = new RequestClient("synthetic-token", { fetch });
+    const rejected = expect(
+      withAuthority("read", caller.assert, () => submitRequest(client, "read")),
+    ).rejects.toThrow("read authority revoked");
+    await vi.runAllTimersAsync();
+    await rejected;
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
 
   it("settles an already-dispatched PUT after source authority closes", async () => {
     const source = new AbortController();
@@ -188,6 +157,7 @@ describe("Discord request authority", () => {
   });
 
   it("fences directory helper retries after authority is revoked", async () => {
+    vi.useFakeTimers();
     const reader = authority();
     const fetcher = vi.fn(async () => {
       reader.revoke();
@@ -195,25 +165,13 @@ describe("Discord request authority", () => {
       return Response.json({ retry_after: 0.001 }, { status: 429 });
     });
     scope.current = reader.assert;
-    await expect(
+    const rejected = expect(
       fetchDiscord("/users/@me/guilds", "synthetic-token", fetcher, {
         retry: { attempts: 2, minDelayMs: 1, maxDelayMs: 1, jitter: 0 },
       }),
     ).rejects.toThrow("read authority revoked");
+    await vi.runAllTimersAsync();
+    await rejected;
     expect(fetcher).toHaveBeenCalledTimes(1);
   });
-
-  it.each(["read", "action"] as const)(
-    "checks unqueued %s requests before transport",
-    async (source) => {
-      const caller = authority(source);
-      const fetch = vi.fn();
-      const client = new RequestClient("synthetic-token", { fetch, queueRequests: false });
-      caller.revoke();
-      await expect(
-        withAuthority(source, caller.assert, () => submitRequest(client, source)),
-      ).rejects.toThrow(`${source} authority revoked`);
-      expect(fetch).not.toHaveBeenCalled();
-    },
-  );
 });

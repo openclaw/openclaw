@@ -8,15 +8,16 @@ import {
   asyncDiscussionTestStore,
   createDiscussionMemoryStore,
 } from "./discussions/service-test-support.js";
-import type { ClickClackMessage, CoreConfig } from "./types.js";
+import type {
+  ClickClackMessage,
+  ClickClackUser,
+  CoreConfig,
+  ResolvedClickClackAccount,
+} from "./types.js";
 
 export function createInboundRuntime(includeExecution: boolean): PluginRuntime {
   const runtime = createPluginRuntimeMock({
     agent: {
-      runEmbeddedAgent: vi.fn().mockResolvedValue({
-        payloads: [{ text: "service bot online" }],
-        meta: {},
-      }),
       session: {
         getSessionEntry: vi.fn(() => ({ sessionId: "session-id", updatedAt: 1 })),
       },
@@ -86,14 +87,7 @@ export function createInboundMessage(
     body: "/fast on",
     body_format: "markdown",
     created_at: "2026-05-09T12:00:00.000Z",
-    author: {
-      id: "usr_owner",
-      kind: "human",
-      display_name: "Peter",
-      handle: "steipete",
-      avatar_url: "",
-      created_at: "2026-05-09T12:00:00.000Z",
-    },
+    author: createInboundAuthor(),
     ...overrides,
   };
 }
@@ -132,4 +126,98 @@ export function createInboundDiscussionConfig(): CoreConfig {
       },
     },
   };
+}
+
+export function createInboundAgentAccount(
+  overrides: Partial<ResolvedClickClackAccount> = {},
+): ResolvedClickClackAccount {
+  const base = {
+    accountId: "default",
+    enabled: true,
+    configured: true,
+    baseUrl: "http://127.0.0.1:8080",
+    apiEndpoint: "http://127.0.0.1:8080",
+    token: "test-token-placeholder",
+    workspace: "wsp_1",
+    replyMode: "agent",
+    toolsAllow: [],
+    defaultTo: "channel:general",
+    allowFrom: ["*"],
+    botUserId: "usr_receiver",
+    botHandle: "blackbird",
+    allowBots: false,
+    reconnectMs: 1_500,
+    agentActivity: false,
+    commandMenu: true,
+    discussions: { enabled: false, workspace: "wsp_1", section: "Sessions" },
+    requireMention: false,
+    mentionPatterns: [],
+    groups: {},
+    config: {
+      baseUrl: "http://127.0.0.1:8080",
+      workspace: "wsp_1",
+      allowFrom: ["*"],
+    },
+  } satisfies ResolvedClickClackAccount;
+
+  return {
+    ...base,
+    ...overrides,
+    config: {
+      ...base.config,
+      ...overrides.config,
+    },
+  };
+}
+
+export function createInboundAuthor(overrides: Partial<ClickClackUser> = {}): ClickClackUser {
+  return {
+    id: "usr_owner",
+    kind: "human",
+    display_name: "Peter",
+    handle: "steipete",
+    avatar_url: "",
+    created_at: "2026-05-09T12:00:00.000Z",
+    ...overrides,
+  };
+}
+
+export function createInboundAccountConfig(
+  account: ResolvedClickClackAccount,
+  config: CoreConfig = {},
+): CoreConfig {
+  const {
+    accountId,
+    configured: _configured,
+    apiEndpoint,
+    tokenSource: _tokenSource,
+    tokenStatus: _tokenStatus,
+    credentialDiagnostics: _credentialDiagnostics,
+    botHandle: _botHandle,
+    config: authoredConfig,
+    ...settings
+  } = account;
+  const accountConfig = {
+    ...authoredConfig,
+    ...settings,
+    apiBaseUrl: apiEndpoint,
+    workspace: authoredConfig.workspace ?? account.workspace,
+    botUserId: authoredConfig.botUserId,
+  };
+  return {
+    ...config,
+    channels: {
+      ...config.channels,
+      clickclack:
+        accountId === "default" ? accountConfig : { accounts: { [accountId]: accountConfig } },
+    },
+  };
+}
+
+export function publishInboundAccountConfig(
+  runtime: PluginRuntime,
+  account: ResolvedClickClackAccount,
+  config: CoreConfig = {},
+): void {
+  vi.mocked(runtime.config.current).mockReturnValue(createInboundAccountConfig(account, config));
 }

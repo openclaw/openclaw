@@ -1,4 +1,3 @@
-// Read-only session queries.
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -276,6 +275,10 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
       diagnostics,
       onResult: (result) => {
         args.sessionMutationAuthorization?.assertCurrent();
+        // An event delivered before roster admission may not have established its ancestor rows.
+        if (client?.connId) {
+          context.forgetConnectionAncestors(client.connId);
+        }
         respond(true, result);
       },
     });

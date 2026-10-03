@@ -242,11 +242,10 @@ export async function createQaLabApp(root: HTMLDivElement) {
   let previousRunnerStatus: string | null = null;
   let currentUiVersion: string | null = null;
   let syncingCaptureTimelineScroll = false;
-  let sparklineSweepActive = false;
-  let sparklineSweepAnchorStartPct: number | null = null;
-  let sparklineSweepAnchorEndPct: number | null = null;
-  let sparklineSweepCurrentStartPct: number | null = null;
-  let sparklineSweepCurrentEndPct: number | null = null;
+  let sparklineSweep: {
+    anchor: { start: number; end: number };
+    current: { start: number; end: number };
+  } | null = null;
   let captureGlobalListenersBound = false;
 
   function isSelectOpen(): boolean {
@@ -428,12 +427,13 @@ export async function createQaLabApp(root: HTMLDivElement) {
     render();
   }
 
-  async function runBusyAction(action: () => Promise<void>) {
+  async function runBusyAction(action: () => Promise<void>, onError?: (error: unknown) => void) {
     state.busy = true;
     render();
     try {
       await action();
     } catch (error) {
+      onError?.(error);
       state.error = formatErrorMessage(error);
       render();
     } finally {
@@ -513,50 +513,47 @@ export async function createQaLabApp(root: HTMLDivElement) {
   }
 
   async function runSuite() {
-    if (!state.runnerDraft) {
+    const selection = state.runnerDraft;
+    if (!selection) {
       state.error = "Runner selection not ready yet.";
       render();
       return;
     }
-    state.busy = true;
     state.error = null;
-    render();
-    try {
-      const result = await postJson<{ runner: { selection: RunnerSelection } }>(
-        "/api/scenario/suite",
-        {
-          profile: state.runnerDraft.profile,
-          channel: state.runnerDraft.channel,
-          channelDriver: state.runnerDraft.channelDriver,
-          evidenceMode: state.runnerDraft.evidenceMode,
-          providerMode: state.runnerDraft.providerMode,
-          primaryModel: state.runnerDraft.primaryModel,
-          alternateModel: state.runnerDraft.alternateModel,
-          fastMode: state.runnerDraft.fastMode,
-          runtimePair: state.runnerDraft.runtimePair,
-          runtimePairLane: state.runnerDraft.runtimePairLane,
-          scenarioIds: state.runnerDraft.scenarioIds,
-        },
-      );
-      state.runnerDraft = cloneRunnerSelection(result.runner.selection);
-      state.runnerDraftDirty = false;
-      state.runnerPlanOverride = null;
-      state.activeTab = "chat";
-      await refresh();
-    } catch (error) {
-      if (error instanceof QaLabHttpError) {
-        const plan = (error.payload as { plan?: RunnerResolvedPlan } | null)?.plan;
-        if (plan) {
-          state.runnerPlanOverride = plan;
-          state.sidebarPanel = "run";
+    await runBusyAction(
+      async () => {
+        const result = await postJson<{ runner: { selection: RunnerSelection } }>(
+          "/api/scenario/suite",
+          {
+            profile: selection.profile,
+            channel: selection.channel,
+            channelDriver: selection.channelDriver,
+            evidenceMode: selection.evidenceMode,
+            providerMode: selection.providerMode,
+            primaryModel: selection.primaryModel,
+            alternateModel: selection.alternateModel,
+            fastMode: selection.fastMode,
+            runtimePair: selection.runtimePair,
+            runtimePairLane: selection.runtimePairLane,
+            scenarioIds: selection.scenarioIds,
+          },
+        );
+        state.runnerDraft = cloneRunnerSelection(result.runner.selection);
+        state.runnerDraftDirty = false;
+        state.runnerPlanOverride = null;
+        state.activeTab = "chat";
+        await refresh();
+      },
+      (error) => {
+        if (error instanceof QaLabHttpError) {
+          const plan = (error.payload as { plan?: RunnerResolvedPlan } | null)?.plan;
+          if (plan) {
+            state.runnerPlanOverride = plan;
+            state.sidebarPanel = "run";
+          }
         }
-      }
-      state.error = formatErrorMessage(error);
-      render();
-    } finally {
-      state.busy = false;
-      render();
-    }
+      },
+    );
   }
 
   async function loadEvidence(pathOverride?: string) {
@@ -877,20 +874,17 @@ export async function createQaLabApp(root: HTMLDivElement) {
         value === "core" || value === "extended" || value === "soak" ? value : null;
       updateRunnerDraft((draft) => ({ ...draft, runtimePairLane }));
     });
-    bindValue("#primary-model", "change", (primaryModel) => {
-      updateRunnerDraft((d) => ({
-        ...d,
-        primaryModel,
-        fastMode: isQaFastModeEnabled({ primaryModel, alternateModel: d.alternateModel }),
-      }));
-    });
-    bindValue("#alternate-model", "change", (alternateModel) => {
-      updateRunnerDraft((d) => ({
-        ...d,
-        alternateModel,
-        fastMode: isQaFastModeEnabled({ primaryModel: d.primaryModel, alternateModel }),
-      }));
-    });
+    for (const [selector, field] of [
+      ["#primary-model", "primaryModel"],
+      ["#alternate-model", "alternateModel"],
+    ] as const) {
+      bindValue(selector, "change", (value) => {
+        updateRunnerDraft((draft) => {
+          const models = { ...draft, [field]: value };
+          return { ...models, fastMode: isQaFastModeEnabled(models) };
+        });
+      });
+    }
 
     bindValue("#evidence-path", "input", (value) => {
       state.evidencePathDraft = value;
@@ -983,12 +977,6 @@ export async function createQaLabApp(root: HTMLDivElement) {
       });
     });
     root
-      .querySelector<HTMLButtonElement>("#capture-toggle-selected-sessions")
-      ?.addEventListener("click", () => {
-        state.captureSelectedSessionsExpanded = !state.captureSelectedSessionsExpanded;
-        render();
-      });
-    root
       .querySelector<HTMLButtonElement>("#capture-delete-selected-sessions")
       ?.addEventListener("click", () => {
         void (async () => {
@@ -1076,7 +1064,7 @@ export async function createQaLabApp(root: HTMLDivElement) {
       render();
     });
     bindValue("#capture-timeline-lane-search", "input", (value) => {
-      state.captureTimelineLaneSearch = value ?? "";
+      state.captureTimelineLaneSearch = value;
       render();
     });
     bindValue("#capture-timeline-zoom", "change", (value) => {
@@ -1181,11 +1169,11 @@ export async function createQaLabApp(root: HTMLDivElement) {
       state.capturePayloadEventSort = value === "name" || value === "size" ? value : "stream";
     });
     bindValue("#capture-payload-event-filter", "input", (value) => {
-      state.capturePayloadEventFilter = value ?? "";
+      state.capturePayloadEventFilter = value;
       render();
     });
     bindValue("#capture-search-filter", "input", (value) => {
-      state.captureSearchText = value ?? "";
+      state.captureSearchText = value;
       state.selectedCaptureEventKey = null;
       render();
     });
@@ -1196,18 +1184,16 @@ export async function createQaLabApp(root: HTMLDivElement) {
         state.selectedCaptureEventKey = null;
         render();
       });
-    root
-      .querySelector<HTMLButtonElement>("#capture-summary-toggle")
-      ?.addEventListener("click", () => {
-        state.captureSummaryExpanded = !state.captureSummaryExpanded;
+    for (const [selector, field] of [
+      ["#capture-toggle-selected-sessions", "captureSelectedSessionsExpanded"],
+      ["#capture-summary-toggle", "captureSummaryExpanded"],
+      ["#capture-controls-toggle", "captureControlsExpanded"],
+    ] as const) {
+      root.querySelector<HTMLButtonElement>(selector)?.addEventListener("click", () => {
+        state[field] = !state[field];
         render();
       });
-    root
-      .querySelector<HTMLButtonElement>("#capture-controls-toggle")
-      ?.addEventListener("click", () => {
-        state.captureControlsExpanded = !state.captureControlsExpanded;
-        render();
-      });
+    }
     root
       .querySelector<HTMLButtonElement>("#capture-clear-filters")
       ?.addEventListener("click", () => {
@@ -1264,30 +1250,22 @@ export async function createQaLabApp(root: HTMLDivElement) {
         if (!windowRange) {
           return;
         }
-        sparklineSweepActive = true;
-        sparklineSweepAnchorStartPct = windowRange.start;
-        sparklineSweepAnchorEndPct = windowRange.end;
-        sparklineSweepCurrentStartPct = windowRange.start;
-        sparklineSweepCurrentEndPct = windowRange.end;
+        sparklineSweep = { anchor: windowRange, current: windowRange };
         state.captureTimelineBrushAnchorPct = windowRange.start;
         state.captureTimelineBrushCurrentPct = windowRange.end;
         render();
       });
       node.addEventListener("mouseenter", () => {
-        if (!sparklineSweepActive) {
+        if (!sparklineSweep) {
           return;
         }
         const windowRange = readWindow();
         if (!windowRange) {
           return;
         }
-        sparklineSweepCurrentStartPct = windowRange.start;
-        sparklineSweepCurrentEndPct = windowRange.end;
-        const previewStart = Math.min(
-          sparklineSweepAnchorStartPct ?? windowRange.start,
-          windowRange.start,
-        );
-        const previewEnd = Math.max(sparklineSweepAnchorEndPct ?? windowRange.end, windowRange.end);
+        sparklineSweep.current = windowRange;
+        const previewStart = Math.min(sparklineSweep.anchor.start, windowRange.start);
+        const previewEnd = Math.max(sparklineSweep.anchor.end, windowRange.end);
         state.captureTimelineBrushAnchorPct = previewStart;
         state.captureTimelineBrushCurrentPct = previewEnd;
         render();
@@ -1357,31 +1335,13 @@ export async function createQaLabApp(root: HTMLDivElement) {
     if (!captureGlobalListenersBound) {
       captureGlobalListenersBound = true;
       window.addEventListener("mouseup", (event) => {
-        if (!sparklineSweepActive) {
+        if (!sparklineSweep) {
           return;
         }
-        const anchorStart = sparklineSweepAnchorStartPct;
-        const anchorEnd = sparklineSweepAnchorEndPct;
-        const currentStart = sparklineSweepCurrentStartPct;
-        const currentEnd = sparklineSweepCurrentEndPct;
-        sparklineSweepActive = false;
-        sparklineSweepAnchorStartPct = null;
-        sparklineSweepAnchorEndPct = null;
-        sparklineSweepCurrentStartPct = null;
-        sparklineSweepCurrentEndPct = null;
-        if (
-          anchorStart == null ||
-          anchorEnd == null ||
-          currentStart == null ||
-          currentEnd == null
-        ) {
-          state.captureTimelineBrushAnchorPct = null;
-          state.captureTimelineBrushCurrentPct = null;
-          render();
-          return;
-        }
-        const start = Math.min(anchorStart, currentStart);
-        const end = Math.max(anchorEnd, currentEnd);
+        const { anchor, current } = sparklineSweep;
+        sparklineSweep = null;
+        const start = Math.min(anchor.start, current.start);
+        const end = Math.max(anchor.end, current.end);
         const width = Math.max(0.01, end - start);
         const expand = event.shiftKey ? width : 0;
         state.captureTimelineWindowStartPct = Math.max(0, Math.min(100, start - expand));
@@ -1471,15 +1431,15 @@ export async function createQaLabApp(root: HTMLDivElement) {
       state.composer.conversationKind =
         selectedKind === "channel" || selectedKind === "group" ? selectedKind : "direct";
     });
-    bindValue("#conversation-id", "input", (value) => {
-      state.composer.conversationId = value;
-    });
-    bindValue("#sender-id", "input", (value) => {
-      state.composer.senderId = value;
-    });
-    bindValue("#sender-name", "input", (value) => {
-      state.composer.senderName = value;
-    });
+    for (const [selector, field] of [
+      ["#conversation-id", "conversationId"],
+      ["#sender-id", "senderId"],
+      ["#sender-name", "senderName"],
+    ] as const) {
+      bindValue(selector, "input", (value) => {
+        state.composer[field] = value;
+      });
+    }
 
     const textarea = root.querySelector<HTMLTextAreaElement>("#composer-text");
     if (textarea) {
@@ -1507,7 +1467,6 @@ export async function createQaLabApp(root: HTMLDivElement) {
     root.innerHTML = renderQaLabUi(state);
     bindEvents();
 
-    /* Restore composer text (since we re-rendered) */
     const textEl = root.querySelector<HTMLTextAreaElement>("#composer-text");
     if (textEl && composerText) {
       textEl.value = composerText;

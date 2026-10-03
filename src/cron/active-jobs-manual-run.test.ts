@@ -1,18 +1,8 @@
-// Regression: upstream commit 7d1575b5df (#60310, 2026-04-04) introduced
-// activeJobIds + markCronJobActive/clearCronJobActive but only wired the pair
-// into the scheduled due-job path. The manual-run path (cron.run() →
-// prepareManualRun + finishPreparedManualRun in src/cron/service/ops-run.ts) was
-// left without the mark/clear pair, so task-registry.maintenance.ts
-// hasBackingSession (cron branch under isRuntimeAuthoritative()=true)
-// returns false during manual-run executions and reconciles them as `lost`
-// after TASK_RECONCILE_GRACE_MS (5 min).
-//
-// The merged commit 1fae716a04 (resolveDurableCronTaskRecovery) reconciles
-// terminal status retroactively from cron history + store.lastRunStatus, but
-// only after the run finishes. This test asserts the producer-side mark/clear
-// pair so the transient `lost` marker plus `Background task lost` system
-// message is suppressed for long manual runs (force-mode `agentTurn` runs can
-// reach AGENT_TURN_SAFETY_TIMEOUT_MS = 60 min).
+// Manual cron runs must hold the same native active-job marker as scheduled runs.
+// This protects cancellation and drain visibility throughout delayed execution,
+// including force-mode turns whose safety timeout can reach an hour.
+// Regression introduced when the native mark/clear pair originally covered only
+// scheduled admission (7d1575b5df, #60310); prove the manual producer directly.
 //
 // Production hot-path: cron.run("<id>", "force") direct invocation, the same
 // surface used by the `openclaw cron run` CLI / RPC and agent tools. No

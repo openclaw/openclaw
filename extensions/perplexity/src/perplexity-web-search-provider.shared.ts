@@ -76,20 +76,6 @@ export function resolvePerplexityWebSearchRuntimeMetadata(
   };
 }
 
-function inferPerplexityBaseUrlFromApiKey(apiKey?: string): "direct" | "openrouter" | undefined {
-  if (!apiKey) {
-    return undefined;
-  }
-  const normalized = normalizeLowercaseStringOrEmpty(apiKey);
-  if (normalized.startsWith("pplx-")) {
-    return "direct";
-  }
-  if (normalized.startsWith("sk-or-")) {
-    return "openrouter";
-  }
-  return undefined;
-}
-
 export function isDirectPerplexityBaseUrl(baseUrl: string): boolean {
   try {
     return (
@@ -117,7 +103,7 @@ export function resolvePerplexityRuntime(
   const baseUrl =
     normalizeOptionalString(perplexity?.baseUrl) ||
     (auth.source === "perplexity_env" ||
-    (auth.source === "config" && inferPerplexityBaseUrlFromApiKey(auth.apiKey) !== "openrouter")
+    (auth.source === "config" && !normalizeLowercaseStringOrEmpty(auth.apiKey).startsWith("sk-or-"))
       ? PERPLEXITY_DIRECT_BASE_URL
       : DEFAULT_PERPLEXITY_BASE_URL);
   return {

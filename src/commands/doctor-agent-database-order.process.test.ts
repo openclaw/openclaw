@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { stripVTControlCharacters } from "node:util";
-import { afterAll, beforeAll, expect, it } from "vitest";
+import { afterAll, beforeAll, it } from "vitest";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import { getCliProcessTestTimeout } from "../cli/cli-process-child.test-helpers.js";
 import { transcriptEventJsonSql } from "../config/sessions/transcript-payload.js";
@@ -31,6 +31,7 @@ function seedHistoricalSharedDatabase(pathname: string): void {
   fs.mkdirSync(path.dirname(pathname), { recursive: true });
   const database = new DatabaseSync(pathname);
   try {
+    database.exec("BEGIN;");
     // Exact schema and metadata written by v2026.7.35, before deletion history existed.
     database.exec(
       fs.readFileSync(
@@ -42,6 +43,7 @@ function seedHistoricalSharedDatabase(pathname: string): void {
     database
       .prepare("INSERT INTO schema_meta VALUES ('primary', 'global', 1, NULL, NULL, 1, 1)")
       .run();
+    database.exec("COMMIT;");
   } finally {
     database.close();
   }
@@ -51,6 +53,7 @@ function seedHistoricalAgentDatabase(pathname: string, agentId: string): void {
   fs.mkdirSync(path.dirname(pathname), { recursive: true });
   const database = new DatabaseSync(pathname);
   try {
+    database.exec("BEGIN;");
     // Exact schema bytes from v2026.7.35, whose agent databases used user_version=1.
     database.exec(
       fs.readFileSync(
@@ -62,6 +65,7 @@ function seedHistoricalAgentDatabase(pathname: string, agentId: string): void {
     database
       .prepare("INSERT INTO schema_meta VALUES ('primary', 'agent', 1, ?, NULL, 1, 1)")
       .run(agentId);
+    database.exec("COMMIT;");
   } finally {
     database.close();
   }
@@ -76,9 +80,10 @@ function readDatabase<T>(pathname: string, read: (database: DatabaseSync) => T):
   }
 }
 
-it.each(["current", "historical-v1", "lost-journal"] as const)(
+it.concurrent.for(["current", "historical-v1", "lost-journal"] as const)(
   "settles historical agent migration before auth and session repair with %s shared state",
-  async (sharedState) => {
+  { timeout: getCliProcessTestTimeout(CHILD_TIMEOUT_MS, CHILD_TIMEOUT_MS) },
+  async (sharedState, { expect, onTestFinished }) => {
     const root = fs.realpathSync(fixtures.createTempDir("doctor-agent-database-order-"));
     const stateDir = path.join(root, "state");
     const configPath = path.join(stateDir, "openclaw.json");
@@ -188,7 +193,9 @@ it.each(["current", "historical-v1", "lost-journal"] as const)(
       );
       const agentDatabaseBytes = databasePaths.map((pathname) => fs.readFileSync(pathname));
       const args = ["doctor", "--fix", "--non-interactive", "--yes", "--no-workspace-suggestions"];
-      const first = await fixtures.track(runBuiltRuntime(runtimeRoot, env, args, CHILD_TIMEOUT_MS));
+      const first = await fixtures.track(
+        runBuiltRuntime(runtimeRoot, env, args, CHILD_TIMEOUT_MS, { onTestFinished }),
+      );
       const output = stripVTControlCharacters(`${first.stdout}\n${first.stderr}`);
       if (sharedState === "lost-journal") {
         expect(first.code, output).toBe(1);
@@ -283,7 +290,7 @@ it.each(["current", "historical-v1", "lost-journal"] as const)(
       );
 
       const second = await fixtures.track(
-        runBuiltRuntime(runtimeRoot, env, args, CHILD_TIMEOUT_MS),
+        runBuiltRuntime(runtimeRoot, env, args, CHILD_TIMEOUT_MS, { onTestFinished }),
       );
       const repeatedOutput = `${second.stdout}\n${second.stderr}`;
       expect(second.code, repeatedOutput).toBe(0);
@@ -295,5 +302,4 @@ it.each(["current", "historical-v1", "lost-journal"] as const)(
       await port.release();
     }
   },
-  getCliProcessTestTimeout(CHILD_TIMEOUT_MS, CHILD_TIMEOUT_MS),
 );

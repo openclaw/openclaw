@@ -21,6 +21,26 @@ import "./app-sidebar.ts";
 const hint = "No active sessions match this filter";
 const pagination = ".sidebar-session-pagination--roster button";
 
+// Roster mode renders the owner filter from the roster's own list. Let that first
+// load settle so the Filter & sort owner picker is not replaced while in use.
+async function useSidebarMode(
+  sidebar: Awaited<ReturnType<typeof mountRoster>>["sidebar"],
+  context: Awaited<ReturnType<typeof mountRoster>>["context"],
+  mode: "chip" | "roster",
+) {
+  sidebar.sidebarAgentsMode = mode;
+  await sidebar.updateComplete;
+  if (mode === "roster") {
+    await vi.waitFor(() =>
+      expect(rosterActivityStore(context).snapshot).toMatchObject({
+        loading: false,
+        result: expect.anything(),
+      }),
+    );
+    await sidebar.updateComplete;
+  }
+}
+
 describe("sidebar session feedback", () => {
   it("shows pending append, blocks repeated activation, and recovers after failure and retry", async () => {
     const keys = Array.from(
@@ -237,7 +257,7 @@ describe("sidebar session feedback", () => {
       "explains settled empty %s and preserves recovery",
       async (filter) => {
         const { sidebar, context, result } = await mountRoster(undefined, []);
-        sidebar.sidebarAgentsMode = mode;
+        await useSidebarMode(sidebar, context, mode);
         for (const status of ["active", "archived", "all"]) {
           await selectFilter(sidebar, "status:" + status);
           expect(sidebar.textContent).not.toContain(hint);
@@ -279,16 +299,12 @@ describe("sidebar session feedback", () => {
     it.each(["owner:profile-ada", "involving-me"])(
       "does not claim no matches before initial data, during refresh, or after a list error (%s)",
       async (filter) => {
-        const { sidebar, context, request, sessions } = await mountRoster(undefined, []);
-        sidebar.sidebarAgentsMode = mode;
+        const { sidebar, context, sessions } = await mountRoster(undefined, []);
+        await useSidebarMode(sidebar, context, mode);
         await selectFilter(sidebar, filter);
         await vi.waitFor(() => expect(sidebar.textContent).toContain(hint));
         const pending = createDeferred<never>();
-        if (mode === "roster") {
-          request.mockImplementation(async () => await pending.promise);
-        } else {
-          sessions.list.mockImplementation(async () => await pending.promise);
-        }
+        sessions.list.mockImplementation(async () => await pending.promise);
         const refresh =
           mode === "roster"
             ? rosterActivityStore(context).refresh()

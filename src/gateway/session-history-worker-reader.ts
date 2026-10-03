@@ -25,13 +25,13 @@ export async function readSessionHistoryRequest(
   };
   if (request.kind === "artifacts") {
     const { selectSessionArtifacts } = await import("./session-artifact-read.js");
+    const query = request.params.query;
     return {
       kind: "artifacts",
-      result: await selectSessionArtifacts(
-        request.params.target,
-        request.params.query,
-        options.readers,
-      ),
+      result:
+        query.kind === "list" && query.includeDownloadData === false && !query.downloadArtifactIds
+          ? { kind: "list", artifacts: await options.readers.readArtifactSummaries(query) }
+          : await selectSessionArtifacts(request.params.target, query, options.readers),
     };
   }
   if (request.kind === "message-page") {
@@ -62,6 +62,16 @@ export async function readSessionHistoryRequest(
     };
   }
   if (request.kind === "recent-page") {
+    if (request.params.exactArchivePath) {
+      const { ArchivedTranscriptReader } = await import("./session-transcript-archive-reader.js");
+      return {
+        kind: "recent-page",
+        result: await new ArchivedTranscriptReader({
+          exactArchivePath: request.params.exactArchivePath,
+          sessionId: request.params.target.sessionId,
+        }).readRecentWithStats(request.params.options),
+      };
+    }
     return {
       kind: "recent-page",
       result: await options.readers.readRecentSessionMessagesWithStatsAsync(
@@ -70,10 +80,19 @@ export async function readSessionHistoryRequest(
       ),
     };
   }
+  if (request.kind === "reactions") {
+    return { kind: "reactions", result: options.readers.readReactions() };
+  }
+  if (request.kind === "conversation-binding") {
+    return {
+      kind: "conversation-binding",
+      result: options.readers.readConversationBinding(request.params.conversationRef),
+    };
+  }
   if (request.kind === "transcript-binding") {
     return {
       kind: "transcript-binding",
-      binding: options.readers.readTranscriptBinding(request.params.run),
+      binding: options.readers.readTranscriptBinding(),
     };
   }
   if (request.kind === "message-by-id") {
@@ -119,9 +138,14 @@ export async function readSessionHistoryRequest(
   if (request.kind === "rpc") {
     const { readChatHistoryPageKernel } =
       await import("./server-methods/chat-history-page-kernel.js");
+    const { encodeChatHistoryResponsePage } =
+      await import("./server-methods/chat-history-response-page.js");
     return {
       kind: "rpc",
-      page: await readChatHistoryPageKernel(request.params, options),
+      page: encodeChatHistoryResponsePage(
+        await readChatHistoryPageKernel(request.params, options),
+        request.params,
+      ),
     };
   }
   const { readSessionHistorySnapshotKernel } = await import("./session-history-snapshot.js");

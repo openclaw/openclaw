@@ -31,14 +31,15 @@ import { MemoryManagerReloadError } from "./lifecycle.js";
 import { runMemoryIndexState } from "./manager-cpu-worker-runtime.js";
 import { MemoryManagerEmbeddingOps } from "./manager-embedding-ops.js";
 import {
-  createDegradedMemoryProviderLifecycle,
-  createPendingMemoryProviderLifecycle,
   resolveFallbackCurrentProviderId,
   resolveMemoryFallbackProviderRequest,
   resolveMemoryPrimaryProviderRequest,
   resolveMemoryProviderState,
 } from "./manager-provider-state.js";
-import type { MemoryEmbeddingProbeCacheEntry } from "./manager-registry.js";
+import type {
+  MemoryEmbeddingProbeCacheEntry,
+  MemoryIndexManagerPurpose,
+} from "./manager-registry.js";
 import type { MemoryIndexIdentityState } from "./manager-reindex-state.js";
 import type { MemoryRetrievalIndexState } from "./manager-retrieval-read.js";
 
@@ -103,7 +104,7 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
   protected abstract canPublishEmbeddingProbe(): boolean;
   protected abstract readonly embeddingProbeCache: Map<string, MemoryEmbeddingProbeCacheEntry>;
   protected abstract readonly cacheKey: string;
-  protected abstract readonly purpose: "default" | "status" | "cli" | "maintenance";
+  protected abstract readonly purpose: MemoryIndexManagerPurpose;
   protected abstract readonly providerRequirement: MemoryEmbeddingProviderRequirement;
   protected providerInitPromise: Promise<void> | null = null;
   protected providerInitialized = false;
@@ -163,10 +164,11 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
     }
     this.providerInitialized = true;
     this.providerUnavailableReason = reason;
-    this.providerLifecycle = createDegradedMemoryProviderLifecycle({
+    this.providerLifecycle = {
+      mode: "degraded",
       providerId: provider,
       reason,
-    });
+    };
     this.embeddingBootstrapFailure = debug;
     this.providerKey = this.computeProviderKey();
     this.batch = this.resolveBatchConfig();
@@ -322,7 +324,7 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
         !this.provider &&
         this.getCachedEmbeddingAvailability() === null;
       if (!bootstrapRetryDue) {
-        await this.getPendingFallbackProviderInitialization()?.catch(() => undefined);
+        await this.fallbackProviderInitPromise?.catch(() => undefined);
         return;
       }
       this.resetProviderInitializationForRetry();
@@ -337,7 +339,7 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
     }
     if (!this.providerInitPromise) {
       this.providerInitPromise = (async () => {
-        await this.getPendingFallbackProviderInitialization()?.catch(() => undefined);
+        await this.fallbackProviderInitPromise?.catch(() => undefined);
         await this.retireCurrentProvider();
         if (this.closed) {
           return;
@@ -371,7 +373,7 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
     this.providerInitialized = false;
     this.providerInitPromise = null;
     this.providerUnavailableReason = undefined;
-    this.providerLifecycle = createPendingMemoryProviderLifecycle(this.settings.provider);
+    this.providerLifecycle = { mode: "pending", requestedProvider: this.settings.provider };
   }
 
   protected markLocalEmbeddingProviderDegraded(err: unknown): void {
@@ -382,10 +384,11 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
     const degradedProvider = this.provider;
     void this.retireCurrentProvider();
     this.providerUnavailableReason = `Local embeddings degraded: ${message}`;
-    this.providerLifecycle = createDegradedMemoryProviderLifecycle({
+    this.providerLifecycle = {
+      mode: "degraded",
       providerId: degradedProvider.id,
       reason: message,
-    });
+    };
     this.embeddingProbeCache.delete(this.cacheKey);
     this.providerKey = this.computeProviderKey();
     this.batch = this.resolveBatchConfig();
@@ -506,13 +509,7 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
         ? { meta: params.indexState.meta, hasIndexedChunks: params.indexState.hasIndexedChunks }
         : {}),
     });
-    this.indexIdentityState = state;
-    this.indexIdentityDirty =
-      state.status === "mismatched" ||
-      (state.status === "missing" &&
-        (this.sources.has("memory") ||
-          (params?.indexState?.hasIndexedChunks ?? this.hasIndexedChunks())));
-    return state;
+    return this.updateIndexIdentityState(state, params?.indexState);
   }
 
   protected refreshKeywordFallbackIndexIdentity(indexState?: MemoryRetrievalIndexState) {
@@ -524,6 +521,13 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
       vectorReady: false,
       ...(indexState ? { hasIndexedChunks: indexState.hasIndexedChunks } : {}),
     });
+    return this.updateIndexIdentityState(state, indexState);
+  }
+
+  private updateIndexIdentityState(
+    state: MemoryIndexIdentityState,
+    indexState?: MemoryRetrievalIndexState,
+  ): MemoryIndexIdentityState {
     this.indexIdentityState = state;
     this.indexIdentityDirty =
       state.status === "mismatched" ||

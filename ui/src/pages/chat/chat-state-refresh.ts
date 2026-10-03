@@ -1,5 +1,5 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { GatewaySessionRow, ModelCatalogResult } from "../../api/types.ts";
+import type { ModelCatalogResult } from "../../api/types.ts";
 import type {
   ChatMetadataResult,
   ChatMetadataRefresh,
@@ -200,11 +200,7 @@ function bindChatMetadata(host: ChatPageHost): ChatMetadataBinding | undefined {
         }
         if (update.type !== "loading") {
           if (update.type === "result") {
-            applyRemoteSlashCommandsResult({
-              client,
-              agentId: scope.agentId,
-              result: update.result,
-            });
+            applyRemoteSlashCommandsResult(update.result);
             if (update.catalogChanged) {
               binding.sessionFactsInvalidated = true;
               void refreshChatMetadata(host, { automatic: true });
@@ -224,7 +220,7 @@ function bindChatMetadata(host: ChatPageHost): ChatMetadataBinding | undefined {
   host.chatModelCatalogInitialized = hasUnrestrictedModelCatalogSnapshot(client);
   const cached = peekChatMetadata(client, scope);
   if (cached) {
-    applyRemoteSlashCommandsResult({ client, agentId: scope.agentId, result: cached });
+    applyRemoteSlashCommandsResult(cached);
   }
   return binding;
 }
@@ -346,11 +342,8 @@ function refreshChatSessionFacts(host: ChatPageHost, binding: ChatMetadataBindin
   );
   const reconcile = observation.captureReconcile();
   binding.sessionFactsInvalidated = false;
-  const promise = binding.client
-    .request<{ session?: GatewaySessionRow | null }>("sessions.describe", {
-      key: binding.scope.sessionKey,
-      agentId,
-    })
+  const promise = binding.sessions
+    .describe({ key: binding.scope.sessionKey, agentId }, { client: binding.client, refresh: true })
     .then((result) => {
       if (!binding.isCurrent() || binding.version !== version) {
         return;

@@ -135,9 +135,9 @@ export type CatalogOpenTarget = (typeof CATALOG_OPEN_TARGETS)[number];
 export const normalizeCatalogOpenTarget = normalizeChoice(CATALOG_OPEN_TARGETS, "viewer");
 
 const CHAT_WORKSPACE_DOCKS = ["right", "bottom"] as const;
-export type ChatWorkspaceDock = (typeof CHAT_WORKSPACE_DOCKS)[number];
+type ChatWorkspaceDock = (typeof CHAT_WORKSPACE_DOCKS)[number];
 
-export const normalizeChatWorkspaceDock = normalizeChoice(CHAT_WORKSPACE_DOCKS, "right");
+const normalizeChatWorkspaceDock = normalizeChoice(CHAT_WORKSPACE_DOCKS, "right");
 
 export function normalizeAccentColor(value: unknown): string | undefined {
   return normalizeUiAppearancePreference("ui.accent", value);
@@ -229,6 +229,8 @@ export type UiSettings = {
   sessionDeleteConfirm?: boolean;
   // Device-local opt-in: route eligible external links into the Gateway browser panel.
   openLinksInControlUiBrowser?: boolean;
+  // Browser-local opt-in; absence preserves native panels and plugin readers.
+  openLinksExternally?: boolean;
 };
 
 export type UiPreferences = Omit<UiSettings, "token">;
@@ -236,6 +238,10 @@ export type UiPreferences = Omit<UiSettings, "token">;
 function normalizeSidebarPreTeamScope(value: unknown): string | null | undefined {
   const agentId = normalizeOptionalString(value);
   return value === null ? null : agentId ? normalizeAgentId(agentId) : undefined;
+}
+
+function normalizeBooleanSetting<T extends boolean | undefined>(value: unknown, fallback: T) {
+  return typeof value === "boolean" ? value : fallback;
 }
 
 function isViteDevPage(): boolean {
@@ -509,35 +515,32 @@ export function loadUiPreferences(
       accent: normalizeAccentColor(parsed.accent),
       fontUi: normalizeTypefaceOverride(parsed.fontUi),
       fontChat: normalizeTypefaceOverride(parsed.fontChat),
-      chatShowThinking:
-        typeof parsed.chatShowThinking === "boolean"
-          ? parsed.chatShowThinking
-          : defaults.chatShowThinking,
-      chatShowToolCalls:
-        typeof parsed.chatShowToolCalls === "boolean"
-          ? parsed.chatShowToolCalls
-          : defaults.chatShowToolCalls,
-      chatPersistCommentary:
-        typeof parsed.chatPersistCommentary === "boolean"
-          ? parsed.chatPersistCommentary
-          : defaults.chatPersistCommentary,
-      chatShowTaskProgress:
-        typeof parsed.chatShowTaskProgress === "boolean"
-          ? parsed.chatShowTaskProgress
-          : defaults.chatShowTaskProgress,
-      chatCollapseTaskProgress:
-        typeof parsed.chatCollapseTaskProgress === "boolean"
-          ? parsed.chatCollapseTaskProgress
-          : defaults.chatCollapseTaskProgress,
+      chatShowThinking: normalizeBooleanSetting(parsed.chatShowThinking, defaults.chatShowThinking),
+      chatShowToolCalls: normalizeBooleanSetting(
+        parsed.chatShowToolCalls,
+        defaults.chatShowToolCalls,
+      ),
+      chatPersistCommentary: normalizeBooleanSetting(
+        parsed.chatPersistCommentary,
+        defaults.chatPersistCommentary,
+      ),
+      chatShowTaskProgress: normalizeBooleanSetting(
+        parsed.chatShowTaskProgress,
+        defaults.chatShowTaskProgress,
+      ),
+      chatCollapseTaskProgress: normalizeBooleanSetting(
+        parsed.chatCollapseTaskProgress,
+        defaults.chatCollapseTaskProgress,
+      ),
       chatSendShortcut: normalizeChatSendShortcut(parsed.chatSendShortcut),
       chatFollowUpMode: normalizeChatFollowUpModeOverride(parsed.chatFollowUpMode),
       catalogOpenTarget: normalizeCatalogOpenTarget(parsed.catalogOpenTarget),
       realtimeTalkInputDeviceId: normalizeOptionalString(parsed.realtimeTalkInputDeviceId),
       realtimeTalkVideoDeviceId: normalizeOptionalString(parsed.realtimeTalkVideoDeviceId),
-      composerHoldToRecord:
-        typeof parsed.composerHoldToRecord === "boolean"
-          ? parsed.composerHoldToRecord
-          : defaults.composerHoldToRecord,
+      composerHoldToRecord: normalizeBooleanSetting(
+        parsed.composerHoldToRecord,
+        defaults.composerHoldToRecord,
+      ),
       talkCameraAutoEnable:
         typeof parsed.talkCameraAutoEnable === "boolean" ? parsed.talkCameraAutoEnable : undefined,
       chatSplitLayout: normalizeChatSplitLayout(parsed.chatSplitLayout),
@@ -561,15 +564,15 @@ export function loadUiPreferences(
         normalizeSidebarEntries(parsedRecord.sidebarEntries) ??
         migratedSidebarEntries ??
         defaults.sidebarEntries,
-      sidebarLiveActivity:
-        typeof parsed.sidebarLiveActivity === "boolean"
-          ? parsed.sidebarLiveActivity
-          : defaults.sidebarLiveActivity,
+      sidebarLiveActivity: normalizeBooleanSetting(
+        parsed.sidebarLiveActivity,
+        defaults.sidebarLiveActivity,
+      ),
       chatMessageMaxWidth: normalizeChatMessageMaxWidth(parsed.chatMessageMaxWidth),
-      showAdvancedSettings:
-        typeof parsed.showAdvancedSettings === "boolean"
-          ? parsed.showAdvancedSettings
-          : defaults.showAdvancedSettings,
+      showAdvancedSettings: normalizeBooleanSetting(
+        parsed.showAdvancedSettings,
+        defaults.showAdvancedSettings,
+      ),
       pinnedAgentIds: normalizeUniqueTrimmedStringList(parsed.pinnedAgentIds),
       textScale:
         typeof parsed.textScale === "number" &&
@@ -582,11 +585,12 @@ export function loadUiPreferences(
       ...(parsed.lobsterPetSounds === true ? { lobsterPetSounds: true } : {}),
       ...(parsed.sessionDeleteConfirm === false ? { sessionDeleteConfirm: false } : {}),
       ...(parsed.openLinksInControlUiBrowser === true ? { openLinksInControlUiBrowser: true } : {}),
+      ...(parsed.openLinksExternally === true ? { openLinksExternally: true } : {}),
     };
     // Scoped blobs from builds that persisted tokens durably get rewritten once
     // so the plaintext token leaves localStorage.
     if ("token" in parsed || migratedSidebarEntries !== null) {
-      persistSettings(
+      saveSettings(
         { ...settings, token: loadSessionToken(gatewayUrl) },
         { selectGateway: !targetGatewayUrl },
       );
@@ -595,10 +599,6 @@ export function loadUiPreferences(
   } catch {
     return defaults;
   }
-}
-
-export function saveSettings(next: UiSettings) {
-  persistSettings(next);
 }
 
 // Single change seam over the one write channel every settings mutation uses;
@@ -617,7 +617,7 @@ export function patchSettings(
 ): UiSettings {
   const previous = loadSettings(patch.gatewayUrl);
   const next = { ...previous, ...patch };
-  persistSettings(next, {
+  saveSettings(next, {
     selectGateway: options.selectGateway ?? patch.gatewayUrl !== undefined,
   });
   settingsChangeListener?.(previous, next);
@@ -637,7 +637,7 @@ export function loadLocalUserIdentity(): LocalUserIdentity {
   }
 }
 
-function persistSettings(next: UiSettings, options: { selectGateway?: boolean } = {}) {
+export function saveSettings(next: UiSettings, options: { selectGateway?: boolean } = {}) {
   const storage = getSafeLocalStorage();
   const scope = gatewayOriginScope(next.gatewayUrl);
   const scopedKey = settingsKeyForGateway(next.gatewayUrl);
@@ -727,6 +727,7 @@ function persistSettings(next: UiSettings, options: { selectGateway?: boolean } 
     sessionDeleteConfirm: next.sessionDeleteConfirm === false ? false : undefined,
     // External links keep host behavior unless the operator explicitly opts in.
     openLinksInControlUiBrowser: next.openLinksInControlUiBrowser === true ? true : undefined,
+    openLinksExternally: next.openLinksExternally === true ? true : undefined,
   };
   const serialized = JSON.stringify(persisted);
   const { token: _token, ...preferences } = next;

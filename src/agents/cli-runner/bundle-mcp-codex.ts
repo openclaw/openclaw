@@ -1,6 +1,7 @@
 /**
  * Codex CLI and app-server bundle MCP projection helpers.
  */
+import { filterStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { normalizeConfiguredMcpServers } from "../../config/mcp-config-normalize.js";
 import type { SessionToolOverrides } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -51,34 +52,22 @@ type CodexUserMcpServersProjectionOptions = {
   preparedNativeMcpPolicy?: PreparedNativeMcpPolicy;
 };
 
-function normalizeAgentIds(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value
-    .filter((entry): entry is string => typeof entry === "string")
-    .map((entry) => entry.trim())
-    .filter((entry) => isValidAgentId(entry))
-    .map((entry) => normalizeAgentId(entry));
-}
-
-function readCodexProjectionConfig(server: BundleMcpServerConfig): Record<string, unknown> {
-  return isRecord(server.codex) ? server.codex : {};
-}
-
 function isCodexMcpServerAllowedForAgent(
   server: BundleMcpServerConfig,
   options: CodexUserMcpServersProjectionOptions | undefined,
 ): boolean {
-  const codex = readCodexProjectionConfig(server);
+  const codex = isRecord(server.codex) ? server.codex : {};
   if (!Object.hasOwn(codex, "agents")) {
     return true;
   }
-  const agentIds = normalizeAgentIds(codex.agents);
-  if (agentIds.length === 0 || !options?.agentId) {
+  if (!options?.agentId) {
     return false;
   }
-  return agentIds.includes(normalizeAgentId(options.agentId));
+  const agentId = normalizeAgentId(options.agentId);
+  return filterStringEntries(codex.agents).some((entry) => {
+    const candidate = entry.trim();
+    return isValidAgentId(candidate) && normalizeAgentId(candidate) === agentId;
+  });
 }
 
 /**
@@ -229,21 +218,12 @@ export async function buildCodexUserMcpServersThreadConfigPatchForRun(params: {
     sessionId: run.sessionId,
     runId: run.runId,
     agentId: policyAgentId,
-    agentDir: run.agentDir,
     agentAccountId: run.agentAccountId,
     messageProvider: run.messageProvider ?? run.messageChannel,
     messageChannel: run.messageChannel,
-    chatType: run.chatType,
-    messageTo: run.messageTo,
-    messageThreadId: run.messageThreadId,
-    currentChannelId: run.currentChannelId,
-    currentMessagingTarget: run.currentMessagingTarget,
-    currentThreadTs: run.currentThreadTs,
-    currentMessageId: run.currentMessageId,
     groupId: run.groupId,
     groupChannel: run.groupChannel,
     groupSpace: run.groupSpace,
-    memberRoleIds: run.memberRoleIds,
     spawnedBy: run.spawnedBy,
     senderId: run.senderId,
     senderName: run.senderName,
@@ -252,12 +232,8 @@ export async function buildCodexUserMcpServersThreadConfigPatchForRun(params: {
     senderIsOwner: run.senderIsOwner,
     modelProvider: run.provider,
     modelId: run.modelId,
-    modelApi: run.model?.api,
-    modelContextWindowTokens: run.model?.contextWindow,
-    modelHasVision: run.model?.input?.includes("image") ?? false,
     workspaceDir: run.workspaceDir,
     cwd: params.cwd,
-    skillsSnapshot: run.skillsSnapshot,
     sandboxToolPolicy: sandboxStatus.sandboxed ? sandboxStatus.toolPolicy : undefined,
     runtimeToolAllowlist: run.toolsAllow,
     inheritRuntimeToolAllowlist: true,

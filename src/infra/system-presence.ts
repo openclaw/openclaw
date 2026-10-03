@@ -14,6 +14,7 @@ import { pickBestEffortPrimaryLanIPv4 } from "./network-discovery-display.js";
 import { resolveDarwinProductVersion } from "./os-summary.js";
 
 export type SystemPresence = {
+  connectionId?: string;
   host?: string;
   clientId?: string;
   ip?: string;
@@ -34,6 +35,8 @@ export type SystemPresence = {
   /** Server-owned timing for the person's current continuous live interval. */
   onlineSince?: number;
   lastActivityAt?: number;
+  /** Latest accepted OpenClaw interaction on this connection only. */
+  connectionLastActivityAt?: number;
   text: string;
   /** Heartbeat freshness, independent of person activity and online duration. */
   ts: number;
@@ -42,6 +45,7 @@ export type SystemPresence = {
 type StoredPresence = {
   presence: SystemPresence;
   freshness: number;
+  pending: boolean;
 };
 
 // The gateway owns a private key; caller-supplied string identities remain peers.
@@ -68,8 +72,12 @@ function freshnessNow(): number {
   return freshnessTime;
 }
 
-function setPresence(key: string | symbol, presence: SystemPresence) {
-  entries.set(key, { presence, freshness: freshnessNow() });
+function setPresence(
+  key: string | symbol,
+  presence: SystemPresence,
+  pending = entries.get(key)?.pending ?? false,
+) {
+  entries.set(key, { presence, freshness: freshnessNow(), pending });
 }
 
 function initSelfPresence() {
@@ -77,30 +85,18 @@ function initSelfPresence() {
   const ip = pickBestEffortPrimaryLanIPv4() ?? os.hostname();
   const version = resolveRuntimeServiceVersion(process.env);
   const modelIdentifier = resolveMachineModelIdentifier();
-  const platform = (() => {
-    const p = os.platform();
-    const rel = os.release();
-    if (p === "darwin") {
-      return `macos ${resolveDarwinProductVersion()}`;
-    }
-    if (p === "win32") {
-      return `windows ${rel}`;
-    }
-    return `${p} ${rel}`;
-  })();
-  const deviceFamily = (() => {
-    const p = os.platform();
-    if (p === "darwin") {
-      return "Mac";
-    }
-    if (p === "win32") {
-      return "Windows";
-    }
-    if (p === "linux") {
-      return "Linux";
-    }
-    return p;
-  })();
+  const osPlatform = os.platform();
+  const release = os.release();
+  const platform =
+    osPlatform === "darwin"
+      ? `macos ${resolveDarwinProductVersion()}`
+      : `${osPlatform === "win32" ? "windows" : osPlatform} ${release}`;
+  const deviceFamilies: Partial<Record<NodeJS.Platform, string>> = {
+    darwin: "Mac",
+    win32: "Windows",
+    linux: "Linux",
+  };
+  const deviceFamily = deviceFamilies[osPlatform] ?? osPlatform;
   const text = `Gateway: ${host}${ip ? ` (${ip})` : ""} · app ${version} · mode gateway · reason self`;
   const selfEntry: SystemPresence = {
     host,
@@ -192,7 +188,6 @@ export function updateSystemPresence(payload: SystemPresencePayload) {
   const key =
     normalizeOptionalLowercaseString(payload.deviceId) ||
     normalizeOptionalLowercaseString(payload.instanceId) ||
-    normalizeOptionalLowercaseString(parsed.instanceId) ||
     normalizeOptionalLowercaseString(parsed.host) ||
     parsed.ip ||
     truncateUtf16Safe(parsed.text, 64) ||
@@ -216,7 +211,7 @@ export function updateSystemPresence(payload: SystemPresencePayload) {
     deviceId: payload.deviceId ?? existing.deviceId,
     roles: mergeStringList(existing.roles, payload.roles),
     scopes: mergeStringList(existing.scopes, payload.scopes),
-    instanceId: payload.instanceId ?? parsed.instanceId ?? existing.instanceId,
+    instanceId: payload.instanceId ?? existing.instanceId,
     text: payload.text || parsed.text || existing.text,
     ts: Date.now(),
   };
@@ -230,10 +225,14 @@ export function updateSystemPresence(payload: SystemPresencePayload) {
   };
 }
 
-export function upsertPresence(key: string, presence: Partial<SystemPresence>) {
+export function upsertPresence(
+  key: string,
+  presence: Partial<SystemPresence>,
+  options?: { pending: boolean },
+) {
   const normalizedKey =
     normalizeOptionalLowercaseString(key) ?? normalizeLowercaseStringOrEmpty(os.hostname());
-  const existing = entries.get(normalizedKey)?.presence ?? ({} as SystemPresence);
+  const existing: Partial<SystemPresence> = entries.get(normalizedKey)?.presence ?? {};
   const roles = mergeStringList(existing.roles, presence.roles);
   const scopes = mergeStringList(existing.scopes, presence.scopes);
   const merged: SystemPresence = {
@@ -249,7 +248,16 @@ export function upsertPresence(key: string, presence: Partial<SystemPresence>) {
         presence.mode ?? existing.mode ?? "unknown"
       }`,
   };
-  setPresence(normalizedKey, merged);
+  setPresence(normalizedKey, merged, options?.pending);
+}
+
+/** Only the connection that staged a row may make it visible to other readers. */
+export function commitPresence(key: string, connectionId: string): void {
+  const normalizedKey = normalizeOptionalLowercaseString(key);
+  const entry = normalizedKey ? entries.get(normalizedKey) : undefined;
+  if (entry?.presence.connectionId === connectionId) {
+    entry.pending = false;
+  }
 }
 
 /** Renews an existing connection-owned presence row without recreating expired metadata. */
@@ -266,7 +274,7 @@ export function touchPresence(key: string): boolean {
   return true;
 }
 
-export function listSystemPresence(): SystemPresence[] {
+export function listSystemPresence(options?: { includeConnectionId?: string }): SystemPresence[] {
   touchSelfPresence();
   const now = freshnessNow();
   for (const [key, entry] of entries) {
@@ -284,5 +292,13 @@ export function listSystemPresence(): SystemPresence[] {
       entries.delete(key);
     }
   }
-  return [...entries.values()].map((entry) => entry.presence).toSorted((a, b) => b.ts - a.ts);
+  return [...entries.values()]
+    .filter(
+      (entry) =>
+        !entry.pending ||
+        (options?.includeConnectionId !== undefined &&
+          entry.presence.connectionId === options.includeConnectionId),
+    )
+    .map((entry) => entry.presence)
+    .toSorted((a, b) => b.ts - a.ts);
 }

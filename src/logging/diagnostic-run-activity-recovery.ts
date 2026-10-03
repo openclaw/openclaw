@@ -10,28 +10,27 @@ type DiagnosticRecoveryMarker = {
   sequence?: number;
 };
 
-export type DiagnosticRecoveryEmbeddedRun = DiagnosticRecoveryMarker & {
+type DiagnosticRecoveryEmbeddedRun = DiagnosticRecoveryMarker & {
   runId: string;
   sessionKey?: string;
   sequence: number;
   generation?: CoreModelRequestOwnerGeneration;
 };
 
-export type DiagnosticRecoveryTool = DiagnosticRecoveryMarker & {
+type DiagnosticRecoveryTool = DiagnosticRecoveryMarker & {
   sessionKey?: string;
   toolName: string;
   toolCallId?: string;
   startedAt: number;
-  lastProgressAt: number;
   deadlineAtMs?: number;
 };
 
-export type DiagnosticRecoveryModelCall = DiagnosticRecoveryMarker & {
+type DiagnosticRecoveryModelCall = DiagnosticRecoveryMarker & {
   sessionKey?: string;
   requestTimeoutMs?: number;
 };
 
-type DiagnosticRecoveryActivity = {
+export type DiagnosticRecoveryActivity = {
   activeEmbeddedRuns: Map<string, DiagnosticRecoveryEmbeddedRun>;
   activeTools: Map<string, DiagnosticRecoveryTool>;
   activeModelCalls: Map<string, DiagnosticRecoveryModelCall>;

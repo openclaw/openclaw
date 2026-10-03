@@ -23,6 +23,7 @@ import {
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-approval-authority.js";
 import { createAgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
+import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import { placementTurnOwner, type WorkerSessionPlacementIdentity } from "./placement-record.js";
 import {
   createWorkerSessionPlacementStore,
@@ -32,11 +33,16 @@ import {
   advancePlacementFixtureToActive,
   createPlacementTurnClaimFixtureOps,
 } from "./placement-test-fixtures.js";
-import { stagePlacementTurnClaimWorkerPublication } from "./placement-turn-authority.js";
+import {
+  isPlacementTurnToolAuthorized,
+  stagePlacementTurnClaimWorkerPublication,
+  stagePlacementTurnToolWorkerPublication,
+} from "./placement-turn-authority.js";
 import * as workerTurnOwners from "./placement-turn-claim-events.js";
 import {
   bindWorkerTurnOwner,
   getWorkerTurnExecutionIdentityCapability,
+  readWorkerTurnPromptCacheContext,
 } from "./placement-turn-claim-events.js";
 import { prepareWorkerAgentRuntimeIdentity } from "./worker-turn-payload.js";
 
@@ -63,8 +69,40 @@ afterEach(async () => {
   await fs.rm(root, { recursive: true, force: true });
 });
 function advanceToActive(executionMode: "worker-turn" | "remote-exec" = "worker-turn") {
-  return advancePlacementFixtureToActive(store, database, SESSION, executionMode);
+  return advancePlacementFixtureToActive(store, database, { ...SESSION, executionMode });
 }
+
+it("fences pending tool revocation and cannot revive grants after claim release", async () => {
+  const active = await advanceToActive();
+  const claim = await store.claimTurn({
+    ...SESSION,
+    claimId: "tool-publication",
+    runId: "tool-publication-run",
+    owner: placementTurnOwner(active),
+  });
+  const identity = requireOpenClawStateDatabaseIdentity({ db: database.db });
+  const grant = () =>
+    stagePlacementTurnToolWorkerPublication(identity, { claim, toolNames: ["sessions_send"] });
+  const authorized = () => isPlacementTurnToolAuthorized(identity, claim, "sessions_send");
+  grant().commit();
+  expect(authorized()).toBe(true);
+  expect(
+    isPlacementTurnToolAuthorized(
+      identity,
+      { ...claim, owner: { kind: "local" } },
+      "sessions_send",
+    ),
+  ).toBe(false);
+  const refused = stagePlacementTurnToolWorkerPublication(identity, { claim, toolNames: null });
+  expect(authorized()).toBe(false);
+  refused.rollback();
+  expect(authorized()).toBe(true);
+  const delayed = grant();
+  await store.releaseTurn(claim);
+  expect(authorized()).toBe(false);
+  delayed.commit();
+  expect(authorized()).toBe(false);
+});
 
 it.each([
   { settlement: "commit", replace: true },
@@ -390,7 +428,7 @@ it.each(["preparing", "bound"] as const)(
   },
 );
 
-it("retains the original session target while claim authority is prepared", async () => {
+it("retains the original transcript and prompt cache facts while claim authority is prepared", async () => {
   const active = await advanceToActive();
   const claim = await store.claimTurn({
     ...SESSION,
@@ -406,7 +444,33 @@ it("retains the original session target while claim authority is prepared", asyn
     expectedWriterRunId: claim.runId,
   };
   const requested = { ...expected };
-  const binding = bindWorkerTurnOwner(store, claim, undefined, instance, requested, () => {});
+  const promptCacheContext = { boundaryCount: 2, promptCacheKey: "gateway-cache" };
+  const binding = bindWorkerTurnOwner(
+    store,
+    claim,
+    undefined,
+    instance,
+    requested,
+    () => {},
+    undefined,
+    undefined,
+    undefined,
+    promptCacheContext,
+  );
+  const connection: WorkerConnectionIdentity = {
+    environmentId: active.environmentId,
+    ownerEpoch: active.activeOwnerEpoch,
+    sessionId: claim.sessionId,
+    runId: claim.runId,
+    turnClaim: claim,
+    credentialHash: "synthetic-credential-hash",
+    bundleHash: "synthetic-bundle-hash",
+    rpcSetVersion: 1,
+    protocolFeatures: [],
+    credentialExpiresAtMs: 1,
+  };
+  promptCacheContext.boundaryCount = 99;
+  promptCacheContext.promptCacheKey = "replacement-cache";
   requested.sessionId = "replacement-session";
   requested.storePath = path.join(root, "replacement.json");
   requested.expectedLifecycleRevision = "replacement-lifecycle";
@@ -417,6 +481,15 @@ it("retains the original session target while claim authority is prepared", asyn
     await capability.run((identity) => {
       expect(identity.sessionTarget).toEqual(expected);
     });
+    expect(readWorkerTurnPromptCacheContext(connection)).toEqual({
+      boundaryCount: 2,
+      promptCacheKey: "gateway-cache",
+    });
+    expect(
+      readWorkerTurnPromptCacheContext({ ...connection, runId: "another-run" }),
+    ).toBeUndefined();
+    await store.releaseTurn(claim);
+    expect(readWorkerTurnPromptCacheContext(connection)).toBeUndefined();
   } finally {
     await Promise.allSettled([binding]);
     if (store.validateTurnClaim(claim)) {
@@ -458,6 +531,7 @@ it("does not adopt a same-claim successor while execution identity preparation r
         agentId: SESSION.agentId,
         sessionKey: SESSION.sessionKey,
         sessionTarget,
+        promptCacheContext: { boundaryCount: 0 },
         assertSourceCurrent: () => {},
         runtimeInstanceId: active.environmentId,
         placements: store,
@@ -514,6 +588,7 @@ it("does not read the worker source when its claim closes during run admission",
         agentId: SESSION.agentId,
         sessionKey: SESSION.sessionKey,
         sessionTarget,
+        promptCacheContext: { boundaryCount: 0 },
         assertSourceCurrent,
         runtimeInstanceId: active.environmentId,
         placements: store,
@@ -598,7 +673,7 @@ it("shares claim revocation across facades while restart clearing leaves worker 
     expect(facade.clearLocalTurnClaimsAfterRestart()).toBe(1);
     expect(localAuthority.isCurrent()).toBe(false);
     expect(workerAuthority.isCurrent()).toBe(true);
-    facade.authorizeWorkerTurnTools(worker, ["sessions_send"]);
+    await facade.authorizeWorkerTurnTools(worker, ["sessions_send"]);
     expect(workerAuthority.isCurrent()).toBe(true);
     await facade.releaseTurn(worker);
     expect(workerAuthority.isCurrent()).toBe(false);

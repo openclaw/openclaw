@@ -22,9 +22,7 @@ describe("tool-card redaction", () => {
       container,
     );
 
-    expect(container.querySelector(".chat-tool-msg-summary__label")?.textContent).toBe(
-      "View Image",
-    );
+    expect(container.querySelector("[role=img]")?.ariaLabel).toBe("view_image");
     expect(container.querySelector(".chat-tool-msg-summary__names")?.textContent).toBe(expected);
   });
 

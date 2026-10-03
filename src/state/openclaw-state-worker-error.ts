@@ -258,18 +258,14 @@ function decodeErrorGraph(
       if (node.stateDatabasePath !== undefined) {
         markOpenClawStateDatabaseFailure(error, node.stateDatabasePath);
       }
-      for (const key of ["code", "errcode", "errno"] as const) {
-        if (node[key] !== undefined) {
-          Object.defineProperty(error, key, {
-            value: node[key],
-            configurable: true,
-            writable: true,
-          });
-        }
-      }
-      if (node.cause) {
-        Object.defineProperty(error, "cause", {
-          value: decodeValue(node.cause),
+      for (const [key, propertyValue] of Object.entries({
+        ...(node.code !== undefined ? { code: node.code } : {}),
+        ...(node.errcode !== undefined ? { errcode: node.errcode } : {}),
+        ...(node.errno !== undefined ? { errno: node.errno } : {}),
+        ...(node.cause ? { cause: decodeValue(node.cause) } : {}),
+      })) {
+        Object.defineProperty(error, key, {
+          value: propertyValue,
           configurable: true,
           writable: true,
         });

@@ -15,6 +15,7 @@ import { formatErrorMessage as errorMessage } from "../../../infra/errors.js";
 import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db.paths.js";
 import { shortenHomePath } from "../../../utils.js";
 import type { DoctorPrompter, DoctorOptions } from "../../doctor-prompter.js";
+import { countLabel as pluralize } from "../../doctor-state-integrity-format.js";
 import {
   applyLegacyCronStoreRepair,
   loadLegacyCronRepairState,
@@ -39,20 +40,12 @@ export {
   noteLegacyWhatsAppCrontabHealthCheck,
 } from "./warnings.js";
 
-function pluralize(count: number, noun: string) {
-  return `${count} ${noun}${count === 1 ? "" : "s"}`;
-}
-
 function readLegacyCronStorePath(cfg: OpenClawConfig): string | undefined {
   return (cfg.cron as (NonNullable<OpenClawConfig["cron"]> & { store?: string }) | undefined)
     ?.store;
 }
 
-// Count jobs the store still marks in-flight (`state.runningAtMs` is a number).
-// The scheduler sets this while a run is active and clears it on completion, so a
-// leftover marker (gateway killed mid-run) can survive while nothing executes it.
-// Startup marks exactly these runs interrupted
-// (`src/cron/service/ops-lifecycle.ts` `start`), so doctor only reports the count here.
+// Scheduler startup owns interruption recovery; Doctor only reports retained markers.
 function countInFlightCronJobs(jobs: Array<Record<string, unknown>>): number {
   return jobs.filter((job) => {
     const state = job.state;
@@ -64,22 +57,12 @@ function countInFlightCronJobs(jobs: Array<Record<string, unknown>>): number {
   }).length;
 }
 
-// Fixed advisory threshold: three failures in a row is a clear chronic signal on
-// its own. It coincides with the scheduler's built-in transient-retry budget, but
-// doctor deliberately does not mirror retry exhaustion semantics.
+// The advisory threshold is independent of the scheduler's transient-retry budget.
 const CHRONIC_FAILURE_MIN_CONSECUTIVE_ERRORS = 3;
 
-// Count enabled jobs stuck in repeated run failures. `state.consecutiveErrors`
-// resets to 0 on the next successful run and also increments for runs interrupted
-// by a gateway restart (startup marks in-flight runs failed, `src/cron/service/ops-lifecycle.ts`),
-// so a streak can mean task failures, interrupted runs, or a mix — the note says so.
-// Failure alerts are opt-in, so by default nothing else surfaces the streak.
-// Disabled jobs no longer re-fire (e.g. the scheduler disables exhausted
-// one-shot jobs with their error state retained), so they are excluded.
 function countChronicallyFailingCronJobs(jobs: Array<Record<string, unknown>>): number {
   return jobs.filter((job) => {
-    // Missing `enabled` counts as enabled, matching `isJobEnabled`
-    // (`src/cron/service/jobs.ts`); only an explicit `false` is excluded.
+    // Match the scheduler: only an explicit false disables a job.
     if (job.enabled === false) {
       return false;
     }
@@ -191,7 +174,7 @@ export async function collectLegacyCronStoreHealthFindings(params: {
   const sqliteStorePath = resolveOpenClawStateSqlitePath();
 
   try {
-    const quarantine = loadCronQuarantinedJobs(storePath);
+    const quarantine = await loadCronQuarantinedJobs(storePath);
     if (quarantine.length > 0) {
       findings.push(
         legacyCronStoreFinding({
@@ -351,7 +334,6 @@ function noteLegacyCronRepairResult(result: LegacyCronRepairResult): void {
   }
 }
 
-/** Inspect cron storage and optionally repair legacy JSON/SQLite/payload shapes. */
 export async function maybeRepairLegacyCronStore(params: {
   cfg: OpenClawConfig;
   options: DoctorOptions;
@@ -392,7 +374,7 @@ export async function maybeRepairLegacyCronStore(params: {
   ).length;
   const sqliteStorePath = resolveOpenClawStateSqlitePath();
   try {
-    const quarantine = loadCronQuarantinedJobs(storePath);
+    const quarantine = await loadCronQuarantinedJobs(storePath);
     if (quarantine.length > 0) {
       note(
         [
@@ -414,6 +396,23 @@ export async function maybeRepairLegacyCronStore(params: {
       "Cron",
     );
   }
+  const storagePreviewLines: string[] = [];
+  if (legacyRunLogDetected) {
+    storagePreviewLines.push("- legacy JSON cron run logs will be imported into SQLite");
+  }
+  if (legacyQuarantine) {
+    storagePreviewLines.push("- legacy JSON cron quarantine will be imported into SQLite");
+  }
+  if (invalidConfigRows.length > 0) {
+    storagePreviewLines.push(
+      `- ${pluralize(invalidConfigRows.length, "malformed cron row")} will be quarantined in SQLite`,
+    );
+  }
+  if (revalidatableQuarantineCount > 0) {
+    storagePreviewLines.push(
+      `- ${pluralize(revalidatableQuarantineCount, "quarantined automation")} will be revalidated and restored only if current validation passes`,
+    );
+  }
   if (rawJobs.length === 0) {
     if (
       !legacyStoreDetected &&
@@ -428,22 +427,7 @@ export async function maybeRepairLegacyCronStore(params: {
     if (legacyStoreDetected) {
       previewLines.push("- legacy JSON cron store will be archived after SQLite migration");
     }
-    if (legacyRunLogDetected) {
-      previewLines.push("- legacy JSON cron run logs will be imported into SQLite");
-    }
-    if (legacyQuarantine) {
-      previewLines.push("- legacy JSON cron quarantine will be imported into SQLite");
-    }
-    if (invalidConfigRows.length > 0) {
-      previewLines.push(
-        `- ${pluralize(invalidConfigRows.length, "malformed cron row")} will be quarantined in SQLite`,
-      );
-    }
-    if (revalidatableQuarantineCount > 0) {
-      previewLines.push(
-        `- ${pluralize(revalidatableQuarantineCount, "quarantined automation")} will be revalidated and restored only if current validation passes`,
-      );
-    }
+    previewLines.push(...storagePreviewLines);
     const noteHeading =
       legacyStoreDetected || legacyRunLogDetected || legacyQuarantine
         ? `Legacy cron storage detected at ${shortenHomePath(storePath)}.`
@@ -606,22 +590,7 @@ export async function maybeRepairLegacyCronStore(params: {
         : "- legacy JSON cron store will be archived after SQLite migration",
     );
   }
-  if (legacyRunLogDetected) {
-    previewLines.push("- legacy JSON cron run logs will be imported into SQLite");
-  }
-  if (legacyQuarantine) {
-    previewLines.push("- legacy JSON cron quarantine will be imported into SQLite");
-  }
-  if (invalidConfigRows.length > 0) {
-    previewLines.push(
-      `- ${pluralize(invalidConfigRows.length, "malformed cron row")} will be quarantined in SQLite`,
-    );
-  }
-  if (revalidatableQuarantineCount > 0) {
-    previewLines.push(
-      `- ${pluralize(revalidatableQuarantineCount, "quarantined automation")} will be revalidated and restored only if current validation passes`,
-    );
-  }
+  previewLines.push(...storagePreviewLines);
   if (notifyCount > 0) {
     previewLines.push(
       `- ${pluralize(notifyCount, "job")} still uses legacy \`notify: true\` webhook fallback`,

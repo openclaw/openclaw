@@ -6,6 +6,7 @@ import {
   setActiveEmbeddedRun,
 } from "../../../agents/embedded-agent-runner/runs.js";
 import { testing as embeddedRunTesting } from "../../../agents/embedded-agent-runner/runs.test-support.js";
+import { REALTIME_VOICE_AGENT_CONTEXT_INSTRUCTIONS } from "../../../agents/realtime-bootstrap-context.test-support.js";
 import { replyRunRegistry } from "../../../auto-reply/reply/reply-run-registry.js";
 import {
   listSessionEntriesReadOnly,
@@ -76,8 +77,8 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../../../agents/embedded-agent.js", () => ({ runEmbeddedAgent: mocks.runEmbeddedAgent }));
-vi.mock("../../../agents/realtime-bootstrap-context.js", () => ({
-  resolveRealtimeBootstrapContextInstructions: async () => undefined,
+vi.mock("../../../agents/bootstrap-files.js", () => ({
+  resolveBootstrapFilesForRun: async () => [],
 }));
 vi.mock("../../../talk/provider-resolver.js", () => ({
   resolveConfiguredRealtimeVoiceProvider: mocks.resolveProvider,
@@ -249,6 +250,7 @@ it.each([undefined, "main"])(
   async (sessionKey) => {
     config.session = { scope: "global" };
     const { sessionId } = await createRelayCall();
+    expect(providerInstructions).toBe(REALTIME_VOICE_AGENT_CONTEXT_INSTRUCTIONS);
     await replaceSessionEntry(
       { agentId: "primary", sessionKey: "global" },
       {
@@ -746,7 +748,12 @@ it("restores bounded relay history after the original voice provider finishes cl
     expect(instructions).not.toContain("HISTORY_ENTRY_00");
     expect([...instructions.matchAll(/HISTORY_ENTRY_\d{2}/gu)].length).toBeLessThanOrEqual(16);
     expect(
-      Buffer.byteLength(instructions.slice(configuredInstructions.length), "utf8"),
+      Buffer.byteLength(
+        instructions.slice(
+          configuredInstructions.length + 2 + REALTIME_VOICE_AGENT_CONTEXT_INSTRUCTIONS.length,
+        ),
+        "utf8",
+      ),
     ).toBeLessThanOrEqual(8_000);
 
     await expect(
@@ -782,7 +789,9 @@ describe.each(["browser", "relay"] as const)("native %s Talk consultation", (tra
       ...(transport === "browser" ? { capabilities: ["gateway-control-v1"] } : {}),
     });
     expect(respond).toHaveBeenCalledWith(true, expect.any(Object), undefined);
-    expect(providerInstructions).toBe("Keep native answers brief.");
+    expect(providerInstructions).toBe(
+      `Keep native answers brief.\n\n${REALTIME_VOICE_AGENT_CONTEXT_INSTRUCTIONS}`,
+    );
     const result = respond.mock.calls[0]?.[1] as { voiceSessionId?: string; sessionId?: string };
     const storage = { agentId: "voice", sessionKey: canonicalKey, storePath: target.storePath };
     const created = loadSessionEntry(storage);

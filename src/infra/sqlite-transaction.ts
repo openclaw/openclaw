@@ -108,13 +108,6 @@ export function retainSqliteWriteAdmissionService(
   };
 }
 
-/** Native coordinator waits must keep the same worker's current-authority grants serviceable. */
-export function sqliteWriteAdmissionServicesForLocation(
-  location: string,
-): ReadonlySet<() => void> | undefined {
-  return writeAdmissionServices.get(normalizeWriteAdmissionLocation(location));
-}
-
 type SqliteBeginAdmissionDiagnostics = {
   nativeAttempts: number;
   nativeMs: number;
@@ -203,16 +196,6 @@ function slowBusyWaitThresholdMs(options: SqliteTransactionOptions | undefined):
   return Math.min(DEFAULT_SLOW_BUSY_WAIT_MS, options.busyTimeoutMs);
 }
 
-function slowTransactionHoldThresholdMs(options: SqliteTransactionOptions | undefined): number {
-  return options?.slowTransactionHoldMs ?? DEFAULT_SLOW_TRANSACTION_HOLD_MS;
-}
-
-function transactionLogger(
-  options: SqliteTransactionOptions | undefined,
-): Pick<SubsystemLogger, "warn"> {
-  return options?.logger ?? transactionLog;
-}
-
 function transactionDiagnosticLabels(
   db: DatabaseSync | undefined,
   options: Pick<SqliteTransactionOptions, "databaseLabel" | "operationLabel"> | undefined,
@@ -238,10 +221,12 @@ function logSlowTransactionHold(params: {
   mode: SqliteTransactionMode;
   options?: SqliteTransactionOptions;
 }): void {
-  if (params.elapsedMs < slowTransactionHoldThresholdMs(params.options)) {
+  if (
+    params.elapsedMs < (params.options?.slowTransactionHoldMs ?? DEFAULT_SLOW_TRANSACTION_HOLD_MS)
+  ) {
     return;
   }
-  transactionLogger(params.options).warn("slow SQLite transaction hold", {
+  (params.options?.logger ?? transactionLog).warn("slow SQLite transaction hold", {
     async: false,
     ...transactionDiagnosticLabels(params.db, params.options),
     elapsedMs: params.elapsedMs,
@@ -249,39 +234,8 @@ function logSlowTransactionHold(params: {
     mode: params.mode,
     pid: process.pid,
     threadId,
-    thresholdMs: slowTransactionHoldThresholdMs(params.options),
+    thresholdMs: params.options?.slowTransactionHoldMs ?? DEFAULT_SLOW_TRANSACTION_HOLD_MS,
   });
-}
-
-/** The lifecycle lock precedes BEGIN, so transaction hold diagnostics cannot see this wait. */
-export function logSlowSqliteCoordinatorWait(
-  elapsedMs: number,
-  options: Pick<SqliteTransactionOptions, "databaseLabel" | "operationLabel">,
-): void {
-  if (!isMainThread || elapsedMs <= 100) {
-    return;
-  }
-  try {
-    // Capture only slow waits, while the synchronous owner's call chain is still on the stack.
-    const trace = new Error();
-    Error.captureStackTrace(trace, logSlowSqliteCoordinatorWait);
-    transactionLogger(undefined).warn("slow SQLite coordinator lock wait", {
-      async: false,
-      caller: trace.stack
-        ?.split("\n")
-        .slice(1, 9)
-        .map((frame) => frame.trim())
-        .join(" <- "),
-      ...transactionDiagnosticLabels(undefined, options),
-      elapsedMs,
-      isMainThread,
-      pid: process.pid,
-      threadId,
-      thresholdMs: 100,
-    });
-  } catch {
-    // Diagnostics cannot abandon an acquired coordinator or replace its admission error.
-  }
 }
 
 function logSlowTransactionStep(params: {
@@ -294,7 +248,7 @@ function logSlowTransactionStep(params: {
   if (params.elapsedMs < slowBusyWaitThresholdMs(params.options)) {
     return;
   }
-  transactionLogger(params.options).warn("slow SQLite transaction step", {
+  (params.options?.logger ?? transactionLog).warn("slow SQLite transaction step", {
     async: false,
     ...(params.options?.busyTimeoutMs !== undefined
       ? { busyTimeoutMs: params.options.busyTimeoutMs }
@@ -340,7 +294,7 @@ function execTimedTransactionStep(params: {
     if (isSqliteLockError(error) && shouldReportSqliteLockFailure(params.db)) {
       const sqliteErrcode = sqliteExtendedResultCode(error);
       const sqlitePrimaryCode = sqlitePrimaryResultCode(error);
-      transactionLogger(params.options).warn("SQLite transaction lock wait failed", {
+      (params.options?.logger ?? transactionLog).warn("SQLite transaction lock wait failed", {
         async: false,
         ...(params.options?.busyTimeoutMs !== undefined
           ? { busyTimeoutMs: params.options.busyTimeoutMs }

@@ -54,11 +54,7 @@ export async function resolveInstalledClawHubPlugin(params: {
   if (matches.length > 1) {
     return { status: "ambiguous", pluginIds: matches.map(([pluginId]) => pluginId).toSorted() };
   }
-  const match = matches[0];
-  if (!match) {
-    return { status: "missing" };
-  }
-  const [pluginId, record] = match;
+  const [pluginId, record] = matches[0]!;
   return {
     status: "found",
     pluginId,

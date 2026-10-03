@@ -34,7 +34,7 @@ export function formatBtwTextForExternalDelivery(payload: ReplyPayload): string 
     return payload.text;
   }
   const formatted = `BTW\nQuestion: ${question}\n\n${text}`;
-  return text === formatted || text.startsWith("BTW\nQuestion:") ? text : formatted;
+  return text.startsWith("BTW\nQuestion:") ? text : formatted;
 }
 
 /** True when a payload has visible or playable content for delivery. */
@@ -305,6 +305,8 @@ export type ReplyPayloadMetadata = {
    * are message-tool-only; sendPolicy deny still wins.
    */
   deliverDespiteSourceReplySuppression?: boolean;
+  /** An independently delivered message does not complete the active turn's answer. */
+  independentDeliveryIntentId?: string;
   /**
    * A message-tool reply to the active internal UI source. The final payload is
    * still the live delivery vehicle; this mirror makes the reply durable for
@@ -505,6 +507,7 @@ export function isReplyPayloadStatusNotice(
 export const isReplyPayloadTerminalContent = (payload: ReplyPayload): boolean => {
   const supplement = getReplyPayloadTtsSupplement(payload);
   return (
+    getReplyPayloadMetadata(payload)?.independentDeliveryIntentId === undefined &&
     payload.isReasoning !== true &&
     payload.isCommentary !== true &&
     (!isReplyPayloadStatusNotice(payload) ||

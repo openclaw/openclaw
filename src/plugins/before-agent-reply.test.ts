@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { captureGuardedFetchRequestAuthority } from "../infra/net/fetch-request-authority.js";
 import {
   buildHandledBeforeAgentReplyPayloads,
   runBeforeAgentReplyForTurn,
@@ -27,6 +28,44 @@ describe("before_agent_reply runner boundary", () => {
   beforeEach(() => {
     hookRunner.hasHooks.mockReset().mockReturnValue(true);
     hookRunner.runBeforeAgentReply.mockReset().mockResolvedValue(undefined);
+  });
+
+  it("keeps authority through observer finalization and rejects revoked effects", async () => {
+    let current = true;
+    let finalAuthority: (() => void) | undefined;
+    const effect = vi.fn();
+    hookRunner.runBeforeAgentReply.mockResolvedValue({ handled: true });
+    await expect(
+      withBeforeAgentReplyObserver(
+        {
+          beforeDispatch: async () => undefined,
+          afterDispatch: async (result) => {
+            finalAuthority = captureGuardedFetchRequestAuthority();
+            expect(finalAuthority).toBeTypeOf("function");
+            finalAuthority?.();
+            current = false;
+            await Promise.resolve();
+            finalAuthority?.();
+            effect();
+            return result;
+          },
+        },
+        () =>
+          runBeforeAgentReplyForTurn({
+            runId: "finalization-authority",
+            trigger: "cron",
+            event: { cleanedBody: "hello" },
+            context: { trigger: "cron" },
+            assertCurrent: () => {
+              if (!current) {
+                throw new Error("root reassigned");
+              }
+            },
+          }),
+      ),
+    ).rejects.toThrow("root reassigned");
+    expect(effect).not.toHaveBeenCalled();
+    expect(finalAuthority).toThrow("no longer active");
   });
 
   it("preserves the complete reply payload", () => {

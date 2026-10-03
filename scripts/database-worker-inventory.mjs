@@ -63,22 +63,6 @@ const reviewed = new Map([
     },
   ],
   [
-    "src/tasks/task-registry.store.sqlite.ts",
-    { priority: 5, evidence: "Mixed native mutations and worker-backed read facade" },
-  ],
-  [
-    "src/tasks/task-registry.store.kernel.ts",
-    { priority: 5, evidence: "Kernel shared by native and worker callers" },
-  ],
-  [
-    "src/tasks/task-flow-registry.store.sqlite.ts",
-    { priority: 5, evidence: "Mixed native mutations and worker-backed read facade" },
-  ],
-  [
-    "src/tasks/task-flow-registry.store.kernel.ts",
-    { priority: 5, evidence: "Kernel shared by native and worker callers" },
-  ],
-  [
     "src/agents/plugin-model-catalog.ts",
     {
       priority: 6,
@@ -105,6 +89,27 @@ const reviewed = new Map([
     "src/config/sessions/session-sharing-store.kernel.ts",
     { priority: 7, evidence: "Member-row kernel shared by session readers" },
   ],
+  [
+    "src/config/sessions/session-reaction-store.kernel.ts",
+    {
+      priority: 99,
+      evidence: "Durable reads use worker; writes and incognito reads remain native",
+    },
+  ],
+  [
+    "src/config/sessions/session-reaction-store.ts",
+    {
+      priority: 99,
+      evidence: "Native reaction writer; worker broker excludes process-held incognito",
+    },
+  ],
+  [
+    "src/config/sessions/conversation-registry.ts",
+    {
+      priority: 99,
+      evidence: "Reaction bindings use worker; other synchronous registry callers remain",
+    },
+  ],
 ]);
 const workerModules = new Set([
   "src/channels/message/ingress-queue-health.kernel.ts",
@@ -114,7 +119,7 @@ const workerModules = new Set([
   "src/infra/session-cost-usage-worker.ts",
 ]);
 const exceptionModules = new Set([
-  "src/state/openclaw-state-db-write-coordination.ts",
+  "src/state/openclaw-state-db-transaction.ts",
   "src/state/openclaw-state-lease-store.ts",
   "src/state/openclaw-state-lease-storage.ts",
   "src/state/openclaw-agent-db-lease.ts",
@@ -319,13 +324,15 @@ function render(rows) {
     "| 1 | `ensureProfileForEmail`; `updateExecApprovals` | Separate write-coordination lane; exclude from this cutover. The 47% is shared, not a measurement of either method alone. |",
     "| 2 | `sessions.list` → `listProjectedSessions` → resident session row projection | Warm requests already reuse resident rows with no host Kysely reads. Hydration, dirty/archived rows, and membership reads remain migration debt; preserve identity-keyed reuse and projection revisions. |",
     "| 3 | `chat.history` → history worker | Ordinary durable pages already use the worker. This cutover moves raw cursor delta reads and JSON parsing through the same owner; display/profile projection, byte budgets, and fresh sharing checks stay on the host. |",
-    "| 4 | Transcript search → `session-transcript-search.ts` | The async facade moves durable FTS reads through the existing worker lifecycle for all four runtime callers: `sessions-read.ts`, `sessions-search-projected.ts`, `control-ui-session-pr-references.ts`, and `embedded-gateway-stub.ts`. Callers recheck current scope and authorization after awaiting. |",
+    "| 4 | Transcript search → `session-transcript-search.ts` | The async facade moves durable FTS reads through the existing worker lifecycle for the runtime callers: `sessions-read.ts`, `sessions-search-projected.ts`, and `embedded-gateway-stub.ts`. Callers recheck current scope and authorization after awaiting. |",
     "| 5 | Task/flow registry | Async read facades already use workers; native mutations and mixed kernels remain. Preserve accepted-write fences and projection publication. |",
     "| 6 | Provider catalog → `plugin-model-catalog.ts` | Persisted reads reached from `models-config.ts` and prepared model runtime; keep Doctor imports distinct. |",
     "",
     "The warm `sessions.list` baseline used 5,000 rows, 50 viewers, and 350 calls: **zero host Kysely reads**, **3.07538 ms CPU per call**, and **3.12680 ms amortized wall time per call**. The original per-request store scan was already gone, so this lane does not claim another warm-list database cutover or speedup. These numbers do not cover projection hydration, dirty-row refresh, archived-row materialization, or membership reads.",
     "",
     "The history cutover leaves selected/current session entries, pending-input/receipt reads, the retained transcript-session key, and lazy subagent source/run-input visibility reads as native work. Ordinary full pages were already worker-backed; raw cursor delta reads now share that worker. Process-held incognito database lifetime and the existing CLI-import history path remain explicit migration gaps. Incognito data cannot be reopened by a durable path in another isolate; this is remaining owner/lifetime work, not a new synchronous exception. A failed durable worker read never selects that local path.",
+    "",
+    "Durable session reaction summaries and target-message reads use the admitted history worker. The reaction row kernel remains T1: writes and process-held incognito reads retain their existing native owner. The write cutover is blocked by the current broker contract: `supportsOpenClawAgentDatabaseExecution` excludes incognito scopes, and `openOpenClawAgentSqliteWorkerStore` requires a file identity. Supporting process-held databases requires their owner/lifetime cutover; this partial migration adds no broker or synchronous exception. Reaction mirroring reads durable source conversation bindings through the history worker, including a final read after account/config preparation and immediately before dispatch; synchronous handoff guards retain live reactor, session, and config checks. The conversation registry remains T1 because other synchronous callers are outside this cutover. Schemas, stored bytes, retention, and update behavior are unchanged.",
     "",
     "## Next five independent lanes",
     "",

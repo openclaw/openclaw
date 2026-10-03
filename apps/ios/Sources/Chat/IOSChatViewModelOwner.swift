@@ -18,6 +18,12 @@ final class IOSChatViewModelOwner {
     private var wasConnected = false
     @ObservationIgnored private var hydratedComposerModel: (@MainActor () -> OpenClawChatViewModel?)?
     @ObservationIgnored private var controlUIInputs: GatewayConnectConfig.ControlUIInputs?
+    @ObservationIgnored private var isObservingPendingSend = false
+
+    private var hasPendingSend: Bool {
+        guard let viewModel else { return false }
+        return viewModel.isSubmittingDraft || viewModel.pendingRunCount > 0
+    }
 
     func sync(appModel: NodeAppModel) {
         self.viewModel?.attachmentOwnerActivityChanged()
@@ -51,6 +57,17 @@ final class IOSChatViewModelOwner {
         }
         // Recording, staging, and delivery retain their captured route until the owner releases it.
         guard self.viewModel?.isAttachmentOwnerPinned != true else { return }
+        // Preserve the accepted turn and optimistic row until its captured run settles.
+        if let viewModel, self.hasPendingSend, !viewModel.isQuestionAuthorityRetired,
+           self.ownerID == ownerID, self.controlUIInputs == controlUIInputs,
+           self.transportAgentID.isEmpty, !agentID.isEmpty,
+           Self.transportAgentID(appModel.selectedAgentId).isEmpty,
+           viewModel.sessionKey == appModel.chatSessionKey,
+           self.routingContract.isEmpty || self.routingContract == routingContract
+        {
+            self.observePendingSend(appModel: appModel)
+            return
+        }
         // Resolving the default agent replaces its transport without changing the draft's owner.
         let draft: String? = if let viewModel, !viewModel.isQuestionAuthorityRetired,
                                 self.ownerID == ownerID, self.controlUIInputs == controlUIInputs,
@@ -103,6 +120,22 @@ final class IOSChatViewModelOwner {
         if let draft { viewModel.input = draft }
         self.hydratedComposerModel = draft != nil ? viewModel.composerModelResolver() : nil
         viewModel.load()
+    }
+
+    private func observePendingSend(appModel: NodeAppModel) {
+        guard !self.isObservingPendingSend else { return }
+        self.isObservingPendingSend = true
+        // A fast send can settle between SwiftUI updates, so the owner observes its release directly.
+        withObservationTracking {
+            _ = self.hasPendingSend
+        } onChange: { [weak self, weak appModel] in
+            Task { @MainActor in
+                guard let self else { return }
+                self.isObservingPendingSend = false
+                guard let appModel else { return }
+                self.sync(appModel: appModel)
+            }
+        }
     }
 
     func composerModelResolver() -> @MainActor () -> OpenClawChatViewModel? {

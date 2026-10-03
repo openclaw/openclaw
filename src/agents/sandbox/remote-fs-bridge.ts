@@ -192,7 +192,6 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
     await this.ensureRemoteWritable(destination, "copy files", params.signal);
     await this.assertNoHardlinkedFile({
       containerPath: destination.containerPath,
-      action: "copy files",
       signal: params.signal,
     });
     const sourcePinned = await this.resolvePinnedTarget({
@@ -265,7 +264,6 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
     if (kind === "write") {
       await this.assertNoHardlinkedFile({
         containerPath: target.containerPath,
-        action,
         signal: params.signal,
       });
     }
@@ -336,7 +334,6 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
       action: "remove files",
       requireWritable: true,
       includeDescendants: params.recursive,
-      allowFinalSymlinkForUnlink: true,
       pinnedCanonicalPath: authorizedRemotePinnedPath(
         params.pinnedPath,
         target.containerPath,
@@ -366,7 +363,6 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
       action: "rename files",
       requireWritable: true,
       includeDescendants: true,
-      allowFinalSymlinkForUnlink: true,
       signal: params.signal,
     });
     const toPinned = await this.resolvePinnedTarget({
@@ -401,7 +397,6 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
     });
     await this.assertNoHardlinkedFile({
       containerPath: canonicalPath,
-      action: "stat files",
       signal: params.signal,
     });
     const result = await this.runtime.runRemoteShellScript({
@@ -539,7 +534,6 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
       containerPath: params.containerPath,
       writable: params.mount.writable,
       mountRootPath: params.mount.containerRoot,
-      source: params.mount.source,
     };
   }
 
@@ -609,7 +603,6 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
     containerPath: string;
     mountRootPath: string;
     action: string;
-    allowFinalSymlinkForUnlink?: boolean;
     signal?: AbortSignal;
   }): Promise<RemoteCanonicalPath> {
     return await resolveRemoteCanonicalPath({
@@ -620,7 +613,6 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
 
   private async assertNoHardlinkedFile(params: {
     containerPath: string;
-    action: string;
     signal?: AbortSignal;
   }): Promise<void> {
     // Remote mutation helpers pin by parent path. Rejecting hardlinked regular

@@ -147,21 +147,22 @@ function deliveryStatusFromDurableSend(send: DurableSendResult): AgentCommandDel
   const payloadOutcomes = serializeDurableMessagePayloadOutcomes(send.payloadOutcomes, {
     includeHookEffect: true,
   });
+  const status = {
+    requested: true,
+    attempted: true,
+    status: send.status,
+  } as const;
   switch (send.status) {
     case "sent":
       return {
-        requested: true,
-        attempted: true,
-        status: "sent",
+        ...status,
         succeeded: true,
         resultCount: send.results.length,
         ...(payloadOutcomes ? { payloadOutcomes } : {}),
       };
     case "suppressed":
       return {
-        requested: true,
-        attempted: true,
-        status: "suppressed",
+        ...status,
         succeeded: true,
         reason: send.reason,
         resultCount: 0,
@@ -169,9 +170,7 @@ function deliveryStatusFromDurableSend(send: DurableSendResult): AgentCommandDel
       };
     case "partial_failed":
       return {
-        requested: true,
-        attempted: true,
-        status: "partial_failed",
+        ...status,
         succeeded: "partial",
         error: true,
         errorMessage: formatErrorMessage(send.error),
@@ -181,9 +180,7 @@ function deliveryStatusFromDurableSend(send: DurableSendResult): AgentCommandDel
       };
     case "failed":
       return {
-        requested: true,
-        attempted: true,
-        status: "failed",
+        ...status,
         succeeded: false,
         error: true,
         errorMessage: formatErrorMessage(send.error),
@@ -475,51 +472,40 @@ export async function deliverAgentCommandResult(
         // Keep the internal channel marker; error handling below reports the failure.
       }
     }
-    const effectiveDeliveryPlan =
-      deliveryChannel === deliveryPlan.resolvedChannel
-        ? deliveryPlan
-        : {
-            ...deliveryPlan,
-            resolvedChannel: deliveryChannel,
-            plugin: preparedPlugin,
-          };
     // Bundled/setup channels may be dockable before they appear in the registered
     // deliverable-id list. Resolve only when upstream planning prepared no plugin.
     const deliveryPlugin =
       deliver && !isInternalMessageChannel(deliveryChannel)
-        ? (effectiveDeliveryPlan.plugin ??
+        ? (preparedPlugin ??
           getChannelPlugin(normalizeChannelId(deliveryChannel) ?? deliveryChannel))
         : undefined;
-    const pluginDeliveryPlan =
-      deliveryPlugin && deliveryPlugin !== effectiveDeliveryPlan.plugin
-        ? { ...effectiveDeliveryPlan, plugin: deliveryPlugin }
-        : effectiveDeliveryPlan;
     const isDeliveryChannelKnown =
       isInternalMessageChannel(deliveryChannel) || Boolean(deliveryPlugin);
     const targetMode =
       opts.deliveryTargetMode ??
-      pluginDeliveryPlan.deliveryTargetMode ??
+      deliveryPlan.deliveryTargetMode ??
       (opts.to ? "explicit" : "implicit");
     const defaultAccountId =
-      !pluginDeliveryPlan.resolvedAccountId && deliveryPlugin?.config?.listAccountIds
+      !deliveryPlan.resolvedAccountId && deliveryPlugin?.config?.listAccountIds
         ? resolveChannelDefaultAccountId({ plugin: deliveryPlugin, cfg })
         : undefined;
-    const resolvedAccountId = pluginDeliveryPlan.resolvedAccountId ?? defaultAccountId;
-    const resolvedDeliveryPlan =
-      resolvedAccountId === pluginDeliveryPlan.resolvedAccountId
-        ? pluginDeliveryPlan
-        : { ...pluginDeliveryPlan, resolvedAccountId };
+    const resolvedAccountId = deliveryPlan.resolvedAccountId ?? defaultAccountId;
     const resolved =
       deliver && isDeliveryChannelKnown && deliveryChannel
         ? resolveAgentOutboundTarget({
             cfg,
-            plan: resolvedDeliveryPlan,
+            plan: {
+              ...deliveryPlan,
+              resolvedChannel: deliveryChannel,
+              plugin: deliveryPlugin ?? preparedPlugin,
+              resolvedAccountId,
+            },
             targetMode,
             validateExplicitTarget: true,
           })
         : {
             resolvedTarget: null,
-            resolvedTo: effectiveDeliveryPlan.resolvedTo,
+            resolvedTo: deliveryPlan.resolvedTo,
             targetMode,
           };
     const resolvedThreadId = deliveryPlan.resolvedThreadId ?? opts.threadId;

@@ -2,7 +2,11 @@ import { describe, expect, it, vi } from "vitest";
 import { createAssistantMessageEventStream } from "../../llm.js";
 import type { AssistantMessage, Model, StreamFn, Usage } from "../../llm.js";
 import type { AgentMessage } from "../../types.js";
-import type { SessionTreeEntry } from "../types.js";
+import {
+  InvalidSummaryOutputError,
+  SummaryOutputBudgetError,
+  type SessionTreeEntry,
+} from "../types.js";
 import {
   calculateContextTokens,
   compact,
@@ -787,10 +791,52 @@ describe("generateSummary thinking options", () => {
     if (result.ok) {
       throw new Error("expected empty compaction output to fail");
     }
+    expect(result.error).toBeInstanceOf(InvalidSummaryOutputError);
     expect(result.error).toMatchObject({
       name: "CompactionError",
       code: "summarization_failed",
       message: "Summarization failed: model returned no summary text",
+    });
+  });
+
+  it("identifies a length-stopped reasoning-only summary as an exhausted output budget", async () => {
+    const model = createSummaryModel(true);
+    const streamFn = vi.fn<StreamFn>(() => {
+      const stream = createAssistantMessageEventStream();
+      stream.push({
+        type: "done",
+        reason: "length",
+        message: {
+          ...createAssistant("", createUsage(800), 1),
+          content: [{ type: "thinking", thinking: "internal summary reasoning" }],
+          stopReason: "length",
+        },
+      });
+      stream.end();
+      return stream;
+    });
+
+    const result = await generateSummary(
+      [{ role: "user", content: "hello", timestamp: 1 }],
+      model,
+      1_000,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      "high",
+      streamFn,
+    );
+
+    expect(streamFn).toHaveBeenCalledOnce();
+    expect(result).toMatchObject({ error: expect.any(SummaryOutputBudgetError) });
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        code: "summarization_failed",
+        message: expect.stringContaining("output budget (800 tokens) was exhausted"),
+      },
     });
   });
 });

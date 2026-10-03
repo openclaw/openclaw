@@ -20,6 +20,7 @@ import {
   type InstalledPluginIndex,
 } from "../plugins/installed-plugin-index.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
+import { sha256FileSync } from "./crypto-digest.js";
 import {
   LEGACY_DELIVERY_QUEUE_DIRS,
   listLegacyDeliveryQueueFiles,
@@ -31,7 +32,6 @@ import {
   inferDeliveryQueueFailureRetention,
   projectDeliveryQueueTerminalEntry,
 } from "./delivery-queue-sqlite.types.js";
-import { hashFileDescriptorSync } from "./file-descriptor.js";
 import { parseRegistryNpmSpec } from "./npm-registry-spec.js";
 import { migrationFileExists } from "./state-migrations.fs.js";
 import {
@@ -57,15 +57,6 @@ type LegacyArchiveResolution = {
   action: "archived" | "removed";
 };
 
-function hashLegacyArchiveSource(sourcePath: string): string {
-  const fd = fs.openSync(sourcePath, "r");
-  try {
-    return hashFileDescriptorSync(fd).sha256;
-  } finally {
-    fs.closeSync(fd);
-  }
-}
-
 function archiveLegacyFileSource(params: {
   sourcePath: string;
   label: string;
@@ -82,8 +73,8 @@ function archiveLegacyFileSource(params: {
         return { targetPath, action: "archived" };
       }
       // Legacy sources can exceed whole-file allocation limits; hash only collisions.
-      sourceSha256 ??= hashLegacyArchiveSource(params.sourcePath);
-      if (sourceSha256 === hashLegacyArchiveSource(targetPath)) {
+      sourceSha256 ??= sha256FileSync(params.sourcePath);
+      if (sourceSha256 === sha256FileSync(targetPath)) {
         fs.rmSync(params.sourcePath, { force: true });
         return { targetPath, action: "removed" };
       }
@@ -128,10 +119,10 @@ export function readLegacyInstalledPluginIndex(sourcePath: string): InstalledPlu
 function readLegacyTopLevelInstallRecords(
   parsed: unknown,
 ): Record<string, PluginInstallRecord> | null | undefined {
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+  const legacy = asNullableRecord(parsed);
+  if (!legacy) {
     return null;
   }
-  const legacy = parsed as Record<string, unknown>;
   const key = Object.hasOwn(legacy, "installRecords")
     ? "installRecords"
     : Object.hasOwn(legacy, "records")
@@ -143,24 +134,21 @@ function readLegacyTopLevelInstallRecords(
 function readLegacyEmbeddedInstallRecords(
   parsed: unknown,
 ): Record<string, PluginInstallRecord> | null {
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    return null;
-  }
-  const plugins = (parsed as { plugins?: unknown }).plugins;
+  const plugins = asNullableRecord(parsed)?.plugins;
   if (!Array.isArray(plugins)) {
     return null;
   }
   const records = createPluginInstallRecordMap<unknown>();
   let found = false;
-  for (const plugin of plugins) {
-    if (!plugin || typeof plugin !== "object" || Array.isArray(plugin)) {
+  for (const item of plugins) {
+    const plugin = asNullableRecord(item);
+    if (!plugin) {
       return null;
     }
     if (!Object.hasOwn(plugin, "installRecord")) {
       continue;
     }
-    const pluginId = (plugin as { pluginId?: unknown }).pluginId;
-    const installRecord = (plugin as { installRecord?: unknown }).installRecord;
+    const { pluginId, installRecord } = plugin;
     if (typeof pluginId !== "string" || !pluginId.trim()) {
       return null;
     }

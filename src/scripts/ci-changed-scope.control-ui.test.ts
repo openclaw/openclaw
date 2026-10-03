@@ -42,7 +42,6 @@ it.each([
   "packages/mermaid-renderer/src/renderer.ts",
   "packages/normalization-core/src/record-coerce.ts",
   "packages/normalization-core/package.json",
-  "tsconfig.json",
 ])("runs browser proof and all native asset builds for %s", (changedPath) => {
   expect(detectChangedScope([changedPath])).toMatchObject({
     runNode: true,
@@ -70,7 +69,6 @@ it.each([
 });
 
 it.each([
-  "package.json",
   ".github/workflows/ci.yml",
   "test/vitest/vitest.ui-paths.mjs",
   "test/vitest/vitest.ui-isolated-paths.mjs",
@@ -113,3 +111,24 @@ it.each([
 ])("keeps unrelated changes out of Chromium UI tests: %s", (changedPath) => {
   expect(detectChangedScope([changedPath]).runUiTests).toBe(false);
 });
+
+it.each([
+  "package.json",
+  "pnpm-lock.yaml",
+  "pnpm-workspace.yaml",
+  "tsconfig.json",
+  "test/vitest/vitest.shared.config.ts",
+])(
+  "keeps global Node inputs with Node owners instead of all platform families: %s",
+  (changedPath) => {
+    expect(detectChangedScope([changedPath])).toMatchObject({
+      runNode: true,
+      runWindows: false,
+      runUiTests: false,
+      runAndroid: false,
+      runMacos: false,
+      runIosBuild: false,
+    });
+    expect(shouldRunIosScreenshots([changedPath])).toBe(false);
+  },
+);

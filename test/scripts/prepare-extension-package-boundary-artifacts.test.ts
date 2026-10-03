@@ -2,11 +2,14 @@
 import { spawn } from "node:child_process";
 import { getEventListeners, once } from "node:events";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import * as managedChildProcess from "../../scripts/lib/managed-child-process.mts";
+import * as processMemory from "../../scripts/lib/process-memory.mts";
 import { createVitestResourceOwner } from "../../scripts/lib/vitest-resource-ownership.mts";
 import {
   createPrefixedOutputWriter,
@@ -581,6 +584,77 @@ child.once("message", () => process.exit(${exitCode}));
         "second-end",
       ]);
     }));
+
+  it.each([
+    { cpus: 8, memoryGiB: 24, local: undefined, expected: 2 },
+    { cpus: 4, memoryGiB: 24, local: undefined, expected: 1 },
+    { cpus: 8, memoryGiB: 16, local: undefined, expected: 1 },
+    { cpus: 8, memoryGiB: null, local: undefined, expected: 1 },
+    { cpus: 8, memoryGiB: 24, local: "1", expected: 1 },
+  ])(
+    "bounds CI declaration children to $expected ($cpus CPUs, $memoryGiB GiB, local=$local)",
+    async ({ cpus, memoryGiB, local, expected }) => {
+      const children = Array.from({ length: 4 }, () => {
+        let start!: () => void;
+        let finish!: (code: number) => void;
+        const started = new Promise<void>((resolve) => {
+          start = resolve;
+        });
+        const finished = new Promise<number>((resolve) => {
+          finish = resolve;
+        });
+        return { started, finished, start, finish };
+      });
+      const commands: string[] = [];
+      const capacityBytes = memoryGiB === null ? null : memoryGiB * 1024 ** 3;
+      vi.spyOn(os, "availableParallelism").mockReturnValue(cpus);
+      vi.spyOn(os, "totalmem").mockReturnValue(64 * 1024 ** 3);
+      vi.spyOn(processMemory, "readProcessMemoryCapacity").mockReturnValue({
+        capacityBytes,
+        limitBytes: capacityBytes,
+        availableBytes: capacityBytes,
+        unresolved: memoryGiB === null,
+        usageKnown: false,
+      });
+      vi.spyOn(managedChildProcess, "runManagedCommand").mockImplementation(({ args }) => {
+        const index = args?.[0];
+        if (index === undefined) {
+          throw new Error("Missing compiler fixture ID");
+        }
+        commands.push(index);
+        const child = children[Number(index)]!;
+        child.start();
+        return child.finished;
+      });
+      const count = process.platform === "linux" ? expected : 1;
+      const running = runNodeSteps(
+        children.map((_, index) => ({
+          label: String(index),
+          args: [String(index)],
+          timeoutMs: 5_000,
+        })),
+        { CI: "true", OPENCLAW_LOCAL_CHECK: local },
+      );
+      try {
+        for (let offset = 0; offset < children.length; offset += count) {
+          await children[offset]!.started;
+          expect(commands).toEqual(
+            Array.from({ length: offset + count }, (_, index) => String(index)),
+          );
+          for (const child of children.slice(offset, offset + count)) {
+            child.finish(0);
+          }
+        }
+        await running;
+      } finally {
+        for (const child of children) {
+          child.finish(0);
+        }
+        await running;
+        vi.restoreAllMocks();
+      }
+    },
+  );
 
   it("passes step-specific environment overrides to child steps", () =>
     fixture.run(async () => {

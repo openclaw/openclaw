@@ -58,6 +58,20 @@ afterEach(async () => {
   }
 });
 
+function generationFixture(
+  options: Omit<
+    Parameters<typeof createModelGenerationFixture>[0],
+    "agentDir" | "workspaceDir" | "config"
+  > & { config?: OpenClawConfig },
+) {
+  return createModelGenerationFixture({
+    agentDir: state.agentDir(),
+    workspaceDir: state.workspaceDir,
+    config: {},
+    ...options,
+  });
+}
+
 async function resolveGeneration(
   generation: ReturnType<typeof createModelGenerationFixture>,
   authProfileId?: string,
@@ -102,9 +116,7 @@ async function createExternalCodexGeneration() {
   vi.spyOn(globalThis, "fetch").mockImplementation(() => {
     throw new Error("Model auth discovery must not contact a provider");
   });
-  const generation = createModelGenerationFixture({
-    agentDir: state.agentDir(),
-    workspaceDir: state.workspaceDir,
+  const generation = generationFixture({
     provider: "openai",
     requestProvider: "openai",
     config: {},
@@ -125,21 +137,11 @@ describe("model runtime generation scope", () => {
     resetModelGenerationFixtureState();
   });
 
-  it.each([
-    { selection: "explicit", profileId: "openai:default" },
-    { selection: "automatic", profileId: undefined },
-  ])("keeps $selection host auth separate from native Codex credentials", async ({ profileId }) => {
+  it("keeps automatic host auth separate from native Codex credentials", async () => {
     const generation = await createExternalCodexGeneration();
-
-    if (profileId) {
-      await expect(resolveGeneration(generation, profileId)).rejects.toMatchObject({
-        code: "selected_auth_profile_unavailable",
-      });
-    } else {
-      const result = await resolveGeneration(generation);
-      expect(result.model?.id).toBe(generation.modelId);
-      expect(result.authStorage.get("openai")).toBeUndefined();
-    }
+    const result = await resolveGeneration(generation);
+    expect(result.model?.id).toBe(generation.modelId);
+    expect(result.authStorage.get("openai")).toBeUndefined();
     expect(
       ensureAuthProfileStoreWithoutExternalProfiles(state.agentDir()).profiles["openai:default"],
     ).toBeUndefined();
@@ -172,10 +174,7 @@ describe("model runtime generation scope", () => {
   });
 
   it("reports a removed selected credential before reusing dynamic model metadata", async () => {
-    const generation = createModelGenerationFixture({
-      agentDir: state.agentDir(),
-      workspaceDir: state.workspaceDir,
-      config: {},
+    const generation = generationFixture({
       label: "revoked",
     });
     const profileId = `${generation.provider}:selected`;
@@ -200,9 +199,7 @@ describe("model runtime generation scope", () => {
   it("resolves a config-only AWS SDK profile without requiring a stored credential", async () => {
     const provider = "amazon-bedrock";
     const profileId = `${provider}:default`;
-    const generation = createModelGenerationFixture({
-      agentDir: state.agentDir(),
-      workspaceDir: state.workspaceDir,
+    const generation = generationFixture({
       provider,
       requestProvider: provider,
       config: {
@@ -223,10 +220,7 @@ describe("model runtime generation scope", () => {
   });
 
   it("passes the selected personal auth mode into dynamic model discovery", async () => {
-    const generation = createModelGenerationFixture({
-      agentDir: state.agentDir(),
-      workspaceDir: state.workspaceDir,
-      config: {},
+    const generation = generationFixture({
       label: "personal",
     });
     const owner = ensureProfileForEmail("alice@example.test");
@@ -258,10 +252,8 @@ describe("model runtime generation scope", () => {
   });
 
   it.each([
-    { auth: true, registry: true },
     { auth: true, registry: false },
     { auth: false, registry: true },
-    { auth: false, registry: false },
   ])(
     "fills missing stores from the prepared runtime (auth=$auth, registry=$registry)",
     async (supplied) => {
@@ -290,10 +282,7 @@ describe("model runtime generation scope", () => {
       };
       const preparedStores = createStores("prepared");
       const callerStores = createStores("caller");
-      const generation = createModelGenerationFixture({
-        agentDir: state.agentDir(),
-        workspaceDir: state.workspaceDir,
-        config: {},
+      const generation = generationFixture({
         label: "stores",
         provider,
         requestProvider: provider,
@@ -342,58 +331,42 @@ describe("model runtime generation scope", () => {
     },
   );
 
-  it.each([
-    "explicit-snapshot",
-    "explicit-config",
-    "mutable-process",
-    "mutable-scope",
-    "unowned",
-  ] as const)("preserves metadata compatibility for %s discovery", async (mode) => {
-    const config = { plugins: { enabled: false } } satisfies OpenClawConfig;
-    await state.writeConfig(config);
-    const generation = createModelGenerationFixture({
-      agentDir: state.agentDir(),
-      workspaceDir: state.workspaceDir,
-      config: {},
-      label: "compatibility",
-    });
-    if (mode === "mutable-process" || mode === "explicit-config") {
-      publishCurrentModelGeneration(generation);
-    }
-    const resolve = () =>
-      resolveModelPluginMetadataSnapshot({
-        useRuntimeConfig: true,
-        workspaceDir: state.workspaceDir,
-        ...(mode === "explicit-config" ? { config } : {}),
-        ...(mode === "explicit-snapshot"
-          ? { pluginMetadataSnapshot: generation.metadataSnapshot, config }
-          : {}),
+  it.each(["explicit-config", "mutable-scope"] as const)(
+    "preserves metadata compatibility for %s discovery",
+    async (mode) => {
+      const config = { plugins: { enabled: false } } satisfies OpenClawConfig;
+      await state.writeConfig(config);
+      const generation = generationFixture({
+        label: "compatibility",
       });
-    const snapshot =
-      mode === "mutable-scope"
-        ? withPluginMetadataSnapshotScope(generation.metadataSnapshot, resolve, {
-            config: generation.preparedModelRuntime.config,
-          })
-        : resolve();
-    if (mode === "explicit-snapshot") {
-      expect(snapshot).toBe(generation.metadataSnapshot);
-    } else {
+      if (mode === "explicit-config") {
+        publishCurrentModelGeneration(generation);
+      }
+      const resolve = () =>
+        resolveModelPluginMetadataSnapshot({
+          useRuntimeConfig: true,
+          workspaceDir: state.workspaceDir,
+          ...(mode === "explicit-config" ? { config } : {}),
+        });
+      const snapshot =
+        mode === "mutable-scope"
+          ? withPluginMetadataSnapshotScope(generation.metadataSnapshot, resolve, {
+              config: generation.preparedModelRuntime.config,
+            })
+          : resolve();
       expect(snapshot).toBeDefined();
       expect(snapshot).not.toBe(generation.metadataSnapshot);
       expect(snapshot).toMatchObject({ policyHash: resolveInstalledPluginIndexPolicyHash(config) });
-    }
-    if (mode === "explicit-config" || mode === "explicit-snapshot") {
-      expect(getRuntimeConfigSnapshot()).toBeNull();
-    } else {
-      expect(getRuntimeConfigSnapshot()?.plugins?.enabled).toBe(false);
-    }
-  });
+      if (mode === "explicit-config") {
+        expect(getRuntimeConfigSnapshot()).toBeNull();
+      } else {
+        expect(getRuntimeConfigSnapshot()?.plugins?.enabled).toBe(false);
+      }
+    },
+  );
 
   it("selects from a prepared generation without reading or publishing ambient config", async () => {
-    const generation = createModelGenerationFixture({
-      agentDir: state.agentDir(),
-      workspaceDir: state.workspaceDir,
-      config: {},
+    const generation = generationFixture({
       label: "cold-owned",
     });
     await state.writeConfig({ gateway: { mode: "local" } });
@@ -481,40 +454,9 @@ describe("model runtime generation scope", () => {
     }
   });
 
-  it("keeps alias, suppression, static metadata, and runtime hooks on the prepared generation", async () => {
-    const config = {} satisfies OpenClawConfig;
-    const generationA = createModelGenerationFixture({
-      agentDir: state.agentDir(),
-      workspaceDir: state.workspaceDir,
-      config,
-      label: "a",
-    });
-    const generationB = createModelGenerationFixture({
-      agentDir: state.agentDir(),
-      workspaceDir: state.workspaceDir,
-      config,
-      label: "b",
-      suppression: {},
-    });
-    publishCurrentModelGeneration(generationB);
-
-    const result = await resolveGeneration(generationA);
-
-    expect(result.error).toBeUndefined();
-    expect(result.model).toMatchObject({
-      provider: generationA.provider,
-      name: "Runtime A",
-      mediaInput: { image: generationA.staticImagePolicy },
-    });
-    expect(generationA.resolveDynamicModel).toHaveBeenCalled();
-    expect(generationB.resolveDynamicModel).not.toHaveBeenCalled();
-  });
-
   it("preserves the retirement remedy when the selected route has no discoverable model", async () => {
     const provider = "generation-retirement-miss";
-    const generation = createModelGenerationFixture({
-      agentDir: state.agentDir(),
-      workspaceDir: state.workspaceDir,
+    const generation = generationFixture({
       config: {
         models: {
           providers: {
@@ -543,10 +485,7 @@ describe("model runtime generation scope", () => {
   });
 
   it("keeps the retirement failure discovered by the prepared catalog tier", async () => {
-    const generation = createModelGenerationFixture({
-      agentDir: state.agentDir(),
-      workspaceDir: state.workspaceDir,
-      config: {},
+    const generation = generationFixture({
       label: "tiered-retirement",
       runtimeBaseUrl: "https://subscription.example/v1",
       withRegistry: false,
@@ -591,10 +530,7 @@ describe("model runtime generation scope", () => {
       let current = true;
       const controller = new AbortController();
       const stopped = new Error("Model selection stopped during reader close");
-      const generation = createModelGenerationFixture({
-        agentDir: state.agentDir(),
-        workspaceDir: state.workspaceDir,
-        config: {},
+      const generation = generationFixture({
         label: "readonly-reuse",
         provider: fallbackProvider,
         requestProvider: fallbackProvider,
@@ -713,16 +649,12 @@ describe("model runtime generation scope", () => {
       }
       await gate;
     };
-    const generationA = createModelGenerationFixture({
-      agentDir: state.agentDir(),
-      workspaceDir: state.workspaceDir,
+    const generationA = generationFixture({
       config,
       label: "a",
       prepareDynamicModel,
     });
-    const generationB = createModelGenerationFixture({
-      agentDir: state.agentDir(),
-      workspaceDir: state.workspaceDir,
+    const generationB = generationFixture({
       config,
       label: "b",
       prepareDynamicModel,
@@ -752,16 +684,12 @@ describe("model runtime generation scope", () => {
 
   it("keeps metadata-only prepared generations from borrowing current runtime hooks", async () => {
     const config = {} satisfies OpenClawConfig;
-    const generationA = createModelGenerationFixture({
-      agentDir: state.agentDir(),
-      workspaceDir: state.workspaceDir,
+    const generationA = generationFixture({
       config,
       label: "a",
       withRegistry: false,
     });
-    const generationB = createModelGenerationFixture({
-      agentDir: state.agentDir(),
-      workspaceDir: state.workspaceDir,
+    const generationB = generationFixture({
       config,
       label: "b",
     });

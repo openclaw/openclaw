@@ -271,30 +271,57 @@ committed_path, snapshot_path = map(Path, sys.argv[1:])
 committed = json.loads(committed_path.read_text())
 snapshot = json.loads(snapshot_path.read_text())
 
-def pins(document):
+def fail(reason):
+    raise SystemExit(f"ERROR: Peekaboo snapshot resolution does not match the committed Package.resolved: {reason}")
+
+def pins(document, label):
     values = document.get("pins")
     if not isinstance(values, list):
-        raise SystemExit(1)
+        fail(f"{label} has no pins list")
     result = {}
     for pin in values:
         if not isinstance(pin, dict):
-            raise SystemExit(1)
+            fail(f"{label} has a malformed pin")
         identity = pin.get("identity")
         if not isinstance(identity, str) or not identity or identity in result:
-            raise SystemExit(1)
+            fail(f"{label} has a missing or duplicate pin identity {identity!r}")
         result[identity] = pin
     return result
 
-if committed.get("version") != snapshot.get("version"):
-    raise SystemExit(1)
+def describe(pin):
+    state = pin.get("state")
+    if not isinstance(state, dict):
+        return json.dumps(pin, sort_keys=True)
+    parts = [str(state[key]) for key in ("version", "branch", "revision") if key in state]
+    location = pin.get("location")
+    return " ".join(parts + ([f"from {location}"] if location else []))
 
-committed_pins = pins(committed)
-snapshot_pins = pins(snapshot)
-if "peekaboo" not in committed_pins or "peekaboo" in snapshot_pins:
-    raise SystemExit(1)
+if committed.get("version") != snapshot.get("version"):
+    fail(f"format version {committed.get('version')!r} became {snapshot.get('version')!r}")
+
+committed_pins = pins(committed, "committed lock")
+snapshot_pins = pins(snapshot, "snapshot lock")
+if "peekaboo" not in committed_pins:
+    fail("committed lock has no peekaboo pin")
+if "peekaboo" in snapshot_pins:
+    fail("snapshot lock still pins peekaboo instead of the edited snapshot")
 del committed_pins["peekaboo"]
 if committed_pins != snapshot_pins:
-    raise SystemExit(1)
+    changes = []
+    for identity in sorted(committed_pins.keys() | snapshot_pins.keys()):
+        before, after = committed_pins.get(identity), snapshot_pins.get(identity)
+        if before == after:
+            continue
+        if after is None:
+            changes.append(f"{identity}: {describe(before)} -> removed")
+        elif before is None:
+            changes.append(f"{identity}: added {describe(after)}")
+        else:
+            old, new = describe(before), describe(after)
+            if old == new:
+                old, new = (json.dumps(pin, sort_keys=True) for pin in (before, after))
+            changes.append(f"{identity}: {old} -> {new}")
+    fail("; ".join(changes))
 PY
 }
 
@@ -463,21 +490,32 @@ build_swift_architecture() {
   prepare_swift_package_root
   cd "$SWIFT_PACKAGE_ROOT"
   BUILD_PATH="$(build_path_for_arch "$arch")"
-  clear_peekaboo_edit "$BUILD_PATH"
   echo "📦 Resolving Swift packages [$arch]"
-  run_with_locked_swift_packages swift package --scratch-path "$BUILD_PATH" resolve
+  # The reused scratch path still records local packages under the previous run's
+  # package root. A full resolve (any resolve with Peekaboo edited, or a stale
+  # originHash) drops pins it cannot reach and floats them, e.g. swift-cmark via
+  # OpenClawKit. Lock-file mode rebinds local packages, checks out exactly the
+  # committed pins and returns an interrupted run's edited Peekaboo to its pin.
+  run_with_locked_swift_packages swift package --scratch-path "$BUILD_PATH" resolve --force-resolved-versions
   echo "🔒 Freezing authenticated Peekaboo sources in a read-only snapshot [$arch]"
   create_verified_peekaboo_snapshot "$BUILD_PATH" "$PEEKABOO_LOCKED_SOURCE_COMMIT"
   edit_peekaboo_from_snapshot "$BUILD_PATH"
   swift package --scratch-path "$BUILD_PATH" resolve
   verify_snapshot_swift_lock
   patch_swiftpm_resource_lookups "$BUILD_PATH"
+  # SwiftPM compiles each dependency for its own floored platform (KeyboardShortcuts: macOS 12),
+  # and below macOS 13 the weak Clock.sleep(for:) specialization gets a smaller async frame.
+  # The linker coalesces bodies and frame descriptors separately, so mixed targets can pair a
+  # 128-byte body with a 112-byte descriptor. Compile every module for the app's minimum.
+  local deployment_target
+  deployment_target="$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$ROOT_DIR/apps/macos/Sources/OpenClaw/Resources/Info.plist")"
+  local target_flags=(-Xswiftc -target -Xswiftc "$arch-apple-macosx$deployment_target")
   echo "🔨 Building $PRODUCT ($BUILD_CONFIG) [$arch]"
   verify_snapshot_swift_lock
-  swift build -c "$BUILD_CONFIG" --jobs "$SWIFT_BUILD_JOBS" --product "$PRODUCT" --build-path "$BUILD_PATH" --arch "$arch" -Xlinker -rpath -Xlinker @executable_path/../Frameworks
+  swift build -c "$BUILD_CONFIG" --jobs "$SWIFT_BUILD_JOBS" --product "$PRODUCT" --build-path "$BUILD_PATH" --arch "$arch" "${target_flags[@]}" -Xlinker -rpath -Xlinker @executable_path/../Frameworks
   verify_snapshot_swift_lock
   echo "🔨 Building openclaw-mac ($BUILD_CONFIG) [$arch]"
-  swift build -c "$BUILD_CONFIG" --jobs "$SWIFT_BUILD_JOBS" --product openclaw-mac --build-path "$BUILD_PATH" --arch "$arch" -Xlinker -rpath -Xlinker @executable_path/../Frameworks
+  swift build -c "$BUILD_CONFIG" --jobs "$SWIFT_BUILD_JOBS" --product openclaw-mac --build-path "$BUILD_PATH" --arch "$arch" "${target_flags[@]}" -Xlinker -rpath -Xlinker @executable_path/../Frameworks
   verify_snapshot_swift_lock
   arch_peekaboo_commit="$(compiled_peekaboo_commit "$PEEKABOO_SNAPSHOT_MOUNT" "$PEEKABOO_LOCKED_SOURCE_COMMIT")"
   printf '%s\n' "$arch_peekaboo_commit" > "$SWIFT_WORK_ROOT/peekaboo-commit"

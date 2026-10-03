@@ -1,4 +1,3 @@
-// Resolves media paths from reply payloads into runtime attachment metadata.
 import path from "node:path";
 import { sanitizeUntrustedFileName } from "@openclaw/fs-safe/advanced";
 import { mediaKindFromMime } from "@openclaw/media-core/constants";
@@ -64,11 +63,6 @@ function resolveReplyMediaFailureLabel(media: string, index: number): string {
   );
 }
 
-function resolveReplyMediaFailureKind(media: string): ReplyMediaFailure["kind"] {
-  const kind = mediaKindFromMime(mimeTypeFromFilePath(media));
-  return kind === "image" || kind === "audio" || kind === "video" ? kind : "document";
-}
-
 function resolveReplyMediaFailureCode(error: unknown): ReplyMediaFailure["code"] {
   let current: unknown = error;
   // Media loaders wrap filesystem/policy errors; bound cause traversal so malformed cycles fail safe.
@@ -92,9 +86,10 @@ function resolveReplyMediaFailureCode(error: unknown): ReplyMediaFailure["code"]
 
 function createReplyMediaFailure(media: string, index: number, error: unknown): ReplyMediaFailure {
   const mimeType = mimeTypeFromFilePath(media);
+  const kind = mediaKindFromMime(mimeType);
   return {
     code: resolveReplyMediaFailureCode(error),
-    kind: resolveReplyMediaFailureKind(media),
+    kind: kind === "image" || kind === "audio" || kind === "video" ? kind : "document",
     label: resolveReplyMediaFailureLabel(media, index),
     ...(mimeType ? { mimeType } : {}),
   };

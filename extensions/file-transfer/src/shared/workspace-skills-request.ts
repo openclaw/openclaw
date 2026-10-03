@@ -20,14 +20,17 @@ export function readWorkspaceSkillsRequest(input: unknown) {
     throw new Error("Skills request must be an object");
   }
   const paths: { path: string; kind: "read" | "write" }[] = [];
-  const add = (value: unknown, kind: "read" | "write" = "read") => {
+  const readPath = (value: unknown) => {
     if (typeof value !== "string" || !path.posix.isAbsolute(value) || value.includes("\0")) {
       throw new Error("Skill operation requires an absolute path");
     }
     if (containsParentRefSegment(value)) {
       throw new Error("Skill path contains parent segments");
     }
-    paths.push({ path: path.posix.resolve(value), kind });
+    return value;
+  };
+  const add = (value: unknown, kind: "read" | "write" = "read") => {
+    paths.push({ path: path.posix.resolve(readPath(value)), kind });
   };
   switch (params.operation) {
     case "discovery":
@@ -71,17 +74,7 @@ export function readWorkspaceSkillsRequest(input: unknown) {
       add(request.filePath);
       break;
     case "resolveResource": {
-      const selectionPath = request.path;
-      if (
-        typeof selectionPath !== "string" ||
-        !path.posix.isAbsolute(selectionPath) ||
-        selectionPath.includes("\0")
-      ) {
-        throw new Error("Skill operation requires an absolute path");
-      }
-      if (containsParentRefSegment(selectionPath)) {
-        throw new Error("Skill path contains parent segments");
-      }
+      const selectionPath = readPath(request.path);
       // The native explicit loader selects SKILL.md, regardless of the supplied basename.
       add(path.posix.join(path.posix.dirname(selectionPath), "SKILL.md"));
       break;

@@ -9,12 +9,22 @@ import type { UpdateRuns } from "../state/openclaw-state-db.generated.js";
 import { resolveRequiredHomeDir } from "./home-dir.js";
 import { normalizeUpdateFailureFacts } from "./update-failure-facts.js";
 import { UPDATE_RUN_TEXT_LIMIT } from "./update-run-limits.js";
+import type { UpdateRunRedactionFacts } from "./update-run-mutation.types.js";
 import type { UpdateRunRecord } from "./update-run-record.js";
 import { UpdateRunRecordSchema } from "./update-run-schema.js";
 
 const JSON_BYTES = 16 * 1024;
 const RETAINED_STEP_NAMES = [
   ...UPDATE_RUN_PHASES,
+  "candidate-admission",
+  // Keep named admission/lifecycle receipts, not the unbounded warning:* namespace.
+  "warning:update-admission-unsupported-target",
+  "warning:update-admission-fallback",
+  "warning:managed-service-membership",
+  "warning:finalize:plugins:deadline",
+  "global update",
+  "global update (omit optional)",
+  "candidate-doctor-lint",
   "notice:ack",
   "notice:activating",
   "notice:verifying",
@@ -35,6 +45,31 @@ export type UpdateRunLedgerOptions = OpenClawStateDatabaseOptions & {
   busyTimeoutMs?: number;
   redactPaths?: readonly string[];
 };
+
+/** Capture only path redaction facts; the state worker keeps its own authority environment. */
+export function captureUpdateRunRedactionFacts(
+  env: NodeJS.ProcessEnv = process.env,
+): UpdateRunRedactionFacts {
+  return {
+    effectiveHome: resolveRequiredHomeDir(env),
+    home: env.HOME,
+    userProfile: env.USERPROFILE,
+    configPath: env.OPENCLAW_CONFIG_PATH,
+  };
+}
+
+export function resolveUpdateRunCodecEnv(
+  stateEnv: NodeJS.ProcessEnv | undefined,
+  facts: UpdateRunRedactionFacts,
+): NodeJS.ProcessEnv {
+  return {
+    ...(stateEnv ?? process.env),
+    OPENCLAW_HOME: facts.effectiveHome,
+    HOME: facts.home,
+    USERPROFILE: facts.userProfile,
+    OPENCLAW_CONFIG_PATH: facts.configPath,
+  };
+}
 
 function mapJsonText(
   value: unknown,

@@ -72,6 +72,62 @@ function createUiFixture() {
 }
 
 describe("Crabbox PR-derived gate plan", () => {
+  it("resolves Vitest inventory helpers to their concrete consumers without executing them", () => {
+    const agents = "test/vitest/vitest.agents-paths.mjs";
+    const cli = "test/vitest/vitest.cli-process-paths.mjs";
+    const unowned = "test/vitest/vitest.unowned-paths.mjs";
+    const cwd = createTrackedFixture({
+      [agents]:
+        'import { cliProcessTestFiles } from "./vitest.cli-process-paths.mjs";\n' +
+        "export const agentFiles = cliProcessTestFiles;\n" +
+        'throw new Error("Candidate inventory must not execute while planning");\n',
+      [cli]:
+        "export const cliProcessTestFiles = [];\n" +
+        'throw new Error("Candidate inventory must not execute while planning");\n',
+      [unowned]: "export {};\n",
+      "test/vitest/vitest.unit-fast-paths.mjs":
+        'export { agentFiles } from "./vitest.agents-paths.mjs";\n',
+      "scripts/test-projects.test-support.mts":
+        'import "../test/vitest/vitest.agents-paths.mjs";\n' +
+        'import "../test/vitest/vitest.cli-process-paths.mjs";\n',
+      "test/scripts/test-projects.test.ts":
+        'import "../../scripts/test-projects.test-support.mts";\n',
+      "test/scripts/ci-node-test-plan.test.ts":
+        'import "../vitest/vitest.agents-paths.mjs";\n' +
+        'import "../vitest/vitest.cli-process-paths.mjs";\n',
+      "test/vitest-scoped-config.test.ts":
+        'import "./vitest/vitest.agents-paths.mjs";\n' +
+        'import "./vitest/vitest.cli-process-paths.mjs";\n',
+      "test/vitest-projects-config.test.ts": 'import "./vitest/vitest.agents-paths.mjs";\n',
+      "test/vitest-unit-fast-config.test.ts": 'import "./vitest/vitest.unit-fast-paths.mjs";\n',
+      "test/vitest/unrelated.test.ts": "export {};\n",
+      "src/unrelated.test.ts": "export {};\n",
+    });
+    const consumers = [
+      "test/scripts/ci-node-test-plan.test.ts",
+      "test/scripts/test-projects.test.ts",
+      "test/vitest-projects-config.test.ts",
+      "test/vitest-scoped-config.test.ts",
+      "test/vitest-unit-fast-config.test.ts",
+    ];
+
+    for (const changed of [[agents], [cli], [agents, cli]]) {
+      const plan = planFixture(cwd, changed);
+      expect(plan.targets).toEqual(consumers);
+      expect(buildVitestRunPlans(plan.targets, cwd)).toEqual([
+        {
+          config: "test/vitest/vitest.tooling.config.ts",
+          forwardedArgs: [],
+          includePatterns: consumers,
+          watchMode: false,
+        },
+      ]);
+    }
+    expect(() => planFixture(cwd, [agents, unowned])).toThrow(
+      /broad or unmatched target test\/vitest\/vitest\.unowned-paths\.mjs/u,
+    );
+  });
+
   it.each(["ui/src/presenter.ts", "ui/src/theme.css", "extensions/example/browser/view.ts"])(
     "materializes the whole UI owner and host consumers for %s",
     (changedPath) => {
@@ -337,7 +393,10 @@ describe("Crabbox PR-derived gate plan", () => {
         "scripts/test-projects.mts",
       ]);
       expect(buildVitestRunPlans(args.slice(3))).toMatchObject([
-        { includePatterns: plan.targets, forwardedArgs: ["--reporter=dot"] },
+        {
+          includePatterns: plan.targets,
+          forwardedArgs: ["--reporter=dot", "--coverage.enabled=false"],
+        },
       ]);
       expect(command).not.toContain("OPENCLAW_TEST_PROJECTS_PARALLEL");
       expect(command).not.toContain("--silent");

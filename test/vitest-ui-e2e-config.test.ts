@@ -111,6 +111,7 @@ const qaLabFiles = [
   "extensions/qa-lab/src/control-ui-openclaw-delegation.real-gateway.e2e.test.ts",
 ] as const;
 const realGatewayFiles = [
+  "activity-run-inspector.real-gateway",
   "agent-file-lifecycle.real-gateway",
   "chat-agent-avatar.real-gateway",
   "chat-collaborator-scroll.real-gateway",
@@ -278,8 +279,7 @@ function probeOwnership(
       root: ${JSON.stringify(repoRoot)}, config: ${JSON.stringify(configFile)},
       configLoader: "runner", watch: false, project: ${JSON.stringify(options.project ?? [])},
     });
-    const readEvents = () => fs.existsSync(${JSON.stringify(eventsFile)})
-      ? fs.readFileSync(${JSON.stringify(eventsFile)}, "utf8").trim().split("\\n").map(JSON.parse) : [];
+    const readEvents = () => fs.existsSync(${JSON.stringify(eventsFile)})      ? fs.readFileSync(${JSON.stringify(eventsFile)}, "utf8").trim().split("\\n").map(JSON.parse) : [];
     if (${JSON.stringify(options.failure)} === "provide") {
       const root = ctx.getRootProject();
       const provide = root.provide;
@@ -670,7 +670,7 @@ describe("Control UI E2E resource ownership", () => {
         },
       ]);
       const parallel = result.files.filter((entry) => entry.phase === 2);
-      expect(parallel).toHaveLength(26);
+      expect(parallel).toHaveLength(27);
       expect(parallel.every((entry) => entry.fileParallelism)).toBe(true);
       expect(parallel.every((entry) => entry.workers === result.rootWorkers)).toBe(true);
       for (const entry of parallel) {

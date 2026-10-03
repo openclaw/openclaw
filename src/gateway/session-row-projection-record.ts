@@ -11,6 +11,7 @@ import type {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveProjectedAgentRunModel } from "../infra/agent-run-registry.js";
 import { isIncognitoSessionKey, parseAgentSessionKey } from "../routing/session-key.js";
+import type { SessionRepositoryWorkspaceRecord } from "../state/session-repository-workspaces.types.js";
 import type { readSessionRowFacts } from "./server-methods/session-placement-read-projection.js";
 import { compareSessionEntryPairs } from "./session-list-order.js";
 import { readSessionListSelectionFacts } from "./session-list-target.js";
@@ -31,6 +32,7 @@ export type ProjectionOptions = {
 
 export type PreparedSessionRowDatabaseFacts = SessionRowDatabaseFacts & {
   acpMeta: SessionAcpMeta | null;
+  repositoryWorkspace: SessionRepositoryWorkspaceRecord | null;
 };
 
 export type SessionRowStore = {
@@ -111,7 +113,11 @@ export type Inputs = Parameters<typeof rowProjection.readSessionRowInputs>[0];
 export type SnapshotOptions = Pick<
   Inputs,
   "now" | "includeDerivedTitles" | "includeLastMessage" | "excludedChildKeys"
-> & { active?: boolean; subagentRuns?: SessionListRowContext["subagentRuns"] };
+> & {
+  active?: boolean;
+  subagentRuns?: SessionListRowContext["subagentRuns"];
+  preparedFacts?: ReturnType<NonNullable<Row["facts"]>["present"]>;
+};
 export type Lookup = { agentId: string; key: string; storePath?: string };
 type RowTarget = Pick<Row, "agentId" | "key" | "storeTarget">;
 export const identity = (row: RowTarget) =>
@@ -363,7 +369,7 @@ export function present(
     activeModel: active ? (live ?? undefined) : record.fallbackModel,
     excludedChildKeys: options.excludedChildKeys,
   });
-  Object.assign(row, record.facts?.present());
+  Object.assign(row, options.preparedFacts ?? record.facts?.present());
   // Undefined omits wire fields without converting each presented row to dictionary storage.
   if (!options.includeDerivedTitles) {
     row.derivedTitle = undefined;

@@ -29,6 +29,7 @@ import {
 } from "../agents/run-termination.js";
 import { resolveEffectiveAgentRuntime } from "../agents/thinking-runtime.js";
 import { callInProcessGatewayTool } from "../agents/tools/in-process-gateway.js";
+import type * as AgentWorkspaceModule from "../agents/workspace.js";
 import { ensureAgentWorkspace } from "../agents/workspace.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
 import { BASE_THINKING_LEVELS } from "../auto-reply/thinking.shared.js";
@@ -780,6 +781,45 @@ describe("agentCommand", () => {
         expect(resolveReusableWorkspaceSkillSnapshot).toHaveBeenCalledWith(
           expect.objectContaining({ watch }),
         );
+      });
+    },
+  );
+
+  it.each([undefined, "agent:main:dashboard:parent"])(
+    "seeds only the configured workspace when a project run is spawned by %s",
+    async (spawnedBy) => {
+      await withTempHome(async (home) => {
+        const project = path.join(home, "project");
+        const workspace = path.join(home, "openclaw");
+        fs.mkdirSync(project);
+        fs.writeFileSync(path.join(project, "AGENTS.md"), "# Project instructions\n");
+        mockConfig(home, path.join(home, "sessions.json"));
+        const actualWorkspace =
+          await vi.importActual<typeof AgentWorkspaceModule>("../agents/workspace.js");
+        vi.mocked(ensureAgentWorkspace).mockImplementationOnce((params) =>
+          actualWorkspace.ensureAgentWorkspace(params),
+        );
+
+        const prepared = await prepareAgentCommandExecution(
+          {
+            message: "inspect this project",
+            agentId: "main",
+            sessionId: "project-bootstrap",
+            workspaceDir: project,
+            cwd: project,
+            spawnedBy,
+          },
+          runtime,
+        );
+
+        expect(prepared.workspaceDir).toBe(project);
+        expect(fs.readdirSync(project)).toEqual(["AGENTS.md"]);
+        expect(fs.readFileSync(path.join(project, "AGENTS.md"), "utf8")).toBe(
+          "# Project instructions\n",
+        );
+        for (const name of ["AGENTS.md", "SOUL.md", "IDENTITY.md", "USER.md"]) {
+          expect(fs.existsSync(path.join(workspace, name)), name).toBe(true);
+        }
       });
     },
   );
@@ -1788,7 +1828,7 @@ describe("agentCommand", () => {
       });
       const runTurn = vi.fn();
       acpManagerTesting.setAcpSessionManagerForTests({
-        resolveSession: vi.fn(() => ({
+        resolveSessionAsync: vi.fn(async () => ({
           kind: "ready",
           sessionKey,
           meta: {

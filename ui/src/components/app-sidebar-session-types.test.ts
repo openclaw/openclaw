@@ -43,7 +43,9 @@ describe("sidebar session status preference", () => {
     expect(loadStoredSidebarSessionStatusFilter()).toBe("active");
   });
 
-  it("stores archived and all filters", () => {
+  it("stores snoozed, archived, and all filters", () => {
+    storeSidebarSessionStatusFilter("snoozed");
+    expect(loadStoredSidebarSessionStatusFilter()).toBe("snoozed");
     storeSidebarSessionStatusFilter("archived");
     expect(loadStoredSidebarSessionStatusFilter()).toBe("archived");
     storeSidebarSessionStatusFilter("all");

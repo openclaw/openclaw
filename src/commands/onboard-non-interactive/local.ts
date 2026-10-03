@@ -24,6 +24,7 @@ import {
 import {
   applyWizardMetadata,
   DEFAULT_WORKSPACE,
+  probeGatewayReachable,
   resolveLocalControlUiProbeLinks,
   waitForGatewayReachable,
 } from "../onboard-helpers.js";
@@ -343,12 +344,15 @@ export async function runNonInteractiveLocalSetup(params: {
       ? resolveGatewayStartupTiming()
       : { deadlineMs: 15_000 };
     const probeAuth = await resolveGatewayHealthProbeToken(nextConfig);
-    const probe = await waitForGatewayReachable({
+    const probeParams = {
       url: links.wsUrl,
       token: probeAuth.token,
       password: probeAuth.password,
-      ...startupTiming,
-    });
+    };
+    const probe =
+      opts.installDaemon === false
+        ? await probeGatewayReachable(probeParams)
+        : await waitForGatewayReachable({ ...probeParams, ...startupTiming });
     if (!probe.ok) {
       // Non-daemon setup attaches to an existing gateway, so collect expensive
       // daemon diagnostics only when this run was responsible for installing it.

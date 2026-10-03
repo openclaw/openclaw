@@ -18,9 +18,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.booleanOrNull
-import kotlinx.serialization.json.contentOrNull
 import java.util.UUID
 
 internal data class WearPendingReply(
@@ -1154,7 +1151,7 @@ internal class WearViewModel(
           ) {
             return@launch
           }
-          val loadResult = historyLoadTracker.finish(loadToken)
+          val liveStream = historyLoadTracker.finish(loadToken)
           val retiredSend = sendAttemptTracker.reconcileTerminalHistory(transcript)
           val loadedSession =
             currentSession.copy(
@@ -1199,10 +1196,10 @@ internal class WearViewModel(
                     mergeObservedMessageIntoSnapshot(transcript.messages, message)
                   } ?: transcript.messages,
                 streamText =
-                  loadResult.liveStream?.let { live ->
+                  liveStream?.let { live ->
                     reconcileWearStreamSnapshot(transcript.activeText, live.text, live.complete) ?: live.text
                   } ?: transcript.activeText,
-                activeRunId = loadResult.liveStream?.runId ?: transcript.activeRunId,
+                activeRunId = liveStream?.runId ?: transcript.activeRunId,
               ).reconcileReplyHistory(transcript)
           }
           pendingEvents.forEach(::handleEvent)
@@ -1589,30 +1586,26 @@ internal class WearViewModel(
     val selectedSessionKey = initialState.selectedSession?.key
     val routeGeneration = phoneRouteGeneration
     val requestGeneration = agentPulseRequestGeneration
+
+    fun isCurrent(state: WearUiState = mutableState.value): Boolean =
+      wearAgentPulseRouteIsCurrent(
+        requestedPhoneNodeId = phoneNodeId,
+        requestedAgentId = activeAgentId,
+        requestedSessionKey = selectedSessionKey,
+        requestedRouteGeneration = routeGeneration,
+        currentRouteGeneration = phoneRouteGeneration,
+        requestedGeneration = requestGeneration,
+        currentGeneration = agentPulseRequestGeneration,
+        pulseVisible = agentPulseVisible,
+        state = state,
+      )
     agentPulsePollJob =
       viewModelScope.launch {
         var showForcedLoading = forceLoading
         try {
-          while (
-            isCurrentAgentPulseRoute(
-              phoneNodeId = phoneNodeId,
-              activeAgentId = activeAgentId,
-              selectedSessionKey = selectedSessionKey,
-              routeGeneration = routeGeneration,
-              requestGeneration = requestGeneration,
-            )
-          ) {
+          while (isCurrent()) {
             mutableState.update { state ->
-              if (
-                isCurrentAgentPulseRoute(
-                  phoneNodeId,
-                  activeAgentId,
-                  selectedSessionKey,
-                  routeGeneration,
-                  requestGeneration,
-                  state,
-                )
-              ) {
+              if (isCurrent(state)) {
                 state.copy(
                   agentPulseLoading = showForcedLoading || state.agentPulse == null,
                   agentPulseFailure = null,
@@ -1631,13 +1624,7 @@ internal class WearViewModel(
                 )
               if (
                 pulse.phoneNodeId != phoneNodeId ||
-                !isCurrentAgentPulseRoute(
-                  phoneNodeId,
-                  activeAgentId,
-                  selectedSessionKey,
-                  routeGeneration,
-                  requestGeneration,
-                )
+                !isCurrent()
               ) {
                 return@launch
               }
@@ -1653,16 +1640,7 @@ internal class WearViewModel(
                 return@launch
               }
               mutableState.update { state ->
-                if (
-                  isCurrentAgentPulseRoute(
-                    phoneNodeId,
-                    activeAgentId,
-                    selectedSessionKey,
-                    routeGeneration,
-                    requestGeneration,
-                    state,
-                  )
-                ) {
+                if (isCurrent(state)) {
                   state.copy(
                     agentPulse = pulse,
                     agentPulseLoading = false,
@@ -1684,16 +1662,7 @@ internal class WearViewModel(
                 return@launch
               }
               mutableState.update { state ->
-                if (
-                  isCurrentAgentPulseRoute(
-                    phoneNodeId,
-                    activeAgentId,
-                    selectedSessionKey,
-                    routeGeneration,
-                    requestGeneration,
-                    state,
-                  )
-                ) {
+                if (isCurrent(state)) {
                   state.copy(
                     agentPulse = if (err.isConnectivityFailure()) null else state.agentPulse,
                     agentPulseLoading = false,
@@ -1712,26 +1681,6 @@ internal class WearViewModel(
         }
       }
   }
-
-  private fun isCurrentAgentPulseRoute(
-    phoneNodeId: String,
-    activeAgentId: String?,
-    selectedSessionKey: String?,
-    routeGeneration: Long,
-    requestGeneration: Long,
-    state: WearUiState = mutableState.value,
-  ): Boolean =
-    wearAgentPulseRouteIsCurrent(
-      requestedPhoneNodeId = phoneNodeId,
-      requestedAgentId = activeAgentId,
-      requestedSessionKey = selectedSessionKey,
-      requestedRouteGeneration = routeGeneration,
-      currentRouteGeneration = phoneRouteGeneration,
-      requestedGeneration = requestGeneration,
-      currentGeneration = agentPulseRequestGeneration,
-      pulseVisible = agentPulseVisible,
-      state = state,
-    )
 
   private fun invalidateAgentPulse(clearSnapshot: Boolean) {
     agentPulseRequestGeneration += 1
@@ -2100,11 +2049,7 @@ internal fun reconcileWearStreamSnapshot(
   if (snapshot.isNullOrEmpty()) return live
   val merged =
     if (liveComplete) {
-      when {
-        live.startsWith(snapshot) -> live
-        snapshot.startsWith(live) -> snapshot
-        else -> live
-      }
+      if (snapshot.startsWith(live)) snapshot else live
     } else {
       if (snapshot.startsWith(live)) {
         snapshot
@@ -2123,10 +2068,6 @@ internal fun reconcileWearStreamSnapshot(
 }
 
 private fun String.hasCodePointBoundary(index: Int): Boolean = index <= 0 || index >= length || !(this[index - 1].isHighSurrogate() && this[index].isLowSurrogate())
-
-internal data class WearHistoryLoadResult(
-  val liveStream: WearLiveStreamSnapshot?,
-)
 
 internal class WearHistoryLoadTracker {
   private var generation = 0L
@@ -2161,9 +2102,9 @@ internal class WearHistoryLoadTracker {
 
   fun finish(
     token: Long,
-  ): WearHistoryLoadResult {
-    if (!isCurrent(token)) return WearHistoryLoadResult(liveStream = null)
-    val result = WearHistoryLoadResult(liveStream)
+  ): WearLiveStreamSnapshot? {
+    if (!isCurrent(token)) return null
+    val result = liveStream
     sessionKey = null
     liveStream = null
     return result
@@ -2202,10 +2143,6 @@ internal fun wearConversationFailureForConnection(payload: JsonObject?): WearCon
 }
 
 private fun Throwable.isConnectivityFailure(): Boolean = this is WearProxyException && code in setOf("phone_unavailable", "unavailable", "timeout")
-
-private fun JsonObject?.string(name: String): String? = (this?.get(name) as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull
-
-private fun JsonObject?.boolean(name: String): Boolean? = (this?.get(name) as? JsonPrimitive)?.takeUnless { it.isString }?.booleanOrNull
 
 private const val MAX_TRANSCRIPT_MESSAGES = 20
 private const val MAX_STREAM_CODE_POINTS = 2_000

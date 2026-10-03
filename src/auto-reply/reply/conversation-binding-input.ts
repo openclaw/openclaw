@@ -1,4 +1,3 @@
-// Builds normalized conversation binding inputs from channel and routing facts.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizeConversationText } from "../../acp/conversation-id.js";
 import { resolveCommandConversationResolution } from "../../channels/conversation-resolution.js";

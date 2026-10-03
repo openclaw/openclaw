@@ -1,8 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { root } from "@openclaw/fs-safe/root";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import { isMissingPathError } from "../infra/errno.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { resolveNpmCommand } from "../infra/npm-command.js";
 import { readOpenClawManagedNpmRootOverrides } from "../infra/npm-managed-root.js";
 import { pathMayExistSync } from "../infra/path-existence.js";
 import { createSafeNpmInstallEnv } from "../infra/safe-package-install.js";
@@ -519,8 +522,7 @@ export async function applyPluginUninstallDirectoryRemoval(
   if (removal.cleanup?.kind === "npm" && npmCleanupManifestExists && usesLegacySharedNpmRoot) {
     assertPersistentApply();
     const uninstall = await runCommandWithTimeout(
-      [
-        "npm",
+      resolveNpmCommand([
         "uninstall",
         "--loglevel=error",
         "--legacy-peer-deps",
@@ -528,7 +530,7 @@ export async function applyPluginUninstallDirectoryRemoval(
         "--no-audit",
         "--no-fund",
         removal.cleanup.packageName,
-      ],
+      ]),
       {
         cwd: removal.cleanup.npmRoot,
         timeoutMs: 300_000,
@@ -586,15 +588,27 @@ export async function applyPluginUninstallDirectoryRemoval(
   }
   assertPersistentApply();
   try {
-    await fs.rm(removal.target, { recursive: true, force: true });
+    const target = path.resolve(removal.target);
+    const directory = await root(path.dirname(target));
+    await directory.remove(`.${path.sep}${path.basename(target)}`, {
+      recursive: true,
+      force: true,
+      // Uninstall must accept the full managed dependency tree.
+      maxEntries: Infinity,
+      maxDepth: Infinity,
+      assertBeforeMutation: assertPersistentApply,
+    });
   } catch (error) {
-    return {
-      directoryRemoved: false,
-      warnings: [
-        ...warnings,
-        `Failed to remove plugin directory ${removal.target}: ${formatErrorMessage(error)}`,
-      ],
-    };
+    rethrowAuthorityFailure?.();
+    if (!isMissingPathError(error)) {
+      return {
+        directoryRemoved: false,
+        warnings: [
+          ...warnings,
+          `Failed to remove plugin directory ${removal.target}: ${formatErrorMessage(error)}`,
+        ],
+      };
+    }
   }
   if (removal.cleanup?.kind === "git") {
     assertPersistentApply();

@@ -2,7 +2,6 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { runOutsideOpenClawStateLeaseScope } from "../state/openclaw-state-lease-exclusion.js";
 import {
   OpenClawStateLeaseError,
   withOpenClawStateLease,
@@ -43,11 +42,24 @@ type PluginLifecycleLeaseOptions = Pick<
   signal?: AbortSignal;
   leaseMs?: number;
   waitMs?: number;
+  /** Opt in only when protected mutations cannot outlive this process. */
+  processBound?: boolean;
   /** Additional live caller authority; never replaces the plugin lease. */
   assertCurrent?: () => void;
 };
 
 const activePluginLifecycleLease = new AsyncLocalStorage<ActivePluginLifecycleLease>();
+const lifecycleLeaseDemand = new Map<
+  string,
+  { acquisitions: number; holders: number; waiters: number }
+>();
+
+/** Lease holders use this to stop waiting on work that may be queued behind their lease. */
+export function hasPluginLifecycleLeaseDemand(): boolean {
+  return [...lifecycleLeaseDemand.values()].some(
+    ({ holders, waiters }) => holders > 0 && waiters > 0,
+  );
+}
 
 export function hasPluginLifecycleLease(): boolean {
   return activePluginLifecycleLease.getStore() !== undefined;
@@ -55,7 +67,7 @@ export function hasPluginLifecycleLease(): boolean {
 
 /** Detached observers must acquire ownership rather than borrow their writer's lease. */
 export function runOutsidePluginLifecycleLease<T>(run: () => T): T {
-  return activePluginLifecycleLease.exit(() => runOutsideOpenClawStateLeaseScope(run));
+  return activePluginLifecycleLease.exit(run);
 }
 
 function resolveLifecycleLeaseEnv(env: NodeJS.ProcessEnv | undefined): NodeJS.ProcessEnv {
@@ -97,6 +109,15 @@ export async function withPluginLifecycleLease<T>(
         ? lease
         : {
             ...lease,
+            ...(lease.renew
+              ? {
+                  renew: () =>
+                    assertAuthority(() => {
+                      assertCurrent?.();
+                      lease.renew?.();
+                    }),
+                }
+              : {}),
             assertCurrent: () =>
               assertAuthority(() => {
                 assertCurrent?.();
@@ -150,6 +171,23 @@ export async function withPluginLifecycleLease<T>(
     return await runWithLease(active.lease);
   }
 
+  const waitMs = options.waitMs ?? DEFAULT_PLUGIN_LIFECYCLE_WAIT_MS;
+  const demand = lifecycleLeaseDemand.get(databasePath) ?? {
+    acquisitions: 0,
+    holders: 0,
+    waiters: 0,
+  };
+  lifecycleLeaseDemand.set(databasePath, demand);
+  demand.acquisitions += 1;
+  let waiting = waitMs > 0;
+  let acquired = false;
+  demand.waiters += Number(waiting);
+  const stopWaiting = () => {
+    if (waiting) {
+      waiting = false;
+      demand.waiters -= 1;
+    }
+  };
   return await withOpenClawStateLease(
     {
       ...PLUGIN_LIFECYCLE_LEASE_IDENTITY,
@@ -163,17 +201,22 @@ export async function withPluginLifecycleLease<T>(
         },
       },
       leaseMs: options.leaseMs ?? DEFAULT_PLUGIN_LIFECYCLE_LEASE_MS,
-      waitMs: options.waitMs ?? DEFAULT_PLUGIN_LIFECYCLE_WAIT_MS,
+      waitMs,
+      processBound: options.processBound,
       ...(options.signal ? { signal: options.signal } : {}),
       leaseLabel: "plugin lifecycle lease",
       operationLabel: "plugins.lifecycle.lease",
     },
     async (lease) => {
+      stopWaiting();
+      acquired = true;
+      demand.holders += 1;
       const pluginLease: PluginLifecycleLeaseContext = {
         databasePath,
         stateLease: lease,
         assertCurrent: () => assertAuthority(() => lease.signal.throwIfAborted()),
         signal: lease.signal,
+        ...(lease.renew ? { renew: () => lease.renew?.() } : {}),
         assertOwned: () => lease.assertOwned(),
         assertOwnedInTransaction: (database) => lease.assertOwnedInTransaction(database),
       };
@@ -205,5 +248,12 @@ export async function withPluginLifecycleLease<T>(
       }
       return result;
     },
-  );
+  ).finally(() => {
+    stopWaiting();
+    demand.holders -= Number(acquired);
+    demand.acquisitions -= 1;
+    if (demand.acquisitions === 0) {
+      lifecycleLeaseDemand.delete(databasePath);
+    }
+  });
 }

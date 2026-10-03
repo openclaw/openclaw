@@ -45,10 +45,9 @@ function targetKey(target: SessionMoveTarget | null): string {
       return "gateway";
     case "profile":
       return `profile:${target.profileId}`;
-    case "device":
+    default:
       return `device:${target.deviceId}`;
   }
-  throw new Error("Unknown session placement move target");
 }
 
 export function showSessionPlacementTargetDialog(

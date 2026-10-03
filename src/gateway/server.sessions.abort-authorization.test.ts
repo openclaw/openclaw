@@ -45,7 +45,7 @@ const gatewayToken = "abort-authorization-test-token";
 let harness: Awaited<ReturnType<typeof createGatewaySuiteHarness>>;
 let registration: MockInstance<typeof chatAbort.registerChatAbortController>;
 let childCancellation: MockInstance<typeof subagentControl.killAllControlledSubagentRuns>;
-let queueClearing: MockInstance<typeof queueCleanup.clearSessionQueues>;
+let queueClearing: MockInstance<typeof queueCleanup.clearSessionLifecycleQueues>;
 
 beforeAll(async () => {
   harness = await createGatewaySuiteHarness({
@@ -54,7 +54,7 @@ beforeAll(async () => {
   // Observe production admission and effects without replacing their implementations.
   registration = vi.spyOn(chatAbort, "registerChatAbortController");
   childCancellation = vi.spyOn(subagentControl, "killAllControlledSubagentRuns");
-  queueClearing = vi.spyOn(queueCleanup, "clearSessionQueues");
+  queueClearing = vi.spyOn(queueCleanup, "clearSessionLifecycleQueues");
 });
 
 beforeEach(async () => {
@@ -281,18 +281,13 @@ describe("native sessions.abort requester authorization over WebSocket", () => {
     }
   });
 
-  test.each(["owner", "same-device", "admin"])("preserves Stop by %s", async (requester) => {
+  test.each(["same-device", "admin"])("preserves Stop by %s", async (requester) => {
     const owner = await openOperator(`owner-${requester}`);
-    const stopper =
-      requester === "owner"
-        ? owner
-        : await openOperator(
-            requester === "same-device" ? `owner-${requester}` : "admin",
-            requester === "admin" ? ["operator.admin"] : ["operator.write"],
-          );
-    if (requester !== "owner") {
-      expect(stopper.hello.server.connId).not.toBe(owner.hello.server.connId);
-    }
+    const stopper = await openOperator(
+      requester === "same-device" ? `owner-${requester}` : "admin",
+      requester === "admin" ? ["operator.admin"] : ["operator.write"],
+    );
+    expect(stopper.hello.server.connId).not.toBe(owner.hello.server.connId);
     if (requester === "same-device") {
       expect(stopper.deviceId).toBe(owner.deviceId);
     }

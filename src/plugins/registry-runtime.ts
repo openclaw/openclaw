@@ -379,6 +379,12 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
                 return await gateway.request(method, params, options);
               });
             },
+            readSessionFacts: (params) =>
+              runWithPluginScope(async () => {
+                const result = await gateway.readSessionFacts(params);
+                assertRuntimeCurrent();
+                return result;
+              }),
           } satisfies PluginRuntime["gateway"];
         }
         if (prop === "hooks") {
@@ -666,7 +672,7 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
 
   return {
     resolvePluginRuntime,
-    resolveRegisteredChannelRuntime: (record: PluginRecord) => resolveRecordChannelRuntime(record),
+    resolveRegisteredChannelRuntime: resolveRecordChannelRuntime,
     revokePluginRuntimeRecord: (pluginId: string, record: PluginRecord) => {
       revokePluginRecord(registry, record);
       registeredAdmissionOwnerByRecord.get(record)?.dispose();

@@ -54,7 +54,6 @@ public final class TalkSystemSpeechSynthesizer: NSObject {
         let watchdogTimeout = Self.watchdogTimeoutSeconds(
             text: trimmed,
             language: language ?? utterance.voice?.language)
-        self.watchdog?.cancel()
         self.watchdog = Task { @MainActor [weak self] in
             guard let self else { return }
             try? await Task.sleep(nanoseconds: UInt64(watchdogTimeout * 1_000_000_000))
@@ -136,11 +135,7 @@ public final class TalkSystemSpeechSynthesizer: NSObject {
         self.didStartCallback = nil
         let cont = self.speakContinuation
         self.speakContinuation = nil
-        if let error {
-            cont?.resume(throwing: error)
-        } else {
-            cont?.resume(returning: ())
-        }
+        if let cont { ThrowingContinuationSupport.resumeVoid(cont, error: error) }
     }
 }
 

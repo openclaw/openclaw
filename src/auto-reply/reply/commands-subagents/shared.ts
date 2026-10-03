@@ -1,4 +1,3 @@
-// Shared helpers for subagent command actions and target resolution.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -11,11 +10,8 @@ import {
 } from "../../../agents/tools/sessions-helpers.js";
 import { isNativeCommandTurn, resolveCommandTurnContext } from "../../command-turn-context.js";
 import { commandReply } from "../command-gates.js";
-import { extractSubagentMessageText, type ChatMessage } from "../commands-subagents-text.js";
 import type { CommandHandler, CommandHandlerResult } from "../commands-types.js";
 import { formatRunLabel } from "../subagents-utils.js";
-
-export type { ChatMessage } from "../commands-subagents-text.js";
 
 export const RECENT_WINDOW_MINUTES = 30;
 
@@ -120,17 +116,4 @@ export function buildSubagentsHelp() {
     "",
     "Ids: use the list index (#), runId/session prefix, label, or full session key.",
   ].join("\n");
-}
-
-export function formatLogLines(messages: ChatMessage[]) {
-  const lines: string[] = [];
-  for (const msg of messages) {
-    const extracted = extractSubagentMessageText(msg);
-    if (!extracted) {
-      continue;
-    }
-    const label = extracted.role === "assistant" ? "Assistant" : "User";
-    lines.push(`${label}: ${extracted.text}`);
-  }
-  return lines;
 }

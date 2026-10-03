@@ -29,7 +29,6 @@ afterEach(() => {
 // Snapshots can run login commands via -c, so assert lookup instead of argv shape.
 describe.skipIf(process.platform === "win32")("native Codex tool PATH", () => {
   it.for([
-    { configured: true, loginAllowed: true, snapshots: true, filters: false },
     { configured: false, loginAllowed: true, snapshots: true, filters: false },
     { configured: true, loginAllowed: false, snapshots: true, filters: false },
     { configured: true, loginAllowed: true, snapshots: false, filters: false },

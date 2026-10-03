@@ -167,18 +167,17 @@ function buildFilesystemConfig(params: {
     ...resolveProtectedSkillPolicyPathSpecs(params.workspace),
   ];
 
-  if (params.baseline.filesystem.restrictToProjectDir) {
-    const projectDirPath = params.context.projectDir;
-    if (params.workspace.workspaceAccess === "rw") {
-      readwritePathSpecs.push(requiredFilesystemPath(projectDirPath));
-    } else {
-      readonlyPathSpecs.push(requiredFilesystemPath(projectDirPath));
-    }
-    readwritePathSpecs.push(requiredFilesystemPath(path.resolve(params.sandboxTempDir)));
-    readwritePathSpecs.push(
-      ...params.baseline.configuredPaths.readwritePaths.map(createConfiguredFilesystemPath),
-    );
+  // Policy admission accepts only restrictToProjectDir=true.
+  const projectDirPath = params.context.projectDir;
+  if (params.workspace.workspaceAccess === "rw") {
+    readwritePathSpecs.push(requiredFilesystemPath(projectDirPath));
+  } else {
+    readonlyPathSpecs.push(requiredFilesystemPath(projectDirPath));
   }
+  readwritePathSpecs.push(requiredFilesystemPath(path.resolve(params.sandboxTempDir)));
+  readwritePathSpecs.push(
+    ...params.baseline.configuredPaths.readwritePaths.map(createConfiguredFilesystemPath),
+  );
 
   const protectedSkillPolicyPaths = resolveMxcProtectedSkillPolicyPaths(params.workspace);
   // ProcessContainer writable-parent grants override nested read-only grants.

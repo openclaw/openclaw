@@ -2,10 +2,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanupSessionResources } from "../session-resources.js";
 import {
   claimOpenAIResponsesHttpContinuation,
+  recordResponsesContinuationState,
   resolveResponsesContinuationRequest,
   type ResponsesContinuationRequest,
   type ResponsesContinuationState,
 } from "./openai-responses-continuation.js";
+import { normalizeOpenAIResponsesFunctionCallId } from "./openai-responses-tool-call-id-shape.js";
 
 const firstUser = {
   type: "message",
@@ -354,6 +356,642 @@ describe("OpenAI Responses continuation", () => {
     expect({ state, request }).toEqual(before);
   });
 
+  it("continues a tool-calling round despite replay re-sanitizing call_id, and restores the raw call_id on the wire delta", () => {
+    // Real shape: the cached lastResponseItems is the raw provider response
+    // (bare call_id), but replaying history for the next round runs it
+    // through normalizeOpenAIResponsesToolCallIds (embedded-agent-helpers)
+    // for provider-format compatibility -- a real, necessary id reshape, not
+    // a change to what the model actually said. Before this fixed, that
+    // reshape made every multi-round tool-calling turn permanently
+    // ineligible for continuation (history_changed on every attempt,
+    // confirmed live against a real gateway).
+    const rawCallId = "chatcmpl-tool-20cf1f2fabdd434da069764b4dca72eb";
+    const toolCall = {
+      type: "function_call",
+      id: "fc_1",
+      status: "completed",
+      call_id: rawCallId,
+      name: "exec",
+      arguments: '{"command":"echo hi"}',
+    };
+    const state: ResponsesContinuationState = {
+      lastRequest: { model: "gpt-5.6-luna", store: true, input: [firstUser] as never },
+      lastResponseId: "resp_1",
+      lastResponseItems: [{ type: "reasoning" }, toolCall] as never,
+    };
+    // The exact reshape normalizeOpenAIResponsesToolCallIds would have
+    // produced for the paired "rawCallId|fc_1" (verified against
+    // normalizeOpenAIResponsesFunctionCallId directly, then split back to
+    // just the call_id half the way the request builder splits it onto the
+    // wire) -- not a hand-approximated shape, so the restore-to-raw path
+    // under test actually has to recognize it via the real transform, not a
+    // lucky string match.
+    const reshapedCallId = "call_chatcmpl-tool-20cf1f2fabdd434da069764b4dca72eb_f_3b92d47627";
+    const replayedToolCall = {
+      ...toolCall,
+      id: "fc_1",
+      call_id: reshapedCallId,
+    };
+    const toolResult = {
+      type: "function_call_output",
+      call_id: reshapedCallId,
+      output: "hi\n",
+    };
+    const nextRoundRequest: ResponsesContinuationRequest = {
+      model: "gpt-5.6-luna",
+      store: true,
+      input: [firstUser, { type: "reasoning" }, replayedToolCall, toolResult] as never,
+    };
+
+    const result = resolveResponsesContinuationRequest(state, nextRoundRequest);
+
+    // The wire delta must carry the RAW call_id the provider actually
+    // returned, not the client's replay-local reshape of it -- a server
+    // that reconstructs full history from its own cached copy of the raw
+    // response (e.g. a proxy virtualizing previous_response_id
+    // server-side) has no way to know about the client's reshape, and
+    // pairs function_call_output.call_id against the function_call it
+    // cached verbatim.
+    expect(result).toMatchObject({
+      continuationStatus: "continued",
+      request: {
+        previous_response_id: "resp_1",
+        input: [{ type: "function_call_output", call_id: rawCallId, output: "hi\n" }],
+      },
+    });
+  });
+
+  it("continues a tool-calling round when replay preserves the raw non-canonical call_id/id pair unchanged", () => {
+    // Real shape for a direct Responses transport caller that never runs
+    // history through the agent-level normalizer: transcript-transform.ts's
+    // transformMessages preserves same-model tool-call ids verbatim on its
+    // same-model branch, so this replayed function_call/function_call_output
+    // pair carries the exact same raw, non-canonical call_id and item id the
+    // provider originally returned -- not the agent-reshaped composite the
+    // sibling test above covers. Before this fixed, the cached side
+    // canonicalized the call_id/id *pair*, while the replayed side
+    // canonicalized only the bare call_id, so this exact case -- nothing
+    // about the call actually changed -- permanently forced history_changed
+    // and resent the whole conversation every round.
+    const rawCallId = "functions.gateway:0";
+    const rawItemId = "fc_tmp_kegospxl46";
+    const toolCall = {
+      type: "function_call",
+      id: rawItemId,
+      status: "completed",
+      call_id: rawCallId,
+      name: "exec",
+      arguments: '{"command":"echo hi"}',
+    };
+    const state: ResponsesContinuationState = {
+      lastRequest: { model: "gpt-5.6-luna", store: true, input: [firstUser] as never },
+      lastResponseId: "resp_1",
+      lastResponseItems: [{ type: "reasoning" }, toolCall] as never,
+    };
+    // Replayed completely unchanged -- same raw call_id, same raw id, no
+    // agent-level reshape applied at all.
+    const replayedToolCall = { ...toolCall };
+    const toolResult = {
+      type: "function_call_output",
+      call_id: rawCallId,
+      output: "hi\n",
+    };
+    const nextRoundRequest: ResponsesContinuationRequest = {
+      model: "gpt-5.6-luna",
+      store: true,
+      input: [firstUser, { type: "reasoning" }, replayedToolCall, toolResult] as never,
+    };
+
+    const result = resolveResponsesContinuationRequest(state, nextRoundRequest);
+
+    expect(result).toMatchObject({
+      continuationStatus: "continued",
+      request: {
+        previous_response_id: "resp_1",
+        input: [{ type: "function_call_output", call_id: rawCallId, output: "hi\n" }],
+      },
+    });
+  });
+
+  it("continues a tool-calling round when replay omits the item id entirely (replayResponsesItemIds:false)", () => {
+    // A connection configured with replayResponsesItemIds:false (e.g. the
+    // ChatGPT-Responses provider) omits function_call.id from the wire
+    // while preserving its raw call_id verbatim -- openai-responses-replay-
+    // messages-internal.ts's toolCall handling literally never puts `id` on
+    // the item in that case. The cached side still has the full raw
+    // call_id/id pair (from the provider's own response), so pairing it
+    // unconditionally (as the sibling "unchanged pair" test above requires)
+    // would hash a different input than this replay's un-pairable bare
+    // call_id ever could, permanently forcing history_changed for a call
+    // that didn't actually change -- a real regression the pairing fix
+    // above introduced for this equally real replay shape.
+    const rawCallId = "functions.gateway:0";
+    const rawItemId = "fc_tmp_kegospxl46";
+    const toolCall = {
+      type: "function_call",
+      id: rawItemId,
+      status: "completed",
+      call_id: rawCallId,
+      name: "exec",
+      arguments: '{"command":"echo hi"}',
+    };
+    const state: ResponsesContinuationState = {
+      lastRequest: { model: "gpt-5.6-luna", store: true, input: [firstUser] as never },
+      lastResponseId: "resp_1",
+      lastResponseItems: [{ type: "reasoning" }, toolCall] as never,
+    };
+    // Replayed with the same raw call_id but no `id` field at all -- exactly
+    // what a replayResponsesItemIds:false connection sends. Everything else
+    // about the item is otherwise unchanged from the cached one.
+    const { id: _unusedItemId, ...replayedToolCall } = toolCall;
+    const toolResult = {
+      type: "function_call_output",
+      call_id: rawCallId,
+      output: "hi\n",
+    };
+    const nextRoundRequest: ResponsesContinuationRequest = {
+      model: "gpt-5.6-luna",
+      store: true,
+      input: [firstUser, { type: "reasoning" }, replayedToolCall, toolResult] as never,
+    };
+
+    const result = resolveResponsesContinuationRequest(state, nextRoundRequest);
+
+    expect(result).toMatchObject({
+      continuationStatus: "continued",
+      request: {
+        previous_response_id: "resp_1",
+        input: [{ type: "function_call_output", call_id: rawCallId, output: "hi\n" }],
+      },
+    });
+  });
+
+  it("restores the raw call id when replay omits the item id and reshapes the bare call id", () => {
+    const rawCallId = "functions.gateway:0";
+    const rawItemId = "fc_tmp_kegospxl46";
+    const bareReshapedCallId = normalizeOpenAIResponsesFunctionCallId(rawCallId);
+    const toolCall = {
+      type: "function_call",
+      id: rawItemId,
+      status: "completed",
+      call_id: rawCallId,
+      name: "exec",
+      arguments: '{"command":"echo hi"}',
+    };
+    const state: ResponsesContinuationState = {
+      lastRequest: { model: "gpt-5.6-luna", store: true, input: [firstUser] as never },
+      lastResponseId: "resp_1",
+      lastResponseItems: [{ type: "reasoning" }, toolCall] as never,
+    };
+    const { id: _itemId, ...replayedToolCall } = toolCall;
+    replayedToolCall.call_id = bareReshapedCallId;
+    const request: ResponsesContinuationRequest = {
+      model: "gpt-5.6-luna",
+      store: true,
+      input: [
+        firstUser,
+        { type: "reasoning" },
+        replayedToolCall,
+        { type: "function_call_output", call_id: bareReshapedCallId, output: "hi\n" },
+      ] as never,
+    };
+
+    const result = resolveResponsesContinuationRequest(state, request);
+
+    expect(result).toMatchObject({
+      continuationStatus: "continued",
+      request: {
+        previous_response_id: "resp_1",
+        input: [{ type: "function_call_output", call_id: rawCallId, output: "hi\n" }],
+      },
+    });
+  });
+
+  it.each([
+    ["id", "fc_output_changed"],
+    ["status", "in_progress"],
+  ] as const)("rejects continuation when prior function_call_output %s changes", (field, value) => {
+    const originalOutput = {
+      type: "function_call_output",
+      id: "fc_output_1",
+      call_id: "call_tool_1",
+      output: "recorded",
+      status: "completed",
+    };
+    const state = continuationState();
+    state.lastRequest.input = [firstUser, originalOutput] as never;
+    const next = nextRequest();
+    next.input = [
+      firstUser,
+      { ...originalOutput, [field]: value },
+      ...(next.input ?? []).slice(1),
+    ] as never;
+
+    expect(resolveResponsesContinuationRequest(state, next).continuationStatus).toBe(
+      "history_changed",
+    );
+  });
+
+  it("matches a replayed output call id without pairing it to the output item id", () => {
+    const rawCallId = "functions.gateway:0";
+    const output = {
+      type: "function_call_output",
+      id: "fc_output_1",
+      call_id: rawCallId,
+      output: "recorded",
+      status: "completed",
+    };
+    const state = continuationState();
+    state.lastRequest.input = [firstUser, output] as never;
+    const request = nextRequest();
+    request.input = [
+      firstUser,
+      { ...output, call_id: normalizeOpenAIResponsesFunctionCallId(rawCallId) },
+      ...(request.input ?? []).slice(1),
+    ] as never;
+
+    expect(resolveResponsesContinuationRequest(state, request).continuationStatus).toBe(
+      "continued",
+    );
+  });
+
+  it("does not tolerate an unrelated function-call id change as the known replay reshape", () => {
+    // A changed call_id that ISN'T the client's own reshape of the cached raw
+    // id (e.g. the model made a genuinely different tool call, or a
+    // corrupted replay) must still be treated as real history drift. The
+    // resolver accepts only an ID owned by the same cached call occurrence.
+    const toolCall = {
+      type: "function_call",
+      id: "fc_1",
+      status: "completed",
+      call_id: "call_original_abc",
+      name: "exec",
+      arguments: '{"command":"echo hi"}',
+    };
+    const state: ResponsesContinuationState = {
+      lastRequest: { model: "gpt-5.6-luna", store: true, input: [firstUser] as never },
+      lastResponseId: "resp_1",
+      lastResponseItems: [toolCall] as never,
+    };
+    const replayedToolCall = { ...toolCall, call_id: "call_unrelated_xyz" };
+    const toolResult = {
+      type: "function_call_output",
+      call_id: "call_unrelated_xyz",
+      output: "hi\n",
+    };
+    const nextRoundRequest: ResponsesContinuationRequest = {
+      model: "gpt-5.6-luna",
+      store: true,
+      input: [firstUser, replayedToolCall, toolResult] as never,
+    };
+
+    expect(resolveResponsesContinuationRequest(state, nextRoundRequest).continuationStatus).toBe(
+      "history_changed",
+    );
+  });
+
+  it("rejects distinct raw call ids that collapse to the same replay shape", () => {
+    const cachedCall = {
+      type: "function_call",
+      id: "fc_1",
+      status: "completed",
+      call_id: " x",
+      name: "exec",
+      arguments: "{}",
+    };
+    const state: ResponsesContinuationState = {
+      lastRequest: { model: "gpt-5.6-luna", store: true, input: [firstUser] as never },
+      lastResponseId: "resp_1",
+      lastResponseItems: [cachedCall] as never,
+    };
+    const request: ResponsesContinuationRequest = {
+      model: "gpt-5.6-luna",
+      store: true,
+      input: [
+        firstUser,
+        { ...cachedCall, call_id: "x" },
+        { type: "function_call_output", call_id: "x", output: "recorded" },
+      ] as never,
+    };
+
+    expect(resolveResponsesContinuationRequest(state, request)).toEqual({
+      continuationStatus: "history_changed",
+      request,
+    });
+  });
+
+  it("rejects a changed earlier tool result when IDs share a replay shape", () => {
+    const canonicalCallId = normalizeOpenAIResponsesFunctionCallId(" x");
+    const firstCall = {
+      type: "function_call",
+      call_id: canonicalCallId,
+      name: "first",
+      arguments: "{}",
+    };
+    const secondCall = {
+      type: "function_call",
+      call_id: " x",
+      name: "second",
+      arguments: "{}",
+    };
+    const originalOutput = {
+      type: "function_call_output",
+      call_id: canonicalCallId,
+      output: "recorded",
+    };
+    const state: ResponsesContinuationState = {
+      lastRequest: {
+        model: "gpt-5.6-luna",
+        store: true,
+        input: [firstUser, firstCall, secondCall, originalOutput] as never,
+      },
+      lastResponseId: "resp_1",
+      lastResponseItems: [assistantOutput],
+    };
+    const request: ResponsesContinuationRequest = {
+      ...state.lastRequest,
+      input: [
+        firstUser,
+        firstCall,
+        secondCall,
+        { ...originalOutput, call_id: " x" },
+        assistantOutput,
+        { type: "message", role: "user", content: [{ type: "input_text", text: "second" }] },
+      ] as never,
+    };
+
+    expect(resolveResponsesContinuationRequest(state, request)).toEqual({
+      continuationStatus: "history_changed",
+      request,
+    });
+  });
+
+  it("rejects an unrelated earlier call ID even when its result changes with it", () => {
+    const cachedCall = {
+      type: "function_call",
+      call_id: "call_a",
+      name: "lookup",
+      arguments: "{}",
+    };
+    const state: ResponsesContinuationState = {
+      lastRequest: {
+        model: "gpt-5.6-luna",
+        store: true,
+        input: [
+          firstUser,
+          cachedCall,
+          { type: "function_call_output", call_id: "call_a", output: "recorded" },
+        ] as never,
+      },
+      lastResponseId: "resp_1",
+      lastResponseItems: [assistantOutput],
+    };
+    const request: ResponsesContinuationRequest = {
+      ...state.lastRequest,
+      input: [
+        firstUser,
+        { ...cachedCall, call_id: "call_b" },
+        { type: "function_call_output", call_id: "call_b", output: "recorded" },
+        assistantOutput,
+        { type: "message", role: "user", content: [{ type: "input_text", text: "second" }] },
+      ] as never,
+    };
+
+    expect(resolveResponsesContinuationRequest(state, request)).toEqual({
+      continuationStatus: "history_changed",
+      request,
+    });
+  });
+
+  it.each([
+    { name: "call and result", callId: "x", outputId: "x" },
+    { name: "result", callId: " x", outputId: "x" },
+  ])("rejects an earlier $name change that shares a replay shape", ({ callId, outputId }) => {
+    const cachedCall = {
+      type: "function_call",
+      call_id: " x",
+      name: "lookup",
+      arguments: "{}",
+    };
+    const cachedOutput = {
+      type: "function_call_output",
+      call_id: " x",
+      output: "recorded",
+    };
+    const state: ResponsesContinuationState = {
+      lastRequest: {
+        model: "gpt-5.6-luna",
+        store: true,
+        input: [firstUser, cachedCall, cachedOutput] as never,
+      },
+      lastResponseId: "resp_1",
+      lastResponseItems: [assistantOutput],
+    };
+    const request: ResponsesContinuationRequest = {
+      ...state.lastRequest,
+      input: [
+        firstUser,
+        { ...cachedCall, call_id: callId },
+        { ...cachedOutput, call_id: outputId },
+        assistantOutput,
+        { type: "message", role: "user", content: [{ type: "input_text", text: "second" }] },
+      ] as never,
+    };
+
+    expect(resolveResponsesContinuationRequest(state, request)).toEqual({
+      continuationStatus: "history_changed",
+      request,
+    });
+  });
+
+  it("retains pending calls when a result matches a colliding replay shape", () => {
+    const canonicalCallId = normalizeOpenAIResponsesFunctionCallId(" x");
+    const calls = [
+      { type: "function_call", call_id: " x", name: "async", arguments: "{}" },
+      { type: "function_call", call_id: canonicalCallId, name: "sync", arguments: "{}" },
+    ];
+    const first = recordResponsesContinuationState(
+      undefined,
+      { input: [firstUser, ...calls] as never },
+      { id: "resp_1", output: calls as never },
+    );
+    const second = recordResponsesContinuationState(
+      first,
+      {
+        input: [
+          firstUser,
+          ...calls,
+          { type: "function_call_output", call_id: canonicalCallId, output: "sync result" },
+        ] as never,
+      },
+      { id: "resp_2", output: [assistantOutput] },
+      true,
+    );
+
+    expect(second.pendingToolCalls).toEqual([{ callId: " x" }, { callId: canonicalCallId }]);
+  });
+
+  it("does not let an older result resolve a newer call that reuses its ID", () => {
+    const reusedCall = {
+      type: "function_call",
+      call_id: "call_reused",
+      name: "lookup",
+      arguments: "{}",
+    };
+    const previous: ResponsesContinuationState = {
+      lastRequest: {
+        input: [
+          firstUser,
+          reusedCall,
+          { type: "function_call_output", call_id: "call_reused", output: "old result" },
+        ] as never,
+      },
+      lastResponseId: "resp_1",
+      lastResponseItems: [reusedCall] as never,
+    };
+    const current = recordResponsesContinuationState(
+      previous,
+      {
+        input: [
+          firstUser,
+          reusedCall,
+          { type: "function_call_output", call_id: "call_reused", output: "old result" },
+          reusedCall,
+        ] as never,
+      },
+      { id: "resp_2", output: [assistantOutput] },
+      true,
+    );
+
+    expect(current.pendingToolCalls).toEqual([{ callId: "call_reused" }]);
+  });
+
+  it("rebuilds pending call IDs from a full-history fallback", () => {
+    const rawCall = {
+      type: "function_call",
+      call_id: " x",
+      name: "async",
+      arguments: "{}",
+    };
+    const replayedCallId = normalizeOpenAIResponsesFunctionCallId(rawCall.call_id);
+    const previous = recordResponsesContinuationState(
+      undefined,
+      { input: [firstUser] as never },
+      { id: "resp_1", output: [rawCall] as never },
+    );
+    const fallback = recordResponsesContinuationState(
+      previous,
+      { input: [firstUser, { ...rawCall, call_id: replayedCallId }] as never },
+      { id: "resp_2", output: [assistantOutput] },
+      false,
+    );
+
+    expect(fallback.pendingToolCalls).toEqual([{ callId: replayedCallId }]);
+  });
+
+  it("keeps raw async call IDs when HTTP commits the full baseline of a continuation", () => {
+    const rawCall = {
+      type: "function_call",
+      call_id: " x",
+      name: "async",
+      arguments: "{}",
+    };
+    const replayedCall = {
+      ...rawCall,
+      call_id: normalizeOpenAIResponsesFunctionCallId(rawCall.call_id),
+    };
+    const firstRequest: ResponsesContinuationRequest = {
+      model: "gpt-5.6-luna",
+      store: true,
+      input: [firstUser] as never,
+    };
+    claim({ request: firstRequest })?.commit(firstRequest, {
+      id: "resp_1",
+      output: [rawCall] as never,
+    });
+
+    const secondRequest: ResponsesContinuationRequest = {
+      ...firstRequest,
+      input: [firstUser, replayedCall] as never,
+    };
+    const second = claim({ request: secondRequest });
+    expect(second?.request.previous_response_id).toBe("resp_1");
+    second?.commit(secondRequest, { id: "resp_2", output: [assistantOutput] }, "resp_1");
+
+    const toolResult = {
+      type: "function_call_output",
+      call_id: replayedCall.call_id,
+      output: "lookup result",
+    };
+    const third = claim({
+      request: {
+        ...firstRequest,
+        input: [firstUser, replayedCall, assistantOutput, toolResult] as never,
+      },
+    });
+    expect(third?.request.previous_response_id).toBe("resp_2");
+    expect(third?.request.input).toEqual([{ ...toolResult, call_id: rawCall.call_id }]);
+    third?.release();
+  });
+
+  it("rejects a continuation delta whose tool result id is not a replay shape of the cached call", () => {
+    const cachedCall = {
+      type: "function_call",
+      id: "fc_1",
+      status: "completed",
+      call_id: " x",
+      name: "exec",
+      arguments: "{}",
+    };
+    const state: ResponsesContinuationState = {
+      lastRequest: { model: "gpt-5.6-luna", store: true, input: [firstUser] as never },
+      lastResponseId: "resp_1",
+      lastResponseItems: [cachedCall] as never,
+    };
+    const request: ResponsesContinuationRequest = {
+      model: "gpt-5.6-luna",
+      store: true,
+      input: [
+        firstUser,
+        cachedCall,
+        { type: "function_call_output", call_id: "x", output: "recorded" },
+      ] as never,
+    };
+
+    expect(resolveResponsesContinuationRequest(state, request)).toEqual({
+      continuationStatus: "history_changed",
+      request,
+    });
+  });
+
+  it("rejects ambiguous restoration when distinct cached calls share a bare replay shape", () => {
+    const cachedCalls = [
+      { type: "function_call", id: "fc_1", call_id: " x", name: "first", arguments: "{}" },
+      { type: "function_call", id: "fc_2", call_id: "x", name: "second", arguments: "{}" },
+    ];
+    const bareReplayCallId = normalizeOpenAIResponsesFunctionCallId(" x");
+    const state: ResponsesContinuationState = {
+      lastRequest: { model: "gpt-5.6-luna", store: true, input: [firstUser] as never },
+      lastResponseId: "resp_1",
+      lastResponseItems: cachedCalls as never,
+    };
+    const request: ResponsesContinuationRequest = {
+      model: "gpt-5.6-luna",
+      store: true,
+      input: [
+        firstUser,
+        { type: "function_call", call_id: bareReplayCallId, name: "first", arguments: "{}" },
+        { type: "function_call", call_id: bareReplayCallId, name: "second", arguments: "{}" },
+        { type: "function_call_output", call_id: bareReplayCallId, output: "recorded" },
+      ] as never,
+    };
+
+    expect(resolveResponsesContinuationRequest(state, request)).toEqual({
+      continuationStatus: "history_changed",
+      request,
+    });
+  });
+
   it("ignores turn correlation headers but isolates explicit authorization", () => {
     const first = claim({ turn: "1" });
     first?.commit(continuationState().lastRequest, {
@@ -363,7 +1001,7 @@ describe("OpenAI Responses continuation", () => {
 
     const sameTenant = claim({ turn: "2", request: nextRequest() });
     expect(sameTenant?.request.previous_response_id).toBe("resp_1");
-    sameTenant?.commit(nextRequest(), { id: "resp_2", output: [] });
+    sameTenant?.commit(nextRequest(), { id: "resp_2", output: [] }, "resp_1");
 
     const rotated = claim({
       turn: "3",

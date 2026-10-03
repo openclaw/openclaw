@@ -1,11 +1,12 @@
-import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import { OpenClawStateOwnershipError } from "../infra/sqlite-lifecycle-errors.js";
 import {
   assertSqliteSchemaContains,
   assertSqliteSchemaTablesPresent,
   type SqliteTableContractReader,
 } from "../infra/sqlite-schema-contract.js";
+import { SqliteSchemaMismatchError } from "../infra/sqlite-schema-issues.js";
 import { splitSqlList } from "../infra/sqlite-schema-sql.js";
 import {
   runSqliteImmediateTransactionSync,
@@ -17,14 +18,18 @@ import {
   LAZY_ADDITIVE_STATE_TABLES,
   DOCTOR_OWNED_STATE_TABLES,
   OPENCLAW_STATE_SCHEMA_VERSION,
-  type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db-contract.js";
 import {
   hasDanglingSkillWorkshopCollectionReviewIndex,
   LEGACY_SKILL_WORKSHOP_COLLECTION_REVIEWS_INDEX,
   withSqliteWritableSchema,
 } from "./openclaw-state-db-doctor-schema.js";
-import { ensureColumn, tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
+import {
+  classifySqliteTableReadError,
+  ensureColumn,
+  tableExists,
+  tableHasColumn,
+} from "./openclaw-state-db-schema-helpers.js";
 import { migrateJsonCanonicalWideRowsV13 } from "./openclaw-state-db-schema-v13-widerow.js";
 import {
   assertSupportedStateSchemaVersion,
@@ -32,11 +37,7 @@ import {
   readStateSchemaMigrationVersion,
 } from "./openclaw-state-db-schema-version.js";
 import type { DB } from "./openclaw-state-db.generated.js";
-import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
-import {
-  assertOpenClawStateWriteAllowed,
-  OpenClawStateOwnershipError,
-} from "./openclaw-state-ownership.js";
+import { assertOpenClawStateWriteAllowed } from "./openclaw-state-ownership.js";
 import {
   getOpenClawStateRuntimeSchema,
   OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY,
@@ -74,20 +75,6 @@ function repairDanglingSkillWorkshopCollectionReviewIndex(database: DatabaseSync
   });
 }
 
-function repairDanglingSkillWorkshopCollectionReviewIndexChanges(database: DatabaseSync): string[] {
-  return repairDanglingSkillWorkshopCollectionReviewIndex(database)
-    ? ["Removed dangling legacy Skill Workshop review index"]
-    : [];
-}
-
-/** Run read-only schema admission while SQLite ignores malformed catalog rows. */
-function admitStateDatabaseWithDanglingWorkshopIndex<T>(
-  database: DatabaseSync,
-  operation: () => T,
-): T {
-  return withSqliteWritableSchema(database, operation);
-}
-
 /** Admit the schema before Doctor begins its write transaction. */
 function admitStateDatabaseForSchemaRepair(
   database: DatabaseSync,
@@ -102,7 +89,8 @@ function admitStateDatabaseForSchemaRepair(
     }
   };
   if (danglingWorkshopIndex) {
-    admitStateDatabaseWithDanglingWorkshopIndex(database, admit);
+    // Run read-only admission while SQLite ignores malformed catalog rows.
+    withSqliteWritableSchema(database, admit);
   } else {
     admit();
   }
@@ -119,7 +107,7 @@ function assertStateDatabaseSchemaRepairWriteAllowed(
   const assertAllowed = () =>
     assertOpenClawStateWriteAllowed({ database, databasePath: pathname, env });
   if (danglingWorkshopIndex) {
-    admitStateDatabaseWithDanglingWorkshopIndex(database, assertAllowed);
+    withSqliteWritableSchema(database, assertAllowed);
   } else {
     assertAllowed();
   }
@@ -134,7 +122,9 @@ export function prepareStateDatabaseSchemaRepair(
   const danglingWorkshopIndex = admitStateDatabaseForSchemaRepair(database, pathname, env);
   return () => {
     assertStateDatabaseSchemaRepairWriteAllowed(database, pathname, env, danglingWorkshopIndex);
-    return repairDanglingSkillWorkshopCollectionReviewIndexChanges(database);
+    return repairDanglingSkillWorkshopCollectionReviewIndex(database)
+      ? ["Removed dangling legacy Skill Workshop review index"]
+      : [];
   };
 }
 
@@ -185,21 +175,32 @@ type OpenClawStateMigrationVersion = keyof typeof STATE_MIGRATION_ALLOWED_MISSIN
 export function assertOpenClawStateDatabaseOwner(
   database: DatabaseSync,
   options: { pathname: string },
-): void {
-  const hasMetadataTable = database
-    .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'schema_meta' LIMIT 1")
-    .get();
-  const metadata = hasMetadataTable
-    ? (database.prepare("SELECT role FROM schema_meta WHERE meta_key = 'primary' LIMIT 1").get() as
-        | { role?: unknown }
-        | undefined)
-    : undefined;
-  if (metadata?.role !== "global") {
-    const role = typeof metadata?.role === "string" ? metadata.role : "missing";
-    throw new Error(
-      `OpenClaw state database ${options.pathname} has schema role ${role}; expected global.`,
+): { schema_version?: unknown } {
+  const hasMetadataTable = tableExists(database, "schema_meta");
+  let metadata;
+  try {
+    metadata = hasMetadataTable
+      ? database
+          .prepare(
+            "SELECT role, schema_version FROM schema_meta WHERE meta_key = 'primary' LIMIT 1",
+          )
+          .get()
+      : undefined;
+  } catch (error) {
+    throw classifySqliteTableReadError(
+      database,
+      "schema_meta",
+      ["meta_key", "role", "schema_version"],
+      error,
     );
   }
+  if (metadata?.role !== "global") {
+    const role = typeof metadata?.role === "string" ? metadata.role : "missing";
+    throw new SqliteSchemaMismatchError(
+      `OpenClaw state database ${options.pathname} has schema role ${role}; expected global. Run openclaw doctor --fix to inspect and repair its ownership.`,
+    );
+  }
+  return metadata;
 }
 
 /** Require the canonical shared-state owner and schema before offline file maintenance. */
@@ -210,19 +211,16 @@ export function assertOpenClawStateDatabaseForMaintenance(
 ): void {
   const userVersion = assertSupportedStateSchemaVersion(database, options.pathname);
   if (readStateSchemaContentVersion(database) !== OPENCLAW_STATE_SCHEMA_VERSION) {
-    throw new Error(
+    throw new SqliteSchemaMismatchError(
       `OpenClaw state database ${options.pathname} uses schema version ${userVersion}; run openclaw doctor --fix before compacting it.`,
     );
   }
 
-  assertOpenClawStateDatabaseOwner(database, options);
-  const metadata = database
-    .prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary' LIMIT 1")
-    .get() as { schema_version?: unknown } | undefined;
+  const metadata = assertOpenClawStateDatabaseOwner(database, options);
   if (metadata?.schema_version !== userVersion) {
     const schemaVersion =
       typeof metadata?.schema_version === "number" ? metadata.schema_version : "invalid";
-    throw new Error(
+    throw new SqliteSchemaMismatchError(
       `OpenClaw state database ${options.pathname} metadata schema version ${schemaVersion} does not match ${userVersion}; run openclaw doctor --fix before compacting it.`,
     );
   }
@@ -241,18 +239,15 @@ function assertOpenClawStateDatabaseVersionForMigration(
 ): void {
   const userVersion = readSqliteUserVersion(database);
   if (readStateSchemaMigrationVersion(database) !== options.version) {
-    throw new Error(
+    throw new SqliteSchemaMismatchError(
       `OpenClaw state database ${options.pathname} uses schema version ${userVersion}; expected ${options.version} before migrating it.`,
     );
   }
-  assertOpenClawStateDatabaseOwner(database, options);
-  const metadata = database
-    .prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary' LIMIT 1")
-    .get() as { schema_version?: unknown } | undefined;
+  const metadata = assertOpenClawStateDatabaseOwner(database, options);
   if (metadata?.schema_version !== userVersion) {
     const schemaVersion =
       typeof metadata?.schema_version === "number" ? metadata.schema_version : "invalid";
-    throw new Error(
+    throw new SqliteSchemaMismatchError(
       `OpenClaw state database ${options.pathname} metadata schema version ${schemaVersion} does not match ${userVersion}; repair the ownership metadata before migrating it.`,
     );
   }
@@ -315,10 +310,6 @@ export function markCurrentStateSchemaVersion(
       "UPDATE schema_meta SET schema_version = ?, updated_at = ? WHERE meta_key = 'primary'",
     ).run(version, now);
   }
-}
-
-export function resolveDatabasePath(options: OpenClawStateDatabaseOptions = {}): string {
-  return path.resolve(options.path ?? resolveOpenClawStateSqlitePath(options.env ?? process.env));
 }
 
 /** Historical jobs lost the creator's origin; preserve attribution without guessing authority. */

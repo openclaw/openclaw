@@ -1,4 +1,5 @@
 ---
+doc-schema-version: 1
 summary: "Browser-based control UI for the Gateway (chat, activity, nodes, config)"
 read_when:
   - You want to operate the Gateway from a browser
@@ -25,11 +26,25 @@ If the Gateway's request queue is full, automatic sidebar session discovery keep
 
 While the initial connection or a route loads, shimmer placeholders reserve the chat layout. Home and System busyness open directly in their destination panels, with working headers and Close controls while the content loads. Brief loads do not flash placeholders; slower loads show placeholders inside the panel, and load errors offer Retry in the same place. The rest of the page stays usable. Drag the System busyness title bar to move the panel; its position is remembered in this browser. You can also focus the title bar and use the arrow keys (Shift moves farther). Compact/expanded transitions animate briefly, respect reduced motion, and keep the panel inside the window. Loading indicators respect your theme and reduced-motion preference; Gateway startup progress remains visible when available.
 
-The selected chat loads before automatic sidebar task lists refresh. Live events remain subscribed during startup, and explicit sidebar actions remain available. Background lists resume after the transcript loads or reports an error.
+The selected chat loads before automatic sidebar session lists refresh. Live events remain subscribed during startup, and explicit sidebar actions remain available. Background lists resume after the transcript loads or reports an error.
+
+Session details share concurrent reads across the sidebar, chat, and resource panels. Returning to an unchanged session reuses its details on the same connection. Session changes, explicit refreshes, and reconnects fetch current details; failed reads remain retryable.
+
+Sidebar pull-request indicators reuse the last known snapshot. Opening a session, its progress card, or its Git activity requests current checkout facts; sidebar rows alone do not poll Git. Active panels detect branch and staged changes from Git metadata. Tool completion refreshes working-tree stats, with a five-minute fallback for edits made outside OpenClaw.
+
+The sidebar’s **Online** list shows compact person rows with avatar presence indicators: solid green means active, amber means idle, and a hollow green ring means connected with activity unavailable. Names stay on one line and fade at the edge when space is tight. The indicators, hovercard, and accessible description preserve the activity distinctions. A compact group at the end of each row shows a theme-accent spinner and running count, then a small message-circle icon and muted open count. Each icon-number pair keeps its natural width, with a wider gap between running and open groups. The group rests at the right edge; names and counts share a text baseline, without fixed digit columns. Counts have no pill background at rest, with explanatory tooltips; hovering or keyboard-focusing the row reveals a subtle grouping pill without shifting the content. Reduced motion keeps the spinner still. Known zero counts are omitted. Open counts each person’s owned, unarchived conversations that you can access across configured agents, excluding hidden subagents, automation, system, and global/unknown sessions. Running counts those conversations actively executing an agent turn, not queued work or activity in descendant sessions. Counts cover the matching sessions before pagination and do not change with your session-list filters. All connected people remain visible, ordered Active, Idle, then Online with activity unavailable. Unavailable counts show no placeholder; the row tooltip and accessible description identify them as unavailable rather than zero. A failed refresh keeps the last counts with a retry notice.
+
+Person hovercards keep their **Recent sessions** selection and order stable while open, so background activity does not move links under the pointer or keyboard focus. Reopening the card selects the latest sessions. Timestamps stay live, and sessions that leave the visible, eligible roster disappear without replacing them with other sessions. **Viewing now** continues to follow presence.
 
 Sidebar live narration pauses while the browser tab is hidden and resumes from current activity when you return. The selected chat and pending outbox keep their separately owned subscriptions.
 
+With sidebar previews enabled, running sessions show a small, static tool icon beside the progress text on the second row beneath the session name. The title row stays unchanged, and the tool name is available only in the icon’s tooltip and accessible label rather than repeated as visible text. The compact one-row sidebar and team roster add no tool icon or tool text, so tool changes do not shift the list. Tool progress uses only explicitly public progress text from the Gateway, never argument-derived metadata or raw command output. If a call’s progress becomes hidden, its displayed progress is withdrawn. Pending questions and other critical status keep their existing priority. The existing session indicator remains the only activity animation, and tool state clears when its live subscription ends.
+
 Live narration retains up to six visible running background sessions, plus the open session. Recency changes keep that window stable; when a session finishes or leaves the visible rows, the most recent eligible session fills its slot. Reconnecting selects a fresh window.
+
+If a narration subscription encounters a retryable failure or times out, it retries automatically with randomized exponential backoff, honoring the server's retry delay. Sidebar updates share the pending retry instead of sending more requests. Retries stop when that session leaves the narration window, the tab is hidden, or the connection closes; non-retryable errors wait for a new subscription intent or connection.
+
+Failed narration releases use the same backoff, including while the tab is hidden. If a session is needed again, its queued release is canceled and its subscription is renewed safely. Closing the Gateway connection cancels release retries.
 
 Closed Terminal, Browser, and Desktop panels initialize when you open them rather than during initial navigation. Home/Ask OpenClaw and System busyness keep lightweight frames ready and defer their conversation or diagnostic contents until opened. Home preserves its saved dock position and size throughout loading. Panels saved as open still restore after a reload. Settings does not automatically reopen Ask OpenClaw; its control and diagnostic actions can still open it explicitly.
 
@@ -44,6 +59,8 @@ Provider authentication status is shared across views and refreshes after accoun
 
 The sidebar loads automation status once per connection and refreshes after automation or configuration changes. Failed reads retry once per minute while the tab is visible and stop retrying after success. Overdue warnings advance on a local deadline without polling the Gateway. Hidden tabs catch up when visible; returning to an unchanged tab does not poll automations. Command palette searches reuse their automation inventory on the same connection until one of those changes or a reconnect.
 
+For messages forwarded from an automation, the **From** link opens that automation's History tab and highlights the originating run. Open the run's transcript from History when needed.
+
 Thinking, speed, and context-window changes stay synchronized across panes showing the same session. While a change is pending, the latest selection remains visible. A rejected change restores the latest confirmed value. Delayed events from a replaced session leave the current transcript and unsent draft intact.
 
 While an agent works, completed commentary or preambles appear inline in the
@@ -55,20 +72,40 @@ not whether the active run’s narration survives a history refresh. Completed
 dashboard turns collapse their narration and tool activity under **Worked for …**
 above the answer. Expanding it restores the sequence with the existing tool-call
 groups. When no run duration is available, the heading reads **Worked**.
+The heading includes the total tool-call count followed by any failures, such as
+**Worked · 200 tool calls · 20 failed**. Calls without failures still show the
+total; turns without tool calls omit it.
 
-Subagent runs appear in inline transcript activity rows and the chat **Tasks** tab,
-outside sidebar navigation. Use the [Tasks CLI](/cli/tasks) to inspect work across conversations.
-Their activity rows lead with the child task's display title, using its configured
-`label` when present, followed by the latest activity. The leading claw moves only
-while running; queued and cancelled tasks stay still, and completion briefly turns
-the claw green. Failed tasks have a warning badge and timed-out tasks a clock badge.
-Hover the row or focus it with the keyboard for a tooltip explaining the exact
-status. Reduced motion keeps the claw still. Tasks without a display title keep
-the generic **Subagent** label. Select a row to open its details.
+Consecutive tool activity shares one expandable log, including when background
+work resumes in a new run. Visible messages, media, and conversation markers
+keep their place and separate logs; live response text and the working indicator
+stay outside the log. Grouping changes only the presentation, not the transcript.
+
+Inter-session messages appear as compact **updates from** activity rows instead
+of chat bubbles. Consecutive updates from the same source share one row; other
+messages and conversation markers keep them separate. Select the row to show
+the original messages and timestamps in one step, or select the source name to
+open that session. Search results and reply navigation reveal the matching
+messages. This changes only presentation, not stored messages or run ownership.
+
+When an incoming message causes an unstarted tool call to be skipped, its card
+and work summary show **Skipped**, including after reloading the conversation.
+Approval blocks and tool failures keep their separate outcomes.
+
+Subagent runs appear in their session transcripts, outside sidebar navigation.
+Inspect them from the parent conversation with `/subagents list`,
+`/subagents info <id|#>`, and `/subagents log <id|#>`. Opening a child transcript
+is view-only; continue the conversation in its parent session.
+
+The **running tasks** indicator previews only active background tasks (running or
+queued). Its tooltip shows up to five tasks, with an overflow count for additional
+active tasks. Select the indicator to open the full task list, including finished tasks.
 
 Select a session's title in the chat header to rename it. Enter saves the name;
 Escape cancels the edit. While an input method is composing text, Enter and
 Escape stay with composition. Finish composing before saving or canceling.
+Once the Gateway confirms a rename, the saved name stays visible while the session
+list refreshes, even if an older snapshot arrives late.
 
 Dragging a session between sidebar groups updates its placement immediately. A successful
 save keeps that placement even if the subsequent list refresh fails; the UI reports
@@ -97,6 +134,28 @@ Opening **New agent** keeps your existing Ask OpenClaw conversation. Finish any
 pending wizard or approval before opening the creation choices.
 If team creation stops partway through, the custodian reports the retained
 agents so you can inspect them before creating the missing members.
+
+## Take a photo in chat
+
+Choose **Add attachment → Take photo** in chat or New Session to open a camera
+preview. Allow camera access when your browser asks, then choose **Capture**,
+**Retake**, or **Use photo**. The chosen photo becomes a draft attachment; it does
+not send the message. The preview stays in your browser and does not request
+microphone access.
+
+The live preview requires HTTPS or localhost and a browser that supports camera
+access. On plain HTTP LAN addresses or browsers without the camera API, choose
+**Use device camera** to open the native capture picker instead. This preserves
+mobile camera capture without silently substituting a picker for the preview;
+your browser decides whether it shows a camera or a file picker. If access is denied,
+allow the site in your browser and operating-system camera settings and retry.
+The explicit **Use device camera** option also remains available after a preview
+request fails, including permission denial; it never opens automatically.
+If no camera is available, choose **Upload photo** instead.
+
+The camera stops when you capture a photo, close the dialog, or leave its draft.
+File and photo uploads remain available through their existing pickers, including
+the combined **Attach…** picker on iOS Safari.
 
 ## Watch a desktop in Picture-in-Picture
 
@@ -160,7 +219,8 @@ agent switcher. This enables **team mode**, a browser preference that is off by
 default. The top row becomes a workspace header with the configured Gateway display
 name, or **OpenClaw**, and the OpenClaw mark. Its menu contains **Show one agent**,
 **Agent settings**, and the existing documentation, help, community, and changelog
-links. Sessions appear under collapsible agent headers in configured roster order,
+links. Pinned sessions stay in **Pages**, using their agent's avatar as the icon.
+Other sessions appear under collapsible agent headers in configured roster order,
 which stays stable as activity changes. **Home** disappears from Pages: click an agent header's avatar or name to
 open that agent's main chat. The separate collapse control only folds its sessions.
 The top **+**, labeled **New conversation**, opens an agent menu with avatars and names in
@@ -268,7 +328,7 @@ Every section heading from the previous single-page version keeps its anchor her
 - <a id="feature-and-rpc-reference" />[Feature and RPC reference](/web/control-ui/feature-reference#feature-and-rpc-reference)
 - <a id="chat-and-talk" />[chat and talk](/web/control-ui/feature-reference#chat-and-talk)
 - <a id="channels-sessions-memory" />[channels sessions memory](/web/control-ui/feature-reference#channels-sessions-memory)
-- <a id="cron-tasks-plugins-skills-devices-exec-approvals" />[cron tasks plugins skills devices exec approvals](/web/control-ui/feature-reference#cron-tasks-plugins-skills-devices-exec-approvals)
+- <a id="cron-tasks-plugins-skills-devices-exec-approvals" />[cron plugins skills devices exec approvals](/web/control-ui/feature-reference#cron-tasks-plugins-skills-devices-exec-approvals)
 - <a id="config" />[config](/web/control-ui/feature-reference#config)
 - <a id="usage" />[usage](/web/control-ui/feature-reference#usage)
 - <a id="debug-logs-update" />[debug logs update](/web/control-ui/feature-reference#debug-logs-update)

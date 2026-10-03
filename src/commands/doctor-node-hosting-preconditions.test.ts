@@ -128,12 +128,12 @@ describe("node-hosting preconditions", () => {
     name: string;
     cfg: OpenClawConfig;
     requirements: string[];
-  }>)("warns when $name", ({ cfg, requirements }) => {
-    expect(findingsFor(cfg).map((finding) => finding.requirement)).toEqual(requirements);
+  }>)("warns when $name", async ({ cfg, requirements }) => {
+    expect((await findingsFor(cfg)).map((finding) => finding.requirement)).toEqual(requirements);
   });
 
-  it("does not warn for token auth with a reachable bind", () => {
-    expect(findingsFor(healthyBase)).toEqual([]);
+  it("does not warn for token auth with a reachable bind", async () => {
+    expect(await findingsFor(healthyBase)).toEqual([]);
   });
 
   it.each([
@@ -167,14 +167,14 @@ describe("node-hosting preconditions", () => {
     },
   ] satisfies Array<{ name: string; cfg: OpenClawConfig; requirement: string }>)(
     "warns when $name",
-    ({ cfg, requirement }) => {
-      expect(findingsFor(cfg).map((finding) => finding.requirement)).toContain(requirement);
+    async ({ cfg, requirement }) => {
+      expect((await findingsFor(cfg)).map((finding) => finding.requirement)).toContain(requirement);
     },
   );
 
-  it("keeps a mixed explicit roster healthy when one agent uses the embedded runtime", () => {
+  it("keeps a mixed explicit roster healthy when one agent uses the embedded runtime", async () => {
     expect(
-      findingsFor({
+      await findingsFor({
         ...healthyBase,
         agents: {
           ownership: "explicit",
@@ -195,9 +195,9 @@ describe("node-hosting preconditions", () => {
     ).toEqual([]);
   });
 
-  it("accepts a registered external runtime that declares paired-device support", () => {
+  it("accepts a registered external runtime that declares paired-device support", async () => {
     expect(
-      findingsFor({
+      await findingsFor({
         ...healthyBase,
         agents: {
           defaults: {
@@ -209,26 +209,29 @@ describe("node-hosting preconditions", () => {
     ).toEqual([]);
   });
 
-  it.each(["codex", "auto"])("does not activate plugins or reject a cold %s runtime", (runtime) => {
-    resetPluginRuntimeStateForTest();
+  it.each(["codex", "auto"])(
+    "does not activate plugins or reject a cold %s runtime",
+    async (runtime) => {
+      resetPluginRuntimeStateForTest();
 
-    expect(
-      findingsFor({
-        ...healthyBase,
-        agents: {
-          defaults: {
-            model: "openai/gpt-5.6-sol",
-            models: { "openai/gpt-5.6-sol": { agentRuntime: { id: runtime } } },
+      expect(
+        await findingsFor({
+          ...healthyBase,
+          agents: {
+            defaults: {
+              model: "openai/gpt-5.6-sol",
+              models: { "openai/gpt-5.6-sol": { agentRuntime: { id: runtime } } },
+            },
           },
-        },
-      }),
-    ).toEqual([]);
-    expect(getActivePluginRegistry()).toBeNull();
-  });
+        }),
+      ).toEqual([]);
+      expect(getActivePluginRegistry()).toBeNull();
+    },
+  );
 
-  it("accepts a configured public URL for loopback onboarding", () => {
+  it("accepts a configured public URL for loopback onboarding", async () => {
     expect(
-      findingsFor({
+      await findingsFor({
         ...healthyBase,
         gateway: {
           bind: "loopback",
@@ -238,6 +241,19 @@ describe("node-hosting preconditions", () => {
           entries: {
             "device-pair": { config: { publicUrl: "wss://gateway.example" } },
           },
+        },
+      }),
+    ).toEqual([]);
+  });
+
+  it("accepts gateway.publicOrigin for loopback onboarding", async () => {
+    expect(
+      await findingsFor({
+        ...healthyBase,
+        gateway: {
+          ...healthyBase.gateway,
+          bind: "loopback",
+          publicOrigin: "https://gateway.example.test",
         },
       }),
     ).toEqual([]);

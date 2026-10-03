@@ -82,7 +82,10 @@ suite.define(() => {
           locale: "en-US",
           serviceWorkers: "block",
           viewport: { height: 1_000, width: 1_400 },
-          recordVideo: { dir: artifactDir, size: { height: 1_000, width: 1_400 } },
+          recordVideo:
+            process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
+              ? { dir: artifactDir, size: { height: 1_000, width: 1_400 } }
+              : undefined,
         },
         async ({ page }) => {
           const errors: string[] = [];
@@ -261,7 +264,10 @@ suite.define(() => {
       await suite.withPage(
         {
           viewport: { height: 1_000, width: 1_400 },
-          recordVideo: { dir: artifactDir, size: { height: 1_000, width: 1_400 } },
+          recordVideo:
+            process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
+              ? { dir: artifactDir, size: { height: 1_000, width: 1_400 } }
+              : undefined,
         },
         async ({ page }) => {
           const errors: string[] = [];

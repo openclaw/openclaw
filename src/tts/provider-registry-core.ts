@@ -1,8 +1,7 @@
-// TTS provider registry core stores provider factories and defaults.
 import type { OpenClawConfig } from "../config/types.js";
 import {
   buildCapabilityProviderIndex,
-  normalizeCapabilityProviderId,
+  normalizeCapabilityProviderId as normalizeSpeechProviderId,
 } from "../plugins/provider-registry-shared.js";
 import type { SpeechProviderPlugin } from "../plugins/types.js";
 import type { SpeechProviderId } from "./provider-types.js";
@@ -13,12 +12,7 @@ export type SpeechProviderRegistryResolver = {
   listProviders: (cfg?: OpenClawConfig) => SpeechProviderPlugin[];
 };
 
-/** Normalize user/provider IDs into the canonical speech provider ID shape. */
-export function normalizeSpeechProviderId(
-  providerId: string | undefined,
-): SpeechProviderId | undefined {
-  return normalizeCapabilityProviderId(providerId);
-}
+export { normalizeSpeechProviderId };
 
 /** Order speech providers by priority and provider ID for deterministic equal-priority fallback. */
 export function compareSpeechProviderOrder(

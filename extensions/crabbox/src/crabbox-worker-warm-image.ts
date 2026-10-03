@@ -28,7 +28,7 @@ import {
   crabboxWarmImageRecoveryHint,
   CRABBOX_WARM_IMAGE_WAIT_HINT,
   CrabboxWarmImageRequestError,
-  isCrabboxWarmImageCaptureUncertain,
+  isCrabboxCaptureRefusalRetained,
   isCrabboxWarmImageHeld as held,
   openCrabboxWarmImageStore,
   projectCrabboxWarmImage,
@@ -68,7 +68,6 @@ type AllocationContext = LeaseContext & {
 export function createCrabboxWarmImageManager(dependencies: {
   state: CrabboxState;
   runCommand: CrabboxCommandRunner;
-  runArgs: (context: LeaseContext) => string[];
   warn: (message: string) => void;
   policy?: CrabboxWarmImagePolicy;
 }) {
@@ -99,14 +98,17 @@ export function createCrabboxWarmImageManager(dependencies: {
   const retiringCurrent = (record: WarmProfileRecord) =>
     record.operation?.type === "retire" &&
     record.operation.checkpointId === record.image?.checkpointId;
+  const hasNoProviderObligations = (record: WarmProfileRecord) =>
+    !record.image &&
+    !record.previous &&
+    !record.operation &&
+    Object.keys(record.allocations).length === 0;
   const deleteEmptyProfile = (key: string) =>
     openStore().deleteIf(
       key,
       (record) =>
-        !record.image &&
-        !record.previous &&
-        !record.operation &&
-        Object.keys(record.allocations).length === 0,
+        hasNoProviderObligations(record) &&
+        !isCrabboxCaptureRefusalRetained(record, policy.refreshAfterMs),
     );
 
   const lookupLease = (id: string) => openStore().lookupLease(id);
@@ -203,9 +205,9 @@ export function createCrabboxWarmImageManager(dependencies: {
     const entries = await openStore().entries();
     assertCurrent(context);
     const paused = entries
-      .flatMap(({ key, value }) => {
-        const capture = crabboxWarmImageCaptureStatus(key, value);
-        return capture && isCrabboxWarmImageCaptureUncertain(capture) ? [capture.selector] : [];
+      .flatMap(({ value }) => {
+        const capture = crabboxWarmImageCaptureStatus(value);
+        return capture?.phase === "uncertain" ? [capture.selector] : [];
       })
       .toSorted();
     const snapshot = JSON.stringify(paused);
@@ -219,9 +221,9 @@ export function createCrabboxWarmImageManager(dependencies: {
     }
     for (const { key, value } of entries) {
       assertCurrent(context);
-      const capture = crabboxWarmImageCaptureStatus(key, value);
+      const capture = crabboxWarmImageCaptureStatus(value);
       if (capture) {
-        if (!isCrabboxWarmImageCaptureUncertain(capture) && capture.stale) {
+        if (capture.phase !== "uncertain" && capture.stale) {
           warnOnce(
             `capture ${capture.selector} still pending`,
             CRABBOX_WARM_IMAGE_WAIT_HINT,
@@ -236,6 +238,14 @@ export function createCrabboxWarmImageManager(dependencies: {
       const remaining = () => deadline - Date.now();
       if (remaining() <= 0) {
         break;
+      }
+      if (
+        value.captureUnsupported &&
+        hasNoProviderObligations(value) &&
+        !isCrabboxCaptureRefusalRetained(value, policy.refreshAfterMs)
+      ) {
+        await deleteEmptyProfile(key);
+        continue;
       }
       await retireImage(context, key, value, remaining);
       let current = await openStore().lookup(key);
@@ -287,8 +297,10 @@ export function createCrabboxWarmImageManager(dependencies: {
         const image = current?.[generation];
         if (current && image && (generation === "previous" || !current.previous)) {
           await deleteImage(context, key, current, remaining, image.checkpointId);
-        } else if (generation === "image") {
-          await deleteEmptyProfile(key);
+        }
+        if (generation === "image") {
+          // A retained refusal marker is display-only and never holds a capacity slot.
+          await openStore().deleteIf(key, hasNoProviderObligations);
         }
       }
     }
@@ -580,7 +592,7 @@ export function createCrabboxWarmImageManager(dependencies: {
       openStore().notePreparedDemand(id, preparation),
 
     async release(context: LeaseContext) {
-      // Only confirmed stop releases this hold: enrollment success may itself be a lost response,
+      // Only confirmed stop or absence releases this hold: enrollment success may be a lost response,
       // and replay still needs the original checkpoint catalog entry and native artifact.
       const owner = await lookupLease(context.id);
       if (!owner) {
@@ -620,7 +632,6 @@ export function createCrabboxWarmImageManager(dependencies: {
       deleteImage,
       retireImage,
       checkpointCommand,
-      runArgs: dependencies.runArgs,
     }),
 
     async allocate(context: AllocationContext): Promise<WarmAllocationRecord["choice"]> {

@@ -22,7 +22,27 @@ function write(root: string, relative: string, contents: string): void {
   fs.mkdirSync(path.dirname(target), { recursive: true });
   fs.writeFileSync(target, contents);
 }
-function fixture(platform = "ios") {
+function fixture(
+  platform = "ios",
+  testflight?: {
+    groupId: string;
+    builds: Array<{
+      id: string;
+      shortVersion: string;
+      buildNumber: string;
+      externalState: string;
+      configured: boolean;
+      hasBetaNotes?: boolean;
+      selectedForAppStore?: boolean;
+    }>;
+    pendingBuild: {
+      id: string;
+      shortVersion: string;
+      buildNumber: string;
+      externalState: string;
+    } | null;
+  },
+) {
   const directory = tempDirs.make("openclaw-mobile-release-");
   const remote = path.join(directory, "origin.git");
   const root = path.join(directory, "checkout");
@@ -51,6 +71,7 @@ function fixture(platform = "ios") {
   );
   for (const file of [
     "scripts/mobile-release-notes.ts",
+    "scripts/lib/mobile-release-evidence.ts",
     "scripts/lib/mobile-release-notes.ts",
     "scripts/mobile-release-ref.ts",
     "scripts/lib/android-store-version.ts",
@@ -62,7 +83,7 @@ function fixture(platform = "ios") {
   write(
     root,
     "scripts/ios-release-plan.sh",
-    `echo '{"gatewayVersion":"2026.9.2","appStoreVersion":"2026.9.20","appStoreRevision":0,"buildNumber":8,"releaseNotesBaselines":[{"audience":"ios","version":null,"build":null}]}'\n`,
+    `echo '${JSON.stringify({ gatewayVersion: "2026.9.2", appStoreVersion: "2026.9.20", appStoreRevision: 0, buildNumber: 8, buildUploads: [], releaseNotesBaselines: [{ audience: "ios", version: null, build: null }], ...(testflight ? { destination: "testflight", testflight } : {}) })}'\n`,
   );
   write(root, "scripts/ios-release-upload.sh", 'exec node scripts/fixture-upload.mjs "$@"\n');
   write(
@@ -74,8 +95,11 @@ import { renderMobileReleaseNotes } from "./lib/mobile-release-notes.ts";
 const git = (...args) => execFileSync("git", args, { encoding: "utf8" }).trim();
 const sha = git("rev-parse", "HEAD");
 const stageOnly = process.argv.includes("--stage-only");
-const notes = renderMobileReleaseNotes({ rootDir: process.cwd(), platform: "ios", version: "2026.9.20", build: "8", audience: "ios" });
-fs.appendFileSync(process.env.FIXTURE_UPLOAD_AUDIT, JSON.stringify({ sha, stageOnly, notes, stampedSha: process.env.GIT_COMMIT, status: git("status", "--porcelain", "--untracked-files=all"), remoteMain: git("ls-remote", "origin", "refs/heads/main").split(/\\s+/)[0], metadata: fs.readFileSync("apps/ios/CHANGELOG.md", "utf8") }) + "\\n");
+const sourceRoot = process.env.OPENCLAW_IOS_RELEASE_SOURCE_ROOT || process.cwd();
+const plan = JSON.parse(fs.readFileSync(process.env.OPENCLAW_IOS_RELEASE_PLAN, "utf8"));
+const buildNumber = process.argv[process.argv.indexOf("--build-number") + 1];
+const notes = renderMobileReleaseNotes({ rootDir: sourceRoot, platform: "ios", version: plan.appStoreVersion, build: buildNumber, audience: "ios" });
+fs.appendFileSync(process.env.FIXTURE_UPLOAD_AUDIT, JSON.stringify({ sha, stageOnly, notes, buildNumber, destination: process.argv.includes("--destination") ? process.argv[process.argv.indexOf("--destination") + 1] : "app-store", stampedSha: process.env.GIT_COMMIT, status: git("status", "--porcelain", "--untracked-files=all"), remoteMain: git("ls-remote", "origin", "refs/heads/main").split(/\\s+/)[0], metadata: fs.readFileSync("apps/ios/CHANGELOG.md", "utf8") }) + "\\n");
 if (process.env.FIXTURE_UPLOAD_FAIL === "1") {
   fs.mkdirSync("apps/ios/fastlane/screenshots/en-US", { recursive: true });
   fs.writeFileSync("apps/ios/fastlane/screenshots/en-US/iPhone-01-control-connected.png", "Synthetic fixture screenshot");
@@ -97,6 +121,7 @@ console.log(stageOnly ? "Synthetic notes staged" : "Synthetic store upload accep
       "scripts/android-version.ts",
       "scripts/lib/android-version.ts",
       "scripts/lib/mobile-changelog.ts",
+      "scripts/lib/mobile-version.ts",
       "scripts/lib/release-version.mjs",
       "scripts/lib/version-script-args.ts",
       "scripts/lib/arg-utils.mts",
@@ -104,6 +129,7 @@ console.log(stageOnly ? "Synthetic notes staged" : "Synthetic store upload accep
       "apps/android/scripts/build-release-artifacts.ts",
       "apps/android/Config/ReleaseSigning.json",
       "apps/android/fastlane/Fastfile",
+      "scripts/android-release-upload.sh",
     ]) {
       write(root, file, fs.readFileSync(path.join(process.cwd(), file), "utf8"));
     }
@@ -127,10 +153,13 @@ console.log(stageOnly ? "Synthetic notes staged" : "Synthetic store upload accep
       root,
       "scripts/lib/android-fastlane.sh",
       `run_android_fastlane() {
+  if [[ "$2" != "release_plan" ]]; then
+    (cd ../.. && ruby scripts/fixture-upload.rb "$3")
+    return
+  fi
   echo '{"schemaVersion":2,"gatewayVersion":"2026.9.2","revision":0,"buildNumber":1,"version":"2026.9.20","versionCode":2026090250,"wearVersionCode":2026090251,"legacyMaxVersionCode":2026090249,"releaseNotesBaselines":[{"audience":"phone","version":null,"build":null},{"audience":"wear","version":null,"build":null}]}' > "\u0024{3#output_path:}"
 }\n`,
     );
-    write(root, "scripts/android-release-upload.sh", "exec ruby scripts/fixture-upload.rb\n");
     write(
       root,
       "scripts/fixture-upload.rb",
@@ -155,12 +184,12 @@ def build_release_artifacts!
   raise "Archive failed" unless system("node", "--import", "tsx", "apps/android/scripts/build-release-artifacts.ts", "--dry-run")
 end
 def upload_play_store_build!(metadata, **options)
-  File.write(ENV.fetch("FIXTURE_UPLOAD_AUDIT"), JSON.generate({ version: metadata.fetch(:version), versionCode: metadata.fetch(:version_code), wearVersionCode: metadata.fetch(:wear_version_code), gradleVersion: ENV["ORG_GRADLE_PROJECT_OPENCLAW_ANDROID_VERSION_NAME"], gradleCode: ENV["ORG_GRADLE_PROJECT_OPENCLAW_ANDROID_VERSION_CODE"], gradleWearCode: ENV["ORG_GRADLE_PROJECT_OPENCLAW_ANDROID_WEAR_VERSION_CODE"] }) + "\n")
+  File.write(ENV.fetch("FIXTURE_UPLOAD_AUDIT"), JSON.generate({ version: metadata.fetch(:version), versionCode: metadata.fetch(:version_code), wearVersionCode: metadata.fetch(:wear_version_code), uploadMetadata: options.fetch(:upload_metadata), gradleVersion: ENV["ORG_GRADLE_PROJECT_OPENCLAW_ANDROID_VERSION_NAME"], gradleCode: ENV["ORG_GRADLE_PROJECT_OPENCLAW_ANDROID_VERSION_CODE"], gradleWearCode: ENV["ORG_GRADLE_PROJECT_OPENCLAW_ANDROID_WEAR_VERSION_CODE"] }) + "\n")
   %w(initialize-android record).each do |command|
     raise "Record failed" unless system("node", "--import", "tsx", "scripts/mobile-release-ref.ts", command, "--plan", ENV.fetch("OPENCLAW_ANDROID_RELEASE_PLAN"))
   end
 end
-$lanes.fetch(:release_upload).call
+$lanes.fetch(:release_upload).call(destination: ARGV.fetch(0).delete_prefix("destination:"))
 `,
     );
   }
@@ -212,55 +241,79 @@ function advanceMain(f: ReturnType<typeof fixture>): string {
 }
 
 describe("mobile release CLI", () => {
-  it("builds Android from the saved store plan and notes without changing Git or pinned metadata", () => {
-    const f = fixture("android");
-    const pinned = [
-      "apps/android/version.json",
-      "apps/android/Config/Version.properties",
-      "apps/android/fastlane/metadata/android/en-US/release_notes.txt",
-    ];
-    const original = pinned.map((file) => fs.readFileSync(path.join(f.root, file), "utf8"));
-    const result = f.invoke("run");
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).toContain("Android versionName: 2026.9.20");
-    expect(result.stdout).toContain("Android versionCode: 2026090250");
-    expect(result.stdout).toContain("Android Wear versionCode: 2026090251");
-    expect(f.audit()[0]).toMatchObject({
-      version: "2026.9.20",
-      versionCode: 2026090250,
-      wearVersionCode: 2026090251,
-      gradleVersion: "2026.9.20",
-      gradleCode: "2026090250",
-      gradleWearCode: "2026090251",
-    });
-    expect(
-      git(
-        f.remote,
-        "rev-parse",
-        "refs/openclaw/mobile-releases/android/v2/2026.9.2/0/1/2026090250-2026090251",
-      ),
-    ).toBe(f.base);
-    expect(git(f.remote, "rev-parse", "main")).toBe(f.base);
-    for (const [index, file] of pinned.entries()) {
-      expect(fs.readFileSync(path.join(f.root, file), "utf8")).toBe(original[index]);
-    }
-    const rebuilt = spawnSync(
-      process.execPath,
-      ["--import", "tsx", "apps/android/scripts/build-release-artifacts.ts", "--dry-run"],
-      {
-        cwd: f.root,
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          OPENCLAW_ANDROID_RELEASE_PLAN: path.join(f.recovery, "android-plan.json"),
-          OPENCLAW_MOBILE_RELEASE_NOTES: path.join(f.recovery, "release-notes.json"),
+  it.each(["play-store", "internal"])(
+    "builds Android %s from the saved plan without changing Git or pinned metadata",
+    (destination) => {
+      const f = fixture("android");
+      const pinned = [
+        "apps/android/version.json",
+        "apps/android/Config/Version.properties",
+        "apps/android/fastlane/metadata/android/en-US/release_notes.txt",
+      ];
+      const original = pinned.map((file) => fs.readFileSync(path.join(f.root, file), "utf8"));
+      const ci = {
+        GITHUB_ACTIONS: "true",
+        GITHUB_EVENT_NAME: "schedule",
+        GITHUB_RUN_ATTEMPT: "1",
+        GITHUB_REF: "refs/heads/main",
+        GITHUB_SHA: f.base,
+      };
+      if (destination === "internal") {
+        const rejected = f.invoke("run", ["--destination", "play-store"], ci);
+        expect(rejected.status).toBe(1);
+        expect(rejected.stderr).toContain("scheduled events are accepted only");
+        expect(fs.existsSync(f.uploadAudit)).toBe(false);
+      }
+      const result = f.invoke(
+        "run",
+        destination === "internal" ? ["--destination", destination] : [],
+        destination === "internal" ? ci : {},
+      );
+      expect(result.status, result.stderr).toBe(0);
+      expect(
+        JSON.parse(fs.readFileSync(path.join(f.recovery, "android-plan.json"), "utf8")),
+      ).toMatchObject({ destination, sourceSha: f.base });
+      expect(result.stdout).toContain("Android versionName: 2026.9.20");
+      expect(result.stdout).toContain("Android versionCode: 2026090250");
+      expect(result.stdout).toContain("Android Wear versionCode: 2026090251");
+      expect(f.audit()[0]).toMatchObject({
+        version: "2026.9.20",
+        versionCode: 2026090250,
+        wearVersionCode: 2026090251,
+        uploadMetadata: destination === "play-store",
+        gradleVersion: "2026.9.20",
+        gradleCode: "2026090250",
+        gradleWearCode: "2026090251",
+      });
+      expect(
+        git(
+          f.remote,
+          "rev-parse",
+          "refs/openclaw/mobile-releases/android/v2/2026.9.2/0/1/2026090250-2026090251",
+        ),
+      ).toBe(f.base);
+      expect(git(f.remote, "rev-parse", "main")).toBe(f.base);
+      for (const [index, file] of pinned.entries()) {
+        expect(fs.readFileSync(path.join(f.root, file), "utf8")).toBe(original[index]);
+      }
+      const rebuilt = spawnSync(
+        process.execPath,
+        ["--import", "tsx", "apps/android/scripts/build-release-artifacts.ts", "--dry-run"],
+        {
+          cwd: f.root,
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            OPENCLAW_ANDROID_RELEASE_PLAN: path.join(f.recovery, "android-plan.json"),
+            OPENCLAW_MOBILE_RELEASE_NOTES: path.join(f.recovery, "release-notes.json"),
+          },
         },
-      },
-    );
-    expect(rebuilt.status, rebuilt.stderr).toBe(0);
-    expect(rebuilt.stdout).toContain("Android versionCode: 2026090250");
-    expect(git(f.root, "status", "--porcelain")).toBe("");
-  });
+      );
+      expect(rebuilt.status, rebuilt.stderr).toBe(0);
+      expect(rebuilt.stdout).toContain("Android versionCode: 2026090250");
+      expect(git(f.root, "status", "--porcelain")).toBe("");
+    },
+  );
 
   it("uploads the detached dispatch source with generated notes and leaves advanced main untouched", () => {
     const f = fixture();
@@ -355,20 +408,171 @@ describe("mobile release CLI", () => {
     expect(git(f.remote, "rev-parse", "main")).toBe(f.base);
   });
 
-  it("recovers only iOS metadata staging using frozen notes and never uploads twice", () => {
-    const f = fixture();
-    const result = f.invoke("run", [], { FIXTURE_STAGE_FAIL: "1" });
+  it.each(["app-store", "testflight"])(
+    "recovers the saved %s destination with corrected tooling and original source without uploading twice",
+    (destination) => {
+      const f = fixture(
+        "ios",
+        destination === "testflight"
+          ? { groupId: "external-fixture", builds: [], pendingBuild: null }
+          : undefined,
+      );
+      const result = f.invoke("run", ["--destination", destination], {
+        FIXTURE_STAGE_FAIL: "1",
+        OPENCLAW_IOS_RELEASE_SOURCE_ROOT: "/invalid-inherited-source",
+      });
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("Synthetic metadata stage refused after upload");
+      expect(git(f.remote, "rev-parse", uploadRef)).toBe(f.base);
+      const notes = fs.readFileSync(path.join(f.recovery, "release-notes.json"), "utf8");
+      const plan = fs.readFileSync(path.join(f.recovery, "ios-plan.json"), "utf8");
+      write(
+        f.root,
+        "scripts/ios-release-upload.sh",
+        'echo "Corrected staging tooling"\nexec node scripts/fixture-upload.mjs "$@"\n',
+      );
+      git(f.root, "add", ".");
+      git(f.root, "commit", "-m", "Fix staging tooling after upload");
+      const toolingSha = git(f.root, "rev-parse", "HEAD");
+      const source = path.join(f.recovery, "source");
+      if (destination === "testflight") {
+        // Downloaded recovery artifacts have no source checkout.
+        git(f.root, "worktree", "remove", "--force", source);
+      } else {
+        write(source, "README.md", "Uncommitted recovery work.\n");
+        const dirty = f.invoke("stage");
+        expect(dirty.status).toBe(1);
+        expect(dirty.stderr).toContain("require a clean checkout");
+        expect(fs.readFileSync(path.join(source, "README.md"), "utf8")).toBe(
+          "Uncommitted recovery work.\n",
+        );
+        git(source, "checkout", "--", "README.md");
+        git(source, "checkout", "--detach", toolingSha);
+        const mismatched = f.invoke("stage");
+        expect(mismatched.status).toBe(1);
+        expect(mismatched.stderr).toContain("Retained source differs from the uploaded build");
+        expect(git(source, "rev-parse", "HEAD")).toBe(toolingSha);
+        git(source, "checkout", "--detach", f.base);
+        expect(f.audit()).toHaveLength(1);
+      }
+      const recovery = f.invoke("stage", [], { OPENAI_API_KEY: "" });
+      expect(recovery.status, recovery.stderr).toBe(0);
+      expect(recovery.stdout).toContain("Corrected staging tooling");
+      expect(f.audit().map((entry) => entry.sha)).toEqual([f.base, toolingSha]);
+      expect(f.audit().map((entry) => entry.stampedSha)).toEqual([f.base, f.base]);
+      expect(f.audit().map((entry) => entry.stageOnly)).toEqual([false, true]);
+      expect(f.audit().map((entry) => entry.destination)).toEqual([destination, destination]);
+      expect(fs.readFileSync(path.join(f.recovery, "release-notes.json"), "utf8")).toBe(notes);
+      expect(fs.readFileSync(path.join(f.recovery, "ios-plan.json"), "utf8")).toBe(plan);
+      expect(fs.existsSync(path.join(f.recovery, "source"))).toBe(false);
+      expect(git(f.remote, "rev-parse", "main")).toBe(f.base);
+      expect(git(f.remote, "rev-parse", uploadRef)).toBe(f.base);
+    },
+  );
+
+  it("admits scheduled TestFlight on the exact main source and rejects scheduled store uploads", () => {
+    const f = fixture("ios", { groupId: "external-fixture", builds: [], pendingBuild: null });
+    const ci = {
+      GITHUB_ACTIONS: "true",
+      GITHUB_EVENT_NAME: "schedule",
+      GITHUB_RUN_ATTEMPT: "1",
+      GITHUB_REF: "refs/heads/main",
+      GITHUB_SHA: f.base,
+    };
+    expect(f.invoke("run", [], ci).status).toBe(1);
+    expect(fs.existsSync(f.uploadAudit)).toBe(false);
+    const result = f.invoke("run", ["--destination", "testflight"], ci);
+    expect(result.status, result.stderr).toBe(0);
+    expect(f.audit()).toEqual([
+      expect.objectContaining({ destination: "testflight", sha: f.base, stageOnly: false }),
+    ]);
+  });
+
+  it("stages an existing App Store build for TestFlight and recovers its frozen notes without uploading", () => {
+    const build = {
+      id: "store-build",
+      shortVersion: "2026.9.20",
+      buildNumber: "7",
+      externalState: "READY_FOR_BETA_SUBMISSION",
+      configured: false,
+      hasBetaNotes: false,
+      selectedForAppStore: true,
+    };
+    const f = fixture("ios", {
+      groupId: "external-fixture",
+      builds: [build],
+      pendingBuild: null,
+    });
+    const existingRef = "refs/openclaw/mobile-releases/ios/2026.9.20-7";
+    git(f.root, "push", "origin", `${f.base}:${existingRef}`);
+    const result = f.invoke("run", ["--destination", "testflight"], { FIXTURE_STAGE_FAIL: "1" });
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("Synthetic metadata stage refused after upload");
-    expect(git(f.remote, "rev-parse", uploadRef)).toBe(f.base);
+    expect(f.audit()).toEqual([
+      expect.objectContaining({ destination: "testflight", buildNumber: "7", stageOnly: true }),
+    ]);
+    expect(
+      JSON.parse(fs.readFileSync(path.join(f.recovery, "ios-plan.json"), "utf8")),
+    ).toMatchObject({
+      destination: "testflight",
+      decision: "stage-existing",
+      buildNumber: 7,
+      sourceSha: f.base,
+      testflight: { existingBuildId: build.id },
+    });
     const notes = fs.readFileSync(path.join(f.recovery, "release-notes.json"), "utf8");
-    const recovery = f.invoke("stage", [], { OPENAI_API_KEY: "" });
-    expect(recovery.status, recovery.stderr).toBe(0);
-    expect(f.audit().map((entry) => entry.stageOnly)).toEqual([false, true]);
+    const recovered = f.invoke("stage", [], { OPENAI_API_KEY: "" });
+    expect(recovered.status, recovered.stderr).toBe(0);
+    expect(f.audit().map((entry) => [entry.stageOnly, entry.buildNumber])).toEqual([
+      [true, "7"],
+      [true, "7"],
+    ]);
     expect(fs.readFileSync(path.join(f.recovery, "release-notes.json"), "utf8")).toBe(notes);
+    expect(git(f.root, "ls-remote", "--refs", "origin", uploadRef)).toBe("");
+    expect(git(f.remote, "rev-parse", existingRef)).toBe(f.base);
     expect(fs.existsSync(path.join(f.recovery, "source"))).toBe(false);
-    expect(git(f.remote, "rev-parse", "main")).toBe(f.base);
   });
+
+  it.each(["unchanged", "deferred-review", "recovery-required"])(
+    "does not upload or regenerate notes for TestFlight %s",
+    (outcome) => {
+      const build = {
+        id: "fixture-build",
+        shortVersion: "2026.9.20",
+        buildNumber: "7",
+        externalState:
+          outcome === "deferred-review"
+            ? "WAITING_FOR_BETA_REVIEW"
+            : outcome === "recovery-required"
+              ? "READY_FOR_BETA_SUBMISSION"
+              : "IN_BETA_TESTING",
+        configured: outcome !== "recovery-required",
+        selectedForAppStore: outcome === "recovery-required",
+        hasBetaNotes: true,
+      };
+      const f = fixture("ios", {
+        groupId: "external-fixture",
+        builds: [build],
+        pendingBuild: outcome === "deferred-review" ? build : null,
+      });
+      if (outcome !== "deferred-review") {
+        git(f.root, "push", "origin", `${f.base}:refs/openclaw/mobile-releases/ios/2026.9.20-7`);
+      }
+      const result = f.invoke("run", ["--destination", "testflight"], { OPENAI_API_KEY: "" });
+      expect(fs.existsSync(f.uploadAudit)).toBe(false);
+      expect(fs.existsSync(path.join(f.recovery, "release-notes.json"))).toBe(false);
+      if (outcome === "recovery-required") {
+        expect(result.status).toBe(1);
+        expect(result.stderr).toContain("Recover its saved destination");
+      } else {
+        expect(result.status, result.stderr).toBe(0);
+        expect(
+          JSON.parse(fs.readFileSync(path.join(f.recovery, "testflight-result.json"), "utf8")),
+        ).toMatchObject({ outcome, groupId: "external-fixture", sourceSha: f.base });
+        expect(fs.existsSync(path.join(f.recovery, "source"))).toBe(false);
+      }
+    },
+  );
 
   it("rejects dirty, non-main, and missing-key releases before creating a worktree or calling Fastlane", () => {
     const f = fixture();

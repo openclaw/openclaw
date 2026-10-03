@@ -60,6 +60,9 @@ export function sessionMenuReasons(params: {
   const archiveReason = lifecycleRows.some((row) => !row.sessionId?.trim())
     ? "Session lifecycle action requires a durable session identity."
     : batchPatchReason({ archived: true }, true);
+  const snoozeReason = !session.sessionId?.trim()
+    ? "Session lifecycle action requires a durable session identity."
+    : patchReason({ snoozedUntil: null }, true);
   const groupReason = reason({
     method: "sessions.groups.put",
     requiredScope: "operator.write",
@@ -85,6 +88,7 @@ export function sessionMenuReasons(params: {
   const cloudWorkerStopReason = cloudWorkerStopAction ? reason(cloudWorkerStopAction) : undefined;
   return {
     ...(pinReason ? { "toggle-pin": pinReason } : {}),
+    ...(snoozeReason ? { snooze: snoozeReason, wake: snoozeReason } : {}),
     ...(renameReason ? { rename: renameReason } : {}),
     ...(iconReason ? { "set-icon": iconReason } : {}),
     ...(colorReason ? { "set-color": colorReason } : {}),

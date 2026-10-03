@@ -73,9 +73,13 @@ describe("createGatewayRequestContext", () => {
             readyState: 1,
             bufferedAmount: 0,
             close: vi.fn(),
-            send: (wire: string, done?: () => void) => {
-              frames.push({ connId: `event-${index}`, ...JSON.parse(wire) });
-              done?.();
+            send: (
+              wire: string | Buffer,
+              options?: { binary: false } | (() => void),
+              done?: () => void,
+            ) => {
+              frames.push({ connId: `event-${index}`, ...JSON.parse(String(wire)) });
+              (typeof options === "function" ? options : done)?.();
             },
           } as unknown as GatewayWsClient["socket"],
         });
@@ -109,7 +113,6 @@ describe("createGatewayRequestContext", () => {
         sessionMessageSubscribers: createSessionMessageSubscriberRegistry(),
         chatAbortControllers: new Map(),
         restartRecoveryCandidates: new Map(),
-        terminalSessions: { closeTaskSessions: vi.fn() },
         refreshConnectedUserProfiles: () => context.refreshConnectedUserProfile?.(),
       });
       try {
@@ -147,7 +150,6 @@ describe("createGatewayRequestContext", () => {
         subscriptions.heartbeatUnsub();
         subscriptions.transcriptUnsub();
         await subscriptions.agentUnsub();
-        await subscriptions.taskUnsub();
       }
     });
   });

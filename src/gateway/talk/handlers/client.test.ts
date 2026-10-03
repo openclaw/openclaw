@@ -75,8 +75,8 @@ vi.mock("../../../plugins/runtime/index.js", async () => {
 vi.mock("../../../agents/embedded-agent.js", () => ({
   runEmbeddedAgent: voiceMocks.runEmbeddedAgent,
 }));
-vi.mock("../../../agents/realtime-bootstrap-context.js", () => ({
-  resolveRealtimeBootstrapContextInstructions: async () => undefined,
+vi.mock("../../../agents/bootstrap-files.js", () => ({
+  resolveBootstrapFilesForRun: async () => [],
 }));
 
 const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);

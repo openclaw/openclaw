@@ -1,212 +1,118 @@
-/** Verifies bundle manifest loading and bundled plugin runtime resolution. */
 import fs from "node:fs";
 import path from "node:path";
-import { afterAll, afterEach, describe, expect, it } from "vitest";
-import { withEnv } from "../test-utils/env.js";
-import { loadOpenClawPlugins } from "./loader.js";
+import { afterAll, afterEach, expect, it } from "vitest";
 import {
   cleanupPluginLoaderFixturesForTest,
   loadBundleFixture,
   makePluginLoaderTempDir,
   mkdirSafe,
   resetPluginLoaderTestStateForTest,
-  useNoBundledPlugins,
 } from "./loader.test-fixtures.js";
 
-function expectNoUnwiredBundleDiagnostic(
-  registry: ReturnType<typeof loadOpenClawPlugins>,
-  pluginId: string,
-) {
+function writeFiles(root: string, files: Record<string, string | object>) {
+  for (const [name, content] of Object.entries(files)) {
+    const file = path.join(root, name);
+    mkdirSafe(path.dirname(file));
+    fs.writeFileSync(file, typeof content === "string" ? content : JSON.stringify(content));
+  }
+}
+
+const skill = "---\ndescription: fixture\n---\n";
+const bundles: Array<{
+  id: string;
+  format: string;
+  capabilities: string[];
+  files: Record<string, string | object>;
+}> = [
+  {
+    id: "sample-bundle",
+    format: "codex",
+    capabilities: ["skills"],
+    files: {
+      ".codex-plugin/plugin.json": { name: "Sample Bundle", skills: "skills" },
+      "skills/SKILL.md": skill,
+    },
+  },
+  {
+    id: "claude-skills",
+    format: "claude",
+    capabilities: ["skills", "commands", "settings"],
+    files: { "commands/review.md": skill, "settings.json": { hideThinkingBlock: true } },
+  },
+  {
+    id: "claude-mcp",
+    format: "claude",
+    capabilities: ["mcpServers"],
+    files: {
+      ".claude-plugin/plugin.json": { name: "Claude MCP" },
+      ".mcp.json": { mcpServers: { probe: { command: "node", args: ["./probe.mjs"] } } },
+    },
+  },
+  {
+    id: "cursor-skills",
+    format: "cursor",
+    capabilities: ["skills", "commands"],
+    files: {
+      ".cursor-plugin/plugin.json": { name: "Cursor Skills" },
+      ".cursor/commands/review.md": skill,
+    },
+  },
+];
+
+afterEach(resetPluginLoaderTestStateForTest);
+afterAll(cleanupPluginLoaderFixturesForTest);
+
+it.each(bundles)("loads supported $id bundle surfaces without a runtime entry", (fixture) => {
+  const registry = loadBundleFixture({
+    pluginId: fixture.id,
+    build: (root) => writeFiles(root, fixture.files),
+  });
+  expect(registry.plugins.find((entry) => entry.id === fixture.id)).toMatchObject({
+    status: "loaded",
+    format: "bundle",
+    bundleFormat: fixture.format,
+    bundleCapabilities: fixture.capabilities,
+  });
+  expect(
+    registry.diagnostics.some(
+      (diag) =>
+        diag.pluginId === fixture.id &&
+        diag.message.includes("bundle capability detected but not wired"),
+    ),
+  ).toBe(false);
+});
+
+it("accepts bundle HTTP MCP and warns only for incomplete configs", () => {
+  const pluginId = "claude-mcp-url";
+  const registry = loadBundleFixture({
+    pluginId,
+    env: { OPENCLAW_HOME: makePluginLoaderTempDir() },
+    build: (root) =>
+      writeFiles(root, {
+        ".claude-plugin/plugin.json": { name: "Claude MCP URL" },
+        ".mcp.json": {
+          mcpServers: {
+            remoteProbe: { transport: "streamable-http", url: "http://127.0.0.1:8787/mcp" },
+            incompleteProbe: { transport: "streamable-http" },
+          },
+        },
+      }),
+  });
+  expect(registry.plugins.find((entry) => entry.id === pluginId)).toMatchObject({
+    status: "loaded",
+    bundleCapabilities: ["mcpServers"],
+  });
   expect(
     registry.diagnostics.some(
       (diag) =>
         diag.pluginId === pluginId &&
-        diag.message.includes("bundle capability detected but not wired"),
+        diag.message.includes("unsupported transports or incomplete configs") &&
+        diag.message.includes("incompleteProbe"),
+    ),
+  ).toBe(true);
+  expect(
+    registry.diagnostics.some(
+      (diag) => diag.pluginId === pluginId && diag.message.includes("remoteProbe"),
     ),
   ).toBe(false);
-}
-
-afterEach(() => {
-  resetPluginLoaderTestStateForTest();
-});
-
-afterAll(() => {
-  cleanupPluginLoaderFixturesForTest();
-});
-
-describe("bundle plugins", () => {
-  it("reports Codex bundles as loaded bundle plugins without importing runtime code", () => {
-    useNoBundledPlugins();
-    const workspaceDir = makePluginLoaderTempDir();
-    const stateDir = makePluginLoaderTempDir();
-    const bundleRoot = path.join(workspaceDir, ".openclaw", "extensions", "sample-bundle");
-    mkdirSafe(path.join(bundleRoot, ".codex-plugin"));
-    mkdirSafe(path.join(bundleRoot, "skills"));
-    fs.writeFileSync(
-      path.join(bundleRoot, ".codex-plugin", "plugin.json"),
-      JSON.stringify({
-        name: "Sample Bundle",
-        description: "Codex bundle fixture",
-        skills: "skills",
-      }),
-      "utf-8",
-    );
-    fs.writeFileSync(
-      path.join(bundleRoot, "skills", "SKILL.md"),
-      "---\ndescription: fixture\n---\n",
-    );
-
-    const registry = withEnv({ OPENCLAW_STATE_DIR: stateDir }, () =>
-      loadOpenClawPlugins({
-        workspaceDir,
-        onlyPluginIds: ["sample-bundle"],
-        config: {
-          plugins: {
-            entries: {
-              "sample-bundle": {
-                enabled: true,
-              },
-            },
-          },
-        },
-        cache: false,
-      }),
-    );
-
-    const plugin = registry.plugins.find((entry) => entry.id === "sample-bundle");
-    expect(plugin?.status).toBe("loaded");
-    expect(plugin?.format).toBe("bundle");
-    expect(plugin?.bundleFormat).toBe("codex");
-    expect(plugin?.bundleCapabilities).toContain("skills");
-  });
-
-  it.each([
-    {
-      name: "treats Claude command roots and settings as supported bundle surfaces",
-      pluginId: "claude-skills",
-      expectedFormat: "claude",
-      expectedCapabilities: ["skills", "commands", "settings"],
-      build: (bundleRoot: string) => {
-        mkdirSafe(path.join(bundleRoot, "commands"));
-        fs.writeFileSync(
-          path.join(bundleRoot, "commands", "review.md"),
-          "---\ndescription: fixture\n---\n",
-        );
-        fs.writeFileSync(
-          path.join(bundleRoot, "settings.json"),
-          '{"hideThinkingBlock":true}',
-          "utf-8",
-        );
-      },
-    },
-    {
-      name: "treats bundle MCP as a supported bundle surface",
-      pluginId: "claude-mcp",
-      expectedFormat: "claude",
-      expectedCapabilities: ["mcpServers"],
-      build: (bundleRoot: string) => {
-        mkdirSafe(path.join(bundleRoot, ".claude-plugin"));
-        fs.writeFileSync(
-          path.join(bundleRoot, ".claude-plugin", "plugin.json"),
-          JSON.stringify({
-            name: "Claude MCP",
-          }),
-          "utf-8",
-        );
-        fs.writeFileSync(
-          path.join(bundleRoot, ".mcp.json"),
-          JSON.stringify({
-            mcpServers: {
-              probe: {
-                command: "node",
-                args: ["./probe.mjs"],
-              },
-            },
-          }),
-          "utf-8",
-        );
-      },
-    },
-    {
-      name: "treats Cursor command roots as supported bundle skill surfaces",
-      pluginId: "cursor-skills",
-      expectedFormat: "cursor",
-      expectedCapabilities: ["skills", "commands"],
-      build: (bundleRoot: string) => {
-        mkdirSafe(path.join(bundleRoot, ".cursor-plugin"));
-        mkdirSafe(path.join(bundleRoot, ".cursor", "commands"));
-        fs.writeFileSync(
-          path.join(bundleRoot, ".cursor-plugin", "plugin.json"),
-          JSON.stringify({
-            name: "Cursor Skills",
-          }),
-          "utf-8",
-        );
-        fs.writeFileSync(
-          path.join(bundleRoot, ".cursor", "commands", "review.md"),
-          "---\ndescription: fixture\n---\n",
-        );
-      },
-    },
-  ])("$name", ({ pluginId, expectedFormat, expectedCapabilities, build }) => {
-    const registry = loadBundleFixture({ pluginId, build });
-    const plugin = registry.plugins.find((entry) => entry.id === pluginId);
-
-    expect(plugin?.status).toBe("loaded");
-    expect(plugin?.bundleFormat).toBe(expectedFormat);
-    expect(plugin?.bundleCapabilities).toEqual(expectedCapabilities);
-    expectNoUnwiredBundleDiagnostic(registry, pluginId);
-  });
-
-  it("accepts bundle HTTP MCP and warns only for incomplete configs", () => {
-    const stateDir = makePluginLoaderTempDir();
-    const registry = loadBundleFixture({
-      pluginId: "claude-mcp-url",
-      env: {
-        OPENCLAW_HOME: stateDir,
-      },
-      build: (bundleRoot) => {
-        mkdirSafe(path.join(bundleRoot, ".claude-plugin"));
-        fs.writeFileSync(
-          path.join(bundleRoot, ".claude-plugin", "plugin.json"),
-          JSON.stringify({
-            name: "Claude MCP URL",
-          }),
-          "utf-8",
-        );
-        fs.writeFileSync(
-          path.join(bundleRoot, ".mcp.json"),
-          JSON.stringify({
-            mcpServers: {
-              remoteProbe: {
-                transport: "streamable-http",
-                url: "http://127.0.0.1:8787/mcp",
-              },
-              incompleteProbe: {
-                transport: "streamable-http",
-              },
-            },
-          }),
-          "utf-8",
-        );
-      },
-    });
-
-    const plugin = registry.plugins.find((entry) => entry.id === "claude-mcp-url");
-    expect(plugin?.status).toBe("loaded");
-    expect(plugin?.bundleCapabilities).toEqual(["mcpServers"]);
-    expect(
-      registry.diagnostics.some(
-        (diag) =>
-          diag.pluginId === "claude-mcp-url" &&
-          diag.message.includes("unsupported transports or incomplete configs") &&
-          diag.message.includes("incompleteProbe"),
-      ),
-    ).toBe(true);
-    expect(
-      registry.diagnostics.some(
-        (diag) => diag.pluginId === "claude-mcp-url" && diag.message.includes("remoteProbe"),
-      ),
-    ).toBe(false);
-  });
 });

@@ -206,11 +206,9 @@ export type SlackQaScenarioContext = {
   channelId: string;
   driverClient: WebClient;
   gateway: QaGatewayChild;
-  postSlackMessage: (params: { text: string; threadTs?: string }) => Promise<{ ts: string }>;
   sentTs: string;
   sutIdentity: SlackAuthIdentity;
   sutReadClient: WebClient;
-  waitForReady: () => Promise<void>;
 };
 
 export type SlackQaScenarioImplementation = {
@@ -284,13 +282,6 @@ export const SLACK_QA_APPROVAL_CHECKPOINT_DIR_ENV = "OPENCLAW_QA_SLACK_APPROVAL_
 export const SLACK_QA_APPROVAL_CHECKPOINT_TIMEOUT_MS_ENV =
   "OPENCLAW_QA_SLACK_APPROVAL_CHECKPOINT_TIMEOUT_MS";
 export const SLACK_QA_WEB_API_TIMEOUT_MS = 45_000;
-export const SLACK_QA_ENV_KEYS = [
-  "OPENCLAW_QA_SLACK_CHANNEL_ID",
-  "OPENCLAW_QA_SLACK_DRIVER_BOT_TOKEN",
-  "OPENCLAW_QA_SLACK_SUT_BOT_TOKEN",
-  "OPENCLAW_QA_SLACK_SUT_APP_TOKEN",
-] as const;
-
 export const slackQaCredentialPayloadSchema = z.object({
   channelId: z.string().trim().min(1),
   driverBotToken: z.string().trim().min(1),

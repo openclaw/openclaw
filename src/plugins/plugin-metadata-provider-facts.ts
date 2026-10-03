@@ -17,10 +17,11 @@ import type {
   PluginProviderAuthContribution,
 } from "./plugin-metadata-snapshot.types.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
+import { normalizeManifestProviderRequestProvider } from "./plugin-provider-request-policy.js";
 import { listSetupProviderIds } from "./setup-descriptors.js";
 
 const PROVIDER_ENDPOINT_CLASSES = new Set(
-  "anthropic-public cerebras-native chutes-native deepseek-native github-copilot-native groq-native meta-native mistral-public minimax-native moonshot-native modelstudio-native nvidia-native openai-public openai opencode-native opencode-go-native azure-openai openrouter xai-native xiaomi-native zai-native google-generative-ai google-vertex".split(
+  "anthropic-public cerebras-native chutes-native deepseek-native github-copilot-native groq-native meta-native mistral-public minimax-native moonshot-native modelstudio-native nvidia-native openai-public openai opencode-native opencode-go-native azure-openai openrouter vercel-ai-gateway xai-native xiaomi-native zai-native google-generative-ai google-vertex".split(
     " ",
   ),
 );
@@ -193,20 +194,7 @@ export function buildPluginMetadataProviderFacts(plugins: readonly PluginManifes
       if (!provider) {
         continue;
       }
-      const supportsStreamingUsage = isRecord(request.openAICompletions)
-        ? request.openAICompletions.supportsStreamingUsage
-        : undefined;
-      providerRequests.set(provider, {
-        ...(normalizeOptionalString(request.family)
-          ? { family: normalizeOptionalString(request.family) }
-          : {}),
-        ...(normalizeOptionalString(request.compatibilityFamily) === "moonshot"
-          ? { compatibilityFamily: "moonshot" as const }
-          : {}),
-        ...(typeof supportsStreamingUsage === "boolean"
-          ? { openAICompletions: { supportsStreamingUsage } }
-          : {}),
-      });
+      providerRequests.set(provider, normalizeManifestProviderRequestProvider(request) ?? {});
     }
   }
   for (const manifest of listOfficialExternalProviderEndpointManifests()) {

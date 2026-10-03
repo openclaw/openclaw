@@ -9,16 +9,14 @@ import {
   validateQaEvidenceSummaryJson,
   type QaEvidenceSummaryJson,
 } from "./evidence-summary.js";
-import type { QaProviderMode } from "./model-selection.js";
+import { splitQaModelRef, type QaProviderMode } from "./model-selection.js";
 import type { QaTransportDriver } from "./qa-transport-registry.js";
 import type { QaTransportAdapter } from "./qa-transport.js";
 import { renderQaMarkdownReport } from "./report.js";
-import type { RuntimeId } from "./runtime-parity.js";
+import type { RuntimeId } from "./runtime-id.js";
 import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
 import type { QaScorecardEvidenceMode } from "./scorecard-taxonomy.js";
-import { splitModelRef } from "./suite-planning.js";
 import { countQaSuiteFailedScenarios, type QaSuiteSummaryJson } from "./suite-summary.js";
-import { createQaSuiteReportNotes } from "./suite-support.js";
 import {
   rejectRemovedQaChannelDriverSelection,
   type QaSuiteScenarioResult,
@@ -52,7 +50,7 @@ export async function invalidateQaSuiteArtifactGeneration(outputDir: string) {
   }
 }
 
-export type QaSuiteSummaryJsonParams = {
+type QaSuiteSummaryJsonParams = {
   status?: QaSuiteSummaryJson["run"]["status"];
   scenarios: QaSuiteScenarioResult[];
   startedAt: Date;
@@ -89,8 +87,8 @@ export type QaSuiteGatewayHeapSnapshot = NonNullable<
  */
 export function buildQaSuiteSummaryJson(params: QaSuiteSummaryJsonParams): QaSuiteSummaryJson {
   rejectRemovedQaChannelDriverSelection(params);
-  const primarySplit = splitModelRef(params.primaryModel);
-  const alternateSplit = splitModelRef(params.alternateModel);
+  const primarySplit = splitQaModelRef(params.primaryModel);
+  const alternateSplit = splitQaModelRef(params.alternateModel);
   return {
     scenarios: params.scenarios,
     counts: {
@@ -158,10 +156,10 @@ export async function writeQaSuiteArtifacts(
     startedAt: params.startedAt,
     finishedAt: params.finishedAt,
     scenarios: params.scenarios,
-    notes: createQaSuiteReportNotes({
-      ...params,
-      transportArtifactNotes: params.transportArtifacts?.reportNotes,
-    }),
+    notes: [
+      ...params.transport.createReportNotes(params),
+      ...(params.transportArtifacts?.reportNotes ?? []),
+    ],
   });
   const artifactPaths = [
     { kind: "summary", path: path.basename(summaryPath) },

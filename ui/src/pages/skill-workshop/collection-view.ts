@@ -58,7 +58,7 @@ export function renderSkillWorkshopCollection(props: SkillWorkshopProps) {
             .value=${props.query}
             @input=${(event: Event) =>
               // SAFETY: handler is bound on the <input> itself, so currentTarget is that element.
-              props.onQueryChange((event.currentTarget as HTMLInputElement).value ?? "")}
+              props.onQueryChange((event.currentTarget as HTMLInputElement).value)}
           />
         </label>
         <p class="sw-collection__count" role="status">
@@ -139,7 +139,8 @@ function renderShelf(props: SkillWorkshopProps, matches: InstalledSkill[]) {
       },
     });
   }
-  const selectedName = selectedInstalledName(props);
+  const selectedName =
+    props.installedSelection.status === "idle" ? null : props.installedSelection.name;
   return matches.map((skill) => {
     const isSelected = skill.name === selectedName;
     const changed = changedSkillWorkshopVersion(skill.read);
@@ -171,10 +172,6 @@ function renderShelf(props: SkillWorkshopProps, matches: InstalledSkill[]) {
       </button>
     `;
   });
-}
-
-function selectedInstalledName(props: SkillWorkshopProps): string | null {
-  return props.installedSelection.status === "idle" ? null : props.installedSelection.name;
 }
 
 function renderReader(props: SkillWorkshopProps) {

@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-// Check Madge Import Cycles script supports OpenClaw repository automation.
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import * as ts from "typescript/unstable/ast";
@@ -9,6 +8,7 @@ import {
 } from "./lib/import-cycle-graph.ts";
 import { formatNativeTypeScriptDiagnostics } from "./lib/native-typescript-diagnostics.mts";
 import { createNativeTypeScriptProject } from "./lib/native-typescript.mts";
+import { visitModuleSpecifiers } from "./lib/ts-guard-utils.mts";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const scanRoots = ["src", "extensions", "ui"] as const;
@@ -16,25 +16,13 @@ const sourceExtensions = [".ts"] as const;
 const ignoredPathPartPattern =
   /(^|\/)(node_modules|dist|build|coverage|\.artifacts|\.git|assets)(\/|$)/;
 
-function shouldSkipRepoPath(repoPath: string): boolean {
-  return ignoredPathPartPattern.test(repoPath);
-}
-
 function collectStaticModuleSpecifiers(sourceFile: ts.SourceFile): ts.StringLiteral[] {
   const specifiers: ts.StringLiteral[] = [];
-  const visit = (node: ts.Node) => {
-    if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) {
-      specifiers.push(node.moduleSpecifier);
-    } else if (
-      ts.isExportDeclaration(node) &&
-      node.moduleSpecifier &&
-      ts.isStringLiteral(node.moduleSpecifier)
-    ) {
-      specifiers.push(node.moduleSpecifier);
+  visitModuleSpecifiers(sourceFile, ({ kind, specifierNode }) => {
+    if ((kind === "import" || kind === "export") && ts.isStringLiteral(specifierNode)) {
+      specifiers.push(specifierNode);
     }
-    node.forEachChild(visit);
-  };
-  visit(sourceFile);
+  });
   return specifiers;
 }
 
@@ -105,7 +93,7 @@ function main(): number {
     collectSourceFiles(path.join(repoRoot, root), {
       repoRoot,
       sourceExtensions,
-      shouldSkipRepoPath,
+      shouldSkipRepoPath: (repoPath) => ignoredPathPartPattern.test(repoPath),
     }),
   );
   const graph = createImportGraph(files);

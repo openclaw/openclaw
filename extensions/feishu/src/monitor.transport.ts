@@ -9,12 +9,10 @@ import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   applyBasicWebhookRequestGuards,
-  getWebhookLegacyListener,
   resolveRequestClientIp,
 } from "openclaw/plugin-sdk/webhook-ingress";
 import {
   createWebhookInFlightLimiter,
-  installRequestBodyLimitGuard,
   readWebhookBodyOrReject,
   sendHttpRequestRejection,
 } from "openclaw/plugin-sdk/webhook-request-guards";
@@ -39,6 +37,7 @@ import {
   recordWebhookStatus,
   wsClients,
 } from "./monitor.state.js";
+import { feishuWebhookHost, startFeishuLegacyWebhookListener } from "./monitor.webhook-legacy.js";
 import type { ResolvedFeishuAccount } from "./types.js";
 import { DEFAULT_FEISHU_WEBHOOK_PATH, normalizeFeishuWebhookPath } from "./webhook-path.js";
 import {
@@ -232,13 +231,11 @@ function waitForFeishuWsCycleEnd(params: {
         return;
       }
       settled = true;
-      if (handleAbort) {
-        params.abortSignal?.removeEventListener("abort", handleAbort);
-      }
+      params.abortSignal?.removeEventListener("abort", handleAbort);
       resolve(result);
     };
 
-    const handleAbort: (() => void) | undefined = () => finish("abort");
+    const handleAbort = () => finish("abort");
     params.abortSignal?.addEventListener("abort", handleAbort, { once: true });
     if (params.abortSignal?.aborted) {
       finish("abort");
@@ -401,10 +398,10 @@ async function handleFeishuWebhook(
   req: http.IncomingMessage,
   res: http.ServerResponse,
   webhookTargets: Map<string, FeishuWebhookTarget[]>,
+  legacyListener = feishuWebhookHost.getWebhookLegacyListener?.(req),
 ): Promise<void> {
   const requestUrl = req.url ?? "/";
   const requestPath = requestUrl.split("?", 1)[0];
-  const legacyListener = getWebhookLegacyListener(req);
   const targets = (
     webhookTargets.get(canonicalizeWebhookRouteKey(requestPath ?? "/")) ?? []
   ).filter(
@@ -490,19 +487,10 @@ async function handleFeishuWebhook(
     return;
   }
 
-  const guard = installRequestBodyLimitGuard(req, res, {
-    maxBytes: FEISHU_WEBHOOK_MAX_BODY_BYTES,
-    timeoutMs: FEISHU_WEBHOOK_BODY_TIMEOUT_MS,
-    responseFormat: "text",
-  });
-  if (guard.isTripped()) {
-    preAuthInFlightLimiter.release(preAuthInFlightKey);
-    return;
-  }
-
   try {
     let rawBody: string;
     try {
+      res.setHeader("Content-Type", "text/plain; charset=utf-8");
       const body = await readWebhookBodyOrReject({
         req,
         res,
@@ -511,9 +499,6 @@ async function handleFeishuWebhook(
         profile: "pre-auth",
       });
       if (!body.ok || res.writableEnded) {
-        return;
-      }
-      if (guard.isTripped()) {
         return;
       }
       rawBody = body.value;
@@ -562,7 +547,6 @@ async function handleFeishuWebhook(
     } finally {
       // This slot owns only untrusted body and signature work; authenticated
       // parsing and dispatch must not reject new reads when downstream stalls.
-      guard.dispose();
       preAuthInFlightLimiter.release(preAuthInFlightKey);
     }
 
@@ -609,8 +593,13 @@ async function handleFeishuWebhook(
 }
 
 export async function monitorWebhook(params: MonitorTransportParams): Promise<void> {
-  const { account, accountId, runtime, abortSignal, statusSink } = params;
+  const { account, accountId, runtime, statusSink } = params;
+  const stopped = new AbortController();
+  const abortSignal = params.abortSignal
+    ? AbortSignal.any([params.abortSignal, stopped.signal])
+    : stopped.signal;
   const legacyListener = resolveFeishuLegacyWebhookListener(account.config);
+  const gatewayOwnsLegacyListeners = feishuWebhookHost.getWebhookLegacyListener !== undefined;
   const encryptKey = account.encryptKey?.trim();
   if (!encryptKey) {
     throw new Error(`Feishu account "${accountId}" webhook mode requires encryptKey`);
@@ -639,6 +628,7 @@ export async function monitorWebhook(params: MonitorTransportParams): Promise<vo
     });
   const registration = registerWebhookTarget(webhookTargets, {
     ...params,
+    abortSignal,
     path,
     rawPath,
     legacyListener,
@@ -647,6 +637,8 @@ export async function monitorWebhook(params: MonitorTransportParams): Promise<vo
     pendingResponses: new Map<http.ServerResponse, Promise<void>>(),
   });
   let unregisterRoute: (() => void) | undefined;
+  let ownedListener: Awaited<ReturnType<typeof startFeishuLegacyWebhookListener>> | undefined;
+  let listenerError: Error | undefined;
   let cleanupStarted = false;
   let pendingDrain: Promise<void> | undefined;
   const cleanup = () => {
@@ -654,6 +646,8 @@ export async function monitorWebhook(params: MonitorTransportParams): Promise<vo
       return pendingDrain;
     }
     cleanupStarted = true;
+    stopped.abort();
+    ownedListener?.stopAccepting();
     const identityRevision = readFeishuBotIdentityRevision(accountId);
     pendingDrain = (async () => {
       const pendingResponses = registration.target.pendingResponses;
@@ -681,12 +675,16 @@ export async function monitorWebhook(params: MonitorTransportParams): Promise<vo
       ) {
         clearFeishuBotIdentityState(accountId);
       }
-      registration.unregister();
-      unregisterRoute?.();
+      try {
+        registration.unregister();
+        unregisterRoute?.();
+      } finally {
+        await ownedListener?.close();
+      }
     })();
     return pendingDrain;
   };
-  if (abortSignal?.aborted) {
+  if (abortSignal.aborted) {
     await cleanup();
     return;
   }
@@ -700,18 +698,44 @@ export async function monitorWebhook(params: MonitorTransportParams): Promise<vo
       handler: (req, res) => handleFeishuWebhook(req, res, webhookTargets),
       reuseExistingSameOwner: true,
       throwOnFailure: true,
-      legacyListener,
+      legacyListener: gatewayOwnsLegacyListeners ? legacyListener : undefined,
       log: runtime?.log,
     });
+    if (!gatewayOwnsLegacyListeners && legacyListener && !abortSignal.aborted) {
+      const accountTargets = new Map([[path, [registration.target]]]);
+      ownedListener = await startFeishuLegacyWebhookListener({
+        endpoint: legacyListener,
+        handleRequest: (req, res) => handleFeishuWebhook(req, res, accountTargets, legacyListener),
+        onFailure: (error) => {
+          listenerError = error;
+          stopped.abort(error);
+        },
+        onRequestError: (error) =>
+          (runtime?.error ?? console.error)(
+            `feishu[${accountId}]: legacy webhook request failed: ${formatFeishuWsErrorForLog(error)}`,
+          ),
+      });
+    }
+    if (abortSignal.aborted) {
+      if (listenerError) {
+        throw listenerError;
+      }
+      return;
+    }
     const connectedAt = Date.now();
     statusSink?.(channelReadyPatch({ lastConnectedAt: connectedAt, lastEventAt: connectedAt }));
     runtime?.log?.(
-      pathConflict
-        ? `feishu[${accountId}]: ${pathConflict} The legacy listener keeps the old path working; move the path and callback before setting legacyWebhook:false.`
-        : `feishu[${accountId}]: webhook registered on Gateway port ${params.gatewayPort ?? 18789} at ${rawPath}; point the Feishu callback URL or reverse-proxy upstream to this Gateway route. ${legacyListener ? `The legacy listener on ${legacyListener.host}:${legacyListener.port} forwards here; set legacyWebhook:false after verifying delivery through the Gateway to disable legacy forwarding for this account.` : "legacyWebhook:false disables legacy forwarding for this account."}`,
+      ownedListener
+        ? `feishu[${accountId}]: 2026.9.6 compatibility listener ${legacyListener?.host}:${legacyListener?.port} serves this account directly. This host requires distinct legacy endpoints for separate accounts; set legacyWebhook:false after verifying delivery on the Gateway route.`
+        : pathConflict
+          ? `feishu[${accountId}]: ${pathConflict} The legacy listener keeps the old path working; move the path and callback before setting legacyWebhook:false.`
+          : `feishu[${accountId}]: webhook registered on Gateway port ${params.gatewayPort ?? 18789} at ${rawPath}; point the Feishu callback URL or reverse-proxy upstream to this Gateway route. ${legacyListener ? `The legacy listener on ${legacyListener.host}:${legacyListener.port} forwards here; set legacyWebhook:false after verifying delivery through the Gateway to disable legacy forwarding for this account.` : "legacyWebhook:false disables legacy forwarding for this account."}`,
     );
     // Stopping targets retain only signature recognition until their responses finish.
     await waitUntilAbort(abortSignal, cleanup);
+    if (listenerError) {
+      throw listenerError;
+    }
   } finally {
     await cleanup();
   }

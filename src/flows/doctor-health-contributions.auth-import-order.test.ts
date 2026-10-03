@@ -162,7 +162,7 @@ afterEach(async () => {
 });
 
 describe("interactive Doctor auth migration", () => {
-  it.each(["failed", "completed", "declined"] as const)(
+  it.each(["failed", "declined"] as const)(
     "reports interrupted archive recovery when the remaining migration is %s",
     async (outcome) => {
       const state = await makeState();

@@ -11,6 +11,7 @@ import {
   getRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
+import { ACTIVITY_SUMMARY_FORMAT_REVISION } from "../../config/sessions/activity-summary.js";
 import {
   loadSessionEntry,
   replaceSessionEntrySync,
@@ -56,7 +57,7 @@ it("reuses committed row facts when a changed model catalog updates session list
         modelOverride: "fixture",
         activitySummary: {
           version: 1,
-          formatRevision: 2,
+          formatRevision: ACTIVITY_SUMMARY_FORMAT_REVISION,
           text: "Ready",
           updatedAt: 1,
           sessionId: scope.sessionKey,

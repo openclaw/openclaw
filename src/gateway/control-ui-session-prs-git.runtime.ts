@@ -3,13 +3,65 @@ import nodePath from "node:path";
 import { readRegularFile } from "@openclaw/fs-safe/advanced";
 import { runGit } from "../agents/worktrees/git.js";
 import type { GitReadOperations } from "../infra/git-read-operations.js";
-import { readGitRefs } from "../infra/git-root.js";
+import { readGitHead, readGitRefs, resolveGitRefsBase } from "../infra/git-root.js";
+import { canReadGitFilesystemRefs } from "../infra/git-worker-context.js";
 import {
   gitOutput,
   readCheckoutHead,
   resolveBranchLanding,
 } from "./control-ui-session-prs-landing.js";
 import { parseGitHubRemoteUrl } from "./github-remote.js";
+
+/** File-backed Git metadata is checked in the worker, never by spawning Git. */
+export function readCheckoutGitRevision({
+  root,
+  includeIndex,
+}: GitReadOperations["checkout.revision"]["input"]): string | null {
+  if (!canReadGitFilesystemRefs()) {
+    return null;
+  }
+  try {
+    const head = readGitHead(root, { maxDepth: 1 });
+    if (!head) {
+      return null;
+    }
+    const gitDir = nodePath.dirname(head.headPath);
+    const common = resolveGitRefsBase(head.headPath);
+    if (fs.existsSync(nodePath.join(common, "reftable"))) {
+      return null;
+    }
+    const paths = [
+      nodePath.join(root, ".git"),
+      head.headPath,
+      nodePath.join(gitDir, "commondir"),
+      nodePath.join(common, "config"),
+      nodePath.join(gitDir, "config.worktree"),
+      nodePath.join(common, "packed-refs"),
+    ];
+    if (includeIndex) {
+      paths.push(nodePath.join(gitDir, "index"));
+    }
+    const refs = nodePath.join(common, "refs");
+    if (fs.existsSync(refs)) {
+      paths.push(
+        ...fs
+          .readdirSync(refs, { recursive: true, encoding: "utf8" })
+          .map((name) => nodePath.join(refs, name)),
+      );
+    }
+    return JSON.stringify(
+      paths.toSorted().map((file) => {
+        const stat = fs.lstatSync(file, { throwIfNoEntry: false });
+        if (stat?.isSymbolicLink()) {
+          throw new Error("Symbolic Git metadata requires Git discovery");
+        }
+        return [file, stat?.ino, stat?.size, stat?.mtimeMs, stat?.ctimeMs];
+      }),
+    );
+  } catch {
+    return null;
+  }
+}
 
 function readDefaultRef(head: ReturnType<typeof readCheckoutHead>): string | null | undefined {
   if (!head) {
@@ -122,8 +174,11 @@ async function untrackedFileAdditions(root: string, filePath: string): Promise<n
 }
 
 async function untrackedStats(root: string): Promise<{ additions: number; files: number }> {
-  const listing = await gitOutput(root, ["ls-files", "--others", "--exclude-standard", "-z"]);
-  const paths = (listing ?? "").split("\0").filter(Boolean);
+  const listing = await runGit(root, ["ls-files", "--others", "--exclude-standard", "-z"]).catch(
+    () => null,
+  );
+  // NUL-delimited filenames retain leading whitespace, unlike scalar Git output.
+  const paths = listing?.code === 0 ? listing.stdout.split("\0").filter(Boolean) : [];
   let additions = 0;
   for (const filePath of paths.slice(0, MAX_UNTRACKED_STAT_FILES)) {
     additions += await untrackedFileAdditions(root, filePath);
@@ -144,7 +199,10 @@ async function diffStatsAgainst(
   try {
     // Checkout-configurable diff drivers must never execute in the Gateway
     // process (same guard as sessions-diff).
+    // A read must not refresh index stat data and invalidate its own revision.
     const result = await runGit(root, [
+      "-c",
+      "diff.autoRefreshIndex=false",
       "diff",
       "--shortstat",
       "--no-ext-diff",
