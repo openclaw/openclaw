@@ -81,7 +81,7 @@ function sweeperFixture(): TimerFixture {
   const timer = observeTimer(() => {
     references = invokeCaller(sweeper.start);
   });
-  return { references, timer, close: sweeper.reset };
+  return { references, timer, close: () => sweeper.reset() };
 }
 
 function schedulerFixture(): TimerFixture {

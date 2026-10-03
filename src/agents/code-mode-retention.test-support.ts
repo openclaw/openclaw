@@ -65,10 +65,10 @@ const callerContext = new AsyncLocalStorage<object>();
 class CodeModeExpiryCaller {
   readonly prompt = Buffer.alloc(1024 * 1024, 1);
 }
-async function closeUnrelatedOwner(config: CodeModeConfig) {
+async function closeUnrelatedOwner(runConfig: CodeModeConfig) {
   const caller = new CodeModeExpiryCaller();
   const references = [new WeakRef(caller), new WeakRef(caller.prompt)];
-  await callerContext.run(caller, () => createCodeModeRunOwner(ctx, config).close());
+  await callerContext.run(caller, () => createCodeModeRunOwner(ctx, runConfig).close());
   return references;
 }
 let pending: PendingBridgeState[] = [];

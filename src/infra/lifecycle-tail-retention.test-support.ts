@@ -12,7 +12,7 @@ class LifecycleTailCaller {
 const callers = new AsyncLocalStorage<LifecycleTailCaller>();
 const references: Array<{ label: string; reference: WeakRef<object> }> = [];
 
-async function withCaller(label: string, run: () => unknown | Promise<unknown>) {
+async function withCaller(label: string, run: () => unknown) {
   const caller = new LifecycleTailCaller(label);
   references.push(
     { label: `${label} context`, reference: new WeakRef(caller) },

@@ -22,7 +22,7 @@ const context = new AsyncLocalStorage<QueueTimerCaller>();
 
 class QueueTimerCaller {
   readonly prompt = Buffer.alloc(1024 * 1024, 1);
-  constructor(readonly resource: string | undefined) {}
+  constructor(readonly label: string | undefined) {}
 }
 
 async function completedCaller(run: () => unknown) {
@@ -59,7 +59,7 @@ async function queueFixture(): Promise<Fixture> {
   const secondStarted = createDeferredCore();
   const first = completedCaller(() =>
     run(async () => {
-      assert.equal(context.getStore()?.resource, resource, "Work retains its own caller");
+      assert.equal(context.getStore()?.label, resource, "Work retains its own caller");
       await firstGate.promise;
     }),
   );
@@ -119,7 +119,7 @@ async function timerFixture(): Promise<Fixture> {
           {
             name: "retention.txt",
             contentBase64: Buffer.from("retention fixture").toString("base64"),
-            assertCommitAllowed: () => assert.equal(context.getStore()?.resource, resource),
+            assertCommitAllowed: () => assert.equal(context.getStore()?.label, resource),
           },
           { tempRoot: root },
         );
