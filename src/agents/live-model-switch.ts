@@ -13,20 +13,17 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveSessionAgentId } from "./agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
+import type { LiveSessionModelSelection } from "./live-model-switch-error.js";
 import {
   normalizeStoredOverrideModel,
   resolveDefaultModelForAgent,
   resolvePersistedSelectedModelRef,
 } from "./model-selection.js";
 import { resolveSessionRuntimeOverrideForProvider } from "./session-runtime-compat.js";
-export { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
-export type LiveSessionModelSelection = {
-  provider: string;
-  model: string;
-  agentRuntimeOverride?: string;
-  authProfileId?: string;
-  authProfileIdSource?: "auto" | "user";
-};
+export {
+  LiveSessionModelSwitchError,
+  type LiveSessionModelSelection,
+} from "./live-model-switch-error.js";
 
 const OPENAI_PROVIDER_ID = "openai";
 const OPENAI_CODEX_PROVIDER_ID = "openai";

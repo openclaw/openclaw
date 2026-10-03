@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import type {
   SessionPlacementMachine,
   SessionsReclaimParams,
-  WorkerDesktopLaunchResult as ProtocolWorkerDesktopLaunchResult,
+  WorkerDesktopLaunchResult,
   WorkerDesktopObserveResult as ProtocolWorkerDesktopObserveResult,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { DevicePlacementRequirement } from "../../agents/harness/types.js";
@@ -72,11 +72,11 @@ export type WorkerEnvironmentServiceRecord = {
   error?: string;
 };
 
-export type WorkerDesktopObserveResult = Omit<ProtocolWorkerDesktopObserveResult, "transport"> & {
+export type { WorkerDesktopLaunchResult } from "../../../packages/gateway-protocol/src/index.js";
+
+export type WorkerDesktopObserveResult = ProtocolWorkerDesktopObserveResult & {
   transport: "rfb";
 };
-
-export type WorkerDesktopLaunchResult = ProtocolWorkerDesktopLaunchResult;
 
 /** Request-facing lifecycle methods, kept separate from persistence and provider internals. */
 export type WorkerEnvironmentServiceContract = {

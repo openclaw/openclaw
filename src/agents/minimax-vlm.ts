@@ -13,7 +13,7 @@ import {
   createProviderErrorTextRedactor,
   readProviderJsonResponse,
 } from "./provider-http-errors.js";
-import type { ModelProviderRequestTransportOverrides } from "./provider-request-config.js";
+import type { ModelProviderRequestTransportOverrides } from "./provider-request-config.types.js";
 import { resolveProviderTransportSsrFPolicy } from "./provider-transport-fetch.js";
 
 type MinimaxBaseResp = {

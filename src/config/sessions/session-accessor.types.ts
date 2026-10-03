@@ -570,12 +570,8 @@ export type SessionEntryPatchContext = {
   existingEntry?: SessionEntry;
 };
 
-export type SessionEntryPatchResult = {
-  /** Exact persisted key for the patched entry after alias normalization. */
-  sessionKey: string;
-  /** Persisted entry returned by the backing store. */
-  entry: SessionEntry;
-};
+/** Persisted row returned after alias normalization. */
+export type SessionEntryPatchResult = SessionEntrySummary;
 
 export type SessionEntryTargetPatchScope = {
   env?: NodeJS.ProcessEnv;
@@ -588,19 +584,11 @@ export type SessionEntryTargetPatchScope = {
   target: SessionLifecycleStoreTarget;
 };
 
-export type SessionEntryReplacementSnapshot = {
-  /** Exact persisted key for the candidate row. */
-  sessionKey: string;
-  /** Detached entry snapshot; mutating it does not persist unless returned as a replacement. */
-  entry: SessionEntry;
-};
+/** Detached candidate row; changes persist only when returned as a replacement. */
+export type SessionEntryReplacementSnapshot = SessionEntrySummary;
 
-export type SessionEntryReplacement = {
-  /** Exact persisted key to replace. Missing keys are ignored. */
-  sessionKey: string;
-  /** Full replacement row to persist for this transaction. */
-  entry: SessionEntry;
-};
+/** Full row to replace in the transaction; missing keys are ignored. */
+export type SessionEntryReplacement = SessionEntrySummary;
 
 export type SessionEntryReplacementUpdate<T> = {
   /** Caller-owned result returned after replacements are persisted. */

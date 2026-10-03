@@ -6,10 +6,7 @@ import type {
   WebPushNotificationPreferences,
 } from "../../../../packages/gateway-protocol/src/schema/push.js";
 import type { ConfigUiHints, ModelCatalogEntry } from "../../api/types.ts";
-import type {
-  NativeNotificationsPermission,
-  NativeNotificationTestOutcome,
-} from "../../app/native-notifications.ts";
+import type { NativeNotificationsCapability } from "../../app/native-notifications.ts";
 import type { ServerUiPrefProvenance } from "../../app/server-prefs.ts";
 import type { ChatFollowUpMode, ChatSendShortcut, CatalogOpenTarget } from "../../app/settings.ts";
 import type { ThemeCatalogSnapshot } from "../../app/theme-catalog.ts";
@@ -212,10 +209,7 @@ export type ConfigProps = {
   includeVirtualSections?: boolean;
   /** Layout mode: "tabs" (default flat scroll) or "accordion" (grouped collapsible). */
   settingsLayout?: "tabs" | "accordion";
-  nativeNotifications?: {
-    permission: NativeNotificationsPermission | "unknown";
-    test: NativeNotificationTestOutcome | null;
-  };
+  nativeNotifications?: NativeNotificationsCapability["snapshot"];
   onNativeNotificationsRequestPermission?: () => void;
   onNativeNotificationsSendTest?: () => void;
   webPush?: WebPushSnapshot;

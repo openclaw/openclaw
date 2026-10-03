@@ -1,5 +1,5 @@
 import type {
-  WorkerExecutionMode as ProtocolWorkerExecutionMode,
+  WorkerExecutionMode,
   WorkerMachineOption as ProtocolWorkerMachineOption,
   WorkerOperatingSystem as ProtocolWorkerOperatingSystem,
 } from "../../packages/gateway-protocol/src/schema/environments.js";
@@ -119,7 +119,7 @@ export type WorkerDesktopEndpoint = {
 };
 
 /** Placement execution modes a worker provider can carry. */
-export type WorkerExecutionMode = ProtocolWorkerExecutionMode;
+export type { WorkerExecutionMode } from "../../packages/gateway-protocol/src/schema/environments.js";
 
 /** Grant-free identity of the runtime bytes a provider may retain in a prepared image. */
 export type WorkerNodeRuntimeIdentity = {

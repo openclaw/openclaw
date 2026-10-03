@@ -4,7 +4,6 @@ import { buildSessionContext as buildCoreSessionContext } from "../../../package
 import { selectSessionTranscriptLeafControlledPath } from "../../config/sessions/transcript-tree.js";
 import { MIN_READABLE_SESSION_VERSION } from "../../config/sessions/version.js";
 import { logWarn } from "../../logger.js";
-import type { SessionTreeEntry as CoreSessionTreeEntry } from "../runtime/index.js";
 import { generateSessionEntryId } from "./session-manager-id.js";
 import type {
   CompactionEntry,
@@ -171,7 +170,7 @@ export function buildSessionContext(
     current = current.parentId ? byId.get(current.parentId) : undefined;
   }
   path.reverse();
-  return buildCoreSessionContext(path as CoreSessionTreeEntry[]) as SessionContext;
+  return buildCoreSessionContext(path);
 }
 
 export function parseSessionEntries(content: string): FileEntry[] {
