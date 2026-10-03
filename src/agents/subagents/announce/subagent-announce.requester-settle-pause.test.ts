@@ -130,7 +130,7 @@ describe("requester pause notices", () => {
     expect(child.requesterSettleWake).toBeUndefined();
   });
 
-  it("wakes once for a paused child before its frozen sibling settles, then delivers completion", async () => {
+  it("wakes once for a paused child, then settles its frozen sibling and its later completion separately", async () => {
     const batchRunIds = ["run-a", "run-b"];
     const child = makeSettledChild({
       runId: "run-b",
@@ -182,7 +182,9 @@ describe("requester pause notices", () => {
     expect(message).not.toContain("</prompt-data>\n[Subagent Context]");
     expect(child.pauseReason).toBe("sessions_yield");
     expect(child.execution.outcome).toBeUndefined();
-    expect(child.requesterSettleWake?.batchRunIds).toEqual(batchRunIds);
+    // The delivered notice hands the continuation to the requester and detaches the child.
+    expect(child.requesterSettleWake?.batchRunIds).toEqual(["run-b"]);
+    expect(sibling.requesterSettleWake?.batchRunIds).toEqual(batchRunIds);
     const runs = new Map(children.map((entry) => [entry.runId, entry]));
     const parentYield = createSessionsYieldTool({
       sessionId: "sess-main",
@@ -204,21 +206,32 @@ describe("requester pause notices", () => {
     expect(await maybeWakeRequesterAfterAllChildrenSettled(params)).toBe(false);
     expect(deliverSpy).toHaveBeenCalledOnce();
 
-    child.pauseReason = undefined;
-    child.execution = { status: "running", startedAt: 4_000 };
-    expect(await maybeWakeRequesterAfterAllChildrenSettled(params)).toBe(false);
-    for (const entry of children) {
-      entry.execution = { status: "terminal", endedAt: 5_000, outcome: { status: "ok" } };
-      entry.completion = { required: true, resultText: `completed ${entry.runId}` };
-    }
-    expect(await maybeWakeRequesterAfterAllChildrenSettled(params)).toBe(true);
+    // The sibling's result does not wait for a continuation only the requester can send.
+    sibling.execution = { status: "terminal", endedAt: 4_000, outcome: { status: "ok" } };
+    sibling.completion = { required: true, resultText: "completed run-a" };
+    const siblingParams = { ...params, settledEntry: sibling };
+    expect(await maybeWakeRequesterAfterAllChildrenSettled(siblingParams)).toBe(true);
     expect(deliverSpy).toHaveBeenCalledTimes(2);
-    expect(deliverSpy.mock.calls[1]?.[0].triggerMessage).toContain("completed run-b");
-    expect(deliverSpy.mock.calls[1]?.[0].directIdempotencyKey).not.toBe(
+    expect(deliverSpy.mock.calls[1]?.[0].triggerMessage).toContain("completed run-a");
+    expect(deliverSpy.mock.calls[1]?.[0].triggerMessage).not.toContain("PAUSE-MARKER");
+    expect(sibling.requesterSettleWake).toBeUndefined();
+    expect(child.requesterSettleWake?.batchRunIds).toEqual(["run-b"]);
+
+    child.pauseReason = undefined;
+    child.execution = { status: "running", startedAt: 5_000 };
+    expect(await maybeWakeRequesterAfterAllChildrenSettled(params)).toBe(false);
+    child.execution = { status: "terminal", endedAt: 6_000, outcome: { status: "ok" } };
+    child.completion = { required: true, resultText: "completed run-b" };
+    expect(await maybeWakeRequesterAfterAllChildrenSettled(params)).toBe(true);
+    expect(deliverSpy).toHaveBeenCalledTimes(3);
+    expect(deliverSpy.mock.calls[2]?.[0].triggerMessage).toContain("completed run-b");
+    expect(deliverSpy.mock.calls[2]?.[0].triggerMessage).not.toContain("completed run-a");
+    expect(deliverSpy.mock.calls[2]?.[0].directIdempotencyKey).not.toBe(
       deliveredCallArg().directIdempotencyKey,
     );
     expect(await maybeWakeRequesterAfterAllChildrenSettled(params)).toBe(false);
-    expect(deliverSpy).toHaveBeenCalledTimes(2);
+    expect(await maybeWakeRequesterAfterAllChildrenSettled(siblingParams)).toBe(false);
+    expect(deliverSpy).toHaveBeenCalledTimes(3);
   });
 
   it.each([

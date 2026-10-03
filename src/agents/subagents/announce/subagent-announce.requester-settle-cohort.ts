@@ -5,6 +5,33 @@ import {
   filterCurrentDirectChildCompletionRows,
 } from "./subagent-announce-output.js";
 
+/**
+ * Current members of a frozen wave. Retired rows no longer own its completion, and a
+ * member whose consumed pause notice detached it into its own wave leaves this one.
+ */
+export function selectFrozenWave(
+  settled: SubagentRunRecord,
+  rows: readonly SubagentRunRecord[],
+): { members: SubagentRunRecord[]; waveRunIds: string[] } {
+  const runsById = new Map(rows.map((entry) => [entry.runId, entry]));
+  const generation = settled.requesterSettleWake?.rearmGeneration;
+  const members: SubagentRunRecord[] = [];
+  const waveRunIds: string[] = [];
+  for (const runId of settled.requesterSettleWake?.batchRunIds ?? []) {
+    const entry = runsById.get(runId);
+    const wake = entry?.requesterSettleWake;
+    const sameGeneration = wake && wake.rearmGeneration === generation;
+    if (sameGeneration && wake.batchRunIds?.includes(settled.runId) === false) {
+      continue;
+    }
+    waveRunIds.push(runId);
+    if (entry && sameGeneration) {
+      members.push(entry);
+    }
+  }
+  return { members, waveRunIds };
+}
+
 export function selectCurrentRequesterCompletionRows(params: {
   rows: SubagentRunRecord[];
   requesterSessionKey: string;

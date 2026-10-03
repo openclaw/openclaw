@@ -11,6 +11,7 @@ import {
   emptySqliteCounts,
   observeParentSqlite,
 } from "../../../test/helpers/sqlite-parent-observer.js";
+import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { createRequesterYieldCallback } from "../../agents/openclaw-tools.requester-yield.js";
 import { withLocalSessionPlacementTurnSettlement } from "../../agents/session-placement-admission.js";
 import { setSubagentAnnounceDeliveryDepsForTest } from "../../agents/subagents/announce/subagent-announce-overrides.test-support.js";
@@ -20,6 +21,7 @@ import { mutateSubagentRuns } from "../../agents/subagents/registry/subagent-reg
 import { markSubagentRunPausedAfterYield } from "../../agents/subagents/registry/subagent-registry-run-pause.js";
 import { observeRootWork } from "../../agents/subagents/registry/subagent-registry.browser-cleanup.test-support.js";
 import {
+  markSubagentMessageWait,
   registerSubagentRun,
   settleRequesterAfterSessionSpawns,
 } from "../../agents/subagents/registry/subagent-registry.js";
@@ -33,6 +35,7 @@ import { emitAgentEvent } from "../../infra/agent-events.js";
 import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db-cache.js";
 import * as stateWorker from "../../state/openclaw-state-worker-store.js";
+import { readOperatorToolGatewayAuthority } from "../operator-tool-gateway-authority.js";
 import { withRequesterTestAuthority } from "./sessions-initial-transfer.test-support.js";
 import { sessionMessagingHandlers } from "./sessions-messaging.js";
 import { sessionSharingTestContext, soloClient } from "./sessions-sharing.test-support.js";
@@ -354,6 +357,212 @@ it("resumes a yielded child through sessions.send and wakes its original parent 
   }
   expect(archiveRead).not.toHaveBeenCalled();
   expect(hostSql.counts).toEqual(emptySqliteCounts());
+});
+
+it("delivers a completed sibling while a batch member waits for its requester's continuation", async () => {
+  vi.useFakeTimers();
+  const { runSubagentAnnounceFlow } = await vi.importActual<
+    typeof import("../../agents/subagents/announce/subagent-announce.js")
+  >("../../agents/subagents/announce/subagent-announce.js");
+  const requesterSessionKey = "agent:main:main";
+  const waitingSessionKey = "agent:main:subagent:waiting-child";
+  const siblingSessionKey = "agent:main:subagent:finishing-sibling";
+  const waitingRunId = "waiting-child-run";
+  const resumedRunId = "resumed-waiting-child-run";
+  const siblingRunId = "finishing-sibling-run";
+  const requesterTurnRunId = "parent-turn";
+  const context = sessionSharingTestContext(vi.fn(), getRuntimeConfig());
+  context.resolveGatewayContext = () => context;
+  // The yield captures the requester's operator; every split wave must still carry it.
+  const operator = createAdmittedRunOperatorAuthority({
+    profileId: "split-batch-operator",
+    scopes: ["operator.read"],
+    assertCurrent: () => {},
+  });
+  const dispatchOperators: unknown[] = [];
+  const delivery = { dispatch: dispatchGatewayMethodInProcess };
+  const dispatch = vi.spyOn(delivery, "dispatch").mockImplementation(async () => {
+    dispatchOperators.push(readOperatorToolGatewayAuthority()?.operatorRunAuthority);
+    return {
+      status: "ok",
+      result: { payloads: [{ text: "Parent handled the update." }], meta: {} },
+    };
+  });
+  setSubagentAnnounceDeliveryDepsForTest({ dispatchGatewayMethodInProcess: delivery.dispatch });
+  const dispatchedMessage = (index: number) => String(dispatch.mock.calls[index]?.[1]?.message);
+
+  for (const sessionKey of [requesterSessionKey, waitingSessionKey, siblingSessionKey]) {
+    await writeSubagentSessionEntry({
+      stateDir: fixture.stateDir,
+      agentId: "main",
+      sessionKey,
+      defaultSessionId: `${sessionKey}-session`,
+    });
+  }
+  const children = [
+    { runId: waitingRunId, childSessionKey: waitingSessionKey, expectsCompletionMessage: true },
+    { runId: siblingRunId, childSessionKey: siblingSessionKey, expectsCompletionMessage: true },
+  ];
+  for (const child of children) {
+    await registerSubagentRun({
+      ...child,
+      requesterSessionKey,
+      requesterAgentId: "main",
+      requesterTurnRunId,
+      requesterDisplayKey: requesterSessionKey,
+      task: "Complete the existing child task",
+      cleanup: "keep",
+      expectsCompletionMessage: true,
+      gatewayContextResolver: context.resolveGatewayContext,
+    });
+  }
+  const yieldTool = createSessionsYieldTool({
+    sessionId: `${requesterSessionKey}-session`,
+    claimYield: createRequesterYieldCallback({
+      requesterSessionKey,
+      requesterAgentId: "main",
+      requesterTurnRunId,
+    }),
+    onYield: vi.fn(),
+  });
+  await withRequesterTestAuthority(
+    requesterTurnRunId,
+    requesterSessionKey,
+    async () => {
+      await expect(yieldTool.execute("yield-parent", {})).resolves.toMatchObject({
+        details: { status: "yielded" },
+      });
+      const settlement = withLocalSessionPlacementTurnSettlement(
+        {
+          sessionId: `${requesterSessionKey}-session`,
+          sessionKey: requesterSessionKey,
+          agentId: "main",
+          runId: requesterTurnRunId,
+        },
+        async () => ({
+          acceptedSessionSpawns: children,
+          meta: {
+            durationMs: 1,
+            yielded: true,
+            executionTrace: { runner: "cli", attempts: [], fallbackUsed: false },
+          },
+        }),
+        {},
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      await expect(settlement).resolves.toMatchObject({ requesterContinuationSettled: true });
+    },
+    operator,
+  );
+  for (const runId of [waitingRunId, siblingRunId]) {
+    expect(subagentRuns.get(runId)?.requesterSettleWake).toMatchObject({
+      batchRunIds: [waitingRunId, siblingRunId].toSorted(),
+      requesterYieldBatch: true,
+      rearmGeneration: 1,
+    });
+  }
+
+  const endRun = async (runId: string, sessionKey: string, data: Record<string, unknown>) => {
+    const settleRootWork = observeRootWork();
+    emitAgentEvent({
+      runId,
+      sessionKey,
+      stream: "lifecycle",
+      data: { phase: "end", endedAt: Date.now(), ...data },
+    });
+    await settleRootWork();
+    await fixture.settle();
+  };
+  const complete = async (runId: string, sessionKey: string, text: string) => {
+    const announceEntered = createDeferred();
+    fixture.announce.mockImplementationOnce((params) => {
+      announceEntered.resolve();
+      return runSubagentAnnounceFlow(params);
+    });
+    const ended = endRun(runId, sessionKey, {
+      terminalReply: { disposition: "visible", text },
+    });
+    await announceEntered.promise;
+    await ended;
+  };
+
+  // The child asks its requester for direction. Once that notice is delivered, the
+  // requester owns the continuation, so the child no longer holds its sibling's result.
+  await expect(
+    markSubagentMessageWait({
+      runId: waitingRunId,
+      sessionKey: waitingSessionKey,
+      acknowledgment: "WAITING-MARKER: send the sibling's result before I continue.",
+    }),
+  ).resolves.toBe(true);
+  await endRun(waitingRunId, waitingSessionKey, { yielded: true });
+  expect(dispatch).toHaveBeenCalledOnce();
+  expect(dispatchedMessage(0)).toContain('"state":"paused"');
+  expect(dispatchedMessage(0)).toContain("WAITING-MARKER");
+  const waiting = expectDefined(subagentRuns.get(waitingRunId), "waiting child");
+  expect(waiting.pauseReason).toBe("sessions_yield");
+  expect(waiting.requesterSettleWake?.status).toBe("pending");
+  expect(waiting.requesterSettleWake?.pauseNotice).toBeUndefined();
+
+  await complete(siblingRunId, siblingSessionKey, "SIBLING-MARKER: result is ready.");
+  expect(dispatch).toHaveBeenCalledTimes(2);
+  expect(dispatch.mock.calls[1]?.[1]).toMatchObject({
+    sessionKey: requesterSessionKey,
+    inputProvenance: { sourceTool: "subagent_settle" },
+  });
+  expect(dispatchedMessage(1)).toContain("SIBLING-MARKER: result is ready.");
+  expect(dispatchedMessage(1)).not.toContain("WAITING-MARKER");
+  expect(subagentRuns.get(siblingRunId)?.requesterSettleWake).toBeUndefined();
+  expect(subagentRuns.get(waitingRunId)).toMatchObject({
+    pauseReason: "sessions_yield",
+    requesterSettleWake: {
+      status: "pending",
+      batchRunIds: [waitingRunId],
+      requesterYieldBatch: true,
+      rearmGeneration: 1,
+    },
+  });
+
+  // The requester's continuation resumes the same task, whose result still arrives.
+  chatSend.mockImplementation(async ({ respond }) => {
+    respond(true, { runId: resumedRunId, status: "started" });
+  });
+  const sendResponse = vi.fn<RespondFn>();
+  await expectDefined(
+    sessionMessagingHandlers["sessions.send"],
+    "sessions.send",
+  )({
+    req: { type: "req", id: "resume-request", method: "sessions.send" },
+    params: {
+      key: waitingSessionKey,
+      message: "Here is the sibling's result; finish the task.",
+      idempotencyKey: resumedRunId,
+    },
+    respond: sendResponse,
+    context,
+    client: soloClient(),
+    isWebchatConnect: () => false,
+  });
+  expect(sendResponse).toHaveBeenCalledWith(
+    true,
+    { runId: resumedRunId, status: "started" },
+    undefined,
+    undefined,
+  );
+  expect(subagentRuns.get(resumedRunId)?.requesterSettleWake).toMatchObject({
+    batchRunIds: [resumedRunId],
+    requesterYieldBatch: true,
+    rearmGeneration: 1,
+  });
+  await complete(resumedRunId, waitingSessionKey, "RESUMED-MARKER: continued task finished.");
+  expect(dispatch).toHaveBeenCalledTimes(3);
+  expect(dispatchedMessage(2)).toContain("RESUMED-MARKER: continued task finished.");
+  expect(dispatchedMessage(2)).not.toContain("SIBLING-MARKER");
+  expect(subagentRuns.get(resumedRunId)?.requesterSettleWake).toBeUndefined();
+  expect(dispatchOperators).toHaveLength(3);
+  for (const dispatchOperator of dispatchOperators) {
+    expect(dispatchOperator).toBe(operator);
+  }
 });
 
 it.each([

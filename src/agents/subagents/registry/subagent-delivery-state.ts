@@ -28,14 +28,21 @@ export function resetRequesterSettleWakeRetry(
   };
 }
 
-/** A pause uses the existing retry owner, but never consumes the completion cohort. */
+/**
+ * A pause uses the existing retry owner and keeps the member's own completion wake.
+ * Its consumed notice hands the continuation to the requester, so the member leaves
+ * its frozen wave: siblings stop waiting on it, and the resumed task reports alone.
+ */
 export function consumeSubagentPauseNotice(entry: SubagentRunRecord): boolean {
   const wake = entry.requesterSettleWake;
   if (entry.pauseReason !== "sessions_yield" || !wake?.pauseNotice) {
     return false;
   }
   const { pauseNotice: _notice, ...completionWake } = wake;
-  entry.requesterSettleWake = resetRequesterSettleWakeRetry(completionWake);
+  entry.requesterSettleWake = {
+    ...resetRequesterSettleWakeRetry(completionWake),
+    batchRunIds: [entry.runId],
+  };
   return true;
 }
 

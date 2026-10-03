@@ -26,14 +26,18 @@ import {
 import type { FollowupRequesterAuthority } from "./completion/session-followup-completion.types.js";
 import type { SubagentRunRecord } from "./registry/subagent-registry.types.js";
 import {
-  sameRequesterSettleBatch,
-  isRequesterYieldCohortMember,
   resolveCurrentRequesterSettleBatch,
+  sameRequesterSettleBatch,
 } from "./registry/subagent-requester-settle-identity.js";
 import {
   getSubagentRunRuntimeKey,
   isSameSubagentRunOwner,
 } from "./registry/subagent-run-generation.js";
+import {
+  isRequesterAuthorityCohortCurrent,
+  isRequesterAuthorityCohortWave,
+  listOwedRequesterAuthorityMembers,
+} from "./requester-cron-authority-cohort.js";
 
 type RequesterCronAuthority = {
   managementEntitlement?: NonNullable<CronCreatorAuthorityCapability["managementEntitlement"]>;
@@ -153,24 +157,9 @@ function isCurrent(authority: RequesterCronAuthority): boolean {
   if (authority.runScopeBound) {
     return true;
   }
-  const batch = resolveCurrentRequesterSettleBatch(authority.batch, authority.runs);
-  if (
-    !batch ||
-    batch.some(
-      (entry) =>
-        entry.killIntent?.suppressTaskDelivery === true ||
-        entry.killReconciliation?.suppressTaskDelivery === true,
-    ) ||
-    batch.every((entry) => entry.suppressCompletionDelivery === true)
-  ) {
-    return false;
-  }
-  const batchRunIds = authority.batch.map((entry) => entry.runId).toSorted();
-  return batch.every(
-    (entry) =>
-      state.byEntry.get(getSubagentRunRuntimeKey(entry)) === authority &&
-      (authority.rearmGeneration === undefined ||
-        isRequesterYieldCohortMember(entry, batchRunIds, authority.rearmGeneration)),
+  return isRequesterAuthorityCohortCurrent(
+    authority,
+    (entry) => state.byEntry.get(getSubagentRunRuntimeKey(entry)) === authority,
   );
 }
 
@@ -445,6 +434,25 @@ export function revokeRequesterCronAuthorityBatch(
       ) {
         continue;
       }
+      // A settled wave releases only its members while detached waves still owe delivery.
+      const owed = listOwedRequesterAuthorityMembers(authority, batch);
+      if (owed.length > 0) {
+        for (const settled of authority.batch) {
+          const key = getSubagentRunRuntimeKey(settled);
+          // Settled operator rows keep their binding so a later retry fails closed.
+          if (
+            !owed.includes(settled) &&
+            !authority.operatorAuthority &&
+            state.byEntry.get(key) === authority
+          ) {
+            state.byEntry.delete(key);
+          }
+        }
+        authority.batch = owed;
+        if (isCurrent(authority)) {
+          continue;
+        }
+      }
       discard(authority);
     }
   }
@@ -487,7 +495,7 @@ export async function withRequesterCronAuthority<T>(
     authority.rearmGeneration !== params.rearmGeneration ||
     !(pause
       ? authority.batch.some((entry) => isSameSubagentRunOwner(entry, pause.entry))
-      : sameRequesterSettleBatch(authority.batch, params.batch))
+      : isRequesterAuthorityCohortWave(authority.batch, params.batch))
   ) {
     if (authority?.operatorAuthority) {
       throw new Error("Requester operator authority does not own this continuation");

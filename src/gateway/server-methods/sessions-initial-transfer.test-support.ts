@@ -1,4 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
+import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { createTestAdmittedRunContext } from "../../agents/admitted-run-context.test-support.js";
 import {
   createCronCreatorAuthorityCapability,
@@ -17,6 +18,7 @@ export async function withRequesterTestAuthority<T>(
   runId: string,
   sessionKey: string,
   run: (retire: () => void) => Promise<T>,
+  operatorAuthority?: AdmittedRunOperatorAuthority,
 ): Promise<T> {
   const { operationalRunInstance } = createTestAdmittedRunContext(runId);
   const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
@@ -49,6 +51,7 @@ export async function withRequesterTestAuthority<T>(
           sessionKey,
           operationalRunInstance,
           approvalAuthority: authority,
+          ...(operatorAuthority ? { operatorAuthority } : {}),
           receiptAuthority: () => validateAgentRunDelegatedAuthority(authority),
         },
         () => run(retire),

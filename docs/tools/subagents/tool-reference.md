@@ -325,7 +325,9 @@ or a default "Paused awaiting continuation." line. The acknowledgment is
 presented as child-provided data using the same escaping as completion results. The
 notice is distinct from a completion and uses the requester's existing message
 queue policy if it is already running. It does not resume the child: send the
-continuation with `sessions_send` to the named child session. Yielding again in
+continuation with `sessions_send` to the named child session. Siblings yielded
+for in the same batch no longer wait for that child, so their results arrive
+whether or not the continuation is sent first. Yielding again in
 the requester does not repeat an already delivered pause notice. A default
 follow-up already admitted on the child's session while the child was still
 yielding continues it instead, so no notice is sent. A follow-up with its own

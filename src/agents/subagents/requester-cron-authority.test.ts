@@ -421,6 +421,82 @@ describe("requester cron authority lifetime", () => {
     },
   );
 
+  it("keeps cohort authority for each wave split off by a consumed pause notice", async () => {
+    const operator = createAdmittedRunOperatorAuthority({
+      profileId: "split-requester",
+      scopes: ["operator.read"],
+      assertCurrent: () => {},
+    });
+    const batch = createBatch("split-owner", 2);
+    await inAdminRun(
+      "split-owner",
+      async () => expect(await mark(batch)).toBe(2),
+      undefined,
+      undefined,
+      undefined,
+      operator,
+    );
+    expect(await settle(batch)).toBe(true);
+    const operatorDispatch = (wave: SubagentRunRecord[], runId: string) =>
+      dispatch(
+        wave,
+        async () => expect(readOperatorToolGatewayAuthority()?.operatorRunAuthority).toBe(operator),
+        runId,
+      );
+    await updateBatch(batch, ([paused]) => {
+      paused!.pauseReason = "sessions_yield";
+      paused!.requesterSettleWake!.pauseNotice = { acknowledgment: "Need a continuation." };
+    });
+    await operatorDispatch([batch[0]!], "pause-turn");
+    await updateBatch(batch, ([paused]) => expect(consumeSubagentPauseNotice(paused!)).toBe(true));
+    revokeRequesterCronAuthorityBatch([batch[0]!], 1);
+
+    // The sibling's wave no longer waits for the detached child and keeps the operator.
+    await updateBatch(batch, ([, sibling]) => {
+      sibling!.requesterSettleWake!.batchRunIds = [sibling!.runId];
+    });
+    await operatorDispatch([batch[1]!], "sibling-turn");
+    await updateBatch(batch, ([, sibling]) => {
+      sibling!.requesterSettleWake = undefined;
+    });
+    revokeRequesterCronAuthorityBatch([batch[1]!], 1);
+    await expect(dispatch([batch[1]!], async () => {})).rejects.toThrow(
+      "Requester operator authority does not own this continuation",
+    );
+
+    // The resumed child's own later wave still carries the cohort's operator.
+    const paused = batch[0]!;
+    const continued = structuredClone(paused);
+    continued.runId = "continued-split-child";
+    continued.taskRunId = paused.runId;
+    continued.pauseReason = undefined;
+    continued.requesterSettleWake!.batchRunIds = [continued.runId];
+    const resumed = [continued];
+    await mutateSubagentRuns(
+      [paused.runId, continued.runId],
+      () => ({
+        value: undefined,
+        postimages: new Map<string, SubagentRunRecord | null>([
+          [paused.runId, null],
+          [continued.runId, continued],
+        ]),
+      }),
+      {
+        runs,
+        onPublished(postimages) {
+          resumed[0] = expectDefined(postimages.get(continued.runId), "acknowledged resumed child");
+        },
+      },
+    );
+    replaceRequesterCronAuthorityEntry({ previous: paused, next: resumed[0]!, preserve: true });
+    await operatorDispatch(resumed, "resumed-turn");
+    await updateBatch(resumed, ([draft]) => {
+      draft!.requesterSettleWake = undefined;
+    });
+    revokeRequesterCronAuthorityBatch(resumed, 1);
+    await expect(dispatch(resumed, async () => {})).rejects.toThrow("Requester operator authority");
+  });
+
   it.each([
     "complete",
     "source revoked",

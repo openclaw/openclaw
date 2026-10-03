@@ -38,6 +38,9 @@ thread/topic routing when available on channel adapters.
 After `sessions_yield`, the frozen batch waits for its own children and their
 descendants to settle. A still-running child from an earlier requester turn does
 not delay that batch's result; the earlier batch retains its own completion wake.
+Once a child's `waitFor: "message"` pause notice is delivered, the requester owns
+that continuation and the child leaves the batch: its siblings' results arrive
+without waiting for it, and its own result arrives separately after it resumes.
 
 Completion inputs retain their own turn identity across compaction and runtime
 context messages. If transcript persistence rejects a completion because its

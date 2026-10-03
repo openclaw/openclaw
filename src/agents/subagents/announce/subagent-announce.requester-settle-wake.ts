@@ -49,7 +49,10 @@ import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatc
 import { resolveAnnounceOrigin } from "./subagent-announce-origin.js";
 import { readChildCompletionFindings } from "./subagent-announce-output.js";
 import { hasUsableSessionEntry } from "./subagent-announce.js";
-import { selectCurrentRequesterCompletionRows } from "./subagent-announce.requester-settle-cohort.js";
+import {
+  selectCurrentRequesterCompletionRows,
+  selectFrozenWave,
+} from "./subagent-announce.requester-settle-cohort.js";
 import { createRequesterDescendantReader } from "./subagent-announce.requester-settle-descendants.js";
 import { buildRequesterSettleWakeMessage } from "./subagent-announce.requester-settle-message.js";
 import { createRequesterSettleReceiptAdmission } from "./subagent-announce.requester-settle-receipt.js";
@@ -142,20 +145,13 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
   const frozenBatchRunIds = currentState.batchRunIds;
   const frozen = Boolean(frozenBatchRunIds?.length);
   const currentRearmGeneration = currentState.rearmGeneration;
+  let waveRunIds = frozenBatchRunIds;
   let settledBatch: SubagentRunRecord[];
   if (pauseNotice) {
     settledBatch = [currentSettledEntry];
   } else if (frozenBatchRunIds && frozen) {
-    const runsById = new Map(requesterRuns.map((entry) => [entry.runId, entry]));
-    // Retired rows no longer own completion, but every surviving frozen member
-    // must be terminal before this batch can wake its requester.
-    settledBatch = frozenBatchRunIds
-      .map((runId) => runsById.get(runId))
-      .filter(
-        (entry): entry is SubagentRunRecord =>
-          Boolean(entry?.requesterSettleWake) &&
-          entry?.requesterSettleWake?.rearmGeneration === currentRearmGeneration,
-      );
+    // Every surviving frozen member must be terminal before this batch can wake its requester.
+    ({ members: settledBatch, waveRunIds } = selectFrozenWave(currentSettledEntry, requesterRuns));
     if (
       settledBatch.some(
         (entry) =>
@@ -252,8 +248,8 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
     // Scheduling is per child, but every replay of this frozen wave is one input.
     // Retain all possible shipped sources only for exact accepted-input matching.
     const batchCreatedAt = Math.min(...settledBatch.map((entry) => entry.createdAt));
-    // Keep the batch members themselves in the settle check, including paused work.
-    const rootRunIds = frozen ? new Set(frozenBatchRunIds) : undefined;
+    // Keep the wave's members themselves in the settle check, including paused work.
+    const rootRunIds = frozen ? new Set(waveRunIds) : undefined;
     const readRequesterDescendants = createRequesterDescendantReader({
       requesterSessionKey,
       requesterAgentId,

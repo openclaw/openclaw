@@ -849,7 +849,10 @@ describe("persisted subagent requester wakes", () => {
       });
       database = await reopenCompletionFixtureOwners();
       const restored = subagentRuns.get(paused.subagent.runId)!;
-      expect(restored.requesterSettleWake).toEqual(storeReplaced ? undefined : completionWake);
+      // The consumed notice detaches the paused child into its own completion wave.
+      expect(restored.requesterSettleWake).toEqual(
+        storeReplaced ? undefined : { ...completionWake, batchRunIds: [paused.subagent.runId] },
+      );
       expect(restored.pauseReason).toBe("sessions_yield");
       expect(restored.execution.outcome).toBeUndefined();
       expect(restored.delivery).toEqual({ status: "pending" });

@@ -285,6 +285,7 @@ function readRequesterBatch(
     }
     // Outcome settlement owns the whole frozen wave; quiet wake decisions may select
     // current members without settling the remaining siblings' delivery outcomes.
+    // A member detached by its consumed pause notice no longer belongs to this wave.
     for (const id of params.kind === "requesterBatch" &&
     !(subagent.pauseReason === "sessions_yield" && subagent.requesterSettleWake.pauseNotice)
       ? (subagent.requesterSettleWake?.batchRunIds ?? [])
@@ -294,7 +295,8 @@ function readRequesterBatch(
         if (
           member?.requesterSettleWake &&
           member.requesterSettleWake.rearmGeneration ===
-            subagent.requesterSettleWake?.rearmGeneration
+            subagent.requesterSettleWake?.rearmGeneration &&
+          member.requesterSettleWake.batchRunIds?.includes(subagent.runId) !== false
         ) {
           throw changedOwner();
         }
