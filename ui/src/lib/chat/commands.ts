@@ -164,12 +164,12 @@ const COMMAND_OVERRIDES: Partial<
   Record<string, Pick<SlashCommandDef, "description" | "descriptionKey" | "args">>
 > = {
   steer: {
-    description: "Inject a message into the active run",
+    description: registerCommandPaletteEnglish.catalog.chat.commands.steerDescription,
     descriptionKey: "chat.commands.steerDescription",
     args: "<message>",
   },
   "export-session": {
-    description: "Download this conversation as Markdown",
+    description: registerCommandPaletteEnglish.catalog.chat.commands.exportDescription,
     descriptionKey: "chat.commands.exportDescription",
     args: undefined,
   },

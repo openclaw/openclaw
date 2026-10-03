@@ -531,7 +531,7 @@ function isRouteOwnedBasePath(basePath: string): boolean {
   if (APP_ROUTE_PATHS.includes(basePath)) {
     return true;
   }
-  const [namespace] = basePath.split("/").filter(Boolean);
+  const namespace = basePath.split("/").find(Boolean);
   return APP_ROUTE_PATHS.some((path) => path.startsWith(`/${namespace}/`));
 }
 

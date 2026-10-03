@@ -319,10 +319,6 @@
   color: var(--text);
 }
 
-.agent-chat__capability-menu-state {
-  font-size: 12px;
-}
-
 .agent-chat__capability-menu-item svg,
 .agent-chat__capability-menu-state svg {
   width: var(--chat-composer-menu-icon);
@@ -412,6 +408,7 @@
 
 .agent-chat__capability-menu-state {
   padding: 10px 12px;
+  font-size: 12px;
   line-height: 1.4;
 }
 
