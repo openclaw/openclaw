@@ -92,9 +92,9 @@ describe("nested tool activity ownership", () => {
         if (owner === "committed-abort") {
           const append = manager.appendMessageAsync.bind(manager);
           vi.spyOn(manager, "appendMessageAsync").mockImplementation(async (...args) => {
-            const entryId = await append(...args);
+            const receipt = await append(...args);
             aborted = true;
-            return entryId;
+            return receipt;
           });
         }
         const controller = new AbortController();
@@ -185,116 +185,137 @@ describe("nested tool activity ownership", () => {
     },
   );
 
-  it("reads canonical nested hook evidence across compaction without replaying another attempt", async () => {
-    await withStateDirEnv("openclaw-nested-hook-evidence-", async () => {
-      const target = {
-        agentId: "main",
-        sessionId: "session-output-schema",
-        sessionKey: "agent:main:nested-evidence",
-        storePath: resolveDefaultSessionStorePath("main"),
-      };
-      await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: Date.now() });
-      const manager = await SessionManager.openBoundedAsync(target, {
-        maxEvents: 32,
-        maxBytes: 8192,
-      });
-      const user = await manager.appendMessageWithTranscriptAnchorAsync({
-        role: "user",
-        content: "Look up the record",
-        timestamp: 1,
-      });
-      expect(user.anchor).toBeDefined();
-      installSessionToolResultGuard(manager, {
-        beforeMessageWriteHook: ({ message }) => {
-          const activity = readNestedToolActivity(message);
-          return activity
-            ? {
-                message: {
-                  ...activity,
-                  details: {
-                    ...activity.details,
-                    result: { content: [{ type: "text", text: "canonical hook result" }] },
-                  },
-                },
-              }
-            : undefined;
-        },
-      });
-      const { session } = await createTestSession({ sessionManager: manager });
-      const actualHooks = await vi.importActual<
-        typeof import("../../harness/lifecycle-hook-helpers.js")
-      >("../../harness/lifecycle-hook-helpers.js");
-      mocks.runBeforeFinalizeHook.mockImplementation(
-        actualHooks.runAgentHarnessBeforeAgentFinalizeHook,
-      );
-      const runBeforeAgentFinalize = vi.fn(async (_event: { messages?: unknown[] }) => undefined);
-      const options = {
-        activeSession: session,
-        sessionKey: target.sessionKey,
-        attempt: { ...target, sessionTarget: target },
-        hookRunner: {
-          hasHooks: (name: string) => name === "before_agent_finalize",
-          runBeforeAgentFinalize,
-        } as never,
-      };
-      const previous = prepareCatalogExecutor(options);
-      const call = (prepared: typeof previous, toolCallId: string) =>
-        prepared.toolSearchCatalogExecutor({
-          tool: {
-            name: "lookup",
-            execute: async () => ({ content: [{ type: "text", text: "original tool output" }] }),
-          } as never,
-          toolName: "lookup",
-          source: "openclaw",
-          toolCallId,
-          input: {},
-          acceptResultBeforeProjection: async (result) => result,
-        });
-      await call(previous, "previous-attempt");
-      previous.subscription.unsubscribe();
-      const prepared = prepareCatalogExecutor(options);
-      try {
-        await call(prepared, "current-attempt");
-        const kept = await manager.appendMessageAsync({
-          role: "user",
-          content: "Continue",
-          timestamp: 2,
-        });
-        expect(kept).toBeDefined();
-        await manager.appendCompactionAsync("Prior work", kept!, 100);
-        await manager.reloadPersistedTranscriptAsync();
-        expect(
-          manager
-            .getEntries()
-            .some((entry) => entry.type === "message" && readNestedToolActivity(entry.message)),
-        ).toBe(false);
-        const input = mocks.subscribe.mock.calls.at(-1)?.[0] as {
-          onBeforeTerminalDelivery: (event: unknown) => Promise<unknown>;
+  it.each(["none", "content", "role"] as const)(
+    "reads complete canonical hook evidence across compaction (malformed=%s)",
+    async (malformed) => {
+      await withStateDirEnv("openclaw-nested-hook-evidence-", async () => {
+        const target = {
+          agentId: "main",
+          sessionId: "session-output-schema",
+          sessionKey: "agent:main:nested-evidence",
+          storePath: resolveDefaultSessionStorePath("main"),
         };
-        await runWithSessionTranscriptReadFence(
-          user.anchor && { ...user.anchor, logicalTurnId: "nested-evidence-turn", role: "user" },
-          () => input.onBeforeTerminalDelivery(createBeforeFinalizeEvent()),
+        await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: Date.now() });
+        const manager = await SessionManager.openBoundedAsync(target, {
+          maxEvents: 32,
+          maxBytes: 8192,
+        });
+        const user = await manager.appendMessageWithTranscriptAnchorAsync({
+          role: "user",
+          content: "Look up the record",
+          timestamp: 1,
+        });
+        expect(user.anchor).toBeDefined();
+        installSessionToolResultGuard(manager, {
+          beforeMessageWriteHook: ({ message }) => {
+            const activity = readNestedToolActivity(message);
+            return activity
+              ? {
+                  message: {
+                    ...activity,
+                    ...(malformed === "role" && activity.details.toolCallId === "current-attempt"
+                      ? { role: "user" as const }
+                      : {}),
+                    content:
+                      (malformed === "content" || malformed === "role") &&
+                      activity.details.toolCallId === "current-attempt"
+                        ? "rewritten"
+                        : "",
+                    details: {
+                      ...activity.details,
+                      result: { content: [{ type: "text", text: "canonical hook result" }] },
+                    },
+                  },
+                }
+              : undefined;
+          },
+        });
+        const { session } = await createTestSession({ sessionManager: manager });
+        const actualHooks = await vi.importActual<
+          typeof import("../../harness/lifecycle-hook-helpers.js")
+        >("../../harness/lifecycle-hook-helpers.js");
+        mocks.runBeforeFinalizeHook.mockImplementation(
+          actualHooks.runAgentHarnessBeforeAgentFinalizeHook,
         );
-        const messages = runBeforeAgentFinalize.mock.calls.at(-1)?.[0]?.messages;
-        expect(messages).toEqual(
-          expect.arrayContaining([
-            expect.objectContaining({
-              details: expect.objectContaining({
-                toolCallId: "current-attempt",
-                result: { content: [{ type: "text", text: "canonical hook result" }] },
+        const runBeforeAgentFinalize = vi.fn(async (_event: { messages?: unknown[] }) => undefined);
+        const options = {
+          activeSession: session,
+          sessionKey: target.sessionKey,
+          attempt: { ...target, sessionTarget: target },
+          hookRunner: {
+            hasHooks: (name: string) => name === "before_agent_finalize",
+            runBeforeAgentFinalize,
+          } as never,
+        };
+        const previous = prepareCatalogExecutor(options);
+        const call = (prepared: typeof previous, toolCallId: string) =>
+          prepared.toolSearchCatalogExecutor({
+            tool: {
+              name: "lookup",
+              execute: async () => ({ content: [{ type: "text", text: "original tool output" }] }),
+            } as never,
+            toolName: "lookup",
+            source: "openclaw",
+            toolCallId,
+            input: {},
+            acceptResultBeforeProjection: async (result) => result,
+          });
+        await call(previous, "previous-attempt");
+        previous.subscription.unsubscribe();
+        const prepared = prepareCatalogExecutor(options);
+        try {
+          await call(prepared, "accepted-sibling");
+          await call(prepared, "current-attempt");
+          await call(prepared, "accepted-tail");
+          const kept = await manager.appendMessageAsync({
+            role: "user",
+            content: "Continue",
+            timestamp: 2,
+          });
+          expect(kept).toBeDefined();
+          await manager.appendCompactionAsync("Prior work", kept!, 100);
+          await manager.reloadPersistedTranscriptAsync();
+          expect(
+            manager
+              .getEntries()
+              .some((entry) => entry.type === "message" && readNestedToolActivity(entry.message)),
+          ).toBe(false);
+          const input = mocks.subscribe.mock.calls.at(-1)?.[0] as {
+            onBeforeTerminalDelivery: (event: unknown) => Promise<unknown>;
+          };
+          await runWithSessionTranscriptReadFence(
+            user.anchor && { ...user.anchor, logicalTurnId: "nested-evidence-turn", role: "user" },
+            () => input.onBeforeTerminalDelivery(createBeforeFinalizeEvent()),
+          );
+          if (malformed !== "none") {
+            expect(runBeforeAgentFinalize).not.toHaveBeenCalled();
+            expect([...prepared.nestedToolActivityState.successfulToolNames]).toEqual(["lookup"]);
+            return;
+          }
+          expect(
+            (await prepared.readActivities()).map(({ details }) => details.toolCallId),
+          ).toEqual(["accepted-sibling", "current-attempt", "accepted-tail"]);
+          const messages = runBeforeAgentFinalize.mock.calls.at(-1)?.[0]?.messages;
+          expect(messages).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({
+                details: expect.objectContaining({
+                  toolCallId: "current-attempt",
+                  result: { content: [{ type: "text", text: "canonical hook result" }] },
+                }),
               }),
-            }),
-          ]),
-        );
-        expect(JSON.stringify(messages)).not.toContain("previous-attempt");
-        expect(JSON.stringify(messages)).not.toContain("original tool output");
-        expect([...prepared.nestedToolActivityState.successfulToolNames]).toEqual(["lookup"]);
-      } finally {
-        prepared.subscription.unsubscribe();
-        session.dispose();
-      }
-    });
-  });
+            ]),
+          );
+          expect(JSON.stringify(messages)).not.toContain("previous-attempt");
+          expect(JSON.stringify(messages)).not.toContain("original tool output");
+          expect([...prepared.nestedToolActivityState.successfulToolNames]).toEqual(["lookup"]);
+        } finally {
+          prepared.subscription.unsubscribe();
+          session.dispose();
+        }
+      });
+    },
+  );
 
   it.each(["rejected", "accepted", "canonical failure", "thrown", "suppressed"] as const)(
     "preserves the terminal outcome and canonical activity for %s output",
@@ -307,7 +328,7 @@ describe("nested tool activity ownership", () => {
         });
       }
       const prepared = prepareCatalogExecutor({ sessionManager: manager });
-      let activities: NestedToolActivity[] = [];
+      let activities: NestedToolActivity[];
       const rawResult = {
         content: [{ type: "text" as const, text: "tool output" }],
         details: { id: 42, status: kind === "canonical failure" ? "error" : "success" },

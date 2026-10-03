@@ -6,6 +6,7 @@ import {
   type SessionTranscriptTargetBinding,
 } from "../../../config/sessions/transcript-target-binding.js";
 import {
+  NESTED_TOOL_ACTIVITY_CUSTOM_TYPE,
   readNestedToolActivity,
   type NestedToolActivity,
 } from "../../../sessions/nested-tool-activity.js";
@@ -64,7 +65,17 @@ export async function readAttemptNestedToolActivity(
     throw new Error("Accepted nested tool activity is no longer available");
   }
   return entries.slice(first, last + 1).flatMap((entry) => {
-    const activity = readNestedToolActivity(asOptionalRecord(entry)?.message);
-    return activity?.details.scopeId === state.scopeId ? [activity] : [];
+    const message = asOptionalRecord(asOptionalRecord(entry)?.message);
+    if (
+      message?.customType !== NESTED_TOOL_ACTIVITY_CUSTOM_TYPE ||
+      asOptionalRecord(message.details)?.scopeId !== state.scopeId
+    ) {
+      return [];
+    }
+    const activity = readNestedToolActivity(message);
+    if (!activity) {
+      throw new Error("Accepted nested tool activity is no longer valid");
+    }
+    return [activity];
   });
 }

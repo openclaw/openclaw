@@ -437,7 +437,6 @@ it.each(["sync", "async"])(
         mode === "async"
           ? await manager.appendMessageWithTranscriptAnchorAsync(message)
           : manager.appendMessageWithTranscriptAnchor(message);
-      expect(appended.anchor?.effectiveParentId).toBe(displayIds.at(-1) ?? side.entryId);
       displayIds.push(appended.entryId);
       expect(manager.getEntry(appended.entryId)).toBeUndefined();
       expect(manager.getAppendParentId()).toBe(appended.entryId);
@@ -446,8 +445,11 @@ it.each(["sync", "async"])(
     const answer = await manager.appendMessageWithTranscriptAnchorAsync(
       buildAssistantMessage("reply"),
     );
-    expect(answer.anchor?.effectiveParentId).toBe(displayIds.at(-1));
     expect(manager.getBranch().map((entry) => entry.id)).toEqual([user.entryId, answer.entryId]);
+    await waitForSessionTranscriptIndexReconcile({
+      agentId: scope.agentId,
+      path: resolveSessionTranscriptDatabasePath(scope),
+    });
     const reopened = await SessionManager.openBoundedAsync(scope, {
       maxBytes: 4096,
       maxEvents: 10,
@@ -457,6 +459,13 @@ it.each(["sync", "async"])(
     expect(
       events.filter((entry) => displayIds.includes((entry as { id: string }).id)),
     ).toHaveLength(3);
+    expect(
+      [...displayIds, answer.entryId].map((id) =>
+        events.find((entry) => (entry as { id: string }).id === id),
+      ),
+    ).toEqual(
+      [side.entryId, ...displayIds].map((parentId) => expect.objectContaining({ parentId })),
+    );
   },
 );
 

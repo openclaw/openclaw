@@ -10,6 +10,7 @@ import {
   getGatewayRestartDrainSignal,
   isGatewayRestartDrainError,
 } from "../../process/gateway-work-admission.js";
+import { runInDetachedAsyncContext } from "../../shared/async-work-scope.js";
 import { captureAgentDatabaseAdmission } from "../../state/agent-database-admission.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw-agent-db-resources.js";
 import {
@@ -265,10 +266,13 @@ function scheduleImmediateMaintenance(
   clearTimeout(owner.timer);
   owner.timer = undefined;
   owner.running = true;
-  owner.immediate = setImmediate(() => {
-    owner.immediate = undefined;
-    startPendingMaintenance(databasePath, owner);
-  });
+  // Database maintenance outlives the writer's turn and carries its own admission.
+  owner.immediate = runInDetachedAsyncContext(() =>
+    setImmediate(() => {
+      owner.immediate = undefined;
+      startPendingMaintenance(databasePath, owner);
+    }),
+  );
 }
 
 function scheduleMaintenanceAfterWriteQuiet(
@@ -282,12 +286,14 @@ function scheduleMaintenanceAfterWriteQuiet(
     owner.timer.refresh();
     return;
   }
-  owner.timer = setTimeout(() => {
-    owner.timer = undefined;
-    owner.retryDelayMs = undefined;
-    owner.running = true;
-    startPendingMaintenance(databasePath, owner);
-  }, owner.retryDelayMs);
+  owner.timer = runInDetachedAsyncContext(() =>
+    setTimeout(() => {
+      owner.timer = undefined;
+      owner.retryDelayMs = undefined;
+      owner.running = true;
+      startPendingMaintenance(databasePath, owner);
+    }, owner.retryDelayMs),
+  );
   owner.timer.unref();
 }
 

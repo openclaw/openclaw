@@ -223,15 +223,19 @@ test.each(["blocked", "error"] as const)(
       expect(first, boundCodeModeError(JSON.stringify(first), 1_024)).toMatchObject({
         status: "completed",
       });
-      expect(await h.readNestedActivities()).toHaveLength(1);
-      expect((await h.readNestedActivities())[0]?.details.result.content).toContainEqual(output);
+      const firstActivities = await h.readNestedActivities();
       if (mode === "error") {
-        expect((await h.readNestedActivities())[0]?.details.isError).toBe(true);
+        expect(firstActivities).toHaveLength(1);
+        expect(firstActivities[0]?.details.result.content).toContainEqual(output);
+        expect(firstActivities[0]?.details.isError).toBe(true);
+      } else {
+        expect(firstActivities).toEqual([]);
       }
       expect(await poll("nested-next-turn")).toMatchObject({ status: "completed" });
-      expect(await h.readNestedActivities()).toHaveLength(2);
+      const nextActivities = await h.readNestedActivities();
+      expect(nextActivities).toHaveLength(mode === "blocked" ? 1 : 2);
       if (mode === "blocked") {
-        expect((await h.readNestedActivities())[1]?.details.result.content).toContainEqual(output);
+        expect(nextActivities[0]?.details.result.content).toContainEqual(output);
         expect(await poll("nested-after-retry")).toMatchObject({ status: "completed" });
       }
       expect((await h.readNestedActivities()).at(-1)?.details.result.content).not.toContainEqual(

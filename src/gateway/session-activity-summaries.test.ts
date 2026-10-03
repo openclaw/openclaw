@@ -1,5 +1,7 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { mkdir } from "node:fs/promises";
 import { backup } from "node:sqlite";
+import { queryObjects } from "node:v8";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
@@ -459,6 +461,12 @@ describe("Activity recap lifecycle with the canonical session store", () => {
   });
 
   it("refreshes new work, catches up after archiving, and makes no calls for idle metadata changes", async () => {
+    class CompletedTurnContext {}
+    const caller = new AsyncLocalStorage<CompletedTurnContext>();
+    const notifyTranscriptFromTurn = () =>
+      caller.run(new CompletedTurnContext(), () =>
+        service.handleTranscript({ target: { ...scope }, lifecycleRevision: "lifecycle-1" }),
+      );
     await messages(2);
     await awaitPublication(() => terminal(service));
     expect(view()?.state).toBe("current");
@@ -473,13 +481,15 @@ describe("Activity recap lifecycle with the canonical session store", () => {
     expect(view()?.state).toBe("current");
     expect(complete).toHaveBeenCalledTimes(1);
     await messages(2, 2);
-    service.handleTranscript({ target: { ...scope }, lifecycleRevision: "lifecycle-1" });
+    notifyTranscriptFromTurn();
+    expect(queryObjects(CompletedTurnContext)).toBe(0);
     expect(view()?.state).toBe("updating");
     expect(complete).toHaveBeenCalledTimes(1);
     await awaitPublication(() => terminal(service));
     expect(read()?.activitySummary?.coveredMessages).toBe(4);
     expect(complete).toHaveBeenCalledTimes(2);
     expect(read()?.archivedAt).toBeDefined();
+    expect(queryObjects(CompletedTurnContext)).toBe(0);
   });
 
   it.each(["reset", "delete"] as const)(

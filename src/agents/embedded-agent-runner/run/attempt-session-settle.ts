@@ -120,7 +120,7 @@ type CleanupEmbeddedAttemptSessionInput = EmbeddedAttemptSessionResources & {
 export async function cleanupEmbeddedAttemptSessionPhase(
   input: CleanupEmbeddedAttemptSessionInput,
 ): Promise<void> {
-  using _promptState = input.promptStateLease;
+  using _ = input.promptStateLease;
   const { attempt } = input;
   const initialState = projectAgentRunAttemptTerminal(input.state.terminal);
   if (input.trajectoryRecorder && !input.trajectoryEndRecorded) {

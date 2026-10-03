@@ -1,5 +1,4 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { sql } from "kysely";
 import { iterateSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import { NESTED_TOOL_ACTIVITY_CUSTOM_TYPE } from "../../sessions/nested-tool-activity.js";
@@ -20,7 +19,7 @@ import type {
   SessionTranscriptMaintenanceRead,
   SessionTranscriptMaintenanceFacts,
 } from "./session-transcript-hydration.types.js";
-import { transcriptEventJsonSql, transcriptEventNavigationSql } from "./transcript-payload.js";
+import { transcriptEventJsonSql } from "./transcript-payload.js";
 
 export function readSessionTranscriptMaintenance(
   database: OpenClawAgentReadOnlyDatabase,
@@ -72,13 +71,6 @@ export function readSessionTranscriptMaintenance(
             .where("session_id", "=", target.sessionId)
             .where("seq", ">=", first.seq)
             .where("seq", "<=", last.seq)
-            .where(
-              /* kysely-allow-raw: bounded navigation skips model payloads; overdepth JSON keeps the canonical JS decoder. */
-              sql<string>`CASE WHEN json_valid(${transcriptEventNavigationSql()})
-                THEN json_extract(${transcriptEventNavigationSql()}, '$.message.role') ELSE 'custom' END`,
-              "=",
-              "custom",
-            )
             .orderBy("seq", "asc"),
         );
         const events: TranscriptEvent[] = [];

@@ -124,7 +124,10 @@ describe("recoverEmbeddedRunOverflow transcript ownership", () => {
         const contextEngine: ContextEngine = {
           info: { id: "fixture", name: "Fixture engine" },
           ingest: async () => ({ ingested: true }),
-          assemble: async ({ messages }) => ({ messages, estimatedTokens: 0 }),
+          assemble: async ({ messages: contextMessages }) => ({
+            messages: contextMessages,
+            estimatedTokens: 0,
+          }),
           compact: async () => {
             throw new Error("compaction budget is exhausted");
           },
