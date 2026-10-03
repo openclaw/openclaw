@@ -43,18 +43,12 @@ export class McpAppCatalogController implements ReactiveController {
       return;
     }
     if (!this.cleanup.length) {
-      this.cleanup.push(
-        context.gateway.subscribe(() => {
-          this.sync();
-          this.host.requestUpdate();
-        }),
-      );
-      this.cleanup.push(
-        context.agentSelection.subscribe(() => {
-          this.sync();
-          this.host.requestUpdate();
-        }),
-      );
+      const onChange = () => {
+        this.sync();
+        this.host.requestUpdate();
+      };
+      this.cleanup.push(context.gateway.subscribe(onChange));
+      this.cleanup.push(context.agentSelection.subscribe(onChange));
       this.cleanup.push(
         context.gateway.subscribeEvents((event) => {
           if (event.event === "config.changed") {

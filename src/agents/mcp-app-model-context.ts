@@ -102,12 +102,7 @@ export function updateMcpAppModelContext(
   const serialized = JSON.stringify(next);
   const views = contexts.get(runtime) ?? new Map<object, Snapshot>();
   const previous = views.get(view);
-  const previousData = previous && {
-    ...(previous.content ? { content: previous.content } : {}),
-    ...(previous.structuredContent !== undefined
-      ? { structuredContent: previous.structuredContent }
-      : {}),
-  };
+  const { updateId: _updateId, leased: _leased, ...previousData } = previous ?? {};
   const updateId =
     previous && JSON.stringify(previousData) === serialized ? previous.updateId : randomUUID();
   const totalBytes =

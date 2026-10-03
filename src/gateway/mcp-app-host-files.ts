@@ -157,14 +157,10 @@ export async function readMcpAppHostFile(
       throw new Error("File is missing, unsafe, or too large");
     }
     const writable = result.readOnly !== true;
-    let content: { text: string } | { blob: string };
-    if (representation === "text") {
-      content = {
-        text: new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(result.buffer),
-      };
-    } else {
-      content = { blob: result.buffer.toString("base64") };
-    }
+    const content =
+      representation === "text"
+        ? { text: new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(result.buffer) }
+        : { blob: result.buffer.toString("base64") };
     if (writable) {
       writeAdmissions.add(view);
     }

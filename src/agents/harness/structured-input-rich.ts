@@ -275,7 +275,6 @@ export function compileResourceField(
       if (values.length < (minimum ?? 0) || values.length > (maximum ?? 64)) {
         return invalid(context, "has an invalid number of resources.");
       }
-      const uris: string[] = [];
       for (const value of values) {
         const supplied = findChoice(choices, value, true);
         if (
@@ -284,12 +283,11 @@ export function compileResourceField(
         ) {
           return invalid(context, "contains a resource not admitted for this field.");
         }
-        uris.push(value);
       }
-      if (new Set(uris).size !== uris.length) {
+      if (new Set(values).size !== values.length) {
         return invalid(context, "contains duplicate resources.");
       }
-      return { kind: "present", value: type === "array" ? uris : (uris[0] ?? "") };
+      return { kind: "present", value: type === "array" ? [...values] : (values[0] ?? "") };
     },
   });
 }

@@ -24,18 +24,6 @@ const WIDGET_PROMPT_RATE_MAX = 10;
 const WIDGET_PROMPT_RATE_KEYS_MAX = 100;
 const widgetPromptTimestampsByKey = new Map<string, number[]>();
 
-function resolveWidgetPromptText(raw: unknown): string | null {
-  if (typeof raw !== "string") {
-    return null;
-  }
-  const text = raw.trim();
-  const isHostCommand = text.startsWith("/") || text.startsWith("!");
-  if (!text || text.length > WIDGET_PROMPT_MAX_CHARS || isHostCommand) {
-    return null;
-  }
-  return text;
-}
-
 export function allowWidgetPrompt(key: string, nowMs: number): boolean {
   const cutoff = nowMs - WIDGET_PROMPT_RATE_WINDOW_MS;
   const timestamps = (widgetPromptTimestampsByKey.get(key) ?? []).filter((ts) => ts > cutoff);
@@ -85,9 +73,12 @@ export function dispatchWidgetPrompt(
   rateKey: string,
   confirmPrompt?: (text: string) => boolean,
 ): boolean {
-  const text = resolveWidgetPromptText(raw);
+  const text = typeof raw === "string" ? raw.trim() : "";
   if (
     !text ||
+    text.length > WIDGET_PROMPT_MAX_CHARS ||
+    text.startsWith("/") ||
+    text.startsWith("!") ||
     !isWidgetFrameInteractable(frame) ||
     !allowWidgetPrompt(rateKey, Date.now()) ||
     (confirmPrompt && !confirmPrompt(text))

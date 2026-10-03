@@ -80,11 +80,7 @@ function buildCodexEffectiveMcpCatalog(
         raw,
         ...(deniedBySession ? { deniedBySession } : {}),
       });
-      if (deniedBySession) {
-        sessionDeniedTools.push(tool);
-      } else {
-        tools.push(tool);
-      }
+      (deniedBySession ? sessionDeniedTools : tools).push(tool);
     }
     for (const toolName of [...deniedNames].toSorted()) {
       if (observedNames.has(toolName)) {
