@@ -36,7 +36,7 @@ describe("Matrix QA destructive CLI JSON boundary", () => {
 
   it.each([
     {
-      name: "decodes authoritative stdout after both redacted artifacts are written",
+      name: "returns authoritative stdout and both redacted artifacts",
       outcome: "success",
       stdout,
       stderr,
@@ -60,7 +60,7 @@ describe("Matrix QA destructive CLI JSON boundary", () => {
       expectedStderr: `\t{]\n${redactedDetail}  `,
     },
     {
-      name: "rejects empty streams without decoding or a JSON parser cause",
+      name: "rejects empty streams without a JSON parser cause",
       outcome: "empty",
       stdout: " \n",
       stderr: "\t ",
@@ -93,13 +93,6 @@ describe("Matrix QA destructive CLI JSON boundary", () => {
           throw new Error("The JSON wrapper must not start an interactive CLI session");
         },
       };
-      const decoded = { marker: "decoded" };
-      const decode = vi.fn((payload: unknown) => {
-        expect(payload).toEqual({ values: [0, false, null, ""], detail: rawDetail });
-        expect(readFileSync(artifacts.stdoutPath, "utf8")).toBe(expectedStdout);
-        expect(readFileSync(artifacts.stderrPath, "utf8")).toBe(expectedStderr);
-        return decoded;
-      });
       const pending = runMatrixQaCliJson({
         args,
         allowNonZero: true,
@@ -107,21 +100,16 @@ describe("Matrix QA destructive CLI JSON boundary", () => {
         timeoutMs: 1_234,
         label: "json-output",
         runtime,
-        decode,
       });
       if (outcome === "success") {
         const actual = await pending;
         expect(actual.result).toBe(result);
-        expect(actual.payload).toBe(decoded);
+        expect(actual.payload).toEqual({ values: [0, false, null, ""], detail: rawDetail });
         expect(actual.artifacts).toEqual(artifacts);
-        expect(decode).toHaveBeenCalledTimes(1);
       } else {
         const failure = await pending.catch((caught: unknown) => caught);
-        expect(readFileSync(artifacts.stdoutPath, "utf8")).toBe(expectedStdout);
-        expect(readFileSync(artifacts.stderrPath, "utf8")).toBe(expectedStderr);
         expect(failure).toBeInstanceOf(Error);
         const error = failure as Error;
-        expect(decode).not.toHaveBeenCalled();
         if (outcome === "empty") {
           expect(error.message).toBe(`${command} did not print JSON`);
           expect(error).not.toHaveProperty("cause");
@@ -132,6 +120,8 @@ describe("Matrix QA destructive CLI JSON boundary", () => {
           );
         }
       }
+      expect(readFileSync(artifacts.stdoutPath, "utf8")).toBe(expectedStdout);
+      expect(readFileSync(artifacts.stderrPath, "utf8")).toBe(expectedStderr);
       expect(run).toHaveBeenCalledExactlyOnceWith(args, {
         allowNonZero: true,
         stdin: "fixture-input\n",

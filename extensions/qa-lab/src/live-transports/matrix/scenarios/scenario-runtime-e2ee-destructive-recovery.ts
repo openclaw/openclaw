@@ -68,12 +68,7 @@ export async function loginMatrixQaRecoveryDevice(params: {
   deviceName: string;
   userId: string;
   password: string;
-}): Promise<{
-  accessToken: string;
-  deviceId: string;
-  password?: string;
-  userId: string;
-}> {
+}) {
   return await loginMatrixQaCliDevice(
     params.context.baseUrl,
     params,
@@ -85,7 +80,6 @@ export async function loginMatrixQaRecoveryDevice(params: {
 export async function runMatrixQaCliJson<T>(params: {
   allowNonZero?: boolean;
   args: string[];
-  decode?: (payload: unknown) => T;
   label: string;
   runtime: MatrixQaCliRuntime;
   stdin?: string;
@@ -101,10 +95,9 @@ export async function runMatrixQaCliJson<T>(params: {
     result,
     rootDir: params.runtime.artifactDir,
   });
-  const parsed = parseMatrixQaCliJson(result);
   return {
     artifacts,
-    payload: params.decode ? params.decode(parsed) : (parsed as T),
+    payload: parseMatrixQaCliJson(result) as T,
     result,
   };
 }

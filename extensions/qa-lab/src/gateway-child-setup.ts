@@ -220,13 +220,14 @@ export async function prepareQaGatewayChild(
     autoCompactTokenLimit: params.codexMockAutoCompactTokenLimit,
   });
   const resolvedProvider = getQaProvider(providerMode);
-  const liveProviderIds = resolvedProvider.usesModelProviderPlugins
-    ? [params.primaryModel, params.alternateModel]
-        .map((modelRef) =>
-          typeof modelRef === "string" ? splitQaModelRef(modelRef)?.provider : undefined,
-        )
-        .filter((providerId): providerId is string => Boolean(providerId))
-    : [];
+  const liveProviderIds =
+    resolvedProvider.kind === "live"
+      ? [params.primaryModel, params.alternateModel]
+          .map((modelRef) =>
+            typeof modelRef === "string" ? splitQaModelRef(modelRef)?.provider : undefined,
+          )
+          .filter((providerId): providerId is string => Boolean(providerId))
+      : [];
   const liveProviderConfigs = await readQaLiveProviderConfigOverrides({
     providerIds: liveProviderIds,
   });
