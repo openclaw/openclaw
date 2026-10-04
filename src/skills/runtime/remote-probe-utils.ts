@@ -12,20 +12,14 @@ export function extractErrorMessage(err: unknown): string | undefined {
   if (!err) {
     return undefined;
   }
-  if (typeof err === "string") {
-    return err;
-  }
   if (err instanceof Error) {
     return err.message;
   }
   if (typeof err === "object" && "message" in err && typeof err.message === "string") {
     return err.message;
   }
-  if (typeof err === "number" || typeof err === "boolean" || typeof err === "bigint") {
+  if (typeof err !== "object" && typeof err !== "function") {
     return String(err);
-  }
-  if (typeof err === "symbol") {
-    return err.toString();
   }
   if (typeof err === "object") {
     try {

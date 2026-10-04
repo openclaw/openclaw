@@ -222,9 +222,6 @@ function usesBuiltInRedactPatterns(value?: readonly RedactPattern[]): boolean {
 }
 
 function maskToken(token: string): string {
-  if (token === "***") {
-    return token;
-  }
   if (token.length < DEFAULT_REDACT_MIN_LENGTH) {
     return "***";
   }

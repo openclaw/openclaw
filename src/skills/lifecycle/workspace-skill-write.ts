@@ -17,11 +17,6 @@ type WorkspaceSkillSupportFileRestoration = {
   proposedContentHash: string;
 };
 
-type SkillsRootWriteTargetParams = {
-  skillsRoot: string;
-  filePath: string;
-};
-
 type PreparedWorkspaceSkillFileMutation = {
   filePath: string;
   rootDir: string;
@@ -33,8 +28,6 @@ type PreparedWorkspaceSkillFileMutation = {
 
 export type PreparedWorkspaceSkillMutation = {
   mode: "create" | "update";
-  skillsRoot: string;
-  skillDir: string;
   skillFile: PreparedWorkspaceSkillFileMutation;
   supportFiles: Array<PreparedWorkspaceSkillFileMutation & { path: string }>;
 };
@@ -109,11 +102,12 @@ export async function prepareWorkspaceSkillMutation(params: {
 }): Promise<PreparedWorkspaceSkillMutation> {
   assertInsideSkillsRoot(params.skillsRoot, params.skillDir, "skill directory");
   await fs.mkdir(params.skillsRoot, { recursive: true });
-  const supportFiles = normalizeSupportFiles(params.supportFiles ?? []);
-  const skillTarget = await resolveSkillsRootWriteTarget({
-    skillsRoot: params.skillsRoot,
-    filePath: params.skillFile,
-  });
+  const supportFiles = (params.supportFiles ?? []).map((file) => ({
+    ...file,
+    path: normalizeWorkspaceSkillSupportPath(file.path),
+  }));
+  assertWorkspaceSkillSupportPathSetIsFileOnly(supportFiles.map((file) => file.path));
+  const skillTarget = resolveSkillsRootWriteTarget(params.skillsRoot, params.skillFile);
   const previousContent = await readWorkspaceSkillFile(params.skillFile);
   if (params.mode === "create" && previousContent !== null) {
     throw new Error(`Target skill already exists: ${params.skillFile}`);
@@ -125,10 +119,7 @@ export async function prepareWorkspaceSkillMutation(params: {
   const preparedSupportFiles: PreparedWorkspaceSkillMutation["supportFiles"] = [];
   for (const file of supportFiles) {
     const filePath = path.join(params.skillDir, ...file.path.split("/"));
-    const target = await resolveSkillsRootWriteTarget({
-      skillsRoot: params.skillsRoot,
-      filePath,
-    });
+    const target = resolveSkillsRootWriteTarget(params.skillsRoot, filePath);
     const previousSupportContent = await readWorkspaceSupportFile({
       skillDir: params.skillDir,
       relativePath: file.path,
@@ -148,8 +139,6 @@ export async function prepareWorkspaceSkillMutation(params: {
 
   return {
     mode: params.mode,
-    skillsRoot: params.skillsRoot,
-    skillDir: params.skillDir,
     skillFile: {
       filePath: params.skillFile,
       ...skillTarget,
@@ -178,17 +167,11 @@ export async function prepareWorkspaceSkillRestoration(params: {
     proposedContentHash: file.proposedContentHash,
   }));
   assertWorkspaceSkillSupportPathSetIsFileOnly(supportFiles.map((file) => file.path));
-  const skillTarget = await resolveSkillsRootWriteTarget({
-    skillsRoot: params.skillsRoot,
-    filePath: params.skillFile,
-  });
+  const skillTarget = resolveSkillsRootWriteTarget(params.skillsRoot, params.skillFile);
   const preparedSupportFiles: PreparedWorkspaceSkillMutation["supportFiles"] = [];
   for (const file of supportFiles) {
     const filePath = path.join(params.skillDir, ...file.path.split("/"));
-    const target = await resolveSkillsRootWriteTarget({
-      skillsRoot: params.skillsRoot,
-      filePath,
-    });
+    const target = resolveSkillsRootWriteTarget(params.skillsRoot, filePath);
     preparedSupportFiles.push({
       path: file.path,
       filePath,
@@ -200,8 +183,6 @@ export async function prepareWorkspaceSkillRestoration(params: {
   }
   return {
     mode: params.mode,
-    skillsRoot: params.skillsRoot,
-    skillDir: params.skillDir,
     skillFile: {
       filePath: params.skillFile,
       ...skillTarget,
@@ -285,17 +266,6 @@ export async function isWorkspaceSkillMutationRestored(
   } catch {
     return false;
   }
-}
-
-function normalizeSupportFiles(
-  supportFiles: readonly WorkspaceSkillSupportFileWrite[],
-): WorkspaceSkillSupportFileWrite[] {
-  const normalized = supportFiles.map((file) => ({
-    ...file,
-    path: normalizeWorkspaceSkillSupportPath(file.path),
-  }));
-  assertWorkspaceSkillSupportPathSetIsFileOnly(normalized.map((file) => file.path));
-  return normalized;
 }
 
 async function writePreparedWorkspaceFile(
@@ -388,13 +358,10 @@ async function readPreparedWorkspaceFile(
   return read.buffer.toString("utf8");
 }
 
-async function resolveSkillsRootWriteTarget(
-  params: SkillsRootWriteTargetParams,
-): Promise<{ rootDir: string; relativePath: string }> {
-  assertInsideSkillsRoot(params.skillsRoot, params.filePath, "skill file");
-  const skillsRoot = path.resolve(params.skillsRoot);
-  const filePath = path.resolve(params.filePath);
-  return { rootDir: skillsRoot, relativePath: path.relative(skillsRoot, filePath) };
+function resolveSkillsRootWriteTarget(skillsRoot: string, filePath: string) {
+  assertInsideSkillsRoot(skillsRoot, filePath, "skill file");
+  const rootDir = path.resolve(skillsRoot);
+  return { rootDir, relativePath: path.relative(rootDir, path.resolve(filePath)) };
 }
 
 export function assertInsideSkillsRoot(

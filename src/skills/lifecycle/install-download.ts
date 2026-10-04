@@ -71,7 +71,7 @@ async function downloadFile(params: {
   tempPath: string;
   sha256?: string;
   timeoutMs: number;
-}): Promise<{ bytes: number }> {
+}): Promise<number> {
   const temporaryRoot = await fsRoot(path.dirname(params.tempPath));
   const { response, release } = await fetchWithSsrFGuard({
     url: params.url,
@@ -119,7 +119,7 @@ async function downloadFile(params: {
       }
     }
     await params.pinnedRoot.copyIn(params.relativePath, params.tempPath);
-    return { bytes: downloadedBytes };
+    return downloadedBytes;
   } catch (error) {
     if (error instanceof FsSafeError && error.code === "too-large") {
       throw new Error(`Skill download exceeds ${MAX_SKILL_DOWNLOAD_BYTES}-byte limit`, {
@@ -249,7 +249,7 @@ export async function installDownloadSpec(params: {
   return await withTempDownloadPath({ prefix: "skill-download" }, async (tempArchivePath) => {
     let downloaded;
     try {
-      const result = await downloadFile({
+      downloaded = await downloadFile({
         url,
         relativePath: archiveRelativePath,
         pinnedRoot,
@@ -257,7 +257,6 @@ export async function installDownloadSpec(params: {
         sha256: spec.sha256,
         timeoutMs,
       });
-      downloaded = result.bytes;
     } catch (err) {
       const message = formatErrorMessage(err);
       return { ok: false, message, stdout: "", stderr: message, code: null };
