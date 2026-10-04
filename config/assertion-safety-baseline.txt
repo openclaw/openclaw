@@ -2553,7 +2553,7 @@ src/plugins/installed-plugin-index-store.ts	1
 src/plugins/interactive-state.ts	2
 src/plugins/interactive.ts	4
 src/plugins/lazy-service-module.ts	1
-src/plugins/legacy-session-surfaces.ts	3
+src/plugins/legacy-session-surfaces.ts	2
 src/plugins/loader-channel-runtime.ts	1
 src/plugins/loader-channel-setup.ts	12
 src/plugins/loader-discovery.ts	1
