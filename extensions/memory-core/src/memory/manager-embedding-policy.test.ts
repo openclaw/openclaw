@@ -488,13 +488,11 @@ describe("memory embedding policy", () => {
     });
 
     const result = await runMemoryEmbeddingBatchRetryWithSplit({
-      profile: "index",
       items: ["a", "b", "c", "d"],
       run,
       onSuccess: (items) => {
         completed.push(items);
       },
-      isSplittable: isSplittableMemoryEmbeddingBatchError,
       waitForRetry: async () => {},
     });
 
@@ -562,10 +560,8 @@ describe("memory embedding policy", () => {
     });
 
     const result = await runMemoryEmbeddingBatchRetryWithSplit({
-      profile: "index",
       items: ["a", "b", "c", "d"],
       run,
-      isSplittable: isSplittableMemoryEmbeddingBatchError,
       waitForRetry: async (delayMs) => {
         waits.push(delayMs);
       },
@@ -592,10 +588,8 @@ describe("memory embedding policy", () => {
 
     await expect(
       runMemoryEmbeddingBatchRetryWithSplit({
-        profile: "index",
         items: ["a", "b"],
         run,
-        isSplittable: isSplittableMemoryEmbeddingBatchError,
         waitForRetry: async () => {},
       }),
     ).rejects.toThrow("429 rate limit");
@@ -609,10 +603,8 @@ describe("memory embedding policy", () => {
 
     await expect(
       runMemoryEmbeddingBatchRetryWithSplit({
-        profile: "index",
         items: ["a", "b"],
         run,
-        isSplittable: isSplittableMemoryEmbeddingBatchError,
         waitForRetry: async () => {},
       }),
     ).rejects.toThrow("ECONNREFUSED");

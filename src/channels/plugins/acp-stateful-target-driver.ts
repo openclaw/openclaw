@@ -1,8 +1,5 @@
 import { resolveAcpSessionTarget } from "../../acp/control-plane/manager.utils.js";
-import {
-  ensureConfiguredAcpBindingReadyCore,
-  ensureConfiguredAcpBindingSession,
-} from "../../acp/persistent-bindings.lifecycle.js";
+import { ensureConfiguredAcpBindingReadyCore } from "../../acp/persistent-bindings.lifecycle.js";
 import { resolveConfiguredAcpBindingSpecBySessionKey } from "../../acp/persistent-bindings.resolve.js";
 import { resolveConfiguredAcpBindingSpecFromRecord } from "../../acp/persistent-bindings.types.js";
 import { readAcpSessionEntryAsync } from "../../acp/runtime/session-meta.js";
@@ -69,20 +66,6 @@ export const acpStatefulBindingTargetDriver: StatefulBindingTargetDriver = {
         spec: configuredBinding,
         record: params.bindingResolution.record,
       },
-    });
-  },
-  async ensureSession(params) {
-    const spec = resolveConfiguredAcpBindingSpecFromRecord(params.bindingResolution.record);
-    if (!spec) {
-      return {
-        ok: false,
-        sessionKey: params.bindingResolution.statefulTarget.sessionKey,
-        error: "Configured ACP binding unavailable",
-      };
-    }
-    return await ensureConfiguredAcpBindingSession({
-      cfg: params.cfg,
-      spec,
     });
   },
   async resetInPlace(params) {
