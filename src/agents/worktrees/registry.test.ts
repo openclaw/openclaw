@@ -75,7 +75,7 @@ describe("managed worktree registry", () => {
         now: 1,
       });
     }
-    const assertClaims = createWorktreeRemovalClaimsGuard(env, ["first", "second"], token);
+    const assertClaims = createWorktreeRemovalClaimsGuard(env, ["first", "second", "first"], token);
     expect(assertClaims).not.toThrow();
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();

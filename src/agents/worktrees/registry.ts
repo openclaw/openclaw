@@ -1,6 +1,10 @@
 import type { DatabaseSync } from "node:sqlite";
-import { sql, type Insertable, type Selectable } from "kysely";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import type { Insertable, Selectable } from "kysely";
+import {
+  executeSqliteQuerySync,
+  getNodeSqliteKysely,
+  sqliteStringSet,
+} from "../../infra/kysely-sync.js";
 import {
   withExistingOpenClawStateDatabaseArtifactPreservingReadOnly,
   withExistingOpenClawStateDatabaseCurrentReadOnly,
@@ -466,8 +470,9 @@ export function createWorktreeRemovalClaimsGuard(
   worktreeIds: readonly string[],
   token: string,
 ): () => void {
-  const count = worktreeIds.length;
-  const scopes = JSON.stringify(worktreeIds.map(worktreeRunLeaseScope));
+  const ids = [...new Set(worktreeIds)];
+  const count = ids.length;
+  const scopes = sqliteStringSet(ids.map(worktreeRunLeaseScope));
   return () => {
     if (count === 0) {
       return;
@@ -476,9 +481,9 @@ export function createWorktreeRemovalClaimsGuard(
     const held = executeSqliteQuerySync(
       db,
       kyselyFor(db)
-        .selectFrom(sql<{ value: string }>`json_each(${scopes})`.as("requested"))
-        .innerJoin("state_leases", "state_leases.scope", "requested.value")
+        .selectFrom("state_leases")
         .select((eb) => eb.fn.countAll<number>().as("held"))
+        .where("state_leases.scope", "in", scopes)
         .where("state_leases.lease_key", "=", WORKTREE_REMOVING_LEASE_KEY)
         .where("state_leases.owner", "=", token),
     ).rows[0]?.held;
