@@ -531,6 +531,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
               <div class="agent-chat__composer-input-row">
                 <div class="agent-chat__composer-combobox">
                   <textarea
+                    enterkeyhint="enter"
                     ${ref(state.textareaRef ?? undefined)}
                     .value=${guard([dictationPreviewDraft], () => live(dictationPreviewDraft))}
                     dir=${draftDirection}

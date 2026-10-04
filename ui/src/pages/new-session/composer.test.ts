@@ -46,6 +46,28 @@ afterEach(() => {
 });
 
 describe("new-session submission preview", () => {
+  it.each([false, true])(
+    "keeps mobile Return native with requiresModifier=%s",
+    (requiresModifier) => {
+      vi.spyOn(navigator, "userAgent", "get").mockReturnValue("iPhone");
+      const onSubmit = vi.fn();
+      const onBackgroundSubmit = vi.fn();
+      const { composer } = renderComposer({
+        message: "First line",
+        requiresModifier,
+        onSubmit,
+        onBackgroundSubmit,
+      });
+      const event = new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Enter" });
+      composerTextarea(composer).dispatchEvent(event);
+      expect(event.defaultPrevented).toBe(false);
+      expect(onSubmit).not.toHaveBeenCalled();
+      expect(onBackgroundSubmit).not.toHaveBeenCalled();
+      composer.querySelector<HTMLButtonElement>(".new-session-page__start-submit")?.click();
+      expect(onSubmit).toHaveBeenCalledOnce();
+    },
+  );
+
   it("removes new-session file inputs and blocks dropped files under the Gateway upload policy", () => {
     const context = composerContext({ client: null });
     context.config.current.uploadsEnabled = false;

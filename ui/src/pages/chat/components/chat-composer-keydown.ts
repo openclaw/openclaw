@@ -1,4 +1,5 @@
 import type { ChatFollowUpMode, ChatSendShortcut } from "../../../app/settings.ts";
+import { isNativeMobileReturn } from "../../../lib/composer-keyboard.ts";
 import { isComposingKeyboardEvent } from "../../../lib/ime.ts";
 import { steerableQueuedMessage } from "../chat-queue.ts";
 import { restoreHistoryCaret } from "./chat-composer-dom.ts";
@@ -49,7 +50,7 @@ export function createComposerKeyDownHandler({
     if (!(target instanceof HTMLTextAreaElement)) {
       return;
     }
-    if (state.composerComposing || isComposingKeyboardEvent(event)) {
+    if (state.composerComposing || isComposingKeyboardEvent(event) || isNativeMobileReturn(event)) {
       return;
     }
 

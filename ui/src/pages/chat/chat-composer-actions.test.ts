@@ -37,6 +37,64 @@ function pressComposerEnter(
 }
 
 describe("renderChatComposer controls", () => {
+  it.each([
+    ["iPhone", "iPhone", "iPhone", 5],
+    ["Android", "Mozilla/5.0 (Linux; Android 15)", "Linux armv8l", 5],
+    ["desktop-mode iPad", "Mozilla/5.0 (Macintosh)", "MacIntel", 5],
+  ])(
+    "keeps %s Return native while explicit send still works",
+    (_name, userAgent, platform, maxTouchPoints) => {
+      vi.spyOn(navigator, "userAgent", "get").mockReturnValue(userAgent);
+      vi.spyOn(navigator, "platform", "get").mockReturnValue(platform);
+      vi.stubGlobal("navigator", Object.assign(Object.create(navigator), { maxTouchPoints }));
+      const onSend = vi.fn();
+      const { container } = renderComposer({ draft: "First line", onSend });
+      expect(pressComposerEnter(container).defaultPrevented).toBe(false);
+      expect(onSend).not.toHaveBeenCalled();
+      primaryButton(container).click();
+      expect(onSend).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each(["prompt", "goal", "queue", "slash"] as const)(
+    "does not consume mobile Return in the %s path",
+    (mode) => {
+      vi.spyOn(navigator, "userAgent", "get").mockReturnValue("iPhone");
+      const onSend = vi.fn();
+      const onGoalSubmit = vi.fn();
+      const onQueueSteer = vi.fn();
+      const onSlashCommand = vi.fn();
+      const { container } = renderComposer({
+        draft: mode === "queue" ? "" : mode === "slash" ? "Keep this /btw question" : "First line",
+        goalDraftMode: mode === "goal" ? { action: "start" } : undefined,
+        canAbort: mode === "queue",
+        onAbort: vi.fn(),
+        queue: mode === "queue" ? [{ id: "queued", text: "queued prompt", createdAt: 1 }] : [],
+        onSend,
+        onGoalSubmit,
+        onQueueSteer,
+        onSlashCommand,
+      });
+      expect(pressComposerEnter(container).defaultPrevented).toBe(false);
+      for (const action of [onSend, onGoalSubmit, onQueueSteer, onSlashCommand]) {
+        expect(action).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it.each([{}, { ctrlKey: true }, { metaKey: true }])(
+    "preserves desktop submission and explicit mobile shortcuts: %j",
+    (modifiers) => {
+      vi.spyOn(navigator, "userAgent", "get").mockReturnValue(
+        modifiers.ctrlKey || modifiers.metaKey ? "iPhone" : "Mozilla/5.0 (Windows NT 10.0)",
+      );
+      const onSend = vi.fn();
+      const { container } = renderComposer({ draft: "Send this", onSend });
+      expect(pressComposerEnter(container, modifiers).defaultPrevented).toBe(true);
+      expect(onSend).toHaveBeenCalledOnce();
+    },
+  );
+
   it.each(["local draft", "/stop"])(
     "keeps an editable draft without send permission: %s",
     (draft) => {
