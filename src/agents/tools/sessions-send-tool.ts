@@ -289,7 +289,10 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
         mainSessionKey,
         visibility: sessionVisibility,
         a2aPolicy,
-      }).check({ key: resolvedSession.key });
+        }).check({
+          key: resolvedSession.key,
+          ...(restrictToSpawned ? { spawnedBy: effectiveRequesterKey } : {}),
+        });
       const visibleSession = await resolveVisibleSessionReference({
         action: "send",
         resolvedSession,
