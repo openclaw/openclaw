@@ -10,10 +10,10 @@ import type { AssistantMessage } from "../../../llm/types.js";
 import { getAgentScopedMediaLocalRoots } from "../../../media/local-roots.js";
 import type { ProviderRuntimePluginHandle } from "../../../plugins/provider-hook-runtime.js";
 import { resolveProviderTextTransforms } from "../../../plugins/provider-runtime.js";
-import type { NestedToolActivity } from "../../../sessions/nested-tool-activity.js";
 import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
 import type { AgentRunAttemptFailureSource } from "../../agent-run-terminal-outcome.js";
 import type { subscribeEmbeddedAgentSession } from "../../embedded-agent-subscribe.js";
+import { resolveSelectedModelCredential } from "../../model-auth-selected-credential.js";
 import { wrapStreamFnTextTransforms } from "../../plugin-text-transforms.js";
 import { registerProviderStreamForModel } from "../../provider-stream.js";
 import type { AgentMessage } from "../../runtime/index.js";
@@ -55,6 +55,7 @@ import {
   findLatestUncompactedAttemptUsageSnapshot,
   resolvePromptCacheTouchTimestamp,
 } from "./attempt-context-engine-helpers.js";
+import type { AttemptNestedToolActivityState } from "./attempt-nested-tool-activity.js";
 import { appendAttemptCacheTtlIfNeeded } from "./attempt-thread-helpers.js";
 import { normalizeCompactionRecoveryTranscriptTail } from "./attempt-transcript-helpers.js";
 import {
@@ -115,7 +116,7 @@ export async function settleEmbeddedAttemptStream(input: {
   }) => Promise<void> | void;
   abortable: <T>(promise: Promise<T>) => Promise<T>;
   prePromptMessageCount: number;
-  nestedToolActivities: readonly NestedToolActivity[];
+  nestedToolActivityState: AttemptNestedToolActivityState;
   cache: {
     getObservation?: () => PromptCacheRequestObservation | undefined;
     retention: PromptCacheRetention;
@@ -388,13 +389,7 @@ export async function settleEmbeddedAttemptStream(input: {
     lastAssistant,
     currentAttemptAssistant,
     currentAttemptCompletedAssistant,
-    successfulNestedToolNames: [
-      ...new Set(
-        input.nestedToolActivities.flatMap(({ details }) =>
-          details.isError ? [] : [details.toolName],
-        ),
-      ),
-    ],
+    successfulNestedToolNames: [...input.nestedToolActivityState.successfulToolNames],
     attemptUsage,
     lastCallUsage,
     promptCache,
@@ -649,14 +644,25 @@ export async function prepareEmbeddedAttemptTransport(input: {
   const runtime = attempt.preparedModelRuntime;
   const profileId = attempt.authProfileId;
   const credential = profileId ? attempt.authProfileStore?.profiles[profileId] : undefined;
+  const selectedCredential =
+    runtime &&
+    resolveSelectedModelCredential({
+      provider: attempt.model.provider,
+      profileId,
+      mode: credential?.type ?? attempt.runtimePlan?.auth.selectedAuthMode,
+    });
   if (
     runtime?.accountCatalog &&
-    profileId &&
-    credential?.type === "api_key" &&
+    selectedCredential &&
+    selectedCredential.source !== "harness" &&
+    selectedCredential.requirement === "api-key" &&
     attempt.model.provider === "openai" &&
     attempt.model.api === "openai-responses"
   ) {
-    const record = runtime.accountCatalog.prepareServiceTierObserver({ profileId, credential });
+    const record = runtime.accountCatalog.prepareServiceTierObserver({
+      selectedCredential,
+      credential,
+    });
     session.agent.streamFn = createOpenAIServiceTierObservationWrapper(
       session.agent.streamFn,
       (model) =>

@@ -6,9 +6,11 @@ import { looksLikeSecretSentinel, resolveSecretSentinel } from "../secrets/senti
 import * as secretStore from "../secrets/store/secret-store.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
+import { createWorkerPlacementTools } from "../worker/worker-placement-tools.js";
 import type { ExecuteNodeHostCommandParams } from "./bash-tools.exec-host-node.types.js";
 import { createRunExit } from "./bash-tools.exec-runtime.test-support.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
+import { prepareCoreToolPolicy } from "./prepared-tool-surface.js";
 
 const mocks = vi.hoisted(() => ({
   egressActive: false,
@@ -264,6 +266,42 @@ describe("exec store environment", () => {
     const nextRun = createLazyExecTool({ host: "gateway", security: "full", ask: "off" });
     await nextRun.execute("code-mode-next-run", { command: "echo three", yieldMs: 120_000 });
     expect(mocks.gatewayParams.at(-1)?.env.AWS_REGION).toBe("eu-west-1");
+  });
+
+  it("runs worker placement exec without reading or projecting its scratch secret store", async () => {
+    await writeEntries([
+      { name: "AWS_REGION", value: "synthetic-worker-store-value", kind: "env" },
+    ]);
+    const workspaceDir = tempDirs.make("worker-exec-store-env-");
+    const read = vi.spyOn(secretStore, "readSecretStoreExecEnvironment");
+    try {
+      const tools = createWorkerPlacementTools({
+        policy: prepareCoreToolPolicy({}),
+        cwd: workspaceDir,
+        containmentRoot: workspaceDir,
+        execAuthority: { host: "gateway", security: "full", ask: "off" },
+        agentId: "main",
+        sessionKey: "worker:store-env",
+        sessionId: "store-env",
+        runId: "worker-store-env",
+      });
+      const exec = tools.find((tool) => tool.name === "exec");
+      if (!exec) {
+        throw new Error("Worker placement exec tool is unavailable");
+      }
+
+      const result = await exec.execute("worker-store-env", {
+        command: "echo ok",
+        yieldMs: 120_000,
+      });
+
+      expect(result.details).toMatchObject({ status: "completed", exitCode: 0 });
+      expect(mocks.spawnInputs).toHaveLength(1);
+      expect(mocks.spawnInputs[0]?.env).not.toHaveProperty("AWS_REGION");
+      expect(read).not.toHaveBeenCalled();
+    } finally {
+      read.mockRestore();
+    }
   });
 
   it("refuses a cancelled exec after its store read without cancelling the run's shared snapshot", async () => {

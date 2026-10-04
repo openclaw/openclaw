@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type {
   SessionPlacementMachine,
   SessionsReclaimParams,
+  WorkerDesktopLaunchResult,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { DevicePlacementRequirement } from "../../agents/harness/types.js";
 import type {
@@ -70,6 +71,8 @@ export type WorkerEnvironmentServiceRecord = {
   error?: string;
 };
 
+export type { WorkerDesktopLaunchResult } from "../../../packages/gateway-protocol/src/index.js";
+
 export type WorkerDesktopObserveResult = {
   transport: "rfb";
   wsPath: string;
@@ -80,13 +83,19 @@ export type WorkerDesktopObserveResult = {
   vncPassword?: string;
 };
 
-export type WorkerDesktopLaunchResult = {
-  app: WorkerDesktopApp["id"];
-  status: "ready";
-};
-
 /** Request-facing lifecycle methods, kept separate from persistence and provider internals. */
 export type WorkerEnvironmentServiceContract = {
+  observeProcesses?(
+    input: Omit<
+      import("../../worker/worker-process-observation.js").NodeWorkerProcessInput,
+      "gatewayNamespace" | "expectedBundleHash"
+    >,
+    assertCurrent: () => void,
+    signal?: AbortSignal,
+  ): Promise<
+    | import("../../../packages/gateway-protocol/src/schema/session-processes.js").SessionsProcessesListResult
+    | import("../../../packages/gateway-protocol/src/schema/session-processes.js").SessionsProcessesStopResult
+  >;
   /** Current explicit provider attestation, never the persisted legacy default. */
   getDedicatedNodeLeaseSignal(environmentId: string): AbortSignal | undefined;
   captureSessionAttachment(identity: WorkerEnvironmentSessionIdentity): {

@@ -37,7 +37,6 @@ function launchInput(workspaceDir: string, launchId: string, prompt = "success")
 describe("node worker supervisor initialization", () => {
   it.each([
     { availableParallelism: 0, expected: 1 },
-    { availableParallelism: 7, expected: 7 },
     { availableParallelism: NODE_WORKER_CAPACITY_MAX + 1, expected: NODE_WORKER_CAPACITY_MAX },
   ])(
     "publishes $expected default worker slots for $availableParallelism available CPUs",

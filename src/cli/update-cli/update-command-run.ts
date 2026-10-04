@@ -14,7 +14,6 @@ import {
   isGatewayExternallySupervised,
 } from "../../infra/gateway-supervision.js";
 import { resolveOpenClawPackageRootSync } from "../../infra/openclaw-root.js";
-import { assertNoPendingPackageActivation } from "../../infra/package-update-activation.js";
 import { normalizeUpdateChannel } from "../../infra/update-channels.js";
 import { resolveUpdateInstallKind } from "../../infra/update-check.js";
 import {
@@ -22,11 +21,11 @@ import {
   UPDATE_RUN_ID_ENV,
 } from "../../infra/update-control-plane-sentinel.js";
 import { readDevUpdateTarget } from "../../infra/update-dev-target.js";
+import { normalizeUpdateFailureResult } from "../../infra/update-failure-result.js";
 import {
   createFreeBsdPkgOwnershipInspection,
   type FreeBsdPkgOwnershipInspection,
 } from "../../infra/update-freebsd-pkg-ownership.js";
-import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
 import { cleanupStaleManagedServiceUpdateHandoffs } from "../../infra/update-managed-service-handoff-cleanup.js";
 import {
   POST_CORE_UPDATE_CHANNEL_ENV,
@@ -88,7 +87,7 @@ import {
   retireMutableUpdateSignalRun,
   withMutableUpdateSignals,
 } from "./update-command-mutable-signals.js";
-import { UpdateCommandPendingRecoveryFailure } from "./update-command-result.js";
+import { assertUpdatePackageActivationAdmission } from "./update-command-package-activation.js";
 import {
   resolveOwnedManagedUpdateEnv,
   withOwnedManagedUpdateEnv,
@@ -196,35 +195,6 @@ export async function resolveUpdateCommandAdmissionEnv(params: {
     }
   }
   return env;
-}
-
-/** Package admission must not open history or launch diagnostics on a retained operation. */
-export function assertUpdatePackageActivationAdmission(
-  root: string,
-  options?: Parameters<typeof assertNoPendingPackageActivation>[1] & { serviceRoot?: string },
-): void {
-  try {
-    assertNoPendingPackageActivation(resolveUpdateInstallRoot(root), options);
-  } catch (cause) {
-    throw new UpdateCommandPendingRecoveryFailure(
-      {
-        status: "error",
-        mode: "unknown",
-        root,
-        reason: "update-recovery-pending",
-        steps: [],
-        durationMs: 0,
-      },
-      formatErrorMessage(cause),
-      { cause },
-    );
-  }
-  // A retained publication still owns the service installation when the CLI updates another root.
-  if (options?.serviceRoot && options.serviceRoot !== root) {
-    assertUpdatePackageActivationAdmission(options.serviceRoot, {
-      continuation: options.continuation,
-    });
-  }
 }
 
 export async function admitUpdateCommandRun(params: {
@@ -509,7 +479,7 @@ export function completeUpdateCommandRun(
   run: UpdateCommandOptions["run"],
   completion: { rolledBack?: boolean; downtimeMs?: number } = {},
 ): UpdateRunResult {
-  const result = normalizeControlPlaneUpdateResult(input);
+  const result = normalizeUpdateFailureResult(normalizeControlPlaneUpdateResult(input));
   if (!run) {
     return result;
   }
@@ -530,7 +500,7 @@ export function completeUpdateCommandRun(
     getUpdateRun(run.runId, { env: run.env })?.status === recovery.terminal.status
   ) {
     // Read the atomic durable outcome; diagnostics never authorize retention cleanup.
-    return {
+    return normalizeUpdateFailureResult({
       ...result,
       status: recovery.terminal.status === "succeeded" ? "ok" : "error",
       reason:
@@ -538,15 +508,15 @@ export function completeUpdateCommandRun(
           ? undefined
           : (recovery.primaryFailure?.code ?? "update-rolled-back"),
       runId: run.runId,
-    };
+    });
   }
   if (recovery) {
-    return {
+    return normalizeUpdateFailureResult({
       ...result,
       status: "error",
       reason: result.reason ?? "update-recovery-pending",
       runId: run.runId,
-    };
+    });
   }
   const recordOptions = { env: run.env, redactPaths: result.root ? [result.root] : [] };
   // Both finalization and outer CLI unwind come here. A verified restored generation

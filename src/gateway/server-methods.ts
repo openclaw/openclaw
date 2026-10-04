@@ -55,7 +55,7 @@ import {
   runWithGatewayObservationScope,
   workAdmissionUnavailableError,
 } from "./server-request-lifecycle.js";
-import type { GatewayRpcDiagnostics } from "./server/ws-connection/request-diagnostics.js";
+import { GatewayRpcDiagnostics } from "./server/ws-connection/request-diagnostics.js";
 import type { GatewaySessionAccessAuthority } from "./session-access-authority.js";
 import { sessionLog } from "./session-log.js";
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
@@ -76,27 +76,27 @@ export function createRequestGatewayMethodRegistry(
   // Attached gateway methods must not be shadowed by agent-scoped registry loads.
   const gatewayPluginRegistry = getActivePluginRegistry();
   const gatewayPluginHandlers = gatewayPluginRegistry?.gatewayHandlers ?? {};
-  const extraHandlerEntries = Object.entries(extraHandlers ?? {});
   const pluginMethodNames = new Set(Object.keys(gatewayPluginHandlers));
   const coreDescriptorHandlers = { ...coreGatewayHandlers };
-  for (const [method, extraHandler] of extraHandlerEntries) {
+  const auxHandlers: Array<[string, GatewayRequestHandler]> = [];
+  for (const [method, extraHandler] of Object.entries(extraHandlers ?? {})) {
     // Tests and local harnesses can override classified core methods, but plugin-provided
     // methods win so a loaded plugin cannot be shadowed by a caller-local extra handler.
-    if (!pluginMethodNames.has(method) && isCoreGatewayMethodClassified(method)) {
+    if (pluginMethodNames.has(method)) {
+      continue;
+    }
+    if (isCoreGatewayMethodClassified(method)) {
       coreDescriptorHandlers[method] = extraHandler;
+    } else {
+      auxHandlers.push([method, extraHandler]);
     }
   }
-  const auxHandlers = Object.fromEntries(
-    extraHandlerEntries.filter(
-      ([method]) => !pluginMethodNames.has(method) && !isCoreGatewayMethodClassified(method),
-    ),
-  );
   return createGatewayMethodRegistry(
     [
       ...createCoreGatewayMethodDescriptors(coreDescriptorHandlers),
       ...(gatewayPluginRegistry ? createPluginGatewayMethodDescriptors(gatewayPluginRegistry) : []),
       ...createGatewayMethodDescriptorsFromHandlers({
-        handlers: auxHandlers,
+        handlers: Object.fromEntries(auxHandlers),
         owner: { kind: "aux", area: "gateway-extra" },
         defaultScope: ADMIN_SCOPE,
       }),
@@ -467,9 +467,7 @@ export async function handleGatewayRequest(
         // Long polls and shutdown initiators must never remain preparation leases.
         entry?.release();
         profileBinding?.markInvoked();
-        return diagnostics
-          ? diagnostics.runHandler(() => preparedHandler(handlerOptions))
-          : preparedHandler(handlerOptions);
+        return GatewayRpcDiagnostics.runHandler(() => preparedHandler(handlerOptions), diagnostics);
       };
       if (req.method === "question.get" || req.method === "question.resolve") {
         // Draining admission consults the pending owner before handler entry.

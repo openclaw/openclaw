@@ -147,7 +147,7 @@ export function registerAgentCommandRecoveryCases(
       throw new Error("Restart interruption must not retry the model");
     }
     expect(terminal.result.meta).toMatchObject({ aborted: true, stopReason: "restart" });
-    expect(input.activateInternalPrompt).not.toHaveBeenCalled();
+    expect(input.sessionPromptState.activateInternalPrompt).not.toHaveBeenCalled();
     state.runAgentAttemptMock.mockResolvedValue(terminal.result);
 
     await expect(

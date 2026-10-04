@@ -75,23 +75,13 @@ function sameOpenedFile(left: StableBigIntFileStat, right: StableBigIntFileStat)
   );
 }
 
-function compareArtifactEntryNames(left: string, right: string): number {
-  return left < right ? -1 : left > right ? 1 : 0;
-}
-
 async function readExecutableFileIdentity(
   filePath: string,
   includePrefix = false,
 ): Promise<ReadIdentityResult | null> {
-  let canonicalPath: string;
-  try {
-    canonicalPath = await fs.realpath(filePath);
-  } catch {
-    return null;
-  }
-
   let handle: Awaited<ReturnType<typeof fs.open>> | undefined;
   try {
+    const canonicalPath = await fs.realpath(filePath);
     handle = await fs.open(canonicalPath, "r");
     const before = await handle.stat({ bigint: true });
     if (!before.isFile()) {
@@ -280,7 +270,7 @@ async function resolvePackageTreeArtifact(params: {
     // Locale collation can differ across hosts. Artifact bytes must have one
     // process- and locale-independent traversal order.
     for (const entry of entries.toSorted((left, right) =>
-      compareArtifactEntryNames(left.name, right.name),
+      left.name < right.name ? -1 : left.name > right.name ? 1 : 0,
     )) {
       entryCount += 1;
       if (entryCount > MAX_PACKAGE_ARTIFACT_ENTRIES) {
@@ -429,6 +419,8 @@ async function resolvePosixIdentity(params: {
   if (!runtimeArtifact) {
     return undefined;
   }
+  const resolvedPath = commandFile.identity.path;
+  let invocation: CliExecutableIdentity["invocation"];
   if (shebang) {
     const interpreterPath = resolveCommandPath({
       command: shebang.executable,
@@ -460,30 +452,25 @@ async function resolvePosixIdentity(params: {
       files.push(target.identity);
       invocationInterpreter = target.identity.path;
     }
-    return {
-      command: params.command,
-      resolvedPath: commandFile.identity.path,
-      invocation: {
-        command: invocationInterpreter,
-        leadingArgv: [...shebang.args, commandFile.identity.path],
-        resolution: "direct",
-      },
-      files: dedupeFileIdentities(files),
-      runtimeArtifact,
+    invocation = {
+      command: invocationInterpreter,
+      leadingArgv: [...shebang.args, resolvedPath],
+      resolution: "direct",
     };
-  }
-  const resolvedPath = commandFile.identity.path;
-  return {
-    command: params.command,
-    resolvedPath,
-    invocation: {
+  } else {
+    invocation = {
       // Execute the exact file opened and hashed, while preserving a symlink's
       // invocation name for runtimes that dispatch from argv0.
       command: resolvedPath,
       ...(params.resolvedPath !== resolvedPath ? { argv0: params.resolvedPath } : {}),
       leadingArgv: [],
       resolution: "direct",
-    },
+    };
+  }
+  return {
+    command: params.command,
+    resolvedPath,
+    invocation,
     files: dedupeFileIdentities(files),
     runtimeArtifact,
   };

@@ -12,9 +12,9 @@ import type { PluginRuntime } from "./runtime/types.js";
 describe("plugin registry SQLite session ownership", () => {
   it("resolves unscoped worker keys through the configured default agent", async () => {
     await withTempHome(async () => {
-      const config = {
-        agents: { list: [{ id: "researcher", default: true }] },
-      } as OpenClawConfig;
+      const config: OpenClawConfig = {
+        agents: { entries: { researcher: {} } },
+      };
       const subagent = {
         complete: vi.fn(async () => ({ text: "completed" })),
         run: vi.fn(async () => ({ runId: "workboard-run" })),
@@ -89,7 +89,7 @@ describe("plugin registry SQLite session ownership", () => {
           },
         );
         const pending = api.runtime.subagent.run({ sessionKey, message: "continue" });
-        runtimeConfig = { agents: { list: [{ id: "replacement", default: true }] } };
+        runtimeConfig = { agents: { entries: { replacement: {} } } };
         await expect(pending).rejects.toThrow('owned by plugin "harness-owner"');
         expect(subagent.run).toHaveBeenCalledOnce();
       } finally {

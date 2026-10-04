@@ -425,7 +425,9 @@ describe("tool-cards", () => {
       const container = mountCard(card, { ...options, expanded: false });
 
       const summary = container.querySelector("button.chat-tool-msg-summary");
-      expect(summary?.textContent).not.toContain("Message");
+      expect(textOf(container, ".chat-tool-msg-summary__label")).toBe(
+        shape === "serialized" ? "Message" : undefined,
+      );
       expect(
         summary?.querySelector(".chat-tool-msg-summary__icon")?.getAttribute("aria-label"),
       ).toBe("message");
@@ -526,13 +528,29 @@ describe("tool-cards", () => {
 });
 
 describe("tool-card outcomes", () => {
+  it.each(["start", "update"] as const)(
+    "keeps statusless %s activity running only while live",
+    (phase) => {
+      const card: ToolCard = {
+        id: "statusless-activity",
+        name: "subagents",
+        live: true,
+        activity: { itemId: "statusless-activity", kind: "tool", title: "Delegate task", phase },
+      };
+      const container = mountCard(card, { runActive: true });
+      expect(textOf(container, ".chat-tool-card__outcome")).toBe("Running");
+      mountCard(card, { runActive: false }, container);
+      expect(textOf(container, ".chat-tool-card__outcome")).toBe("Outcome unknown");
+    },
+  );
+
   it.each([
     { status: "failed", label: "failed" },
     { status: "blocked", label: "Blocked" },
     { status: "skipped", label: "Skipped" },
     { status: undefined, label: "Outcome unknown" },
   ] as const)(
-    "preserves prepared $status outcomes through live items and history attachment",
+    "reconciles prepared $status outcomes through live items and history attachment",
     ({ status, label }) => {
       const item = projectAgentActivityItem({
         itemId: "collaboration-call",
@@ -587,7 +605,7 @@ describe("tool-card outcomes", () => {
         const card = extractToolCardsCached(message)[0]!;
         expect(card.outputText).toBeUndefined();
         expect(card.isError).toBeUndefined();
-        expect(card.completed).not.toBe(true);
+        expect(card.completed === true).toBe(message === live);
       }
       expect(live).toMatchObject({ __openclawToolStreamResultReceived: false });
       expect(saved).not.toHaveProperty("activity");

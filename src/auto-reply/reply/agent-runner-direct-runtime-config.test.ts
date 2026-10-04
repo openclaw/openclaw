@@ -342,14 +342,8 @@ describe("runReplyAgent runtime config", () => {
     });
     runSessionCompactionIfNeededMock.mockImplementation(runRequiredCheckpoint);
     runMemoryFlushIfNeededMock.mockImplementation(
-      async (params: {
-        replyOperation: ReplyOperation;
-        onVisibleErrorPayloads?: (payloads: Array<{ text?: string; isError?: boolean }>) => void;
-      }) => {
+      async (params: { replyOperation: ReplyOperation }) => {
         params.replyOperation.setPhase("memory_flushing");
-        params.onVisibleErrorPayloads?.([
-          { text: "⚠️ memory flush preparation failed", isError: true },
-        ]);
         return { sessionEntry: undefined, outcome: "failed" };
       },
     );

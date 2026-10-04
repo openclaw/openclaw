@@ -26,10 +26,13 @@ function createRosterHost(request: GatewayBrowserClient["request"]) {
   const sessions = createTestSessionCapability(gateway);
   const context = { gateway, agents, sessions } as unknown as ApplicationContext;
   const abort = new AbortController();
-  const owner = { client, abort, descriptor: { pluginId: "review" }, disposers: new Set() } as Omit<
-    ControlUiPluginOwner,
-    "host"
-  >;
+  const owner = {
+    client,
+    abort,
+    descriptor: { pluginId: "review" },
+    disposers: new Set(),
+    contributions: { navigation: new Map() },
+  } as Omit<ControlUiPluginOwner, "host">;
   const runtime = new ControlUiPluginRuntime(() => context);
   runtime.start();
   return {
@@ -102,6 +105,8 @@ describe("native UI roster refresh", () => {
     expect(request.mock.calls[1]).toEqual([
       "sessions.list",
       {
+        rowMode: "compact",
+        source: "chat-pane",
         includeGlobal: true,
         includeUnknown: true,
         configuredAgentsOnly: false,
@@ -391,6 +396,47 @@ describe("native UI locale subscription", () => {
 });
 
 describe("native UI page navigation", () => {
+  it("pins only registered destinations once through sidebar preferences and retires pin handles", () => {
+    const fixture = createRosterHost(vi.fn());
+    onTestFinished(fixture.dispose);
+    let sidebarEntries = ["route:usage", "session:agent:main:existing"];
+    const update = vi.fn((patch: { sidebarEntries: string[] }) => {
+      sidebarEntries = patch.sidebarEntries;
+    });
+    Object.assign(fixture.context, {
+      navigation: {
+        get snapshot() {
+          return { sidebarEntries };
+        },
+        update,
+      },
+    });
+    const view = new AbortController();
+    const pin = scopeControlUiHost(fixture.host, view.signal).ui.pinNavigation;
+    pin("board");
+    expect(update).not.toHaveBeenCalled();
+    const unregister = fixture.host.ui.registerNavigation({
+      id: "board",
+      label: "Board",
+      page: { id: "board" },
+      defaultVisible: false,
+    });
+    pin("foreign/board");
+    pin("board");
+    pin("board");
+    expect(update).toHaveBeenCalledExactlyOnceWith({
+      sidebarEntries: ["route:usage", "session:agent:main:existing", "plugin:review/board"],
+    });
+    unregister();
+    sidebarEntries = ["route:usage"];
+    pin("board");
+    expect(update).toHaveBeenCalledOnce();
+    view.abort();
+    expect(() => pin("board")).toThrow("view has ended");
+    fixture.dispose();
+    expect(() => fixture.host.ui.pinNavigation("board")).toThrow("activation has ended");
+  });
+
   it("opens a queried global session with its owner before changing the selected key", async () => {
     const primary = sessionsResult(
       [{ key: "global", kind: "global", agentId: "main", boardFace: "dashboard" }],

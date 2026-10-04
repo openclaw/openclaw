@@ -114,9 +114,17 @@ describe("Gateway creation preparation", () => {
     },
   );
 
-  it.each(["canonical", "alias", "sessionId", "embedded"] as const)(
-    "rejects workspace preparation before allocation while %s owns active work",
-    async (identity) => {
+  it.each([
+    ["canonical", undefined],
+    ["alias", undefined],
+    ["sessionId", undefined],
+    ["embedded", undefined],
+    ["canonical", "sessionRoot"],
+    ["canonical", "spawnedCwd"],
+    ["canonical", "execNode"],
+  ] as const)(
+    "rejects active %s work before workspace allocation or direct binding (%s)",
+    async (identity, binding) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         const key = "agent:main:main";
         const originalRoot = state.path("original");
@@ -174,7 +182,14 @@ describe("Gateway creation preparation", () => {
           value: { sessionRoot: destination, spawnedCwd: destination },
         }));
         try {
-          expect(await createGatewaySession({ ...common, prepareLifecycle })).toMatchObject({
+          expect(
+            await createGatewaySession({
+              ...common,
+              ...(binding
+                ? { [binding]: binding === "execNode" ? "selected-node" : destination }
+                : { prepareLifecycle }),
+            }),
+          ).toMatchObject({
             ok: false,
             error: { code: "UNAVAILABLE", message: expect.stringContaining("still active") },
           });
@@ -274,38 +289,6 @@ describe("Gateway creation preparation", () => {
       }
     });
   });
-
-  it.each(["sessionRoot", "spawnedCwd", "execNode"] as const)(
-    "rejects an active target's changed %s without a preparation callback",
-    async (binding) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async () => {
-        const key = "agent:main:direct-binding";
-        const common = {
-          cfg: {},
-          key,
-          commandSource: "test",
-          operatorRoleActor: { kind: "system" as const },
-        };
-        const first = await createGatewaySession(common);
-        expect(first.ok).toBe(true);
-        const target = resolveGatewaySessionStoreTarget({ cfg: {}, key });
-        const admission = await beginSessionWorkAdmission({
-          scope: target.storePath,
-          identities: [key],
-          assertAllowed: () => {},
-        });
-        try {
-          const value = binding === "execNode" ? "selected-node" : "/selected-workspace";
-          expect(await createGatewaySession({ ...common, [binding]: value })).toMatchObject({
-            ok: false,
-            error: { code: "UNAVAILABLE", message: expect.stringContaining("still active") },
-          });
-        } finally {
-          admission.release();
-        }
-      });
-    },
-  );
 
   it.each(["commit", "rollback"] as const)(
     "holds queued admission through workspace %s while unrelated work progresses",

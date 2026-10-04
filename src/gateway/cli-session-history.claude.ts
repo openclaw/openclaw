@@ -24,7 +24,7 @@ import {
 } from "../config/sessions/cli-session-binding.js";
 import { attachOpenClawTranscriptMeta } from "./session-transcript-readers.js";
 
-export const CLAUDE_CLI_PROVIDER = "claude-cli";
+const CLAUDE_CLI_PROVIDER = "claude-cli";
 const CLAUDE_PROJECTS_RELATIVE_DIR = path.join(".claude", "projects");
 
 export type ClaudeCliProjectEntry = {
@@ -191,14 +191,6 @@ function normalizeClaudeCliContent(
     }
     return block;
   });
-}
-
-function coalesceClaudeCliToolMessages(messages: TranscriptLikeMessage[]): TranscriptLikeMessage[] {
-  const coalesced: TranscriptLikeMessage[] = [];
-  for (const message of messages) {
-    appendCoalescedClaudeCliToolMessage(coalesced, message);
-  }
-  return coalesced;
 }
 
 export function appendCoalescedClaudeCliToolMessage(
@@ -569,17 +561,16 @@ export function readClaudeCliFallbackSeed(params: {
       },
     );
     if (message) {
-      windowedTurns.push(message);
+      appendCoalescedClaudeCliToolMessage(windowedTurns, message);
     }
   }
 
-  const recentTurns = coalesceClaudeCliToolMessages(windowedTurns);
   const resolvedSummaryText = lastSummary ?? pendingSummary ?? lastBoundaryFallback;
-  if (!resolvedSummaryText && recentTurns.length === 0) {
+  if (!resolvedSummaryText && windowedTurns.length === 0) {
     return undefined;
   }
   return {
     ...(resolvedSummaryText ? { summaryText: resolvedSummaryText } : {}),
-    recentTurns,
+    recentTurns: windowedTurns,
   };
 }

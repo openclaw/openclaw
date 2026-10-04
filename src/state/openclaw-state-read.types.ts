@@ -60,6 +60,7 @@ import type {
   WorkspaceJournalReadCommand,
   WorkspaceJournalReadResult,
 } from "../gateway/worker-environments/placement-workspace-journal.types.js";
+import type { PreparedPoolPresenceDemand } from "../gateway/worker-environments/prepared-pool-presence.types.js";
 import type {
   WorkerEnvironmentFacts,
   WorkerEnvironmentPrunePage,
@@ -247,7 +248,9 @@ export type OpenClawStateReadCommand =
   | { type: "workerPlacements.changeSnapshot"; profileIds?: string[] }
   | { type: "fleet.get"; tenantId: string }
   | { type: "nodeHost.config" }
+  | { type: "tts.prefsPath" }
   | { type: "operator.channelPolicy" }
+  | { type: "preparedPoolPresence.read" }
   | {
       type: "sessionRepositoryWorkspaces.find";
       owners: readonly RepositoryWorkspaceOwner[];
@@ -287,6 +290,7 @@ export type OpenClawStateReadResult =
       orphanWorkspace: ClawOrphanWorkspace | undefined;
     }
   | { type: "doctor.gatewayOwnerLease.read"; lease: GatewayOwnerLeaseIdentity | undefined }
+  | { type: "preparedPoolPresence.read"; demand: PreparedPoolPresenceDemand | undefined }
   | {
       type: "tui.lastSession.read";
       row: ConfigMachineStateRow | undefined;
@@ -515,7 +519,7 @@ export type OpenClawStateReadResult =
     }
   | { type: "fleet.get"; cell: FleetCellRecord | undefined }
   | {
-      type: "nodeHost.config" | "operator.channelPolicy";
+      type: "nodeHost.config" | "operator.channelPolicy" | "tts.prefsPath";
       row: ConfigMachineStateRow | undefined;
     }
   | {

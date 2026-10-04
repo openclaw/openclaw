@@ -56,6 +56,7 @@ import {
   YIELD_DIAGNOSTIC_TEXT,
 } from "./incomplete-turn-resolution.js";
 import type { RunEmbeddedAgentInternalParams as TerminalRunParams } from "./internal-params.js";
+import type { createEmbeddedRunSessionPromptState } from "./session-prompt-state.js";
 import {
   isEmbeddedRunTerminalAbort,
   isEmbeddedRunTerminalInterrupted,
@@ -104,10 +105,8 @@ export function resolveSettledTurnFinalizationRequest(input: {
   runParams: TerminalRunParams;
   attempt: EmbeddedRunAttemptResult;
   activeErrorContext: { provider: string; model: string };
-  modelApi: Parameters<typeof resolveReasoningOnlyRetryInstruction>[0]["modelApi"];
-  executionContract: Parameters<
-    typeof resolveReasoningOnlyRetryInstruction
-  >[0]["executionContract"];
+  modelApi: string | undefined;
+  executionContract: string | undefined;
   payloadsWithToolMedia: EmbeddedAgentRunResult["payloads"];
   recoveredFinalAssistantPayloadsAfterPromptTimeout?: EmbeddedAgentRunResult["payloads"];
   hasTerminalToolPresentation: boolean;
@@ -170,10 +169,8 @@ export async function resolveEmbeddedRunTerminal(input: {
   attempt: EmbeddedRunAttemptResult;
   attemptAssistant?: AssistantMessage;
   activeErrorContext: { provider: string; model: string };
-  modelApi: Parameters<typeof resolveReasoningOnlyRetryInstruction>[0]["modelApi"];
-  executionContract: Parameters<
-    typeof resolveReasoningOnlyRetryInstruction
-  >[0]["executionContract"];
+  modelApi: string | undefined;
+  executionContract: string | undefined;
   terminalState: EmbeddedRunTerminalState;
   payloadsWithToolMedia: EmbeddedAgentRunResult["payloads"];
   replyDeliveryState?: ReplyDeliveryState;
@@ -186,12 +183,15 @@ export async function resolveEmbeddedRunTerminal(input: {
   terminalToolFailure?: EmbeddedAgentRunResult["meta"]["terminalToolFailure"];
   attemptCompactionCount: number;
   replayState: EmbeddedRunReplayState;
-  activePromptPersisted: boolean;
-  activateInternalPrompt: (prompt: string) => void;
-  markOwnedTranscriptRetry: () => void;
-  activateCompactionContinuation: (instruction: string) => void;
-  clearCompactionContinuation: () => void;
-  setSuppressNextUserMessagePersistence: (value: boolean) => void;
+  sessionPromptState: Pick<
+    Awaited<ReturnType<typeof createEmbeddedRunSessionPromptState>>,
+    | "activePrompt"
+    | "suppressNextUserMessagePersistence"
+    | "activateInternalPrompt"
+    | "markOwnedTranscriptRetry"
+    | "activateCompactionContinuation"
+    | "clearCompactionContinuation"
+  >;
   armPostCompactionGuard: () => void;
   readTerminalToolPresentation: () => string | undefined;
   resolveReplayInvalid: (incompleteTurnText?: string | null) => boolean;
@@ -227,7 +227,7 @@ export async function resolveEmbeddedRunTerminal(input: {
   thinkLevel?: string;
   contextRecoveryState: EmbeddedRunContextRecoveryState;
 }): Promise<TerminalResolution> {
-  const { runParams, attempt, retryState } = input;
+  const { runParams, attempt, retryState, sessionPromptState } = input;
   const { externalAbort, promptError } = projectAgentRunAttemptTerminal(attempt.terminal);
   const terminalAborted = isEmbeddedRunTerminalAbort(input.terminalState.outcome);
   const terminalTimedOut = isEmbeddedRunTerminalTimeout(input.terminalState.outcome);
@@ -293,7 +293,7 @@ export async function resolveEmbeddedRunTerminal(input: {
     retryState.reasoningOnlyAttempts < DEFAULT_REASONING_ONLY_RETRY_LIMIT
   ) {
     retryState.reasoningOnlyAttempts += 1;
-    input.activateInternalPrompt(nextReasoningOnlyRetryInstruction);
+    sessionPromptState.activateInternalPrompt(nextReasoningOnlyRetryInstruction);
     log.warn(
       `reasoning-only assistant turn detected: runId=${runParams.runId} sessionId=${runParams.sessionId} ` +
         `provider=${input.activeErrorContext.provider}/${input.activeErrorContext.model} — retrying ${retryState.reasoningOnlyAttempts}/${DEFAULT_REASONING_ONLY_RETRY_LIMIT} ` +
@@ -317,7 +317,8 @@ export async function resolveEmbeddedRunTerminal(input: {
     retryState.missingAssistantAttempts < MAX_MISSING_ASSISTANT_RETRIES
   ) {
     retryState.missingAssistantAttempts += 1;
-    input.setSuppressNextUserMessagePersistence(input.activePromptPersisted);
+    sessionPromptState.suppressNextUserMessagePersistence =
+      sessionPromptState.activePrompt.persisted;
     log.warn(
       `missing assistant terminal message detected: runId=${runParams.runId} sessionId=${runParams.sessionId} ` +
         `provider=${input.activeErrorContext.provider}/${input.activeErrorContext.model} — retrying ${retryState.missingAssistantAttempts}/${MAX_MISSING_ASSISTANT_RETRIES} with same prompt`,
@@ -331,7 +332,7 @@ export async function resolveEmbeddedRunTerminal(input: {
     retryState.emptyResponseAttempts < DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT
   ) {
     retryState.emptyResponseAttempts += 1;
-    input.activateInternalPrompt(nextEmptyResponseRetryInstruction);
+    sessionPromptState.activateInternalPrompt(nextEmptyResponseRetryInstruction);
     log.warn(
       `empty response detected: runId=${runParams.runId} sessionId=${runParams.sessionId} ` +
         `provider=${input.activeErrorContext.provider}/${input.activeErrorContext.model} ` +
@@ -385,7 +386,7 @@ export async function resolveEmbeddedRunTerminal(input: {
     retryState.compactionContinuationAttempts < 1
   ) {
     retryState.compactionContinuationAttempts += 1;
-    input.activateCompactionContinuation(COMPACTION_CONTINUATION_RETRY_INSTRUCTION);
+    sessionPromptState.activateCompactionContinuation(COMPACTION_CONTINUATION_RETRY_INSTRUCTION);
     log.warn(
       `compaction interrupted visible final answer: runId=${runParams.runId} sessionId=${runParams.sessionId} ` +
         `compactions=${input.attemptCompactionCount} — retrying ${retryState.compactionContinuationAttempts}/1 with compacted-transcript continuation`,
@@ -394,7 +395,7 @@ export async function resolveEmbeddedRunTerminal(input: {
     return { action: "retry" };
   }
   // Invisible retries return above; visible and terminal paths release this retained constraint.
-  input.clearCompactionContinuation();
+  sessionPromptState.clearCompactionContinuation();
 
   if (reasoningOnlyRetriesExhausted && !input.finalAssistantVisibleText) {
     const incompletePayloadText = "⚠️ Agent couldn't generate a response. Please try again.";
@@ -455,12 +456,12 @@ export async function resolveEmbeddedRunTerminal(input: {
     !emptyAssistantReplyIsSilent
   ) {
     retryState.beforeFinalizeRevisionAttempts += 1;
-    input.activateInternalPrompt(
+    sessionPromptState.activateInternalPrompt(
       `${BEFORE_AGENT_FINALIZE_RETRY_PROMPT_PREFIX}\n\n${beforeFinalizeRevisionReason}`,
     );
     // Settlement excluded the rejected draft with a leaf control. Wait for its
     // transcript projection to rebuild before reopening for the hidden pass.
-    input.markOwnedTranscriptRetry();
+    sessionPromptState.markOwnedTranscriptRetry();
     log.warn(
       `before_agent_finalize requested one more pass: ` +
         `runId=${runParams.runId} sessionId=${runParams.sessionId} ` +

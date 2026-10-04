@@ -35,13 +35,7 @@ export function mediaUrlValue(value: unknown): string | undefined {
 
 function isSafeDownloadUrl(value: string): boolean {
   const trimmed = value.trim();
-  if (!trimmed || /^data:/i.test(trimmed)) {
-    return false;
-  }
-  if (trimmed.startsWith("/")) {
-    return !trimmed.startsWith("//") && trimmed.startsWith("/api/");
-  }
-  return isHttpUrl(trimmed);
+  return trimmed.startsWith("/api/") || isHttpUrl(trimmed);
 }
 
 export function resolveMessageRunId(message: Record<string, unknown>): string | undefined {

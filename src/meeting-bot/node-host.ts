@@ -96,10 +96,7 @@ function runCommandWithTimeout(argv: string[], timeoutMs: number) {
   };
 }
 
-function waitForInputDrain(
-  stream: ChildProcess["stdout"] | undefined,
-  timeoutMs: number,
-): Promise<void> {
+function waitForInputDrain(stream: ChildProcess["stdout"] | undefined): Promise<void> {
   if (!stream || stream.readableEnded || stream.destroyed) {
     return Promise.resolve();
   }
@@ -115,7 +112,7 @@ function waitForInputDrain(
       stream.off("close", finish);
       resolve();
     };
-    const timeout = setTimeout(finish, timeoutMs);
+    const timeout = setTimeout(finish, NODE_BRIDGE_INPUT_DRAIN_MS);
     timeout.unref?.();
     stream.once("end", finish);
     stream.once("close", finish);
@@ -191,9 +188,7 @@ export function createMeetingNodeHost(options: MeetingNodeHostOptions): {
       }
       session.chunks.length = 0;
       session.queuedInputBytes = 0;
-      if (!session.closed) {
-        session.closed = true;
-      }
+      session.closed = true;
       session.waiters.wake();
     }
     releaseOutputWriteWaiters(session);
@@ -204,7 +199,7 @@ export function createMeetingNodeHost(options: MeetingNodeHostOptions): {
     }
     const terminalReady = session.discardQueuedAudioOnStop
       ? Promise.resolve()
-      : waitForInputDrain(session.input?.stdout, NODE_BRIDGE_INPUT_DRAIN_MS).then(() => {
+      : waitForInputDrain(session.input?.stdout).then(() => {
           if (session.discardQueuedAudioOnStop || session.closed) {
             return;
           }
@@ -604,10 +599,7 @@ export function createMeetingNodeHost(options: MeetingNodeHostOptions): {
 
   const stopBrowser = async (params: Record<string, unknown>) => {
     const bridgeId = readNonEmptyString(params.bridgeId);
-    if (!bridgeId) {
-      return { ok: true, stopped: false };
-    }
-    const session = sessions.get(bridgeId);
+    const session = bridgeId ? sessions.get(bridgeId) : undefined;
     if (!session) {
       return { ok: true, stopped: false };
     }

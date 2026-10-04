@@ -11,12 +11,14 @@ import type { DoctorWorkerOperations } from "../commands/doctor-state.worker.js"
 import type { ConfigSnapshotWorkerOperations } from "../config/config-journal-snapshot.worker-contract.js";
 import type { FleetRegistryWriteOperations } from "../fleet/registry.worker-contract.js";
 import type { ManagedImageRecordWorkerOperations } from "../gateway/managed-image-record-store.kernel.js";
+import type { MentionWorkerOperations } from "../gateway/mention-inbox.worker-contract.js";
 import type { OperatorApprovalWorkerOperations } from "../gateway/operator-approval-store.worker-contract.js";
 import type { WorkerInferenceStoreOperations } from "../gateway/worker-environments/inference-store.worker-contract.js";
 import type { WorkerPlacementDispatchStoreOperations } from "../gateway/worker-environments/placement-dispatch-store.worker-contract.js";
 import type { PlacementSessionToolWorkerOperations } from "../gateway/worker-environments/placement-session-tool-operations.worker-contract.js";
 import type { PlacementTurnClaimWorkerOperations } from "../gateway/worker-environments/placement-turn-claims.worker-contract.js";
 import type { WorkspaceJournalWorkerOperations } from "../gateway/worker-environments/placement-workspace-journal.worker-contract.js";
+import type { PreparedPoolPresenceWorkerOperations } from "../gateway/worker-environments/prepared-pool-presence.worker.js";
 import type { WorkerEnvironmentWorkerOperations } from "../gateway/worker-environments/store-worker-contract.js";
 import type { WorkerTranscriptCommitOperations } from "../gateway/worker-environments/transcript-commit-store.worker-contract.js";
 import type { DeliveryQueueWorkerOperations } from "../infra/delivery-queue.worker-contract.js";
@@ -31,6 +33,7 @@ import type { SessionDeliveryWorkerOperations } from "../infra/session-delivery-
 import type { DiagnosticWorkerOperations } from "../infra/sqlite-audit-record.worker-contract.js";
 import type { LegacyMcpOAuthWorkerOperations } from "../infra/state-migrations.mcp-oauth.worker.js";
 import type { TelemetryWorkerOperations } from "../infra/telemetry-store.worker.js";
+import type { GeneratedHtmlProvenanceOperations } from "../media/generated-html-provenance.worker-contract.js";
 import type { ModelCatalogWorkerOperations } from "../model-catalog/remote-store.worker.js";
 import type { NodeWorkerJournalWorkerOperations } from "../node-host/node-worker-journal.worker-contract.js";
 import type { PluginBlobWorkerOperations } from "../plugin-state/plugin-blob-store.worker.js";
@@ -49,10 +52,13 @@ import type { UserProfileWorkerOperations } from "./user-profiles.worker.js";
 import { createWorkerOperationRegistry } from "./worker-operation-registry.js";
 
 export type RegisteredStateWorkerOperations = ClawProvenanceWriteOperations &
+  GeneratedHtmlProvenanceOperations &
+  MentionWorkerOperations &
   ConfigSnapshotWorkerOperations &
   DiagnosticWorkerOperations &
   RestartSentinelWorkerOperations &
   WebPushWorkerOperations &
+  PreparedPoolPresenceWorkerOperations &
   ProjectRegistryWorkerOperations &
   ApnsRegistrationWorkerOperations &
   WorktreeWorkerOperations &
@@ -96,12 +102,22 @@ export type RegisteredStateWorkerOperations = ClawProvenanceWriteOperations &
   UserProfileWorkerOperations;
 
 export const stateWorkerRegistry = createWorkerOperationRegistry<RegisteredStateWorkerOperations>({
+  generatedHtmlProvenance: () =>
+    import("../media/generated-html-provenance.worker.js").then(
+      (m) => m.generatedHtmlProvenanceOperations,
+    ),
+  mentions: () =>
+    import("../gateway/mention-inbox.worker.js").then((m) => m.mentionWorkerOperations),
   config: () =>
     import("../config/config-journal-snapshot.worker.js").then((m) => m.configSnapshotOperations),
   diagnostic: () =>
     import("../infra/sqlite-audit-record.worker.js").then((m) => m.diagnosticOperations),
   restartSentinel: () =>
     import("../infra/restart-sentinel.worker.js").then((m) => m.restartSentinelOperations),
+  preparedPoolPresence: () =>
+    import("../gateway/worker-environments/prepared-pool-presence.worker.js").then(
+      (m) => m.preparedPoolPresenceOperations,
+    ),
   clawProvenance: () =>
     import("../claws/provenance-write.worker.js").then((m) => m.clawProvenanceOperations),
   projects: () =>

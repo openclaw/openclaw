@@ -84,9 +84,6 @@ describe("Claw MCP removal", () => {
       await recordManagedMcp(current);
       const config = structuredClone(current.getConfig());
       config.agents = { ...config.agents, ownership: "explicit" };
-      for (const entry of Object.values(config.agents.entries ?? {})) {
-        delete entry.default;
-      }
       config.mcp = { servers: { docs: sourceServer } };
       await withTempHomeConfig(config, async ({ configPath }) => {
         const snapshot = await readSourceConfigSnapshot();

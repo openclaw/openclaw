@@ -15,7 +15,7 @@ export async function resolveMutableUpdateInstallKind(
   }
   if (installKind === "immutable") {
     throw new Error(
-      "Immutable installations require the preparation-only openclaw update entry point.",
+      "Immutable installations require the native immutable openclaw update entry point.",
     );
   }
   if (opts.sha !== undefined) {

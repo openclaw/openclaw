@@ -285,6 +285,18 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
   const rows = [
     { Item: "Install", Value: installLabel },
     { Item: "Channel", Value: channelLabel },
+    ...(update.immutable
+      ? [
+          {
+            Item: "Immutable activation",
+            Value: update.immutable.activation
+              ? `${update.immutable.activation.phase} (${update.immutable.activation.operationId})`
+              : update.immutable.activationEnabled
+                ? "enabled"
+                : "preparation only",
+          },
+        ]
+      : []),
     ...(packageActivation
       ? [
           {

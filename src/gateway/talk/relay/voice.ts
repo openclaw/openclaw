@@ -8,6 +8,7 @@ import {
   normalizeVoiceTranscriptText,
   VOICE_TRANSCRIPT_QUEUE_POLICY,
 } from "../../../talk/voice-transcript.js";
+import { sleep } from "../../../utils/sleep.js";
 import { drainingRelaySessions, type RelaySession } from "./state.js";
 
 const RELAY_TRANSCRIPT_RETRY_DELAYS_MS = [0, 500, 2_000] as const;
@@ -62,9 +63,7 @@ export function enqueueRelayVoiceTranscript(
       let lastError: unknown;
       for (const delayMs of RELAY_TRANSCRIPT_RETRY_DELAYS_MS) {
         if (delayMs > 0) {
-          await new Promise<void>((resolve) => {
-            setTimeout(resolve, delayMs);
-          });
+          await sleep(delayMs);
         }
         try {
           await appendRelayVoiceTranscript({

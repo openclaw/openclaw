@@ -42,6 +42,17 @@ serveOwnedWorkerTasks(
       .releaseOpenClawAgentDatabaseReadValidation;
     // SAFETY: The paired runtime constructs this request; the SQLite snapshot validates admission.
     const request = input as SessionTranscriptWorkerInput | UsageCostWorkerInput;
+    if (request.kind === "cli-process-history") {
+      if (!channel) {
+        throw new Error("Process-held history requires its host reader channel");
+      }
+      const { readProcessHeldCliHistoryInWorker } =
+        await import("../../gateway/cli-session-history.process-held.js");
+      return {
+        ok: true,
+        value: await readProcessHeldCliHistoryInWorker(request.request, channel),
+      };
+    }
     if (request.kind === "sqlite-target") {
       const { resolveSqliteTargetFromSessionStorePath } =
         await import("./session-sqlite-target.js");

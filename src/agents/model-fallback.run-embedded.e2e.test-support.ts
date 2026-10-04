@@ -23,7 +23,7 @@ export function makeModelFallbackConfig(primaryProvider = "openai"): OpenClawCon
           fallbacks: ["groq/mock-2"],
         },
       },
-      list: [{ id: "test" }],
+      entries: { test: {} },
     },
     models: {
       providers: {

@@ -1,5 +1,4 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import type {
   CompactionAccountingFact,
   RunEmbeddedAgentInternalParams,
@@ -52,7 +51,6 @@ export async function runEmbeddedFallbackCandidate(
   result: Awaited<ReturnType<typeof runEmbeddedAgent>>;
   maintenanceAuthProfile?: CompletedAgentAuthSelection;
   compactionRequestBudget?: CompactionRequestBudget;
-  bootstrapPromptWarningSignaturesSeen: string[];
 }> {
   const turn = params.turn;
   let maintenanceAuthProfile: CompletedAgentAuthSelection | undefined;
@@ -122,6 +120,7 @@ export async function runEmbeddedFallbackCandidate(
     let eventHandler: ReturnType<typeof createAgentRunEventHandler> | undefined;
     const result = await params.timing.measure("embedded_run", () => {
       const embeddedRunParams: RunEmbeddedAgentInternalParams = {
+        preparedTtsPreferences: turn.opts?.preparedTtsPreferences,
         preparedRunAdmission: params.preparedRunAdmission,
         ...embeddedContext,
         messageActionTurnCapability: params.messageActionTurnCapability,
@@ -364,9 +363,6 @@ export async function runEmbeddedFallbackCandidate(
       result,
       maintenanceAuthProfile,
       compactionRequestBudget,
-      bootstrapPromptWarningSignaturesSeen: resolveBootstrapWarningSignaturesSeen(
-        result.meta?.systemPromptReport,
-      ),
     };
   } finally {
     // Runtime event/result counts are observable, but cannot prove a durable write target.

@@ -189,7 +189,7 @@ describe("legacy Web Push Doctor migration", () => {
   it("routes explicit Doctor repair through the Web Push SQLite importer", async () => {
     const stateDir = useStateDir();
     const cfg: OpenClawConfig = {
-      agents: { entries: { "worker-1": { default: true } } },
+      agents: { entries: { "worker-1": {} } },
       session: { mainKey: "desk" },
     };
     const env = {

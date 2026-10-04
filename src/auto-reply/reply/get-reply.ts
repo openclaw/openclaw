@@ -1,4 +1,3 @@
-import fs from "node:fs/promises";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { isImplicitAcpWorkspaceCandidate } from "../../agents/agent-scope-config.js";
 import {
@@ -24,7 +23,7 @@ import {
   WorkspaceAliasRepointedError,
   WorkspaceVanishedError,
 } from "../../agents/workspace-state-identity.js";
-import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../../agents/workspace.js";
+import { DEFAULT_AGENT_WORKSPACE_DIR } from "../../agents/workspace.js";
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import { type OpenClawConfig, getRuntimeConfig } from "../../config/config.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
@@ -103,6 +102,7 @@ import {
 } from "./reply-operation-run-state.js";
 import { assertReplyPreprocessingActive } from "./reply-preprocessing-abort.js";
 import { createReplyTimingTracker, isReplyProfilerEnabled } from "./reply-timing-tracker.js";
+import { prepareReplyWorkspace } from "./reply-workspace.js";
 import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
 import { prepareReplySessionDiffBaseline } from "./session-diff-baseline.js";
 import { SessionResetCleanupError } from "./session-reset-cleanup.js";
@@ -114,16 +114,10 @@ import { createTypingController } from "./typing.js";
 
 type ResetCommandAction = "new" | "reset";
 
-const sessionResetModelRuntimeLoader = createLazyImportLoader(
-  () => import("./session-reset-model.runtime.js"),
-);
 const stageSandboxMediaRuntimeLoader = createLazyImportLoader(
   () => import("./stage-sandbox-media.runtime.js"),
 );
 const replyResolverTimingLog = createSubsystemLogger("auto-reply/reply-resolver-timing");
-const commandsCoreRuntimeLoader = createLazyImportLoader(
-  () => import("./commands-core.runtime.js"),
-);
 
 function canSelfServeLocalPaths(params: {
   ctx: MsgContext;
@@ -460,19 +454,18 @@ export async function getReplyFromConfig(
       })
     : { cfg, agentId, ...(agentSessionKey ? { sessionKey: agentSessionKey } : {}) };
 
-  let workspace: Awaited<ReturnType<typeof ensureAgentWorkspace>>;
+  let workspace: Awaited<ReturnType<typeof prepareReplyWorkspace>>;
   try {
-    workspace = await traceGetReplyPhase("reply.ensure_workspace", async () =>
-      useFastTestBootstrap
-        ? (await fs.mkdir(workspaceDirRaw, { recursive: true }), { dir: workspaceDirRaw })
-        : await ensureAgentWorkspace({
-            dir: workspaceDirRaw,
-            ensureBootstrapFiles: !agentCfg?.skipBootstrap && !isFastTestEnv,
-            skipOptionalBootstrapFiles: agentCfg?.skipOptionalBootstrapFiles,
-            provisioning: await (
-              await import("../../agents/acp-workspace-provisioning.js")
-            ).resolveAcpAgentWorkspaceProvisioningForTurn(acpWorkspaceProvisioningInput),
-          }),
+    workspace = await traceGetReplyPhase("reply.ensure_workspace", () =>
+      prepareReplyWorkspace({
+        dir: workspaceDirRaw,
+        ensureBootstrapFiles: !agentCfg?.skipBootstrap && !isFastTestEnv,
+        skipOptionalBootstrapFiles: agentCfg?.skipOptionalBootstrapFiles,
+        useFastTestBootstrap,
+        provisioningInput: acpWorkspaceProvisioningInput,
+        abortSignal: optsWithSkillFilter?.abortSignal,
+        operatorAuthority: optsWithSkillFilter?.operatorAuthority,
+      }),
     );
   } catch (error) {
     if (
@@ -739,7 +732,7 @@ export async function getReplyFromConfig(
   }
 
   if (resetTriggered && normalizeOptionalString(bodyStripped)) {
-    const { applyResetModelOverride } = await sessionResetModelRuntimeLoader.load();
+    const { applyResetModelOverride } = await import("./session-reset-model.runtime.js");
     try {
       await applyResetModelOverride({
         cfg,
@@ -954,7 +947,7 @@ export async function getReplyFromConfig(
     if (!resetMatch) {
       return;
     }
-    const { emitResetCommandHooks } = await commandsCoreRuntimeLoader.load();
+    const { emitResetCommandHooks } = await import("./commands-core.runtime.js");
     const action: ResetCommandAction = resetMatch[1]?.toLowerCase() === "reset" ? "reset" : "new";
     await emitResetCommandHooks({
       action,

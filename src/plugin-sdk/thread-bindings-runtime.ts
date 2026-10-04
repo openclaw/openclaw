@@ -2,11 +2,8 @@
 // expiry and session-binding record types without loading the full
 // conversation-runtime surface.
 
-export { resolveThreadBindingConversationIdFromBindingId } from "../channels/thread-binding-id.js";
-export { resolveThreadBindingFarewellText } from "../channels/thread-bindings-messages.js";
 export {
   resolveThreadBindingIdleTimeoutMsForChannel,
-  resolveThreadBindingLifecycle,
   resolveThreadBindingMaxAgeMsForChannel,
 } from "../channels/thread-bindings-policy.js";
 export type {

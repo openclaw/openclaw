@@ -13,7 +13,7 @@ const execStoreDirs = useSessionStoreTempDirs(afterAll, "openclaw-required-exec-
 function withDefaultAgent(config: OpenClawConfig): OpenClawConfig {
   return {
     ...config,
-    agents: { ...config.agents, list: [{ id: "main", default: true }] },
+    agents: { ...config.agents, entries: { main: {} } },
   };
 }
 
@@ -249,7 +249,7 @@ describe("resolveExecDefaults", () => {
               mode: "full",
             },
           },
-          agents: { list: [{ id: "agent-a", default: true }] },
+          agents: { entries: { "agent-a": {} } },
         },
         agentId: "agent-a",
         sandboxAvailable: false,
@@ -401,17 +401,15 @@ describe("resolveExecDefaults", () => {
             },
           },
           agents: {
-            list: [
-              {
-                id: "agent-a",
-                default: true,
+            entries: {
+              "agent-a": {
                 tools: {
                   exec: {
                     mode: "full",
                   },
                 },
               },
-            ],
+            },
           },
         },
         agentId: "agent-a",
@@ -434,17 +432,15 @@ describe("resolveExecDefaults", () => {
             },
           },
           agents: {
-            list: [
-              {
-                id: "agent-a",
-                default: true,
+            entries: {
+              "agent-a": {
                 tools: {
                   exec: {
                     mode: "allowlist",
                   },
                 },
               },
-            ],
+            },
           },
         },
         agentId: "agent-a",
@@ -457,7 +453,7 @@ describe("resolveExecDefaults", () => {
     });
   });
 
-  it("uses the configured default agent for an unscoped session", () => {
+  it("uses the explicit agent owner for an unscoped session", () => {
     expect(
       resolveExecDefaults({
         cfg: {
@@ -465,10 +461,11 @@ describe("resolveExecDefaults", () => {
           agents: {
             entries: {
               main: {},
-              ops: { default: true, tools: { exec: { security: "deny", ask: "always" } } },
+              ops: { tools: { exec: { security: "deny", ask: "always" } } },
             },
           },
         },
+        agentId: "ops",
         sandboxAvailable: false,
       }),
     ).toMatchObject({

@@ -159,13 +159,6 @@ function collectPackageDistExclusionRules(rootPackageJson: unknown): PackageDist
   };
 }
 
-async function collectPackageDistExclusionRulesForRoot(
-  packageRoot: string,
-): Promise<PackageDistExclusionRules> {
-  const packageJsonPath = path.join(packageRoot, "package.json");
-  return collectPackageDistExclusionRules(await readJsonIfExists<unknown>(packageJsonPath));
-}
-
 function isPackageFilesExcludedDistPath(
   relativePath: string,
   exclusions: PackageDistExclusionRules,
@@ -222,7 +215,6 @@ async function collectRelativeFiles(
   baseDir: string,
   rules: PackageDistExclusionRules,
   fsLimit: LimitFunction,
-  onDirectory?: (directoryPath: string) => Promise<void>,
 ): Promise<string[]> {
   const rootRelativePath = normalizeRelativePath(path.relative(baseDir, rootDir));
   if (rootRelativePath && isOmittedDistSubtree(rootRelativePath, rules)) {
@@ -235,7 +227,6 @@ async function collectRelativeFiles(
         `Unsafe package dist path: ${normalizeRelativePath(path.relative(baseDir, rootDir))}`,
       );
     }
-    await onDirectory?.(rootDir);
     const entries = await fsLimit(() => fs.readdir(rootDir, { withFileTypes: true }));
     const files = await Promise.all(
       entries.map(async (entry) => {
@@ -245,7 +236,7 @@ async function collectRelativeFiles(
           throw new Error(`Unsafe package dist path: ${relativePath}`);
         }
         if (entry.isDirectory()) {
-          return await collectRelativeFiles(entryPath, baseDir, rules, fsLimit, onDirectory);
+          return await collectRelativeFiles(entryPath, baseDir, rules, fsLimit);
         }
         if (entry.isFile()) {
           return isPackagedDistPath(relativePath, rules) ? [relativePath] : [];
@@ -269,7 +260,6 @@ async function collectRelativeFiles(
 export async function collectPackageDistInventory(
   packageRoot: string,
   options: {
-    onDirectory?: (directoryPath: string) => Promise<void>;
     packageManifest?: unknown;
     includePackageExcludedFiles?: boolean;
   } = {},
@@ -277,16 +267,12 @@ export async function collectPackageDistInventory(
   const rules = options.includePackageExcludedFiles
     ? { ...collectPackageDistExclusionRules({}), includePackageExcludedFiles: true }
     : options.packageManifest === undefined
-      ? await collectPackageDistExclusionRulesForRoot(packageRoot)
+      ? collectPackageDistExclusionRules(
+          await readJsonIfExists<unknown>(path.join(packageRoot, "package.json")),
+        )
       : collectPackageDistExclusionRules(options.packageManifest);
   const fsLimit = pLimit(PACKAGE_DIST_INVENTORY_SCAN_CONCURRENCY);
-  return await collectRelativeFiles(
-    path.join(packageRoot, "dist"),
-    packageRoot,
-    rules,
-    fsLimit,
-    options.onDirectory,
-  );
+  return await collectRelativeFiles(path.join(packageRoot, "dist"), packageRoot, rules, fsLimit);
 }
 
 /** Reads an existing package dist inventory, returning null when the inventory is absent. */

@@ -44,13 +44,20 @@ describe("diagnostics-prometheus service", () => {
     for (const heapDeltaBytes of [-2048, 4096]) {
       metrics.record({
         ...base,
-        phase: "dispatch",
+        phase: "handler",
         outcome: "returned",
         durationMs: 20,
-        response: "sent",
+        admissionMs: 0,
         heapDeltaBytes,
       });
     }
+    metrics.record({
+      ...base,
+      phase: "handler",
+      outcome: "returned",
+      durationMs: 20,
+      admissionMs: 0,
+    });
     metrics.record({ ...base, phase: "response", outcome: "unavailable", durationMs: 20 });
     metrics.record(
       {
@@ -64,6 +71,12 @@ describe("diagnostics-prometheus service", () => {
       untrusted,
     );
     const rendered = metrics.render();
+    expect(rendered).toContain(
+      'openclaw_gateway_rpc_handler_heap_delta_exclusive_total{method="sessions.history"} 2',
+    );
+    expect(rendered).toContain(
+      'openclaw_gateway_rpc_handler_seconds_count{method="sessions.history"} 3',
+    );
     for (const [metric, sum, buckets] of [
       [
         "response",
@@ -758,7 +771,14 @@ describe("diagnostics-prometheus service", () => {
       for (const event of [
         { ...base, phase: "received" },
         { ...base, phase: "response", outcome: "ok", durationMs: 10, responseBytes: 1024 },
-        { ...base, phase: "handler", outcome: "returned", durationMs: 10, admissionMs: 1 },
+        {
+          ...base,
+          phase: "handler",
+          outcome: "returned",
+          durationMs: 10,
+          admissionMs: 1,
+          heapDeltaBytes: -1024,
+        },
         {
           ...base,
           phase: "dispatch",
@@ -766,20 +786,19 @@ describe("diagnostics-prometheus service", () => {
           durationMs: 11,
           queueWaitMs: 1,
           response: "sent",
-          heapDeltaBytes: -1024,
         },
       ] satisfies DiagnosticEventPayload[]) {
         metrics.record(event);
       }
     }
-    expect(metrics.render()).toContain("openclaw_prometheus_series_dropped_total 939");
+    expect(metrics.render()).toContain("openclaw_prometheus_series_dropped_total 1365");
     metrics.record({ ...queue, queueSize: 2 });
     const existing = metrics.render();
     expect(existing).toContain('openclaw_queue_lane_size{lane="main"} 2');
     expect(existing).toContain('openclaw_queue_lane_wait_seconds_count{lane="main"} 2');
-    expect(existing).toContain("openclaw_prometheus_series_dropped_total 939");
+    expect(existing).toContain("openclaw_prometheus_series_dropped_total 1365");
     metrics.record({ ...queue, lane: "later" });
-    expect(metrics.render()).toContain("openclaw_prometheus_series_dropped_total 941");
+    expect(metrics.render()).toContain("openclaw_prometheus_series_dropped_total 1367");
     expect(metrics.render()).not.toContain('lane="later"');
     metrics.stop();
   });

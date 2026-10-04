@@ -537,12 +537,7 @@ export type CodexLoginAccountParams =
       type: "apiKey";
       apiKey: string;
     }
-  | {
-      type: "chatgptAuthTokens";
-      accessToken: string;
-      chatgptAccountId: string;
-      chatgptPlanType: string | null;
-    };
+  | (CodexChatgptAuthTokensRefreshResponse & { type: "chatgptAuthTokens" });
 
 export type CodexRequestObject = Record<string, unknown>;
 

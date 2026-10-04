@@ -94,9 +94,12 @@ export function createExecTool(
     resolveStoredSubagentCapabilities(defaults?.runSessionKey ?? defaults?.sessionKey, {
       cfg: defaults?.config,
     }).depth > 0;
-  // Agent runs own one tool instance, so the store is read on first exec and reused for that run.
+  // Agent runs own one tool instance; unprepared store snapshots are read on first exec.
   // A new run constructs a new instance and observes later store mutations.
-  let storeEnvPromise: Promise<SecretStoreExecEnvironment> | undefined;
+  let storeEnvPromise: Promise<Readonly<SecretStoreExecEnvironment>> | undefined =
+    defaults?.preparedStoreEnvironment === undefined
+      ? undefined
+      : Promise.resolve(defaults.preparedStoreEnvironment);
   const resolveStoreEnv = () => {
     if (storeEnvPromise === undefined) {
       const context = captureOpenClawStateReadWorkerContext();
@@ -436,7 +439,7 @@ export function createExecTool(
         const secretEgressBindings = useSecretEgress
           ? (storeEnv.secretEgressBindings ?? [])
           : undefined;
-        const { env, requestedEnv } = resolvePreparedExecEnvironment({
+        const { env, requestedEnv, executionContext } = resolvePreparedExecEnvironment({
           execParams: params,
           host,
           sandbox,
@@ -458,6 +461,7 @@ export function createExecTool(
             workdir,
             env,
             requestedEnv,
+            executionContext,
             requestedNode: params.node?.trim(),
             boundNode: defaults?.node?.trim(),
             sessionKey: defaults?.sessionKey,

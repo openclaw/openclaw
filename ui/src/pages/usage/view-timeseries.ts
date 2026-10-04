@@ -69,10 +69,10 @@ export function renderTimeSeriesCompact(
   }
 
   let points = timeSeries.points;
-  if (startDate || endDate || (selectedDays && selectedDays.length > 0)) {
+  if (startDate || endDate || selectedDays.length > 0) {
     const startTs = startDate ? dateBoundaryMs(startDate, timeZone, 0) : 0;
     const endTs = endDate ? dateBoundaryMs(endDate, timeZone, 1) : Infinity;
-    const selectedDaySet = selectedDays?.length ? new Set(selectedDays) : undefined;
+    const selectedDaySet = selectedDays.length ? new Set(selectedDays) : undefined;
     points = timeSeries.points.filter((p) => {
       if (p.timestamp < startTs || p.timestamp >= endTs) {
         return false;
@@ -159,7 +159,7 @@ export function renderTimeSeriesCompact(
   const cursorLeft = Math.max(firstTimestamp, Math.min(lastTimestamp, rangeStartTs));
   const cursorRight = Math.max(firstTimestamp, Math.min(lastTimestamp, rangeEndTs));
   const moveCursor = (side: "left" | "right", timestamp: number) => {
-    callbacks.onTimeSeriesCursorRangeChange?.(
+    callbacks.onTimeSeriesCursorRangeChange(
       side === "left" ? Math.max(firstTimestamp, Math.min(timestamp, cursorRight)) : cursorLeft,
       side === "right" ? Math.min(lastTimestamp, Math.max(timestamp, cursorLeft)) : cursorRight,
     );
@@ -202,7 +202,7 @@ export function renderTimeSeriesCompact(
                   <div class="settings-segmented settings-segmented--accent small">
                     <button
                       class="btn btn--sm settings-segmented__btn settings-segmented__btn--active"
-                      @click=${() => callbacks.onTimeSeriesCursorRangeChange?.(null, null)}
+                      @click=${() => callbacks.onTimeSeriesCursorRangeChange(null, null)}
                     >
                       ${t("usage.details.reset")}
                     </button>
@@ -328,10 +328,7 @@ export function renderTimeSeriesCompact(
         <!-- Handle drag zones (only on handles, not full chart) -->
         ${(() => {
           const makeDragHandler = (side: "left" | "right") => (e: MouseEvent) => {
-            if (
-              !callbacks.onTimeSeriesCursorRangeChange ||
-              !(e.currentTarget instanceof HTMLElement)
-            ) {
+            if (!(e.currentTarget instanceof HTMLElement)) {
               return;
             }
             e.preventDefault();

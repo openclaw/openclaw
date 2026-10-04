@@ -69,56 +69,54 @@ async function withSession(
 
 function repair() {
   return noteSessionTranscriptHealth({
-    cfg: { agents: { list: [{ id: "main", default: true }] } },
+    cfg: { agents: { entries: { main: {} } } },
     shouldRepair: true,
     postSessionPluginMigrationPlanBound: true,
   });
 }
 
 describe("Doctor session title repair", () => {
-  it("uses the first user request and preserves activity without calling a model", async () => {
-    await withSession(
-      async (params) => {
-        const before = sessionAccessor.loadSessionEntry(params);
-        await repair();
-        expect(sessionAccessor.loadSessionEntry(params)).toEqual({
-          ...before,
-          displayName: "Investigate why the gateway times out",
-        });
-        expect(generateConversationLabelWithFallback).not.toHaveBeenCalled();
-      },
-      [
-        { role: "user", content: "Internal relay", provenance: { kind: "inter_session" } },
-        { role: "user", content: "Investigate why the gateway times out" },
-        { role: "assistant", content: "**Found** the slow query" },
-      ],
-    );
-  });
-
-  it.each(["oversized prefix", "user request after the first 100 messages"])(
-    "does not name a session from an incomplete %s",
+  it.each(["first user request", "oversized prefix", "user request after the first 100 messages"])(
+    "derives a title only from a complete %s",
     async (kind) => {
-      const messages =
-        kind === "oversized prefix"
-          ? [{ role: "user", content: `oversized-title-payload ${"x".repeat(70 * 1024)}` }]
-          : Array.from({ length: 100 }, () => ({ role: "assistant", content: "Earlier reply" }));
-      await withSession(
-        async (params) => {
+      const complete = kind === "first user request";
+      const messages = complete
+        ? [
+            { role: "user", content: "Internal relay", provenance: { kind: "inter_session" } },
+            { role: "user", content: "Investigate why the gateway times out" },
+            { role: "assistant", content: "**Found** the slow query" },
+          ]
+        : [
+            ...(kind === "oversized prefix"
+              ? [{ role: "user", content: `oversized-title-payload ${"x".repeat(70 * 1024)}` }]
+              : Array.from({ length: 100 }, () => ({
+                  role: "assistant",
+                  content: "Earlier reply",
+                }))),
+            { role: "user", content: "A later task must not become the title" },
+          ];
+      await withSession(async (params) => {
+        let oversizedParses = 0;
+        if (!complete) {
           const parse = JSON.parse;
-          let oversizedParses = 0;
           vi.spyOn(JSON, "parse").mockImplementation((text, reviver) => {
             if (text.includes("oversized-title-payload")) {
               oversizedParses++;
             }
             return parse(text, reviver);
           });
-          const before = sessionAccessor.loadSessionEntry(params);
-          await repair();
-          expect(sessionAccessor.loadSessionEntry(params)).toEqual(before);
+        }
+        const before = sessionAccessor.loadSessionEntry(params);
+        await repair();
+        expect(sessionAccessor.loadSessionEntry(params)).toEqual(
+          complete ? { ...before, displayName: "Investigate why the gateway times out" } : before,
+        );
+        if (complete) {
+          expect(generateConversationLabelWithFallback).not.toHaveBeenCalled();
+        } else {
           expect(oversizedParses).toBe(0);
-        },
-        [...messages, { role: "user", content: "A later task must not become the title" }],
-      );
+        }
+      }, messages);
     },
   );
 
@@ -126,45 +124,38 @@ describe("Doctor session title repair", () => {
     ["a replacement lifecycle", { lifecycleRevision: "replacement" }],
     ["a manual rename", { label: "Manual title" }],
     ["a newly running turn", { status: "running" }],
-  ] satisfies Array<[string, Partial<SessionEntry>]>)(
+    ["a rewritten transcript", undefined],
+  ] satisfies Array<[string, Partial<SessionEntry> | undefined]>)(
     "preserves %s admitted before its metadata write",
     async (_name, mutation) => {
       await withSession(async (params) => {
         const patch = sessionAccessor.patchSessionEntryCore;
         vi.spyOn(sessionAccessor, "patchSessionEntryCore").mockImplementationOnce(
           async (scope, update, options) => {
-            await patch(scope, () => mutation);
+            if (mutation) {
+              await patch(scope, () => mutation);
+            } else {
+              await sessionAccessor.replaceTranscriptEvents(params, [
+                { type: "session", version: 3, id: params.sessionId },
+                {
+                  type: "message",
+                  id: "replacement-user",
+                  parentId: null,
+                  message: { role: "user", content: "A different branch" },
+                },
+              ]);
+            }
             return patch(scope, update, options);
           },
         );
         await repair();
-        expect(sessionAccessor.loadSessionEntry(params)).toMatchObject(mutation);
+        if (mutation) {
+          expect(sessionAccessor.loadSessionEntry(params)).toMatchObject(mutation);
+        }
         expect(sessionAccessor.loadSessionEntry(params)?.displayName).toBeUndefined();
       });
     },
   );
-
-  it("rejects a title from a transcript rewritten before its metadata commit", async () => {
-    await withSession(async (params) => {
-      const patch = sessionAccessor.patchSessionEntryCore;
-      vi.spyOn(sessionAccessor, "patchSessionEntryCore").mockImplementationOnce(
-        async (scope, update, options) => {
-          await sessionAccessor.replaceTranscriptEvents(params, [
-            { type: "session", version: 3, id: params.sessionId },
-            {
-              type: "message",
-              id: "replacement-user",
-              parentId: null,
-              message: { role: "user", content: "A different branch" },
-            },
-          ]);
-          return patch(scope, update, options);
-        },
-      );
-      await repair();
-      expect(sessionAccessor.loadSessionEntry(params)?.displayName).toBeUndefined();
-    });
-  });
 
   it("does not commit after Doctor maintenance authority expires", async () => {
     await withSession(async (params) => {
@@ -182,7 +173,7 @@ describe("Doctor session title repair", () => {
           );
           await expect(
             repairLegacySessionTitles({
-              cfg: { agents: { list: [{ id: "main", default: true }] } },
+              cfg: { agents: { entries: { main: {} } } },
               env: process.env,
               apply: true,
               authority,

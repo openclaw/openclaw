@@ -9,6 +9,7 @@ import {
 } from "../../agents/agent-scope-config.js";
 import { resolveSandboxConfigForAgent } from "../../agents/sandbox/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveEnvironmentValue } from "../../infra/process-env.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { isTerminalConfigEnabled } from "./enabled.js";
 
@@ -207,7 +208,10 @@ export function createTerminalLaunchPolicy(initialConfig: OpenClawConfig): Termi
   };
 }
 
-export function buildTerminalEnv(baseEnv: NodeJS.ProcessEnv): Record<string, string> {
+export function buildTerminalEnv(
+  baseEnv: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform = process.platform,
+): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(baseEnv)) {
     if (typeof value === "string") {
@@ -215,6 +219,10 @@ export function buildTerminalEnv(baseEnv: NodeJS.ProcessEnv): Record<string, str
     }
   }
   env.TERM = env.TERM ?? "xterm-256color";
+  // The browser renderer supports RGB regardless of the Gateway host terminal.
+  if (resolveEnvironmentValue(env, "COLORTERM", platform) === undefined) {
+    env.COLORTERM = "truecolor";
+  }
   // Lets shells and prompts detect that they are inside an OpenClaw terminal.
   env.OPENCLAW_TERMINAL = "1";
   return env;

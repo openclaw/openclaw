@@ -8,8 +8,8 @@ import { resolveProviderRequestCapabilities } from "../agents/provider-attributi
 import {
   getModelProviderRequestRouteFacts,
   getModelProviderRequestTransport,
-  type ModelProviderRequestTransportOverrides,
 } from "../agents/provider-request-config.js";
+import type { ModelProviderRequestTransportOverrides } from "../agents/provider-request-config.types.js";
 import {
   unwrapModelHeaderSentinelsForProviderEgress,
   unwrapSecretSentinelsForProviderEgress,
@@ -62,14 +62,6 @@ function isNativeResponsesReasoningPayload(model: Model): boolean {
   }).usesKnownNativeOpenAIRoute;
 }
 
-function removeReasoningInclude(value: unknown): unknown {
-  if (!Array.isArray(value)) {
-    return value;
-  }
-  const next = value.filter((entry) => entry !== "reasoning.encrypted_content");
-  return next.length > 0 ? next : undefined;
-}
-
 function disableReasoningForImageRetryPayload(payload: unknown, model: Model): unknown {
   // Empty-text image responses can be caused by reasoning-only payloads; retry
   // with reasoning stripped while preserving provider-specific Responses shape.
@@ -80,8 +72,10 @@ function disableReasoningForImageRetryPayload(payload: unknown, model: Model): u
   delete next.reasoning;
   delete next.reasoning_effort;
 
-  const include = removeReasoningInclude(next.include);
-  if (include === undefined) {
+  const include = Array.isArray(next.include)
+    ? next.include.filter((entry) => entry !== "reasoning.encrypted_content")
+    : next.include;
+  if (include === undefined || (Array.isArray(include) && include.length === 0)) {
     delete next.include;
   } else {
     next.include = include;
@@ -97,57 +91,14 @@ function isImageModelNoTextError(err: unknown): boolean {
   return err instanceof Error && /^Image model returned no text\b/.test(err.message);
 }
 
-function composeImageDescriptionPayloadHandlers(
-  first: ProviderStreamOptions["onPayload"] | undefined,
-  second: ProviderStreamOptions["onPayload"] | undefined,
-): ProviderStreamOptions["onPayload"] | undefined {
-  if (!first) {
-    return second;
-  }
-  if (!second) {
-    return first;
-  }
+function imageRetryPayloadHandler(
+  onPayload: ProviderStreamOptions["onPayload"],
+): NonNullable<ProviderStreamOptions["onPayload"]> {
   return (payload, payloadModel) => {
-    const runSecond = (firstResult: unknown) => {
-      const nextPayload = firstResult === undefined ? payload : firstResult;
-      const secondResult = second(nextPayload, payloadModel);
-      const coerceResult = (resolvedSecond: unknown) =>
-        resolvedSecond === undefined ? firstResult : resolvedSecond;
-      return isPromiseLike(secondResult)
-        ? Promise.resolve(secondResult).then(coerceResult)
-        : coerceResult(secondResult);
-    };
-    const firstResult = first(payload, payloadModel);
-    if (isPromiseLike(firstResult)) {
-      return Promise.resolve(firstResult).then(runSecond);
-    }
-    return runSecond(firstResult);
-  };
-}
-
-function buildImageContext(
-  prompt: string,
-  images: Array<{ buffer: Buffer; mime?: string }>,
-  opts?: { promptInUserContent?: boolean },
-): Context {
-  const imageContent = images.map((image) => ({
-    type: "image" as const,
-    data: image.buffer.toString("base64"),
-    mimeType: image.mime ?? "image/jpeg",
-  }));
-  const content = opts?.promptInUserContent
-    ? [{ type: "text" as const, text: prompt }, ...imageContent]
-    : imageContent;
-
-  return {
-    ...(opts?.promptInUserContent ? {} : { systemPrompt: prompt }),
-    messages: [
-      {
-        role: "user",
-        content,
-        timestamp: Date.now(),
-      },
-    ],
+    const stripped = disableReasoningForImageRetryPayload(payload, payloadModel);
+    const result = onPayload?.(stripped === undefined ? payload : stripped, payloadModel);
+    const fallback = (value: unknown) => (value === undefined ? stripped : value);
+    return isPromiseLike(result) ? Promise.resolve(result).then(fallback) : fallback(result);
   };
 }
 
@@ -172,16 +123,6 @@ function shouldPlaceImagePromptInUserContent(model: Model): boolean {
     capabilities.endpointClass === "modelstudio-native" ||
     (model.provider.toLowerCase() === "openrouter" && capabilities.endpointClass === "default")
   );
-}
-
-function buildImageRequestHeaders(model: Model): Record<string, string> | undefined {
-  if (model.provider !== "github-copilot") {
-    return undefined;
-  }
-  return {
-    "x-initiator": "user",
-    "Copilot-Vision-Request": "true",
-  };
 }
 
 async function describeImagesWithMinimax(params: {
@@ -508,23 +449,41 @@ async function describeImagesWithModelInternal(
           : {}),
     });
 
-    const context = buildImageContext(prompt, params.images, {
-      promptInUserContent: shouldPlaceImagePromptInUserContent(model),
-    });
+    const promptInUserContent = shouldPlaceImagePromptInUserContent(model);
+    const context: Context = {
+      ...(promptInUserContent ? {} : { systemPrompt: prompt }),
+      messages: [
+        {
+          role: "user",
+          content: [
+            ...(promptInUserContent ? [{ type: "text" as const, text: prompt }] : []),
+            ...params.images.map((image) => ({
+              type: "image" as const,
+              data: image.buffer.toString("base64"),
+              mimeType: image.mime ?? "image/jpeg",
+            })),
+          ],
+          timestamp: Date.now(),
+        },
+      ],
+    };
 
     const maxTokens = resolveImageToolMaxTokens(model.maxTokens, params.maxTokens);
-    const completeImage = async (onPayload?: ProviderStreamOptions["onPayload"]) => {
+    const completeImage = async (retry = false) => {
       params.signal?.throwIfAborted();
       assertResourcesOpen?.();
-      const payloadHandler = composeImageDescriptionPayloadHandlers(onPayload, options.onPayload);
+      const payloadHandler = retry
+        ? imageRetryPayloadHandler(options.onPayload)
+        : options.onPayload;
       const timeoutMs = configuredTimeoutMs;
-      const headers = buildImageRequestHeaders(requestModel);
       const streamOptions = {
         apiKey,
         maxTokens,
         signal: requestSignal,
         ...(timeoutMs !== undefined ? { timeoutMs } : {}),
-        ...(headers ? { headers } : {}),
+        ...(requestModel.provider === "github-copilot"
+          ? { headers: { "x-initiator": "user", "Copilot-Vision-Request": "true" } }
+          : {}),
         ...(payloadHandler ? { onPayload: payloadHandler } : {}),
       };
       const task: Promise<AssistantMessage> = trackAsyncWork(() => {
@@ -564,7 +523,7 @@ async function describeImagesWithModelInternal(
     }
 
     params.signal?.throwIfAborted();
-    const retryMessage = await completeImage(disableReasoningForImageRetryPayload);
+    const retryMessage = await completeImage(true);
     const text = coerceImageAssistantText({
       message: retryMessage,
       provider: model.provider,

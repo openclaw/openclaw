@@ -146,6 +146,14 @@ Its id must match the plugin manifest. Register contributions through
 | `registerWidget`                        | Native dashboard widget views.                                                                                                          |
 | `registerReplacement`                   | `workspace`, `session-list`, `composer`, `transcript`, or `tool-result`.                                                                |
 
+Set a navigation item's `parent` to another navigation ID in the same plugin to
+show it nested while the parent or a child destination is active; children only
+appear as top-level entries when pinned. Set `defaultVisible: false` to offer an
+item in **Customize**, and call `host.ui.pinNavigation(id)` after registering it
+to append an ordinary saved sidebar pin. Pinning is a no-op for an unknown or
+already pinned ID; call it for a user action such as creation, not on every
+catalog refresh, so a later manual removal stays removed.
+
 For a dashboard widget, also register a backend
 `api.session.controls.registerControlUiDescriptor` with `surface: "widget"`,
 the same widget `id`, and its `requiredScopes`. The Gateway advertises widget

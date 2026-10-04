@@ -51,16 +51,6 @@ function deleteEntry(key: string, entry: AvatarRouteEntry) {
   }
 }
 
-function avatarRouteKey(
-  url: string,
-  authTokens: readonly string[],
-  cacheNotFound: boolean,
-  retryUnavailable: boolean,
-  cacheScope: string,
-): string {
-  return JSON.stringify([cacheNotFound, retryUnavailable, authTokens, cacheScope, url]);
-}
-
 function releaseEntry(key: string, owner: symbol) {
   const entry = sharedAvatarRoutes.get(key);
   if (!entry) {
@@ -85,7 +75,6 @@ async function fetchAvatarRoute(
   key: string,
   url: string,
   authTokens: readonly string[],
-  cacheNotFound: boolean,
   retryUnavailable: boolean,
   entry: AvatarRouteEntry,
 ) {
@@ -129,7 +118,7 @@ async function fetchAvatarRoute(
     return;
   }
   if (!blobUrl) {
-    if (notFound && cacheNotFound) {
+    if (notFound) {
       return;
     }
     if (entry.unavailable && entry.consumers.size > 0) {
@@ -143,7 +132,7 @@ async function fetchAvatarRoute(
             return;
           }
           entry.controller = new AbortController();
-          void fetchAvatarRoute(key, url, authTokens, cacheNotFound, retryUnavailable, entry);
+          void fetchAvatarRoute(key, url, authTokens, retryUnavailable, entry);
         }, retryDelayMs);
       }
       // A render is not evidence that Gateway preparation changed. Keep the
@@ -178,7 +167,7 @@ export class AuthenticatedAvatarRouteLoader implements ReactiveController {
 
   constructor(
     private readonly host: ReactiveControllerHost,
-    private readonly options: { cacheNotFound?: boolean; retryUnavailable?: boolean } = {},
+    private readonly options: { retryUnavailable?: boolean } = {},
   ) {
     host.addController(this);
   }
@@ -238,9 +227,8 @@ export class AuthenticatedAvatarRouteLoader implements ReactiveController {
     if (!this.connected) {
       return null;
     }
-    const cacheNotFound = this.options.cacheNotFound === true;
     const retryUnavailable = this.options.retryUnavailable === true;
-    const key = avatarRouteKey(url, authTokens, cacheNotFound, retryUnavailable, cacheScope);
+    const key = JSON.stringify([retryUnavailable, authTokens, cacheScope, url]);
     let entry = sharedAvatarRoutes.get(key);
     if (!entry) {
       entry = {
@@ -253,7 +241,7 @@ export class AuthenticatedAvatarRouteLoader implements ReactiveController {
         unavailable: false,
       };
       sharedAvatarRoutes.set(key, entry);
-      void fetchAvatarRoute(key, url, authTokens, cacheNotFound, retryUnavailable, entry);
+      void fetchAvatarRoute(key, url, authTokens, retryUnavailable, entry);
     }
     if (entry.releaseTimer !== undefined) {
       clearTimeout(entry.releaseTimer);

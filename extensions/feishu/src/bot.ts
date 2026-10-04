@@ -1530,22 +1530,18 @@ export async function handleFeishuMessage(params: {
       const strategy = rawStrategy === "sequential" ? "sequential" : "parallel";
       const activeAgentId =
         ctx.mentionedBot || !requireMention ? normalizeAgentId(route.agentId) : null;
-      const agentIds = (cfg.agents?.list ?? []).map((a: { id: string }) => normalizeAgentId(a.id));
+      const agentIds = Object.keys(cfg.agents?.entries ?? {}).map((id) => normalizeAgentId(id));
       const hasKnownAgents = agentIds.length > 0;
 
       log(
         `feishu[${account.accountId}]: broadcasting to ${broadcastAgents.length} agents (strategy=${strategy}, active=${activeAgentId ?? "none"})`,
       );
 
-      type BroadcastInboundVariant =
-        | { kind: "observeOnly" }
-        | { kind: "active"; dispatcher: ReturnType<typeof createFeishuReplyDispatcher> };
-
       const dispatchForAgent = async (agentId: string) => {
         const normalizedAgentId = normalizeAgentId(agentId);
         if (hasKnownAgents && !agentIds.includes(normalizedAgentId)) {
           log(
-            `feishu[${account.accountId}]: broadcast agent ${agentId} not found in agents.list; skipping`,
+            `feishu[${account.accountId}]: broadcast agent ${agentId} not found in agents.entries; skipping`,
           );
           return;
         }
@@ -1610,33 +1606,25 @@ export async function handleFeishuMessage(params: {
             ctx.mentionedBot && agentId === activeAgentId,
           );
 
-          let variant: BroadcastInboundVariant;
-          if (agentId === activeAgentId) {
-            const identity = resolveAgentOutboundIdentity(cfg, agentId);
-            variant = {
-              kind: "active",
-              dispatcher: createAgentReplyDispatcher({
-                cfg,
-                agentId,
-                allowReasoningPreview,
-                identity,
-                sessionKey: agentSessionKey,
-              }),
-            };
-
-            log(
-              `feishu[${account.accountId}]: broadcast active dispatch agent=${agentId} (session=${agentSessionKey})`,
-            );
-          } else {
+          const dispatcher =
+            agentId === activeAgentId
+              ? createAgentReplyDispatcher({
+                  cfg,
+                  agentId,
+                  allowReasoningPreview,
+                  identity: resolveAgentOutboundIdentity(cfg, agentId),
+                  sessionKey: agentSessionKey,
+                })
+              : undefined;
+          if (!dispatcher) {
             // Observer agent: no-op dispatcher (session entry + inference, no Feishu reply).
             // Strip CommandAuthorized so slash commands (e.g. /reset) don't silently
             // mutate observer sessions — only the active agent should execute commands.
             delete (agentCtx as Record<string, unknown>).CommandAuthorized;
-            variant = { kind: "observeOnly" };
-            log(
-              `feishu[${account.accountId}]: broadcast observer dispatch agent=${agentId} (session=${agentSessionKey})`,
-            );
           }
+          log(
+            `feishu[${account.accountId}]: broadcast ${dispatcher ? "active" : "observer"} dispatch agent=${agentId} (session=${agentSessionKey})`,
+          );
 
           const turnResult = await core.channel.inbound.run({
             channel: "feishu",
@@ -1658,17 +1646,17 @@ export async function handleFeishuMessage(params: {
                 route: { agentId, sessionKey: agentSessionKey },
                 ctxPayload: agentCtx,
                 record: agentRecord,
-                ...(variant.kind === "observeOnly"
+                ...(!dispatcher
                   ? {
                       admission: { kind: "observeOnly" as const, reason: "broadcast-observer" },
                       delivery: { deliver: async () => ({ visibleReplySent: false }) },
                       replyOptions: bindIngressLifecycleToReplyOptions(lane.lifecycle),
                     }
                   : {
-                      dispatcherOptions: variant.dispatcher.dispatcherOptions,
-                      delivery: variant.dispatcher.delivery,
+                      dispatcherOptions: dispatcher.dispatcherOptions,
+                      delivery: dispatcher.delivery,
                       replyOptions: {
-                        ...variant.dispatcher.replyOptions,
+                        ...dispatcher.replyOptions,
                         ...bindIngressLifecycleToReplyOptions(lane.lifecycle),
                       },
                     }),
@@ -1676,11 +1664,11 @@ export async function handleFeishuMessage(params: {
             },
           });
           if (
-            variant.kind === "active" &&
+            dispatcher &&
             turnResult.dispatched &&
             shouldSendNoVisibleReplyFallback(turnResult.dispatchResult)
           ) {
-            await variant.dispatcher.ensureNoVisibleReplyFallback(
+            await dispatcher.ensureNoVisibleReplyFallback(
               "broadcast-dispatch-complete-no-visible-reply",
             );
           }

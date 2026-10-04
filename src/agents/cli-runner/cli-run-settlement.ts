@@ -15,7 +15,6 @@ import {
 } from "../cli-auth-epoch.js";
 import type { CliOutput, CliTerminalInterruption } from "../cli-output-contracts.js";
 import { shouldClearInterruptedCliSessionBinding } from "../cli-session.js";
-import { claudeCliSessionTranscriptHasContent as claudeCliSessionTranscriptHasContentImpl } from "../command/attempt-execution.helpers.js";
 import type { EmbeddedAgentRunResult } from "../embedded-agent-runner.js";
 import { resolveExplicitFinalSourceReplyDeliveryEvidence } from "../embedded-agent-runner/delivery-evidence.js";
 import { resolveAuthProfileFailureReason } from "../embedded-agent-runner/run/auth-profile-failure-policy.js";
@@ -39,18 +38,6 @@ export function formatCliTerminalInterruption(interruption: CliTerminalInterrupt
   return `CLI turn ${interruption.reason} after partial output`;
 }
 
-export const cliRunSettlementDeps = {
-  claudeCliSessionTranscriptHasContent: claudeCliSessionTranscriptHasContentImpl,
-  delay: async (delayMs: number) => {
-    await new Promise((resolve) => {
-      setTimeout(resolve, delayMs);
-    });
-  },
-  loadAuthProfileStoreForRuntime,
-  markAuthProfileFailure,
-  markAuthProfileSuccess,
-};
-
 async function settleCliAuthProfile(params: {
   store: AuthProfileStore;
   profileId: string;
@@ -68,7 +55,7 @@ async function settleCliAuthProfile(params: {
 }): Promise<void> {
   try {
     if (params.terminal.outcome === "success") {
-      await cliRunSettlementDeps.markAuthProfileSuccess({
+      await markAuthProfileSuccess({
         store: params.store,
         profileId: params.profileId,
         provider: params.provider,
@@ -85,7 +72,7 @@ async function settleCliAuthProfile(params: {
           : undefined,
     });
     if (reason) {
-      await cliRunSettlementDeps.markAuthProfileFailure({
+      await markAuthProfileFailure({
         store: params.store,
         profileId: params.profileId,
         reason,
@@ -146,7 +133,7 @@ export async function settleCliPreparationError(
     if (!(error instanceof CliAuthProfilePreparationError)) {
       return;
     }
-    const store = cliRunSettlementDeps.loadAuthProfileStoreForRuntime(error.agentDir, {
+    const store = loadAuthProfileStoreForRuntime(error.agentDir, {
       externalCli: externalCliDiscoveryForProviderAuth({
         cfg: params.config,
         provider: error.provider,

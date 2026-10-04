@@ -8,7 +8,6 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SecretInput } from "../../config/types.secrets.js";
 import { resolveSecretInputModeForEnvSelection } from "../../plugins/provider-auth-mode.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
-import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
 import { setTopLevelChannelEnabledInConfigSection, writeChannelSection } from "./config-helpers.js";
 import type { ChannelSetupAdapter } from "./setup-adapter.types.js";
@@ -27,10 +26,6 @@ import type {
 
 type WizardAllowFrom = NonNullable<ChannelSetupWizard["allowFrom"]>;
 type WizardGroupAccess = NonNullable<ChannelSetupWizard["groupAccess"]>;
-
-const loadProviderAuthInput = createLazyRuntimeModule(
-  () => import("../../plugins/provider-auth-ref.js"),
-);
 
 export const promptAccountId: PromptAccountId = async (params: PromptAccountIdParams) => {
   const existingIds = params.listAccountIds(params.cfg);
@@ -638,7 +633,7 @@ export async function promptSingleChannelSecretInput(params: {
     return token ? { action: "set", value: token, resolvedValue: token } : { action: "keep" };
   }
 
-  const { promptSecretRefForSetup } = await loadProviderAuthInput();
+  const { promptSecretRefForSetup } = await import("../../plugins/provider-auth-ref.js");
   const resolved = await promptSecretRefForSetup({
     provider: params.providerHint,
     config: params.cfg,

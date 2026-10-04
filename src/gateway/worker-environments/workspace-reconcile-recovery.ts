@@ -226,7 +226,6 @@ export async function createWorkspacePatch(params: {
 export async function applyWorkspacePatch(params: {
   root: string;
   patch: Uint8Array;
-  reverse?: boolean;
   assertCurrent?: () => void;
 }): Promise<void> {
   if (params.patch.byteLength === 0) {
@@ -241,15 +240,7 @@ export async function applyWorkspacePatch(params: {
   try {
     await requireGit(
       params.root,
-      [
-        "-c",
-        "core.autocrlf=false",
-        "apply",
-        "--no-index",
-        "--binary",
-        "--whitespace=nowarn",
-        ...(params.reverse ? ["--reverse"] : []),
-      ],
+      ["-c", "core.autocrlf=false", "apply", "--no-index", "--binary", "--whitespace=nowarn"],
       params.patch,
       { GIT_DIR: path.join(temporary, ".git") },
       params.assertCurrent,
@@ -486,14 +477,10 @@ async function restoreWorkspaceJournalDirectories(params: WorkspaceRecoveryConte
 export async function recoverWorkerWorkspaceReconciliation(params: {
   root: string;
   journal: WorkerWorkspaceReconciliationJournal;
-  preservePaths?: ReadonlySet<string>;
   assertCurrent?: () => void;
 }): Promise<void> {
   if (params.journal.appliedManifestRef) {
     throw new Error("Cloud workspace result is already applied and awaits fence acceptance");
-  }
-  if (params.preservePaths?.size) {
-    throw new Error("Cloud workspace patch recovery cannot preserve partial paths");
   }
   const root = await fs.realpath(params.root);
   validateJournalSnapshot(params.journal);

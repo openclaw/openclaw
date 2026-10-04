@@ -1,3 +1,4 @@
+import { resolveConfiguredGitHubHost } from "../agents/github-host.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GitCheckoutContext } from "../infra/git-read-operations.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
@@ -32,6 +33,7 @@ export type ControlUiSessionPrTarget = {
   identity: string;
   readSource: { agentId: string; path: string };
   source: string | GitCheckoutContext | null;
+  githubHost?: string;
   assertCurrent?: () => void;
 };
 
@@ -53,15 +55,22 @@ export function resolveControlUiSessionPrTarget(
     return undefined;
   }
   let source: ControlUiSessionPrTarget["source"];
+  const githubHost = resolveConfiguredGitHubHost(cfg);
   if (entry.repositoryWorkspaceId) {
     const repository = preparedRepository;
-    const remote = repository ? parseGitHubRemoteUrl(repository.url) : null;
-    source = remote && repository ? { ...remote, branch: repository.branch } : null;
+    const publicRemote = repository ? parseGitHubRemoteUrl(repository.url) : null;
+    const remote =
+      publicRemote ?? (repository ? parseGitHubRemoteUrl(repository.url, githubHost) : null);
+    source =
+      remote && repository
+        ? { ...remote, ...(!publicRemote ? { host: githubHost } : {}), branch: repository.branch }
+        : null;
   } else {
     source = resolveSessionWorkspaceRoots(cfg, agentId, entry).diffCwd ?? null;
   }
   return {
     params: { sessionKey: canonicalKey, agentId },
+    githubHost,
     readSource,
     identity: JSON.stringify([
       agentId,
@@ -74,6 +83,7 @@ export function resolveControlUiSessionPrTarget(
       entry.repositoryWorkspaceId,
       entry.worktree?.id,
       source,
+      githubHost,
     ]),
     source,
   };

@@ -507,13 +507,7 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
                 runtimePolicy: route?.runtimePolicy,
                 requestTransportOverrides: route?.requestTransportOverrides,
                 // Native observations select a route but do not supply host credentials.
-                preparedAuth: evaluation.runtimeAuth
-                  ? { source: "harness" }
-                  : {
-                      source: evaluation.selectedProfileId ? "profile" : "direct",
-                      mode: evaluation.selectedAuthMode,
-                      requirement: route?.authRequirement,
-                    },
+                preparedAuth: evaluation.selectedCredential,
               },
             }),
           );
@@ -556,15 +550,7 @@ export function resolveCatalogDecisionRuntime(params: {
       baseUrl: route?.baseUrl ?? params.entry.baseUrl,
       requestTransportOverrides: route?.requestTransportOverrides,
       runtimePolicy: route?.runtimePolicy,
-      preparedAuth: {
-        source: params.evaluation.runtimeAuth
-          ? ("harness" as const)
-          : params.evaluation.selectedProfileId
-            ? ("profile" as const)
-            : ("direct" as const),
-        mode: params.evaluation.selectedAuthMode,
-        requirement: route?.authRequirement,
-      },
+      preparedAuth: params.evaluation.selectedCredential,
     },
     preparedModelProvider: true,
   };

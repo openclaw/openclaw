@@ -855,7 +855,7 @@ describe("handleFeishuMessage command authorization", () => {
         groups: { oc_target: { allow: true, requireMention: false } },
       },
       {
-        agents: { list: [{ id: "main" }, { id: "oc1" }] },
+        agents: { entries: { main: {}, oc1: {} } },
         bindings: [
           {
             agentId: "oc1",

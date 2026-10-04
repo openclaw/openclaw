@@ -7,18 +7,17 @@ function trimTrailingSlashes(value: string): string {
 
 export function normalizeGoogleApiBaseUrl(baseUrl?: string): string {
   const raw = trimTrailingSlashes(baseUrl?.trim() || DEFAULT_GOOGLE_API_BASE_URL);
-  try {
-    const url = new URL(raw);
-    url.hash = "";
-    url.search = "";
-    if (
-      url.hostname.toLowerCase() === GOOGLE_GENERATIVE_LANGUAGE_HOST &&
-      trimTrailingSlashes(url.pathname || "") === ""
-    ) {
-      url.pathname = "/v1beta";
-    }
-    return trimTrailingSlashes(url.toString());
-  } catch {
+  const url = URL.parse(raw);
+  if (!url) {
     return raw;
   }
+  url.hash = "";
+  url.search = "";
+  if (
+    url.hostname.toLowerCase() === GOOGLE_GENERATIVE_LANGUAGE_HOST &&
+    trimTrailingSlashes(url.pathname || "") === ""
+  ) {
+    url.pathname = "/v1beta";
+  }
+  return trimTrailingSlashes(url.toString());
 }

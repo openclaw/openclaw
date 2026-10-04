@@ -6,7 +6,6 @@ const enSessionPeople = {
   sessionsView: {
     searchPeople: "Search people and agents…",
     noPeopleMatch: "No matching people or agents",
-    peopleRange: "{start}–{end} of {total}",
   },
 } satisfies TranslationMap;
 

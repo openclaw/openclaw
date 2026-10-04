@@ -22,11 +22,7 @@ function normalizePathSeparators(pathname: string): string {
 }
 
 function resolveDotSegments(pathname: string): string {
-  try {
-    return new URL(pathname, "http://localhost").pathname;
-  } catch {
-    return pathname;
-  }
+  return URL.parse(pathname, "http://localhost")?.pathname ?? pathname;
 }
 
 function normalizePathForSecurity(pathname: string): string {

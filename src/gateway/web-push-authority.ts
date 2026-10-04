@@ -149,6 +149,7 @@ export async function withCurrentWebPushAuthority<T>(
     getRuntimeConfig: () => OpenClawConfig;
     sessionKeys?: readonly string[];
     agentId?: string;
+    preparePublication?: () => Promise<void>;
   },
   prepare: (authority: WebPushAuthority) => { start: () => T | Promise<T> } | undefined,
 ): Promise<T | undefined> {
@@ -227,6 +228,7 @@ export async function withCurrentWebPushAuthority<T>(
                   },
                 };
               },
+              params.preparePublication,
             );
             if (!changed) {
               return begun ? { start: () => begun } : undefined;

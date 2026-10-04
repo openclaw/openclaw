@@ -23,7 +23,7 @@ describe("gateway chat metadata native session ownership", () => {
             model: { primary: "github-copilot/fixture-model" },
             models: { "github-copilot/fixture-model": { agentRuntime: { id: "openclaw" } } },
           },
-          list: [{ id: "main", default: true }],
+          entries: { main: {} },
         },
       };
       const harness = createChatMetadataHarness(config, { useDefaultProjection: true });

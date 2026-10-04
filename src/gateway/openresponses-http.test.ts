@@ -403,7 +403,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
     const request = { model: "openclaw", input: "hi" };
     const admin = { "x-openclaw-scopes": "operator.admin, operator.write" };
     try {
-      testState.agentsConfig = { list: [{ id: "main" }] };
+      testState.agentsConfig = { entries: { main: {} } };
       resetConfigRuntimeState();
       const nonPost = await fetch(`http://127.0.0.1:${enabledPort}/v1/responses`);
       expect(nonPost.status).toBe(405);
@@ -415,7 +415,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
           "x-openclaw-session-key": `agent:main:${key}`,
         });
       }
-      testState.agentsConfig = { ownership: "explicit", list: [{ id: "main" }, { id: "beta" }] };
+      testState.agentsConfig = { ownership: "explicit", entries: { main: {}, beta: {} } };
       resetConfigRuntimeState();
       await accept(
         {},
@@ -434,7 +434,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
         { model: "openclaw/beta" },
         { sessionKey: expect.stringMatching(/^agent:beta:/) },
       );
-      testState.agentsConfig = { list: [{ id: "main" }] };
+      testState.agentsConfig = { entries: { main: {} } };
       resetConfigRuntimeState();
       await accept(
         { model: "openclaw/default" },

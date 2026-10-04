@@ -516,17 +516,17 @@ describe("run-node script", () => {
       env: { OPENCLAW_RUNNER_LOG: "0" },
       fs: fsSync,
       process: lockProcess,
-      stderr: { write: () => true } as unknown as NodeJS.WriteStream,
+      stderr: { write: () => true },
     });
     const { promise: waitingForLock, resolve: markWaiting } = createDeferred();
     const stderr = {
-      write: (chunk: string | Buffer) => {
+      write: (chunk: string | Uint8Array) => {
         if (String(chunk).includes("Waiting for TypeScript/runtime artifact lock")) {
           markWaiting();
         }
         return true;
       },
-    } as unknown as NodeJS.WriteStream;
+    };
     const runRuntimePostBuild = vi.fn();
     const { spawnCalls, spawn, spawnSync } = createCurrentGitSpawnRecorder({
       gitStatus: ` M ${ROOT_SRC}\0`,
@@ -674,7 +674,7 @@ describe("run-node script", () => {
       env: { OPENCLAW_RUNNER_LOG: "0" },
       fs: fsSync,
       process: fakeProcess,
-      stderr: { write: () => true } as unknown as NodeJS.WriteStream,
+      stderr: { write: () => true },
     });
 
     it("releases the lock directory on process exit", async ({ tmp }) => {

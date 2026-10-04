@@ -1,6 +1,10 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { Insertable, Selectable } from "kysely";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import {
+  executeSqliteQuerySync,
+  getNodeSqliteKysely,
+  sqliteStringSet,
+} from "../../infra/kysely-sync.js";
 import {
   withExistingOpenClawStateDatabaseArtifactPreservingReadOnly,
   withExistingOpenClawStateDatabaseCurrentReadOnly,
@@ -13,6 +17,7 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
 import {
+  findLiveRegistryWorktreeByOwnerInDatabase,
   getRegistryWorktreeInDatabase,
   getRegistryWorktreeProvisionedStateInDatabase,
   listRegistryWorktreesInDatabase,
@@ -25,7 +30,6 @@ import {
   worktreeRunLeaseScope,
   WorktreeRemovalContentionError,
   WORKTREE_REMOVING_LEASE_KEY,
-  type RunLeaseOwnerChecks,
 } from "./run-lease-owner.js";
 import { releaseWorktreeRunLeaseInDatabase } from "./run-lease-store.kernel.js";
 import type {
@@ -35,8 +39,8 @@ import type {
 } from "./types.js";
 
 export { WorktreeRemovalContentionError } from "./run-lease-owner.js";
+export { clearRegistryWorktreeProvisionedChunks } from "./provisioned-snapshot-store.js";
 export {
-  getRegistryWorktreeProvisionedChunk,
   getRegistryWorktreeProvisionedPaths,
   getRegistryWorktreeProvisionedState,
 } from "./registry-read.js";
@@ -191,48 +195,6 @@ export function rewriteRegistryWorktreePathsForMigration(
   );
 }
 
-export function clearRegistryWorktreeProvisionedChunks(
-  env: NodeJS.ProcessEnv,
-  worktreeId: string,
-): void {
-  runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      executeSqliteQuerySync(
-        db,
-        kyselyFor(db)
-          .deleteFrom("worktree_provisioned_file_chunks")
-          .where("worktree_id", "=", worktreeId),
-      );
-    },
-    { env },
-  );
-}
-
-export function insertRegistryWorktreeProvisionedChunk(
-  env: NodeJS.ProcessEnv,
-  params: {
-    worktreeId: string;
-    path: string;
-    chunkIndex: number;
-    data: Uint8Array;
-  },
-): void {
-  runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      executeSqliteQuerySync(
-        db,
-        kyselyFor(db).insertInto("worktree_provisioned_file_chunks").values({
-          worktree_id: params.worktreeId,
-          path: params.path,
-          chunk_index: params.chunkIndex,
-          data: params.data,
-        }),
-      );
-    },
-    { env },
-  );
-}
-
 export function findLiveRegistryWorktreeByPath(
   env: NodeJS.ProcessEnv,
   worktreePath: string,
@@ -254,17 +216,7 @@ export function findLiveRegistryWorktreeByOwner(
   ownerKind: ManagedWorktreeOwnerKind,
   ownerId: string,
 ): ManagedWorktreeRecord | undefined {
-  const db = dbFor(env);
-  const query = kyselyFor(db)
-    .selectFrom("worktrees")
-    .select(WORKTREE_RECORD_COLUMNS)
-    .where("owner_kind", "=", ownerKind)
-    .where("owner_id", "=", ownerId)
-    .where("removed_at", "is", null)
-    .orderBy("created_at", "desc")
-    .limit(1);
-  const row = executeSqliteQuerySync(db, query).rows[0];
-  return row ? rowToRecord(row) : undefined;
+  return findLiveRegistryWorktreeByOwnerInDatabase(dbFor(env), ownerKind, ownerId);
 }
 
 export function insertRegistryWorktree(
@@ -373,7 +325,7 @@ function assertSnapshotRetirementInDatabase(
   if (provisioned === undefined || provisioned.length !== 0 || chunk) {
     throw new Error("Worktree snapshot retains provisioned data; retain its custody");
   }
-  const leases = collectLiveRunLeases(db, kyselyFor(db), worktreeRunLeaseScope(observed.id), {});
+  const leases = collectLiveRunLeases(db, kyselyFor(db), worktreeRunLeaseScope(observed.id));
   if (leases.liveCount !== 0 || leases.removingToken !== undefined) {
     throw new Error("Worktree snapshot has an active or unresolved run/removal consumer");
   }
@@ -426,7 +378,6 @@ export function claimWorktreeRemovalRow(
     pid: number;
     startTime: number | null;
     now: number;
-    checks?: RunLeaseOwnerChecks;
     retiredExact?: true;
     retiredRemoval?: true;
     assertCurrent?: () => void;
@@ -460,11 +411,12 @@ export function claimWorktreeRemovalRow(
           `managed worktree was removed: ${record?.path ?? params.worktreeId}`,
         );
       }
-      const { livePids, removingToken } = collectLiveRunLeases(db, k, scope, params.checks ?? {});
+      const { livePids, removingToken } = collectLiveRunLeases(db, k, scope);
       if (livePids.length > 0) {
         throw new WorktreeRemovalContentionError(
           "busy",
           `worktree is busy: locked by live pid ${livePids[0]}`,
+          { worktreeId: params.worktreeId, pid: livePids[0]! },
         );
       }
       // The removal claim is exclusive: a live marker owned by a different token means
@@ -503,27 +455,36 @@ export function claimWorktreeRemovalRow(
   );
 }
 
-/** Synchronous lock primitive: a lost removal claim must never be reacquired implicitly. */
-export function assertWorktreeRemovalClaim(
+/** Batch lock-primitive read: one JSON binding avoids per-claim SQL and SQLite bind limits. */
+export function createWorktreeRemovalClaimsGuard(
   env: NodeJS.ProcessEnv,
-  worktreeId: string,
+  worktreeIds: readonly string[],
   token: string,
-): void {
-  const db = dbFor(env);
-  const row = executeSqliteQuerySync(
-    db,
-    kyselyFor(db)
-      .selectFrom("state_leases")
-      .select("owner")
-      .where("scope", "=", worktreeRunLeaseScope(worktreeId))
-      .where("lease_key", "=", WORKTREE_REMOVING_LEASE_KEY),
-  ).rows[0];
-  if (row?.owner !== token) {
-    throw new WorktreeRemovalContentionError(
-      "busy",
-      "Worktree removal claim changed; checkout preserved",
-    );
-  }
+): () => void {
+  const ids = [...new Set(worktreeIds)];
+  const count = ids.length;
+  const scopes = sqliteStringSet(ids.map(worktreeRunLeaseScope));
+  return () => {
+    if (count === 0) {
+      return;
+    }
+    const db = dbFor(env);
+    const held = executeSqliteQuerySync(
+      db,
+      kyselyFor(db)
+        .selectFrom("state_leases")
+        .select((eb) => eb.fn.countAll<number>().as("held"))
+        .where("state_leases.scope", "in", scopes)
+        .where("state_leases.lease_key", "=", WORKTREE_REMOVING_LEASE_KEY)
+        .where("state_leases.owner", "=", token),
+    ).rows[0]?.held;
+    if (held !== count) {
+      throw new WorktreeRemovalContentionError(
+        "busy",
+        "Worktree removal claim changed; checkout preserved",
+      );
+    }
+  };
 }
 
 export function releaseWorktreeRunLeaseRow(
@@ -577,21 +538,12 @@ export function abortWorktreeRemovalRow(
   );
 }
 
-export function hasLiveWorktreeRunLeaseRow(
-  env: NodeJS.ProcessEnv,
-  worktreeId: string,
-  checks?: RunLeaseOwnerChecks,
-): boolean {
+export function hasLiveWorktreeRunLeaseRow(env: NodeJS.ProcessEnv, worktreeId: string): boolean {
   return (
     withExistingOpenClawStateDatabaseCurrentReadOnly(
       ({ db }) =>
-        collectLiveRunLeases(
-          db,
-          kyselyFor(db),
-          worktreeRunLeaseScope(worktreeId),
-          checks ?? {},
-          false,
-        ).livePids.length > 0,
+        collectLiveRunLeases(db, kyselyFor(db), worktreeRunLeaseScope(worktreeId), false).livePids
+          .length > 0,
       { env },
     ) ?? false
   );

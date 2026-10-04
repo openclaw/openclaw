@@ -12,6 +12,7 @@ import type {
 } from "../../plugins/hook-types.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { buildAgentHookContext, type AgentHarnessHookContext } from "./hook-context.js";
+import { takeHookMessageLoader } from "./lifecycle-hook-messages.js";
 
 const log = createSubsystemLogger("agents/harness");
 const FINALIZE_RETRY_BUDGET_KEY = Symbol.for("openclaw.pluginFinalizeRetryBudget");
@@ -96,12 +97,14 @@ export function runAgentHarnessLlmOutputHook(
 async function executeAgentHarnessAgentEndHook(
   params: AgentHarnessHookParams<PluginHookAgentEndEvent> & { unrefTimeout?: boolean },
 ): Promise<void> {
+  const loadMessages = takeHookMessageLoader(params.event);
   const hookRunner = params.hookRunner ?? getGlobalHookRunner();
   if (!hookRunner?.hasHooks("agent_end") || typeof hookRunner.runAgentEnd !== "function") {
     return;
   }
   try {
-    await hookRunner.runAgentEnd(params.event, buildAgentHookContext(params.ctx), {
+    const event = loadMessages ? { ...params.event, messages: await loadMessages() } : params.event;
+    await hookRunner.runAgentEnd(event, buildAgentHookContext(params.ctx), {
       unrefTimeout: params.unrefTimeout ?? false,
     });
   } catch (error) {
@@ -133,6 +136,7 @@ type AgentHarnessBeforeAgentFinalizeOutcome =
 export async function runAgentHarnessBeforeAgentFinalizeHook(
   params: AgentHarnessHookParams<PluginHookBeforeAgentFinalizeEvent>,
 ): Promise<AgentHarnessBeforeAgentFinalizeOutcome> {
+  const loadMessages = takeHookMessageLoader(params.event);
   const hookRunner = params.hookRunner ?? getGlobalHookRunner();
   if (
     !hookRunner?.hasHooks("before_agent_finalize") ||
@@ -144,6 +148,7 @@ export async function runAgentHarnessBeforeAgentFinalizeHook(
     const eventForNormalization: PluginHookBeforeAgentFinalizeEvent = {
       ...params.event,
       runId: params.event.runId ?? params.ctx.runId,
+      ...(loadMessages ? { messages: await loadMessages() } : {}),
     };
     return normalizeBeforeAgentFinalizeResult(
       await hookRunner.runBeforeAgentFinalize(

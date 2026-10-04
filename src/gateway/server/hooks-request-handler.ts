@@ -489,6 +489,7 @@ export function createHooksRequestHandler(
           sourcePath: `${basePath}/agent`,
           agentId: target.selectedAgentId,
           externalContentSource: "webhook",
+          replayKey,
         });
       });
       await sendAgentResult(res, dispatched, undefined, waitForCompletion === true);
@@ -630,6 +631,7 @@ export function createHooksRequestHandler(
                   mappingId: action.mappingId,
                   allowUnsafeExternalContent: action.allowUnsafeExternalContent,
                   ...(mapped.fanout ? { admissionMode: "background" as const } : {}),
+                  replayKey,
                   externalContentSource:
                     subPath === "gmail"
                       ? "gmail"

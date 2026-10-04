@@ -2,9 +2,14 @@
 
 import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { parseApprovalRequestedEvent, type ExecApprovalRequest } from "../app/exec-approval.ts";
+import {
+  parseApprovalRequestedEvent,
+  resolveApprovalRequest,
+  type ExecApprovalDecision,
+  type ExecApprovalRequest,
+} from "../app/exec-approval.ts";
 import { i18n } from "../i18n/index.ts";
-import { renderExecApprovalCard } from "./exec-approval-card.ts";
+import { renderExecApprovalCard, renderSidebarApprovalRow } from "./exec-approval-card.ts";
 
 let container: HTMLDivElement;
 
@@ -128,6 +133,67 @@ describe("exec approval card", () => {
     expect(card?.querySelector(".exec-approval-details")).toBeNull();
     expect(card?.textContent).not.toContain("agent:main:session-1");
   });
+
+  it.each(["inline", "modal", "sidebar"] as const)(
+    "uses plugin decision action labels and resolves their original decisions in the %s surface",
+    async (variant) => {
+      const request = parseApprovalRequestedEvent("plugin.approval.requested", {
+        id: "mcp-app-search",
+        request: {
+          title: "Allow parts.search?",
+          description:
+            "Allow this MCP App to call parts/search once, or while this App stays open?",
+          allowedDecisions: ["allow-once", "allow-always", "deny"],
+          actions: [
+            { kind: "decision", decision: "allow-once", label: "Allow once", command: "" },
+            {
+              kind: "decision",
+              decision: "allow-always",
+              label: "Allow while this App is open",
+              command: "",
+            },
+            { kind: "command", decision: "deny", label: "Run a command", command: "status" },
+            { kind: "decision", decision: "deny", label: "Deny", command: "" },
+          ],
+        },
+        createdAtMs: Date.now(),
+        expiresAtMs: Date.now() + 60_000,
+      });
+      if (!request) {
+        throw new Error("Plugin approval event was not parsed");
+      }
+      const client = { request: vi.fn(async () => ({})) };
+      const onDecision = vi.fn((id: string, decision: ExecApprovalDecision) => {
+        expect(id).toBe(request.id);
+        return resolveApprovalRequest(client, request, decision);
+      });
+      const props = { approval: request, busy: false, canGrant: true, error: null };
+      render(
+        variant === "sidebar"
+          ? renderSidebarApprovalRow({
+              ...props,
+              onDecision: (_event, id, decision) => void onDecision(id, decision),
+            })
+          : renderExecApprovalCard({ ...props, variant, onDecision }),
+        container,
+      );
+      const buttons = Array.from(container.querySelectorAll<HTMLButtonElement>("button"));
+      expect(buttons.map((button) => button.textContent?.trim())).toEqual([
+        "Allow once",
+        "Allow while this App is open",
+        "Deny",
+      ]);
+      for (const button of buttons) {
+        button.click();
+      }
+      await Promise.all(onDecision.mock.results.map((result) => result.value));
+      expect(client.request.mock.calls).toEqual([
+        ["plugin.approval.resolve", { id: request.id, decision: "allow-once" }],
+        ["plugin.approval.resolve", { id: request.id, decision: "allow-always" }],
+        ["plugin.approval.resolve", { id: request.id, decision: "deny" }],
+      ]);
+    },
+  );
 
   it.each(["inline", "modal"] as const)(
     "shows the full plugin request detail as plain text in the %s card",

@@ -66,14 +66,13 @@ it.each(["SDK initialization", "model transition"] as const)(
         });
         const create = () =>
           createAgentSession({
+            systemPrompt: "Test session prompt",
             cwd: firstDir,
-            agentDir: state.agentDir("main"),
             sessionManager: manager,
             model: reasoningModel,
             thinkingLevel: "high",
-            authStorage,
             modelRegistry,
-            noTools: "all",
+            tools: [],
             settingsManager: SettingsManager.inMemory({ defaultThinkingLevel: "high" }),
             resourceLoader: createResourceLoader(),
           });

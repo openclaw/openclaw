@@ -13,7 +13,7 @@ import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-even
 import { emitAgentRunStatusEvent } from "../../infra/agent-run-status-events.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { materializeProjectClone, refreshProjectClone } from "../../projects/project-clone.js";
-import { parseProjectGitUrl } from "../../projects/project-git-url.js";
+import { parseConfiguredProjectGitUrl } from "../../projects/project-git-url.runtime.js";
 import { resolveProjectDirectory } from "../../projects/project-registry.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
@@ -21,6 +21,7 @@ import { getSessionRepositoryWorkspaceStore } from "../../state/session-reposito
 import { generateWorktreeSessionTitle } from "../dashboard-session-title.js";
 import { githubApiToken } from "../github-public-api.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
+import { prepareGatewayProjectGitHubIdentity } from "../project-github-identity.js";
 import type {
   PrepareGatewaySessionLifecycle,
   PreparedGatewaySessionLifecycle,
@@ -153,7 +154,7 @@ export function prepareSessionRepositoryWorkspace(
 
 export function normalizeSessionProjectGitUrl(value: unknown): string | undefined {
   return typeof value === "string" && value.length <= 2048
-    ? parseProjectGitUrl(value)?.url
+    ? parseConfiguredProjectGitUrl(value)?.url
     : undefined;
 }
 
@@ -312,12 +313,33 @@ export async function prepareSessionWorkspaceForRun(params: {
       delete entry.pendingWorktree;
       return;
     }
+    const configuredToken = gitUrl ? githubApiToken(process.env, cfg) : undefined;
+    const projectIdentity =
+      gitUrl && !configuredToken
+        ? await prepareGatewayProjectGitHubIdentity({
+            agentId,
+            assertActive: assertRunOwnership,
+            config: cfg,
+            context,
+          })
+        : undefined;
+    const projectToken = configuredToken ?? projectIdentity?.token;
+    const assertProjectCurrent = () => {
+      assertRunOwnership();
+      projectIdentity?.assertSelected();
+    };
     const project = gitUrl
       ? await materializeProjectClone(
           { cfg, gitUrl },
-          { signal, token: githubApiToken(process.env, cfg) },
+          {
+            signal,
+            token: projectToken,
+            assertCurrent: assertProjectCurrent,
+            startRun: projectIdentity?.start,
+          },
         )
       : undefined;
+    projectIdentity?.assertSelected();
     assertRunOwnership();
     const directory = project
       ? await resolveProjectDirectory(project.repoRoot)
@@ -377,8 +399,11 @@ export async function prepareSessionWorkspaceForRun(params: {
         ) {
           await refreshProjectClone(project, {
             signal,
-            token: githubApiToken(process.env, cfg),
+            token: projectToken,
+            assertCurrent: assertProjectCurrent,
+            startRun: projectIdentity?.start,
           });
+          projectIdentity?.assertSelected();
           assertRunOwnership();
           resolved = await resolveSessionWorktreeBase(directory, pending.baseRef, signal);
         }

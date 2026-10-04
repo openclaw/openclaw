@@ -15,7 +15,11 @@ import {
 import { withGitProcessOperation, type GitProcessOperation } from "../process/spawn-diagnostics.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { retryableGitNetworkOperation, withGitNetworkRetry } from "./git-network-retry.js";
+import {
+  retryableGitNetworkOperation,
+  withGitNetworkRetry,
+  type GitOperationStarter,
+} from "./git-network-retry.js";
 import { startGitOperationTiming } from "./git-operation-timing.js";
 
 export const GIT_TIMEOUT_MS = 120_000;
@@ -132,6 +136,8 @@ export type GitCommandOptions = Pick<
   waitForExit?: boolean;
   /** Recheck caller authority immediately before each attempt. */
   beforeRun?: () => void;
+  /** Admit each attempt inside the caller's asynchronous credential owner. */
+  startRun?: GitOperationStarter;
 };
 export type GitCommandBytesResult = BufferSpawnResult & { timeoutMs: number };
 
@@ -165,11 +171,14 @@ async function executeGitCommandWithOutput<Result extends SpawnResult | BufferSp
   const timeoutMs = options.timeoutMs ?? GIT_TIMEOUT_MS;
   const argv = gitCommandArgv(cwd, args);
   if (options.waitForExit === true) {
-    options.beforeRun?.();
-    const result = await run(options.killProcessTree ? withForegroundGitMaintenance(argv) : argv, {
-      ...options,
-      timeoutMs: undefined,
-    });
+    const start = () => {
+      options.beforeRun?.();
+      return run(options.killProcessTree ? withForegroundGitMaintenance(argv) : argv, {
+        ...options,
+        timeoutMs: undefined,
+      });
+    };
+    const result = await (options.startRun ? options.startRun(start) : start());
     return { ...result, timeoutMs: 0 };
   }
   const result = await withGitNetworkRetry(
@@ -186,6 +195,7 @@ async function executeGitCommandWithOutput<Result extends SpawnResult | BufferSp
 
 export type GitBufferedCommandOptions = BufferedCommandOptions & {
   beforeRun?: () => void;
+  startRun?: GitOperationStarter;
   operation?: GitProcessOperation;
 };
 

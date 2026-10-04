@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { captureRuntimeConfig } from "../../config/runtime-source-projection.js";
 import {
   resolveSqliteReadScope,
   toDatabaseOptions,
@@ -19,8 +20,9 @@ import {
 } from "../../config/sessions/transcript-write-context.js";
 import type { Message } from "../../llm/types.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
-import { runInDetachedAsyncContext, trackAsyncWork } from "../../shared/async-work-scope.js";
+import { trackAsyncWork } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { runQueuedStoreWrite, type StoreWriterQueue } from "../../shared/store-writer-queue.js";
 import {
@@ -158,13 +160,13 @@ export async function appendSessionTranscriptNote(
   const captured = withOwnedSessionTranscriptWriterFence(
     captureSessionTranscriptTargetBinding(target),
   );
+  const append = {
+    cwd: process.cwd(),
+    message: structuredClone(message),
+    ...(options?.config ? { config: captureRuntimeConfig(options.config) } : {}),
+  };
   if (isIncognitoSessionKey(captured.sessionKey)) {
     // The caller retains the process-held incognito owner until its actor cutover.
-    const append = {
-      cwd: process.cwd(),
-      message: structuredClone(message),
-      ...(options?.config ? { config: structuredClone(options.config) } : {}),
-    };
     return await withSessionManagerWrite(
       { getSessionTarget: () => captured, getSessionId: () => captured.sessionId },
       () => {
@@ -217,9 +219,7 @@ export async function appendSessionTranscriptNote(
   const input = {
     target: captured,
     candidate,
-    message: structuredClone(message),
-    ...(options?.config ? { config: structuredClone(options.config) } : {}),
-    cwd: process.cwd(),
+    ...append,
     assertCurrent,
   };
   const releases: Array<() => void> = [];

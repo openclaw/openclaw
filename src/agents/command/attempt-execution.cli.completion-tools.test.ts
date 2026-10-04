@@ -276,6 +276,7 @@ describe("CLI completion tool handoffs", () => {
             replyInstruction: "Relay this completion.",
           },
         ],
+        runtimeContextFragments: [{ kind: "conversation-data", text: "supplemental context" }],
       },
       messageChannel: "telegram",
       sessionStore,
@@ -299,6 +300,30 @@ describe("CLI completion tool handoffs", () => {
       toolsAllow: ["read", "exec"],
     });
   }
+
+  it("forwards the child result and reply instruction to CLI append context", async () => {
+    await runTrustedClaudeCompletion();
+
+    const run = runCliAgentMock.mock.calls[0]?.[0] as RunCliAgentParams;
+    expect(run.runtimeContextFragments).toEqual([
+      {
+        kind: "runtime-instruction",
+        text: "A background task completed. Keep internal details private and use its result to reply in your normal assistant voice.",
+      },
+      {
+        kind: "conversation-data",
+        text: expect.stringContaining("child output"),
+      },
+      {
+        kind: "runtime-instruction",
+        text: "Relay this completion.",
+      },
+      {
+        kind: "conversation-data",
+        text: "supplemental context",
+      },
+    ]);
+  });
 
   it.each(["direct", "cached", "awaiting cache"])(
     "preserves inherited denies and rechecks lineage for a %s lookup",

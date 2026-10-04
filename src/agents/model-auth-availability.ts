@@ -8,12 +8,10 @@ import { hasNonEmptyString as hasSecret } from "@openclaw/normalization-core/str
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import { resolveMergedModelProviderConfig } from "../config/model-provider-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { coerceSecretRef } from "../config/types.secrets.js";
+import { parseSecretRef } from "../config/types.secrets.js";
 import type {
   ProviderModelRouteAuthRequirement,
   ProviderModelRouteCandidate,
-  ProviderModelRouteResolution,
-  ProviderModelRouteSource,
 } from "../plugin-sdk/provider-model-types.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { passesManifestOwnerBasePolicy } from "../plugins/manifest-owner-policy.js";
@@ -57,6 +55,13 @@ import {
 } from "./cli-backends.js";
 import { resolveBundledCliBackendAuthPolicy } from "./cli-runner/cli-backend-auth-policy.js";
 import { resolveAgentHarnessPolicy } from "./harness/policy.js";
+import type {
+  ModelAuthAvailability,
+  ModelAuthAvailabilityEvidence,
+  ModelAuthAvailabilityEvaluation,
+  ModelAuthAvailabilityRef,
+  ModelAuthAvailabilityResolver,
+} from "./model-auth-availability.types.js";
 import {
   listProviderEnvAuthLookupKeys,
   resolveProviderEnvAuthLookupMaps,
@@ -72,6 +77,7 @@ import {
   shouldPreferExplicitConfigApiKeyAuth,
 } from "./model-auth-provider-config.js";
 import { resolveManagedSecretRefRuntimeProviderAuth } from "./model-auth-runtime-config.js";
+import { resolveSelectedModelCredential } from "./model-auth-selected-credential.js";
 import { hasAuthoredProviderRequestParams } from "./model-extra-params.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
 import {
@@ -89,7 +95,6 @@ import {
   buildProviderModelAuthSourcePlan,
   fromProviderModelAuthReadiness,
   toProviderModelAuthReadiness,
-  type ProviderModelAuthEvidence,
   type ProviderModelAuthProfileSource,
   type ProviderModelAuthSourcePlan,
 } from "./provider-model-auth-source-plan.js";
@@ -100,60 +105,17 @@ import {
 } from "./provider-model-route-auth.js";
 import { modelMatchesProviderModelRoute } from "./provider-model-route.js";
 
+export type {
+  ModelAuthAvailabilityEvaluation,
+  ModelAuthAvailabilityRef,
+  ModelAuthAvailabilityResolver,
+} from "./model-auth-availability.types.js";
+
 const OPENAI_PROVIDER_ID = "openai";
 const OPENAI_CODEX_RESPONSES_API = "openai-chatgpt-responses";
 const EXTERNAL_CLI_REFRESH_PROVIDER_IDS = new Set(
   listExternalCliSyncProviderIds().map(normalizeProviderIdForAuth),
 );
-
-type ModelAuthAvailability = boolean | undefined;
-type ModelAuthAvailabilityEvidence = Exclude<ProviderModelAuthEvidence, "none">;
-export type ModelAuthAvailabilityRef = {
-  /** Concrete runtime selected by the model decision owner; absent means provider auth only. */
-  runtimeId?: string;
-  modelId?: string;
-  api?: string | null;
-  baseUrl?: unknown;
-  /** All physical route rows observed for this logical provider/model pair. */
-  observedRoutes?: readonly ProviderModelRouteSource[];
-  /** Automatic session preference; considered before the configured profile order. */
-  preferredProfileId?: string;
-  /** Explicit session preference, including profiles outside the shared order. */
-  pinnedProfileId?: string;
-  /** Runtime-owned account boundary that forbids shared profile failover. */
-  requiredProfileId?: string;
-};
-export type ModelAuthAvailabilityEvaluation = {
-  requestedRuntimeId?: string;
-  availability: ModelAuthAvailability;
-  /** A route/account or runtime-owned result must not fall back to provider-only registry auth. */
-  availabilityAuthoritative?: true;
-  unavailableReason?: "missing-auth" | "auth-failed" | "cooldown";
-  /** Earliest known retry time, in milliseconds since the Unix epoch. */
-  unavailableUntil?: number;
-  routeResolution: ProviderModelRouteResolution | null;
-  selectedRoute?: ProviderModelRouteCandidate;
-  selectedProfileId?: string;
-  selectedAuthMode?: string;
-  evidence?: ModelAuthAvailabilityEvidence;
-  runtimeAuth?: { id: string; source: "native" };
-};
-export type ModelAuthAvailabilityResolver = {
-  evaluateRuntimeModelAuth(
-    this: void,
-    provider: string,
-    ref?: ModelAuthAvailabilityRef,
-  ): ModelAuthAvailabilityEvaluation;
-  providerDiscoveryProviderIds: readonly string[];
-  evaluateModelAuth(
-    provider: string,
-    ref?: ModelAuthAvailabilityRef,
-  ): ModelAuthAvailabilityEvaluation;
-  resolveProviderAuthAvailability(
-    provider: string,
-    ref?: ModelAuthAvailabilityRef,
-  ): ModelAuthAvailability;
-};
 
 function evaluateCliRuntimeModelAuthAvailability(
   params: CreateModelAuthAvailabilityResolverParams,
@@ -346,8 +308,8 @@ export function createModelAuthAvailabilityResolver(
       : undefined);
   const hydratedProfileIds = new Set<string>();
   const sameSecretRef = (
-    left: ReturnType<typeof coerceSecretRef>,
-    right: ReturnType<typeof coerceSecretRef>,
+    left: ReturnType<typeof parseSecretRef>,
+    right: ReturnType<typeof parseSecretRef>,
   ) =>
     left !== null &&
     right !== null &&
@@ -378,8 +340,8 @@ export function createModelAuthAvailabilityResolver(
       credential.type === "api_key" &&
       runtime.type === "api_key" &&
       sameSecretRef(
-        coerceSecretRef(credential.keyRef ?? credential.key, params.cfg.secrets?.defaults),
-        coerceSecretRef(runtime.keyRef, params.cfg.secrets?.defaults),
+        parseSecretRef(credential.keyRef ?? credential.key, params.cfg.secrets?.defaults),
+        parseSecretRef(runtime.keyRef, params.cfg.secrets?.defaults),
       ) &&
       hasSecret(runtime.key)
     ) {
@@ -390,8 +352,8 @@ export function createModelAuthAvailabilityResolver(
       credential.type === "token" &&
       runtime.type === "token" &&
       sameSecretRef(
-        coerceSecretRef(credential.tokenRef ?? credential.token, params.cfg.secrets?.defaults),
-        coerceSecretRef(runtime.tokenRef, params.cfg.secrets?.defaults),
+        parseSecretRef(credential.tokenRef ?? credential.token, params.cfg.secrets?.defaults),
+        parseSecretRef(runtime.tokenRef, params.cfg.secrets?.defaults),
       ) &&
       hasSecret(runtime.token)
     ) {
@@ -1101,7 +1063,7 @@ export function createModelAuthAvailabilityResolver(
   // it never claims a concrete OpenAI endpoint.
   const resolveProviderAuthAvailability = (provider: string, ref: ModelAuthAvailabilityRef = {}) =>
     resolveProviderEvaluation(provider, ref).availability;
-  const evaluateModelAuth = (
+  const evaluateModelAuthSources = (
     rawProvider: string,
     ref: ModelAuthAvailabilityRef = {},
   ): ModelAuthAvailabilityEvaluation => {
@@ -1439,6 +1401,23 @@ export function createModelAuthAvailabilityResolver(
       selectedRoute,
     };
   };
+  const withSelectedCredential = (
+    provider: string,
+    evaluation: ModelAuthAvailabilityEvaluation,
+  ): ModelAuthAvailabilityEvaluation => ({
+    ...evaluation,
+    selectedCredential: resolveSelectedModelCredential({
+      provider,
+      profileId: evaluation.selectedProfileId,
+      mode: evaluation.selectedAuthMode,
+      authRequirement: evaluation.selectedProfileId
+        ? profilePolicyFacts(provider, evaluation.selectedProfileId).authRequirement
+        : undefined,
+      runtimeAuth: evaluation.runtimeAuth,
+    }),
+  });
+  const evaluateModelAuth = (provider: string, ref?: ModelAuthAvailabilityRef) =>
+    withSelectedCredential(provider, evaluateModelAuthSources(provider, ref));
   const providerDiscoveryProviderIds = new Set<string>();
   const addProviderDiscoveryProviderId = (provider: string | undefined) => {
     if (!provider) {
@@ -1508,7 +1487,10 @@ export function createModelAuthAvailabilityResolver(
         evaluateModelAuth,
       );
       return runtimeEvaluation
-        ? { ...runtimeEvaluation, availabilityAuthoritative: true }
+        ? withSelectedCredential(provider, {
+            ...runtimeEvaluation,
+            availabilityAuthoritative: true,
+          })
         : evaluation;
     },
     resolveProviderAuthAvailability,

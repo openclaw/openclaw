@@ -1,5 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
+import { resolveGitHubHost } from "../agents/github-host-runtime.js";
 import type { PreparedGitHubPublicationIdentity } from "../agents/github-tool-identity.js";
 import { GitHubPublicationKnownFailure } from "./github-publication-failure.js";
 import {
@@ -23,6 +24,7 @@ type GitHubPublicationPullRequestLookup = {
   branch: string;
   baseBranch: string;
   marker: string;
+  host?: string;
   refreshIdentity: () => Promise<PreparedGitHubPublicationIdentity>;
   assertCurrent: () => void;
 };
@@ -33,7 +35,11 @@ async function loadGitHubPublicationPullRequests(params: GitHubPublicationPullRe
   const marker = JSON.stringify(params.marker);
   const raw = await requirePublicationCommand(
     [
-      ...githubPublicationApiArgs(`repos/${params.repository}/pulls`),
+      ...githubPublicationApiArgs(
+        `repos/${params.repository}/pulls`,
+        "GET",
+        identity.host ?? params.host ?? resolveGitHubHost(),
+      ),
       "-f",
       `head=${params.pushOwner}:${params.branch}`,
       "-f",
@@ -163,7 +169,11 @@ export async function reconcileGitHubPublicationPullRequest(
   const identity = await params.refreshIdentity();
   params.assertCurrent();
   const raw = await requirePublicationCommand(
-    githubPublicationApiArgs(`repos/${params.pushRepository}/git/commits/${params.headCommit}`),
+    githubPublicationApiArgs(
+      `repos/${params.pushRepository}/git/commits/${params.headCommit}`,
+      "GET",
+      identity.host ?? params.host ?? resolveGitHubHost(),
+    ),
     { env: identity.env },
   );
   params.assertCurrent();
@@ -208,6 +218,8 @@ export async function reconcileGitHubPublicationPullRequest(
         [
           ...githubPublicationApiArgs(
             `repos/${params.pushRepository}/compare/${params.headCommit}...${head}?per_page=1`,
+            "GET",
+            currentIdentity.host ?? params.host ?? resolveGitHubHost(),
           ),
           "--jq",
           "{sha: .merge_base_commit.sha}",
@@ -255,6 +267,8 @@ export async function reconcileGitHubPublicationPullRequest(
     await requirePublicationCommand(
       githubPublicationApiArgs(
         `repos/${params.pushRepository}/git/matching-refs/heads/${encodeURIComponent(params.branch)}`,
+        "GET",
+        refIdentity.host ?? params.host ?? resolveGitHubHost(),
       ),
       { env: refIdentity.env },
     ),

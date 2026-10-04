@@ -248,7 +248,7 @@ struct ApplicationRelocatorTests {
 
     @Test
     func `replacement handoff retries back off and stop after three attempts`() {
-        let policy = ApplicationRelocator.replacementHandoffPolicy
+        let policy = ApplicationRelocator.ReplacementHandoffPolicy.self
 
         #expect(policy.maximumAttempts == 3)
         #expect(policy.failureAction(
@@ -271,7 +271,7 @@ struct ApplicationRelocatorTests {
 
     @Test
     func `replacement handoff timeout scales with system load`() {
-        let policy = ApplicationRelocator.replacementHandoffPolicy
+        let policy = ApplicationRelocator.ReplacementHandoffPolicy.self
 
         #expect(policy.timeoutMilliseconds(loadAverage: nil, activeProcessorCount: 12) == 15000)
         #expect(policy.timeoutMilliseconds(loadAverage: 12, activeProcessorCount: 12) == 15000)

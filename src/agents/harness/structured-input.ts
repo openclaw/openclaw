@@ -192,10 +192,8 @@ export function compileStructuredInputUrl(params: {
       `OpenClaw declined an invalid or over-limit ${params.protocolName} elicitation URL.`,
     );
   }
-  let parsed: URL;
-  try {
-    parsed = new URL(url);
-  } catch {
+  const parsed = URL.parse(url);
+  if (!parsed) {
     return unsupported(`OpenClaw declined an invalid ${params.protocolName} elicitation URL.`);
   }
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {

@@ -4,8 +4,10 @@ import { tmpdir } from "node:os";
 import { performance } from "node:perf_hooks";
 import { formatByteSize } from "@openclaw/normalization-core";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import { resolveForwardedExitCompilerArgs } from "../bootstrap/node-exit-safe-compilers.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getSpawnBroker } from "../process/spawn-broker/context.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { hasErrnoCode } from "./errno.js";
 import { resolveNodeCompileCacheEnv } from "./node-compile-cache-env.js";
 import {
@@ -236,6 +238,7 @@ function sqliteReadOnlyWorkerArgv(pathname: string, options: SqliteReadOnlyWorke
   return {
     runtimeGeneration,
     argv: [
+      ...resolveForwardedExitCompilerArgs(),
       ...resolveRuntimeWorkerArgv(moduleUrl),
       SQLITE_READONLY_CHILD_ARG,
       ...sqliteReadOnlyWorkerRequestArgs(pathname, options),
@@ -267,22 +270,25 @@ export function createScopedSqliteReadOnlyWorker(
   },
 ): ReturnType<typeof createSqliteReadOnlyWorkerSession> {
   const workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sqliteReadOnly);
-  return createSqliteReadOnlyWorkerSession({
-    ...launch,
-    argv: [
-      ...resolveRuntimeWorkerArgv(launch.runtimeGeneration?.resolve(workerUrl) ?? workerUrl),
-      SQLITE_READONLY_CHILD_ARG,
-      "session",
-    ],
-    requestArgs: sqliteReadOnlyWorkerRequestArgs,
-    readBudget: (pathname) => readSqliteInspectionBudget("read-only snapshot", pathname),
-    // Detached staging ownership retains its own budget inside caller-owned inspection scopes.
-    deadlineOwnedByCaller:
-      launch.retainLifetime === false ? () => false : isSqliteInspectionDeadlineOwnedByCaller,
-    timeoutError: (pathname, timeoutMs, size) =>
-      sqliteInspectionTimeoutError("read-only snapshot", pathname, timeoutMs, size),
-    closeTimeoutMs: SQLITE_INSPECTION_TIMEOUT_MS,
-  });
+  // Launch facts are captured by the caller; the reusable child belongs to its scope.
+  return runInDetachedAsyncContext(() =>
+    createSqliteReadOnlyWorkerSession({
+      ...launch,
+      argv: [
+        ...resolveRuntimeWorkerArgv(launch.runtimeGeneration?.resolve(workerUrl) ?? workerUrl),
+        SQLITE_READONLY_CHILD_ARG,
+        "session",
+      ],
+      requestArgs: sqliteReadOnlyWorkerRequestArgs,
+      readBudget: (pathname) => readSqliteInspectionBudget("read-only snapshot", pathname),
+      // Detached staging ownership retains its own budget inside caller-owned inspection scopes.
+      deadlineOwnedByCaller:
+        launch.retainLifetime === false ? () => false : isSqliteInspectionDeadlineOwnedByCaller,
+      timeoutError: (pathname, timeoutMs, size) =>
+        sqliteInspectionTimeoutError("read-only snapshot", pathname, timeoutMs, size),
+      closeTimeoutMs: SQLITE_INSPECTION_TIMEOUT_MS,
+    }),
+  );
 }
 
 export async function runSqliteReadOnlyOperation<Key extends keyof SqliteReadOnlyOperations>(
@@ -388,9 +394,11 @@ export function runSqliteReadOnlyWorker(
       })();
   if (readRequest) {
     // Source locks are process-owned. Keep admitted reads serial even for different databases.
-    scope.readTail = operation.then(
-      () => {},
-      () => {},
+    scope.readTail = runInDetachedAsyncContext(() =>
+      operation.then(
+        () => {},
+        () => {},
+      ),
     );
   }
   scope.pending.add(operation);

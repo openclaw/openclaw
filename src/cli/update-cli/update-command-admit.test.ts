@@ -1,9 +1,11 @@
 import fs from "node:fs";
+import fsp from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { resolveOpenClawPackageRootSync } from "../../infra/openclaw-root.js";
 import * as runtimeGuard from "../../infra/runtime-guard.js";
 import {
   isUpdateAdmissionAuthorityEnvKey,
@@ -13,6 +15,7 @@ import {
   parseUpdateAdmissionVerdict,
   type UpdateAdmissionVerdict,
 } from "../../infra/update-run-schema.js";
+import * as pluginMigrationResources from "../../plugins/doctor-migration-resources.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-contract.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
@@ -108,7 +111,7 @@ beforeEach(() => {
     target: { spec: "openclaw@latest", version: null, source: "registry", channel: "stable" },
     request: { yes: true, noRestart: true, acceptCapabilities: false, json: true },
     run: { id: "candidate-admission-fixture" },
-    supervisor: { version: "2026.9.1", host: "fixture", pid: process.pid },
+    supervisor: { version: "2026.9.9", host: "fixture", pid: process.pid },
   };
   for (const key of Object.keys(process.env)) {
     if (isUpdateAdmissionAuthorityEnvKey(key)) {
@@ -142,6 +145,145 @@ afterEach(() => {
 });
 
 describe("candidate update admission", () => {
+  it.each(["retired call log", "Cannot inspect source: EACCES"])(
+    "returns a published-driver refusal for plugin state failure: %s",
+    async (message) => {
+      vi.spyOn(pluginMigrationResources, "assertPluginStateRetention").mockRejectedValue(
+        new Error(message),
+      );
+      const before = snapshotFiles();
+      await updateAdmitCommand(contextPath);
+      expect(process.exitCode).toBe(3);
+      expect(readVerdict()).toMatchObject({
+        verdict: "refuse",
+        reasons: [
+          expect.objectContaining({
+            code: "plugin-state-retention",
+            message: expect.stringContaining(message),
+          }),
+        ],
+      });
+      expect(stderr).toBe("");
+      expect(snapshotFiles()).toEqual(before);
+    },
+  );
+
+  it.each([
+    {
+      supervisor: "2026.9.8",
+      entries: 50_001,
+      refused: true,
+      spec: "openclaw@2026.9.9",
+      manualSpec: "openclaw@2026.9.9",
+    },
+    {
+      supervisor: "2026.9.8",
+      entries: 50_001,
+      refused: true,
+      spec: "openclaw@next",
+      manualSpec: "openclaw@next",
+    },
+    {
+      supervisor: "2026.9.8",
+      entries: 50_001,
+      refused: true,
+      spec: "2026.9.9",
+      manualSpec: "openclaw@2026.9.9",
+    },
+    {
+      supervisor: "2026.9.8-beta.1",
+      entries: 50_001,
+      refused: true,
+      spec: "openclaw",
+      manualSpec: "openclaw@beta",
+    },
+    {
+      supervisor: "2026.9.8",
+      entries: 50_001,
+      refused: true,
+      spec: "openclaw@latest; echo unexpected",
+      manualSpec: null,
+    },
+    { supervisor: "2026.9.8", entries: 50_001, refused: true },
+    { supervisor: "2026.9.8-beta.1", entries: 50_001, refused: true },
+    { supervisor: "2026.8.99", entries: 50_001, refused: true },
+    { supervisor: "2026.9.8", entries: 50_000, refused: false },
+    { supervisor: "2026.9.9-beta.1", entries: 50_000, refused: false },
+    { supervisor: "2026.9.10", entries: 50_000, refused: false },
+    { supervisor: "unparseable", entries: 50_000, refused: false },
+  ])(
+    "checks a $entries-entry candidate for shipped supervisor $supervisor (refused=$refused, spec=$spec)",
+    async ({
+      supervisor,
+      entries,
+      refused,
+      spec = "openclaw@latest",
+      manualSpec = "openclaw@latest",
+    }) => {
+      context.supervisor.version = supervisor;
+      context.target.channel = supervisor.includes("beta") ? "beta" : "stable";
+      context.target.spec = spec;
+      fs.writeFileSync(contextPath, JSON.stringify(context));
+      const candidateRoot = resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url })!;
+      expect(candidateRoot).not.toBe(root);
+      const inventory = path.join(home, "candidate-inventory");
+      const dependencies = path.join(inventory, "node_modules");
+      fs.mkdirSync(dependencies, { recursive: true });
+      fs.writeFileSync(path.join(inventory, "package.json"), "{}");
+      fs.writeFileSync(path.join(dependencies, ".package-lock.json"), "{}");
+      fs.symlinkSync(dependencies, path.join(inventory, "linked"), "junction");
+      const rootEntries = fs.readdirSync(inventory, { withFileTypes: true });
+      const [hiddenLockfile] = fs.readdirSync(dependencies, { withFileTypes: true });
+      const opendir = fsp.opendir.bind(fsp);
+      let discovered = 0;
+      vi.spyOn(fsp, "opendir").mockImplementation(async (...args) => {
+        const file = String(args[0]);
+        const isRoot = file === candidateRoot;
+        if (!isRoot && file !== path.join(candidateRoot, "node_modules")) {
+          return opendir(...args);
+        }
+        const directory = await opendir(isRoot ? inventory : dependencies);
+        const reader: { read(): Promise<fs.Dirent | null> } = directory;
+        let returned = 0;
+        vi.spyOn(reader, "read").mockImplementation(async () => {
+          const entry = isRoot
+            ? rootEntries[returned++]
+            : returned++ < entries - rootEntries.length - 1
+              ? hiddenLockfile
+              : undefined;
+          if (entry) {
+            discovered++;
+          }
+          return entry ?? null;
+        });
+        return directory;
+      });
+      const before = snapshotFiles();
+
+      await updateAdmitCommand(contextPath);
+
+      expect(process.exitCode).toBe(refused ? 3 : 0);
+      expect(readVerdict()).toMatchObject({
+        verdict: refused ? "refuse" : "admit",
+        reasons: refused
+          ? [
+              {
+                code: "installed-updater-tree-limit",
+                message: expect.stringContaining("50,000 entries"),
+                nextAction: manualSpec
+                  ? `Run npm i -g ${manualSpec} manually because the installed updater cannot stage packages of this size.`
+                  : "Install the requested package manually because the installed updater cannot stage packages of this size.",
+              },
+            ]
+          : [],
+      });
+      const scansTree = ["2026.9.8", "2026.9.8-beta.1", "2026.8.99"].includes(supervisor);
+      expect(discovered).toBe(scansTree ? Math.min(entries, 50_001) - 1 : 0);
+      expect(stderr).toBe("");
+      expect(snapshotFiles()).toEqual(before);
+    },
+  );
+
   it.each([
     "cron/runs",
     "delivery-queue",
@@ -466,6 +608,86 @@ describe("candidate update admission", () => {
       });
       expect(process.exitCode).toBe(exitCode);
       expect(snapshotFiles()).toEqual(before);
+    },
+  );
+
+  it.each(["valid", "repairable"])(
+    "refuses retired config that a selected older plugin considers %s",
+    async (shape) => {
+      const pluginDir = path.join(home, "older-whatsapp");
+      fs.mkdirSync(pluginDir);
+      fs.writeFileSync(
+        path.join(pluginDir, "package.json"),
+        JSON.stringify({
+          name: "@openclaw/whatsapp",
+          version: "2026.9.7",
+          openclaw: { extensions: ["./index.js"] },
+        }),
+      );
+      fs.writeFileSync(
+        path.join(pluginDir, "openclaw.plugin.json"),
+        JSON.stringify({
+          id: "whatsapp",
+          channels: ["whatsapp"],
+          configSchema: { type: "object", additionalProperties: false },
+          channelConfigs: { whatsapp: { schema: { type: "object" } } },
+          doctorContract: { configRepair: true },
+        }),
+      );
+      fs.writeFileSync(
+        path.join(pluginDir, "index.js"),
+        "throw new Error('admission must not activate the plugin');\n",
+      );
+      fs.writeFileSync(
+        path.join(pluginDir, "doctor-contract-api.cjs"),
+        `const { stripRetiredChannelKeys } = require("openclaw/plugin-sdk/runtime-doctor-migrations");
+module.exports = {
+  legacyConfigRules: ${JSON.stringify(
+    shape === "repairable"
+      ? [{ path: ["channels", "whatsapp", "exposeErrorText"], message: "Retired ignored setting" }]
+      : [],
+  )},
+  normalizeCompatibilityConfig: ({ cfg }) => {
+    const changes = [];
+    const result = stripRetiredChannelKeys({
+      cfg, channelId: "whatsapp", keys: new Set(["exposeErrorText"]),
+      scope: "root-and-accounts", onRemove: () => changes.push("Removed ignored setting"),
+    });
+    return { config: result.config, changes };
+  },
+};\n`,
+      );
+      writeConfig({
+        plugins: { load: { paths: [pluginDir] }, allow: ["whatsapp"] },
+        channels: {
+          whatsapp: { exposeErrorText: false, accounts: { default: { exposeErrorText: true } } },
+        },
+      });
+      fs.writeFileSync(`${configPath}.bak`, "retained backup bytes\n");
+      const before = snapshotFiles();
+
+      await runCli(["node", "openclaw", "update", "admit", "--context", contextPath]);
+
+      expect(process.exitCode).toBe(3);
+      expect(readVerdict()).toMatchObject({
+        verdict: "refuse",
+        reasons: [
+          {
+            code: "invalid-config",
+            message: expect.stringContaining("channels.whatsapp.exposeErrorText"),
+            nextAction: expect.stringContaining("Install OpenClaw 2026.9.5"),
+          },
+        ],
+        facts: {
+          checks: expect.arrayContaining([
+            { name: "config", status: "refuse", detail: expect.any(String) },
+          ]),
+        },
+      });
+      expect(stdout).toContain("channels.whatsapp.accounts.default.exposeErrorText");
+      expect(stderr).toBe("");
+      expect(snapshotFiles()).toEqual(before);
+      expect(fs.existsSync(resolveOpenClawStateSqlitePath())).toBe(false);
     },
   );
 

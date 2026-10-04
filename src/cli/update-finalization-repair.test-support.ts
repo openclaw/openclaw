@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { GatewayRestartResult } from "./daemon-cli/restart-health.types.js";
 
 /** Executable CLI fixture: native service state is shared with the Doctor child. */
 export async function prepareRepairDeadlineFixture(
@@ -7,6 +8,7 @@ export async function prepareRepairDeadlineFixture(
   sourceUrl: (relative: string) => string,
   root: string,
   entrypoint: string,
+  outcome: GatewayRestartResult["outcome"],
 ) {
   const statePath = path.join(process.env.OPENCLAW_STATE_DIR!, "managed-service-state");
   await fs.writeFile(statePath, "running");
@@ -66,15 +68,26 @@ export const readGatewayServiceState = async () => {
 };
 `,
   );
+  const health: GatewayRestartResult = {
+    outcome,
+    healthy: outcome === "ready",
+    waitOutcome:
+      outcome === "ready" ? "healthy" : outcome === "starting" ? "still-starting" : "timeout",
+    staleGatewayPids: [],
+    runtime: { status: "running" },
+    portUsage: {
+      port: Number(process.env.OPENCLAW_GATEWAY_PORT),
+      status: outcome === "starting" ? "free" : "busy",
+      listeners: [],
+      hints: [],
+    },
+  };
   override(
     "./daemon-cli/restart-health.ts",
     `${shared}
 export const waitForGatewayHealthyRestart = async () => {
-  const healthy = (await fs.readFile(statePath, 'utf8')) === 'running';
-  return {
-    outcome: healthy ? 'ready' : 'failed', healthy, staleGatewayPids: [],
-    runtime: { status: 'running' }, portUsage: { port: Number(process.env.OPENCLAW_GATEWAY_PORT), status: 'busy', listeners: [], hints: [] },
-  };
+  if ((await fs.readFile(statePath, 'utf8')) !== 'running') throw new Error('Gateway was not restored');
+  return ${JSON.stringify(health)};
 };
 `,
   );

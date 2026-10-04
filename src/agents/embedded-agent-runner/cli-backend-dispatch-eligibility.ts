@@ -51,24 +51,6 @@ export function resolveEmbeddedCliBackendDispatchEligibility(
   if (!backends.get(provider)?.subscriptionAuthDispatch) {
     return undefined;
   }
-  const authMode = resolveAuthModeSafe(params, provider);
-  // API-key stores keep direct passthrough; subscription or unresolved credentials use CLI.
-  if (authMode === "api-key" || authMode === "mixed" || authMode === "aws-sdk") {
-    return undefined;
-  }
-  return { provider };
-}
-
-function resolveAuthModeSafe(
-  params: {
-    authProfileId?: string;
-    config?: OpenClawConfig;
-    agentDir?: string;
-    workspaceDir?: string;
-    preparedAuthStore?: AuthProfileStore;
-  },
-  provider: string,
-): ReturnType<typeof resolveModelAuthMode> {
   try {
     const store =
       params.preparedAuthStore ??
@@ -85,17 +67,20 @@ function resolveAuthModeSafe(
     });
     const selectedType =
       pinnedType ?? (selectedProfileId ? store.profiles[selectedProfileId]?.type : undefined);
-    if (selectedType === "api_key") {
-      return "api-key";
+    const authMode =
+      selectedType === "api_key"
+        ? "api-key"
+        : selectedType === "oauth" || selectedType === "token"
+          ? selectedType
+          : resolveModelAuthMode(provider, params.config, store, {
+              workspaceDir: params.workspaceDir,
+            });
+    // API-key stores keep direct passthrough; subscription or unresolved credentials use CLI.
+    if (authMode === "api-key" || authMode === "mixed" || authMode === "aws-sdk") {
+      return undefined;
     }
-    if (selectedType === "oauth" || selectedType === "token") {
-      return selectedType;
-    }
-    return resolveModelAuthMode(provider, params.config, store, {
-      workspaceDir: params.workspaceDir,
-    });
   } catch {
     // Unreadable stores keep the CLI best-effort path, as missing credentials do.
-    return undefined;
   }
+  return { provider };
 }

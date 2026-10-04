@@ -81,6 +81,8 @@ Global and thread entrypoint tools accept `{}`. File entrypoints declare extensi
 
 App resource metadata can declare supported and preferred display modes. Apps must inspect the actual host capabilities before using an extension: a standalone channel window does not have every capability of a connected Control UI conversation. Do not infer file, messaging, or model-context authority from a successful MCP connection alone.
 
+When an App asks to send a message to the assistant, review its preview and choose **Send** or **Cancel** in the App pane's confirmation strip.
+
 File saves follow the extension protocol’s optional `ifMatch` precondition. Sending the ETag from the last read prevents a stale save from replacing a newer edit; omitting `ifMatch` performs an unconditional save (last writer wins). App authors should send the ETag when protecting concurrent edits. Both forms still require a writable read, the host-issued file URI, and current session and requester authority.
 
 Native Codex Apps borrow the conversation’s existing MCP connection and retain
@@ -92,6 +94,14 @@ four simultaneous requests, 120 requests per minute, and 30 tool calls per minut
 Background preview generation consumes the same limits as user-triggered calls.
 
 The extensions use the existing sandbox and permission boundaries below. Server-owned settings and plugin data remain with their existing owners. Raw app state is not a new durable Gateway store, and a reconstructed transcript preview is not a fresh grant to run tools.
+
+## Tool approvals
+
+When an App tool call needs approval, choose **Allow once**, **Allow while this App is open**, or **Deny**. **Allow once** approves only that call. **Allow while this App is open** lets the same requester call that exact server/tool pair again from the same current view without another prompt.
+
+The grant lives only in the view's ten-minute in-memory lease. It ends when the lease is released, expires, or is replaced; relaunching or reconstructing a view does not carry it forward. A different tool, view, session, or requester needs its own approval. The grant never updates configuration or a persistent tool allowlist, and it does not approve model-driven calls.
+
+Current server and session policies still apply and are checked again before execution. Calls that the server's approval mode already permits do not prompt. Calls made before a view exists, such as opening an entrypoint, retain **Allow once** and **Deny**.
 
 ## Behavior and security boundaries
 

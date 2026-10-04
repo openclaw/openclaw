@@ -9,8 +9,6 @@ import {
 import { resolveSignalTarget } from "./aliases.js";
 import { normalizeSignalMessagingTarget } from "./normalize.js";
 
-type ApprovalForwardingConfig = NonNullable<NonNullable<OpenClawConfig["approvals"]>["exec"]>;
-
 export type SignalApprovalReactionRoute =
   | {
       deliveryMode: "session";
@@ -24,45 +22,6 @@ export type SignalApprovalReactionRoute =
       agentId?: string;
       sessionKey?: string;
     };
-
-function resolveApprovalForwardingConfig(params: {
-  cfg: OpenClawConfig;
-  approvalKind: ChannelApprovalKind;
-}): ApprovalForwardingConfig | undefined {
-  return params.approvalKind === "plugin"
-    ? params.cfg.approvals?.plugin
-    : params.cfg.approvals?.exec;
-}
-
-function matchesSignalApprovalReactionFilters(params: {
-  config: ApprovalForwardingConfig;
-  route: Pick<SignalApprovalReactionRoute, "agentId" | "sessionKey">;
-}): boolean {
-  return matchesApprovalRequestFilters({
-    request: {
-      agentId: params.route.agentId,
-      sessionKey: params.route.sessionKey,
-    },
-    agentFilter: params.config.agentFilter,
-    sessionFilter: params.config.sessionFilter,
-    fallbackAgentIdFromSessionKey: true,
-  });
-}
-
-function targetAccountMatches(params: {
-  routeAccountId?: string | null;
-  configuredAccountId?: string | null;
-}): boolean {
-  const configuredAccountId = normalizeOptionalString(params.configuredAccountId);
-  if (!configuredAccountId) {
-    return true;
-  }
-  const routeAccountId = normalizeOptionalString(params.routeAccountId);
-  return Boolean(
-    routeAccountId &&
-    normalizeAccountId(routeAccountId) === normalizeAccountId(configuredAccountId),
-  );
-}
 
 function resolveSignalApprovalRouteTarget(params: {
   cfg: OpenClawConfig;
@@ -84,30 +43,6 @@ function resolveSignalApprovalRouteTarget(params: {
   }
 }
 
-function hasMatchingSignalApprovalReactionTarget(params: {
-  cfg: OpenClawConfig;
-  config: ApprovalForwardingConfig;
-  route: Extract<SignalApprovalReactionRoute, { deliveryMode: "target" }>;
-}): boolean {
-  return (params.config.targets ?? []).some((target) => {
-    if (normalizeLowercaseStringOrEmpty(target.channel) !== "signal") {
-      return false;
-    }
-    const configuredTo = resolveSignalApprovalRouteTarget({
-      cfg: params.cfg,
-      accountId: target.accountId ?? params.route.accountId,
-      to: target.to,
-    });
-    if (!configuredTo || configuredTo !== params.route.to) {
-      return false;
-    }
-    return targetAccountMatches({
-      routeAccountId: params.route.accountId,
-      configuredAccountId: target.accountId,
-    });
-  });
-}
-
 export function isSignalApprovalReactionRouteStillEnabled(params: {
   cfg: OpenClawConfig;
   target: {
@@ -115,29 +50,51 @@ export function isSignalApprovalReactionRouteStillEnabled(params: {
     route: SignalApprovalReactionRoute;
   };
 }): boolean {
-  const config = resolveApprovalForwardingConfig({
-    cfg: params.cfg,
-    approvalKind: params.target.approvalKind,
-  });
+  const { approvalKind, route } = params.target;
+  const config =
+    approvalKind === "plugin" ? params.cfg.approvals?.plugin : params.cfg.approvals?.exec;
   if (!config?.enabled) {
     return false;
   }
   const mode = config.mode ?? "session";
-  if (params.target.route.deliveryMode === "target") {
-    return (
-      (mode === "targets" || mode === "both") &&
-      matchesSignalApprovalReactionFilters({ config, route: params.target.route }) &&
-      hasMatchingSignalApprovalReactionTarget({
-        cfg: params.cfg,
-        config,
-        route: params.target.route,
-      })
-    );
+  if (mode !== "both" && mode !== (route.deliveryMode === "target" ? "targets" : "session")) {
+    return false;
   }
-  return (
-    (mode === "session" || mode === "both") &&
-    matchesSignalApprovalReactionFilters({ config, route: params.target.route })
-  );
+  if (
+    !matchesApprovalRequestFilters({
+      request: { agentId: route.agentId, sessionKey: route.sessionKey },
+      agentFilter: config.agentFilter,
+      sessionFilter: config.sessionFilter,
+      fallbackAgentIdFromSessionKey: true,
+    })
+  ) {
+    return false;
+  }
+  if (route.deliveryMode === "session") {
+    return true;
+  }
+  return (config.targets ?? []).some((target) => {
+    if (normalizeLowercaseStringOrEmpty(target.channel) !== "signal") {
+      return false;
+    }
+    const configuredTo = resolveSignalApprovalRouteTarget({
+      cfg: params.cfg,
+      accountId: target.accountId ?? route.accountId,
+      to: target.to,
+    });
+    if (!configuredTo || configuredTo !== route.to) {
+      return false;
+    }
+    const configuredAccountId = normalizeOptionalString(target.accountId);
+    const routeAccountId = normalizeOptionalString(route.accountId);
+    return (
+      !configuredAccountId ||
+      Boolean(
+        routeAccountId &&
+        normalizeAccountId(routeAccountId) === normalizeAccountId(configuredAccountId),
+      )
+    );
+  });
 }
 
 export function buildTargetRoute(params: {
@@ -156,18 +113,15 @@ export function buildTargetRoute(params: {
   if (!to) {
     return null;
   }
+  const accountId = normalizeOptionalString(params.accountId);
+  const agentId = normalizeOptionalString(params.agentId);
+  const sessionKey = normalizeOptionalString(params.sessionKey);
   const route: Extract<SignalApprovalReactionRoute, { deliveryMode: "target" }> = {
     deliveryMode: "target",
     to,
-    ...(normalizeOptionalString(params.accountId)
-      ? { accountId: normalizeOptionalString(params.accountId) }
-      : {}),
-    ...(normalizeOptionalString(params.agentId)
-      ? { agentId: normalizeOptionalString(params.agentId) }
-      : {}),
-    ...(normalizeOptionalString(params.sessionKey)
-      ? { sessionKey: normalizeOptionalString(params.sessionKey) }
-      : {}),
+    ...(accountId ? { accountId } : {}),
+    ...(agentId ? { agentId } : {}),
+    ...(sessionKey ? { sessionKey } : {}),
   };
   return isSignalApprovalReactionRouteStillEnabled({
     cfg: params.cfg,

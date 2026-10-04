@@ -120,21 +120,6 @@ describe("memory recall doctor integration", () => {
     });
   });
 
-  it("notes that Memory Core recall audits do not apply to native providers", async () => {
-    resolveActiveMemoryBackendConfig.mockReturnValue({
-      backend: "provider-runtime",
-      providerId: "records",
-    });
-
-    await noteMemoryRecallHealth(cfg);
-
-    expect(String(note.mock.calls[0]?.[0] ?? "")).toContain(
-      "Not applicable: records uses the provider runtime; see its health.",
-    );
-    expect(auditShortTermPromotionArtifacts).not.toHaveBeenCalled();
-    expect(getActiveMemorySearchManagerCore).not.toHaveBeenCalled();
-  });
-
   function createPrompter(): DoctorPrompter {
     return {
       confirm: vi.fn(async () => true),
@@ -154,44 +139,58 @@ describe("memory recall doctor integration", () => {
     };
   }
 
-  it("notes recall-store audit problems with doctor guidance", async () => {
-    auditShortTermPromotionArtifacts.mockResolvedValueOnce(
-      shortTermAudit({
-        entryCount: 12,
-        promotedCount: 4,
-        spacedEntryCount: 2,
-        conceptTaggedEntryCount: 10,
-        invalidEntryCount: 1,
-        issues: [
-          {
-            severity: "warn",
-            code: "recall-store-invalid",
-            message: "Short-term recall store contains 1 invalid entry.",
-            fixable: true,
-          },
-          {
-            severity: "warn",
-            code: "recall-lock-stale",
-            message: "Short-term promotion lock appears stale.",
-            fixable: true,
-          },
-        ],
-      }),
-    );
+  it.each(["provider-runtime", "builtin"] as const)(
+    "reports %s recall health with appropriate guidance",
+    async (backend) => {
+      if (backend === "provider-runtime") {
+        resolveActiveMemoryBackendConfig.mockReturnValue({ backend, providerId: "records" });
+      }
+      auditShortTermPromotionArtifacts.mockResolvedValueOnce(
+        shortTermAudit({
+          entryCount: 12,
+          promotedCount: 4,
+          spacedEntryCount: 2,
+          conceptTaggedEntryCount: 10,
+          invalidEntryCount: 1,
+          issues: [
+            {
+              severity: "warn",
+              code: "recall-store-invalid",
+              message: "Short-term recall store contains 1 invalid entry.",
+              fixable: true,
+            },
+            {
+              severity: "warn",
+              code: "recall-lock-stale",
+              message: "Short-term promotion lock appears stale.",
+              fixable: true,
+            },
+          ],
+        }),
+      );
 
-    await noteMemoryRecallHealth(cfg);
+      await noteMemoryRecallHealth(cfg);
 
-    expect(auditShortTermPromotionArtifacts).toHaveBeenCalledWith({
-      workspaceDir: "/tmp/agent-default/workspace",
-    });
-    expect(note).toHaveBeenCalledTimes(2);
-    expectFirstNoteContains(
-      "Memory recall artifacts need attention:",
-      "doctor --fix",
-      "memory status --fix",
-    );
-    expect(String(note.mock.calls[1]?.[0] ?? "")).toContain("Dreaming: enabled");
-  });
+      if (backend === "provider-runtime") {
+        expect(String(note.mock.calls[0]?.[0] ?? "")).toContain(
+          "Not applicable: records uses the provider runtime; see its health.",
+        );
+        expect(auditShortTermPromotionArtifacts).not.toHaveBeenCalled();
+        expect(getActiveMemorySearchManagerCore).not.toHaveBeenCalled();
+        return;
+      }
+      expect(auditShortTermPromotionArtifacts).toHaveBeenCalledWith({
+        workspaceDir: "/tmp/agent-default/workspace",
+      });
+      expect(note).toHaveBeenCalledTimes(2);
+      expectFirstNoteContains(
+        "Memory recall artifacts need attention:",
+        "doctor --fix",
+        "memory status --fix",
+      );
+      expect(String(note.mock.calls[1]?.[0] ?? "")).toContain("Dreaming: enabled");
+    },
+  );
 
   it("runs dreaming artifact repair during doctor --fix", async () => {
     auditDreamingArtifacts.mockResolvedValueOnce(

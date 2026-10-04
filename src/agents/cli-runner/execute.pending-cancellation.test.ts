@@ -10,7 +10,7 @@ import {
   setCliRunnerExecuteTestDeps,
   wrapPreparedCliRunWithTestAdmission,
 } from "./execute.test-support.js";
-import { buildCliSupervisorScopeKey } from "./helpers.js";
+import { buildCliSupervisorScopeKey } from "./reliability.js";
 import type { PreparedCliRunContext } from "./types.js";
 
 const executePreparedCliRun = wrapPreparedCliRunWithTestAdmission(executePreparedCliRunImpl);
@@ -131,7 +131,7 @@ function createRunContext(params: {
   };
 }
 
-describe("local CLI pending process cancellation", () => {
+describe("CLI execution cancellation", () => {
   const restoreProcessSupervisor = executeDeps.getProcessSupervisor;
   let supervisor: ReturnType<typeof createProcessSupervisor>;
 
@@ -144,6 +144,46 @@ describe("local CLI pending process cancellation", () => {
   afterEach(() => {
     setCliRunnerExecuteTestDeps({ getProcessSupervisor: restoreProcessSupervisor });
     vi.restoreAllMocks();
+  });
+
+  it("does not start approval after a node response races with cancellation", async () => {
+    const controller = new AbortController();
+    const invokeNode = vi
+      .spyOn(executeDeps, "invokeNodeClaudeCliRun")
+      .mockImplementation(async () => {
+        controller.abort();
+        return {
+          ok: true,
+          payloadJSON: JSON.stringify({
+            approvalRequired: true,
+            systemRunPlan: { argv: ["/trusted/claude", "-p"], commandText: "/trusted/claude -p" },
+            security: "allowlist",
+            ask: "on-miss",
+          }),
+        };
+      });
+    const registerApproval = vi
+      .spyOn(executeDeps, "registerExecApprovalRequestForHostOrThrow")
+      .mockRejectedValue(new Error("approval registration failed after cancellation"));
+    const resolveApproval = vi
+      .spyOn(executeDeps, "resolveRegisteredExecApprovalDecision")
+      .mockResolvedValue("deny");
+    const context = createRunContext({
+      runId: "run-node-cancelled-approval",
+      signal: controller.signal,
+    });
+    context.executionTarget = { kind: "node", placement: { nodeId: "node-a" } };
+    context.backendResolved.id = "claude-cli";
+    context.params.provider = "claude-cli";
+    context.preparedBackend.backend.command = "claude";
+
+    await expect(executePreparedCliRun(context)).rejects.toMatchObject({
+      name: "AbortError",
+      message: "CLI run aborted",
+    });
+    expect(invokeNode).toHaveBeenCalledOnce();
+    expect(registerApproval).not.toHaveBeenCalled();
+    expect(resolveApproval).not.toHaveBeenCalled();
   });
 
   it("rejects expired authority after preparation before plugin execution", async () => {

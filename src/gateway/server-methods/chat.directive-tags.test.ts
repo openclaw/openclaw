@@ -80,6 +80,7 @@ import { readChatSendDedupeResponse } from "./chat-send-pre-admission.js";
 import {
   ChatDirectiveDedupe,
   createChatDirectiveReplyBackend,
+  createGlobalChatDirectiveConfig,
   createChatDirectiveSuiteResources,
   createChatDirectiveUserMessageReader,
   expectManagedAudioBlock,
@@ -256,17 +257,35 @@ vi.mock("../../media-understanding/file-context.js", async () => {
   };
 });
 
+function loadFixtureSessionEntry(rawKey: string, opts?: { agentId?: string }) {
+  mockState.loadSessionEntryCalls.push({ rawKey, opts });
+  return suiteResources.loadSessionEntry(mockState, rawKey, opts);
+}
+
 vi.mock("../session-utils.js", async () => {
   const original =
     await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js");
-  const loadSessionEntry = (rawKey: string, opts?: { agentId?: string }) => {
-    mockState.loadSessionEntryCalls.push({ rawKey, opts });
-    return suiteResources.loadSessionEntry(mockState, rawKey, opts);
-  };
   return {
     ...original,
-    loadSessionEntry,
-    loadGatewaySessionEntryReadOnly: loadSessionEntry,
+    loadSessionEntry: loadFixtureSessionEntry,
+    loadGatewaySessionEntryReadOnly: loadFixtureSessionEntry,
+  };
+});
+
+vi.mock("../session-utils-store-worker.js", async () => {
+  const original = await vi.importActual<typeof import("../session-utils-store-worker.js")>(
+    "../session-utils-store-worker.js",
+  );
+  return {
+    ...original,
+    loadGatewaySessionEntryReadOnlyInWorker: async (
+      params: Parameters<typeof original.loadGatewaySessionEntryReadOnlyInWorker>[0],
+    ) => {
+      params.assertActive?.();
+      const loaded = loadFixtureSessionEntry(params.key, { agentId: params.agentId });
+      params.assertActive?.();
+      return loaded;
+    },
   };
 });
 
@@ -848,10 +867,7 @@ function useChatTestModel(model: "vision-model" | "text-only", configured = fals
 }
 
 async function createGlobalTranscriptFixture(prefix: string, agentId = "main") {
-  mockState.config = {
-    agents: { list: [{ id: "main", default: true }, { id: "work" }] },
-    session: { scope: "global" },
-  };
+  mockState.config = createGlobalChatDirectiveConfig();
   return await createTranscriptFixture(prefix, { agentId, sessionKey: "global" });
 }
 
@@ -2514,7 +2530,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     );
   });
 
-  it("registers default global tool-event recipients for unscoped global sends", async () => {
+  it("registers migrated default global tool-event recipients for unscoped global sends", async () => {
     await createGlobalTranscriptFixture("openclaw-chat-send-global-tool-events-");
     mockState.finalText = "ok";
     mockState.triggerAgentRunStart = true;
@@ -4949,17 +4965,14 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     mockState.finalText = "ok";
     mockState.config = {
       agents: {
-        list: [
-          {
-            id: "vision",
-            default: true,
+        entries: {
+          vision: {
             model: "test-provider/vision-model",
           },
-          {
-            id: "writer",
+          writer: {
             model: "test-provider/text-only",
           },
-        ],
+        },
       },
     };
     mockState.modelCatalog = [

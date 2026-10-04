@@ -7,11 +7,7 @@ import {
   VOICE_TRANSCRIPT_QUEUE_POLICY,
 } from "../../../../../src/talk/voice-transcript.js";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
-import type {
-  RealtimeTalkTranscript,
-  RealtimeTalkTranscriptItem,
-  RealtimeTalkTransport,
-} from "./shared.ts";
+import type { RealtimeTalkTranscript, RealtimeTalkTranscriptItem } from "./shared.ts";
 
 type ReservedTranscript = {
   previousItemId: string | null | undefined;
@@ -305,21 +301,6 @@ export function reserveClientVoiceSessionOwner(
     },
     release,
   };
-}
-
-export function retireUncommittedRealtimeTalkTransport(params: {
-  nextTransport: RealtimeTalkTransport | null;
-  transport: string;
-  owner: ClientVoiceSessionOwner;
-  closeVoiceSession: () => void;
-}): void {
-  void params.nextTransport?.stop({ emitClosed: false });
-  if (params.transport === "gateway-relay" && params.nextTransport) {
-    // The relay transport owns server close once constructed; release browser ownership.
-    params.owner.release();
-    return;
-  }
-  params.closeVoiceSession();
 }
 
 function transcriptPersistenceAbortError(): Error {

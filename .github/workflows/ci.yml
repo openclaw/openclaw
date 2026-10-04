@@ -224,6 +224,7 @@ jobs:
       run_ios_lifecycle_tests: ${{ steps.manifest.outputs.run_ios_lifecycle_tests }}
       ios_simulator_selection: ${{ steps.manifest.outputs.ios_simulator_selection }}
       run_ios_screenshots: ${{ steps.changed_scope.outputs.run_ios_screenshots }}
+      run_android_screenshots: ${{ steps.changed_scope.outputs.run_android_screenshots }}
       run_android_job: ${{ steps.manifest.outputs.run_android_job }}
       run_android_access_native: ${{ steps.manifest.outputs.run_android_access_native }}
       use_compatible_android_ci: ${{ steps.manifest.outputs.use_compatible_android_ci }}
@@ -765,7 +766,10 @@ jobs:
                   "scripts/changed-lanes.mts",
                   "scripts/lib/merge-head-diff-base.mjs",
               )
-              linux_node_scripts = (*upgrade_scripts, *npm_lock_scripts, "scripts/ci-additional-checks.sh")
+              linux_node_scripts = (
+                  *upgrade_scripts, *npm_lock_scripts, "scripts/ci-additional-checks.sh",
+                  "scripts/stage-openclaw-bun.sh", "scripts/lib/openclaw-bun.json",
+              )
               if kind == "linux-node" and not os.path.isfile(os.path.join(workspace, action)):
                   raise GitFailure(1)
               harness = os.path.join(workspace, ".ci-harness")
@@ -1429,6 +1433,7 @@ jobs:
           OPENCLAW_CI_RUN_MACOS_NODE: ${{ github.event_name == 'schedule' && 'true' || github.event_name == 'workflow_dispatch' && !inputs.release_gate && 'true' || steps.changed_scope.outputs.run_macos_node || 'false' }}
           OPENCLAW_CI_RUN_IOS_BUILD: ${{ github.event_name == 'schedule' && 'true' || github.event_name == 'workflow_dispatch' && !inputs.release_gate && 'true' || steps.changed_scope.outputs.run_ios_build || 'false' }}
           OPENCLAW_CI_RUN_IOS_SCREENSHOTS: ${{ steps.changed_scope.outputs.run_ios_screenshots || 'false' }}
+          OPENCLAW_CI_RUN_ANDROID_SCREENSHOTS: ${{ steps.changed_scope.outputs.run_android_screenshots || 'false' }}
           OPENCLAW_CI_RUN_ANDROID: ${{ github.event_name == 'schedule' && 'true' || github.event_name == 'workflow_dispatch' && ((inputs.release_gate && (steps.runner_profile.outputs.node_runner_backend != 'runson' && steps.runner_profile.outputs.ci_qualification != 'true')) || inputs.include_android) && 'true' || steps.changed_scope.outputs.run_android || 'false' }}
           OPENCLAW_CI_RUN_WINDOWS: ${{ github.event_name == 'schedule' && 'true' || github.event_name == 'workflow_dispatch' && !inputs.release_gate && (steps.runner_profile.outputs.node_runner_backend != 'runson' && steps.runner_profile.outputs.ci_qualification != 'true') && 'true' || steps.changed_scope.outputs.run_windows || 'false' }}
           OPENCLAW_CI_RUN_NODE_FAST_ONLY: ${{ github.event_name == 'workflow_dispatch' && (steps.runner_profile.outputs.node_runner_backend != 'runson' && steps.runner_profile.outputs.ci_qualification != 'true') && 'false' || steps.changed_scope.outputs.run_node_fast_only || 'false' }}
@@ -1690,6 +1695,7 @@ jobs:
           pnpm check:assertion-safety --base "$BASE_SHA"
           pnpm check:database-worker-ratchet --base "$BASE_SHA"
           pnpm check:test-timeout-race-ratchet --base "$BASE_SHA"
+          pnpm check:test-mock-exports --base "$BASE_SHA"
           node --import ./scripts/tsx.mjs scripts/check-protocol-since.mts
 
   build-artifacts:
@@ -2682,7 +2688,7 @@ jobs:
               process.exit(Object.hasOwn(scripts, process.argv[1]) ? 0 : 1);
             ' "$1"
           }
-          for required_script in check:max-lines-ratchet check:assertion-safety check:test-timeout-race-ratchet config:docs:check plugins:inventory:check; do
+          for required_script in check:max-lines-ratchet check:assertion-safety check:test-timeout-race-ratchet check:test-mock-exports config:docs:check plugins:inventory:check; do
             if ! has_package_script "$required_script"; then
               echo "Current CI targets must provide ${required_script}." >&2
               exit 1
@@ -2712,6 +2718,7 @@ jobs:
           pnpm check:assertion-safety --base "$base_ref"
           pnpm check:database-worker-ratchet --base "$base_ref"
           pnpm check:test-timeout-race-ratchet --base "$base_ref"
+          pnpm check:test-mock-exports --base "$base_ref"
           pnpm config:docs:check
           pnpm plugins:inventory:check
 
@@ -5947,6 +5954,73 @@ jobs:
           path: /var/tmp/openclaw-robolectric-m2
           key: ${{ steps.robolectric-cache.outputs.cache-primary-key }}
 
+  android-screenshots:
+    permissions:
+      contents: read
+    name: "android-screenshots"
+    needs: [preflight]
+    if: ${{ needs.preflight.outputs.validation_tier != 'main' && needs.preflight.outputs.release_scope == 'full' && needs.preflight.outputs.compatibility_target != 'true' && ((github.event_name == 'workflow_dispatch' && !inputs.release_gate) || needs.preflight.outputs.run_android_screenshots == 'true') }}
+    runs-on: *hosted_linux_runner
+    timeout-minutes: 90
+    steps:
+      - *android_checkout_step
+      - *android_toolchain_checkout_step
+
+      - name: Setup Android screenshot toolchain
+        id: android-toolchain
+        uses: ./.ci-harness/.github/actions/setup-android-toolchain
+        with:
+          cache-mode: *cache_mode
+          install-screenshot-emulators: "true"
+
+      - name: Setup Node environment for native resources
+        uses: ./.ci-harness/.github/actions/setup-node-env
+        with:
+          cache-mode: *cache_mode
+          install-bun: "false"
+          install-deps: "false"
+
+      - name: Install native asset dependencies
+        env:
+          CI: "true"
+        run: *mermaid_renderer_install_run
+
+      - name: Prepare Linux screenshot image tools
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends imagemagick
+          test -x /usr/bin/convert
+          test -x /usr/bin/identify
+          tool_dir="$RUNNER_TEMP/openclaw-android-tools"
+          mkdir -p "$tool_dir"
+          install -m 700 scripts/android-sips-linux.sh "$tool_dir/android-sips-linux.sh"
+
+      - name: Capture phone and Wear store screenshots
+        env:
+          JAVA_HOME: ${{ steps.android-toolchain.outputs.gradle-java-home }}
+          SIPS: ${{ runner.temp }}/openclaw-android-tools/android-sips-linux.sh
+        run: pnpm android:screenshots
+
+      - name: Retain Android screenshot evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: android-store-screenshots-${{ needs.preflight.outputs.checkout_revision }}-${{ github.run_attempt }}
+          path: |
+            apps/android/fastlane/metadata/android/en-US/images/phoneScreenshots/*.jpg
+            apps/android/fastlane/metadata/android/en-US/images/wearScreenshots/*.jpg
+            .artifacts/android-screenshots/latest/*/manifest.txt
+            .artifacts/android-screenshots/latest/*/ui-dumps/*.xml
+            .artifacts/android-screenshots/latest/*/activity-start/*.txt
+            .artifacts/android-screenshots/latest/*/emulator.log
+            .artifacts/android-screenshots/latest/*/emulator-args.txt
+            .artifacts/android-screenshots/latest/*/process-status.txt
+            .artifacts/android-screenshots/latest/*/logcat.txt
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+
   android-access-native:
     permissions:
       contents: read
@@ -6247,6 +6321,7 @@ jobs:
       - ios-screenshot-shard
       - ios-screenshot-evidence
       - android
+      - android-screenshots
       - android-access-native
       - docker-seed-e2e
       - published-driver-update
@@ -6315,6 +6390,7 @@ jobs:
             ios-screenshot-shard=${{ needs.ios-screenshot-shard.result }}|${{ needs.preflight.outputs.validation_tier != 'main' && needs.preflight.outputs.release_scope == 'full' && needs.preflight.outputs.compatibility_target != 'true' && ((github.event_name == 'workflow_dispatch' && !inputs.release_gate) || needs.preflight.outputs.run_ios_screenshots == 'true') }}
             ios-screenshot-evidence=${{ needs.ios-screenshot-evidence.result }}|${{ needs.preflight.outputs.validation_tier != 'main' && needs.preflight.outputs.release_scope == 'full' && needs.preflight.outputs.compatibility_target != 'true' && ((github.event_name == 'workflow_dispatch' && !inputs.release_gate) || needs.preflight.outputs.run_ios_screenshots == 'true') }}
             android=${{ needs.android.result }}|${{ needs.preflight.outputs.run_android_job }}
+            android-screenshots=${{ needs.android-screenshots.result }}|${{ needs.preflight.outputs.validation_tier != 'main' && needs.preflight.outputs.release_scope == 'full' && needs.preflight.outputs.compatibility_target != 'true' && ((github.event_name == 'workflow_dispatch' && !inputs.release_gate) || needs.preflight.outputs.run_android_screenshots == 'true') }}
             android-access-native=${{ needs.android-access-native.result }}|${{ needs.preflight.outputs.run_android_access_native }}
             docker-seed-e2e=${{ needs.docker-seed-e2e.result }}|${{ needs.preflight.outputs.run_docker_seed_e2e }}
             published-driver-update=${{ needs.published-driver-update.result }}|${{ needs.preflight.outputs.run_published_driver_update == 'true' && needs.preflight.outputs.checkout_revision == github.sha }}
@@ -6396,6 +6472,7 @@ jobs:
       - ios-screenshot-shard
       - ios-screenshot-evidence
       - android
+      - android-screenshots
       - android-access-native
       - docker-seed-e2e
       - published-driver-update

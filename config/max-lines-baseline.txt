@@ -228,7 +228,6 @@ src/agents/agent-tools.before-tool-call.integration.e2e.test.ts
 src/agents/agent-tools.create-openclaw-coding-tools.test.ts
 src/agents/agent-tools.read.ts
 src/agents/auth-profiles/oauth-manager.ts
-src/agents/auth-profiles/persisted.ts
 src/agents/auth-profiles/profiles.test.ts
 src/agents/auth-profiles/store.ts
 src/agents/auth-profiles/usage.test.ts
@@ -286,7 +285,6 @@ src/agents/session-transcript-repair.test.ts
 src/agents/sessions/extensions/runner.ts
 src/agents/sessions/extensions/types.ts
 src/agents/sessions/model-registry.ts
-src/agents/sessions/package-manager.ts
 src/agents/subagents/announce/subagent-announce-delivery.test.ts
 src/agents/subagents/announce/subagent-announce.format.e2e.test.ts
 src/agents/subagents/registry/subagent-control.test.ts
@@ -465,7 +463,6 @@ src/gateway/server-methods/chat.directive-tags.test.ts
 src/gateway/server-methods/config.ts
 src/gateway/server-methods/cron.ts
 src/gateway/server-methods/cron.validation.test.ts
-src/gateway/server-methods/doctor.test.ts
 src/gateway/server-methods/models-auth-status.test.ts
 src/gateway/server-methods/models.test.ts
 src/gateway/server-methods/nodes.invoke-wake.test.ts

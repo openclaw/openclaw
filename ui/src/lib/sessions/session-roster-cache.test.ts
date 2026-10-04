@@ -192,11 +192,14 @@ describe("persistent session roster", () => {
       channelAvatarUrl: "/channel-avatar",
     };
     const source = record("gateway-one", [row]);
+    source.query = { agentId: "main", source: "sidebar", rowMode: "compact" };
     persist(source);
     await flushSessionRosters();
     expect(writes).toHaveBeenCalledOnce();
     expect(JSON.stringify(writes.mock.calls[0]?.[0])).not.toMatch(/activeModel|snapshotAt/u);
     const saved = await sessionRosterCache.read(source.scope, expected);
+    expect(saved?.query).not.toHaveProperty("source");
+    expect(saved?.query).not.toHaveProperty("rowMode");
     expect(saved).toMatchObject({
       groups: ["Work"],
       groupSettings: source.groupSettings,
@@ -227,8 +230,11 @@ describe("persistent session roster", () => {
     expect(row.hasActiveRun).toBe(true);
     expect(row.snapshotAt).toBe(50);
     expect(await sessionRosterCache.read("gateway-two", expected)).toBeNull();
-    await putRaw(source);
-    const oldWriter = await sessionRosterCache.read(source.scope, expected);
+    await putRaw({ ...source, query: {} });
+    const oldWriter = await sessionRosterCache.read(source.scope, {
+      ...expected,
+      query: source.query,
+    });
     expect(oldWriter?.result.sessions[0]).toMatchObject({
       model: "primary",
       modelProvider: "example",

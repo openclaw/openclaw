@@ -96,6 +96,7 @@ function createCoordinator(
   overrides: Partial<Parameters<typeof createAcpDispatchDeliveryCoordinator>[0]> = {},
 ) {
   return createAcpDispatchDeliveryCoordinator({
+    preparedTtsPreferences: {},
     cfg: createAcpTestConfig(),
     ctx: buildTestCtx({
       Provider: "visiblechat",

@@ -92,15 +92,25 @@ it.each([
       subagentRecovery: { wedgedAt: 1, wedgedReason: "Synthetic recovery tombstone" },
     };
     replaceSessionEntrySync({ agentId: "main", env: state.env, storePath, sessionKey }, entry);
+    const input = {
+      agentId: "main",
+      env: { ...state.env },
+      storePath,
+      sessionKeys: [sessionKey, "agent:main:cron:missing"],
+      projection,
+    };
+    const mutateDuringDispatch = name === "shared.sqlite" && projection === "full";
+    if (mutateDuringDispatch) {
+      observed.dispatch = () => {
+        observed.dispatch = undefined;
+        input.storePath = state.path("replacement.sqlite");
+        input.env.OPENCLAW_STATE_DIR = state.path("replacement-state");
+        input.sessionKeys[0] = "agent:main:cron:other";
+      };
+    }
     const observer = observeHostDataSql();
     try {
-      const result = await readSessionEntriesFromStoreInWorker({
-        agentId: "main",
-        env: state.env,
-        storePath,
-        sessionKeys: [sessionKey, "agent:main:cron:missing"],
-        projection,
-      });
+      const result = await readSessionEntriesFromStoreInWorker(input);
       expect(result.entries).toEqual([
         {
           sessionKey,
@@ -119,33 +129,40 @@ it.each([
       for (const call of observer.calls) {
         expect(call).not.toHaveBeenCalled();
       }
+      if (mutateDuringDispatch) {
+        expect(fs.existsSync(input.storePath)).toBe(false);
+      }
     } finally {
       observer.restore();
     }
   },
 );
 
-it("keeps preparation on the configured store for an incognito-shaped target", async () => {
-  const sessionKey = "agent:main:dashboard:incognito-cron";
-  const storePath = path.join(state.sessionsDir(), "sessions.json");
-  replaceSessionEntrySync(
-    { agentId: "main", env: state.env, storePath, sessionKey },
-    { sessionId: "process-held", updatedAt: 1 },
-  );
-  const prepared = await prepareCronSession({ cfg: {}, agentId: "main", sessionKey, nowMs: 2 });
-  expect(prepared.initialSessionEntry).toBeUndefined();
-  expect(prepared.store).toEqual({});
-  expect(loadCronSessionEntryLatest(storePath, sessionKey)?.sessionId).toBe("process-held");
-});
-
-it("keeps internal-effects rows hidden from cron preparation", async () => {
-  const sessionKey = "agent:main:internal-session-effects:hidden";
-  const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
-  writeSessionEntry(database, sessionKey, { sessionId: "hidden-session", updatedAt: 1 });
-  const prepared = await prepareCronSession({ cfg: {}, agentId: "main", sessionKey, nowMs: 2 });
-  expect(prepared.initialSessionEntry).toBeUndefined();
-  expect(prepared.store).toEqual({});
-});
+it.each(["incognito", "internal-effects"] as const)(
+  "keeps %s rows hidden from cron preparation",
+  async (kind) => {
+    const sessionKey =
+      kind === "incognito"
+        ? "agent:main:dashboard:incognito-cron"
+        : "agent:main:internal-session-effects:hidden";
+    const storePath = path.join(state.sessionsDir(), "sessions.json");
+    if (kind === "incognito") {
+      replaceSessionEntrySync(
+        { agentId: "main", env: state.env, storePath, sessionKey },
+        { sessionId: "process-held", updatedAt: 1 },
+      );
+    } else {
+      const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
+      writeSessionEntry(database, sessionKey, { sessionId: "hidden-session", updatedAt: 1 });
+    }
+    const prepared = await prepareCronSession({ cfg: {}, agentId: "main", sessionKey, nowMs: 2 });
+    expect(prepared.initialSessionEntry).toBeUndefined();
+    expect(prepared.store).toEqual({});
+    if (kind === "incognito") {
+      expect(loadCronSessionEntryLatest(storePath, sessionKey)?.sessionId).toBe("process-held");
+    }
+  },
+);
 
 it("rejects a noncanonical persisted key instead of repairing it at runtime", async () => {
   const database = openOpenClawAgentDatabase({ agentId: "malformed", env: state.env });
@@ -192,29 +209,6 @@ it.each(["full", "list"] as const)(
     expect(fs.existsSync(database.path)).toBe(true);
   },
 );
-
-it("keeps the captured source when caller inputs change during dispatch", async () => {
-  const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
-  const sessionKey = "agent:main:cron:captured";
-  writeSessionEntry(database, sessionKey, { sessionId: "captured-session", updatedAt: 1 });
-  const input = {
-    agentId: "main",
-    env: { ...state.env },
-    storePath: database.path,
-    sessionKeys: [sessionKey],
-  };
-  observed.dispatch = () => {
-    observed.dispatch = undefined;
-    input.storePath = state.path("replacement.sqlite");
-    input.env.OPENCLAW_STATE_DIR = state.path("replacement-state");
-    input.sessionKeys[0] = "agent:main:cron:other";
-  };
-  const result = await readSessionEntriesFromStoreInWorker(input);
-  expect(result.entries).toEqual([
-    { sessionKey, entry: expect.objectContaining({ sessionId: "captured-session" }) },
-  ]);
-  expect(fs.existsSync(input.storePath)).toBe(false);
-});
 
 it.each(["full", "list"] as const)(
   "rejects a configured alias redirected while its %s read is in flight",

@@ -215,7 +215,7 @@ describe("update config provenance", () => {
         const { snapshot, writeOptions } = await createConfigIO({
           pluginValidation: "skip",
         }).readConfigFileSnapshotForWrite();
-        expect(snapshot.sourceConfigBeforeMigrations?.agents?.list).toEqual([
+        expect(snapshot.sourceConfigBeforeMigrations).toHaveProperty("agents.list", [
           { id: "ops" },
           { id: "research" },
         ]);

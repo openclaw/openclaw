@@ -28,6 +28,7 @@ import { resolveRunnerMatrix } from "../../scripts/lib/cross-os-release-checks/c
 import { runManagedCommand } from "../../scripts/lib/managed-child-process.mts";
 import { parseUpgradeSurvivorScenarios } from "../../scripts/lib/upgrade-survivor-policy.mjs";
 import { createReleaseWorkflowMatrixPlan } from "../../scripts/plan-release-workflow-matrix.mjs";
+import { selectLiveShardFiles } from "../../scripts/test-live-shard.mts";
 import { createBoundedChildOutput } from "../helpers/bounded-child-output.js";
 import { copyTreeCloseOnExec } from "../helpers/close-on-exec-copy.js";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
@@ -161,6 +162,14 @@ const FULL_RELEASE_CHILD_DISPATCHES = [
     runName: "Full Release Artifacts",
     stepName: "Dispatch immutable npm artifact producer",
     workflow: "full-release-artifacts.yml",
+  },
+  {
+    jobName: "prepare_plugin_npm",
+    kind: "plugin-npm-preflight",
+    nonceSuffix: "-plugin-npm-preflight)",
+    runName: `Plugin NPM Artifact Preflight [beta] ${"b".repeat(40)} (`,
+    stepName: "Dispatch exact plugin npm artifact preflight",
+    workflow: "plugin-npm-release.yml",
   },
   {
     jobName: "prepare_docker_release",
@@ -1172,7 +1181,7 @@ describe("frozen admission workflow barriers", () => {
       );
       const plan = f.selection();
       expect(plan.docker).toHaveLength(groups);
-      expect(plan.explicitConsumers).toContain("live-cli-backend");
+      expect(plan.explicitConsumers).toEqual([]);
       const result = f.run("Admit frozen source contracts", {}, "printf 'producer-ran\\n'", {
         timeout: 360_000,
       });
@@ -1192,7 +1201,7 @@ describe("frozen admission workflow barriers", () => {
                 evaluation.selection.docker.baselines,
             ),
         ).toEqual(plan.docker.map((group: { baselines: string }) => group.baselines));
-        expect(record.evaluations.at(-1).selection.consumers).toContain("live-cli-backend");
+        expect(record.evaluations.at(-1).selection.consumers).toEqual([]);
         const { digest, provenance: _provenance, ...content } = record;
         expect(digest).toBe(createHash("sha256").update(JSON.stringify(content)).digest("hex"));
         expect(result.stdout).toContain("producer-ran");
@@ -1568,91 +1577,104 @@ describe("frozen admission workflow barriers", () => {
   });
 
   it.each([
-    [FULL_RELEASE_VALIDATION_WORKFLOW, "resolve_target", "known-source"],
-    [RELEASE_CHECKS_WORKFLOW, "resolve_target", "known-source"],
-    [LIVE_E2E_WORKFLOW, "validate_selected_ref", "known-source"],
-    [PACKAGE_ACCEPTANCE_WORKFLOW, "resolve_package", "known-source"],
-    [PACKAGE_ACCEPTANCE_WORKFLOW, "resolve_package", "resolved-package"],
-  ])("fulfills evaluations before emitting %s %s %s admission", (file, job, stage) => {
-    const f = frozenWorkflowFixture(
-      file,
-      job,
-      {
-        release_profile: "beta",
-        release_test_profile: "beta",
-        rerun_group: "live-e2e",
-        live_suite_filter: "live-gateway-docker",
-        include_live_suites: true,
-        include_release_path_suites: false,
-        suite_profile: "custom",
-        docker_lanes: "onboard plugins-offline",
-        allow_frozen_target_scenario_omissions: true,
-      },
-      { "package.json": '{"type":"module","version":"2026.9.9"}' },
-      { ADMISSION_STAGE: stage },
-    );
-    const known = file === PACKAGE_ACCEPTANCE_WORKFLOW && stage === "known-source";
-    const result = f.run(
-      known ? "Plan known package source admission" : "Plan frozen source admission",
-      stage === "resolved-package"
-        ? {
-            ADMISSION_PACKAGE_SOURCE_SHA: f.sha,
-            ADMISSION_PACKAGE_SHA256: "d".repeat(64),
-            ADMISSION_PACKAGE_VERSION: "2026.9.9",
-          }
-        : {},
-    );
-    expect(result.status, result.stderr).toBe(0);
-    const plan = JSON.parse(readFileSync(join(f.root, "frozen-admission-selection.json"), "utf8"));
-    const admitted = f.admit(
-      {},
-      known ? "Admit known package source before packing" : "Admit frozen source contracts",
-    );
-    expect(admitted.status, admitted.stderr).toBe(0);
-    expect(admitted.stdout).toContain("producer-ran");
-    const record = JSON.parse(
-      readFileSync(
-        join(f.root, known ? "frozen-admission-known-source.json" : "frozen-admission.json"),
-        "utf8",
-      ),
-    );
-    expect(record.status).toBe("ADMITTED");
-    expect(record.evaluations).toHaveLength(plan.docker.length + 1);
-    for (const evaluation of reconstructAdmissionEvaluations(record)) {
-      expect(evaluation).toMatchObject({
-        version: 1,
-        selectedSha: f.sha,
-        toolingSha: f.toolingSha,
-      });
-      expect(Array.isArray(evaluation.contracts)).toBe(true);
-      expect(evaluation.digest).toMatch(/^[a-f0-9]{64}$/u);
-      const identities = evaluation.sources.tooling.map(
-        ({ path, oid }: { path: string; oid: string }) => {
-          expect(f.toolingGit("rev-parse", `${f.toolingSha}:${path}`)).toBe(oid);
-          return path;
+    [FULL_RELEASE_VALIDATION_WORKFLOW, "resolve_target", "known-source", "UNSELECTED"],
+    [RELEASE_CHECKS_WORKFLOW, "resolve_target", "known-source", "UNSELECTED"],
+    [LIVE_E2E_WORKFLOW, "validate_selected_ref", "known-source", "ADMITTED"],
+    [PACKAGE_ACCEPTANCE_WORKFLOW, "resolve_package", "known-source", "ADMITTED"],
+    [PACKAGE_ACCEPTANCE_WORKFLOW, "resolve_package", "resolved-package", "ADMITTED"],
+  ])(
+    "fulfills evaluations before emitting %s %s %s admission",
+    (file, job, stage, expectedStatus) => {
+      const f = frozenWorkflowFixture(
+        file,
+        job,
+        {
+          release_profile: "beta",
+          release_test_profile: "beta",
+          rerun_group: "live-e2e",
+          live_suite_filter: "live-gateway-docker",
+          include_live_suites: true,
+          include_release_path_suites: false,
+          suite_profile: "custom",
+          docker_lanes: "onboard plugins-offline",
+          allow_frozen_target_scenario_omissions: true,
         },
+        { "package.json": '{"type":"module","version":"2026.9.9"}' },
+        { ADMISSION_STAGE: stage },
       );
-      expect(identities).toEqual(expect.arrayContaining(frozenAdmissionClosure));
-    }
-    const { digest, provenance: _provenance, ...content } = record;
-    expect(digest).toBe(createHash("sha256").update(JSON.stringify(content)).digest("hex"));
-    expect(existsSync(join(f.target, "node_modules"))).toBe(false);
-    expect(existsSync(join(f.tooling, "node_modules"))).toBe(false);
-  });
+      const known = file === PACKAGE_ACCEPTANCE_WORKFLOW && stage === "known-source";
+      const result = f.run(
+        known ? "Plan known package source admission" : "Plan frozen source admission",
+        stage === "resolved-package"
+          ? {
+              ADMISSION_PACKAGE_SOURCE_SHA: f.sha,
+              ADMISSION_PACKAGE_SHA256: "d".repeat(64),
+              ADMISSION_PACKAGE_VERSION: "2026.9.9",
+            }
+          : {},
+      );
+      expect(result.status, result.stderr).toBe(0);
+      const plan = JSON.parse(
+        readFileSync(join(f.root, "frozen-admission-selection.json"), "utf8"),
+      );
+      const admitted = f.admit(
+        {},
+        known ? "Admit known package source before packing" : "Admit frozen source contracts",
+      );
+      expect(admitted.status, admitted.stderr).toBe(0);
+      expect(admitted.stdout).toContain("producer-ran");
+      const record = JSON.parse(
+        readFileSync(
+          join(f.root, known ? "frozen-admission-known-source.json" : "frozen-admission.json"),
+          "utf8",
+        ),
+      );
+      expect(record.status).toBe(expectedStatus);
+      expect(record.evaluations).toHaveLength(plan.docker.length + 1);
+      for (const evaluation of reconstructAdmissionEvaluations(record)) {
+        expect(evaluation).toMatchObject({
+          version: 1,
+          selectedSha: f.sha,
+          toolingSha: f.toolingSha,
+        });
+        expect(Array.isArray(evaluation.contracts)).toBe(true);
+        expect(evaluation.digest).toMatch(/^[a-f0-9]{64}$/u);
+        const identities = evaluation.sources.tooling.map(
+          ({ path, oid }: { path: string; oid: string }) => {
+            expect(f.toolingGit("rev-parse", `${f.toolingSha}:${path}`)).toBe(oid);
+            return path;
+          },
+        );
+        expect(identities).toEqual(expect.arrayContaining(frozenAdmissionClosure));
+      }
+      const { digest, provenance: _provenance, ...content } = record;
+      expect(digest).toBe(createHash("sha256").update(JSON.stringify(content)).digest("hex"));
+      expect(existsSync(join(f.target, "node_modules"))).toBe(false);
+      expect(existsSync(join(f.tooling, "node_modules"))).toBe(false);
+    },
+  );
 
   it("plans without selected objects and rejects admission before acquisition", () => {
     const f = frozenWorkflowFixture(
       LIVE_E2E_WORKFLOW,
       "validate_selected_ref",
       {
-        docker_lanes: "onboard",
+        docker_lanes: "agent-bundle-mcp-tools",
         include_live_suites: false,
         include_release_path_suites: false,
         allow_frozen_target_scenario_omissions: true,
       },
-      { "src/config/zod-schema.ts": "lastRunAt:" },
+      Object.fromEntries(
+        [
+          "package.json",
+          "test/e2e/qa-lab/runtime/agent-bundle-mcp-tools-docker-client.ts",
+          "scripts/e2e/lib/temp-state-dir.ts",
+          "src/agents/agent-bundle-mcp-manager-api.ts",
+        ].map((path) => [path, readFileSync(path, "utf8")]),
+      ),
     );
-    const oid = f.git("rev-parse", "HEAD:src/config/zod-schema.ts");
+    const selectedPath = "src/agents/agent-bundle-mcp-manager-api.ts";
+    const oid = f.git("rev-parse", `HEAD:${selectedPath}`);
     unlinkSync(join(f.target, ".git/objects", oid.slice(0, 2), oid.slice(2)));
     const missingRoot = join(f.root, "not-acquired");
     const unavailable = f.run("Plan frozen source admission", {
@@ -1660,7 +1682,8 @@ describe("frozen admission workflow barriers", () => {
     });
     expect(unavailable.status, unavailable.stderr).toBe(0);
     expect(existsSync(missingRoot)).toBe(false);
-    expect(f.selection().sourcePaths).toContain("src/config/zod-schema.ts");
+    expect(f.selection().sourcePaths).toContain(selectedPath);
+    f.provisionParser();
     const rejected = f.admit();
     expect(rejected.status, rejected.stderr).toBe(1);
     expect(rejected.stderr).toContain("unable to read selected source");
@@ -1668,7 +1691,7 @@ describe("frozen admission workflow barriers", () => {
     expect(readFileSync(join(f.root, "frozen-admission.json"), "utf8")).toBe("");
   });
 
-  it("stops on a later Docker rejection before explicit consumers or success output", () => {
+  it("stops on a later Docker rejection before success output", () => {
     const f = frozenWorkflowFixture(
       LIVE_E2E_WORKFLOW,
       "validate_selected_ref",
@@ -1683,15 +1706,11 @@ describe("frozen admission workflow barriers", () => {
       },
       {
         "package.json": '{"type":"module","version":"not-a-release"}',
-        "scripts/print-cli-backend-live-metadata.ts":
-          "export function resolveCliBackendDockerPackages() {}",
       },
       { ADMISSION_BASELINES_RESOLVED: "true" },
     );
-    const oid = f.git("rev-parse", "HEAD:scripts/print-cli-backend-live-metadata.ts");
-    unlinkSync(join(f.target, ".git/objects", oid.slice(0, 2), oid.slice(2)));
     const planned = f.selection();
-    expect(planned.explicitConsumers).toContain("live-cli-backend");
+    expect(planned.explicitConsumers).toEqual([]);
     expect(planned.docker.map((group: { lanes: string[] }) => group.lanes)).toEqual([
       ["onboard"],
       ["root-managed-vps-upgrade"],
@@ -3565,6 +3584,7 @@ function runFullReleaseChildDispatch(
     CI_RELEASE_SCOPE: "full",
     CODEX_PLUGIN_SPEC: "",
     CROSS_OS_SUITE_FILTER: "",
+    DISPATCH_ID: `full-release-validation-77-1-${child.kind}`,
     EXTENSION_TEST_EXCLUDE_PATTERNS_JSON: "[]",
     FAIL_FAST: "false",
     GH_TOKEN: "fixture-token",
@@ -3578,6 +3598,8 @@ function runFullReleaseChildDispatch(
     PREPARED_NPM_BUNDLE_JSON: '{"schema":"openclaw.prepared-npm-bundle/v1"}',
     PHASE: child.jobName.endsWith("_candidate") ? "candidate" : "independent",
     PLUGIN_PRERELEASE_NODE_EXCLUDE_PATTERNS_JSON: "[]",
+    PLUGIN_PUBLISH_SCOPE: "all-publishable",
+    PLUGINS: "",
     PROVIDER: "openai",
     PROVIDER_MODE: "mock-openai",
     RELEASE_PACKAGE_SPEC: "",
@@ -3610,7 +3632,7 @@ function runFullReleaseChildDispatch(
       "HTTP 5[0-9][0-9]",
     GITHUB_OUTPUT: resolve(workdir, "github-output"),
     GITHUB_REPOSITORY: "openclaw/openclaw",
-    GITHUB_RUN_ATTEMPT: "2",
+    GITHUB_RUN_ATTEMPT: child.jobName === "prepare_plugin_npm" ? "1" : "2",
     GITHUB_RUN_ID: "77",
     GITHUB_STEP_SUMMARY: resolve(workdir, "github-summary"),
     MOCK_GH_CALLS: callsPath,
@@ -3627,7 +3649,10 @@ function runFullReleaseChildDispatch(
     MOCK_GH_RUN_ID: "101",
     MOCK_GH_RUN_PATH: `.github/workflows/${child.workflow}`,
     MOCK_GH_RUN_ATTEMPT: "1",
-    MOCK_GH_RUN_TITLE: `${child.runName} full-release-validation-77-2${child.nonceSuffix}`,
+    MOCK_GH_RUN_TITLE:
+      child.jobName === "prepare_plugin_npm"
+        ? `Plugin NPM Artifact Preflight [beta] ${"b".repeat(40)} (${stepValues.DISPATCH_ID})`
+        : `${child.runName} full-release-validation-77-2${child.nonceSuffix}`,
     MOCK_GH_RUN_TITLES: "[]",
     MOCK_GH_RUN_WORKFLOW_ID: "789",
     MOCK_GH_STATUSES: '["completed"]',
@@ -5920,6 +5945,7 @@ esac
     expect(identity.run).toContain(
       "node .release-tooling/scripts/release-tooling-identity.mjs verify",
     );
+    expect(identity.run).toContain("--allow-prevalidated-ref");
     expect(target.run).not.toContain('WORKFLOW_REF}" != "refs/heads/main');
     expect(target.run).not.toContain('git merge-base --is-ancestor "${WORKFLOW_SHA}" origin/main');
   });
@@ -8982,7 +9008,7 @@ test "$package_manager" = "pnpm@12.1.0"
       const job = workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, child.jobName);
       const step = workflowStep(job, child.stepName);
       expect(step.env?.CHILD_WORKFLOW_KIND ?? job.env?.CHILD_WORKFLOW_KIND).toBe(child.kind);
-      if (child.kind.startsWith("artifact-")) {
+      if (child.kind.startsWith("artifact-") || child.kind === "plugin-npm-preflight") {
         expect(step.if).toBe("github.run_attempt == 1");
       } else {
         expect(job["timeout-minutes"]).toBe(15);
@@ -9579,7 +9605,6 @@ describe("package artifact reuse", () => {
         step.run?.includes("export OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR="),
       );
       expect(runStep).toBeDefined();
-      expect(runStep?.run).toContain("openclaw_resolve_frozen_update_channel_dry_run_mode");
       expect(`${runStep?.run}\n${JSON.stringify(runStep?.env)}`).toContain(
         "steps.plan.outputs.needs_package",
       );
@@ -9840,6 +9865,9 @@ describe("package artifact reuse", () => {
       ...process.env,
       NPM_PREPARE_RESULT: "success",
       NPM_QUALIFY_RESULT: "success",
+      PLUGIN_NPM_REQUIRED: "false",
+      PLUGIN_NPM_PREPARE_RESULT: "skipped",
+      PREPARED_PLUGIN_NPM_JSON: "",
       QUALIFIED_NPM_BUNDLE_JSON: "{}",
       DOCKER_PREPARE_RESULT: "success",
       PREPARED_DOCKER_MANIFEST_SHA256: "a".repeat(64),
@@ -9861,6 +9889,21 @@ describe("package artifact reuse", () => {
           }).status,
         ).not.toBe(0);
       }
+      expect(
+        spawnSync("bash", ["-c", gate.run ?? ""], {
+          env: {
+            ...releaseEnv,
+            PLUGIN_NPM_REQUIRED: "true",
+            PLUGIN_NPM_PREPARE_RESULT: "success",
+            PREPARED_PLUGIN_NPM_JSON: "{}",
+          },
+        }).status,
+      ).toBe(0);
+      expect(
+        spawnSync("bash", ["-c", gate.run ?? ""], {
+          env: { ...releaseEnv, PLUGIN_NPM_REQUIRED: "true" },
+        }).status,
+      ).not.toBe(0);
     }
   });
 
@@ -11236,18 +11279,68 @@ describe("package artifact reuse", () => {
         key,
       ).toBe("${{ secrets." + key + " }}");
     }
+    const nativeCredentialConsumers: Record<string, string[]> = {
+      "extensions/azure-speech/azure-speech.live.test.ts": [
+        "AZURE_SPEECH_KEY",
+        "AZURE_SPEECH_REGION",
+      ],
+      "extensions/baseten/baseten.live.test.ts": ["BASETEN_API_KEY"],
+      "extensions/cloudflare/cloudflare.live.test.ts": [
+        "OPENCLAW_LIVE_R2_ACCOUNT_ID",
+        "OPENCLAW_LIVE_R2_BUCKET",
+        "OPENCLAW_LIVE_R2_ACCESS_KEY_ID",
+        "OPENCLAW_LIVE_R2_SECRET_ACCESS_KEY",
+      ],
+      "extensions/elevenlabs/elevenlabs.live.test.ts": ["ELEVENLABS_API_KEY"],
+      "extensions/featherless/featherless.live.test.ts": ["FEATHERLESS_API_KEY"],
+      "extensions/github-copilot/connection-bound-ids.live.test.ts": [
+        "OPENCLAW_LIVE_GITHUB_COPILOT_TOKEN",
+      ],
+      "extensions/google-meet/google-meet.live.test.ts": [
+        "OPENCLAW_GOOGLE_MEET_LIVE_MEETING",
+        "OPENCLAW_GOOGLE_MEET_CLIENT_ID",
+        "OPENCLAW_GOOGLE_MEET_CLIENT_SECRET",
+        "OPENCLAW_GOOGLE_MEET_REFRESH_TOKEN",
+      ],
+      "extensions/gradium/gradium.live.test.ts": ["GRADIUM_API_KEY"],
+      "extensions/inworld/inworld.live.test.ts": ["INWORLD_API_KEY"],
+      "extensions/discord/src/internal/live-smoke.live.test.ts": ["DISCORD_BOT_TOKEN"],
+      "extensions/meta/meta.live.test.ts": ["MODEL_API_KEY"],
+      "extensions/mistral/mistral.live.test.ts": ["ELEVENLABS_API_KEY"],
+      "extensions/volcengine/tts.live.test.ts": ["VOLCENGINE_TTS_API_KEY"],
+    };
+    const nativeCredentialKeys = [...new Set(Object.values(nativeCredentialConsumers).flat())];
+    const hydratedValues = {
+      DEEPSEEK_API_KEY: "deepseek-sentinel",
+      DEEPINFRA_API_KEY: "deepinfra-sentinel",
+      KIE_API_KEY: "kie-sentinel",
+      NOVITA_API_KEY: "novita-sentinel",
+      PIXVERSE_API_KEY: "pixverse-sentinel",
+      ...Object.fromEntries(
+        nativeCredentialKeys
+          .filter((key) => key !== "DISCORD_BOT_TOKEN")
+          .map((key) => [key, key + "-native 'literal' $value"]),
+      ),
+    };
     const hydrationHome = tempDirs.make("live-auth-hydration-");
     const hydrated = spawnSync(
       "bash",
       [
         "-euc",
-        `bash "$1" "$2"
-unset DEEPSEEK_API_KEY DEEPINFRA_API_KEY KIE_API_KEY NOVITA_API_KEY PIXVERSE_API_KEY
-source "$2"
-printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY" "$KIE_API_KEY" "$NOVITA_API_KEY" "$PIXVERSE_API_KEY"`,
+        [
+          'profile_path="$2"',
+          'bash "$1" "$profile_path"',
+          "shift 2",
+          'for key in "$@"; do unset "$key"; done',
+          "unset DISCORD_BOT_TOKEN OPENCLAW_DISCORD_SMOKE_BOT_TOKEN",
+          'source "$profile_path"',
+          'for key in "$@"; do printf \'%s\\n\' "${!key}"; done',
+          '[[ -z "${DISCORD_BOT_TOKEN+x}" && -z "${OPENCLAW_DISCORD_SMOKE_BOT_TOKEN+x}" ]]',
+        ].join("\n"),
         "hydrate-live-auth",
         CI_HYDRATE_LIVE_AUTH_SCRIPT,
         resolve(hydrationHome, "live.profile"),
+        ...Object.keys(hydratedValues),
       ],
       {
         encoding: "utf8",
@@ -11255,18 +11348,70 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY" "$KIE_API_KEY" "$NOVITA_
         env: {
           PATH: process.env.PATH,
           HOME: hydrationHome,
-          DEEPSEEK_API_KEY: "deepseek-sentinel",
-          DEEPINFRA_API_KEY: "deepinfra-sentinel",
-          KIE_API_KEY: "kie-sentinel",
-          NOVITA_API_KEY: "novita-sentinel",
-          PIXVERSE_API_KEY: "pixverse-sentinel",
+          ...hydratedValues,
+          DISCORD_BOT_TOKEN: "must-not-hydrate-discord",
+          OPENCLAW_DISCORD_SMOKE_BOT_TOKEN: "must-not-hydrate-smoke",
         },
       },
     );
     expect(hydrated.status, hydrated.stderr).toBe(0);
-    expect(hydrated.stdout).toBe(
-      "deepseek-sentinel\ndeepinfra-sentinel\nkie-sentinel\nnovita-sentinel\npixverse-sentinel\n",
-    );
+    expect(hydrated.stdout).toBe(Object.values(hydratedValues).join("\n") + "\n");
+    const nativeRows = [
+      "validate_live_provider_suites",
+      "validate_live_media_provider_suites",
+    ].flatMap((jobName) => {
+      const nativeJob = workflowJob(LIVE_E2E_WORKFLOW, jobName);
+      const rows = nativeJob.strategy?.matrix?.include ?? [];
+      expect(rows.length).toBeGreaterThan(0);
+      return rows.map((row) => {
+        const shard = row.command?.match(/scripts\/test-live-shard\.mjs ([a-z-]+)/u)?.[1];
+        if (!shard) {
+          throw new Error("Missing live shard command for " + row.suite_id);
+        }
+        const selectedFiles = selectLiveShardFiles(shard, Object.keys(nativeCredentialConsumers));
+        return {
+          jobName,
+          env: nativeJob.env,
+          row,
+          requiredKeys: new Set(
+            selectedFiles.flatMap((file) => nativeCredentialConsumers[file] ?? []),
+          ),
+        };
+      });
+    });
+    for (const key of nativeCredentialKeys) {
+      const secretKey = key === "DISCORD_BOT_TOKEN" ? "OPENCLAW_DISCORD_SMOKE_BOT_TOKEN" : key;
+      const sentinel = key + "-scoped-sentinel";
+      expect(readWorkflow(LIVE_E2E_WORKFLOW).on?.workflow_call?.secrets?.[secretKey]).toEqual({
+        required: false,
+      });
+      for (const job of [
+        workflowJob(RELEASE_CHECKS_WORKFLOW, "live_repo_e2e_release_checks"),
+        workflowJob(SCHEDULED_LIVE_CHECKS_WORKFLOW, "live_and_openwebui_checks"),
+      ]) {
+        expect(job.secrets, secretKey).toMatchObject({
+          [secretKey]: "${{ secrets." + secretKey + " }}",
+        });
+      }
+      expect(
+        nativeRows.some(({ requiredKeys }) => requiredKeys.has(key)),
+        key,
+      ).toBe(true);
+      for (const { jobName, env, row, requiredKeys } of nativeRows) {
+        const value = env?.[key]
+          ? evaluateWorkflowExpression(env[key], {
+              eventName: "workflow_dispatch",
+              repository: "openclaw/openclaw",
+              runAttempt: 1,
+              matrix: row,
+              secrets: { [secretKey]: sentinel },
+            })
+          : "";
+        expect
+          .soft(value, key + ":" + jobName + ":" + row.suite_id)
+          .toBe(requiredKeys.has(key) ? sentinel : "");
+      }
+    }
     expect(reusableWorkflow).toContain("FACTORY_API_KEY:\n        required: false");
     expect(packageAcceptanceWorkflow).toContain("FACTORY_API_KEY:\n        required: false");
     expectTextToIncludeAll(reusableWorkflow, [
@@ -13492,6 +13637,7 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY" "$KIE_API_KEY" "$NOVITA_
       "npm_telegram",
       "performance",
       "prepare_npm_package",
+      "prepare_plugin_npm",
       "prepare_docker_release",
     ]) {
       const job = workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, jobName);
@@ -16225,17 +16371,13 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
       "Outside this extended-stable procedure, a direct canonical-branch dispatch",
       "Current extended-stable validation requires distinct",
       "Direct canonical-branch and mutable-`main` dispatches are not valid",
-      "--ref main",
-      '-f tag="$VALIDATION_SHA"',
-      "-f preflight_only=true",
-      "-f npm_dist_tag=extended-stable",
-      '-f release_candidate_branch="$CONTEXT_REF"',
     ]);
     expectTextToIncludeAll(releaseCi, [
-      "standalone run is a supplemental validation-only preflight",
-      "Do not pass",
-      "publication `preflight_run_id`",
-      "Publication continues to use",
+      "Current all-group FRV also owns read-only core and selected-plugin npm",
+      "Prepared descriptors live in `publicationArtifacts`",
+      "Release Prepare adopts the manifest's plugin npm",
+      "descriptor and prepares only ClawHub",
+      "it never repacks plugin npm after FRV",
     ]);
     expectTextToIncludeAll(ciDocs, [
       'VALIDATION_SHA="<full-commit-sha>"',
@@ -16525,10 +16667,22 @@ esac
       .filter(Boolean);
 
     expect(skillFiles.length).toBeGreaterThan(0);
-    const ignored = spawnSync("git", ["check-ignore", "--no-index", "--stdin"], {
-      encoding: "utf8",
-      input: `${skillFiles.join("\n")}\n`,
-    });
+    // Repository sync rules must not inherit a developer's local info/exclude.
+    const repo = tempDirs.make("skill-ignore-rules-");
+    execFileSync("git", ["init", "-q", "--template=", repo]);
+    const ignored = spawnSync(
+      "git",
+      [
+        `--git-dir=${join(repo, ".git")}`,
+        `--work-tree=${process.cwd()}`,
+        "-c",
+        "core.excludesFile=",
+        "check-ignore",
+        "--no-index",
+        "--stdin",
+      ],
+      { encoding: "utf8", input: `${skillFiles.join("\n")}\n` },
+    );
     expect(ignored.status).toBe(1);
     expect(ignored.stdout).toBe("");
     expect(ignored.stderr).toBe("");

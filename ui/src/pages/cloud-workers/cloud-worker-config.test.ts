@@ -61,7 +61,6 @@ describe("cloud worker settings state", () => {
       {
         id: "production",
         providerId: "crabbox",
-        install: "npm",
         backend: "aws",
         target: "linux",
         machineClass: "beast",
@@ -250,7 +249,6 @@ describe("cloud worker settings state", () => {
       ...createCloudWorkerDraft(),
       id: "production",
       providerId: "crabbox",
-      install: "bundle",
       backend: "aws",
       target: "linux",
       machineClass: "standard",

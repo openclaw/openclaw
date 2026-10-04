@@ -151,7 +151,7 @@ export async function withSessionRowDatabaseFacts(
             if (prepared) {
               facts.set(identity(row), {
                 ...prepared,
-                acpMeta: prepared.entry?.acp ?? null,
+                acpMeta: null,
                 repositoryWorkspace: null,
               });
             }
@@ -159,19 +159,19 @@ export async function withSessionRowDatabaseFacts(
         }
         const acpRows = rows.flatMap((row) => {
           const prepared = facts.get(identity(row));
-          return prepared?.entry && !prepared.entry.acp
-            ? [{ row, prepared, entry: prepared.entry }]
-            : [];
+          return prepared?.entry ? [{ row, prepared, entry: prepared.entry }] : [];
         });
-        const acpMetadata = await readAcpSessionMetaForEntries({
-          env,
-          cfg: owner.cfg,
-          entries: acpRows.map(({ row, entry }) => ({
-            agentId: row.agentId,
-            sessionKey: row.key,
-            entry,
-          })),
-        });
+        const acpMetadata = acpRows.length
+          ? await readAcpSessionMetaForEntries({
+              env,
+              cfg: owner.cfg,
+              entries: acpRows.map(({ row, entry }) => ({
+                agentId: row.agentId,
+                sessionKey: row.key,
+                entry,
+              })),
+            })
+          : [];
         for (const [index, { prepared }] of acpRows.entries()) {
           prepared.acpMeta = acpMetadata[index] ?? null;
         }

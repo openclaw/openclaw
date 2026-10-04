@@ -321,9 +321,9 @@ export async function mutateManagedPluginEnabled(
         }))
       : await readPluginMutationSnapshot(env, beforePersistentApply);
     const metadata = loadFreshManagedPluginMetadata(snapshot.config, env);
-    const pluginId = cli
-      ? normalizePluginId(params.pluginId)
-      : metadata.normalizePluginId(params.pluginId.trim());
+    const pluginId = metadata.normalizePluginId(
+      cli ? normalizePluginId(params.pluginId) : params.pluginId.trim(),
+    );
     const installedPlugin = metadata.index.plugins.find((plugin) => plugin.pluginId === pluginId);
     if (!installedPlugin) {
       return { status: "missing" as const, pluginId };
@@ -351,7 +351,7 @@ export async function mutateManagedPluginEnabled(
       await resolveConsent();
     }
     let next = snapshot.config;
-    let policyPluginId = pluginId;
+    let policyPluginId = normalizePluginId(pluginId);
     if (params.enabled) {
       // Admin selection admits one installed plugin; CLI preserves restrictive policy.
       if (!preserveAllowlist && (next.plugins?.allow?.length ?? 0) > 0) {

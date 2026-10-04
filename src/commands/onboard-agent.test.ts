@@ -37,19 +37,19 @@ describe("onboarding main-agent creation", () => {
       .mockResolvedValueOnce({
         exists: false,
         valid: true,
-        sourceConfig: { agents: { list: [{ id: "main", default: true }] }, gateway: {} },
-        config: { agents: { list: [{ id: "main", default: true }] }, gateway: {} },
+        sourceConfig: { agents: { entries: { main: {} } }, gateway: {} },
+        config: { agents: { entries: { main: {} } }, gateway: {} },
       })
       .mockResolvedValueOnce({
         exists: true,
         valid: true,
         hash: "hash-after-create",
         sourceConfig: {
-          agents: { list: [{ id: "main", default: true }] },
+          agents: { entries: { main: {} } },
           gateway: { controlUi: { enabled: true } },
         },
         config: {
-          agents: { list: [{ id: "main", default: true }] },
+          agents: { entries: { main: {} } },
           gateway: { controlUi: { enabled: true } },
         },
       });
@@ -78,7 +78,7 @@ describe("onboarding main-agent creation", () => {
       config: {
         agents: {
           defaults: { model: "openai/gpt-5.5" },
-          entries: { main: { default: true } },
+          entries: { main: {} },
         },
         gateway: { mode: "local", controlUi: { enabled: true } },
       },

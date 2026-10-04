@@ -14,12 +14,19 @@ import { tryPrepareFreshManagerRuntimeSession } from "../acp/control-plane/manag
 import { getAcpRuntimeBackend } from "../acp/runtime/registry.js";
 import { buildAcpDatabaseSessionKey } from "../acp/runtime/session-meta-keys.js";
 import { writeAcpSessionMetaForMigration } from "../acp/runtime/session-meta.js";
+import { retireSessionMcpRuntime } from "../agents/agent-bundle-mcp-tools.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
+import { clearFinishedSessionsForScopes } from "../agents/bash-process-registry.js";
 import {
   clearBootstrapSnapshot,
   clearBootstrapSnapshotOnSessionBoundary,
 } from "../agents/bootstrap-cache.js";
 import { clearAllCliSessions } from "../agents/cli-session.js";
+import {
+  abortEmbeddedAgentRun,
+  isEmbeddedAgentRunActive,
+  waitForEmbeddedAgentRunEnd,
+} from "../agents/embedded-agent-runner/runs.js";
 import { resetRegisteredAgentHarnessSessions } from "../agents/harness/registry.js";
 import { acquireAgentRuntimeCleanupRegistries } from "../agents/prepared-model-runtime.js";
 import { resolveSessionModelRef } from "../agents/session-model-ref.js";
@@ -214,12 +221,6 @@ async function ensureSessionRuntimeCleanup(params: {
       : undefined,
     assertCurrent: params.assertCurrent,
   });
-  // Cleanup needs the active-run owner, not the runner and compaction orchestration.
-  const [embeddedAgent, mcpTools, { clearFinishedSessionsForScopes }] = await Promise.all([
-    import("../agents/embedded-agent-runner/runs.js"),
-    import("../agents/agent-bundle-mcp-tools.js"),
-    import("../agents/bash-process-registry.js"),
-  ]);
   const closeTrackedBrowserTabs = async () => {
     assertCurrent();
     const closeKeys = new Set<string>([
@@ -286,7 +287,7 @@ async function ensureSessionRuntimeCleanup(params: {
     }
   };
   const retireMcpRuntime = async (retainAcrossReuse: boolean) => {
-    await mcpTools.retireSessionMcpRuntime({
+    await retireSessionMcpRuntime({
       sessionId,
       reason: "gateway-session-cleanup",
       preserveActiveLeases: true,
@@ -310,12 +311,10 @@ async function ensureSessionRuntimeCleanup(params: {
       });
       mcpRunEndWatcherState.cancellations.set(sessionId, cancelWatcher);
       try {
-        while (
-          await Promise.race([embeddedAgent.waitForEmbeddedAgentRunEnd(sessionId, null), cancelled])
-        ) {
+        while (await Promise.race([waitForEmbeddedAgentRunEnd(sessionId, null), cancelled])) {
           // A replacement can register after the wait promise settles but before
           // this continuation runs. Keep the required retirement armed for it.
-          if (embeddedAgent.isEmbeddedAgentRunActive(sessionId)) {
+          if (isEmbeddedAgentRunActive(sessionId)) {
             continue;
           }
           const retirement = retireMcpRuntime(false);
@@ -325,7 +324,7 @@ async function ensureSessionRuntimeCleanup(params: {
           } finally {
             mcpRunEndWatcherState.retirements.delete(retirement);
           }
-          if (embeddedAgent.isEmbeddedAgentRunActive(sessionId)) {
+          if (isEmbeddedAgentRunActive(sessionId)) {
             continue;
           }
           cleanupProviderResources();
@@ -341,18 +340,18 @@ async function ensureSessionRuntimeCleanup(params: {
     },
     { evictOnSettled: true },
   );
-  embeddedAgent.abortEmbeddedAgentRun(sessionId);
+  abortEmbeddedAgentRun(sessionId);
   // Mark cleanup before waiting so the timeout path cannot strand MCP children.
   // Active tool/app leases keep in-flight work alive until their final release.
   await retireMcpRuntime(true);
-  const ended = await embeddedAgent.waitForEmbeddedAgentRunEnd(sessionId, 15_000);
+  const ended = await waitForEmbeddedAgentRunEnd(sessionId, 15_000);
   assertCurrent();
   // A stopping run can create or reuse its runtime while we wait. Retire again
   // after a clean stop; otherwise keep the required marker armed for late work.
   await retireMcpRuntime(!ended);
   assertCurrent();
   clearBootstrapSnapshot(params.target.canonicalKey);
-  if (ended && !embeddedAgent.isEmbeddedAgentRunActive(sessionId)) {
+  if (ended && !isEmbeddedAgentRunActive(sessionId)) {
     assertCurrent();
     mcpRunEndWatcherState.cancellations.get(sessionId)?.();
     await mcpRetirementWatcher;
@@ -1264,7 +1263,7 @@ export async function performGatewaySessionReset(params: {
           }
           return nextEntry;
         },
-        afterEntryMutation: (mutation) => {
+        afterEntryMutation: async (mutation) => {
           if (resetSkipped) {
             return;
           }
@@ -1363,7 +1362,7 @@ export async function performGatewaySessionReset(params: {
             sessionKey: target.canonicalKey ?? params.key,
           });
           if (createdNewEntry) {
-            recordSessionCreated(cfg, {
+            await recordSessionCreated(cfg, {
               sessionKey: target.canonicalKey ?? params.key,
               agentId,
               entry: mutation.nextEntry,

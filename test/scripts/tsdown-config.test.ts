@@ -47,6 +47,7 @@ function hasWorkerEntry(config: TsdownConfig, name: string, source: string): boo
 
 const workerBuildTargets = [
   ["worker", "worker/worker", "src/worker/worker-deploy-entry.ts"],
+  ["code-mode-node", "worker/code-mode-node.worker", "src/agents/code-mode-node.worker.ts"],
   [
     "file-tool-planning",
     "worker/file-tool-planning.worker",
@@ -58,6 +59,12 @@ const workerBuildTargets = [
     "src/worker/worker-deploy-image-processor.ts",
   ],
   ["sqlite-store", "worker/sqlite-store.worker", "src/worker/worker-deploy-sqlite-store.ts"],
+  ["state-read", "worker/openclaw-state-read.worker", "src/worker/worker-deploy-state-read.ts"],
+  [
+    "worker-native-lifecycle",
+    "worker/worker-native-lifecycle.worker",
+    "src/infra/worker-native-lifecycle.worker.ts",
+  ],
   ["receiver", "worker/workspace-rsync-receiver", "src/worker/workspace-rsync-receiver.ts"],
   ["github-launcher", "worker/github-exec-launcher", "src/agents/github-exec-launcher.ts"],
   ["service-relay", "worker/service-child-relay", "src/process/supervisor/service-child-relay.ts"],

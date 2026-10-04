@@ -68,11 +68,8 @@ function normalizeExternalCliCredentialProvider(
 
 /** Read a CLI credential only for safe bootstrap of an unusable local profile. */
 export function readExternalCliBootstrapCredential(params: {
-  store: AuthProfileStore;
   profileId: string;
   credential: OAuthCredential;
-  allowInlineOAuthTokenMaterial?: boolean;
-  allowKeychainPrompt?: boolean;
 }): OAuthCredential | null {
   if (!isMiniMaxCliProfile(params)) {
     return null;

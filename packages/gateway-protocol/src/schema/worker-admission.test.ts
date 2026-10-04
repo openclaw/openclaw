@@ -600,4 +600,32 @@ describe("worker message wire boundaries", () => {
       validateWorkerInferenceStartParams({ ...inferenceStart, context: { messages: [message] } }),
     ).toBe(false);
   });
+
+  it("admits text-only runtime context and rejects image payloads", () => {
+    const runtimeContext = {
+      role: "user",
+      content: [{ type: "text", text: "OpenClaw runtime context:\ncurrent facts" }],
+      timestamp: 1,
+      runtimeContext: { retained: true },
+    };
+    expect(
+      validateWorkerInferenceStartParams({
+        ...inferenceStart,
+        context: { messages: [runtimeContext] },
+      }),
+    ).toBe(true);
+    expect(
+      validateWorkerInferenceStartParams({
+        ...inferenceStart,
+        context: {
+          messages: [
+            {
+              ...runtimeContext,
+              content: [{ type: "image", data: "encoded", mimeType: "image/png" }],
+            },
+          ],
+        },
+      }),
+    ).toBe(false);
+  });
 });

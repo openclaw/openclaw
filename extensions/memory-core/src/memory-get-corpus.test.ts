@@ -279,7 +279,7 @@ describe("memory_get corpus outcomes", () => {
       const get = vi.fn(async () => wikiHit);
       registerMemoryCorpusSupplement("memory-wiki", { search: async () => [], get });
       const config = asOpenClawConfig({
-        agents: { list: [{ id: "marketing-agent", default: true }] },
+        agents: { entries: { "marketing-agent": {} } },
       });
       const tool = createMemoryGetTool({
         config,

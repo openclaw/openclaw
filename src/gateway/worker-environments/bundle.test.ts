@@ -44,12 +44,15 @@ async function writeFixture(
     "utf8",
   );
   for (const [artifactName, contents] of [
+    ["code-mode-node.worker.mjs", "export const codeModeNode = true;\n"],
     ["file-tool-planning.worker.mjs", "export const fileToolPlanning = true;\n"],
     ["github-exec-launcher.mjs", "export const launcher = true;\n"],
     ["image-processor.worker.mjs", "export const imageProcessor = true;\n"],
+    ["openclaw-state-read.worker.mjs", "export const stateRead = true;\n"],
     ["service-child-group-anchor.mjs", "export const anchor = true;\n"],
     ["service-child-relay.mjs", "export const relay = true;\n"],
     ["sqlite-store.worker.mjs", "export const sqliteStore = true;\n"],
+    ["worker-native-lifecycle.worker.mjs", "export const nativeLifecycle = true;\n"],
     ["worker.mjs", workerSource],
     ["workspace-rsync-receiver.mjs", "export const receiver = true;\n"],
   ] as const) {
@@ -208,12 +211,15 @@ describe("worker bundle producer", () => {
       expect(first.tarballBytes).toBe(compressed.byteLength);
       const entries = await listTarball(first.tarballPath);
       expect(entries).toEqual([
+        "code-mode-node.worker.mjs",
         "file-tool-planning.worker.mjs",
         "github-exec-launcher.mjs",
         "image-processor.worker.mjs",
+        "openclaw-state-read.worker.mjs",
         "service-child-group-anchor.mjs",
         "service-child-relay.mjs",
         "sqlite-store.worker.mjs",
+        "worker-native-lifecycle.worker.mjs",
         "worker.mjs",
         "workspace-rsync-receiver.mjs",
       ]);
@@ -228,9 +234,11 @@ describe("worker bundle producer", () => {
         ["file-tool-planning.worker.mjs", "export const fileToolPlanning = true;\n"],
         ["github-exec-launcher.mjs", "export const launcher = true;\n"],
         ["image-processor.worker.mjs", "export const imageProcessor = true;\n"],
+        ["openclaw-state-read.worker.mjs", "export const stateRead = true;\n"],
         ["service-child-group-anchor.mjs", "export const anchor = true;\n"],
         ["service-child-relay.mjs", "export const relay = true;\n"],
         ["sqlite-store.worker.mjs", "export const sqliteStore = true;\n"],
+        ["worker-native-lifecycle.worker.mjs", "export const nativeLifecycle = true;\n"],
         ["worker.mjs", "export const worker = true;\n"],
         ["workspace-rsync-receiver.mjs", "export const receiver = true;\n"],
       ] as const) {
@@ -265,9 +273,11 @@ describe("worker bundle producer", () => {
         "file-tool-planning.worker.mjs",
         "github-exec-launcher.mjs",
         "image-processor.worker.mjs",
+        "openclaw-state-read.worker.mjs",
         "service-child-group-anchor.mjs",
         "service-child-relay.mjs",
         "sqlite-store.worker.mjs",
+        "worker-native-lifecycle.worker.mjs",
         "worker.mjs",
         "workspace-rsync-receiver.mjs",
       ]) {
@@ -683,12 +693,15 @@ describe("worker bundle producer", () => {
 
       expect(repaired.bundleHash).toBe(first.bundleHash);
       await expect(listTarball(repaired.tarballPath)).resolves.toEqual([
+        "code-mode-node.worker.mjs",
         "file-tool-planning.worker.mjs",
         "github-exec-launcher.mjs",
         "image-processor.worker.mjs",
+        "openclaw-state-read.worker.mjs",
         "service-child-group-anchor.mjs",
         "service-child-relay.mjs",
         "sqlite-store.worker.mjs",
+        "worker-native-lifecycle.worker.mjs",
         "worker.mjs",
         "workspace-rsync-receiver.mjs",
       ]);
@@ -701,9 +714,11 @@ describe("worker bundle producer", () => {
       "file-tool-planning.worker.mjs",
       "github-exec-launcher.mjs",
       "image-processor.worker.mjs",
+      "openclaw-state-read.worker.mjs",
       "service-child-group-anchor.mjs",
       "service-child-relay.mjs",
       "sqlite-store.worker.mjs",
+      "worker-native-lifecycle.worker.mjs",
       "worker.mjs",
       "workspace-rsync-receiver.mjs",
     ]) {

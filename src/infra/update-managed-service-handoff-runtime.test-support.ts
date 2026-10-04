@@ -119,9 +119,9 @@ export async function prepareManagedServiceSpawn(
       children.spawn = (command, args, options) => {
         const child = spawn(command, args, options);
         try {
-          let payload = JSON.parse(args.at(-1));
-          if (Array.isArray(payload) && payload[0] !== ${JSON.stringify(modulePath)})
-            payload = JSON.parse(payload.at(-1));
+          let input = args.at(-1);
+          if (input.startsWith("[")) input = JSON.parse(input).at(-1);
+          const payload = JSON.parse(fs.readFileSync(input, "utf8"));
           if (Array.isArray(payload) && payload[0] === ${JSON.stringify(modulePath)}) {
             finalizer = child;
             child.once("close", () => { if (finalizer === child) finalizer = undefined; });

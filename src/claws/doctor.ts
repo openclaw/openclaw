@@ -108,7 +108,7 @@ function collectInstallFindings(
           record.agentState === "missing"
             ? `Claw-owned agent ${JSON.stringify(agentId)} is missing from config.`
             : `Claw-owned agent ${JSON.stringify(agentId)} changed after installation.`,
-        path: `agents.list.${agentId}`,
+        path: `agents.entries.${agentId}`,
         target: agentId,
         requirement: "Claw-owned agent config should match its recorded install digest",
         fixHint: "Inspect the agent change before removing or replacing Claw-owned state.",

@@ -376,6 +376,12 @@ describe("Crabbox profile warm images", () => {
   it.each([
     { backend: "aws", kind: "aws-ebs-snapshot", nativeState: "completed", sourceLifecycleMs: 0 },
     {
+      backend: "azure",
+      kind: "azure-os-disk-snapshot",
+      nativeState: "available",
+      sourceLifecycleMs: 0,
+    },
+    {
       backend: "daytona",
       kind: "daytona-snapshot",
       nativeState: "active",
@@ -430,7 +436,7 @@ describe("Crabbox profile warm images", () => {
         "--wait-timeout",
         "2700000ms",
         "--json",
-        ...(backend === "daytona" ? ["--no-reboot=false"] : []),
+        ...(["azure", "daytona"].includes(backend) ? ["--no-reboot=false"] : []),
         ...(backend === "machine0" ? ["--strategy", "image"] : []),
       ]);
       // Native capture gets Crabbox's 45m plus command overhead and separate source recovery.

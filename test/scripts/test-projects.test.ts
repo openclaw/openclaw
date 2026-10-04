@@ -2183,12 +2183,16 @@ describe("scripts/test-projects changed-target routing", () => {
     expect(plans.every((plan) => plan.includePatterns === null)).toBe(true);
   });
 
-  it("routes the plugin contracts directory to the plugin contracts lane", () => {
+  it("routes the plugin contracts directory across contract and database worker lanes", () => {
     const plans = buildVitestRunPlans(["src/plugins/contracts"]);
 
-    expectSingleVitestRunPlan(plans, {
-      config: "test/vitest/vitest.contracts-plugin.config.ts",
-    });
+    expect(plans).toEqual([
+      runPlan("contracts-plugin"),
+      runPlan("infra", [
+        "src/plugins/contracts/host-hook-state.identity.test.ts",
+        "src/plugins/contracts/host-hooks.contract.test.ts",
+      ]),
+    ]);
   });
 
   it.each([
@@ -2823,6 +2827,425 @@ describe("scripts/test-projects changed-target routing", () => {
   });
 });
 
+describe("changed export mock consumers", () => {
+  it.each([
+    {
+      name: "member access cannot invent an export",
+      before: "export const old = 1; const api = { export: 0 }; api.export\nfunction added() {}",
+      after:
+        "export const old = 1; const api = { export: 0 }; api.export\nfunction added() {} export { added };",
+      selected: true,
+    },
+    {
+      name: "a preceding period literal is not member access",
+      before: "export const old = 1;",
+      after: 'export const old = 1; "."\nexport const added = 2;',
+      selected: true,
+    },
+    {
+      name: "empty-string export alias",
+      before: "export const old = 1; const value = 2;",
+      after: 'export const old = 1; const value = 2; export { value as "" };',
+      selected: true,
+    },
+    {
+      name: "quoted closing brace is an export name",
+      before: "export const old = 1;",
+      after: 'export const old = 1; export { "}" as added } from "./other.js";',
+      selected: true,
+    },
+    {
+      name: "erased default becomes a runtime export",
+      before: "export default interface API {}",
+      after: "export default class API {}",
+      selected: true,
+    },
+    {
+      name: "erased namespace gains a runtime member",
+      before: "export namespace API { export type Value = string; }",
+      after: "export namespace API { export const value = 1; }",
+      selected: true,
+    },
+    {
+      name: "const enums retain mock coverage",
+      before: "export const enum Old { Value = 1 }",
+      after: "export const enum Old { Value = 1 } export const enum Added { Value = 2 }",
+      selected: true,
+    },
+    {
+      name: "JSX text cannot hide a later export",
+      before: "function component() { return <div>}</div>; } export const old = 1;",
+      after:
+        "function component() { return <div>}</div>; } export const old = 1; export const added = 2;",
+      selected: true,
+    },
+    {
+      name: "Unicode names retain mock coverage",
+      before: "export function café() {}",
+      after: "export function cafè() {}",
+      selected: true,
+    },
+    {
+      name: "bracket CommonJS exports retain mock coverage",
+      before: 'module["exports"] = { old: 1 };',
+      after: 'module["exports"] = { old: 1, added: 2 };',
+      selected: true,
+    },
+    {
+      name: "CommonJS exports retain mock coverage",
+      before: "exports.old = 1;",
+      after: "exports.old = 1; exports.added = 2;",
+      selected: true,
+    },
+    {
+      name: "implicit statement does not hide a new export",
+      before: "export const old = 1\nconst hidden = 2, added = 3;",
+      after: "export const old = 1\nconst hidden = 2, added = 3; export { added };",
+      selected: true,
+    },
+    {
+      name: "namespace member does not hide a module export",
+      before: "export namespace API { export const added = 1; }",
+      after: "export namespace API { export const added = 1; } export const added = 2;",
+      selected: true,
+    },
+    {
+      name: "generic initializer does not hide a new export",
+      before: "class Handler {}; export const cache = new Map<string, Handler>();",
+      after:
+        "class Handler {}; export const cache = new Map<string, Handler>(); export { Handler };",
+      selected: true,
+    },
+    {
+      name: "added function",
+      before: "export const old = 1;",
+      after: "export const old = 1; export function added() {}",
+      selected: true,
+    },
+    {
+      name: "removed export",
+      before: "export const old = 1;",
+      after: "const old = 1;",
+      selected: true,
+    },
+    {
+      name: "renamed re-export",
+      before: 'export { original as old } from "./value.js";',
+      after: 'export { original as renamed } from "./value.js";',
+      selected: true,
+    },
+    {
+      name: "multiline export list",
+      before: "const old = 1; export { old };",
+      after: "const old = 1, added = 2; export {\n old,\n added\n };",
+      selected: true,
+    },
+    {
+      name: "second variable",
+      before: "export const old = 1;",
+      after: "export const old = 1, added = 2;",
+      selected: true,
+    },
+    {
+      name: "default export",
+      before: "export const old = 1;",
+      after: "export const old = 1; export default () => 2;",
+      selected: true,
+    },
+    {
+      name: "wildcard source",
+      before: 'export * from "./one.js";',
+      after: 'export * from "./two.js";',
+      selected: true,
+    },
+    {
+      name: "implementation only",
+      before: "export function old() { return 1; }",
+      after: "export function old() { return 2; }",
+      selected: false,
+    },
+    {
+      name: "initializer only",
+      before: "export const old = 1;",
+      after: "export const old = call(2, 3);",
+      selected: false,
+    },
+    {
+      name: "type only",
+      before: "export const old = 1;",
+      after: "export const old = 1; export type New = string; export interface Shape {}",
+      selected: false,
+    },
+    {
+      name: "comments and strings",
+      before: "export const old = 1;",
+      after: `export const old = 1; // export const added = 2;\nconst text = 'export { added }';`,
+      selected: false,
+    },
+    {
+      name: "unknown bindings",
+      before: "export const old = 1;",
+      after: "export const { old, added } = value;",
+      selected: true,
+    },
+  ])("selects all mock owners on $name", ({ before, after, selected }) => {
+    const producer = "src/owner/runtime.ts";
+    const consumers = [
+      "test/relative.test.ts",
+      "test/alias.test.ts",
+      "test/package.test.ts",
+      "test/shared.test.ts",
+    ];
+    withTinyGitRepo(
+      {
+        [producer]: before,
+        "src/owner/runtime.test.ts": "export {};",
+        "src/owner/other.ts": 'const value = 1; export { value as "}" };',
+        "tsconfig.json": JSON.stringify({
+          compilerOptions: { paths: { "@runtime/*": ["src/owner/*"] } },
+        }),
+        "package.json": JSON.stringify({
+          name: "example",
+          exports: { "./runtime": "./src/owner/runtime.ts" },
+        }),
+        [consumers[0]!]: 'vi.mock("../src/owner/runtime.js", () => ({ old: 1 }));',
+        [consumers[1]!]: 'vi.mock(import("@runtime/runtime"), () => ({ old: 1 }));',
+        [consumers[2]!]: 'vi.mock("example/runtime", () => ({ old: 1 }));',
+        "test/mock-factory.ts": 'vi.mock("../src/owner/runtime.js", () => ({ old: 1 }));',
+        "test/shared-layer.ts": '"."\nimport "./mock-factory.js";',
+        [consumers[3]!]: 'import "./shared-layer.js";',
+        "test/fixture-text.test.ts": `const fixture = 'vi.mock("../src/owner/runtime.js", () => ({}))';`,
+        "test/comment.test.ts": '// vi.mock("../src/owner/runtime.js", () => ({}));',
+      },
+      (cwd) => {
+        const base = spawnSync("git", ["write-tree"], { cwd, encoding: "utf8" });
+        expect(base.status).toBe(0);
+        fs.writeFileSync(path.join(cwd, producer), after);
+        const reasons: string[] = [];
+        const result = resolveChangedTestTargetPlan([producer], {
+          cwd,
+          baseRef: base.stdout.trim(),
+          boundedOwners: true,
+          resolveAliases: true,
+          runtimeOnly: true,
+          aggressive: { maxDirectImporters: 1, maxDirectoryTests: 1 },
+          onSelection: ({ rule, targets }) => {
+            if (rule === "mock-export-consumer") {
+              reasons.push(...targets);
+            }
+          },
+        });
+        expect(reasons.toSorted()).toEqual(selected ? consumers.toSorted() : []);
+        if (selected) {
+          expect(result.targets).toEqual(expect.arrayContaining(consumers));
+        }
+        expect(result.targets).not.toContain("test/fixture-text.test.ts");
+        expect(result.targets).not.toContain("test/comment.test.ts");
+      },
+    );
+  });
+
+  it.each([
+    {
+      name: "namespace re-export becomes star re-export",
+      before: 'export * as runtime from "./runtime.js";',
+      after: 'export * from "./runtime.js";',
+      selected: true,
+    },
+    {
+      name: "literal star becomes namespace consumption",
+      before: 'import { "*" as star } from "./runtime.js"; void star;',
+      after: 'import * as runtime from "./runtime.js"; void runtime.existing;',
+      selected: true,
+    },
+    {
+      name: "literal star becomes dynamic consumption",
+      before: 'import { "*" as star } from "./runtime.js"; void star;',
+      after: 'const runtime = await import("./runtime.js"); void runtime.existing;',
+      selected: true,
+    },
+    {
+      name: "literal star becomes re-export consumption",
+      before: 'export { "*" as star } from "./runtime.js";',
+      after: 'export * from "./runtime.js";',
+      selected: true,
+    },
+    {
+      name: "import after a period literal",
+      before: 'import { old } from "./runtime.js";',
+      after: '"."\nimport { existing } from "./runtime.js";',
+      selected: true,
+    },
+    {
+      name: "quoted closing brace is a consumed name",
+      before: 'import { old } from "./runtime.js";',
+      after: 'import { "}" as existing } from "./runtime.js";',
+      selected: true,
+    },
+    {
+      name: "named re-export switches consumed binding",
+      before: 'export { old as run } from "./runtime.js";',
+      after: 'export { existing as run } from "./runtime.js";',
+      selected: true,
+    },
+    {
+      name: "erased query becomes a runtime namespace import",
+      before: 'type Runtime = typeof import("./runtime.js");',
+      after:
+        'type Runtime = typeof import("./runtime.js"); import * as runtime from "./runtime.js";',
+      selected: true,
+    },
+    {
+      name: "default binding named type",
+      before: 'import { old } from "./runtime.js";',
+      after: 'import type from "./runtime.js";',
+      selected: true,
+    },
+    {
+      name: "default binding named type with named imports",
+      before: 'import { old } from "./runtime.js";',
+      after: 'import type, { old } from "./runtime.js";',
+      selected: true,
+    },
+    {
+      name: "new named import",
+      before: 'import { old } from "./runtime.js";',
+      after: 'import { old, existing } from "./runtime.js";',
+      selected: true,
+    },
+    {
+      name: "new default import",
+      before: 'import { old } from "./runtime.js";',
+      after: 'import value, { old } from "./runtime.js";',
+      selected: true,
+    },
+    {
+      name: "local rename",
+      before: 'import { old } from "./runtime.js";',
+      after: 'import { old as renamed } from "./runtime.js";',
+      selected: false,
+    },
+    {
+      name: "new erased binding",
+      before: 'import { old } from "./runtime.js";',
+      after: 'import { old, type Shape } from "./runtime.js";',
+      selected: false,
+    },
+  ])("protects existing exports on $name", ({ before, after, selected }) => {
+    const producer = "src/owner/caller.ts";
+    withTinyGitRepo(
+      {
+        [producer]: before,
+        "src/owner/caller.test.ts": "export {};",
+        "src/owner/runtime.ts":
+          'export const old = 1, existing = 2; export default 3; export { existing as "}", existing as "*" };',
+        "test/consumer.test.ts":
+          'import "./layer-one.js"; vi.mock("../src/owner/runtime.js", () => ({ old: 1, "*": 2 }));',
+        "test/layer-one.ts": 'import "./layer-two.js";',
+        "test/layer-two.ts": 'import "../src/owner/caller.js";',
+        "test/unrelated.test.ts": 'vi.mock("../src/owner/runtime.js", () => ({ old: 1, "*": 2 }));',
+      },
+      (cwd) => {
+        const base = spawnSync("git", ["write-tree"], { cwd, encoding: "utf8" });
+        expect(base.status).toBe(0);
+        fs.writeFileSync(path.join(cwd, producer), after);
+        const result = resolveChangedTestTargetPlan([producer], {
+          cwd,
+          baseRef: base.stdout.trim(),
+          boundedOwners: true,
+          aggressive: { maxDirectImporters: 1, maxDirectoryTests: 1 },
+        });
+        expect(result.targets.includes("test/consumer.test.ts")).toBe(selected);
+        expect(result.targets).not.toContain("test/unrelated.test.ts");
+      },
+    );
+  });
+
+  it.each([
+    'vi.mock<{ old: number }>(import("../src/owner/runtime.js"), () => ({ old: 1 }));',
+    'import { vi as mocker } from "vitest"; mocker.doMock("../src/owner/runtime.js", () => ({ old: 1 }));',
+  ])("retains consumers of typed and aliased mock installers: %s", (installer) => {
+    withTinyGitRepo(
+      {
+        "src/owner/runtime.ts": "export const old = 1;",
+        "src/owner/runtime.test.ts": "export {};",
+        "test/installer.ts": installer,
+        "test/layer.ts": 'import "./installer.js";',
+        "test/consumer.test.ts": 'import "./layer.js";',
+      },
+      (cwd) => {
+        const base = spawnSync("git", ["write-tree"], { cwd, encoding: "utf8" });
+        expect(base.status).toBe(0);
+        fs.appendFileSync(path.join(cwd, "src/owner/runtime.ts"), "export const added = 2;");
+        expect(
+          resolveChangedTestTargetPlan(["src/owner/runtime.ts"], {
+            cwd,
+            baseRef: base.stdout.trim(),
+            boundedOwners: true,
+            runtimeOnly: true,
+            aggressive: { maxDirectImporters: 1, maxDirectoryTests: 1 },
+          }).targets,
+        ).toContain("test/consumer.test.ts");
+      },
+    );
+  });
+
+  it("fails closed when current source cannot be read", () => {
+    withTinyGitRepo(
+      {
+        "src/owner/runtime.ts": "export const old = 1;",
+        "src/owner/runtime.test.ts": "export {};",
+        "test/consumer.test.ts": 'vi.mock("../src/owner/runtime.js", () => ({ old: 1 }));',
+      },
+      (cwd) => {
+        const base = spawnSync("git", ["write-tree"], { cwd, encoding: "utf8" });
+        expect(base.status).toBe(0);
+        const read = fs.readFileSync;
+        const denied = Object.assign(new Error("Current source is unreadable"), { code: "EACCES" });
+        const spy = vi.spyOn(fs, "readFileSync").mockImplementation((...args) => {
+          if (args[0] === path.join(cwd, "src/owner/runtime.ts")) {
+            throw denied;
+          }
+          return read(...args);
+        });
+        try {
+          expect(() =>
+            resolveChangedTestTargetPlan(["src/owner/runtime.ts"], {
+              cwd,
+              baseRef: base.stdout.trim(),
+              boundedOwners: true,
+            }),
+          ).toThrow(denied);
+        } finally {
+          spy.mockRestore();
+        }
+      },
+    );
+  });
+
+  it.each([undefined, "missing-base"])(
+    "keeps mock coverage when base %s is unavailable",
+    (baseRef) => {
+      withTinyGitRepo(
+        {
+          "src/owner/runtime.ts": "export const old = 1;",
+          "src/owner/runtime.test.ts": "export {};",
+          "test/consumer.test.ts": 'vi.mock("../src/owner/runtime.js", () => ({ old: 1 }));',
+        },
+        (cwd) => {
+          expect(
+            resolveChangedTestTargetPlan(["src/owner/runtime.ts"], {
+              cwd,
+              baseRef,
+              boundedOwners: true,
+            }).targets,
+          ).toContain("test/consumer.test.ts");
+        },
+      );
+    },
+  );
+});
+
 describe("test selector native source facts", () => {
   it("keeps whole-area UI consumers and source readers across graph cache scopes", () => {
     const pluginModule = "extensions/example/browser/view.ts";
@@ -2997,6 +3420,7 @@ describe("test selector native source facts", () => {
         expect(syntaxFacts.find(({ file }) => file === "generic-callback.ts")).toMatchObject({
           imports: [],
           typeOnlyImports: [],
+          mocks: [],
         });
         expect(syntaxFacts.find(({ file }) => file === "generic-callback-import.ts")).toMatchObject(
           {
@@ -3062,6 +3486,7 @@ describe("test selector native source facts", () => {
           file,
           imports: [],
           typeOnlyImports: [],
+          mocks: [],
           matches: terms.filter((term) => source.includes(term)),
           references: terms.filter((term) => tokens.has(term)),
         };
@@ -3099,6 +3524,7 @@ describe("test selector native source facts", () => {
             file,
             imports: [dependency],
             typeOnlyImports: [],
+            mocks: [],
             matches: ["needle"],
             references: ["needle"],
           })),
@@ -3110,6 +3536,7 @@ describe("test selector native source facts", () => {
             file,
             imports: [dependency],
             typeOnlyImports: [],
+            mocks: [],
             matches: [],
             references: [],
           })),
@@ -3129,7 +3556,13 @@ describe("test selector native source facts", () => {
           { file: "unterminated.ts", parseImports: true },
           { file: "deleted.ts", parseImports: true },
         ];
-        const unterminatedFacts = { imports: [], typeOnlyImports: [], matches: [], references: [] };
+        const unterminatedFacts = {
+          imports: [],
+          typeOnlyImports: [],
+          mocks: [],
+          matches: [],
+          references: [],
+        };
         const expectedFacts = {
           imports: [
             "./barrel.js",
@@ -3140,6 +3573,7 @@ describe("test selector native source facts", () => {
             "other-dependency",
           ],
           typeOnlyImports: ["./barrel.js"],
+          mocks: [],
           matches: ["scripts/tool.mts", "scripts/tool"],
           references: ["scripts/tool.mts"],
         };
@@ -3203,6 +3637,7 @@ describe("test selector native source facts", () => {
               file: "large.mts",
               imports: [],
               typeOnlyImports: [],
+              mocks: [],
               matches: ["scripts/tool.mts"],
               references: ["scripts/tool.mts"],
             },

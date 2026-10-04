@@ -1254,7 +1254,7 @@ describe("runCodexAppServerSideQuestion", () => {
           cfg: {
             agents: {
               defaults: { sandbox: { mode: "non-main", scope: "agent" } },
-              list: [{ id: "main" }],
+              entries: { main: {} },
             },
           } as never,
           sessionKey: "agent:main:main",

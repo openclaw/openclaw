@@ -347,34 +347,6 @@ export class ReefSqliteReplayStore implements ReplayStore {
     });
   }
 
-  async consume(peer: string, id: string): Promise<void> {
-    const key = reefReplayStoreKey(peer, id);
-    await this.#mutate(key, () => {
-      const owner = this.#claimOwners.get(key);
-      return {
-        decide: (existing) => {
-          if (existing?.state !== "in_flight" || existing.claimOwner !== owner) {
-            return { value: existing, result: false };
-          }
-          const {
-            receipt: _receipt,
-            body: _body,
-            claimOwner: _claimOwner,
-            claimExpiresAt: _claimExpiresAt,
-            ...rest
-          } = existing;
-          return { value: { ...rest, state: "consumed" }, result: true };
-        },
-        publish: (consumed) => {
-          if (!consumed) {
-            throw new Error("replay claim is not in flight");
-          }
-          this.#claimOwners.delete(key);
-        },
-      };
-    });
-  }
-
   async release(peer: string, id: string): Promise<void> {
     const key = reefReplayStoreKey(peer, id);
     await this.#mutate(key, () => {

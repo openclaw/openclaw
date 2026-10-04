@@ -91,7 +91,7 @@ describe("offerLiveModelVerification", () => {
       browser: { enabled: false },
       agents: {
         ownership: "explicit",
-        entries: { main: { default: true } },
+        entries: { main: {} },
         defaults: { model: "openai/test-model@openai:working" },
       },
       auth: { profiles: { "openai:working": { provider: "openai", mode: "api_key" } } },
@@ -282,7 +282,7 @@ describe("offerLiveModelVerification", () => {
 
   it("reports when a repair candidate persisted its verified config", async () => {
     const repairedConfig: OpenClawConfig = {
-      agents: { entries: { main: { default: true } } },
+      agents: { entries: { main: {} } },
       models: {
         providers: {
           openai: { apiKey: "test-key", baseUrl: "https://api.openai.com/v1", models: [] },
@@ -307,7 +307,7 @@ describe("offerLiveModelVerification", () => {
 
     await expect(
       verifyWithMemoryConfig({
-        config: { agents: { entries: { main: { default: true } } } },
+        config: { agents: { entries: { main: {} } } },
         opts: {},
         prompter,
         runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() } as never,

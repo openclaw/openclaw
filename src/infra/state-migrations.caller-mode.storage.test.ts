@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { getAgentDir } from "../agents/config.js";
 import { resolveInstallAgentDir } from "../agents/install-agent-dir.js";
 import { readCurrentConfigForResolution } from "../config/io.runtime.js";
+import type { OpenClawConfigWithLegacyRoster } from "../config/legacy.roster.js";
 import { loadExactSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
 import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-entry-store.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -141,11 +142,12 @@ describe("legacy state migration caller storage", () => {
             env: state.env,
             homedir: () => state.home,
           });
+          const locatorConfig: OpenClawConfigWithLegacyRoster = {
+            agents: { list: [{ id: "main" }, { id: "worker", default: true }] },
+          };
           const migration = resolveLegacyStateMigrationOwner({
             cfg,
-            locatorConfig: {
-              agents: { list: [{ id: "main" }, { id: "worker", default: true }] },
-            },
+            locatorConfig,
             env: state.env,
             homedir: () => state.home,
           });

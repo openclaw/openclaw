@@ -160,7 +160,7 @@ final class AppVoiceRuntime {
         self.talkOverlay = talkOverlay
         self.interruptMonitor = interruptMonitor
         self.talkController = TalkModeController(
-            state: stateProvider, owners: { owners }, publishTalk: environment.publishTalk)
+            state: stateProvider, owners: owners, publishTalk: environment.publishTalk)
     }
 
     func activate() {

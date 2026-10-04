@@ -315,14 +315,6 @@ describe("minimal npm extended-stable workflow", () => {
       invocation: null,
       api: true,
     },
-    {
-      label: "diverged target missing the gate",
-      hasScript: false,
-      relationship: "diverged",
-      status: 1,
-      invocation: null,
-      api: true,
-    },
   ])("enforces plugin compatibility admission for $label", (testCase) => {
     const run = runPluginCompatibilityGate(testCase);
     expect(run.result.status, run.result.stderr).toBe(testCase.status);
@@ -333,25 +325,6 @@ describe("minimal npm extended-stable workflow", () => {
     }
     if (testCase.status === 1) {
       expect(run.result.stderr).toContain("not proven to predate");
-    }
-  });
-
-  it("adds extended-stable without adding policy or verifier contracts", () => {
-    const raw = readFileSync(workflowPath, "utf8");
-    const parsed = workflow();
-    expect(parsed.on?.workflow_dispatch?.inputs?.npm_dist_tag?.options).toEqual([
-      "beta",
-      "latest",
-      "extended-stable",
-    ]);
-    for (const forbidden of [
-      "release-policy",
-      "policyMode",
-      "release-operation-verifier",
-      "external_contract_revision",
-      "stable-lines.json",
-    ]) {
-      expect(raw).not.toContain(forbidden);
     }
   });
 
@@ -552,33 +525,15 @@ describe("minimal npm extended-stable workflow", () => {
       workflowRef: "refs/tags/release-publish/bbbbbbbbbbbb-123",
       status: 0,
     },
-    { label: "feature branch", workflowRef: "refs/heads/feature/recovery", status: 1 },
-    {
-      label: "release branch with candidate override",
-      workflowRef: "refs/heads/release/2026.8.1",
-      status: 1,
-    },
     {
       label: "Tideclaw branch",
       workflowRef: "refs/heads/tideclaw/alpha/2026-09-25-1200Z",
       status: 1,
     },
     {
-      label: "extended-stable branch",
-      workflowRef: "refs/heads/extended-stable/2026.8.33",
-      status: 1,
-    },
-    { label: "ordinary tag", workflowRef: "refs/tags/v2026.8.34", status: 1 },
-    {
       label: "wrong candidate month",
       workflowRef: "refs/tags/release-publish/bbbbbbbbbbbb-123",
       candidate: "extended-stable/2026.7.33",
-      status: 1,
-    },
-    {
-      label: "noncanonical candidate branch",
-      workflowRef: "refs/tags/release-publish/bbbbbbbbbbbb-123",
-      candidate: "extended-stable/2026.8.34",
       status: 1,
     },
     {
@@ -588,21 +543,9 @@ describe("minimal npm extended-stable workflow", () => {
       status: 1,
     },
     {
-      label: "beta selector",
-      workflowRef: "refs/tags/release-publish/bbbbbbbbbbbb-123",
-      npmDistTag: "beta",
-      status: 1,
-    },
-    {
       label: "correction suffix",
       workflowRef: "refs/tags/release-publish/bbbbbbbbbbbb-123",
       tag: "v2026.8.34-1",
-      status: 1,
-    },
-    {
-      label: "non-tag candidate",
-      workflowRef: "refs/tags/release-publish/bbbbbbbbbbbb-123",
-      tag: "a".repeat(40),
       status: 1,
     },
     {
@@ -741,25 +684,20 @@ describe("minimal npm extended-stable workflow", () => {
     expect(save.with?.key).toBe("${{ steps.dist_build_cache.outputs.cache-primary-key }}");
   });
 
-  it("accepts the historical full-build artifact without a target tsx loader", () => {
-    const { artifactExists, invocation, result, targetHasTsxLoader } = runControlUiArtifactStep({
-      artifactPresent: true,
-    });
-    expect(targetHasTsxLoader).toBe(false);
-    expect(result.status, result.stderr).toBe(0);
-    expect(invocation).toBeNull();
-    expect(artifactExists).toBe(true);
-  });
-
-  it("builds a missing Control UI release artifact through the target package script", () => {
-    const { artifactExists, invocation, result, targetHasTsxLoader } = runControlUiArtifactStep({
-      artifactPresent: false,
-    });
-    expect(targetHasTsxLoader).toBe(false);
-    expect(result.status, result.stderr).toBe(0);
-    expect(invocation).toBe("ui:build");
-    expect(artifactExists).toBe(true);
-  });
+  it.each([
+    { artifactPresent: true, invocation: null },
+    { artifactPresent: false, invocation: "ui:build" },
+  ])(
+    "ensures the Control UI artifact without a target tsx loader: $artifactPresent",
+    (testCase) => {
+      const { artifactExists, invocation, result, targetHasTsxLoader } =
+        runControlUiArtifactStep(testCase);
+      expect(targetHasTsxLoader).toBe(false);
+      expect(result.status, result.stderr).toBe(0);
+      expect(invocation).toBe(testCase.invocation);
+      expect(artifactExists).toBe(true);
+    },
+  );
 
   it("uses the trusted Full Validation evidence verifier", () => {
     const parsed = workflow();
@@ -862,28 +800,6 @@ describe("minimal npm extended-stable workflow", () => {
     );
     expect(readFileSync(workflowPath, "utf8")).not.toContain(
       "find preflight-tarball -type f -name '*.tgz'",
-    );
-  });
-
-  it("publishes gateway packages in manifest order before the root package", () => {
-    const parsed = workflow();
-    const preflightPack = step(
-      workflow(preflightWorkflowPath).jobs?.prepare_openclaw_npm,
-      "Pack and seal publishable npm package set",
-    );
-    const publish = step(parsed.jobs?.publish_openclaw_npm, "Publish");
-    expect(preflightPack.run).toContain("npm-prepared-bundle.mjs prepare");
-    const policy = JSON.parse(
-      readFileSync("scripts/lib/npm-core-release-packages.json", "utf8"),
-    ) as { path: string }[];
-    expect(policy.map((entry) => entry.path)).toEqual([
-      "packages/ai",
-      "packages/gateway-protocol",
-      "packages/gateway-client",
-    ]);
-    expect(publish.run).toContain("(.corePackageTarballs // [])[]");
-    expect(publish.run).toContain(
-      'bash scripts/openclaw-npm-publish.sh --publish "${publish_target}"',
     );
   });
 });

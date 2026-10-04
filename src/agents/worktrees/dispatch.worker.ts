@@ -2,7 +2,9 @@ import type {
   WorkerOperationHandlers,
   WorkerOperations,
 } from "../../state/worker-operation-registry.js";
+import { writeProvisionedSnapshotInWorker } from "./provisioned-snapshot.worker.js";
 import {
+  findLiveRegistryWorktreeByOwnerInDatabase,
   getRegistryWorktreeInDatabase,
   getRegistryWorktreeProvisionedChunkInDatabase,
   getRegistryWorktreeProvisionedPathsInDatabase,
@@ -21,8 +23,13 @@ import {
   releaseWorktreeRunLeaseInDatabase,
 } from "./run-lease-store.kernel.js";
 import { worktreeRunLeaseOperation } from "./run-lease-store.worker.js";
+import type { ManagedWorktreeOwnerKind } from "./types.js";
 
 export const worktreeOperations = {
+  "worktrees.findLiveByOwner": (
+    { ownerKind, ownerId }: { ownerKind: ManagedWorktreeOwnerKind; ownerId: string },
+    { open },
+  ) => findLiveRegistryWorktreeByOwnerInDatabase(open().db, ownerKind, ownerId),
   "worktrees.get": ({ id }: { id: string }, { open }) =>
     getRegistryWorktreeInDatabase(open().db, id),
   "worktrees.list": (input: WorktreeRegistryListOptions, { open }) =>
@@ -37,6 +44,10 @@ export const worktreeOperations = {
     input: Parameters<typeof getRegistryWorktreeProvisionedChunkInDatabase>[1],
     { open },
   ) => getRegistryWorktreeProvisionedChunkInDatabase(open().db, input),
+  "worktrees.writeProvisionedSnapshot": (
+    input: Parameters<typeof writeProvisionedSnapshotInWorker>[0],
+    { open, stateOptions },
+  ) => writeProvisionedSnapshotInWorker(input, { ...stateOptions(), database: open() }),
   "worktrees.retireMissing": (
     input: Parameters<typeof retireMissingWorktreeInWorker>[0],
     { open, stateOptions },

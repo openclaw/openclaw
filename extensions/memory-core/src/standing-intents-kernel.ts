@@ -33,16 +33,6 @@ type StandingIntentMatchDatabase = StandingIntentDatabase & {
   };
 };
 
-function shouldRearm(
-  row: Pick<StandingIntentRow, "status" | "last_fired_at" | "cooldown_seconds">,
-  nowMs: number,
-): boolean {
-  if (row.status !== "fired" || row.last_fired_at === null) {
-    return false;
-  }
-  return row.last_fired_at + row.cooldown_seconds * 1_000 <= nowMs;
-}
-
 export function maintainStandingIntentLifecycle(db: DatabaseSync, nowMs: number): void {
   const kysely = getNodeSqliteKysely<StandingIntentDatabase>(db);
   executeSqliteQuerySync(
@@ -73,7 +63,12 @@ export function maintainStandingIntentLifecycle(db: DatabaseSync, nowMs: number)
       .where("expires_at", ">", nowMs)
       .whereRef("fire_count", "<", "max_fires"),
   ).rows;
-  const readyIds = fired.filter((row) => shouldRearm(row, nowMs)).map((row) => row.id);
+  const readyIds = fired
+    .filter(
+      (row) =>
+        row.last_fired_at !== null && row.last_fired_at + row.cooldown_seconds * 1_000 <= nowMs,
+    )
+    .map((row) => row.id);
   if (readyIds.length > 0) {
     executeSqliteQuerySync(
       db,
@@ -144,38 +139,18 @@ function triggerMatchesPrompt(row: StandingIntentRow, promptTokens: ReadonlySet<
     );
 }
 
-function scopesMatch(
-  row: StandingIntentRow,
-  channelScopes: ReadonlySet<string>,
-  senderScope: string | undefined,
-): boolean {
-  return (
-    (row.channel_scope === null || channelScopes.has(row.channel_scope)) &&
-    (row.sender_scope === null || row.sender_scope === senderScope)
-  );
-}
-
-function canFire(row: StandingIntentRow, nowMs: number): boolean {
-  return (
-    row.status === "armed" &&
-    row.expires_at > nowMs &&
-    row.fire_count < row.max_fires &&
-    (row.last_fired_at === null || row.last_fired_at + row.cooldown_seconds * 1_000 <= nowMs)
-  );
-}
-
 export function matchStandingIntentsInDatabase(
   db: DatabaseSync,
   params: StandingIntentMatchInput,
 ): StandingIntent[] {
   const promptTokens = new Set(params.promptTokens);
-  const channelScopes = new Set(params.channelScopes);
+  const channelScopes = params.channelScopes;
   const ftsQuery = params.ftsQuery;
   const storedSenderScope = params.senderScope;
   const nowMs = params.nowMs ?? Date.now();
   maintainStandingIntentLifecycle(db, nowMs);
-  const matchDb = getNodeSqliteKysely<StandingIntentMatchDatabase>(db);
-  let candidatesQuery = matchDb
+  const kysely = getNodeSqliteKysely<StandingIntentMatchDatabase>(db);
+  let candidatesQuery = kysely
     .selectFrom("standing_intents as intent")
     .innerJoin("standing_intents_fts as fts", "fts.rowid", "intent.intent_key")
     .selectAll("intent")
@@ -185,11 +160,11 @@ export function matchStandingIntentsInDatabase(
     .where("intent.expires_at", ">", nowMs)
     .whereRef("intent.fire_count", "<", "intent.max_fires");
   candidatesQuery =
-    channelScopes.size > 0
+    channelScopes.length > 0
       ? candidatesQuery.where((expression) =>
           expression.or([
             expression("intent.channel_scope", "is", null),
-            ...[...channelScopes].map((scope) => expression("intent.channel_scope", "=", scope)),
+            ...channelScopes.map((scope) => expression("intent.channel_scope", "=", scope)),
           ]),
         )
       : candidatesQuery.where("intent.channel_scope", "is", null);
@@ -201,7 +176,6 @@ export function matchStandingIntentsInDatabase(
         ]),
       )
     : candidatesQuery.where("intent.sender_scope", "is", null);
-  const kysely = getNodeSqliteKysely<StandingIntentDatabase>(db);
   const fired: StandingIntent[] = [];
   let scannedCandidates = 0;
   let cursor: { createdAt: number; id: string } | undefined;
@@ -247,8 +221,8 @@ export function matchStandingIntentsInDatabase(
       // This write transaction's page stays current: firing only changes the selected row.
       if (
         !readKnownCreatorSender(current.creator_sender) ||
-        !canFire(current, nowMs) ||
-        !scopesMatch(current, channelScopes, storedSenderScope) ||
+        (current.last_fired_at !== null &&
+          !(current.last_fired_at + current.cooldown_seconds * 1_000 <= nowMs)) ||
         !triggerMatchesPrompt(current, promptTokens)
       ) {
         continue;

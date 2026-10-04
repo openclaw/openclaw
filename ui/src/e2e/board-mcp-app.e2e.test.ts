@@ -524,10 +524,10 @@ describeControlUiE2e("Control UI dashboard MCP Apps", () => {
             reported?.width === size.width && reported?.height === size.height,
         );
     };
-    expect(await frameInsets()).toEqual({ top: 0, bottom: 0, bodyHeightGap: 0 });
+    await expect.poll(frameInsets).toEqual({ top: 0, bottom: 0, bodyHeightGap: 0 });
     await expectHostDimensions();
     await page.setViewportSize({ width: 1440, height: 1000 });
-    expect(await frameInsets()).toEqual({ top: 0, bottom: 0, bodyHeightGap: 0 });
+    await expect.poll(frameInsets).toEqual({ top: 0, bottom: 0, bodyHeightGap: 0 });
     await expectHostDimensions();
     await expectRetainedBoardPresentation(page, "expanded");
     if (artifactDir) {
@@ -540,7 +540,7 @@ describeControlUiE2e("Control UI dashboard MCP Apps", () => {
       .getByRole("button", { name: "Restore split", exact: true })
       .click();
     await expectRetainedBoardPresentation(page, "split");
-    expect((await frameInsets()).bodyHeightGap).toBe(0);
+    await expect.poll(async () => (await frameInsets()).bodyHeightGap).toBe(0);
     await expectHostDimensions();
     await restoreChatAsMain(page);
 

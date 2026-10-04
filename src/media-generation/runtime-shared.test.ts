@@ -217,12 +217,23 @@ describe("media-generation candidate lifecycle", () => {
   it("preserves missing, skipped, and failed attempts before the first usable result", async () => {
     const calls: string[] = [];
     const result = await runMediaGenerationCandidates({
-      candidates: ["missing", "skipped", "failed", "success", "unused"].map((provider) => ({
-        provider,
-        model: "model",
-      })),
+      request: {
+        cfg: {
+          agents: {
+            defaults: {
+              mediaModels: {
+                image: {
+                  primary: "missing/model",
+                  fallbacks: ["skipped/model", "failed/model", "success/model", "unused/model"],
+                },
+              },
+            },
+          },
+        },
+        autoProviderFallback: false,
+      },
+      listProviders: () => [],
       capability: "image",
-      includeSkipFailureDetails: true,
       getProvider(id) {
         calls.push(`lookup:${id}`);
         return id === "missing" ? undefined : { id };
@@ -282,10 +293,17 @@ describe("media-generation candidate lifecycle", () => {
       const lookedUp: string[] = [];
       let executions = 0;
       const result = runMediaGenerationCandidates({
-        candidates: [
-          { provider: "primary", model: "model" },
-          { provider: "fallback", model: "model" },
-        ],
+        request: {
+          cfg: {
+            agents: {
+              defaults: {
+                mediaModels: { video: { primary: "primary/model", fallbacks: ["fallback/model"] } },
+              },
+            },
+          },
+          autoProviderFallback: false,
+        },
+        listProviders: () => [],
         capability: "video",
         getProvider(id) {
           lookedUp.push(id);

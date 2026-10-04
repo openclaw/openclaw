@@ -105,15 +105,6 @@ async function* readLogLines(file: string, last: number, pollMs?: number): Async
   }
 }
 
-function percentile(values: number[], p: number): number {
-  if (values.length === 0) {
-    return 0;
-  }
-  const sorted = [...values].toSorted((a, b) => a - b);
-  const idx = Math.min(sorted.length - 1, Math.max(0, Math.ceil((p / 100) * sorted.length) - 1));
-  return sorted[idx] ?? 0;
-}
-
 function summarizeSeries(values: number[]): {
   count: number;
   minMs: number;
@@ -126,18 +117,16 @@ function summarizeSeries(values: number[]): {
     return { count: 0, minMs: 0, maxMs: 0, avgMs: 0, p50Ms: 0, p95Ms: 0 };
   }
 
-  // Reduce instead of Math.min(...values): spread throws past V8's argument
-  // cap, and `latency --last <n>` can scan an unbounded JSONL history.
-  const minMs = values.reduce((min, value) => (value < min ? value : min));
-  const maxMs = values.reduce((max, value) => (value > max ? value : max));
+  const sorted = values.toSorted((a, b) => a - b);
+  const percentile = (fraction: number) => sorted[Math.ceil(fraction * sorted.length) - 1] ?? 0;
   const avgMs = values.reduce((sum, value) => sum + value, 0) / values.length;
   return {
     count: values.length,
-    minMs,
-    maxMs,
+    minMs: sorted[0] ?? 0,
+    maxMs: sorted[sorted.length - 1] ?? 0,
     avgMs,
-    p50Ms: percentile(values, 50),
-    p95Ms: percentile(values, 95),
+    p50Ms: percentile(0.5),
+    p95Ms: percentile(0.95),
   };
 }
 

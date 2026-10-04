@@ -13,7 +13,7 @@ type Request = {
   taskId: number;
   interactive?: boolean;
   nativeSections: SharedArrayBuffer;
-  deletedAgentDatabaseFences: [string, string][];
+  taskContext: [string, string][];
 };
 type Resource = { close: () => Promise<void>; agentId?: string; revoke: () => void };
 type QuarantineDatabase = {
@@ -23,7 +23,6 @@ type QuarantineDatabase = {
   close: () => void;
 };
 const observed = vi.hoisted(() => ({
-  handler: undefined as ((input: unknown) => unknown) | undefined,
   receive: undefined as ((message: Request) => void) | undefined,
   post: vi.fn<(message: unknown) => void>(),
   read: vi.fn<() => unknown>(),
@@ -102,16 +101,6 @@ vi.mock("../../infra/worker-task-pool.js", async (importOriginal) => {
       rotate() {
         return observed.rotate();
       }
-    },
-  };
-});
-vi.mock("../../infra/worker-task-server.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../infra/worker-task-server.js")>();
-  return {
-    ...actual,
-    serveOwnedWorkerTasks: (handler: (input: unknown) => unknown) => {
-      observed.handler = handler;
-      actual.serveOwnedWorkerTasks(handler);
     },
   };
 });

@@ -270,7 +270,7 @@ function renderToolRowContent(
   const displayLabel = formatCollapsedToolSummaryText(summary.label) ?? summary.label;
   const displayName = distinctSummaryText(summary.name, displayLabel);
   return html`
-    ${summary.label !== toolLabel ? html`<span class="chat-tool-msg-summary__label">${displayLabel}</span>` : nothing}
+    ${!displayName || summary.label !== toolLabel ? html`<span class="chat-tool-msg-summary__label">${displayLabel}</span>` : nothing}
     ${
       displayName ? html`<span class="chat-tool-msg-summary__names">${displayName}</span>` : nothing
     }

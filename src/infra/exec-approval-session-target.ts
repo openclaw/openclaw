@@ -49,11 +49,7 @@ function normalizeExecApprovalThreadValue(
   if (typeof value === "number") {
     return Number.isFinite(value) ? value : undefined;
   }
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const normalized = value.trim();
-  return normalized ? normalized : undefined;
+  return normalizeOptionalString(value);
 }
 
 function toExecLikeApprovalRequest(request: ApprovalRequestLike): ExecApprovalRequest {

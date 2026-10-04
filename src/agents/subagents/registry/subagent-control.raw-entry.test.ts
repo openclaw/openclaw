@@ -11,13 +11,14 @@ import {
 } from "../../../auto-reply/reply/queue/state.js";
 import { setRuntimeConfigSnapshot } from "../../../config/config.js";
 import {
+  appendTranscriptMessage,
   loadSessionEntry,
   replaceSessionEntry,
 } from "../../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { clearCommandLane, enqueueCommandInLane } from "../../../process/command-queue.js";
 import { beginSessionWorkAdmission } from "../../../sessions/session-lifecycle-admission.js";
-import { resolveSessionAgentId } from "../../agent-scope.js";
+import { AgentSelectionRequiredError, resolveSessionAgentId } from "../../agent-scope.js";
 import { resolveEmbeddedSessionLane } from "../../embedded-agent-runner/lanes.js";
 import { clearActiveEmbeddedRun, setActiveEmbeddedRun } from "../../embedded-agent-runner/runs.js";
 import { createEmbeddedRunHandle } from "../../embedded-agent-runner/runs.test-support.js";
@@ -25,12 +26,17 @@ import { isSubagentRegistryWriteCommand } from "../../subagent-test-fixtures.tes
 import type { AgentToolGatewayRequestCaller } from "../../tools/in-process-gateway.js";
 import { createSessionsSendTool } from "../../tools/sessions-send-tool.js";
 import { createSubagentsTool } from "../../tools/subagents-tool.js";
+import { captureSubagentCompletionReply } from "../announce/subagent-announce-output.js";
 import { killAllControlledSubagentRuns, killSubagentRunAdmin } from "./subagent-control.js";
+import { createSubagentRunManager } from "./subagent-registry-run-manager.js";
 import { registerSubagentRun } from "./subagent-registry.js";
 import { writeSubagentSessionEntry } from "./subagent-registry.persistence.test-support.js";
 import { getSubagentRunByRunId } from "./subagent-registry.test-helpers.js";
 
+vi.mock("./subagent-registry-run-manager.js", { spy: true });
+
 const fixture = useSubagentControlFixture();
+const manager = vi.mocked(createSubagentRunManager).mock.results[0]!.value;
 
 // sessions.create composition is proven separately. These rows retain its
 // spawnedBy/spawnDepth contract; the actual send tool must create the run record.
@@ -43,7 +49,8 @@ it.each(["main", "research"] as const)(
     const foreignId = `${foreignAgent}-global-session`;
     const cfg: OpenClawConfig = {
       agents: {
-        list: [{ id: "main", default: true }, { id: "research" }],
+        ownership: "explicit",
+        entries: { main: {}, research: {} },
         defaults: { workspace: fixture.stateDir },
       },
       tools: { sessions: { visibility: "all" }, agentToAgent: { enabled: true } },
@@ -110,7 +117,9 @@ it.each(["main", "research"] as const)(
       requesterSessionKey: parentKey,
       requesterAgentId: owner,
     });
-    expect(resolveSessionAgentId({ config: cfg, sessionKey: "global" })).toBe("main");
+    expect(() => resolveSessionAgentId({ config: cfg, sessionKey: "global" })).toThrow(
+      AgentSelectionRequiredError,
+    );
 
     const foreignAbort = vi.fn();
     const foreignHandle = createEmbeddedRunHandle({ runId: "foreign-run", abort: foreignAbort });
@@ -153,9 +162,8 @@ it.each(["main", "research"] as const)(
       expect(cancelled.details).toMatchObject({ found: true, killed: true });
       expect(interruptChild).toHaveBeenCalledOnce();
       expect(
-        loadSessionEntry({ agentId: owner, storePath: childStorePath, sessionKey: "global" })
-          ?.abortedLastRun,
-      ).toBe(true);
+        loadSessionEntry({ agentId: owner, storePath: childStorePath, sessionKey: "global" }),
+      ).toMatchObject({ abortedLastRun: true, status: "killed" });
       expect.soft(foreignAbort).not.toHaveBeenCalled();
       expect.soft(getExistingFollowupQueue("global")?.items.includes(followup) ?? false).toBe(true);
       release.resolve();
@@ -191,7 +199,8 @@ it.each(["main", "research"] as const)(
 async function prepareWatchedRawChildren() {
   const cfg: OpenClawConfig = {
     agents: {
-      list: [{ id: "main", default: true }, { id: "research" }],
+      ownership: "explicit",
+      entries: { main: {}, research: {} },
       defaults: { workspace: fixture.stateDir },
     },
     tools: { sessions: { visibility: "all" }, agentToAgent: { enabled: true } },
@@ -247,6 +256,75 @@ async function prepareWatchedRawChildren() {
   expect((await send("research", "research-turn")).details).toMatchObject({ status: "accepted" });
   return { cfg, children, send };
 }
+
+it.each([
+  { owner: "main", foreignStatus: undefined },
+  { owner: "research", foreignStatus: undefined },
+  { owner: "research", foreignStatus: "done" },
+  { owner: "research", foreignStatus: "failed" },
+] as const)(
+  "settles $owner/global from its own transcript and metadata (foreign=$foreignStatus)",
+  async ({ owner, foreignStatus }) => {
+    const runId = owner === "main" ? "main-1" : "research-2";
+    const waits = vi.spyOn(manager, "waitForSubagentCompletion");
+    const terminal = createDeferred<{
+      status: "timeout";
+      startedAt: number;
+      endedAt: number;
+    }>();
+    fixture.gateway.mockImplementation(async (request) => {
+      if (request.method !== "agent.wait") {
+        throw new Error(`Unexpected registry RPC ${request.method}`);
+      }
+      const params = request.params as { runId?: string };
+      return (await (params.runId === runId
+        ? terminal.promise
+        : new Promise<never>(() => {}))) as never;
+    });
+    fixture.capture.mockImplementation(captureSubagentCompletionReply);
+    const { children } = await prepareWatchedRawChildren();
+    for (const [agentId, { storePath }] of children) {
+      await appendTranscriptMessage(
+        { agentId, storePath, sessionKey: "global", sessionId: `${agentId}-global` },
+        { message: { role: "assistant", content: `${agentId}'s partial result` } },
+      );
+    }
+    const entry = getSubagentRunByRunId(runId)!;
+    expect(entry.execution.transcriptTarget).toBeUndefined();
+    if (foreignStatus) {
+      const scope = {
+        agentId: "main",
+        storePath: children.get("main")!.storePath,
+        sessionKey: "global",
+      };
+      await replaceSessionEntry(scope, {
+        ...loadSessionEntry(scope)!,
+        status: foreignStatus,
+        endedAt: Date.now(),
+        updatedAt: Date.now(),
+      });
+    }
+    terminal.resolve({ status: "timeout", startedAt: entry.createdAt, endedAt: Date.now() });
+    const waitIndex = waits.mock.calls.findIndex(([waitingRunId]) => waitingRunId === runId);
+    expect(waitIndex).toBeGreaterThanOrEqual(0);
+    await waits.mock.results[waitIndex]!.value;
+    await fixture.settle();
+    expect(getSubagentRunByRunId(runId)).toMatchObject({
+      childAgentId: owner,
+      execution: { status: "terminal", outcome: { status: "timeout" } },
+      completion: { resultText: `${owner}'s partial result` },
+    });
+    expect(
+      loadSessionEntry({
+        agentId: owner,
+        storePath: children.get(owner)!.storePath,
+        sessionKey: "global",
+      }),
+    ).toMatchObject({ status: "timeout" });
+    const foreignRunId = owner === "main" ? "research-2" : "main-1";
+    expect(getSubagentRunByRunId(foreignRunId)?.execution.endedAt).toBeUndefined();
+  },
+);
 
 it("numbers watched raw children independently and keeps their completion owner", async () => {
   const { children, send } = await prepareWatchedRawChildren();
@@ -348,19 +426,21 @@ it("keeps a watched registration current while the other raw owner commits", asy
 it.each(["admin", "bulk"] as const)(
   "%s cancellation keeps legacy raw children separated by requester agent",
   async (action) => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        list: [{ id: "main", default: true }, { id: "research" }],
-        defaults: { workspace: fixture.stateDir },
-      },
-    };
-    setRuntimeConfigSnapshot(cfg);
-    await writeSubagentSessionEntry({
+    const storePath = await writeSubagentSessionEntry({
       stateDir: fixture.stateDir,
       sessionKey: "global",
       agentId: "main",
       defaultSessionId: "legacy-global",
     });
+    const cfg: OpenClawConfig = {
+      session: { store: storePath },
+      agents: {
+        ownership: "explicit",
+        entries: { main: {}, research: {} },
+        defaults: { workspace: fixture.stateDir, sessionStore: { agentId: "main" } },
+      },
+    };
+    setRuntimeConfigSnapshot(cfg);
     for (const owner of ["research", "main"]) {
       await registerSubagentRun({
         runId: `${owner}-legacy`,

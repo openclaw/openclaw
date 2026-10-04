@@ -75,7 +75,7 @@ export function createCodexAttemptServerRequestController(
   } = turnRuntime;
   const {
     emitExecutionPhaseOnce,
-    scheduleTurnReleaseAfterTerminalDynamicTool,
+    recordDynamicToolResult,
     scheduleTerminalDynamicToolReleaseCheck,
   } = lifecycle;
   let refreshDrain: ReturnType<typeof createDeferred<void>> | undefined;
@@ -371,17 +371,8 @@ export function createCodexAttemptServerRequestController(
         pendingOpenClawDynamicToolCompletionIds.delete(call.callId);
         if (params.pluginRuntimeRefreshPending?.()) {
           await settlePluginRuntimeRefresh(turnId);
-        } else if (response.terminate === true && response.success) {
-          scheduleTurnReleaseAfterTerminalDynamicTool({
-            call,
-            response,
-            durationMs: toolDurationMs,
-          });
-        } else if (response.asyncStarted === true) {
-          scheduleTerminalDynamicToolReleaseCheck();
         } else {
-          state.currentTurnHadNonTerminalDynamicToolResult = true;
-          state.pendingTerminalDynamicToolRelease = undefined;
+          recordDynamicToolResult({ call, response, durationMs: toolDurationMs });
         }
         return protocolResponse as JsonValue;
       } catch (error) {

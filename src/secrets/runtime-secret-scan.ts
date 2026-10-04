@@ -1,5 +1,5 @@
 /** Scans config-like values for SecretRefs and credential-looking fields. */
-import { coerceSecretRef } from "../config/types.secrets.js";
+import { isLegacySecretRefWithoutProvider, parseSecretRef } from "../config/types.secrets.js";
 import type { SecretDefaults } from "./runtime-shared.js";
 
 /** Field names treated as credential-bearing even before a value is converted to SecretRef. */
@@ -11,7 +11,10 @@ function hasRecursiveSecretValue(params: {
   seen: WeakSet<object>;
   matchesEntry?: (key: string, value: unknown) => boolean;
 }): boolean {
-  if (coerceSecretRef(params.value, params.defaults)) {
+  if (
+    isLegacySecretRefWithoutProvider(params.value) ||
+    parseSecretRef(params.value, params.defaults)
+  ) {
     return true;
   }
   if (!params.value || typeof params.value !== "object") {

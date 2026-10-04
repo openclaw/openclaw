@@ -3,7 +3,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { trimToUndefined } from "./credentials.js";
 import {
-  resolveConfiguredSecretInputWithFallback,
+  resolveCanonicalConfiguredSecretInputWithFallback,
   type SecretInputUnresolvedReasonStyle,
 } from "./resolve-configured-secret-input-string.js";
 
@@ -35,7 +35,7 @@ export async function resolveGatewayAuthToken(params: {
     };
   }
 
-  const resolved = await resolveConfiguredSecretInputWithFallback({
+  const resolved = await resolveCanonicalConfiguredSecretInputWithFallback({
     config: params.cfg,
     env: params.env,
     value: params.cfg.gateway?.auth?.token,

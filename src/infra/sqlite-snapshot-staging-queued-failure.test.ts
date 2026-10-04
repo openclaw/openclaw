@@ -1,19 +1,17 @@
 import fs from "node:fs";
 import path from "node:path";
+import type { RetainedOperation } from "@openclaw/worker-runtime/lifecycle";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
-import type { RetainedOperation } from "./retained-operation.js";
 import {
   cleanupSnapshotOperations,
   removeTempDirectoryAsync,
 } from "./sqlite-readonly-location-cleanup.js";
 import { captureSqliteReadOnlyWorkerLaunch } from "./sqlite-readonly-worker.js";
-import {
-  allocateWorkerOwnedSqliteSnapshotDirectory,
-  captureSqliteSnapshotStagingOwner,
-} from "./sqlite-snapshot-staging-owner.js";
+import { allocateWorkerOwnedSqliteSnapshotDirectory } from "./sqlite-snapshot-staging-allocation.js";
+import { captureSqliteSnapshotStagingOwner } from "./sqlite-snapshot-staging-owner.js";
 import { holdAllocatedReply } from "./sqlite-snapshot-staging.test-support.js";
 import type { SqliteSnapshotStagingRequest } from "./sqlite-snapshot-staging.types.js";
 import { captureRetainedNativeWorkerSource } from "./worker-native-lifecycle.js";

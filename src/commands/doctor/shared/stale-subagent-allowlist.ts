@@ -140,7 +140,10 @@ export function maybeRepairStaleSubagentAllowlists(cfg: OpenClawConfig): {
       continue;
     }
     const staleTargetIds = new Set(pathHits.map((hit) => hit.normalizedAgentId));
-    subagents.allowAgents = subagents.allowAgents.filter((entry: string) => {
+    subagents.allowAgents = subagents.allowAgents.filter((entry: unknown) => {
+      if (typeof entry !== "string") {
+        return true;
+      }
       const trimmed = entry.trim();
       return !trimmed || trimmed === "*" || !staleTargetIds.has(normalizeAgentId(trimmed));
     });

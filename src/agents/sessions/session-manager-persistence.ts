@@ -28,8 +28,7 @@ import {
 } from "../../config/sessions/transcript-write-context.js";
 import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
-import { runInDetachedAsyncContext } from "../../shared/async-work-scope.js";
-import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
+import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { copyCodeModeSourceAppendOptions } from "../transcript-code-mode-source.js";
@@ -211,7 +210,7 @@ export class SessionManagerPersistence extends SessionManagerCore {
     }
     // Fresh receipts reuse this exact prepared object across the worker handoff.
     if (message) {
-      freezeJsonSnapshot(message.prepared.persistedMessage);
+      Object.freeze(message.prepared.persistedMessage);
     }
     const wireMessage = message
       ? {

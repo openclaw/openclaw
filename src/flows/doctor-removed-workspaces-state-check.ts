@@ -63,7 +63,7 @@ async function configuredAgentWorkspaceCollisions(
   const configured: Array<{ label: string; workspace: string | undefined }> = [
     { label: "agents.defaults.workspace", workspace: cfg.agents?.defaults?.workspace },
     ...listAgentEntries(cfg).map((agent) => ({
-      label: `agents.list.${agent.id}.workspace`,
+      label: `agents.entries.${agent.id}.workspace`,
       workspace: agent.workspace,
     })),
   ];

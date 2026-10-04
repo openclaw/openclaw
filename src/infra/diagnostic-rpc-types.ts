@@ -18,6 +18,8 @@ export type DiagnosticGatewayRpcFields = {
       outcome: "returned" | "threw";
       durationMs: number;
       admissionMs: number;
+      /** Exclusive main-thread handler window; background work and GC can still affect it. */
+      heapDeltaBytes?: number;
     }
   | {
       phase: "dispatch";
@@ -25,7 +27,5 @@ export type DiagnosticGatewayRpcFields = {
       durationMs: number;
       queueWaitMs?: number;
       response: "none" | "sent" | "unavailable" | "suppressed";
-      /** Main-thread heap change over the request; GC can make this negative. */
-      heapDeltaBytes?: number;
     }
 );

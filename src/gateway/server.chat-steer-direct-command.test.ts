@@ -7,6 +7,7 @@ import type { RawData } from "ws";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { readAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import { ACTIVE_EMBEDDED_RUN_REGISTRATIONS } from "../agents/embedded-agent-runner/run-state.js";
+import { createAttemptNestedToolActivityState } from "../agents/embedded-agent-runner/run/attempt-nested-tool-activity.js";
 import { prepareEmbeddedAttemptStream } from "../agents/embedded-agent-runner/run/attempt-stream-prepare.js";
 import type {
   EmbeddedRunAttemptParams,
@@ -230,13 +231,14 @@ it.for([
           coreBuiltinToolNames: new Set(),
           replaySafeToolNames: new Set(),
           codeModeExecToolNames: new Set(),
+          sourceReplyCapableToolNames: new Set(),
           sideEffectToolOwners: new Map(),
           trustedLocalMediaToolNames: new Set(),
         },
         hookAgentId: attempt.agentId ?? "main",
         diagnosticTrace: createDiagnosticTraceContext(),
         diagnosticOwner: createDiagnosticEmbeddedRunOwner({ sessionId, runId }),
-        nestedToolActivities: [],
+        nestedToolActivityState: createAttemptNestedToolActivityState(),
         isReplaySafeTool: () => false,
         runAbortController: controller,
         abortRun: (_timeout, reason) => controller.abort(reason),

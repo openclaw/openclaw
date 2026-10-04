@@ -86,15 +86,11 @@ function resolveOpenAIRequestCapabilities(model: {
   baseUrl?: unknown;
   compat?: unknown;
 }) {
-  const compat =
-    model.compat && typeof model.compat === "object"
-      ? (model.compat as { supportsStore?: boolean })
-      : undefined;
   return resolveProviderRequestPolicyConfig({
     provider: readStringValue(model.provider),
     api: readStringValue(model.api),
     baseUrl: readStringValue(model.baseUrl),
-    compat,
+    compat: model.compat,
     capability: "llm",
     transport: "stream",
     routeFacts: getModelProviderRequestRouteFacts(model),
@@ -110,19 +106,8 @@ function shouldApplyOpenAIServiceTier(model: {
 }
 
 function isCodeModeEnabled(config?: OpenClawConfig): boolean {
-  const tools = config?.tools;
-  if (!tools || typeof tools !== "object") {
-    return false;
-  }
-  const codeMode = (tools as { codeMode?: unknown }).codeMode;
-  if (codeMode === true) {
-    return true;
-  }
-  return Boolean(
-    codeMode &&
-    typeof codeMode === "object" &&
-    (codeMode as { enabled?: unknown }).enabled === true,
-  );
+  const codeMode = config?.tools?.codeMode;
+  return codeMode === true || (typeof codeMode === "object" && codeMode?.enabled === true);
 }
 
 function filterCodeModePayloadHookResult(

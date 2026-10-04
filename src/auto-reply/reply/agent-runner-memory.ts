@@ -20,7 +20,8 @@ import { isCliRuntimeAliasForProvider } from "../../agents/model-runtime-aliases
 import { isCliProvider } from "../../agents/model-selection.js";
 import { resolveContextConfigProviderForRuntime } from "../../agents/openai-routing.js";
 import type { AgentMessage } from "../../agents/runtime/index.js";
-import { resolveSandboxConfigForAgent, resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
+import { resolveSandboxConfigForAgent } from "../../agents/sandbox.js";
+import { withSandboxRuntimeStatusInWorker } from "../../agents/sandbox/runtime-status.js";
 import { createSessionMaintenanceFollowup } from "../../agents/session-maintenance/run.js";
 import {
   resolvePersistedSessionRuntimeId,
@@ -70,7 +71,6 @@ import {
 } from "./agent-runner-utils.js";
 import type { CompactionNoticePhase } from "./compaction-notice.js";
 import {
-  buildMemoryFlushErrorPayload,
   buildVisibleMemoryFlushFailure,
   resolveVisibleMemoryFlushErrorPayloads,
   truncateMemoryFlushErrorMessage,
@@ -891,7 +891,6 @@ export async function runMemoryFlushIfNeeded(params: {
   isHeartbeat: boolean;
   replyOperation?: ReplyOperation;
   abortSignal?: AbortSignal;
-  onVisibleErrorPayloads?: (payloads: ReplyPayload[]) => void;
 }): Promise<MemoryFlushResult> {
   const abortSignal = resolveFollowupAbortSignal({
     abortSignal: params.replyOperation?.abortSignal ?? params.abortSignal,
@@ -901,21 +900,20 @@ export async function runMemoryFlushIfNeeded(params: {
     abortSignal?.throwIfAborted();
     params.followupRun.operatorAuthority?.assertCurrent();
   };
-  const memoryFlushWritable = (() => {
-    if (!params.sessionKey) {
-      return true;
-    }
-    const runtime = resolveSandboxRuntimeStatus({
-      cfg: params.cfg,
-      agentId: params.followupRun.run.agentId,
-      sessionKey: params.sessionKey,
-      classificationSessionKey: params.runtimePolicySessionKey,
-    });
-    const workspaceAccess =
-      runtime.workspaceAccess ??
-      resolveSandboxConfigForAgent(params.cfg, runtime.classificationAgentId).workspaceAccess;
-    return !runtime.sandboxed || workspaceAccess === "rw";
-  })();
+  const memoryFlushWritable =
+    !params.sessionKey ||
+    (await withSandboxRuntimeStatusInWorker(
+      {
+        cfg: params.cfg,
+        agentId: params.followupRun.run.agentId,
+        sessionKey: params.sessionKey,
+        classificationSessionKey: params.runtimePolicySessionKey,
+      },
+      { env: process.env, cwd: process.cwd(), assertCurrent: assertMemoryFlushCurrent },
+      async ({ sandboxed, workspaceAccess: access, classificationAgentId: agentId }) =>
+        !sandboxed ||
+        (access ?? resolveSandboxConfigForAgent(params.cfg, agentId).workspaceAccess) === "rw",
+    ));
 
   let entry =
     params.sessionEntry ??
@@ -1432,22 +1430,12 @@ async function recordMemoryFlushFailure(
           },
         }));
         adoptEntry(exhaustedEntry);
-        run.onVisibleErrorPayloads?.([
-          {
-            text: `⚠️ Memory flush failed after ${MAX_FLUSH_FAILURES} attempts; skipping for this cycle. It will retry after the next compaction.`,
-            isError: true,
-          },
-        ]);
       }
     } catch (persistError) {
       logVerbose(`failed to persist memory flush failure metadata: ${String(persistError)}`);
     }
   } else {
     logVerbose(`memory flush run failed: ${String(error)}`);
-  }
-  const visibleErrorPayload = buildMemoryFlushErrorPayload(error);
-  if (visibleErrorPayload) {
-    run.onVisibleErrorPayloads?.([visibleErrorPayload]);
   }
   return { sessionEntry, outcome };
 }

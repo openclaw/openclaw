@@ -8,7 +8,7 @@ import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { VoiceCallConfig } from "./config.js";
 import { registerFastContextMemoryProvider } from "./runtime.fast-context.test-support.js";
-import { createVoiceCallBaseConfig } from "./test-fixtures.js";
+import { createExternalProviderConfig, createVoiceCallBaseConfig } from "./test-fixtures.js";
 import type { RealtimeCallHandler } from "./webhook/realtime-handler.js";
 
 const mocks = vi.hoisted(() => ({
@@ -143,33 +143,6 @@ function createBaseConfig(): VoiceCallConfig {
   return createVoiceCallBaseConfig({ tunnelProvider: "ngrok" });
 }
 
-function createExternalProviderConfig(params: {
-  provider: "twilio" | "telnyx" | "plivo";
-  publicUrl?: string;
-}): VoiceCallConfig {
-  const config = createVoiceCallBaseConfig({
-    provider: params.provider,
-    tunnelProvider: "none",
-  });
-  config.twilio = {
-    accountSid: "AC123",
-    authToken: "secret",
-  };
-  config.telnyx = {
-    apiKey: "key",
-    connectionId: "conn",
-    publicKey: "pub",
-  };
-  config.plivo = {
-    authId: "MA123",
-    authToken: "secret",
-  };
-  if (params.publicUrl) {
-    config.publicUrl = params.publicUrl;
-  }
-  return config;
-}
-
 type MockSessionEntry = {
   sessionId?: string;
   updatedAt?: number;
@@ -293,8 +266,9 @@ describe("createVoiceCallRuntime lifecycle", () => {
       agentId: "OPERATOR",
     },
     {
-      name: "legacy default owner",
-      coreConfig: { agents: { list: [{ id: "support" }, { id: "operator", default: true }] } },
+      name: "explicit owner after another agent",
+      coreConfig: { agents: { entries: { support: {}, operator: {} } } },
+      agentId: "operator",
     },
   ])("preserves the $name for phone-call startup", async ({ coreConfig, agentId }) => {
     const runtime = await createVoiceCallRuntime({
@@ -438,6 +412,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
   it("builds realtime instructions for the agent frozen on each call", async () => {
     const config = createBaseConfig();
     config.realtime.enabled = true;
+    config.agentId = "operator";
     config.realtime.agentContext = {
       enabled: true,
       maxChars: 6000,
@@ -447,10 +422,10 @@ describe("createVoiceCallRuntime lifecycle", () => {
     };
     const fullConfig: OpenClawConfig = {
       agents: {
-        list: [
-          { id: "operator", default: true, identity: { name: "Main Voice" } },
-          { id: "support", identity: { name: "Support Voice" } },
-        ],
+        entries: {
+          operator: { identity: { name: "Main Voice" } },
+          support: { identity: { name: "Support Voice" } },
+        },
       },
     };
     const runtime = await createVoiceCallRuntime({
@@ -470,33 +445,32 @@ describe("createVoiceCallRuntime lifecycle", () => {
       throw new Error("expected per-call realtime registration resolver");
     }
     expect(runtime.config.agentId).toBe("operator");
+    const outboundContact = {
+      direction: "outbound" as const,
+      from: "+15550001111",
+      to: "+15550002222",
+    };
     expect(() =>
       resolveCallRegistration({
+        ...outboundContact,
         callId: "unowned",
         sessionKey: "agent:operator:voice:unowned",
-        direction: "outbound",
-        from: "+15550001111",
-        to: "+15550002222",
       }),
     ).toThrow("no recorded agent owner");
     expect(mocks.resolveConfiguredRealtimeVoiceProvider).not.toHaveBeenCalled();
     const defaultRegistration = resolveCallRegistration({
+      ...outboundContact,
       callId: "call-default",
       agentId: "operator",
-      direction: "outbound",
-      from: "+15550001111",
-      to: "+15550002222",
     });
     expect(defaultRegistration.agentId).toBe("operator");
     expect(defaultRegistration.instructions).toContain("- Name: Main Voice");
     expect(defaultRegistration.instructions.match(/Agent context:/g)).toHaveLength(1);
 
     const supportRegistration = resolveCallRegistration({
+      ...outboundContact,
       callId: "call-support",
       agentId: "support",
-      direction: "outbound",
-      from: "+15550001111",
-      to: "+15550002222",
     });
     expect(supportRegistration.agentId).toBe("support");
     expect(supportRegistration.instructions.match(/Agent context:/g)).toHaveLength(1);
@@ -504,11 +478,9 @@ describe("createVoiceCallRuntime lifecycle", () => {
     expect(supportRegistration.instructions).not.toContain("Main Voice");
 
     const unknownRegistration = resolveCallRegistration({
+      ...outboundContact,
       callId: "call-unknown",
       agentId: "unknown",
-      direction: "outbound",
-      from: "+15550001111",
-      to: "+15550002222",
     });
     expect(unknownRegistration.instructions).not.toContain("Configured identity:");
     expect(unknownRegistration.instructions.match(/Agent context:/g)).toHaveLength(1);

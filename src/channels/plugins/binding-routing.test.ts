@@ -136,7 +136,7 @@ describe("runtime conversation binding route", () => {
     (mainKey) => {
       const ordinaryRoute = resolveAgentRoute({
         cfg: {
-          agents: { list: [{ id: "main" }, { id: "review" }] },
+          agents: { entries: { main: {}, review: {} } },
           bindings: [{ agentId: "main", match: { channel: "demo" } }],
           session: { mainKey },
         },
@@ -372,11 +372,6 @@ describe("ensureConfiguredBindingRouteReady", () => {
     unregisterDriver = registerStatefulBindingTargetDriver({
       id: "slow",
       ensureReady: async () => await new Promise<never>(() => {}),
-      ensureSession: async () => ({
-        ok: false,
-        sessionKey: "agent:slow:binding",
-        error: "not used",
-      }),
     });
 
     const resultPromise = ensureConfiguredBindingRouteReady({

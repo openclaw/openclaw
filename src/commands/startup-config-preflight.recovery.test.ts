@@ -36,7 +36,15 @@ it.each(["current", "backup", "webhook-repair"] as const)(
       const original = JSON.stringify({
         gateway: { mode: "local" },
         ...(source === "webhook-repair"
-          ? { channels: { "nextcloud-talk": { enabled: true } } }
+          ? {
+              channels: {
+                "nextcloud-talk": {
+                  enabled: true,
+                  baseUrl: "https://cloud.example.com",
+                  botSecret: "test-bot-secret",
+                },
+              },
+            }
           : { plugins: { enabled: false } }),
       });
       await fs.mkdir(stateDir, { recursive: true });

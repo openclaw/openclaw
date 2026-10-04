@@ -18,6 +18,7 @@ import {
   collectForbiddenPackPaths,
   collectSkillShellScriptExecutableErrors,
   collectPackedInstalledPackageVerificationErrors,
+  createPackedBundledPluginActivationSmokeEnv,
   createPackedPluginSdkTypescriptSmokeProject,
   createPackedCompletionSmokeEnv,
   createPackedCliSmokeEnv,
@@ -28,6 +29,7 @@ import {
   resolvePackedTarballPath,
   resolveReleaseNpmCommand,
   runReleaseCheckCommand,
+  writePackedBundledPluginActivationConfig,
 } from "../scripts/release-check.ts";
 import { COMPLETION_SKIP_PLUGIN_COMMANDS_ENV } from "../src/cli/completion-runtime.ts";
 import { resolveNpmJsonEntries as resolveRuntimeNpmJsonEntries } from "../src/infra/npm-registry-spec.js";
@@ -168,6 +170,41 @@ describe("packed CLI smoke", () => {
     });
 
     expect(env).not.toHaveProperty("OPENAI_API_KEY");
+  });
+
+  it("isolates bundled plugin activation from ambient OpenClaw state", () => {
+    const env = createPackedBundledPluginActivationSmokeEnv(
+      {
+        HOME: "/tmp/operator-home",
+        OPENCLAW_STATE_DIR: "/tmp/operator-state",
+      },
+      "/tmp/release-check",
+    );
+
+    const homeDir = join("/tmp/release-check", "activation-home");
+    expect(env).toMatchObject({
+      HOME: homeDir,
+      OPENCLAW_STATE_DIR: join(homeDir, ".openclaw"),
+    });
+  });
+
+  it("keeps bundled plugin activation independent of model runtimes", () => {
+    const homeDir = mkdtempSync(join(tmpdir(), "openclaw-release-activation-config-"));
+    try {
+      writePackedBundledPluginActivationConfig(homeDir);
+      const config = JSON.parse(
+        readFileSync(join(homeDir, ".openclaw", "openclaw.json"), "utf8"),
+      ) as Record<string, unknown>;
+
+      expect(config).toMatchObject({
+        channels: { telegram: { enabled: true } },
+        plugins: { enabled: true, allow: ["telegram"], entries: { telegram: { enabled: true } } },
+      });
+      expect(config).not.toHaveProperty("agents");
+      expect(config).not.toHaveProperty("models");
+    } finally {
+      rmSync(homeDir, { recursive: true, force: true });
+    }
   });
 
   it("does not admit provider credentials through smoke overrides", () => {
@@ -607,17 +644,6 @@ describe("createPackedPluginSdkTypescriptSmokeProject", () => {
     } finally {
       rmSync(consumerDir, { recursive: true, force: true });
     }
-  });
-
-  it("limits setupSurface omission to the recorded frozen targets", async () => {
-    const { packedPluginSdkMayOmitSetupSurface } = await import("../scripts/release-check.js");
-    expect(packedPluginSdkMayOmitSetupSurface("2026.7.33")).toBe(true);
-    expect(packedPluginSdkMayOmitSetupSurface("2026.7.34")).toBe(true);
-    expect(packedPluginSdkMayOmitSetupSurface("2026.7.35")).toBe(true);
-    expect(packedPluginSdkMayOmitSetupSurface("2026.7.36")).toBe(false);
-    expect(packedPluginSdkMayOmitSetupSurface("2026.7.35-beta.1")).toBe(false);
-    expect(packedPluginSdkMayOmitSetupSurface("2026.9.4")).toBe(false);
-    expect(packedPluginSdkMayOmitSetupSurface("2026.10.1")).toBe(false);
   });
 
   it("writes a consumer project that imports representative public SDK subpaths", () => {

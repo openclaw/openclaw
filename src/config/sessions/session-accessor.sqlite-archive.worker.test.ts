@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { recordAcpParentStreamEvents } from "../../agents/subagents/spawn/acp-parent-stream-store.sqlite.js";
+import { recordAcpParentStreamEventsForTest as recordAcpParentStreamEvents } from "../../agents/subagents/spawn/acp-parent-stream-store.sqlite.test-support.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { listUsageCountedTranscriptStats } from "../../infra/session-cost-usage-collection.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
@@ -459,7 +459,7 @@ describe("SQLite transcript archive worker", () => {
     ]);
     appendSqliteTrajectoryRuntimeEvents(target, [trajectory(target.sessionId)]);
     const db = database();
-    recordAcpParentStreamEvents({
+    await recordAcpParentStreamEvents({
       agentId: db.agentId,
       path: db.path,
       sessionId: target.sessionId,
@@ -602,7 +602,7 @@ describe("SQLite transcript archive worker", () => {
         appendSqliteTrajectoryRuntimeEvents(target, [trajectory(sessionId)]);
         break;
       case "ACP parent-stream":
-        recordAcpParentStreamEvents({
+        await recordAcpParentStreamEvents({
           agentId: db.agentId,
           path: db.path,
           sessionId,

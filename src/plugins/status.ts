@@ -16,11 +16,7 @@ import {
   resolvePluginControlPlaneWorkspace,
 } from "./control-plane-workspace.js";
 import { resolveEffectivePluginIds } from "./effective-plugin-ids.js";
-import {
-  buildPluginShapeSummary,
-  type PluginCapabilityEntry,
-  type PluginInspectShape,
-} from "./inspect-shape.js";
+import { buildPluginShapeSummary } from "./inspect-shape.js";
 import {
   acquirePluginRegistryForInspection,
   loadPluginRegistryHandle,
@@ -73,13 +69,9 @@ export type {
   PluginCompatibilitySummary,
 } from "./status-compatibility.js";
 
-export type PluginInspectReport = {
+export type PluginInspectReport = ReturnType<typeof buildPluginShapeSummary> & {
   workspaceDir?: string;
   plugin: PluginRegistry["plugins"][number];
-  shape: PluginInspectShape;
-  capabilityMode: "none" | "plain" | "hybrid";
-  capabilityCount: number;
-  capabilities: PluginCapabilityEntry[];
   typedHooks: Array<{
     name: PluginHookName;
     priority?: number;

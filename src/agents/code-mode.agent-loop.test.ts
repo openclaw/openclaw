@@ -77,15 +77,9 @@ async function runCodeModeAgent(params: {
         wrapToolWithAbortSignal(tool, params.abortSignal),
       )
     : harness.tools;
-  const sessionId = "sessionId" in harness ? harness.sessionId : "session-code-mode";
-  const sessionKey = "sessionKey" in harness ? harness.sessionKey : "agent:main:main";
-  const runId = "runId" in harness ? harness.runId : "run-code-mode";
   applyCodeModeCatalog({
     tools: [...tools, ...params.hiddenTools],
     config,
-    sessionId,
-    sessionKey,
-    runId,
     catalogRef,
   });
   const providerContexts: Context[] = [];

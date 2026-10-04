@@ -438,7 +438,7 @@ describe("qa suite gateway helpers", () => {
         profile: "coding",
       },
       agents: {
-        list: [{ id: "qa", model: { primary: "openai/gpt-5.6-luna" } }],
+        entries: { qa: { model: { primary: "openai/gpt-5.6-luna" } } },
       },
       meta: {
         updatedAt: "2026-04-25T10:00:00.000Z",

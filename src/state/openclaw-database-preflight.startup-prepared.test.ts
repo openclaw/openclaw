@@ -18,6 +18,7 @@ import {
   assertOpenClawDatabasesReady,
   preflightOpenClawDatabaseSchemas,
 } from "./openclaw-database-preflight.js";
+import { clearOpenClawAgentIntegrityVerification } from "./openclaw-quarantine-store.js";
 import { closeOpenClawStateDatabaseForTest } from "./openclaw-state-db.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
@@ -35,7 +36,8 @@ function createFleet() {
   const agentIds = ["first", "second", "third"];
   const config: OpenClawConfig = {
     agents: {
-      entries: Object.fromEntries(agentIds.map((id, index) => [id, { default: index === 0 }])),
+      entries: Object.fromEntries(agentIds.map((id) => [id, {}])),
+      defaults: { systemAgent: { agentId: "first" } },
     },
   };
   const paths = agentIds.map((agentId) => openOpenClawAgentDatabase({ agentId, env }).path);
@@ -51,6 +53,7 @@ function createFleet() {
   }
   const onAgentInspection = vi.fn();
   return {
+    config,
     env,
     paths,
     onAgentInspection,
@@ -70,6 +73,51 @@ function createFleet() {
       }),
   };
 }
+
+it.each(["historical", "retired shared"] as const)(
+  "does not activate %s database owners",
+  async (kind) => {
+    const fleet = createFleet();
+    const historyPath = path.join(
+      fleet.env.OPENCLAW_STATE_DIR,
+      "rollback-drill",
+      "openclaw-agent.sqlite",
+    );
+    const agentId = kind === "retired shared" ? "retired" : "first";
+    if (kind === "retired shared") {
+      fleet.config.session = { store: historyPath };
+    }
+    openOpenClawAgentDatabase({ agentId, path: historyPath, env: fleet.env });
+    closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
+    clearOpenClawAgentIntegrityVerification(historyPath, fleet.env);
+    const history = new (requireNodeSqlite().DatabaseSync)(historyPath);
+    try {
+      history.exec("PRAGMA journal_mode=DELETE;");
+    } finally {
+      history.close();
+    }
+    await withAgentDatabaseStartupAdmission(async () => {
+      await fleet.ready();
+      expect(readAgentDatabaseAdmissionRefusal("first", { env: fleet.env })).toBeUndefined();
+      expect(readAgentDatabaseAdmissionRefusal(agentId, { env: fleet.env })).toBeUndefined();
+    });
+  },
+);
+
+it("isolates an unreadable configured path while inspecting healthy agents", async () => {
+  const fleet = createFleet();
+  fleet.config.agents!.entries = { broken: {}, ...fleet.config.agents!.entries };
+  fs.writeFileSync(path.join(fleet.env.OPENCLAW_STATE_DIR, "agents", "broken"), "not a directory");
+  await withAgentDatabaseStartupAdmission(async () => {
+    await fleet.ready();
+    expect(readAgentDatabaseAdmissionRefusal("first", { env: fleet.env })).toBeUndefined();
+    expect(readAgentDatabaseAdmissionRefusal("broken", { env: fleet.env })).toMatchObject({
+      code: "agent-database-inspection-failed",
+      reason: expect.stringMatching(/ENOTDIR|not a directory/i),
+    });
+  });
+});
 
 it("keeps pending startup stores fenced without inspecting or copying them again in bootstrap", async () => {
   const fleet = createFleet();

@@ -22,7 +22,10 @@ import { withEnvAsync } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { registerEmbeddedHistoryProjectionTests } from "./embedded-backend.history.test-support.js";
 import type { EmbeddedTuiBackend as EmbeddedTuiBackendType } from "./embedded-backend.js";
-import { registerEmbeddedBackendStreamTests } from "./embedded-backend.stream.test-support.js";
+import {
+  captureBackendEvents,
+  registerEmbeddedBackendStreamTests,
+} from "./embedded-backend.stream.test-support.js";
 import {
   registerEmbeddedModelCatalogTests,
   withEmbeddedModelCatalogOwnerFixture,
@@ -50,6 +53,8 @@ const updateSessionStoreMock = vi.fn();
 const applySessionPatchProjectionMock = vi.fn();
 const projectSessionsPatchEntryMock = vi.fn();
 const projectSessionPatchResultMock = vi.fn();
+const readAcpSessionMetaForEntriesMock =
+  vi.fn<typeof import("../acp/runtime/session-meta-readonly.js").readAcpSessionMetaForEntries>();
 const createSessionGoalMock = vi.fn();
 const clearSessionGoalMock = vi.fn();
 const getSessionGoalMock = vi.fn();
@@ -207,10 +212,6 @@ vi.mock("../agents/agent-scope.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../agents/agent-scope.js")>()),
   resolveAgentDir: (_cfg: unknown, agentId: string) => `/tmp/openclaw-agent-${agentId}/agent`,
   resolveAgentWorkspaceDir: (_cfg: unknown, agentId: string) => `/tmp/openclaw-agent-${agentId}`,
-  resolveDefaultAgentId: (cfg?: {
-    agents?: { list?: Array<{ id?: string; default?: boolean }> };
-  }) =>
-    cfg?.agents?.list?.find((agent) => agent.default)?.id ?? cfg?.agents?.list?.[0]?.id ?? "main",
   resolveSessionAgentId: (params: { sessionKey?: string; agentId?: string }) =>
     params.agentId ?? /^agent:([^:]+):/.exec(params.sessionKey ?? "")?.[1] ?? "main",
 }));
@@ -346,6 +347,12 @@ vi.mock("../gateway/session-utils-model.js", () => ({
   projectSessionPatchResult: (...args: unknown[]) => projectSessionPatchResultMock(...args),
 }));
 
+vi.mock("../acp/runtime/session-meta-readonly.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../acp/runtime/session-meta-readonly.js")>()),
+  readAcpSessionMetaForEntries: (...args: Parameters<typeof readAcpSessionMetaForEntriesMock>) =>
+    readAcpSessionMetaForEntriesMock(...args),
+}));
+
 vi.mock("../gateway/session-create-service.js", () => ({
   createGatewaySession: (...args: unknown[]) => createGatewaySessionMock(...args),
 }));
@@ -394,14 +401,6 @@ function emitRegisteredAgentEvent(evt: unknown) {
   if (registeredListener) {
     notifyListeners([registeredListener], evt);
   }
-}
-
-function captureBackendEvents(backend: EmbeddedTuiBackendType) {
-  const events: Array<{ event: string; payload: unknown }> = [];
-  backend.onEvent = ({ event, payload }) => {
-    events.push({ event, payload });
-  };
-  return events;
 }
 
 function sendMainChat(backend: EmbeddedTuiBackendType, message: string, runId: string) {
@@ -508,6 +507,10 @@ describe("EmbeddedTuiBackend", () => {
     projectSessionsPatchEntryMock.mockReset();
     projectSessionsPatchEntryMock.mockResolvedValue({ ok: true, entry: {} });
     projectSessionPatchResultMock.mockReset();
+    readAcpSessionMetaForEntriesMock.mockReset();
+    readAcpSessionMetaForEntriesMock.mockImplementation(async ({ entries }) =>
+      entries.map(() => null),
+    );
     projectSessionPatchResultMock.mockImplementation(
       (params: { canonicalKey: string; entry: unknown; storePath: string }) => ({
         ok: true,
@@ -973,8 +976,8 @@ describe("EmbeddedTuiBackend", () => {
   });
 
   it("queues config runtime publication ahead of later local turns and unregisters on stop", async () => {
-    const initialConfig = { agents: { list: [{ id: "main" }] } };
-    const nextConfig = { agents: { list: [{ id: "main" }], defaults: { model: "openai/next" } } };
+    const initialConfig = { agents: { entries: { main: {} } } };
+    const nextConfig = { agents: { entries: { main: {} }, defaults: { model: "openai/next" } } };
     getRuntimeConfigMock.mockReturnValue(initialConfig);
 
     const backend = new EmbeddedTuiBackend();
@@ -1000,7 +1003,7 @@ describe("EmbeddedTuiBackend", () => {
   });
 
   it("forwards overlapping config publications immediately for runtime latest-wins coalescing", async () => {
-    const initialConfig = { agents: { list: [{ id: "main" }] } };
+    const initialConfig = { agents: { entries: { main: {} } } };
     const middleConfig = { agents: { defaults: { model: "openai/middle" } } };
     const latestConfig = { agents: { defaults: { model: "openai/latest" } } };
     getRuntimeConfigMock.mockReturnValue(initialConfig);
@@ -1439,7 +1442,7 @@ describe("EmbeddedTuiBackend", () => {
   });
 
   it("loads runtime plugins for the send-path workspace before returning embedded history", async () => {
-    const cfg = { agents: { list: [{ id: "main" }] } };
+    const cfg = { agents: { entries: { main: {} } } };
     loadSessionEntryMock.mockReturnValue({
       cfg,
       agentId: "main",
@@ -1506,13 +1509,18 @@ describe("EmbeddedTuiBackend", () => {
   });
 
   it("reports publication failure instead of returning stale model choices", async () => {
+    const publishing = deferred<void>();
     const publication = deferred<void>();
-    refreshPreparedModelRuntimeSnapshotsMock.mockReturnValueOnce(publication.promise);
+    refreshPreparedModelRuntimeSnapshotsMock.mockImplementationOnce(() => {
+      publishing.resolve();
+      return publication.promise;
+    });
     const backend = new EmbeddedTuiBackend();
     backend.start();
     const choices = backend.listModels({ agentId: "work" });
     const failure = expect(choices).rejects.toThrow("catalog publication failed");
 
+    await publishing.promise;
     publication.reject(new Error("catalog publication failed"));
     await failure;
     expect(withPreparedModelCatalogOwnerMock).not.toHaveBeenCalled();
@@ -2853,9 +2861,12 @@ describe("EmbeddedTuiBackend", () => {
     await flushMicrotasks();
   });
 
-  it("does not abort selected-global run ids across default-agent boundaries", async () => {
+  it("does not abort selected-global run ids across explicit agent boundaries", async () => {
     getRuntimeConfigMock.mockReturnValue({
-      agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+      agents: {
+        ownership: "explicit",
+        entries: { main: {}, work: {} },
+      },
     });
     const defaultRun = deferred<EmbeddedAgentResult>();
     const workRun = deferred<EmbeddedAgentResult>();
@@ -2879,6 +2890,7 @@ describe("EmbeddedTuiBackend", () => {
     backend.start();
     await backend.sendChat({
       sessionKey: "global",
+      agentId: "main",
       message: "default",
       runId: "run-local-default-global",
     });
@@ -2899,6 +2911,7 @@ describe("EmbeddedTuiBackend", () => {
     await expect(
       backend.abortChat({
         sessionKey: "global",
+        agentId: "main",
         runId: "run-local-work-global",
       }),
     ).resolves.toEqual({ ok: true, aborted: false, runIds: [] });
@@ -2953,6 +2966,7 @@ describe("EmbeddedTuiBackend", () => {
           canonicalKey: "global",
           cfg: expect.anything(),
           entry,
+          preparedAcpMeta: null,
           storePath: target.storePath,
           targetAgentId: owner,
         });
@@ -3279,7 +3293,6 @@ describe("EmbeddedTuiBackend", () => {
     createPendingReply: () => deferred<EmbeddedAgentResult>(),
     prepareReply: (reply) => agentCommandFromIngressMock.mockReturnValueOnce(reply),
     emitAgentEvent: (event) => registeredListener?.(event),
-    captureBackendEvents,
     flushMicrotasks,
     embeddedEventTimestamp,
   });

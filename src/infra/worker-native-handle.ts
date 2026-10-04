@@ -2,7 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { EventEmitter } from "node:events";
 import type { Transferable, Worker } from "node:worker_threads";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
-import { createRetainedOperation } from "./retained-operation.js";
+import { createRetainedOperation } from "@openclaw/worker-runtime/lifecycle";
 import { trackNativeWorkerForCpu } from "./worker-cpu.js";
 import { decodeNativeWorkerFailure } from "./worker-native-error.js";
 import type {
