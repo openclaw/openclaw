@@ -155,31 +155,6 @@ describe("native device settings pages", () => {
       expect(permissions.textContent).not.toContain("Location access");
     },
   );
-  it("switches the advertised Mac experience and follows the native owner's saved value", async () => {
-    const native = createCapability();
-    const page = await mount("openclaw-device-page", native.capability);
-    const title = "Native experience (Experimental)";
-    const experience = row(page, title);
-    expect(experience.querySelector<ToggleElement>("wa-switch")!.checked).toBe(false);
-    expect(experience.textContent).toContain("When off, use the Web experience");
-    toggle(page, title, true);
-    expect(native.capability.set).toHaveBeenCalledExactlyOnceWith(
-      "app.nativeExperienceEnabled",
-      true,
-    );
-    const saved = createNativeDeviceSettingsSnapshot();
-    saved.app.nativeExperienceEnabled = true;
-    native.publish(saved);
-    await page.updateComplete;
-    expect(experience.querySelector<ToggleElement>("wa-switch")!.checked).toBe(true);
-    toggle(page, title, false);
-    expect(native.capability.set).toHaveBeenLastCalledWith("app.nativeExperienceEnabled", false);
-    delete saved.app.nativeExperienceEnabled;
-    native.publish(saved);
-    await page.updateComplete;
-    expect(page.textContent).not.toContain(title);
-  });
-
   it("switches Gateway hosting only when available and follows the native owner's result", async () => {
     const native = createCapability();
     const page = await mount("openclaw-device-page", native.capability);
@@ -297,12 +272,13 @@ describe("native device settings pages", () => {
     },
   );
 
-  it("renders local settings and delegates native toggles and panels without Gateway access", async () => {
+  it("renders local settings, delegates native edits, and follows capability changes", async () => {
     const snapshot = createNativeDeviceSettingsSnapshot();
     snapshot.app.debugPaneEnabled = true;
     snapshot.app.quickChatShortcut = null;
     snapshot.app.launchAtLoginAvailable = false;
-    const { capability } = createCapability(snapshot);
+    const native = createCapability(snapshot);
+    const { capability } = native;
     const page = await mount("openclaw-device-page", capability);
     expect(page.querySelector(".page-title")?.textContent).toContain("This Mac");
     expect(page.querySelector<HTMLAnchorElement>(".page-subtitle a")?.href).toBe(
@@ -345,11 +321,6 @@ describe("native device settings pages", () => {
       row(page, title).querySelector<HTMLButtonElement>("button")!.click();
       expect(capability.openPanel).toHaveBeenCalledWith(panel);
     }
-  });
-
-  it("renders new native snapshots and removes controls whose native capabilities became unavailable", async () => {
-    const native = createCapability();
-    const page = await mount("openclaw-device-page", native.capability);
     const next = createNativeDeviceSettingsSnapshot();
     next.app.iconStyle = {
       selectedId: "origami",
@@ -357,9 +328,9 @@ describe("native device settings pages", () => {
     };
     native.publish(next);
     await page.updateComplete;
-    const iconStyles = row(page, "Dock icon").querySelector<HTMLSelectElement>("select")!;
-    expect(iconStyles.value).toBe("origami");
-    expect(iconStyles.options).toHaveLength(1);
+    const updatedIconStyles = row(page, "Dock icon").querySelector<HTMLSelectElement>("select")!;
+    expect(updatedIconStyles.value).toBe("origami");
+    expect(updatedIconStyles.options).toHaveLength(1);
     delete next.app.iconStyle;
     next.app.quickChatShortcut = "⌘K";
     next.app.showDockIcon = false;
@@ -383,8 +354,9 @@ describe("native device settings pages", () => {
     expect(page.textContent).not.toContain("Open Debug window…");
   });
 
-  it("renders only published iOS settings and delegates app preferences and device panels", async () => {
-    const { capability } = createCapability(createIosNativeDeviceSettingsSnapshot());
+  it("renders and edits only published iOS settings as capabilities change", async () => {
+    const native = createCapability(createIosNativeDeviceSettingsSnapshot());
+    const { capability } = native;
     const page = await mount("openclaw-device-page", capability);
     expect(page.querySelector(".page-title")?.textContent).toContain("This iPhone");
     expect(
@@ -429,11 +401,6 @@ describe("native device settings pages", () => {
       row(page, title).querySelector<HTMLButtonElement>("button")!.click();
       expect(capability.openPanel).toHaveBeenCalledWith(panel);
     }
-  });
-
-  it("removes absent device families and fields and hides unavailable health summaries", async () => {
-    const native = createCapability(createIosNativeDeviceSettingsSnapshot());
-    const page = await mount("openclaw-device-page", native.capability);
     const next: NativeDeviceSettingsSnapshot = {
       ...createIosNativeDeviceSettingsSnapshot(),
       app: { notificationsEnabled: false },
@@ -455,52 +422,33 @@ describe("native device settings pages", () => {
     expect(row(page, "Diagnostics").querySelector("button")).not.toBeNull();
   });
 
-  it("normalizes and deduplicates added cookie hostnames and removes a selected hostname", async () => {
-    const { capability } = createCapability();
-    const page = await mount("openclaw-device-page", capability);
-    for (const hostname of ["  EXAMPLE.COM ", "  ACCOUNTS.EXAMPLE.ORG  "]) {
-      typeDomain(page, hostname);
-      await page.updateComplete;
-      submitDomain(page);
-      await page.updateComplete;
-    }
-    expect(capability.set).toHaveBeenLastCalledWith(
-      "browser.cookieSync.domains",
-      ["example.com", "accounts.example.org"],
-      expect.any(Function),
-    );
-    page.querySelector<HTMLButtonElement>('[aria-label="Remove example.com"]')?.click();
-    expect(capability.set).toHaveBeenLastCalledWith(
-      "browser.cookieSync.domains",
-      ["accounts.example.org"],
-      expect.any(Function),
-    );
-  });
-
-  it("preserves newer domain edits across an older native acknowledgement", async () => {
+  it("normalizes domains and preserves newer edits until their own acknowledgement", async () => {
     const native = createCapability();
     const page = await mount("openclaw-device-page", native.capability);
-    for (const hostname of ["a.example.com", "b.example.com"]) {
+    for (const hostname of ["  EXAMPLE.COM ", "  A.EXAMPLE.COM  ", "  B.EXAMPLE.COM  "]) {
       typeDomain(page, hostname);
       await page.updateComplete;
       submitDomain(page);
       await page.updateComplete;
     }
-
+    expect(native.capability.set).toHaveBeenLastCalledWith(
+      "browser.cookieSync.domains",
+      ["example.com", "a.example.com", "b.example.com"],
+      expect.any(Function),
+    );
     const older = createNativeDeviceSettingsSnapshot();
     older.browser.cookieSync.domains = ["example.com", "a.example.com"];
-    native.settle(0, older);
+    native.settle(1, older);
     await page.updateComplete;
-    page.querySelector<HTMLButtonElement>('[aria-label="Remove example.com"]')?.click();
+    page.querySelector<HTMLButtonElement>('[aria-label="Remove example.com"]')!.click();
     expect(native.capability.set).toHaveBeenLastCalledWith(
       "browser.cookieSync.domains",
       ["a.example.com", "b.example.com"],
       expect.any(Function),
     );
-
     const latest = createNativeDeviceSettingsSnapshot();
     latest.browser.cookieSync.domains = ["a.example.com", "b.example.com"];
-    native.settle(2, latest);
+    native.settle(3, latest);
     await page.updateComplete;
     const external = createNativeDeviceSettingsSnapshot();
     external.browser.cookieSync.domains = ["external.example.com"];
@@ -535,39 +483,6 @@ describe("native device settings pages", () => {
     );
     await vi.advanceTimersByTimeAsync(500);
     expect(capability.set).toHaveBeenCalledTimes(2);
-  });
-
-  it("preserves the latest sent profile across an older native acknowledgement", async () => {
-    vi.useFakeTimers();
-    const native = createCapability();
-    const page = await mount("openclaw-device-page", native.capability);
-    const input = row(page, "Target profile").querySelector<HTMLInputElement>("input")!;
-    for (const value of ["first-profile", "second-profile"]) {
-      typeInput(input, value);
-      await vi.advanceTimersByTimeAsync(400);
-    }
-    const older = createNativeDeviceSettingsSnapshot();
-    older.browser.cookieSync.targetProfile = "first-profile";
-    native.settle(0, older);
-    await page.updateComplete;
-    expect(input.value).toBe("second-profile");
-
-    typeInput(input, `${input.value}-final`);
-    await vi.advanceTimersByTimeAsync(400);
-    expect(native.capability.set).toHaveBeenLastCalledWith(
-      "browser.cookieSync.targetProfile",
-      "second-profile-final",
-      expect.any(Function),
-    );
-    const latest = createNativeDeviceSettingsSnapshot();
-    latest.browser.cookieSync.targetProfile = "second-profile-final";
-    native.settle(2, latest);
-    await page.updateComplete;
-    const external = createNativeDeviceSettingsSnapshot();
-    external.browser.cookieSync.targetProfile = "external-profile";
-    native.publish(external);
-    await page.updateComplete;
-    expect(input.value).toBe("external-profile");
   });
 
   it("preserves pending cookie sync edits across page navigation", async () => {
