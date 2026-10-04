@@ -19,7 +19,6 @@ import {
   createSubagentCoordinationHistoryProjection,
   prepareForwardedMessageCronJobNameResolver,
   projectForwardedMessages,
-  type SubagentCoordinationDisplayResolver,
 } from "./chat-display-projection.history.js";
 import { resolveCurrentUserProfileDisplay } from "./current-user-profile-display.js";
 import {
@@ -36,6 +35,7 @@ import {
   attachOpenClawTranscriptMeta,
 } from "./session-transcript-entry-message.js";
 import { resolveTranscriptPathForComparison } from "./session-transcript-path.js";
+import type { SubagentCoordinationDisplayResolver } from "./session-transcript-read.types.js";
 import * as sessionTranscriptReaders from "./session-transcript-readers.js";
 
 type InlineSessionHistoryAppend = {

@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { QaRunnerCliRegistration } from "openclaw/plugin-sdk/qa-runner-runtime";
 import {
   assertQaGatewayCredentialLeaseQuarantine,
@@ -582,11 +581,8 @@ export async function createTelegramQaTransportAdapter(
       };
     },
     createGatewayConfig: () =>
-      // SAFETY: The builder accepts an empty base and supplies every QA-owned config section.
-      buildTelegramQaConfig({} as OpenClawConfig, {
+      buildTelegramQaConfig({
         apiRoot: activeApiProxy?.apiRoot,
-        directMessageOnly,
-        enableDirectMessages: true,
         additionalTesterUserIds: participants
           .slice(1)
           .map((participant) => participant.testerUserId),

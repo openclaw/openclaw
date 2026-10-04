@@ -38,7 +38,9 @@ export const PackageActivationDescriptorSchema = z.strictObject({
   binIdentity: packageActivationIdentitySchema,
   originalStageRoot: absolutePath,
   previous: fingerprint,
-  candidate: fingerprint,
+  // An absent digest records identity/version-only preparation after resource exhaustion.
+  // Existing full fingerprints remain valid; the operation's sealed helper reads both.
+  candidate: z.union([fingerprint, fingerprint.omit({ digest: true })]),
   launcherRootIdentity: packageActivationIdentitySchema,
   previousLauncherRootIdentity: packageActivationIdentitySchema.nullable(),
   helperIdentity: packageActivationIdentitySchema,
@@ -77,10 +79,16 @@ export const PackageActivationPhaseSchema = z.enum([
   "aborted",
   "retiring",
   "anchor-retired",
+  "superseded",
 ]);
 export type PackageActivationPhase = z.infer<typeof PackageActivationPhaseSchema>;
 export const intentSchema = z
   .union([
+    z.strictObject({
+      kind: z.literal("superseded-by-manual-install"),
+      replacementIdentity: packageActivationIdentitySchema,
+      settled: z.boolean(),
+    }),
     z.strictObject({
       kind: z.literal("prepare"),
       completed: z.array(transferName).max(5),

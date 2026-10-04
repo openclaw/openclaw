@@ -218,7 +218,6 @@ export const slackQaChannelDisabledWarningScenario: SlackQaScenarioImplementatio
       input: `<@${sutUserId}> reply with only this exact marker: ${marker}`,
       matchText: marker,
       noReplyObservationMs: 8_000,
-      preserveGatewayDebug: true,
       beforeRun: async ({ gateway }) => {
         const gatewayLogTail = (await gateway.call(
           "logs.tail",

@@ -114,16 +114,10 @@ import { createTypingController } from "./typing.js";
 
 type ResetCommandAction = "new" | "reset";
 
-const sessionResetModelRuntimeLoader = createLazyImportLoader(
-  () => import("./session-reset-model.runtime.js"),
-);
 const stageSandboxMediaRuntimeLoader = createLazyImportLoader(
   () => import("./stage-sandbox-media.runtime.js"),
 );
 const replyResolverTimingLog = createSubsystemLogger("auto-reply/reply-resolver-timing");
-const commandsCoreRuntimeLoader = createLazyImportLoader(
-  () => import("./commands-core.runtime.js"),
-);
 
 function canSelfServeLocalPaths(params: {
   ctx: MsgContext;
@@ -738,7 +732,7 @@ export async function getReplyFromConfig(
   }
 
   if (resetTriggered && normalizeOptionalString(bodyStripped)) {
-    const { applyResetModelOverride } = await sessionResetModelRuntimeLoader.load();
+    const { applyResetModelOverride } = await import("./session-reset-model.runtime.js");
     try {
       await applyResetModelOverride({
         cfg,
@@ -953,7 +947,7 @@ export async function getReplyFromConfig(
     if (!resetMatch) {
       return;
     }
-    const { emitResetCommandHooks } = await commandsCoreRuntimeLoader.load();
+    const { emitResetCommandHooks } = await import("./commands-core.runtime.js");
     const action: ResetCommandAction = resetMatch[1]?.toLowerCase() === "reset" ? "reset" : "new";
     await emitResetCommandHooks({
       action,

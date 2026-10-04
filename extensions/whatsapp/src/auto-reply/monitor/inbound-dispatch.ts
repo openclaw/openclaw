@@ -1,6 +1,8 @@
 import type { StatusReactionController } from "openclaw/plugin-sdk/channel-feedback";
 import {
   buildChannelInboundEventContext,
+  type BuildChannelInboundEventContextParams,
+  toLocationContext,
   createChannelPartialDeliveryError,
   isChannelPartialDeliveryError,
   readAgentRunTerminalOutcome,
@@ -10,6 +12,7 @@ import {
 } from "openclaw/plugin-sdk/channel-inbound";
 import {
   listMessageReceiptPlatformIds,
+  resolveChannelMessageSourceReplyDeliveryMode,
   resolveChannelStreamingBlockEnabled,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
@@ -37,11 +40,6 @@ import { markWhatsAppVisibleDeliveryError } from "../util.js";
 import { formatGroupMembers } from "./group-members.js";
 import type { GroupHistoryEntry } from "./inbound-context.js";
 import type { updateLastRouteInBackground } from "./last-route.js";
-import {
-  projectPreparedChannelInbound,
-  resolveWhatsAppInboundReplyPolicy,
-  type PreparedChannelInbound,
-} from "./prepared-inbound.js";
 import {
   createChannelMessageReplyPipeline,
   getAgentScopedMediaLocalRoots,
@@ -373,7 +371,7 @@ export function buildWhatsAppInboundTransportContext(
 export async function prepareWhatsAppInboundContext(params: {
   bodyForAgent?: string;
   combinedBody: string;
-  command?: NonNullable<PreparedChannelInbound["command"]>;
+  command?: BuildChannelInboundEventContextParams["command"];
   groupHistory?: GroupHistoryEntry[];
   groupHistoryLimit?: number;
   groupMemberRoster?: Map<string, string>;
@@ -388,12 +386,7 @@ export async function prepareWhatsAppInboundContext(params: {
   visibleReplyTo?: VisibleReplyTarget;
   suppressMessageReceivedHooks?: boolean;
   buildContext?: typeof buildChannelInboundEventContext;
-}): Promise<{
-  inbound: PreparedChannelInbound;
-  control: Parameters<typeof projectPreparedChannelInbound>[0]["control"];
-  turnInput: ReturnType<typeof projectPreparedChannelInbound>["input"];
-  ctxPayload: FinalizedMsgContext;
-}> {
+}) {
   const admission = requireWhatsAppInboundAdmission(params.msg);
   const conversationId = admission.conversation.id;
   const conversationKind = admission.conversation.kind;
@@ -433,10 +426,19 @@ export async function prepareWhatsAppInboundContext(params: {
       : undefined,
     { transcribed: (_entry, index) => params.mediaTranscribedIndexes?.includes(index) === true },
   );
-  const control = {
-    messageReceivedHooks: params.suppressMessageReceivedHooks ? "channel" : "core",
-  } as const;
-  const inbound: PreparedChannelInbound = {
+  const mentions =
+    wasMentioned !== undefined
+      ? {
+          canDetectMention: conversationKind === "group",
+          wasMentioned,
+          requireMention: params.msg.groupMention?.requireMention,
+        }
+      : undefined;
+  const commands =
+    params.command?.authorized !== undefined
+      ? { authorized: params.command.authorized }
+      : undefined;
+  const inbound = {
     channelIngress,
     channel: "whatsapp",
     supplemental: {
@@ -451,10 +453,8 @@ export async function prepareWhatsAppInboundContext(params: {
       channelStructuredContext: params.msg.payload.channelStructuredContext,
     },
     media,
-    event: {
-      id: eventId,
-      timestamp: params.msg.event.timestamp,
-    },
+    messageId: eventId,
+    timestamp: params.msg.event.timestamp,
     from: conversationId,
     sender: {
       id: params.sender.id ?? params.sender.e164,
@@ -490,38 +490,33 @@ export async function prepareWhatsAppInboundContext(params: {
           ? (params.groupHistoryLimit ?? params.groupHistory?.length ?? 0)
           : 0,
     },
-    mentions:
-      wasMentioned !== undefined
-        ? {
-            canDetectMention: conversationKind === "group",
-            wasMentioned,
-            requireMention: params.msg.groupMention?.requireMention,
-          }
-        : undefined,
+    access: mentions || commands ? { mentions, commands } : undefined,
     command: params.command,
-    context: {
-      transcript: params.transcript,
-      groupSubject: params.msg.group?.subject ?? null,
-      groupMembers: formatGroupMembers({
+    extra: {
+      Transcript: params.transcript,
+      GroupSubject: params.msg.group?.subject ?? undefined,
+      GroupMembers: formatGroupMembers({
         participants: params.msg.group?.participants,
         roster: params.groupMemberRoster,
         fallbackE164: params.sender.e164,
       }),
-      senderE164: params.sender.e164,
-      replyThreading: params.replyThreading,
-      location: params.msg.payload.location,
+      SenderE164: params.sender.e164,
+      ReplyThreading: params.replyThreading,
+      SuppressMessageReceivedHooks: Boolean(params.suppressMessageReceivedHooks),
+      ...(params.msg.payload.location ? toLocationContext(params.msg.payload.location) : {}),
     },
-  };
-  const projected = projectPreparedChannelInbound({
-    inbound,
-    control,
-    buildContext: params.buildContext ?? buildChannelInboundEventContext,
-  });
+  } satisfies BuildChannelInboundEventContextParams;
   return {
     inbound,
-    control,
-    turnInput: projected.input,
-    ctxPayload: projected.context,
+    turnInput: {
+      id: eventId,
+      timestamp: inbound.timestamp,
+      rawText: inbound.message.rawBody,
+      textForAgent: inbound.message.bodyForAgent,
+      textForCommands: inbound.message.commandBody,
+      raw: inbound,
+    },
+    ctxPayload: (params.buildContext ?? buildChannelInboundEventContext)(inbound),
   };
 }
 
@@ -597,8 +592,7 @@ export function createWhatsAppReplyPlan(params: {
   context: FinalizedMsgContext;
   deliverReply: typeof deliverWebReply;
   maxMediaBytes: number;
-  maxMediaTextChunkLimit?: number;
-  inbound: PreparedChannelInbound;
+  conversationId: string;
   onModelSelected?: ChannelReplyOnModelSelected;
   replyLogger: ReturnType<typeof getChildLogger>;
   replyPipeline: WhatsAppDispatchPipeline;
@@ -610,9 +604,9 @@ export function createWhatsAppReplyPlan(params: {
     NonNullable<ChannelInboundTurnPlan["replyOptions"]>["turnAdoptionLifecycle"]
   >;
 }) {
-  const conversationId = params.inbound.conversation.id;
+  const conversationId = params.conversationId;
   const statusReactionController = params.statusReactionController ?? null;
-  const textLimit = params.maxMediaTextChunkLimit ?? resolveTextChunkLimit(params.cfg, "whatsapp");
+  const textLimit = resolveTextChunkLimit(params.cfg, "whatsapp");
   const chunkMode = resolveChunkMode(params.cfg, "whatsapp", params.route.accountId);
   const tableMode = resolveMarkdownTableMode({
     cfg: params.cfg,
@@ -620,11 +614,12 @@ export function createWhatsAppReplyPlan(params: {
     accountId: params.route.accountId,
   });
   const mediaLocalRoots = getAgentScopedMediaLocalRoots(params.cfg, params.route.agentId);
-  const replyPolicy = resolveWhatsAppInboundReplyPolicy({
-    cfg: params.cfg,
-    ctx: params.context,
-    blockStreamingEnabled: resolveChannelStreamingBlockEnabled(params.cfg.channels?.whatsapp),
-  });
+  const sourceReplyDeliveryMode =
+    params.context.ChatType === "group" || params.context.ChatType === "channel"
+      ? resolveChannelMessageSourceReplyDeliveryMode({ cfg: params.cfg, ctx: params.context })
+      : undefined;
+  const sourceRepliesAreToolOnly = sourceReplyDeliveryMode === "message_tool_only";
+  const blockStreamingEnabled = resolveChannelStreamingBlockEnabled(params.cfg.channels?.whatsapp);
   let didSendReply = false;
   let didLogHeartbeatStrip = false;
 
@@ -820,11 +815,16 @@ export function createWhatsAppReplyPlan(params: {
     ...(params.turnAdoptionLifecycle
       ? { turnAdoptionLifecycle: params.turnAdoptionLifecycle }
       : {}),
-    suppressTyping: replyPolicy.suppressTyping,
-    disableBlockStreaming: replyPolicy.disableBlockStreaming,
-    ...(replyPolicy.sourceReplyDeliveryMode
-      ? { sourceReplyDeliveryMode: replyPolicy.sourceReplyDeliveryMode }
-      : {}),
+    suppressTyping:
+      sourceRepliesAreToolOnly &&
+      params.context.ChatType === "group" &&
+      params.context.WasMentioned !== true,
+    disableBlockStreaming: sourceRepliesAreToolOnly
+      ? true
+      : typeof blockStreamingEnabled === "boolean"
+        ? !blockStreamingEnabled
+        : undefined,
+    ...(sourceReplyDeliveryMode ? { sourceReplyDeliveryMode } : {}),
     onModelSelected: params.onModelSelected,
     ...(statusReactionController
       ? {

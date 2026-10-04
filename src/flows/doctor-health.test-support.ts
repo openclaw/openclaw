@@ -95,6 +95,16 @@ vi.mock("../daemon/service-process-membership.js", async (importOriginal) => {
   };
 });
 
+vi.mock("../infra/container-environment.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/container-environment.js")>();
+  return {
+    ...actual,
+    // Native-manager fixtures model a host installation independently of the test runner.
+    isContainerEnvironment: () =>
+      mocks.emulateNativeInstall ? false : actual.isContainerEnvironment(),
+  };
+});
+
 vi.mock("../daemon/systemd-exec.js", async (original) => {
   const { gatewayMaintenanceSystemdShow } =
     await import("../gateway/health-response.test-support.js");

@@ -528,6 +528,22 @@ describe("tool-cards", () => {
 });
 
 describe("tool-card outcomes", () => {
+  it.each(["start", "update"] as const)(
+    "keeps statusless %s activity running only while live",
+    (phase) => {
+      const card: ToolCard = {
+        id: "statusless-activity",
+        name: "subagents",
+        live: true,
+        activity: { itemId: "statusless-activity", kind: "tool", title: "Delegate task", phase },
+      };
+      const container = mountCard(card, { runActive: true });
+      expect(textOf(container, ".chat-tool-card__outcome")).toBe("Running");
+      mountCard(card, { runActive: false }, container);
+      expect(textOf(container, ".chat-tool-card__outcome")).toBe("Outcome unknown");
+    },
+  );
+
   it.each([
     { status: "failed", label: "failed" },
     { status: "blocked", label: "Blocked" },

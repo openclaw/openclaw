@@ -152,7 +152,10 @@ export function resolveToolCardOutcome(
       case "running":
         return runActive === true && card.live === true ? "running" : "unknown";
       default:
-        return runActive === true && card.live === true && card.completed !== true
+        return card.activity.phase !== "end" &&
+          runActive === true &&
+          card.live === true &&
+          card.completed !== true
           ? "running"
           : "unknown";
     }

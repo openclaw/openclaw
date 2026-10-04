@@ -61,10 +61,11 @@ export type CapabilityMenuProps = ChatComposerCapabilityMenuProps;
 
 export type ChatComposerDisabledBanner = {
   kind: "above-composer" | "composer-replacement";
+  presentation?: "compact" | "hidden";
   title?: string;
   text: string;
   tone?: "info" | "neutral";
-  icon?: "warning" | "archive";
+  icon?: "warning" | "archive" | "eye";
   actionStyle?: "primary";
   busy?: boolean;
   busyLabel?: string;

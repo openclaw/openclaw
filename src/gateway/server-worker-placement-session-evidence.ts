@@ -54,13 +54,17 @@ export async function createWorkerPlacementSessionEvidenceResolver(
     const identities = placements.flatMap((placement) =>
       resolvePlacementSessionIdentities(cfg, placement),
     );
-    const subjects = new Map(
+    const subjects = new Map<
+      WorkerSessionPlacementRecord,
+      { agentId: string; sessionId: string; sessionKey: string; evidence: PlacementSessionEvidence }
+    >(
       placements.map((placement) => [
         placement,
         {
           agentId: placement.agentId,
           sessionId: placement.sessionId,
           sessionKey: placement.sessionKey,
+          evidence: "absent",
         },
       ]),
     );
@@ -72,17 +76,11 @@ export async function createWorkerPlacementSessionEvidenceResolver(
         sessionKey: identity.sessionKey,
       })),
     );
-    const evidenceByPlacement = new Map<WorkerSessionPlacementRecord, PlacementSessionEvidence>(
-      placements.map((placement) => [placement, "absent"]),
-    );
     for (const [index, result] of evidence.entries()) {
       const placement = identities[index]?.placement;
-      if (!placement) {
-        continue;
-      }
-      const current = evidenceByPlacement.get(placement) ?? "unknown";
-      if (current !== "current" && result.status !== "absent") {
-        evidenceByPlacement.set(placement, result.status);
+      const subject = placement && subjects.get(placement);
+      if (subject && subject.evidence !== "current" && result.status !== "absent") {
+        subject.evidence = result.status;
       }
     }
     return async (placement) => {
@@ -95,7 +93,7 @@ export async function createWorkerPlacementSessionEvidenceResolver(
       ) {
         return "unknown";
       }
-      return evidenceByPlacement.get(placement) ?? "unknown";
+      return subject.evidence;
     };
   } catch (error) {
     // "unknown" keeps retirement fail-open, but a silent catch would hide a broken

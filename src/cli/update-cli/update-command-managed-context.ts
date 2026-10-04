@@ -12,6 +12,7 @@ import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-
 import { defaultRuntime } from "../../runtime.js";
 import {
   captureTargetDatabaseSchemaContext,
+  updateConfigSource,
   isCandidateAdmissionContextCovered,
   type TargetDatabaseSchemaContextOptions,
 } from "./schema-preflight.js";
@@ -70,16 +71,7 @@ export async function revalidateUpdateDatabaseContext(
     configValidation: expected.configValidation,
   });
   const before = expected.configSnapshot;
-  const after = current.configSnapshot;
-  if (
-    before.path !== after.path ||
-    before.exists !== after.exists ||
-    before.raw !== after.raw ||
-    before.hash !== after.hash ||
-    !isDeepStrictEqual(before.includedPaths ?? [], after.includedPaths ?? []) ||
-    !isDeepStrictEqual(before.includeProvenance ?? [], after.includeProvenance ?? []) ||
-    !isDeepStrictEqual(before.sourceConfig, after.sourceConfig)
-  ) {
+  if (!isDeepStrictEqual(updateConfigSource(before), updateConfigSource(current.configSnapshot))) {
     defaultRuntime.error(
       `Warning: Configuration changed during database admission at ${before.path}; continuing with the current configuration.`,
     );
@@ -127,7 +119,7 @@ export async function readUpdateCandidateSource(
       return {
         config: context.config,
         hash: hashConfigRaw(context.configSnapshot.raw),
-        source: candidateConfigSource(context.configSnapshot),
+        source: updateConfigSource(context.configSnapshot),
       };
     }
   }
@@ -140,20 +132,7 @@ export async function readUpdateCandidateSource(
         ? snapshot.sourceConfig
         : snapshot.config,
     hash: hashConfigRaw(snapshot.raw),
-    source: candidateConfigSource(snapshot),
-  };
-}
-
-// Doctor's input hash stays root-only; activation also fences include bytes and targets.
-function candidateConfigSource(snapshot: ConfigFileSnapshot) {
-  return {
-    path: snapshot.path,
-    exists: snapshot.exists,
-    raw: snapshot.raw,
-    hash: snapshot.hash,
-    includedPaths: snapshot.includedPaths ?? [],
-    includeProvenance: snapshot.includeProvenance ?? [],
-    sourceConfig: snapshot.sourceConfig,
+    source: updateConfigSource(snapshot),
   };
 }
 

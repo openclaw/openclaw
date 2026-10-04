@@ -46,6 +46,21 @@ describe("isolated Vitest build selection", () => {
     ).toEqual({ profile: "ciArtifacts", privateQa: true });
   });
 
+  it("prepares the complete ordinary E2E runtime before global setup", () => {
+    expect(
+      resolveIsolatedVitestBuild(
+        [
+          "run",
+          "--config",
+          "test/vitest/vitest.e2e.config.ts",
+          "test/e2e/qa-lab/runtime/node-worker-launch-wire.e2e.test.ts",
+          "test/e2e/qa-lab/runtime/skill-library-worker-wire.e2e.test.ts",
+        ],
+        {},
+      ),
+    ).toEqual({ profile: "qaRuntime", privateQa: true, declarations: true });
+  });
+
   it("leaves custom config prerequisite ownership unchanged", () => {
     expect(
       resolveIsolatedVitestBuild(

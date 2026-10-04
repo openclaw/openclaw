@@ -32,14 +32,13 @@ type BuzzSetupDependencies = {
 };
 
 function validateRelayUrl(value: string): string | undefined {
-  try {
-    const url = new URL(value.trim());
-    return url.protocol === "ws:" || url.protocol === "wss:"
-      ? undefined
-      : "Use a ws:// or wss:// relay URL";
-  } catch {
+  const url = URL.parse(value.trim());
+  if (!url) {
     return "Enter a valid Buzz relay WebSocket URL";
   }
+  return url.protocol === "ws:" || url.protocol === "wss:"
+    ? undefined
+    : "Use a ws:// or wss:// relay URL";
 }
 
 function isRemoteInsecureRelayUrl(value: string): boolean {

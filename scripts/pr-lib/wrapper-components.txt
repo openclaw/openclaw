@@ -2,6 +2,7 @@
 cli-root-options.mjs
 config/ci-test-timings.json
 node-compile-cache.mjs
+node-runtime-env.mjs
 node-sqlite.mjs
 node-version.mjs
 package.json
@@ -229,6 +230,7 @@ src/agents/agent-runtime-id.ts
 src/agents/agent-scope-config.ts
 src/agents/agent-scope.ts
 src/agents/auth-profiles/sqlite-json.ts
+src/agents/auth-profiles/store-unreadable-error.ts
 src/agents/auth-profiles/sqlite-read-pool.ts
 src/agents/configured-provider-fallback.ts
 src/agents/configured-provider-model.ts
@@ -313,6 +315,7 @@ src/agents/worktrees/snapshot-inventory.ts
 src/agents/worktrees/template-cache.ts
 src/agents/worktrees/template-registry-async.ts
 src/agents/worktrees/template-registry.ts
+src/agents/worktrees/template-registry.worker.ts
 src/auto-reply/reply/delivery-hints.ts
 src/auto-reply/reply/display-text-sanitize.ts
 src/auto-reply/reply/history-limit.ts
@@ -320,6 +323,7 @@ src/auto-reply/reply/inbound-context-marker.ts
 src/auto-reply/reply/strip-inbound-meta.ts
 src/auto-reply/thinking.shared.ts
 src/auto-reply/tokens.ts
+src/bootstrap/node-exit-safe-compilers.ts
 src/channels/bundled-channel-catalog-read.ts
 src/channels/bundled-channel-ids.generated.ts
 src/channels/chat-meta-shared.ts
@@ -1129,6 +1133,7 @@ src/plugins/channel-startup-policy.ts
 src/plugins/clawhub-error-codes.ts
 src/plugins/command-execution-lock.ts
 src/plugins/compat/agent-list-runtime-projection-records.ts
+src/plugins/compat/channel-pairing-record.ts
 src/plugins/compat/deprecation-marking.ts
 src/plugins/compat/media-legacy-projection.ts
 src/plugins/compat/mention-inbox-record.ts
@@ -1154,10 +1159,12 @@ src/plugins/discovery-required-plugins.ts
 src/plugins/discovery.ts
 src/plugins/doctor-compatibility-migration.ts
 src/plugins/doctor-contract-artifact.ts
+src/plugins/doctor-contract-legacy-setup.ts
 src/plugins/doctor-contract-module.ts
 src/plugins/doctor-contract-registry-loader-state.ts
 src/plugins/doctor-contract-registry.ts
 src/plugins/doctor-contract-relevance.ts
+src/plugins/loader-channel-setup.ts
 src/plugins/doctor-session-route-state-owner-types.ts
 src/plugins/enable.ts
 src/plugins/hardlink-policy.ts

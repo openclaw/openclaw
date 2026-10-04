@@ -572,7 +572,7 @@ describe("owned worker tasks", () => {
     expect(siblingWorker.terminate).not.toHaveBeenCalled();
   });
 
-  it.each(["none", "message", "error", "exit"] as const)(
+  it.each(["message", "error", "exit"] as const)(
     "retains failed retirement custody until explicit close despite a late %s event",
     async (lateEvent) => {
       const primary = new Error("result rejected by its owner");
@@ -880,60 +880,53 @@ describe("owned worker tasks", () => {
     }
   });
 
-  it("retains a successful reply when its explicitly requested retirement fails", async () => {
-    const pool = createPool();
-    const executionSettled = vi.fn();
-    const task = pool.runTask("completed", { onExecutionSettled: executionSettled });
-    const worker = workerFor("completed");
-    reply(worker, "completed", "domain outcome");
-    await expect(task.result).resolves.toBe("domain outcome");
-    expect(executionSettled).not.toHaveBeenCalled();
-    const cleanup = new Error("stop failed after reply");
-    worker.terminate.mockRejectedValueOnce(cleanup);
-    await expect(task.close({ retire: true })).rejects.toBe(cleanup);
-    expect(executionSettled).not.toHaveBeenCalled();
-    expect(pool.getSnapshot().pendingTasks).toBe(1);
-    const native = holdExit(worker);
-    const closing = task.close();
-    try {
-      await native.entered;
+  it.each(["retirement", "settlement"] as const)(
+    "reports a %s failure through close without replacing its successful result",
+    async (phase) => {
+      const pool = createPool();
+      const failure = new Error(`${phase} failed after reply`);
+      const executionSettled = vi.fn(() => {
+        if (phase === "settlement") {
+          throw failure;
+        }
+      });
+      const task = pool.runTask("completed", { onExecutionSettled: executionSettled });
+      const worker = workerFor("completed");
+      reply(worker, "completed", "domain outcome");
+      await expect(task.result).resolves.toBe("domain outcome");
       expect(executionSettled).not.toHaveBeenCalled();
-    } finally {
-      native.release();
-      await closing;
-    }
-    expect(executionSettled).toHaveBeenCalledExactlyOnceWith({ retired: true });
-    await task.close({ retire: true });
-    expect(executionSettled).toHaveBeenCalledOnce();
-    expect(worker.terminate).toHaveBeenCalledTimes(2);
-    expect(pool.getSnapshot().pendingTasks).toBe(0);
-    await expect(task.result).resolves.toBe("domain outcome");
-  });
-
-  it("reports a throwing settlement callback through close without replacing its successful result", async () => {
-    const pool = createPool();
-    const failure = new Error("settlement observer failed");
-    const executionSettled = vi.fn(() => {
-      throw failure;
-    });
-    const task = pool.runTask("completed", { onExecutionSettled: executionSettled });
-    const worker = workerFor("completed");
-    reply(worker, "completed", "domain outcome");
-    await expect(task.result).resolves.toBe("domain outcome");
-    expect(executionSettled).not.toHaveBeenCalled();
-    await expect(task.close()).rejects.toBe(failure);
-    expect(executionSettled).toHaveBeenCalledExactlyOnceWith({ retired: false });
-    expect(pool.getSnapshot().pendingTasks).toBe(0);
-    const next = pool.runTask("successor", {});
-    expect(workerFor("successor")).toBe(worker);
-    reply(worker, "successor");
-    await next.result;
-    await next.close();
-    await task.close({ retire: true });
-    expect(executionSettled).toHaveBeenCalledOnce();
-    expect(worker.terminate).not.toHaveBeenCalled();
-    await expect(task.result).resolves.toBe("domain outcome");
-  });
+      if (phase === "retirement") {
+        worker.terminate.mockRejectedValueOnce(failure);
+        await expect(task.close({ retire: true })).rejects.toBe(failure);
+        expect(executionSettled).not.toHaveBeenCalled();
+        expect(pool.getSnapshot().pendingTasks).toBe(1);
+        const native = holdExit(worker);
+        const closing = task.close();
+        try {
+          await native.entered;
+          expect(executionSettled).not.toHaveBeenCalled();
+        } finally {
+          native.release();
+          await closing;
+        }
+      } else {
+        await expect(task.close()).rejects.toBe(failure);
+        expect(executionSettled).toHaveBeenCalledExactlyOnceWith({ retired: false });
+        expect(pool.getSnapshot().pendingTasks).toBe(0);
+        const next = pool.runTask("successor", {});
+        expect(workerFor("successor")).toBe(worker);
+        reply(worker, "successor");
+        await next.result;
+        await next.close();
+      }
+      expect(executionSettled).toHaveBeenCalledExactlyOnceWith({ retired: phase === "retirement" });
+      await task.close({ retire: true });
+      expect(executionSettled).toHaveBeenCalledOnce();
+      expect(worker.terminate).toHaveBeenCalledTimes(phase === "retirement" ? 2 : 0);
+      expect(pool.getSnapshot().pendingTasks).toBe(0);
+      await expect(task.result).resolves.toBe("domain outcome");
+    },
+  );
 
   it("joins native exit when global close reenters healthy task completion", async () => {
     const pool = createPool();

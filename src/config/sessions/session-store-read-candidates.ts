@@ -1,5 +1,6 @@
 import path from "node:path";
 import { resolveIdentityPathViaExistingAncestorSync } from "../../infra/boundary-path.js";
+import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import {
   matchesAgentDatabaseReadCandidatePath,
   type OpenClawAgentDatabaseReadCandidateResource,
@@ -43,6 +44,20 @@ export type SessionStoreReadCandidate = Pick<
   OpenClawAgentDatabaseReadCandidateResource,
   "path" | "scope"
 > & { physicalPath: string };
+
+/** Capture exact candidates before discovery yields; sibling families have no file identity. */
+export function captureSessionStoreCandidateIdentities(
+  candidates: readonly SessionStoreReadCandidate[],
+) {
+  return new Map(
+    candidates
+      .filter((candidate) => !candidate.scope)
+      .map((candidate) => {
+        const identity = readDatabasePathIdentitySync(candidate.path);
+        return [identity.canonicalPath, identity] as const;
+      }),
+  );
+}
 
 /** Families follow their directory; existing file aliases get separate exact captures. */
 export function captureSessionStoreReadCandidate(

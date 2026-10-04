@@ -53,6 +53,8 @@ const updateSessionStoreMock = vi.fn();
 const applySessionPatchProjectionMock = vi.fn();
 const projectSessionsPatchEntryMock = vi.fn();
 const projectSessionPatchResultMock = vi.fn();
+const readAcpSessionMetaForEntriesMock =
+  vi.fn<typeof import("../acp/runtime/session-meta-readonly.js").readAcpSessionMetaForEntries>();
 const createSessionGoalMock = vi.fn();
 const clearSessionGoalMock = vi.fn();
 const getSessionGoalMock = vi.fn();
@@ -345,6 +347,12 @@ vi.mock("../gateway/session-utils-model.js", () => ({
   projectSessionPatchResult: (...args: unknown[]) => projectSessionPatchResultMock(...args),
 }));
 
+vi.mock("../acp/runtime/session-meta-readonly.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../acp/runtime/session-meta-readonly.js")>()),
+  readAcpSessionMetaForEntries: (...args: Parameters<typeof readAcpSessionMetaForEntriesMock>) =>
+    readAcpSessionMetaForEntriesMock(...args),
+}));
+
 vi.mock("../gateway/session-create-service.js", () => ({
   createGatewaySession: (...args: unknown[]) => createGatewaySessionMock(...args),
 }));
@@ -499,6 +507,10 @@ describe("EmbeddedTuiBackend", () => {
     projectSessionsPatchEntryMock.mockReset();
     projectSessionsPatchEntryMock.mockResolvedValue({ ok: true, entry: {} });
     projectSessionPatchResultMock.mockReset();
+    readAcpSessionMetaForEntriesMock.mockReset();
+    readAcpSessionMetaForEntriesMock.mockImplementation(async ({ entries }) =>
+      entries.map(() => null),
+    );
     projectSessionPatchResultMock.mockImplementation(
       (params: { canonicalKey: string; entry: unknown; storePath: string }) => ({
         ok: true,
@@ -1497,13 +1509,18 @@ describe("EmbeddedTuiBackend", () => {
   });
 
   it("reports publication failure instead of returning stale model choices", async () => {
+    const publishing = deferred<void>();
     const publication = deferred<void>();
-    refreshPreparedModelRuntimeSnapshotsMock.mockReturnValueOnce(publication.promise);
+    refreshPreparedModelRuntimeSnapshotsMock.mockImplementationOnce(() => {
+      publishing.resolve();
+      return publication.promise;
+    });
     const backend = new EmbeddedTuiBackend();
     backend.start();
     const choices = backend.listModels({ agentId: "work" });
     const failure = expect(choices).rejects.toThrow("catalog publication failed");
 
+    await publishing.promise;
     publication.reject(new Error("catalog publication failed"));
     await failure;
     expect(withPreparedModelCatalogOwnerMock).not.toHaveBeenCalled();
@@ -2949,6 +2966,7 @@ describe("EmbeddedTuiBackend", () => {
           canonicalKey: "global",
           cfg: expect.anything(),
           entry,
+          preparedAcpMeta: null,
           storePath: target.storePath,
           targetAgentId: owner,
         });

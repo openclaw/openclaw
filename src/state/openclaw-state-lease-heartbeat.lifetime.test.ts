@@ -544,6 +544,48 @@ describe("state lease heartbeat lifetime", () => {
     },
   );
 
+  it.each(["current", "stale", "expired"] as const)(
+    "validates %s acknowledgment after a delayed synchronous wake",
+    async (ending) => {
+      const params = options();
+      const heartbeat = startOpenClawStateLeaseHeartbeat(params);
+      const worker = await constructedWorker();
+      try {
+        await heartbeat.ready;
+        const now = Date.now();
+        let elapsed = 0;
+        vi.spyOn(performance, "now").mockImplementation(() => elapsed);
+        vi.spyOn(Date, "now").mockImplementation(() => now + elapsed);
+        Atomics.store(worker.shared, state.request, 4n);
+        Atomics.store(worker.shared, state.ack, 4n);
+        let waits = 0;
+        vi.spyOn(Atomics, "wait").mockImplementation(() => {
+          if (++waits !== 1) {
+            throw new Error("Unexpected additional synchronous wait");
+          }
+          if (ending !== "stale") {
+            Atomics.store(worker.shared, state.ack, Atomics.load(worker.shared, state.request));
+          }
+          // The worker answered before the parent resumed from its synchronous wait.
+          elapsed = 1_500;
+          return "ok";
+        });
+        const check = () =>
+          heartbeat.assertResponsive(now + (ending === "expired" ? 1_000 : 60_000));
+        if (ending === "current") {
+          expect(check).not.toThrow();
+          expect(params.onLost).not.toHaveBeenCalled();
+        } else {
+          expect(check).toThrow("not responsive");
+          expect(params.onLost).toHaveBeenCalledOnce();
+        }
+        expect(waits).toBe(1);
+      } finally {
+        await finish(heartbeat, worker);
+      }
+    },
+  );
+
   it("bounds an unanswered request despite continuing renewal progress", async () => {
     const params = { ...options(), leaseMs: 3_000 };
     const heartbeat = startOpenClawStateLeaseHeartbeat(params);

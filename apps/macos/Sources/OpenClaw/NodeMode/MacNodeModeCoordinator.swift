@@ -94,7 +94,7 @@ final class MacNodeModeCoordinator: NSObject {
     private var nodeHostWorkerConfigurationGeneration: UInt64 = 0
     private var nodeHostWorkerRetryTaskGeneration: UInt64 = 0
     private var pendingEndpoint: GatewayConnection.EndpointSnapshot?
-    private var activeNodeHostWorkerInput: MacNodeHostWorkerRetryPolicy.Input?
+    private var activeNodeHostWorkerInput: MacNodeHostWorkerLaunch?
     private var lastNodeHostWorkerStartFailure: (reason: String, diagnostic: String?)?
     private(set) var desktopSharingEnabled: Bool? {
         didSet {
@@ -872,10 +872,9 @@ final class MacNodeModeCoordinator: NSObject {
         guard self.nodeHostWorkerRetryTask == nil else {
             throw MacNodeHostWorkerRetryPolicy.RetryBackoffPending()
         }
-        let input = MacNodeHostWorkerRetryPolicy.Input(
-            launch: MacNodeHostWorkerLaunch(
-                command: command,
-                configurationGeneration: self.nodeHostWorkerConfigurationGeneration))
+        let input = MacNodeHostWorkerLaunch(
+            command: command,
+            configurationGeneration: self.nodeHostWorkerConfigurationGeneration)
         try self.nodeHostWorkerRetryPolicy.prepareForStart(input)
         self.activeNodeHostWorkerInput = input
     }
@@ -1038,7 +1037,7 @@ extension MacNodeModeCoordinator {
             // Worker launch metadata is startup-scoped. Route retries reuse it instead of
             // resolving the bundle again until an explicit restart resets state.
             try self.nodeHostWorkerRetryPolicy.prepareForStart(activeInput)
-            return try await nodeHostWorker.start(launch: activeInput.launch)
+            return try await nodeHostWorker.start(launch: activeInput)
         }
         let launch: MacNodeHostWorkerLaunch
         do {
@@ -1056,9 +1055,8 @@ extension MacNodeModeCoordinator {
             currentDirectoryURL: launch.currentDirectoryURL,
             environment: workerEnvironment,
             configurationGeneration: self.nodeHostWorkerConfigurationGeneration)
-        let input = MacNodeHostWorkerRetryPolicy.Input(launch: effectiveLaunch)
-        try self.nodeHostWorkerRetryPolicy.prepareForStart(input)
-        self.activeNodeHostWorkerInput = input
+        try self.nodeHostWorkerRetryPolicy.prepareForStart(effectiveLaunch)
+        self.activeNodeHostWorkerInput = effectiveLaunch
         return try await nodeHostWorker.start(launch: effectiveLaunch)
     }
 

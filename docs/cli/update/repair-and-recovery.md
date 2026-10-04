@@ -207,6 +207,25 @@ deleting database rows to work around this failure.
 
 ## `update repair`
 
+For a package update stranded by an older updater's launcher ownership checks,
+use the manual installation hop, then repair from the new CLI at the same root:
+
+```bash
+npm install -g openclaw@latest
+openclaw doctor --fix
+openclaw update repair
+```
+
+Follow the [manual update precautions](/install/updating/update-methods#alternative-manual-npm-pnpm-or-bun),
+including a verified backup and stopping the managed Gateway during replacement.
+When the installed package directory matches neither recorded generation, repair
+closes the previous package operation as `superseded-by-manual-install`, warns with
+its operation ID, and preserves its staged files and helper beside the installation.
+The original failed history entry remains intact. The pending package-recovery
+gate then clears, so another update can proceed. Same-identity recovery keeps its
+original sealed-helper checks; missing packages, active update owners, and pending
+database or configuration restoration still require their existing recovery path.
+
 Rerun update finalization after the core package already changed but later
 repair work did not finish cleanly. This is the supported recovery path when
 `openclaw update` installed the new core package but post-core plugin sync,
@@ -543,6 +562,21 @@ applies to each artifact's recomputed declared surface during this invocation;
 it does not approve future capability additions.
 
 ### Skipped legacy audit recovery
+
+Doctor can migrate legacy audit logs on filesystems that reject native
+no-replace rename by using an exclusive hard link, then removing the old name.
+This preserves the original inode, including later appends from an older CLI's
+open file descriptor. Existing destinations are never overwritten. Doctor
+recovers interrupted link pairs before importing; backups capture one sanitized
+copy without changing either live name.
+
+If the filesystem also rejects hard links, Doctor preserves the audit files and
+reports a recoverable warning with the affected filename and a command targeting
+that state directory. Other repairs and update finalization continue. Restore
+hard-link support, or stop the Gateway and all CLI writers before moving the
+complete state directory to a compatible filesystem, then run the reported `openclaw doctor --fix`
+command. If the directory moved, update `OPENCLAW_STATE_DIR` in that command.
+Doctor never substitutes a file copy: doing so could lose later audit appends.
 
 When a legacy audit raw archive changed other than by append, Doctor preserves it
 beside itself with a `.quarantined-<date>-<id>` suffix. The warning names the

@@ -11,7 +11,7 @@ import { formatDurationCompact } from "../infra/format-time/format-duration.ts";
 import { getDiagnosticSessionState } from "../logging/diagnostic-session-state.js";
 import type { ManagedRunStdin } from "../process/supervisor/types.js";
 import { captureAgentToolSourceExecutionGuard } from "./agent-tool-source-execution-guard.js";
-import { cancelBackgroundExecSession } from "./bash-process-control.js";
+import { cancelBackgroundExecSession, isConfirmedRequestedStop } from "./bash-process-control.js";
 import {
   acknowledgeNotifyOnExit,
   type ProcessSession,
@@ -158,14 +158,6 @@ function resetPollRetrySuggestion(sessionId: string): void {
   } catch {
     // Ignore diagnostics state failures for process tool behavior.
   }
-}
-
-function isConfirmedRequestedStop(session: ProcessSession): boolean {
-  return (
-    session.cancellationRequested === true &&
-    session.exitReason === "manual-cancel" &&
-    session.finalizationFailed !== true
-  );
 }
 
 function finishedSessionDetails(sessionId: string, finished: ProcessSession) {

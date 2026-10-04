@@ -112,15 +112,6 @@ describe("legacy restart sentinel migration", () => {
     );
   }
 
-  it("detects both the retired source and an interrupted fixed claim", async () => {
-    const { stateDir } = useStateDir();
-    const sourcePath = await writeLegacy(stateDir, { version: 1, payload: payload() });
-    expect(detectLegacyRestartSentinel({ stateDir }).hasLegacy).toBe(true);
-
-    await fsp.rename(sourcePath, `${sourcePath}.doctor-importing`);
-    expect(detectLegacyRestartSentinel({ stateDir }).hasLegacy).toBe(true);
-  });
-
   it.each([false, true])(
     "imports the complete legacy payload after prior native delivery=%s",
     async (priorNative) => {
@@ -182,21 +173,6 @@ describe("legacy restart sentinel migration", () => {
       source_record_count: 1,
       status: "completed",
     });
-  });
-
-  it("preserves a valid canonical row when legacy JSON conflicts", async () => {
-    const { env, stateDir } = useStateDir();
-    const canonical = payload(999);
-    await writeRestartSentinel(canonical, env);
-    const sourcePath = await writeLegacy(stateDir, { version: 1, payload: payload(1) });
-
-    const result = await migrate({ env, stateDir });
-
-    expect(result.changes).toEqual([
-      "Preserved the canonical SQLite restart sentinel and discarded conflicting legacy JSON.",
-    ]);
-    await expect(readRestartSentinel(env)).resolves.toMatchObject({ payload: canonical });
-    expect(fs.existsSync(sourcePath)).toBe(false);
   });
 
   it("repairs an invalid canonical row from a validated legacy envelope", async () => {
@@ -453,8 +429,13 @@ describe("legacy restart sentinel migration", () => {
   it("admits a later unrelated handoff after preserving native canonical state", async () => {
     const { env, stateDir } = useStateDir();
     const native = await writeRestartSentinel(payload(1), env);
-    await writeLegacy(stateDir, { version: 1, payload: payload(2) });
-    expect((await migrate({ env, stateDir })).warnings).toEqual([]);
+    const sourcePath = await writeLegacy(stateDir, { version: 1, payload: payload(2) });
+    const result = await migrate({ env, stateDir });
+    expect(result.warnings).toEqual([]);
+    expect(result.changes).toEqual([
+      "Preserved the canonical SQLite restart sentinel and discarded conflicting legacy JSON.",
+    ]);
+    expect(fs.existsSync(sourcePath)).toBe(false);
     await expect(readRestartSentinel(env)).resolves.toEqual(native);
     await clearRestartSentinelIfRevision(native.revision, env);
     const next = { ...payload(3), stats: { ...payload(3).stats, handoffId: "next-handoff" } };
@@ -486,8 +467,10 @@ describe("legacy restart sentinel migration", () => {
   it("recovers an interrupted claim and finishes the same migration owner", async () => {
     const { env, stateDir } = useStateDir();
     const sourcePath = await writeLegacy(stateDir, { version: 1, payload: payload() });
+    expect(detectLegacyRestartSentinel({ stateDir }).hasLegacy).toBe(true);
     await fsp.rename(sourcePath, `${sourcePath}.doctor-importing`);
 
+    expect(detectLegacyRestartSentinel({ stateDir }).hasLegacy).toBe(true);
     const result = await migrate({ env, stateDir });
 
     expect(result.warnings).toEqual([]);

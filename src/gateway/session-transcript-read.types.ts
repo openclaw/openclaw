@@ -2,6 +2,7 @@ import type { TranscriptDisplayPosition } from "../chat/transcript-display-posit
 import type {
   SessionTranscriptRawDeltaLimits,
   SessionTranscriptRawDeltaResult,
+  SessionTranscriptReadScope,
   TranscriptEvent,
 } from "../config/sessions/session-accessor.types.js";
 import type {
@@ -13,6 +14,14 @@ import type {
   TranscriptReadWindowOptions,
 } from "../sessions/transcript-read-window.js";
 
+export type { SessionTranscriptReadScope } from "../config/sessions/session-accessor.types.js";
+
+export type SubagentCoordinationDisplayResolver = {
+  assertCurrent?: () => void;
+  isSubagentSession: (sessionKey: string) => boolean;
+  isSubagentRunMessage: (runId: string, messageSeq: number | undefined) => boolean;
+};
+
 export type ReadRecentSessionMessagesOptions = {
   maxMessages: number;
   maxBytes?: number;
@@ -23,9 +32,10 @@ export type ReadSessionMessagesAsyncOptions =
   | { mode: "full"; reason: string; includeOffPathMessages?: boolean }
   | ({ mode: "recent" } & ReadRecentSessionMessagesOptions);
 
-export type SessionTranscriptMessageByIdOptions =
+export type SessionTranscriptMessageByIdOptions = (
   | { currentOnly?: false; maxBytes?: never }
-  | { currentOnly: true; maxBytes: number };
+  | { currentOnly: true; maxBytes: number }
+) & { historyVisibility?: { sessionStartedAt?: number } };
 
 export type ReadRecentSessionMessagesResult = {
   olderOffset?: number;
@@ -48,6 +58,9 @@ export type ReadSessionMessagesResult = {
 };
 
 export type ReadSessionMessageByIdResult = {
+  /** A canonical visibility rejection must not fall through to imported history. */
+  historyHidden?: true;
+  historyContext?: { precedingMessage?: unknown; transcriptPath?: string; displaySource?: string };
   message?: unknown;
   seq?: number;
   oversized: boolean;
@@ -75,6 +88,58 @@ export type SessionTranscriptPageOptions = TranscriptReadWindowOptions &
     maxBytes?: number;
     allowOversizedFirst?: boolean;
   };
+
+export type SessionTranscriptReader = {
+  subagentCoordination?: SubagentCoordinationDisplayResolver;
+  readSessionMessageCountAsync(scope: SessionTranscriptReadScope): Promise<number>;
+  readSessionMessagesAsync(
+    scope: SessionTranscriptReadScope,
+    options: ReadSessionMessagesAsyncOptions & SessionTranscriptReadOptions,
+  ): Promise<unknown[]>;
+  readSessionMessagesWithSourceAsync(
+    scope: SessionTranscriptReadScope,
+    options: ReadSessionMessagesAsyncOptions & SessionTranscriptReadOptions,
+  ): Promise<ReadSessionMessagesResult>;
+  readSessionMessageByIdAsync(
+    scope: SessionTranscriptReadScope,
+    messageId: string,
+    options?: SessionTranscriptMessageByIdOptions & { allowResetArchiveFallback?: boolean },
+  ): Promise<ReadSessionMessageByIdResult>;
+  readSessionMessagesMatchingIdAsync(
+    scope: SessionTranscriptReadScope,
+    messageId: string,
+  ): Promise<unknown[]>;
+  readRecentSessionMessagesWithStatsAsync(
+    scope: SessionTranscriptReadScope,
+    options: ReadRecentSessionMessagesOptions &
+      TranscriptReadWindowOptions &
+      SessionTranscriptReadOptions,
+  ): Promise<ReadRecentSessionMessagesResult>;
+  readSessionMessagesPageWithStatsAsync(
+    scope: SessionTranscriptReadScope,
+    options: SessionTranscriptPageOptions,
+  ): Promise<ReadRecentSessionMessagesResult>;
+  readSessionMessagesAroundIdWithStatsAsync(
+    scope: SessionTranscriptReadScope,
+    options: TranscriptAnchorPageOptions & SessionTranscriptReadOptions,
+  ): Promise<ReadSessionMessagesAroundIdResult>;
+};
+
+export type SessionTranscriptPageReader = Pick<
+  SessionTranscriptReader,
+  | "readRecentSessionMessagesWithStatsAsync"
+  | "readSessionMessagesPageWithStatsAsync"
+  | "readSessionMessagesAroundIdWithStatsAsync"
+  | "readSessionMessageByIdAsync"
+  | "subagentCoordination"
+>;
+
+export type SessionTranscriptVisitor = {
+  visitSessionMessagesAsync(
+    scope: SessionTranscriptReadScope,
+    visit: (message: unknown, seq: number) => void,
+  ): Promise<number>;
+};
 
 export type SessionTranscriptProjectionSelection =
   | { kind: "delta"; options: SessionTranscriptRawDeltaLimits }

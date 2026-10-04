@@ -135,9 +135,6 @@ export function* iterateGraphemes(input: string): Generator<string, void> {
 }
 
 export function splitGraphemes(input: string): string[] {
-  if (!input) {
-    return [];
-  }
   return Array.from(graphemeSegmenter.segment(input), (segment) => segment.segment);
 }
 

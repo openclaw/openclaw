@@ -84,14 +84,13 @@ enum PairingPromptSupport {
     static func startPairingPushTask(
         task: inout Task<Void, Never>?,
         gateway: GatewayConnection,
-        bufferingNewest: Int = 200,
         handlePush: @escaping @MainActor (GatewayConnection.PushDelivery) -> Void)
     {
         guard task == nil else { return }
         task = Task {
             _ = try? await gateway.acquireServerLease()
             await GatewayPushSubscription.consume(
-                connection: gateway, bufferingNewest: bufferingNewest, onPush: handlePush)
+                connection: gateway, bufferingNewest: 200, onPush: handlePush)
         }
     }
 

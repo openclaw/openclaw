@@ -101,10 +101,6 @@ function readAcpMetaForDeletedAgentCheck(params: {
   entry?: Pick<SessionEntry, "acp" | "lifecycleRevision"> | null;
   acpMetadataSessionKey?: string | null;
 }) {
-  if (params.entry?.acp) {
-    return params.entry.acp;
-  }
-
   const acpMetadataSessionKey = normalizeOptionalString(params.acpMetadataSessionKey);
   const directKeys = new Set<string>();
   if (acpMetadataSessionKey) {
