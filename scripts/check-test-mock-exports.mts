@@ -114,40 +114,43 @@ function currentFactories(root: string, staged: boolean, ref?: string) {
   const aliases = getImportGraphAliases(root, manifests);
   const aliasResolutions = new Map<string, string[]>();
   using parser = createNativeTypeScriptParser({ cwd: root });
-  const syntax = parser.parseSourceFiles(
-    candidates.map(([fileName, text]) => ({ fileName, text })),
-  );
-  const diagnostics = parser.getSyntacticDiagnostics();
-  if (diagnostics.length > 0) {
-    throw new Error(`Mock factory scan requires valid syntax: ${diagnostics[0]!.text}`);
-  }
   const entries = new Set<string>();
   const locations = new Map<string, string>();
-  syntax.forEach((source, index) => {
-    const file = candidates[index]![0];
-    const resolve = (specifier: string) =>
-      resolveImportSpecifiers(
-        file,
-        specifier,
-        inventory,
-        EXTENSIONS,
-        aliases,
-        aliasResolutions,
-        true,
-      );
-    const occurrences = new Map<string, number>();
-    for (const finding of scanClosedMockFactories(source, resolve)) {
-      const fingerprint = createHash("sha256")
-        .update(JSON.stringify([resolve(finding.specifier).toSorted(), finding.fingerprint]))
-        .digest("hex");
-      const identity = JSON.stringify([file, finding.specifier, fingerprint]);
-      const ordinal = (occurrences.get(identity) ?? 0) + 1;
-      occurrences.set(identity, ordinal);
-      const entry = JSON.stringify([file, finding.specifier, fingerprint, ordinal]);
-      entries.add(entry);
-      locations.set(entry, `${file}:${finding.line}: ${finding.specifier}`);
+  // Release syntax trees between batches; CI ratchets run with a 2 GiB Node heap.
+  const batchSize = 32;
+  for (let offset = 0; offset < candidates.length; offset += batchSize) {
+    const batch = candidates.slice(offset, offset + batchSize);
+    const syntax = parser.parseSourceFiles(batch.map(([fileName, text]) => ({ fileName, text })));
+    const diagnostics = parser.getSyntacticDiagnostics();
+    if (diagnostics.length > 0) {
+      throw new Error(`Mock factory scan requires valid syntax: ${diagnostics[0]!.text}`);
     }
-  });
+    syntax.forEach((source, index) => {
+      const file = batch[index]![0];
+      const resolve = (specifier: string) =>
+        resolveImportSpecifiers(
+          file,
+          specifier,
+          inventory,
+          EXTENSIONS,
+          aliases,
+          aliasResolutions,
+          true,
+        );
+      const occurrences = new Map<string, number>();
+      for (const finding of scanClosedMockFactories(source, resolve)) {
+        const fingerprint = createHash("sha256")
+          .update(JSON.stringify([resolve(finding.specifier).toSorted(), finding.fingerprint]))
+          .digest("hex");
+        const identity = JSON.stringify([file, finding.specifier, fingerprint]);
+        const ordinal = (occurrences.get(identity) ?? 0) + 1;
+        occurrences.set(identity, ordinal);
+        const entry = JSON.stringify([file, finding.specifier, fingerprint, ordinal]);
+        entries.add(entry);
+        locations.set(entry, `${file}:${finding.line}: ${finding.specifier}`);
+      }
+    });
+  }
   return { entries, locations };
 }
 
