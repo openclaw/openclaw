@@ -271,6 +271,37 @@ describe("plugin management service", () => {
     expect(mocks.replaceConfig).not.toHaveBeenCalled();
   });
 
+  it("reloads a bundled plugin when a stale registry record shares its id", async () => {
+    const metadata = metadataSnapshot({ enabled: true, id: "voice-call" });
+    mocks.metadata.mockReturnValue({
+      ...metadata,
+      index: {
+        ...metadata.index,
+        installRecords: {
+          "voice-call": { source: "npm", installPath: "/tmp/registry-voice-call" },
+        },
+      },
+    });
+    mocks.readConfig.mockResolvedValue(configSnapshot());
+    const applyRuntime = vi.fn<PluginLifecycleRuntimeApply>(async (request) => ({
+      operationId: "bundled-shadow-reload",
+      generation: 5,
+      pluginIds: [...request.pluginIds],
+    }));
+
+    await expect(
+      reloadManagedPlugin({
+        plugins: [{ pluginId: "voice-call" }],
+        env: {},
+        applyRuntime,
+      }),
+    ).resolves.toMatchObject({
+      pluginIds: ["voice-call"],
+      application: { operationId: "bundled-shadow-reload" },
+    });
+    expect(applyRuntime).toHaveBeenCalledOnce();
+  });
+
   it.each([
     "install-hash-without-record",
     "ambiguous-owner",
