@@ -323,6 +323,8 @@ transaction and rechecks live host custody at transaction and commit admission.
 Its native receipt acknowledges the exact interrupted IDs together with session
 facts, so a lost ordinary reply does not cause replay. The outer composition
 retains actor lifetime without holding its FIFO across another actor request.
+The inactive compute reader exposes hydration preparation, and the inactive
+history reader exposes pending-input list and exact reads through these bindings.
 
 Both compositions remain inactive. Production incognito stays host-owned until
 P7d switches all runtime callers and deletes the native arms. Durable flows,

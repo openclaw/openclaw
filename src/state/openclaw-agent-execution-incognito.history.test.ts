@@ -8,7 +8,6 @@ import { observeHostDataSql } from "../../test/helpers/sqlite-statement-executio
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { IncognitoSessionAuthority } from "../config/sessions/session-incognito-contract.js";
 import type { IncognitoLifecycleEntry } from "../config/sessions/session-incognito-lifecycle-contract.js";
-import { prepareIncognitoSessionTranscriptHydration } from "../config/sessions/session-transcript-hydration.js";
 import { SessionTranscriptReadFenceError } from "../config/sessions/session-transcript-read-fence.js";
 import {
   createIncognitoSessionComputeReader,
@@ -289,11 +288,7 @@ it("revalidates Codex history after asynchronous consumption and joins it before
 
 it("composes hydration navigation and maintenance on the captured actor", async () => {
   const target = await create("hydration-navigation");
-  const reader = prepareIncognitoSessionTranscriptHydration({
-    actor,
-    authority,
-    target: targetInput(target),
-  });
+  const reader = (await computeReader(target)).reader.prepareHydration();
   const first = await append(target, "first hydration entry");
   assert(first.ok && first.value.append);
   const second = await append(target, "latest hydration entry");
@@ -347,28 +342,28 @@ it("composes hydration navigation and maintenance on the captured actor", async 
 it("rechecks hydration authority after queue waits and refuses a mismatched generation", async () => {
   const target = await create("hydration-revoked");
   let revoked = false;
-  const reader = prepareIncognitoSessionTranscriptHydration({
-    actor,
-    target: targetInput(target),
-    authority: {
+  const reader = (
+    await computeReader(target, actor, {
       assertCurrent() {
         if (revoked) {
           throw new Error("hydration revoked");
         }
       },
-    },
-  });
+    })
+  ).reader.prepareHydration();
   const barrier = await hold();
   const pending = reader.readLatestActiveMessage();
   const rejected = expect(pending).rejects.toThrow("hydration revoked");
   revoked = true;
   barrier.release.resolve();
   await Promise.all([rejected, barrier.held]);
-  const stale = prepareIncognitoSessionTranscriptHydration({
-    actor,
-    authority,
-    target: { ...targetInput(target), lifecycleRevision: "another-generation" },
-  });
+  const stale = (
+    await createIncognitoSessionComputeReader({
+      actor,
+      authority,
+      target: { ...targetInput(target), lifecycleRevision: "another-generation" },
+    })
+  ).prepareHydration();
   await expect(stale.readRecentActiveEvents(1)).rejects.toThrow("generation is no longer current");
 });
 

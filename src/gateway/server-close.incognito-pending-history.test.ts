@@ -4,7 +4,6 @@ import { afterAll, beforeAll, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { SessionPendingInputPage } from "../config/sessions/session-accessor.sqlite-pending-inputs.js";
-import { createIncognitoPendingInputHistoryReader } from "../config/sessions/session-pending-input-history.js";
 import type { SqliteWorkerOperations, SqliteWorkerStore } from "../infra/sqlite-worker-contract.js";
 import * as workerStore from "../infra/sqlite-worker-store.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -20,6 +19,7 @@ import {
   createGatewayCloseTestDepsFactory,
   createGatewayCloseTestHandlerFactory,
 } from "./server-close.test-support.js";
+import { createIncognitoSessionHistoryReader } from "./session-history-snapshot.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterAll);
 const authority = { assertCurrent() {} };
@@ -91,7 +91,13 @@ it("drains an accepted interruption after scheduler abort before closing the act
     lifecycleRevision: "initial",
   };
   await actor.sessions.read(authority, { sessionKey: target.sessionKey });
-  const history = createIncognitoPendingInputHistoryReader({ actor, authority, target });
+  const history = createIncognitoSessionHistoryReader({
+    actor,
+    authority,
+    target: { ...target, agentId: actor.agentId, storePath: actor.path },
+    subagentCoordination: { isSubagentSession: () => false, isSubagentRunMessage: () => false },
+    resolveCurrentUserProfileDisplay: () => ({ kind: "unresolved" }),
+  });
   const queued = createDeferredCore();
   const resume = createDeferredCore();
   const result = createDeferredCore<SessionPendingInputPage>();
@@ -131,7 +137,7 @@ it("drains an accepted interruption after scheduler abort before closing the act
     delayMs: 0,
     async run() {
       try {
-        const page = await history.list();
+        const page = await history.listPendingInputs();
         order.push("interruption-settled");
         result.resolve(page);
       } catch (error) {

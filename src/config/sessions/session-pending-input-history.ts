@@ -82,7 +82,7 @@ function applyReceipt(snapshot: PendingInputHistorySnapshot, receipt: PendingInp
 
 /** Inactive until P7d. Accepted reconciliation retains its actor through native settlement. */
 export function createIncognitoPendingInputHistoryReader(params: {
-  actor: IncognitoAgentDatabaseExecution;
+  actor: Pick<IncognitoAgentDatabaseExecution, "path" | "sessions" | "assertCurrent">;
   authority: IncognitoSessionAuthority;
   target: IncognitoHistoryTarget;
 }) {

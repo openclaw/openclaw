@@ -10,7 +10,7 @@ import {
   type SessionPendingInputOwner,
 } from "../config/sessions/session-accessor.sqlite-pending-inputs.js";
 import type { IncognitoSessionAuthority } from "../config/sessions/session-incognito-contract.js";
-import { createIncognitoPendingInputHistoryReader } from "../config/sessions/session-pending-input-history.js";
+import { createIncognitoSessionHistoryReader } from "../gateway/session-history-snapshot.js";
 import type { SqliteWorkerOperations, SqliteWorkerStore } from "../infra/sqlite-worker-contract.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
 import * as workerStore from "../infra/sqlite-worker-store.js";
@@ -83,7 +83,13 @@ function target(name: string) {
 async function reader(name: string, owner = actor) {
   const selected = target(name);
   await owner.sessions.read(authority, { sessionKey: selected.sessionKey });
-  return createIncognitoPendingInputHistoryReader({ actor: owner, authority, target: selected });
+  return createIncognitoSessionHistoryReader({
+    actor: owner,
+    authority,
+    target: { ...selected, agentId: owner.agentId, storePath: owner.path },
+    subagentCoordination: { isSubagentSession: () => false, isSubagentRunMessage: () => false },
+    resolveCurrentUserProfileDisplay: () => ({ kind: "unresolved" }),
+  });
 }
 
 function pendingOwner(name: string): SessionPendingInputOwner {
@@ -152,7 +158,7 @@ it("pages and reads exact actor inputs while preserving terminal disposition cus
   const owner = pendingOwner("page");
   registerSessionPendingInputOwner(owner);
   try {
-    const newest = await history.list({ limit: 1 });
+    const newest = await history.listPendingInputs({ limit: 1 });
     expect(newest).toMatchObject({
       total: 3,
       items: [
@@ -160,13 +166,16 @@ it("pages and reads exact actor inputs while preserving terminal disposition cus
       ],
     });
     expect(newest.nextBefore).toBeDefined();
-    const older = await history.list({ limit: 1, before: newest.nextBefore });
+    const older = await history.listPendingInputs({ limit: 1, before: newest.nextBefore });
     expect(older.items).toMatchObject([{ id: "page-second", state: "interrupted" }]);
-    const oldest = await history.list({ limit: 1, before: older.nextBefore });
+    const oldest = await history.listPendingInputs({ limit: 1, before: older.nextBefore });
     expect(oldest.items).toMatchObject([{ id: "page-first", state: "queued" }]);
     expect(oldest.nextBefore).toBeUndefined();
-    expect(await history.read("page-first")).toMatchObject({ id: "page-first", state: "queued" });
-    expect(await history.read("missing")).toBeUndefined();
+    expect(await history.readPendingInput("page-first")).toMatchObject({
+      id: "page-first",
+      state: "queued",
+    });
+    expect(await history.readPendingInput("missing")).toBeUndefined();
   } finally {
     releaseSessionPendingInputOwner(owner);
   }
@@ -192,14 +201,14 @@ it.each(["transaction", "commit"] as const)(
       );
     try {
       if (phase === "transaction") {
-        await expect(history.list()).resolves.toMatchObject({
+        await expect(history.listPendingInputs()).resolves.toMatchObject({
           items: [
             { id: "transaction-first", state: "queued" },
             { id: "transaction-second", state: "interrupted" },
           ],
         });
       } else {
-        await expect(history.list()).rejects.toThrow("acquired live custody");
+        await expect(history.listPendingInputs()).rejects.toThrow("acquired live custody");
         expect((await snapshot(phase)).rows.map((row) => row.state)).toEqual(["queued", "queued"]);
       }
       expect(registered).toBe(true);
@@ -220,7 +229,7 @@ it("recovers exact committed interruption IDs after losing the ordinary reply wi
     throw new Error("Synthetic interruption reply loss");
   });
   try {
-    await expect(history.list()).resolves.toMatchObject({
+    await expect(history.listPendingInputs()).resolves.toMatchObject({
       items: [
         { id: "lost-first", state: "queued" },
         { id: "lost-second", state: "interrupted" },
@@ -253,7 +262,7 @@ it("joins an accepted pending-history composition before releasing its actor bor
     ready.resolve();
     await resume.promise;
   });
-  const reading = history.list();
+  const reading = history.listPendingInputs();
   const rejected = expect(reading).rejects.toThrow("Incognito execution reference is released");
   let released = false;
   try {
