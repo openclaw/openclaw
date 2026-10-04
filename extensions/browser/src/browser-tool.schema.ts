@@ -309,6 +309,9 @@ export const BrowserToolOutputSchema = Type.Object(
     url: Type.Optional(Type.String()),
     format: Type.Optional(stringEnum(BROWSER_SNAPSHOT_FORMATS)),
     snapshot: Type.Optional(Type.String()),
+    text: Type.Optional(
+      Type.String({ description: "Bounded browser observation wrapped as untrusted content." }),
+    ),
     refs: Type.Optional(Type.Union([Type.Number(), Type.Record(Type.String(), Type.Unknown())])),
     stats: Type.Optional(BrowserSnapshotStatsSchema),
     truncated: Type.Optional(Type.Boolean()),

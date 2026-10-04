@@ -27,6 +27,7 @@ const {
   sessionTabRegistryMocks: sessionTabs,
   toolCommonMocks: runtime,
   resetBrowserToolMocks,
+  mockSingleBrowserProxyNode,
 } = await import("./browser-tool.test-support.js");
 
 beforeEach(resetBrowserToolMocks);
@@ -59,18 +60,6 @@ function durableOwnership(nativeTargetId: string) {
 
 function nodeReply(result: Record<string, unknown>, route?: BrowserProxyRoute) {
   return { ok: true, payload: { result, ...(route ? { route } : {}) } };
-}
-
-function mockSingleBrowserProxyNode() {
-  nodes.listNodes.mockResolvedValue([
-    {
-      nodeId: "node-1",
-      displayName: "Browser Node",
-      connected: true,
-      caps: ["browser"],
-      commands: ["browser.proxy", "browser.proxy.upload.v1"],
-    },
-  ]);
 }
 
 function setResolvedBrowserProfiles(

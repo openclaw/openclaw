@@ -371,6 +371,18 @@ vi.mock("./browser-tool.runtime.js", async () => {
   };
 });
 
+export function mockSingleBrowserProxyNode() {
+  nodesUtilsMocks.listNodes.mockResolvedValue([
+    {
+      nodeId: "node-1",
+      displayName: "Browser Node",
+      connected: true,
+      caps: ["browser"],
+      commands: ["browser.proxy", "browser.proxy.upload.v1"],
+    },
+  ]);
+}
+
 export function resetBrowserToolMocks() {
   vi.clearAllMocks();
   gatewayMocks.hasGatewayToolRoutingContext.mockReturnValue(true);
