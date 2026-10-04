@@ -711,7 +711,7 @@ export async function buildSessionEntryInProcess(
   const sqliteIdentity = resolveBuildSessionSqliteIdentity(absPath, opts);
   try {
     const snapshot = sqliteIdentity
-      ? readTranscriptExportSnapshotReadOnlySync(sqliteIdentity)
+      ? readTranscriptExportSnapshotReadOnlySync(sqliteIdentity, { omitToolResultPayloads: true })
       : null;
     const sqliteSource =
       snapshot && sqliteIdentity

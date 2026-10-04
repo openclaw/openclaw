@@ -1,3 +1,4 @@
+import { sql } from "kysely";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -101,7 +102,10 @@ export function loadTranscriptEventsSync(scope: SessionTranscriptReadScope): Tra
 }
 
 /** Snapshot export payloads and their identity without opening the writable lifecycle. */
-export function readTranscriptExportSnapshotReadOnlySync(scope: SessionTranscriptReadScope) {
+export function readTranscriptExportSnapshotReadOnlySync(
+  scope: SessionTranscriptReadScope,
+  options: { omitToolResultPayloads?: boolean } = {},
+) {
   const resolved = resolveSqliteTranscriptReadScope(scope);
   const result = withOpenClawAgentDatabaseReadOnly(
     (database) =>
@@ -123,6 +127,7 @@ export function readTranscriptExportSnapshotReadOnlySync(scope: SessionTranscrip
             events: loadTranscriptEventsFromDatabase(database, resolved.sessionId, {
               beforeEventSeq: fence?.beforeRawSeq,
               maxEventBytes: scope.maxEventBytes,
+              omitToolResultPayloads: options.omitToolResultPayloads,
             }),
             stats: readTranscriptStatsFromDatabase(database, resolved.sessionId),
             sessionKey,
@@ -312,6 +317,7 @@ export function loadTranscriptEventsFromDatabase(
     beforeEventSeq?: number;
     projection?: "reset-boundary";
     maxEventBytes?: number;
+    omitToolResultPayloads?: boolean;
   } = {},
 ): TranscriptEvent[] {
   return readHotSessionTranscriptSnapshot(database, sessionId, "events", () => {
@@ -337,7 +343,14 @@ export function loadTranscriptEventsFromDatabase(
         .select((eb) => [
           options.projection === "reset-boundary"
             ? projectResetBoundaryNavigationSql(eb.ref("event_json")).as("event_json")
-            : "event_json",
+            : options.omitToolResultPayloads
+              ? /* kysely-allow-raw: memory export preserves every row and its identity/provenance without materializing unused tool payloads. */ sql<string>`CASE WHEN json_valid(event_json) THEN
+                  CASE WHEN json_extract(event_json, '$.type') = 'message'
+                    AND json_extract(event_json, '$.message.role') = 'toolResult'
+                  THEN json_remove(event_json, '$.message.content', '$.message.details')
+                  ELSE event_json END
+                ELSE event_json END`.as("event_json")
+              : "event_json",
         ])
         .where("session_id", "=", sessionId)
         .$if(beforeEventSeq !== undefined, (query) => query.where("seq", "<", beforeEventSeq!))
