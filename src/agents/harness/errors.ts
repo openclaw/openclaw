@@ -28,6 +28,14 @@ export class AgentHarnessSessionSupersededError extends Error {
   }
 }
 
+/** Required native cleanup failed; the host must preserve the current session generation. */
+export class AgentHarnessSessionCleanupError extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = "AgentHarnessSessionCleanupError";
+  }
+}
+
 /** A model-independent harness preflight failed before an attempt could start. */
 export class AgentHarnessPreflightError extends Error {
   /** Opts fallback into skipping only candidates owned by the selected harness. */

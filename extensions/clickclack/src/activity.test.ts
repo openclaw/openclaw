@@ -153,7 +153,7 @@ describe("createClickClackActivityPublisher", () => {
     expect(createActivityMessage).toHaveBeenCalledTimes(1);
     expect(createActivityMessage.mock.calls[0]?.[0]).toMatchObject({
       kind: "agent_tool",
-      body: "🛠️ Exec",
+      body: "Exec",
     });
     expect(updateMessageBody).not.toHaveBeenCalled();
   });
@@ -196,7 +196,7 @@ describe("createClickClackActivityPublisher", () => {
     await publisher.finalize();
 
     expect(createActivityMessage).toHaveBeenCalledWith(
-      expect.objectContaining({ body: "🧩 Server.exec", kind: "agent_tool" }),
+      expect.objectContaining({ body: "Server.exec", kind: "agent_tool" }),
     );
     expect(JSON.stringify(createActivityMessage.mock.calls)).not.toContain("private-sentinel");
   });
@@ -217,7 +217,7 @@ describe("createClickClackActivityPublisher", () => {
     expect(createActivityMessage).toHaveBeenCalledTimes(1);
     expect(createActivityMessage.mock.calls[0]?.[0]).toMatchObject({
       kind: "agent_tool",
-      body: "📖 Read: Done",
+      body: "Read: Done",
     });
     expect(updateMessageBody).not.toHaveBeenCalled();
   });

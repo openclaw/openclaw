@@ -54,7 +54,6 @@ type ApplicationStartupSettings = {
   pendingGatewayToken: string | null;
   pendingBootstrapToken: string | null;
   pendingBootstrapProfile: ControlUiBootstrapProfileHint | null;
-  queryTokenUsed: boolean;
   nativeClient: NativeGatewayClientOptions | null;
   location: ApplicationStartupLocation;
   changed: boolean;
@@ -98,7 +97,6 @@ export function resolveApplicationStartupSettings(
   let pendingGatewayToken: string | null = null;
   let pendingBootstrapToken: string | null = null;
   let pendingBootstrapProfile: ControlUiBootstrapProfileHint | null = null;
-  let queryTokenUsed = false;
   let nativeClient: NativeGatewayClientOptions | null = null;
 
   const updateSettings = (patch: Partial<UiSettings>) => {
@@ -188,7 +186,6 @@ export function resolveApplicationStartupSettings(
       pendingGatewayToken,
       pendingBootstrapToken,
       pendingBootstrapProfile,
-      queryTokenUsed,
       nativeClient,
       location,
       changed,
@@ -228,7 +225,6 @@ export function resolveApplicationStartupSettings(
 
   if (hasTokenParam) {
     if (queryToken != null) {
-      queryTokenUsed = true;
       console.warn(
         "[openclaw] Auth token passed as query parameter (?token=). Use URL fragment instead: #token=<token>. Query parameters may appear in server logs.",
       );
@@ -292,7 +288,6 @@ export function resolveApplicationStartupSettings(
     pendingGatewayToken,
     pendingBootstrapToken,
     pendingBootstrapProfile,
-    queryTokenUsed,
     nativeClient,
     location: shouldCleanUrl
       ? {

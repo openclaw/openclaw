@@ -5,6 +5,7 @@ import type { OperatorScope } from "../gateway/operator-scopes.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import type { InternalHookHandler } from "../hooks/internal-hook-types.js";
 import type { StorageProvider } from "../storage/types.js";
+import type { AgentExecutorController } from "./agent-executor-controller.types.js";
 import type {
   AgentToolResultMiddleware,
   AgentToolResultMiddlewareOptions,
@@ -365,6 +366,8 @@ export type OpenClawPluginApi = {
   ) => void;
   /** Register an agent harness implementation. */
   registerAgentHarness: (harness: AgentHarness, options?: AgentHarnessRegistrationOptions) => void;
+  /** Register this plugin's executor controller, selected by the owning plugin ID. */
+  registerAgentExecutorController: (controller: AgentExecutorController) => void;
   /**
    * Register a Codex app-server extension factory for Codex harness tool-result
    * middleware. Only bundled plugins may use this seam, and

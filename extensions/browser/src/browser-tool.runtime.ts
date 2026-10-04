@@ -29,8 +29,6 @@ export {
   readPositiveIntegerParam,
   readStringParam,
 } from "openclaw/plugin-sdk/channel-actions";
-export { saveMediaBuffer } from "openclaw/plugin-sdk/media-runtime";
-export { describeImageFile } from "openclaw/plugin-sdk/media-understanding-runtime";
 export { wrapExternalContent } from "openclaw/plugin-sdk/security-runtime";
 export {
   normalizeOptionalString,

@@ -76,7 +76,6 @@ export type {
   SessionLifecycleArtifactCleanupParams,
   SessionLifecycleArtifactCleanupResult,
   SessionLifecycleStoreTarget,
-  SessionLifecycleTranscriptInfo,
   SessionParentForkDecision,
   SessionPatchProjectionContext,
   SessionPatchProjectionFailure,

@@ -63,10 +63,7 @@ const ABOUT_LINKS: ReadonlyArray<{ href: string; icon: TemplateResult; label: ()
   },
 ];
 
-function formatControlUiBuildDate(
-  value: string | null,
-  locales?: Intl.LocalesArgument,
-): string | null {
+function formatControlUiBuildDate(value: string | null): string | null {
   if (!value) {
     return null;
   }
@@ -74,7 +71,7 @@ function formatControlUiBuildDate(
   if (Number.isNaN(date.getTime())) {
     return null;
   }
-  return new Intl.DateTimeFormat(locales, {
+  return new Intl.DateTimeFormat(i18n.getLocale(), {
     dateStyle: "medium",
     timeZone: "UTC",
   }).format(date);
@@ -190,7 +187,7 @@ function renderHero(props: AboutProps) {
 }
 
 export function renderAbout(props: AboutProps) {
-  const buildDate = formatControlUiBuildDate(props.buildInfo.builtAt, i18n.getLocale());
+  const buildDate = formatControlUiBuildDate(props.buildInfo.builtAt);
   const buildFacts = html`
     <dl class="settings-kv about-build-grid" aria-label=${t("aboutPage.artifactDetails")}>
       <dt>${t("aboutPage.version")}</dt>

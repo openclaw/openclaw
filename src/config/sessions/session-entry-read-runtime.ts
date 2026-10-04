@@ -45,6 +45,7 @@ import {
   type CanonicalSessionReaderContinuation,
 } from "./session-canonical-key.js";
 import { withOrderedSessionEntriesInWorker } from "./session-entry-read-ordered.js";
+import { captureSessionEntryWorkerRequest } from "./session-entry-read-request.js";
 import type {
   SessionEntryWorkerRead,
   PreparedSessionEntryWorkerRead,
@@ -66,7 +67,6 @@ import {
 } from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 import type {
-  SessionExactEntriesWorkerSelection,
   SessionHistoryWorkerDatabase,
   SessionEntryListWorkerInput,
 } from "./session-transcript-worker.types.js";
@@ -446,16 +446,7 @@ export async function withSessionEntriesFromStoreInWorker<T>(
   dataOnly = false,
   prepareSource?: SessionEntryReadSourcePreparation,
 ): Promise<T> {
-  const selection: SessionExactEntriesWorkerSelection = input.selection
-    ? { selection: input.selection, projection: input.projection }
-    : { sessionKeys: [...new Set(input.sessionKeys)], projection: input.projection };
-  const request = {
-    ...selection,
-    lifecycleSessionKey: input.lifecycleSessionKey,
-    includeMembers: input.includeMembers,
-    includeParticipantRecords: input.includeParticipantRecords,
-    includeAuthorization: input.includeAuthorization,
-  };
+  const request = captureSessionEntryWorkerRequest(input);
   return withSessionStoreReaderInWorker(
     input,
     async ({ reader, database, continuation, assertCurrent }) => {

@@ -987,9 +987,6 @@ CREATE INDEX IF NOT EXISTS idx_memory_index_sources_source
 CREATE INDEX IF NOT EXISTS idx_memory_index_chunks_path_source
   ON memory_index_chunks(path, source);
 
-CREATE INDEX IF NOT EXISTS idx_memory_index_chunks_path
-  ON memory_index_chunks(path);
-
 CREATE INDEX IF NOT EXISTS idx_memory_index_chunks_source
   ON memory_index_chunks(source);
 

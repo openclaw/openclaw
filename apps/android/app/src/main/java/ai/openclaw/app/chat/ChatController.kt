@@ -8523,17 +8523,18 @@ private fun parseToolActivityContent(
     listOf("toolCallId", "tool_call_id", "toolUseId", "tool_use_id", "callId", "id").firstNotNullOfOrNull(obj::nonBlankString)
   if (name.isEmpty() && id == null) return null
   val args = (obj["arguments"] ?: obj["input"] ?: obj["args"]).asObjectOrNull()
+  val displayCall = unwrapToolCallForDisplay(name, args)
   val result = if (resultBlock) boundedToolText(toolResultText(obj["content"] ?: obj["result"] ?: obj["text"]), CHAT_TOOL_RESULT_MAX_CHARS) else null
   return ChatMessageContent(
     type = if (resultBlock) "toolResult" else "toolCall",
     toolActivity =
       ChatToolActivity(
         toolCallId = id,
-        name = name.ifEmpty { "tool" },
-        detail = toolDetail(args),
+        name = displayCall.name.ifEmpty { "tool" },
+        detail = toolDetail(displayCall.args),
         result = result,
         isError = isChatToolError(obj),
-        arguments = toolPresentationArguments(args),
+        arguments = toolPresentationArguments(displayCall.args),
         browserTab = if (resultBlock && name == "browser" && !isChatToolError(obj)) parseChatBrowserTab(obj["details"]) else null,
       ),
   )

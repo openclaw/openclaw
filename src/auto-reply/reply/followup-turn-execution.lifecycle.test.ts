@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
-import type { AgentTurnParams } from "./agent-runner-execution.types.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
+import type { AgentTurnExecutionResult, AgentTurnParams } from "./agent-runner-execution.types.js";
 import type { AdmittedFollowupTurn } from "./followup-turn-admission.js";
 import {
   createFollowupTurnTestTypingController,
@@ -24,6 +25,76 @@ const executeFollowupTurn = executeFollowupTurnForTest;
 beforeEach(resetFollowupTurnTestState);
 
 describe("executeFollowupTurn lifecycle", () => {
+  it.each([
+    { siblingReason: "rpc", cancelSurvivor: false },
+    { siblingReason: "restart", cancelSurvivor: false },
+    { siblingReason: "rpc", cancelSurvivor: true },
+  ])(
+    "isolates $siblingReason cancellation from runner defaults (cancel survivor: $cancelSurvivor)",
+    async ({ siblingReason, cancelSurvivor }) => {
+      const sibling = new AbortController();
+      sibling.abort(
+        siblingReason === "restart"
+          ? createAgentRunRestartAbortError()
+          : new Error("queued turn aborted: rpc"),
+      );
+      const survivor = new AbortController();
+      const ownReason = new Error("survivor canceled");
+      const turn = createTurn({
+        operation: createMockReplyOperation({ abortSignal: survivor.signal }).replyOperation,
+      });
+      const entered = createDeferred();
+      const release = createDeferred();
+      const completed: AgentTurnExecutionResult = {
+        runId: turn.runId,
+        outcome: {
+          kind: "settled",
+          status: "ok",
+          result: { meta: { durationMs: 0 } },
+          resolved: { provider: "anthropic", model: "claude" },
+          fallback: { exhausted: false, attempts: [] },
+          autoCompactionCount: 0,
+          didLogHeartbeatStrip: false,
+        },
+      };
+      state.execute.mockImplementation(async (params: AgentTurnParams) => {
+        params.opts?.abortSignal?.throwIfAborted();
+        entered.resolve();
+        await release.promise;
+        params.opts?.abortSignal?.throwIfAborted();
+        return completed;
+      });
+      const pending = executeFollowupTurn({
+        turn,
+        defaults: {
+          typing: createTypingController(),
+          typingMode: "never",
+          defaultModel: "claude",
+          opts: { abortSignal: sibling.signal },
+        },
+        onToolResult: vi.fn(async () => {}),
+        onCompactionNoticePayload: vi.fn(async () => {}),
+      });
+      try {
+        await expect(
+          awaitGateBeforeSettlement(entered.promise, pending, "survivor did not enter execution"),
+        ).resolves.toBeUndefined();
+        if (cancelSurvivor) {
+          survivor.abort(ownReason);
+        }
+        release.resolve();
+        if (cancelSurvivor) {
+          await expect(pending).rejects.toBe(ownReason);
+        } else {
+          await expect(pending).resolves.toMatchObject({ execution: completed });
+        }
+      } finally {
+        release.resolve();
+        await Promise.allSettled([pending]);
+      }
+    },
+  );
+
   it("drains detached progress before the caller can project a final", async () => {
     const order: string[] = [];
     const { promise: progressBarrier, resolve: releaseProgress } = createDeferred();

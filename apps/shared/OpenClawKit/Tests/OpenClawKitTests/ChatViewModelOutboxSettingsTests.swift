@@ -97,7 +97,7 @@ struct ChatViewModelOutboxSettingsTests {
         } catch {
             await outbox.releaseSnapshot()
             try? await waitUntil("failed proof flush released") {
-                await MainActor.run { !vm.isFlushingOutbox }
+                await MainActor.run { vm.outboxFlushTask == nil }
             }
             throw error
         }
@@ -141,7 +141,7 @@ struct ChatViewModelOutboxSettingsTests {
                 .attemptVersion + 1
             }
             return await MainActor.run {
-                storedResult && !vm.isFlushingOutbox && (terminalResult != .unavailable || !vm.healthOK)
+                storedResult && vm.outboxFlushTask == nil && (terminalResult != .unavailable || !vm.healthOK)
             }
         }
         #expect(await transport.state.sentMessages.isEmpty)

@@ -152,22 +152,20 @@ type GoogleMeetCalendarQuery = {
   eventQuery?: string;
   timeMin?: string;
   timeMax?: string;
-  maxResults?: number;
-  now?: Date;
 };
 
 async function fetchGoogleCalendarEvents(
   params: GoogleMeetCalendarQuery,
 ): Promise<{ calendarId: string; events: GoogleMeetCalendarEvent[]; now: Date }> {
   const calendarId = params.calendarId?.trim() || "primary";
-  const now = params.now ?? new Date();
+  const now = new Date();
   const defaultTimeMax = new Date(now);
   defaultTimeMax.setDate(defaultTimeMax.getDate() + 7);
   return requestGoogleApi(
     {
       url: `${GOOGLE_CALENDAR_API_BASE_URL}/calendars/${encodeURIComponent(calendarId)}/events`,
       query: {
-        maxResults: params.maxResults ?? 50,
+        maxResults: 50,
         orderBy: "startTime",
         q: params.eventQuery?.trim() || undefined,
         showDeleted: false,

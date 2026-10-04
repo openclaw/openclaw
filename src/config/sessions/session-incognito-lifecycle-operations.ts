@@ -132,7 +132,7 @@ export function deleteIncognitoSessionLifecycle(
         }
         return result;
       },
-      { incognito: actor },
+      { incognito: actor, callerSettlesReceipts: true },
     );
   });
 }

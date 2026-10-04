@@ -1048,6 +1048,7 @@ src/infra/state-migrations.media-persistence-targets.ts
 src/infra/state-migrations.receipts.ts
 src/infra/tcp-port.ts
 src/infra/temp-artifact-cleanup.ts
+src/infra/temp-directory-usage.ts
 src/infra/test-runtime-env.ts
 src/infra/tmp-openclaw-dir.ts
 src/infra/update-channels.ts
@@ -1315,6 +1316,7 @@ src/plugins/plugin-instance-error.ts
 src/plugins/plugin-instance-invocation.ts
 src/plugins/plugin-instance-module-loader.ts
 src/plugins/plugin-instance-owned-values.ts
+src/plugins/plugin-instance-runtime-scope.ts
 src/plugins/plugin-instance-scope.ts
 src/plugins/plugin-instance-settlement.ts
 src/plugins/plugin-instance-bindings.ts
@@ -1362,6 +1364,7 @@ src/plugins/plugin-source-admission-store.ts
 src/plugins/plugin-source-admission.types.ts
 src/plugins/plugin-source-build.ts
 src/plugins/plugin-source-capture-context.ts
+src/plugins/plugin-source-capture-cleanup.ts
 src/plugins/plugin-source-capture-directory.ts
 src/plugins/plugin-source-capture-native-loads.ts
 src/plugins/plugin-source-capture-path.ts

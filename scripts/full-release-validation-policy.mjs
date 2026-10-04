@@ -1307,6 +1307,12 @@ function validateCandidatePlanBinding(plan, expectedCandidateRequest) {
     ) {
       throw new Error("Candidate package request changed the admitted frozen baselines");
     }
+    if (
+      request.schema === "openclaw.full-release-candidate-request/v3" &&
+      request.upgradeBaseline !== baselines.upgradeBaseline
+    ) {
+      throw new Error("Candidate package request changed the admitted primary baseline");
+    }
   }
   if (plan.coveragePolicy !== undefined && plan.attemptEvidenceVersion !== 3) {
     throw new Error("release coverage policy requires a phase-three execution plan");

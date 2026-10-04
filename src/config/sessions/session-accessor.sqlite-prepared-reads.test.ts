@@ -127,7 +127,7 @@ describe("prepared session entry reads", () => {
     }
   });
 
-  it("keeps metadata and participant reads inside the caller's current WAL snapshot", () => {
+  it("keeps selected snapshots, metadata, and participants inside the caller's current WAL snapshot", () => {
     const filename = path.join(tempDirs.make("session-metadata-snapshot-"), "agent.sqlite");
     const database = createDatabase(filename);
     database.db.exec("PRAGMA journal_mode=WAL");
@@ -135,7 +135,8 @@ describe("prepared session entry reads", () => {
     admitSqliteSchema(peer);
     openedDatabases.push(peer);
     const key = database.keys[0];
-    const read = () => readExactSessionEntryRowValidated(database, key, "list")?.entry;
+    const read = () =>
+      readExactSessionEntryRowValidated(database, key, ["systemPromptReport"])?.entry;
     expect(read()?.participants?.[0]?.identity.id).toBe("participant-0");
     database.db.exec("BEGIN");
     expect(read()?.owner).toBeUndefined();
@@ -145,12 +146,20 @@ describe("prepared session entry reads", () => {
       .prepare("UPDATE session_nodes SET owner_actor_type = 'human', owner_actor_id = 'peer-owner'")
       .run();
     peer.prepare("UPDATE session_participants SET actor_id = 'peer-participant'").run();
+    peer
+      .prepare(
+        "UPDATE session_entry_snapshots SET value_json = ? WHERE field = 'systemPromptReport'",
+      )
+      .run('{"source":"run","generatedAt":2}');
     peer.exec("COMMIT");
     expect(read()?.owner).toBeUndefined();
     expect(read()?.participants?.[0]?.identity.id).toBe("participant-0");
+    expect(read()?.systemPromptReport?.generatedAt).toBeUndefined();
+    expect(read()?.skillsSnapshot).toBeUndefined();
     database.db.exec("COMMIT");
     expect(read()?.owner?.actor.id).toBe("peer-owner");
     expect(read()?.participants?.[0]?.identity.id).toBe("peer-participant");
+    expect(read()?.systemPromptReport?.generatedAt).toBe(2);
   });
 
   it.skipIf(typeof DatabaseSync.prototype.setAuthorizer !== "function")(

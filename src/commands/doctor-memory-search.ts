@@ -247,7 +247,7 @@ async function inspectMemorySearchHealth(
   const labelAgents = scopes.length > 1;
   for (const scope of scopes) {
     if (opts.includeWorkspaceMemoryHealth !== false) {
-      await noteWorkspaceMemoryHealth(cfg, {
+      await noteWorkspaceMemoryHealth({
         agentId: scope.agentId,
         workspaceDir: scope.workspaceDir,
         labelAgent: labelAgents,

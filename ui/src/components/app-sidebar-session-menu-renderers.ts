@@ -355,9 +355,8 @@ export function renderSidebarSessionSortMenu(params: {
     value: T,
     options: ReadonlyArray<{ value: T; label: string }>,
     onChange: (value: T) => void,
-    visibleLabel = label,
   ) => html`<div id=${id} class="sidebar-session-menu-row">
-    <span aria-hidden="true" title=${label}>${visibleLabel}</span>
+    <span aria-hidden="true" title=${label}>${label}</span>
     ${renderSettingsSegmented({
       value,
       options: options.map((option) => ({ ...option, title: option.label })),

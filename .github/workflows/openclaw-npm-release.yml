@@ -557,12 +557,12 @@ jobs:
               --no-tags --depth=1 origin "$preflight_head_sha"
           fi
           if [[ "$extended_stable_preflight" != "true" ]]; then
-            lineage_args=()
+            lineage_args=(--verify-publication-lineage)
             if [[ "$full_release_preflight" == "true" ]]; then
               lineage_args+=(--full-release-manifest "$full_manifest")
             fi
             node trusted-workflow/scripts/npm-preflight-tooling-identity.mjs \
-              --verify-publication-lineage "${lineage_args[@]}" \
+              "${lineage_args[@]}" \
               --repository "$GITHUB_REPOSITORY" --source-sha "$EXPECTED_RELEASE_SHA" \
               --workflow-sha "$preflight_head_sha" --publisher-sha "$WORKFLOW_SHA" \
               --run-id "$PREFLIGHT_RUN_ID" --run-attempt "$PREFLIGHT_RUN_ATTEMPT"

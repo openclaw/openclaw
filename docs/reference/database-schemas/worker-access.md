@@ -99,6 +99,15 @@ These cutovers change no schema, stored bytes, retention, or update behavior.
 
 ## Keep one store owner
 
+Public meeting-library pages use the transcript read worker's existing page query
+and bounded collector. The worker projects public fields and summary previews
+before measuring the transport budget, and retains lookahead without decoding an
+oversized next row. Tool reads retain their raw source authorization facts and
+separate byte budget. The host adds live capture and provider presentation and
+checks current request authority before disclosure. Date preparation stays with
+the caller's timezone owner. Export streaming keeps its distinct snapshot
+lifetime. Schemas, stored bytes, permissions, and update behavior are unchanged.
+
 Ordinary `chat.send` turns prepare persisted session lookups and sharing facts
 through the existing session workers. Missing rows retain the selected store's routing
 facts without opening a writable database on the Gateway thread. The router
@@ -1171,6 +1180,12 @@ Per-turn restart admission, runtime selection, and initial placement routing rea
 through the existing placement projection. Reads retain the original physical
 store; admission and initial routing also retain a revocable placement observation
 until their caller consumes the facts.
+If a placement publication overlaps read preparation, the owner joins its
+settlement and reads fresh facts from the same physical store. A preceding turn
+finishing or setup advancing cannot reject the next turn merely by superseding
+that read. Only read preparation repeats; consumer effects and writes never do.
+Unknown publication outcomes, cancellation, and store replacement still refuse
+the read, and an observation already handed to its consumer remains revocable.
 Chat admission reruns its session, reservation, and caller checks after preparation;
 reply admission rechecks its session and lifecycle after the worker read. Runtime
 selection is a prepared default that tolerates setup and preceding-turn publications;
@@ -2067,8 +2082,10 @@ exit, and failed retirement retains unavailable custody.
 
 There is one live authority host per physical database. Cron writes use the
 serving Gateway; concurrent direct SQLite mutation is unsupported. Existing
-offline routing and exclusive Doctor maintenance remain unchanged. The close
-prelude seals new work before scheduler cancellation, while accepted persistence
+offline routing and exclusive Doctor maintenance remain unchanged. Doctor-owned
+cron custody closes with its exact maintenance resources before Gateway restoration,
+without waiting for process-wide CLI cleanup. Independently borrowed authority stays
+with its shared resource owner. The close prelude seals new work before scheduler cancellation, while accepted persistence
 and receipt finalizers retain their original source through settlement and
 publication. Stored grants survive restart; process-local observations do not.
 This publication foundation preserves receipt revisions, force-run eligibility,

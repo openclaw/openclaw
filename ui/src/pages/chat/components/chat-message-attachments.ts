@@ -286,7 +286,6 @@ function retryManagedAttachmentAvailability(
   );
   resource.value = undefined;
   resource.retryAttempted = false;
-  resource.unavailableAt = undefined;
   notifyChatMediaResourceSubscribers(resource);
   onRequestUpdate?.();
 }

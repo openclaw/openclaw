@@ -284,7 +284,7 @@ export class TerminalConnection {
       return result;
     }
     stream.recovering = false;
-    this.flushPending(sessionId, stream, offset, true);
+    this.flushPending(sessionId, stream, offset);
     this.scheduleLivenessCheck();
     return result;
   }
@@ -378,7 +378,7 @@ export class TerminalConnection {
           return;
         }
         stream.recovering = false;
-        this.flushPending(sessionId, stream, offset, true);
+        this.flushPending(sessionId, stream, offset);
       })
       .catch(() => {
         if (signal.aborted) {
@@ -407,12 +407,7 @@ export class TerminalConnection {
       });
   }
 
-  private flushPending(
-    sessionId: string,
-    stream: StreamState,
-    coveredThroughSeq?: number,
-    discardPreAttachDetachedExit = false,
-  ): void {
+  private flushPending(sessionId: string, stream: StreamState, coveredThroughSeq?: number): void {
     const pending = this.pending.get(sessionId);
     if (!pending) {
       return;
@@ -426,7 +421,7 @@ export class TerminalConnection {
       // A successful attach reestablishes ownership after earlier events. A
       // preceding detach notice is stale and must not kill the rebound stream.
       if (
-        discardPreAttachDetachedExit &&
+        coveredThroughSeq !== undefined &&
         event.kind === "exit" &&
         event.info.reason === "detached"
       ) {

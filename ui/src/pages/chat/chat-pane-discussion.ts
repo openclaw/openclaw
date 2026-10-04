@@ -139,10 +139,10 @@ export abstract class ChatPaneDiscussion extends ChatPaneSessionMenu {
     return config;
   }
 
-  protected openSessionDiscussionSlot(): boolean {
+  protected openSessionDiscussionSlot(): void {
     const state = this.state;
     if (!state) {
-      return false;
+      return;
     }
     const opened = openSlot(state.sidebarLayout, "discussion");
     const discussionPanel = opened.columns
@@ -152,7 +152,6 @@ export abstract class ChatPaneDiscussion extends ChatPaneSessionMenu {
     if (discussionPanel) {
       state.updateSidebarActivePanel(discussionPanel.id);
     }
-    return true;
   }
 
   protected resolveSessionDiscussionAction(): {

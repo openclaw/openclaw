@@ -71,6 +71,8 @@ type VmRun = {
 type BridgeState = {
   pendingRequests: PendingBridgeRequest[];
   canceledRequestIds: string[];
+  replies?: SettledBridgeRequest[];
+  replyIndex: number;
   admissionFailure?: CodeModeWorkerFailure;
   networkContentObserved?: true;
 };
@@ -232,6 +234,32 @@ async function createVm(input: CodeModeWorkerPayload, bridge: BridgeState): Prom
     const callbacks = [
       ["__openclawHostRequest", createHostRequestHandler({ vm, bridge, config: input.config })],
       ["__openclawHostCancelRequest", createHostCancelRequestHandler({ vm, bridge })],
+      [
+        "__openclawHostTakeBridgeReply",
+        () => {
+          const request = bridge.replies?.[bridge.replyIndex];
+          if (!request) {
+            return vm.undefined;
+          }
+          bridge.replyIndex++;
+          // Own data properties: guest Object.prototype accessors must not
+          // intercept or replace host reply fields.
+          const reply = vm.newObject();
+          try {
+            using id = vm.newString(request.id);
+            using json = vm.newString(request.json);
+            vm.defineProp(reply, "id", id);
+            vm.defineProp(reply, "ok", request.ok ? vm.true : vm.false);
+            vm.defineProp(reply, "json", json);
+          } catch (error) {
+            reply.dispose();
+            throw error;
+          } finally {
+            request.json = "";
+          }
+          return reply;
+        },
+      ],
       [
         "__openclawHostObserveNetworkContent",
         () => {
@@ -513,7 +541,7 @@ async function runVmExecution(params: {
               params.setBudget(command.timeoutMs);
               params.bridge.pendingRequests = command.pendingRequests;
               params.bridge.canceledRequestIds = [];
-              prepare = () => settleRequests(params.vm, command.settledRequests);
+              prepare = () => settleRequests(params.vm, params.bridge, command.settledRequests);
               continue;
             }
             if (command.kind !== "checkpoint") {
@@ -560,22 +588,16 @@ async function runVmExecution(params: {
   }
 }
 
-function settleRequests(vm: QuickJS, requests: SettledBridgeRequest[]): void {
+function settleRequests(vm: QuickJS, bridge: BridgeState, requests: SettledBridgeRequest[]): void {
+  bridge.replies = requests;
+  bridge.replyIndex = 0;
   try {
-    vm.global.getProp("__openclawSettleBridge").consume((settle) => {
-      for (const request of requests) {
-        using id = vm.newString(request.id);
-        using payload = vm.newString(request.json);
-        vm.callFunction(
-          settle,
-          vm.undefined,
-          id,
-          request.ok ? vm.true : vm.false,
-          payload,
-        ).dispose();
-      }
-    });
+    vm.global
+      .getProp("__openclawSettleBridge")
+      .consume((settle) => vm.callFunction(settle, vm.undefined).dispose());
   } finally {
+    bridge.replies = undefined;
+    bridge.replyIndex = 0;
     // No transport alias may retain replies after the consumption receipt,
     // including a failed conversion which closes the VM instead of resuming it.
     for (const request of requests) {
@@ -605,6 +627,7 @@ async function run(
   const bridge: BridgeState = {
     pendingRequests: input.kind === "resume" ? [...(input.pendingRequests ?? [])] : [],
     canceledRequestIds: [],
+    replyIndex: 0,
   };
   const { vm, didTimeout, setBudget, pauseBudget } = await createVm({ ...input, config }, bridge);
   const result = await runVmExecution({
@@ -626,7 +649,7 @@ async function run(
         vm.evalCode(program.source, USER_SOURCE_FILE, EvalFlags.ASYNC).dispose();
         return;
       }
-      settleRequests(vm, input.settledRequests);
+      settleRequests(vm, bridge, input.settledRequests);
     },
   });
   return bridge.networkContentObserved ? { ...result, networkContentObserved: true } : result;

@@ -166,9 +166,6 @@ export function createChannelSetupMocks() {
     }),
   );
   const collectChannelStatus = vi.fn<CollectChannelStatus>(async (_params) => ({
-    installedPlugins: [],
-    catalogEntries: [],
-    installedCatalogEntries: [],
     statusByChannel: new Map(),
     statusLines: [],
   }));

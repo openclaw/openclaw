@@ -220,6 +220,8 @@ describe("world-readable session publication management", () => {
         await createSession();
         await closeOpenClawAgentDatabasesAsync();
         const database = openOpenClawAgentDatabase(scope);
+        // Projection admission is worker-owned; admit this reader before the raw metadata edit.
+        expect(loadSessionEntry(scope)?.createdActor?.id).toBe("owner");
         const changeOwner = () => {
           // Foreign commits change fresh reader snapshots without publishing resident facts.
           const writer = new DatabaseSync(database.path);
@@ -273,6 +275,8 @@ describe("world-readable session publication management", () => {
       await createSession();
       await closeOpenClawAgentDatabasesAsync();
       const database = openOpenClawAgentDatabase(scope);
+      // Keep the foreign edit on an admitted reader, independently of worker projection setup.
+      expect(loadSessionEntry(scope)?.visibility).toBeUndefined();
       const run = sharingLifecycle.runExclusiveSessionLifecycleMutation;
       vi.spyOn(sharingLifecycle, "runExclusiveSessionLifecycleMutation").mockImplementationOnce(
         async (operation, params) => {

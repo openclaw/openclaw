@@ -194,7 +194,6 @@ it.each([
       opts: {},
       prompter: createWizardPrompter({ confirm: async () => true }),
       runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-      workspaceDir: stage?.staged.workspaceDir ?? state.workspaceDir,
       agentDir,
       stateDir,
       required: true,

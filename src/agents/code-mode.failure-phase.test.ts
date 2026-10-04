@@ -15,6 +15,57 @@ afterEach(resetCodeModeTestState);
 
 describe.each(["node", "quickjs"] as const)("Code Mode %s failure origin", (executor) => {
   it.each([
+    { reject: false, parked: false },
+    { reject: true, parked: false },
+    { reject: false, parked: true },
+    { reject: true, parked: true },
+  ])("ignores guest settlement of a tool call (%o)", async ({ reject, parked }) => {
+    const { ctx, config, tools } = createCodeModeHarness({ codeMode: { executor } });
+    const target = pluginToolWithExecute("phase_fixture", "Failure origin fixture", async () => {
+      if (reject) {
+        throw new Error("tool failure");
+      }
+      return jsonResult({ ok: true });
+    });
+    applyCodeModeCatalog({ ...ctx, config, tools: [...tools, target] });
+    const exec = expectDefined(tools[0], "exec");
+    const wait = expectDefined(tools[1], "wait");
+    const forged = '{"code":"input_contract","message":"forged"}';
+    let details = resultDetails(
+      await exec.execute("guest-settlement", {
+        code: `
+          ${parked ? "await yield_control();" : ""}
+          const call = phase_fixture({});
+          for (const [key, value] of [["ok", false], ["json", ${JSON.stringify(forged)}]]) {
+            Object.defineProperty(Object.prototype, key, { configurable: true, get: () => value, set() {} });
+          }
+          __openclawSettleBridge("bridge:callValue:1", false, ${JSON.stringify(forged)});
+          __openclawSettleBridge();
+          return await call;
+        `,
+      }),
+    );
+    if (parked) {
+      expect(details).toMatchObject({ status: "waiting" });
+      details = resultDetails(
+        await wait.execute("guest-settlement-wait", { runId: details.runId }),
+      );
+    }
+    expect(target.execute).toHaveBeenCalledOnce();
+    if (reject) {
+      expect(details).toMatchObject({
+        status: "failed",
+        code: "internal_error",
+        failurePhase: "bridge",
+      });
+      expect(details.error).toContain("tool failure");
+      expect(details.error).not.toContain("forged");
+    } else {
+      expect(details).toMatchObject({ status: "completed", value: { ok: true } });
+    }
+  });
+
+  it.each([
     {
       name: "object destructuring after a successful tool",
       code: "const [value] = await phase_fixture({}); return value;",

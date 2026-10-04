@@ -82,6 +82,7 @@ import type {
   SessionRuntimeTargetWorkerInput,
   SessionRuntimeTargetWorkerResult,
 } from "./session-entry-read.types.js";
+import type { SessionEntrySnapshotField } from "./session-entry-snapshots.js";
 import type { PublishedSessionTranscriptArchive } from "./session-history-archive-pruning.types.js";
 import type {
   ChatHistoryDisplayRequest,
@@ -324,6 +325,8 @@ export type SessionExactEntriesWorkerSelection =
     };
 
 type SessionExactEntriesWorkerRequest = SessionExactEntriesWorkerSelection & {
+  /** Omitted retains the complete entry; an empty selection reads metadata only. */
+  snapshotFields?: readonly SessionEntrySnapshotField[];
   env: NodeJS.ProcessEnv;
   statusSelection?: SessionEntryStatusSelection;
   lifecycleSessionKey?: string;

@@ -125,6 +125,14 @@ can read and write the database safely, leaving the new index intact and recreat
 their day index; reopening with the current build retires it again. Binary rollback
 requires no row conversion or schema-version change.
 
+Memory chunk admission retires the nonunique `idx_memory_index_chunks_path`
+index at the same agent schema version. Both schema publishers retain the
+`(path, source)` index for path and source lookups. Writable memory initialization
+drops the redundant index after legacy storage validation; agent-only and read-only
+admission tolerate either state without recreating it. Older writable builds may
+rebuild it on downgrade or rollback. Rows and constraints are unchanged; see the
+[storage decision](/reference/database-schemas/storage-changes#memory-chunk-path-index-retirement).
+
 Trajectory retention replaces the existing `idx_agent_trajectory_runtime_run`
 definition with a full covering index on `(session_id, run_id, created_at,
 octet_length(event_json))`, including null run IDs. Agent schema 24 is unchanged.
