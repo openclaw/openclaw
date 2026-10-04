@@ -2,8 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { getPublicKey } from "nostr-tools";
-import { AbstractRelay } from "nostr-tools/abstract-relay";
+import { getPublicKey, SimplePool } from "nostr-tools";
 import { decrypt } from "nostr-tools/nip04";
 import type { ChannelOutboundContext } from "openclaw/plugin-sdk/channel-contract";
 import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
@@ -17,7 +16,7 @@ import {
 } from "openclaw/plugin-sdk/channel-test-helpers";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { awaitGateBeforeSettlement } from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { nostrPlugin } from "./channel.js";
 import { getActiveNostrBuses } from "./gateway.js";
 import { startNostrBus } from "./nostr-bus.js";
@@ -167,16 +166,12 @@ describe("Nostr outbound relay failover", () => {
       const second = await relay();
       const bus = await startBus([first.url, second.url]);
       const refusal = new Error("message use refused");
-      let initiating = false;
       let handedOff = false;
-      const originalPublish = AbstractRelay.prototype.publish;
-      const publish = vi.spyOn(AbstractRelay.prototype, "publish").mockImplementation(function (
-        this: AbstractRelay,
-        event,
-      ) {
-        expect(initiating).toBe(true);
-        return originalPublish.call(this, event);
-      });
+      let publicationsAtHandoff = 0;
+      const connections = vi.spyOn(SimplePool.prototype, "ensureRelay");
+      let publish:
+        | MockInstance<Awaited<ReturnType<SimplePool["ensureRelay"]>>["publish"]>
+        | undefined;
       let initiations = 0;
       const initiate = async <T>(effect: () => T | Promise<T>): Promise<T> => {
         initiations++;
@@ -185,11 +180,11 @@ describe("Nostr outbound relay failover", () => {
         if (!allowed) {
           throw refusal;
         }
-        initiating = true;
         try {
-          return effect();
+          const result = effect();
+          publicationsAtHandoff = publish?.mock.calls.length ?? 0;
+          return result;
         } finally {
-          initiating = false;
           handedOff = true;
         }
       };
@@ -201,7 +196,16 @@ describe("Nostr outbound relay failover", () => {
           Promise.race([completion, received.promise]),
           "Relay skipped preparation",
         );
+        const connectionIndex = connections.mock.calls.findLastIndex(
+          ([url]) => new URL(url).href === new URL(first.url).href,
+        );
+        const connection = connections.mock.results[connectionIndex];
+        if (connection?.type !== "return") {
+          throw new Error("No Nostr relay connection was prepared");
+        }
+        publish = vi.spyOn(await connection.value, "publish");
         expect(first.events).toEqual([]);
+        expect(publish).not.toHaveBeenCalled();
         prepared.resolve();
         if (!allowed) {
           await expect(completion).rejects.toBe(refusal);
@@ -214,13 +218,17 @@ describe("Nostr outbound relay failover", () => {
           await expect(completion).resolves.toBe(first.events[0]!.id);
         }
         expect(initiations).toBe(1);
+        expect(publicationsAtHandoff).toBe(allowed ? 1 : 0);
+        expect(publish).toHaveBeenCalledTimes(allowed ? 1 : 0);
+        expect(first.events).toHaveLength(allowed ? 1 : 0);
         expect(second.events).toEqual([]);
       } finally {
         prepared.resolve();
         first.acknowledgeAll();
         await first.close();
         await completion.catch(() => {});
-        publish.mockRestore();
+        publish?.mockRestore();
+        connections.mockRestore();
       }
     },
   );
