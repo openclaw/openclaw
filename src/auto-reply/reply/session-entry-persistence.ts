@@ -87,7 +87,6 @@ export async function persistReplySessionEntry(
         fallbackEntry: params.entry,
         replaceEntry: true,
         skipMaintenance: params.skipMaintenance,
-        workerGuard: params.validateCommit ? undefined : {},
         assertCommitAllowed: params.validateCommit
           ? () => {
               const error = params.validateCommit?.();

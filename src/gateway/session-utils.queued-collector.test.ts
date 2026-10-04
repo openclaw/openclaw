@@ -768,7 +768,7 @@ describe("queued collector session projection", () => {
           }),
           "ordinary chat admission while collector is queued",
         );
-        return prepared.admitted.value;
+        return prepared.admission;
       };
       const admission = await admitOrdinaryChat(
         extraRunId,

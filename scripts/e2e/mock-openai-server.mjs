@@ -714,10 +714,7 @@ function mcpCodeModeApiFileEvents(body, bodyText) {
     if (!hasDeclaredTool(bodyText, "exec")) {
       return null;
     }
-    const catalogExpression =
-      process.env.OPENCLAW_FROZEN_TARGET_MCP_CODE_MODE_CATALOG_MODE === "legacy"
-        ? "ALL_TOOLS.some((tool) => tool.source === 'mcp')"
-        : "catalog.all().some((tool) => tool.source === 'mcp')";
+    const catalogExpression = "catalog.all().some((tool) => tool.source === 'mcp')";
     return toolCallEvents("exec", {
       title: "Read the MCP fixture note",
       code: [

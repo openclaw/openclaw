@@ -97,7 +97,6 @@ async function reconcileAgentPatchedSessionModel(params: {
         liveModelSwitchPending: undefined,
       };
     },
-    { workerGuard: {} },
   );
   if (note && sessionId) {
     try {

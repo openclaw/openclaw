@@ -113,7 +113,7 @@ describe("Gateway direct tool invoke product proof", () => {
 
       testState.agentsConfig = {
         entries: {
-          main: { default: true, tools: { allow: ["agents_list", "nodes"] } },
+          main: { tools: { allow: ["agents_list", "nodes"] } },
         },
       };
 

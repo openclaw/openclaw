@@ -71,7 +71,6 @@ import {
 } from "./agent-runner-utils.js";
 import type { CompactionNoticePhase } from "./compaction-notice.js";
 import {
-  buildMemoryFlushErrorPayload,
   buildVisibleMemoryFlushFailure,
   resolveVisibleMemoryFlushErrorPayloads,
   truncateMemoryFlushErrorMessage,
@@ -892,7 +891,6 @@ export async function runMemoryFlushIfNeeded(params: {
   isHeartbeat: boolean;
   replyOperation?: ReplyOperation;
   abortSignal?: AbortSignal;
-  onVisibleErrorPayloads?: (payloads: ReplyPayload[]) => void;
 }): Promise<MemoryFlushResult> {
   const abortSignal = resolveFollowupAbortSignal({
     abortSignal: params.replyOperation?.abortSignal ?? params.abortSignal,
@@ -1035,9 +1033,10 @@ export async function runMemoryFlushIfNeeded(params: {
       totalTokensFresh: true,
       totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
     };
-    entry = { ...entry, ...usageUpdate };
+    const nextEntry = { ...entry, ...usageUpdate };
+    entry = nextEntry;
     if (params.sessionKey && params.sessionStore) {
-      params.sessionStore[params.sessionKey] = entry;
+      params.sessionStore[params.sessionKey] = nextEntry;
     }
     if (params.storePath && params.sessionKey) {
       try {
@@ -1432,22 +1431,12 @@ async function recordMemoryFlushFailure(
           },
         }));
         adoptEntry(exhaustedEntry);
-        run.onVisibleErrorPayloads?.([
-          {
-            text: `⚠️ Memory flush failed after ${MAX_FLUSH_FAILURES} attempts; skipping for this cycle. It will retry after the next compaction.`,
-            isError: true,
-          },
-        ]);
       }
     } catch (persistError) {
       logVerbose(`failed to persist memory flush failure metadata: ${String(persistError)}`);
     }
   } else {
     logVerbose(`memory flush run failed: ${String(error)}`);
-  }
-  const visibleErrorPayload = buildMemoryFlushErrorPayload(error);
-  if (visibleErrorPayload) {
-    run.onVisibleErrorPayloads?.([visibleErrorPayload]);
   }
   return { sessionEntry, outcome };
 }

@@ -159,7 +159,7 @@ describe("applyModelProviderToolPolicy", () => {
       config: {
         agents: {
           defaults: { experimental: { localModelLean: true } },
-          list: [{ id: "main", experimental: { localModelLean: false } }, { id: "gemma" }],
+          entries: { main: { experimental: { localModelLean: false } }, gemma: {} },
         },
       },
       sessionKey: "agent:gemma:main",
@@ -180,14 +180,13 @@ describe("applyModelProviderToolPolicy", () => {
               localModelLean: true,
             },
           },
-          list: [
-            {
-              id: "main",
+          entries: {
+            main: {
               experimental: {
                 localModelLean: false,
               },
             },
-          ],
+          },
         },
       },
       agentId: "main",

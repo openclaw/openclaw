@@ -388,12 +388,20 @@ vi.mock("../../channels/plugins/session-thread-info-loaded.js", () => ({
   resolveLoadedSessionThreadInfo: (sessionKey: string | null | undefined) =>
     threadInfoMocks.parseSessionThreadInfo(sessionKey ?? undefined),
 }));
-vi.mock("./dispatch-from-config.runtime.js", () => ({
+vi.mock("../../hooks/internal-hooks.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../hooks/internal-hooks.js")>()),
   createInternalHookEvent: internalHookMocks.createInternalHookEvent,
-  loadSessionStoreEntry: sessionStoreMocks.loadSessionStoreEntry,
+  triggerInternalHook: internalHookMocks.triggerInternalHook,
+}));
+vi.mock("../../config/sessions/paths.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/sessions/paths.js")>()),
+  resolveSessionStorePathCore: sessionStoreMocks.resolveSessionStorePathCore,
+}));
+vi.mock("../../config/sessions/session-entry-read-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/sessions/session-entry-read-runtime.js")>()),
   readSessionEntryReadOnlyInWorker: async (
     scope: Parameters<
-      typeof import("./dispatch-from-config.runtime.js").readSessionEntryReadOnlyInWorker
+      typeof import("../../config/sessions/session-entry-read-runtime.js").readSessionEntryReadOnlyInWorker
     >[0],
     assertCurrent?: () => void,
   ) => {
@@ -402,12 +410,6 @@ vi.mock("./dispatch-from-config.runtime.js", () => ({
     assertCurrent?.();
     return entry;
   },
-  loadSessionStore: sessionStoreMocks.loadSessionStore,
-  readSessionEntry: sessionStoreMocks.readSessionEntry,
-  resolveSessionStoreEntry: sessionStoreMocks.resolveSessionStoreEntry,
-  resolveSessionStorePathCore: sessionStoreMocks.resolveSessionStorePathCore,
-  triggerInternalHook: internalHookMocks.triggerInternalHook,
-  updateSessionStoreEntry: sessionStoreMocks.updateSessionStoreEntry,
 }));
 vi.mock("../../config/sessions/session-accessor.sqlite-entry.js", async (importOriginal) => ({
   ...(await importOriginal<
@@ -428,7 +430,8 @@ vi.mock("../../config/sessions/session-accessor.js", async (importOriginal) => {
   return {
     ...actual,
     loadSessionEntry: (...args: unknown[]) => sessionStoreMocks.loadSessionEntry(...args),
-    loadSessionEntryReadOnly: (...args: unknown[]) => sessionStoreMocks.loadSessionEntry(...args),
+    loadSessionEntryReadOnly: (...args: unknown[]) =>
+      sessionStoreMocks.loadSessionStoreEntry(...args),
     patchSessionEntryCore: (...args: Parameters<typeof sessionStoreMocks.updateSessionEntry>) =>
       sessionStoreMocks.updateSessionEntry(...args),
     updateSessionEntry: (...args: Parameters<typeof sessionStoreMocks.updateSessionEntry>) =>

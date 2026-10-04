@@ -769,7 +769,7 @@ test("sessions.compact refuses real compaction while a worker inference owns the
     resolveSessionTargetForRunId: () => undefined,
   });
   const runtimeConfig = {
-    agents: { list: [{ id: "main", default: true }] },
+    agents: { entries: { main: {} } },
     session: { store: storePath },
   };
 
@@ -948,7 +948,7 @@ test("sessions.patch preserves nested model ids under provider overrides", async
         defaults: {
           model: { primary: "openai/gpt-test-a" },
         },
-        list: [{ id: "main", default: true, workspace: dir }],
+        entries: { main: { workspace: dir } },
       },
       session: { mainKey: "main", store: storePath },
     };

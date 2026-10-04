@@ -2329,8 +2329,6 @@
       "test/scripts/plugin-npm-registry-readback.test.ts": 1,
       "test/scripts/plugin-npm-runtime-assets.test.ts": 1,
       "test/scripts/plugin-npm-runtime-native-import.test.ts": 23,
-      "test/scripts/plugin-npm-security-scan-runner.test.ts": 3,
-      "test/scripts/plugin-npm-security-scan.test.ts": 24,
       "test/scripts/plugin-package-dependencies.test.ts": 1,
       "test/scripts/plugin-prerelease-telegram-shards.test.ts": 14,
       "test/scripts/plugin-prerelease-test-plan.test.ts": 27,

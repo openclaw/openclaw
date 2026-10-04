@@ -150,6 +150,13 @@ it.each([
       }
       const released = outcome === "slow-released" || outcome === "rowless-released";
       if (released) {
+        if (outcome === "slow-released") {
+          withOpenClawStateStartupMigrationCheckpointDatabase((db) => {
+            db.prepare(
+              "DELETE FROM state_leases WHERE scope = 'gateway-owner' AND lease_key = 'global' AND owner = 'previous-gateway'",
+            ).run();
+          });
+        }
         predecessor?.release();
       } else if (outcome === "rowless-deadline") {
         monotonicMs = GATEWAY_SHUTDOWN_RESERVE_MS;

@@ -519,7 +519,7 @@ describe("experience review maintenance", () => {
       const workspaceDir = await tempDirs.make("openclaw-experience-auto-apply-workspace-");
       const agentDir = await tempDirs.make("openclaw-experience-auto-apply-agent-dir-");
       const config = {
-        agents: { entries: { main: { default: true, agentDir } } },
+        agents: { entries: { main: { agentDir } } },
         skills: { workshop: { autonomous: { mode: "propose" as const } } },
       };
       const foregroundPromptCacheKey = resolveSessionBoundaryPromptCacheKey({
@@ -653,7 +653,7 @@ describe("experience review maintenance", () => {
     const canonicalWorkspaceDir = await tempDirs.make("openclaw-experience-canonical-");
     const worktreeWorkspaceDir = await tempDirs.make("openclaw-experience-worktree-");
     const config = {
-      agents: { entries: { main: { default: true, workspace: canonicalWorkspaceDir } } },
+      agents: { entries: { main: { workspace: canonicalWorkspaceDir } } },
       skills: { workshop: { autonomous: { mode: "auto" as const } } },
     };
     const content = "# Deployment preflight\n\nRead the manifest before deploying.\n";

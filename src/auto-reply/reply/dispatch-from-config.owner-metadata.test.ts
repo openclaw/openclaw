@@ -2,7 +2,9 @@ import { afterEach, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { buildAcpDatabaseSessionKey } from "../../acp/runtime/session-meta-keys.js";
 import * as sessionMeta from "../../acp/runtime/session-meta.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
+import * as entryReadRuntime from "../../config/sessions/session-entry-read-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   createOpenClawTestState,
@@ -12,7 +14,6 @@ import { resolveSessionStoreLookup } from "./dispatch-from-config.context.js";
 import { gatherDispatchRequest } from "./dispatch-from-config.gather.js";
 import { prepareDispatchDelivery } from "./dispatch-from-config.prepare-delivery.js";
 import * as runtimeLoaders from "./dispatch-from-config.runtime-loaders.js";
-import * as dispatchRuntime from "./dispatch-from-config.runtime.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import { buildTestCtx } from "./test-ctx.js";
 
@@ -44,7 +45,7 @@ it.each([
   const scope = {
     agentId: "work",
     sessionKey: "global",
-    storePath: dispatchRuntime.resolveSessionStorePathCore(undefined, { agentId: "work" }),
+    storePath: resolveSessionStorePathCore(undefined, { agentId: "work" }),
   };
   const entry = {
     sessionId: "child",
@@ -67,7 +68,7 @@ it.each([
     meta,
   });
   if (scenario === "read-recovery") {
-    vi.spyOn(dispatchRuntime, "readSessionEntryReadOnlyInWorker").mockRejectedValueOnce(
+    vi.spyOn(entryReadRuntime, "readSessionEntryReadOnlyInWorker").mockRejectedValueOnce(
       new Error("synthetic initial read failure"),
     );
   }
@@ -192,11 +193,13 @@ it("does not turn revoked dispatch authority into a missing-entry fallback", asy
   const ctx = buildTestCtx({ SessionKey: "agent:main:revoked" });
   const refusal = new Error("dispatch owner retired");
   let current = true;
-  vi.spyOn(dispatchRuntime, "readSessionEntryReadOnlyInWorker").mockImplementationOnce(async () => {
-    await Promise.resolve();
-    current = false;
-    return { sessionId: "late-entry", updatedAt: 1 };
-  });
+  vi.spyOn(entryReadRuntime, "readSessionEntryReadOnlyInWorker").mockImplementationOnce(
+    async () => {
+      await Promise.resolve();
+      current = false;
+      return { sessionId: "late-entry", updatedAt: 1 };
+    },
+  );
   await expect(
     resolveSessionStoreLookup(ctx, cfg, () => {
       if (!current) {

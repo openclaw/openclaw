@@ -91,7 +91,7 @@ const MACOS_NATIVE_RE =
 const GIT_OWNER_SCOPE_RE =
   /^(?:\.github\/(?:actions\/(?:git-owner|ensure-base-commit|publish-generated-pr|mantis-validate-trusted-ref)\/|workflows\/(?:workflow-sanity|qa-profile-evidence|maturity-scorecard|docs-agent|docs-sync-publish|openclaw-performance|linux-app-release|macos-release|npm-placeholder-bootstrap|plugin-clawhub-release|plugin-npm-release|mantis-(?:discord-(?:smoke|status-reactions|thread-attachment)|slack-desktop-smoke|web-ui-chat-proof))\.yml$)|scripts\/generate-ci-git-owner\.mts$|test\/scripts\/(?:ci-(?:checkout|git-owner|linux-git|platform-checkout|windows-process-census)\.test(?:-support)?\.ts|generated-publisher\.test-support\.ts|openclaw-performance-(?:workflow\.test(?:-support)?|git-lifecycle\.test)\.ts|plugin-release-git-lifecycle\.test\.ts|release-workflow-git-lifecycle\.test\.ts|fixtures\/(?:ci-platform-checkout\.mjs|ci-windows-process-census\.(?:mjs|py)))$)/;
 const MACOS_SCRIPT_SCOPE_RE =
-  /^(?:scripts\/(?:build-and-run-mac|check-swift-tools|codesign-mac-app|create-dmg|format-swift|install-swift-tools|install-xcodegen|lint-swift|mac-elevation-host|notarize-mac-artifact|package-mac-app|package-mac-dist|prepush-ci|restart-mac|stage-cua-driver-macos|stage-mac-runtime|stage-openclaw-bun-macos|build-mac-sqlite)\.sh|scripts\/lib\/(?:openclaw-bun-macos|sqlite-macos)\.json|scripts\/test-macos-native\.mts|scripts\/(?:verify-mac-runtime(?:-fs)?|lib\/(?:mac-node-worker-proof-state|mac-runtime-portability))\.mjs|scripts\/(?:materialize-mac-runtime|swift-build-cache-metadata|lib\/(?:mac-native-inventory|mac-bundle-mutation))\.py|scripts\/lib\/(?:mac-app-bundle|mac-signing-identity|plistbuddy|swift-toolchain)\.sh|test\/helpers\/mac-(?:native|signing)\.ts|test\/scripts\/(?:build-mac-sqlite|stage-openclaw-bun-macos|codesign-mac-app|create-dmg|mac-elevation-artifact|mac-elevation-host|mac-runtime|macos-native-test-launch|notarize-mac-artifact|package-mac-app|package-mac-dist|restart-mac|swift-build-cache-metadata|verify-mac-runtime-fs)\.test\.ts|test\/scripts\/(?:mac-elevation-artifact|mac-native-fixtures|mac-runtime-materialization)\.test-support\.ts)$/;
+  /^(?:scripts\/(?:build-and-run-mac|check-swift-tools|codesign-mac-app|create-dmg|format-swift|install-swift-tools|install-xcodegen|lint-swift|mac-elevation-host|notarize-mac-artifact|package-mac-app|package-mac-dist|prepush-ci|restart-mac|stage-cua-driver-macos|stage-mac-runtime|stage-openclaw-bun|build-mac-sqlite)\.sh|scripts\/lib\/(?:openclaw-bun|sqlite-macos)\.json|scripts\/test-macos-native\.mts|scripts\/(?:verify-mac-runtime(?:-fs)?|lib\/(?:mac-node-worker-proof-state|mac-runtime-portability))\.mjs|scripts\/(?:materialize-mac-runtime|swift-build-cache-metadata|lib\/(?:mac-native-inventory|mac-bundle-mutation))\.py|scripts\/lib\/(?:mac-app-bundle|mac-signing-identity|plistbuddy|swift-toolchain)\.sh|test\/helpers\/mac-(?:native|signing)\.ts|test\/scripts\/(?:build-mac-sqlite|stage-openclaw-bun|codesign-mac-app|create-dmg|mac-elevation-artifact|mac-elevation-host|mac-runtime|macos-native-test-launch|notarize-mac-artifact|package-mac-app|package-mac-dist|restart-mac|swift-build-cache-metadata|verify-mac-runtime-fs)\.test\.ts|test\/scripts\/(?:mac-elevation-artifact|mac-native-fixtures|mac-runtime-materialization)\.test-support\.ts)$/;
 const WORKER_DEPLOY_ARTIFACT_SCOPE_RE =
   /^src\/(?:agents\/github-exec-(?:launcher|credential)\.ts|shared\/worker-bundle-hash\.ts|worker\/workspace-rsync-receiver\.ts|gateway\/worker-environments\/workspace-(?:accepted-(?:remote-script|sync)|mutation-remote-script|rsync-path\.test|sync(?:-helpers)?)\.ts)$/;
 const IOS_BUILD_RE =
@@ -104,6 +104,11 @@ const IOS_SCREENSHOT_SCRIPT_SCOPE_RE =
   /^scripts\/(?:check-swift-tools|format-swift|install-simslim|install-swift-tools|install-xcodegen|lint-swift)\.sh$|^scripts\/(?:ios-(?:configure-signing|screenshots|simulator-prepare|team-id|write-version-xcconfig)\.sh|ios-screenshot-evidence\.(?:mjs|d\.mts)|ios-write-swift-filelist\.m[jt]s|ios-version\.ts)$|^scripts\/lib\/(?:(?:ios-fastlane|swift-toolchain)\.sh|(?:ios|mobile)-version\.ts|release-version\.mjs|version-script-args\.ts)$/;
 const ANDROID_NATIVE_RE =
   /^(apps\/android\/|apps\/shared\/|\.github\/actions\/setup-android-toolchain\/)/;
+// JVM tests and benchmark-only changes do not enter the store capture graph.
+const ANDROID_SCREENSHOT_APP_SCOPE_RE =
+  /^apps\/android\/(?!(?:[^/]+\/src\/(?:test[^/]*|androidTest[^/]*)\/|benchmark\/|fastlane\/metadata\/))/;
+const ANDROID_SCREENSHOT_SCRIPT_SCOPE_RE =
+  /^scripts\/(?:android-(?:screenshots\.sh|sips-linux\.sh|app-i18n\.ts|version\.ts|sync-versioning\.ts|pin-version\.ts)|native-(?:i18n-inventory|i18n-locales)\.ts|lib\/(?:android|mobile)-version\.ts|lib\/(?:canonical-json|direct-run)\.mjs)$/;
 // Native bundling owns Mermaid assets and their shared coercion dependency.
 const MERMAID_ASSET_INPUT_RE =
   /^packages\/(?:mermaid-renderer\/|normalization-core\/(?:package\.json|src\/record-coerce\.ts)$)/;
@@ -201,6 +206,16 @@ function isAppleSharedBuildInput(path) {
   );
 }
 
+/** @param {string} path Canonical repository-relative build input. */
+function isNativeProtocolInput(path) {
+  return (
+    nativeProtocolInputs.files.includes(path) ||
+    (/\.(?:ts|mts|mjs|json)$/.test(path) &&
+      !/\.(?:test|spec)\./.test(path) &&
+      nativeProtocolInputs.directories.some((directory) => path.startsWith(`${directory}/`)))
+  );
+}
+
 /**
  * Detects high-level CI scope from changed file paths.
  * @param {string[]} changedPaths
@@ -248,11 +263,7 @@ export function detectChangedScope(changedPaths) {
     }
 
     const isAppleBuildInput = isAppleSharedBuildInput(path);
-    const isNativeProtocolInput =
-      nativeProtocolInputs.files.includes(path) ||
-      (/\.(?:ts|mts|mjs|json)$/.test(path) &&
-        !/\.(?:test|spec)\./.test(path) &&
-        nativeProtocolInputs.directories.some((directory) => path.startsWith(`${directory}/`)));
+    const hasNativeProtocolInput = isNativeProtocolInput(path);
 
     if (facts.surface === "docs") {
       continue;
@@ -279,7 +290,7 @@ export function detectChangedScope(changedPaths) {
         WORKER_DEPLOY_ARTIFACT_SCOPE_RE.test(path) ||
         APPLE_SHARED_CONTRACT_FIXTURE_RE.test(path) ||
         isAppleBuildInput ||
-        isNativeProtocolInput)
+        hasNativeProtocolInput)
     ) {
       runMacos = true;
     }
@@ -288,7 +299,7 @@ export function detectChangedScope(changedPaths) {
       IOS_BUILD_RE.test(path) ||
       path === "scripts/ci-xcodebuild.py" ||
       isAppleBuildInput ||
-      isNativeProtocolInput
+      hasNativeProtocolInput
     ) {
       runIosBuild = true;
     }
@@ -298,7 +309,7 @@ export function detectChangedScope(changedPaths) {
       (ANDROID_NATIVE_RE.test(path) ||
         ANDROID_TALK_CONTRACT_FIXTURE_RE.test(path) ||
         MERMAID_ASSET_INPUT_RE.test(path) ||
-        isNativeProtocolInput)
+        hasNativeProtocolInput)
     ) {
       runAndroid = true;
     }
@@ -392,6 +403,36 @@ export function shouldRunIosScreenshots(changedPaths) {
       IOS_SCREENSHOT_APP_SCOPE_RE.test(path) ||
       IOS_SCREENSHOT_SCRIPT_SCOPE_RE.test(path) ||
       isAppleSharedBuildInput(path)
+    );
+  });
+}
+
+/**
+ * Prove the phone and Wear store capture flow when its app or build inputs change.
+ * @param {string[] | null} changedPaths
+ * @returns {boolean}
+ */
+function shouldRunAndroidScreenshots(changedPaths) {
+  if (!Array.isArray(changedPaths)) {
+    return true;
+  }
+  return changedPaths.some((rawPath) => {
+    const { path } = getChangedPathFacts(rawPath);
+    if (isCiDocumentationPath(path) || /\.mdx?$/.test(path)) {
+      return false;
+    }
+    return (
+      ANDROID_SCREENSHOT_APP_SCOPE_RE.test(path) ||
+      ANDROID_SCREENSHOT_SCRIPT_SCOPE_RE.test(path) ||
+      /^(?:apps\/shared\/mermaid\/|apps\/\.i18n\/|\.github\/actions\/(?:setup-android-toolchain|setup-node-env|setup-pnpm-store-cache)\/)/.test(
+        path,
+      ) ||
+      /^(?:\.github\/workflows\/(?:ci|android-store-release)\.yml|scripts\/ci-(?:changed-scope|build-manifest)\.mjs|pnpm-lock\.yaml)$/.test(
+        path,
+      ) ||
+      path === "apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/tool-display.json" ||
+      MERMAID_ASSET_INPUT_RE.test(path) ||
+      isNativeProtocolInput(path)
     );
   });
 }
@@ -819,6 +860,11 @@ export function writeGitHubOutput(
   appendFileSync(
     outputPath,
     `run_ios_screenshots=${shouldRunIosScreenshots(changedPaths)}\n`,
+    "utf8",
+  );
+  appendFileSync(
+    outputPath,
+    `run_android_screenshots=${shouldRunAndroidScreenshots(changedPaths)}\n`,
     "utf8",
   );
   appendFileSync(outputPath, `run_android=${scope.runAndroid}\n`, "utf8");

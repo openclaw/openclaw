@@ -9,4 +9,4 @@
 # custom-type constant no longer counts as an OPENCLAW_* name.
 # Cleanup since the last restore (OAuth sidecar retirement #163186, browser deslop #163709) removed names net of additions.
 # OPENCLAW_NODE_EXEC_FALLBACK was removed by the core subsystem cleanup (#164153).
-475
+474

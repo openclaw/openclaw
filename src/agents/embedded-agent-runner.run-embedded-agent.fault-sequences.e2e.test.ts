@@ -123,7 +123,7 @@ function makeProviderConfig(fallbacks: string[]): OpenClawConfig {
   return {
     agents: {
       defaults: { model: { primary: "openai/mock-1", fallbacks } },
-      list: [{ id: "test" }],
+      entries: { test: {} },
     },
     models: {
       providers: {

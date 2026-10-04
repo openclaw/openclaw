@@ -16,6 +16,7 @@ import type {
   ChatGoalRecovery,
   ChatQueueItem,
   ChatQueueDisplayItem,
+  ChatReplyTarget,
   HumanMention,
 } from "../../../lib/chat/chat-types.ts";
 import type { ControlUiFollowUpMode } from "../../../lib/chat/follow-up-mode.ts";
@@ -130,12 +131,7 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   followUpMode?: ControlUiFollowUpMode;
   pendingAttachmentReads?: number;
   getPendingAttachmentReads?: () => number;
-  replyTarget?: {
-    messageId: string;
-    text: string;
-    senderLabel?: string | null;
-    sourceMessageId?: string | null;
-  } | null;
+  replyTarget?: ChatReplyTarget | null;
   realtimeTalkActive?: boolean;
   realtimeTalkStatus?: RealtimeTalkStatus;
   realtimeTalkDetail?: string | null;
@@ -156,6 +152,7 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   onTypingChange?: (typing: boolean, preview?: string) => void;
   composerControls?: TemplateResult | typeof nothing;
   footerContent?: TemplateResult | typeof nothing;
+  composerRecovery?: TemplateResult | typeof nothing;
   notices?: TemplateResult | typeof nothing;
   permissionPicker?: ChatPermissionPickerProps;
   onDraftChange: (next: string, mentions?: readonly HumanMention[]) => void;

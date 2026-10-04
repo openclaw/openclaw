@@ -204,6 +204,10 @@ describe("embedded run durable writer admission", () => {
     } as InternalSessionEntry);
     const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
 
+    // Cold admission registers its native lease; observe the warmed claim mutation separately.
+    expect(
+      loadSessionEntry({ agentId: "main", sessionKey, storePath: fixture.storePath() }),
+    ).toMatchObject({ activeWriterRunId: "completed-run" });
     const sql = observeHostDataSql();
     try {
       await claimAgentSessionWriter({
@@ -218,7 +222,9 @@ describe("embedded run durable writer admission", () => {
       });
       expect(
         sql.queries.filter((query) =>
-          /session_nodes|session_entry_snapshots|session_participants|session_windows/i.test(query),
+          /session_nodes|session_entry_snapshots|session_participants|session_windows|\b(?:BEGIN|COMMIT|ROLLBACK|INSERT|UPDATE|DELETE)\b/i.test(
+            query,
+          ),
         ),
       ).toEqual([]);
     } finally {

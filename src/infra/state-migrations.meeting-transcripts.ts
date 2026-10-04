@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 // Doctor-only repair of transcript projections and the retired JSON/JSONL store.
 import fsSync from "node:fs";
+import fs from "node:fs/promises";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import {
@@ -26,7 +27,6 @@ import {
 } from "./state-migrations.meeting-transcripts-detection.js";
 import {
   archiveLegacyMeetingTranscriptSnapshots,
-  archiveDivergentMeetingTranscriptExport,
   archivePartialMeetingTranscriptArtifacts,
   disposeLegacyMeetingTranscriptStage,
   isRecordedCanonicalTranscriptExport,
@@ -548,11 +548,9 @@ export async function migrateLegacyMeetingTranscripts(params: {
           if (!session) {
             throw new Error(`divergent transcript export has no SQLite owner: ${relativeDir}`);
           }
-          await archiveDivergentMeetingTranscriptExport({
-            sourceRoot: detected.sourceDir,
-            relativeDir,
-            recoveryRoot,
-          });
+          const destination = path.join(recoveryRoot, relativeDir);
+          await fs.mkdir(path.dirname(destination), { recursive: true });
+          await fs.rename(path.join(detected.sourceDir, relativeDir), destination);
           recoveryChanges.push(
             `Archived modified meeting transcript export ${relativeDir} → ${recoveryRoot}`,
           );
@@ -617,9 +615,8 @@ export async function migrateLegacyMeetingTranscripts(params: {
         throw error;
       }
       params.testHooks?.afterImport?.();
-      let archiveRootAfterMove: string;
       try {
-        archiveRootAfterMove = await archiveLegacyMeetingTranscriptSnapshots({
+        await archiveLegacyMeetingTranscriptSnapshots({
           sourceRoot: detected.sourceDir,
           snapshots,
           expectedRelativeDirs: expectedArchiveRelativeDirs,
@@ -649,7 +646,7 @@ export async function migrateLegacyMeetingTranscripts(params: {
       params.testHooks?.afterArchive?.();
       finishPendingMigration({
         runId,
-        archiveRoot: archiveRootAfterMove,
+        archiveRoot,
         now,
         env,
         stateDir: params.stateDir,
@@ -662,7 +659,7 @@ export async function migrateLegacyMeetingTranscripts(params: {
         changes: [
           ...recoveryChanges,
           `Migrated ${snapshots.length} meeting transcript session${snapshots.length === 1 ? "" : "s"} and ${utteranceCount} utterance${utteranceCount === 1 ? "" : "s"} to shared SQLite state`,
-          `Archived legacy meeting transcript files → ${archiveRootAfterMove}`,
+          `Archived legacy meeting transcript files → ${archiveRoot}`,
         ],
         warnings: [],
       };

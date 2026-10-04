@@ -643,7 +643,7 @@ describe("session sources needed by deferred plugin migrations", () => {
 
   it("lets startup proceed for an empty index when the owner has no database yet", async () => {
     await withOpenClawTestState({ label: "deferred-empty-index-no-db" }, async (state) => {
-      const cfg: OpenClawConfig = { agents: { entries: { main: { default: true } } } };
+      const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
       const directory = state.sessionsDir("main");
       fs.mkdirSync(directory, { recursive: true });
       const storePath = path.join(directory, "sessions.json");
@@ -683,7 +683,7 @@ describe("session sources needed by deferred plugin migrations", () => {
     async (kind) => {
       await withOpenClawTestState({ label: "deferred-empty-index-required" }, async (state) => {
         openOpenClawStateDatabase({ env: state.env });
-        const cfg: OpenClawConfig = { agents: { entries: { main: { default: true } } } };
+        const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
         const directory = state.sessionsDir("main");
         fs.mkdirSync(directory, { recursive: true });
         const storePath = path.join(directory, "sessions.json");

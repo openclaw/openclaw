@@ -35,6 +35,10 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
       (input.command.type === "sessionState.ambientTargets" &&
         isRecord(input.command.input) &&
         typeof input.command.input.watcherSessionKey === "string") ||
+      (input.command.type === "generatedHtmlProvenance.read" &&
+        typeof input.command.input === "string") ||
+      (input.command.type === "generatedHtmlProvenance.list" &&
+        input.command.input === undefined) ||
       (input.command.type === "mentions.snapshot" &&
         typeof input.command.input === "number" &&
         Number.isSafeInteger(input.command.input) &&

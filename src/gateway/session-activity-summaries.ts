@@ -22,6 +22,7 @@ import {
   readSessionTranscriptWatermark,
 } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { getAgentRunContext } from "../infra/agent-run-registry.js";
 import { computeBackoff } from "../infra/backoff.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -363,15 +364,6 @@ export function createSessionActivitySummaries(deps: {
           () => controller.abort(new Error("Activity recap timed out")),
           MODEL_TIMEOUT_MS,
         );
-        const aborted = new Promise<never>((_, reject) => {
-          controller.signal.addEventListener(
-            "abort",
-            () => reject(toErrorObject(controller.signal.reason, "Activity recap cancelled")),
-            {
-              once: true,
-            },
-          );
-        });
         try {
           const assertRequestCurrent = () => {
             if (controller.signal.aborted || state.controller !== controller) {
@@ -405,7 +397,11 @@ export function createSessionActivitySummaries(deps: {
           };
           ownedWork = execute();
           text = truncateUtf16Safe(
-            redactToolPayloadText(await Promise.race([ownedWork, aborted]))
+            redactToolPayloadText(
+              await racePromiseWithAbortSignal(ownedWork, controller.signal, (signal) =>
+                toErrorObject(signal.reason, "Activity recap cancelled"),
+              ),
+            )
               .replace(/\s+/gu, " ")
               .trim(),
             450,

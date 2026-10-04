@@ -752,7 +752,7 @@ describe("channel-auth", () => {
 
       mocks.loadConfig.mockReturnValue({
         channels: { whatsapp: {} },
-        agents: { list: [{ id: "sales" }] },
+        agents: { entries: { sales: {} } },
       });
 
       await run({ channel: "  wa  ", account: " work ", agent: "sales" }, runtime);

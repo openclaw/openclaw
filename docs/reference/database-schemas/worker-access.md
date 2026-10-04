@@ -31,6 +31,13 @@ reviewed overrides instead of shadowing them with worker-module entries. The
 ratchet applies the same classification rules to the base and candidate sources,
 so metadata corrections alone do not offset unrelated T1 growth.
 
+Maintenance overrides require actual boot or one-shot caller evidence. Lazy
+database admission, idle-close cleanup, restart signal/retry paths, and CLI
+commands reused inside a running Gateway remain T1 when runtime-reachable.
+Tests are excluded by path; test-only helpers in production modules have no
+separate tier and retain their conservative classification. Branch-specific
+exceptions that cannot be expressed by an operation or initializer stay T1.
+
 Canonical-repair mutations are T2 Doctor work, but its exact-row reader remains
 runtime debt through the Gateway's legacy-main agent-creation check. Claw
 provenance's counted CLI writes do not cover its raw Gateway SQL reads. Shared
@@ -54,8 +61,9 @@ Web Push reads, approval delivery operations, and current-subscription cleanup
 have exact worker-only entries; native preferences, subscription upsert/deletion,
 and their shared schema helper remain T1. Prepared-workspace list and mutation
 operations are worker-only, while the synchronous `find` compatibility query
-remains T1. Terminal approval history uses the read worker; native approval
-operations retain their existing tiers. Offline full-store reset inventory and
+remains T1. Approval history and unguarded insert, pending-list, expiry, and
+allow-once consumption have exact worker-only entries; guarded native
+compatibility operations retain their existing tiers. Offline full-store reset inventory and
 archive-reset operations are T3 CLI one-shots, including dev bootstrap; Gateway
 session reset and other archive lifecycle operations are classified separately.
 
@@ -357,6 +365,15 @@ retain native transactions and yielding writer admission. Arbitrary async plugin
 updaters retain their existing nested-admission behavior. Schemas, durability,
 public callback contracts, and update behavior are unchanged.
 
+Embedded writer claims, live-model-switch consolidation, and pending-final delivery
+preparation, settlement, and cleanup explicitly select that worker patch path.
+Their reducers prepare outside the transaction; the worker rereads the selected
+rows before applying the patch and publishes acknowledged results before releasing
+the existing writer queue. Uncertain writes never replay. Lifecycle-event
+persistence, cron preparation, and opaque SDK updaters retain their existing native
+routes; these callers do not change the default patch contract. Schemas, retention,
+durability, and update behavior are unchanged.
+
 Per-turn model selection, harness admission, skill-snapshot refresh, dispatch,
 plugin injection probes, completion metadata, and diff-baseline selection read
 durable entries through the existing session readers. Exact candidate projections
@@ -369,10 +386,8 @@ still recheck their current owners; prepared metadata never grants authority.
 Source assertions that can read their own session store run before and after
 preparation, outside worker grants. Accepted writer settlement keeps its existing
 transaction-local predicates and does not inherit scheduler cancellation.
-Audited writer-claim, skill-snapshot, model-switch, model-revert, and unguarded reply
-patches use the existing agent executor. Opaque commit callbacks and process-held
-incognito retain their native paths. No schema, retention, durability, or update
-migration is required.
+Process-held incognito retains its native reader. No schema, retention,
+durability, or update migration is required.
 
 Durable transcript turns append messages, consume pending inputs, evaluate typed
 latest-assistant and active-entry predicates, update entries, and commit goal
@@ -538,6 +553,16 @@ the delivery queue's shared-state worker. Callers await creation before publishi
 spool files and await release during cleanup, so a concurrent writer waiting for
 host admission cannot block media sends on the Gateway thread. The existing custody
 rows, atomic enqueue, expiry, and update behavior are unchanged.
+
+Generated-HTML provenance lookup, upsert, and stale-marker cleanup use the shared-state
+reader and writer registries. The host captures the physical store before filesystem
+inspection, keeps realpath/root and exact-byte trust checks outside SQL, and awaits
+acknowledged writes. Cleanup deletes only the selected row values after inspecting
+files; concurrent marker updates survive. Transaction and commit grants recheck the
+original store, and unknown outcomes never replay. The media scheduler retains
+accepted cleanup through the Gateway close prelude before shared-state teardown.
+Public media APIs remain asynchronous; trust policy, schemas, retention, durability,
+and update behavior are unchanged.
 
 Published agent and shared-state database timers dispatch periodic WAL checkpoints
 and bounded page reclamation through those same writers. The existing timer keeps
@@ -708,6 +733,16 @@ retain their existing owner. Schemas, quotas, retention, publication security ch
 and update behavior are unchanged.
 
 ## Carry facts, publish after commit
+
+Durable progress-card replacements and conditional clears use a narrow adapter
+on the canonical agent writer. The host captures the session, physical store, and
+input before waiting; the worker rereads the current revision and preserves clear
+tombstones in one synchronous transaction. Transaction and commit grants recheck
+current caller authority. Only acknowledged results reach the Gateway broadcast;
+unknown outcomes never replay or fall back to host SQL. The request lifecycle joins
+accepted persistence before database teardown, independently of scheduler
+cancellation. Incognito and atomic reset retain their existing row kernel. No
+schema, SDK, retention, durability, or update migration is required.
 
 Native creation, compaction, and child-spawn signals use the existing shared-state
 writer. Their callers join recording before releasing their lifecycle; embedded
@@ -1114,6 +1149,16 @@ lifecycle filtering, complete entry metadata, and missing-store behavior. Cold
 configuration reads also use their asynchronous owner. Process-held incognito
 stores retain their existing native reader and remain separate migration work.
 Schemas, stored bytes, retention, public APIs, and update behavior are unchanged.
+
+Durable ACP parent-stream diagnostics use the canonical agent writer. The relay
+captures its child, run, and physical store before delayed flushes, serializes
+events before dispatch, and keeps one batch in flight beside its bounded buffer.
+The worker allocates sequences and inserts the ordered batch atomically, with
+current source checks at transaction and commit admission. Confirmed rollback
+retains bounded retry; uncertain completion never replays a batch. Gateway close
+seals the relay and joins accepted persistence before retiring database workers.
+Diagnostic failures remain isolated from child execution and parent progress.
+Schemas, stored bytes, retention, and update behavior are unchanged.
 
 TUI remembered-session reads and retired-pointer scans use the shared-state
 read worker; writes and per-pointer compare-and-delete transactions use the

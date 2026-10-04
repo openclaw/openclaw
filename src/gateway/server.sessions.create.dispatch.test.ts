@@ -351,7 +351,7 @@ test("sessions.create can start the first agent turn from an initial task", asyn
   const { storePath } = await createSessionStoreDir();
   // Register "ops" so the deleted-agent guard added in #65986 does not
   // reject the auto-started chat.send triggered by `task:`.
-  testState.agentsConfig = { list: [{ id: "ops", default: true }] };
+  testState.agentsConfig = { entries: { ops: {} } };
   const { ws } = await openClient();
 
   const created = await rpcReq<{
@@ -482,7 +482,7 @@ test("sessions.create rejects stale mention spans before creating a selected-age
 
 test("sessions.create forwards an attachment-only first turn", async () => {
   await createSessionStoreDir();
-  testState.agentsConfig = { list: [{ id: "main", default: true }] };
+  testState.agentsConfig = { entries: { main: {} } };
   const chatSend = vi.spyOn(chatSendOwner, "handleDirectExternalChatSend");
   chatSend.mockImplementation(async ({ respond }) => {
     respond(true, { runId: "attachment-run", status: "started" });
@@ -514,7 +514,7 @@ test("sessions.create forwards an attachment-only first turn", async () => {
 
 test("sessions.create rejects unusable attachment-only input before creating a session", async () => {
   await createSessionStoreDir();
-  testState.agentsConfig = { list: [{ id: "main", default: true }] };
+  testState.agentsConfig = { entries: { main: {} } };
 
   const created = await directSessionReq("sessions.create", {
     agentId: "main",

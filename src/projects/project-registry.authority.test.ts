@@ -8,6 +8,7 @@ import type { SqliteWorkerAdmissionFactory } from "../infra/sqlite-worker-operat
 import type { SqliteWorkerOperationSettlement } from "../infra/sqlite-worker-operation-settlement.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { OpenClawStateLeaseError } from "../state/openclaw-state-lease-error.js";
+import type { startOpenClawStateLeaseHeartbeat } from "../state/openclaw-state-lease-heartbeat.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import { removeClonedProjectCheckout } from "./project-clone.js";
 import { selectStoredProjectRegistry } from "./project-registry.js";
@@ -24,6 +25,7 @@ const fixture = vi.hoisted(() => ({
   captureWorkerGuard: vi.fn<(assertCurrent: () => void) => void>(),
   assertDatabaseCurrent: vi.fn<() => void>(),
   release: vi.fn(),
+  startHeartbeat: vi.fn<typeof startOpenClawStateLeaseHeartbeat>(),
   forbiddenNative: vi.fn(() => {
     throw new Error("Project authority controls must not open SQLite, Git, or heartbeat workers");
   }),
@@ -100,7 +102,7 @@ vi.mock("../state/openclaw-state-lease-storage.js", () => ({
   releaseOpenClawStateLease: fixture.release,
 }));
 vi.mock("../state/openclaw-state-lease-heartbeat.js", () => ({
-  startOpenClawStateLeaseHeartbeat: fixture.forbiddenNative,
+  startOpenClawStateLeaseHeartbeat: fixture.startHeartbeat,
 }));
 
 type WorkerOptions = {
@@ -180,6 +182,7 @@ beforeEach(() => {
   fixture.forbiddenNative.mockImplementation(() => {
     throw new Error("Project authority controls must not open SQLite, Git, or heartbeat workers");
   });
+  fixture.startHeartbeat.mockImplementation(fixture.forbiddenNative);
   fixture.resolveProject.mockResolvedValue(project);
   fixture.removeReference.mockResolvedValue("final");
   fixture.removeCheckout.mockResolvedValue();
@@ -358,6 +361,15 @@ it.each(["completed", "not-entered", "unknown"] as const)(
 it.each(["known", "unknown", "wrapped-unknown"] as const)(
   "preserves the selected %s outcome through allocation cancellation",
   async (outcome) => {
+    fixture.startHeartbeat.mockReturnValueOnce({
+      ready: Promise.resolve(),
+      assertRunning: vi.fn(),
+      assertResponsive: vi.fn(),
+      verify: fixture.forbiddenNative,
+      renew: fixture.forbiddenNative,
+      close: fixture.forbiddenNative,
+      stop: async () => 0,
+    });
     const caller = new AbortController();
     const abortCause = new Error("Caller canceled the allocated operation");
     const callbackFailure = new Error("Selected callback failed");

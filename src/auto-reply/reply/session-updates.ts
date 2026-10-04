@@ -5,7 +5,10 @@ import {
   resolveNodeExecEligibility,
 } from "../../agents/exec-defaults.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import {
+  patchSessionEntryCore,
+  updateSessionEntry,
+} from "../../config/sessions/session-accessor.js";
 import { projectCompactionAccountingPatch } from "../../config/sessions/session-entry-projection.js";
 import { readSessionEntryInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
@@ -72,7 +75,7 @@ async function persistSkillSnapshot(params: {
     return { entry: nextEntry, updated: true };
   }
   let updated = false;
-  const persistedEntry = await patchSessionEntryCore(
+  const persistedEntry = await updateSessionEntry(
     {
       storePath: params.storePath,
       sessionKey: params.sessionKey,
@@ -83,7 +86,6 @@ async function persistSkillSnapshot(params: {
         entry.lifecycleRevision === params.expectedSession?.lifecycleRevision;
       return updated ? updates : null;
     },
-    { workerGuard: {} },
   );
   publishSessionEntry(params, persistedEntry ?? undefined);
   return { entry: persistedEntry ?? undefined, updated: Boolean(persistedEntry) && updated };

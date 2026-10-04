@@ -26,12 +26,11 @@ describe("describeHeartbeatSessionTargetIssues", () => {
         store: path.join(tmpDir, "agents", "{agentId}", "sessions", "sessions.json"),
       },
       agents: {
-        list: [
-          {
-            id: "ops",
+        entries: {
+          ops: {
             heartbeat,
           },
-        ],
+        },
       },
     } as OpenClawConfig;
   }
@@ -50,11 +49,7 @@ describe("describeHeartbeatSessionTargetIssues", () => {
         defaults: {
           heartbeat,
         },
-        list: [
-          {
-            id: "ops",
-          },
-        ],
+        entries: { ops: {} },
       },
     } as OpenClawConfig;
   }
@@ -127,7 +122,7 @@ describe("describeHeartbeatSessionTargetIssues", () => {
 
   it("does not warn when an explicit heartbeat recipient does not need session history", async () => {
     const cfg = cfgWithSession("slack:channel:c123");
-    const agent = cfg.agents?.list?.[0];
+    const agent = cfg.agents?.entries?.ops;
     if (!agent?.heartbeat) {
       throw new Error("expected test config to include heartbeat config");
     }
@@ -140,7 +135,7 @@ describe("describeHeartbeatSessionTargetIssues", () => {
 
   it("does not warn when the heartbeat cadence is disabled", async () => {
     const cfg = cfgWithSession("slack:channel:c123");
-    const agent = cfg.agents?.list?.[0];
+    const agent = cfg.agents?.entries?.ops;
     if (!agent?.heartbeat) {
       throw new Error("expected test config to include heartbeat config");
     }
@@ -176,7 +171,7 @@ describe("describeHeartbeatSessionTargetIssues", () => {
       if (!cfg.agents?.defaults?.heartbeat) {
         throw new Error("expected test config to include default heartbeat config");
       }
-      cfg.agents.list = configuredAgentIds.map((id) => ({ id }));
+      cfg.agents.entries = Object.fromEntries(configuredAgentIds.map((id) => [id, {}]));
       cfg.agents.defaults.heartbeat.agentId = heartbeatAgentId;
       writeStore(cfg, {});
 
@@ -194,7 +189,7 @@ describe("describeHeartbeatSessionTargetIssues", () => {
 
   it("warns when an explicit heartbeat inherits a default session", async () => {
     const cfg = cfgWithDefaultHeartbeat("slack:channel:c123");
-    const agent = cfg.agents?.list?.[0];
+    const agent = cfg.agents?.entries?.ops;
     if (!agent) {
       throw new Error("expected test config to include an agent");
     }

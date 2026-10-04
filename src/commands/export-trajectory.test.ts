@@ -181,7 +181,7 @@ describe("exportTrajectoryCommand", () => {
     ["whitespace-only", "   ", "--agent must not be blank"],
   ])("rejects an %s explicit agent before reading a session", async (_label, agent, message) => {
     const runtime = createTestRuntime();
-    mocks.getRuntimeConfig.mockReturnValue({ agents: { list: [{ id: "main" }] } });
+    mocks.getRuntimeConfig.mockReturnValue({ agents: { entries: { main: {} } } });
 
     await expectTrajectoryFailure(
       exportTrajectoryCommand({ sessionKey: "agent:main:telegram:direct:123", agent }, runtime),
@@ -231,7 +231,7 @@ describe("exportTrajectoryCommand", () => {
 
   it("honours a non-blank encoded store and agent", async () => {
     const runtime = createTestRuntime();
-    mocks.getRuntimeConfig.mockReturnValue({ agents: { list: [{ id: "main" }, { id: "work" }] } });
+    mocks.getRuntimeConfig.mockReturnValue({ agents: { entries: { main: {}, work: {} } } });
     mocks.resolveStorePath.mockReturnValue("/tmp/encoded-store.json");
     const requestJsonBase64 = Buffer.from(
       JSON.stringify({
@@ -283,7 +283,7 @@ describe("exportTrajectoryCommand", () => {
     async (sessionKey) => {
       const runtime = createTestRuntime();
       mocks.getRuntimeConfig.mockReturnValue({
-        agents: { list: [{ id: "main" }, { id: "work" }] },
+        agents: { entries: { main: {}, work: {} } },
         session: { store: "/tmp/openclaw/agents/{agentId}/sessions/sessions.json" },
       });
       mocks.resolveStorePath.mockReturnValue("/tmp/openclaw/agents/work/sessions/sessions.json");

@@ -575,7 +575,7 @@ describe("startGatewayPostAttachRuntime", () => {
     const unavailableGatewayMethods = new Set<string>(["chat.history", "models.list"]);
     const startupOrder: string[] = [];
     const methodsAtRecoveryRegistration: string[][] = [];
-    const currentConfig = { agents: { list: [{ id: "main" }, { id: "work" }] } };
+    const currentConfig = { agents: { entries: { main: {}, work: {} } } };
     hoisted.scheduleRestartAbortedMainSessionRecovery.mockImplementationOnce(
       (params: { getConfig: () => unknown }) => {
         methodsAtRecoveryRegistration.push([...unavailableGatewayMethods]);

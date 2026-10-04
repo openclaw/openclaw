@@ -71,8 +71,8 @@ import {
 } from "./chat-send-command-replies.js";
 import { observeChatSendCommentaryMedia } from "./chat-send-commentary-media.js";
 import type { PreparedChatSendSession } from "./chat-send-session.js";
+import { appendInjectedAssistantMessageToTranscript } from "./chat-transcript-inject.js";
 import {
-  appendAssistantTranscriptMessage,
   assistantTranscriptScope,
   publishAssistantTranscriptRewrite,
   rewriteAssistantTranscriptMessageByIdempotencyKey,
@@ -564,14 +564,13 @@ export function createChatSendReplyDispatch(params: {
     const appendContent = isRuntimeMediaSupplement
       ? persistedContentForAppend.filter((block) => block.type !== "text")
       : persistedContentForAppend;
-    const appended = await appendAssistantTranscriptMessage({
+    const appended = await appendInjectedAssistantMessageToTranscript({
       sessionKey,
       message: isRuntimeMediaSupplement ? "" : transcriptReply,
       content: appendContent,
       sessionId,
       storePath: latestStorePath,
       agentId,
-      createIfMissing: true,
       // Runtime message identity is the dedupe boundary; distinct rows must not collapse
       // onto the single unkeyed media fallback used by tool/audio-only payloads.
       idempotencyKey:
@@ -579,7 +578,7 @@ export function createChatSendReplyDispatch(params: {
           ? `${clientRunId}:assistant-media:${assistantMessageIndex}`
           : `${clientRunId}:assistant-media`,
       ttsSupplement: ttsSupplementMarker,
-      cfg,
+      config: cfg,
       onMessageCommitted: (receipt, acceptCompletion) => {
         const blocks = readAssistantDisplayContent(receipt.message);
         if (hasManagedOutgoingAssistantContent(blocks)) {

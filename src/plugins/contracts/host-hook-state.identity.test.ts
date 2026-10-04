@@ -149,7 +149,7 @@ describe("next-turn injection identity", () => {
       const activeCfg: OpenClawConfig = {
         session: { store: shared, scope: "global" },
         agents: {
-          entries: { work: { default: true }, ops: {}, storage: {} },
+          entries: { work: {}, ops: {}, storage: {} },
           defaults: { sessionStore: { agentId: "ops" } },
         },
       };
@@ -186,7 +186,7 @@ describe("next-turn injection identity", () => {
             ...activeCfg,
             agents: {
               ...activeCfg.agents,
-              entries: { work: { default: true }, storage: {} },
+              entries: { work: {}, storage: {} },
             },
           }
         : activeCfg;

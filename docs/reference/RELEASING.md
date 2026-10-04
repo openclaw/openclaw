@@ -15,17 +15,17 @@ For switching channels, see [Release channels](/install/development-channels).
 
 ## Release channels
 
-| Channel         | What you get                                                                                              |
-| --------------- | --------------------------------------------------------------------------------------------------------- |
-| Stable          | The regular release promoted to npm `latest`.                                                             |
-| Beta            | A candidate on npm `beta`. This may be a prerelease or a final version awaiting promotion.                |
-| Extended-stable | A Gateway maintenance release from either of the two trailing completed months, on npm `extended-stable`. |
-| Dev             | The moving head of `main`, for development.                                                               |
+| Channel         | What you get                                                                               |
+| --------------- | ------------------------------------------------------------------------------------------ |
+| Stable          | The regular release promoted to npm `latest`.                                              |
+| Beta            | A candidate on npm `beta`. This may be a prerelease or a final version awaiting promotion. |
+| Extended-stable | A Gateway maintenance release from the trailing completed month, on npm `extended-stable`. |
+| Dev             | The moving head of `main`, for development.                                                |
 
 Extended-stable includes the Gateway, official npm plugins, and Docker images.
 It does not include native apps or ClawHub publication, and it does not change
 the regular stable channel. Its GitHub release is not marked Latest. A monthly
-line retires when it falls outside the two supported completed months.
+line retires when `main` advances into the next month.
 
 ## Version naming
 
@@ -84,6 +84,11 @@ live-provider checks. All-group qualification includes all nine Gateway
 install/upgrade combinations across Linux, Windows, and macOS. Coverage otherwise
 varies by profile and selected operating systems. Check the release's recorded
 coverage: skipped or deferred checks are not passes.
+
+For selected official npm plugins, Full Release Validation packs and qualifies
+the exact tarballs intended for publication and records their immutable artifact
+descriptors. Publication consumes those same bytes. Unpacked source fixtures do
+not participate unless npm includes them in a shipped tarball.
 
 Dependency advisories never block or delay a release. Release dependency
 evidence records every advisory finding, at any severity, and CI dispatched by

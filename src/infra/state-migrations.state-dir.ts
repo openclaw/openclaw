@@ -10,13 +10,13 @@ import {
   listLegacyOAuthSidecarPaths,
 } from "../commands/doctor-auth-legacy-paths.js";
 import { readCurrentConfigForResolution } from "../config/io.runtime.js";
+import type { OpenClawConfigWithLegacyRoster } from "../config/legacy.roster.js";
 import {
   resolveConfigPath,
   resolveLegacyStateDirs,
   resolveNewStateDir,
   resolveStateDir,
 } from "../config/paths.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { inspectPersistedInstalledPluginIndexInstallRecordsSync } from "../plugins/installed-plugin-index-record-state.js";
 import {
   legacyInstalledPluginIndexUnsupportedMessage,
@@ -78,7 +78,7 @@ function resolveProfileWorkspaceIdentity(workspace: string): string {
 }
 
 function resolveConfiguredProfileWorkspace(params: {
-  config?: OpenClawConfig;
+  config?: OpenClawConfigWithLegacyRoster;
   source: string;
   target: string;
   env?: NodeJS.ProcessEnv;
@@ -103,7 +103,7 @@ function resolveConfiguredProfileWorkspace(params: {
 }
 
 export function resolveLegacyProfileWorkspaceMigrationPaths(params: {
-  config?: OpenClawConfig;
+  config?: OpenClawConfigWithLegacyRoster;
   env?: NodeJS.ProcessEnv;
   homedir?: () => string;
 }): { source: string; target: string } | undefined {
@@ -121,7 +121,7 @@ export function resolveLegacyProfileWorkspaceMigrationPaths(params: {
 }
 
 export function resolvePendingLegacyProfileWorkspaceMigrationPaths(params: {
-  config?: OpenClawConfig;
+  config?: OpenClawConfigWithLegacyRoster;
   env?: NodeJS.ProcessEnv;
   homedir?: () => string;
 }): { source: string; target: string } | undefined {
@@ -132,7 +132,7 @@ export function resolvePendingLegacyProfileWorkspaceMigrationPaths(params: {
 }
 
 export function migrateLegacyProfileWorkspace(params: {
-  config?: OpenClawConfig;
+  config?: OpenClawConfigWithLegacyRoster;
   env?: NodeJS.ProcessEnv;
   homedir?: () => string;
 }): { changes: string[]; warnings: string[]; notices?: string[] } {

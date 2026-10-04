@@ -558,7 +558,7 @@ describe("doctor session snapshot stale runtime metadata", () => {
     await noteSessionSnapshotHealth({
       cfg: {
         session: { store: templatedStore },
-        agents: { list: [{ id: "main" }, { id: "ops" }] },
+        agents: { entries: { main: {}, ops: {} } },
       } as OpenClawConfig,
       bundledSkillsDir,
       env: { OPENCLAW_STATE_DIR: path.join(root, "state") },

@@ -48,7 +48,11 @@ afterEach(() => {
 afterAll(async () => sharedState?.cleanup());
 
 const unrelatedAgentConfig: OpenClawConfig = {
-  agents: { list: [{ id: "main", default: true }, { id: "other" }] },
+  agents: {
+    ownership: "explicit",
+    defaults: { systemAgent: { agentId: "main" } },
+    entries: { main: {}, other: {} },
+  },
 };
 
 it.each([

@@ -116,7 +116,7 @@ type RowFixture = {
 function config(): OpenClawConfig {
   return {
     agents: {
-      list: [{ id: "main", default: true, identity: { name: "Fixture agent" } }],
+      entries: { main: { identity: { name: "Fixture agent" } } },
       defaults: {
         model: { primary: "row-fixture/primary" },
         thinkingDefault: "off",

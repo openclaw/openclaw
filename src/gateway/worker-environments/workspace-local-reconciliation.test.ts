@@ -85,112 +85,90 @@ async function prepareUnchangedWorkspace(options?: {
 }
 
 describe("unchanged local workspace reconciliation", () => {
-  it("keeps durable result refs with one remote verification after final renewal", async () => {
-    const fixture = await prepareUnchangedWorkspace();
-    const { root, base, ref, reconciliation, quiescence, journal } = fixture;
-    expect(reconciliation.acceptUnchangedStagedResult).toBeTypeOf("function");
-    expect(fixture.verifyStable).not.toHaveBeenCalled();
-    expect(journal.commit).not.toHaveBeenCalled();
-    await expect(
-      hasWorkerWorkspaceResultRef({ root, stagedResultRef: preparedWorkerWorkspaceResultRef(ref) }),
-    ).resolves.toBe(true);
-    expect(fixture.record).not.toHaveBeenCalled();
+  it.each([undefined, "local change\n"])(
+    "finalizes durable result refs with local content %j",
+    async (localContent) => {
+      const f = await prepareUnchangedWorkspace({ localContent });
+      const { root, base, ref, reconciliation, quiescence, journal } = f;
+      const hasRef = (stagedResultRef: string) =>
+        hasWorkerWorkspaceResultRef({ root, stagedResultRef });
+      const prepared = preparedWorkerWorkspaceResultRef(ref);
+      if (localContent) {
+        expect(reconciliation.changed).toBe(false);
+        expect(reconciliation.acceptUnchangedStagedResult).toBeUndefined();
+      } else {
+        expect(reconciliation.acceptUnchangedStagedResult).toBeTypeOf("function");
+        expect(f.verifyStable).not.toHaveBeenCalled();
+        expect(journal.commit).not.toHaveBeenCalled();
+        await expect(hasRef(prepared)).resolves.toBe(true);
+        expect(f.record).not.toHaveBeenCalled();
+      }
+      const applied = await verifyReconciledWorkspaceFinal(reconciliation, quiescence);
+      expect(f.verifyStable).toHaveBeenCalledTimes(localContent ? 3 : 1);
+      expect(quiescence.assertActive).toHaveBeenCalledTimes(localContent ? 2 : 1);
+      expect(f.publishAcceptedManifest).toHaveBeenCalledTimes(localContent ? 1 : 0);
+      expect(journal.commit).toHaveBeenCalledExactlyOnceWith(applied?.manifestRef);
+      if (localContent) {
+        expect(applied?.manifestRef).not.toBe(base.manifestRef);
+        await expect(fs.readFile(path.join(root, "result.txt"), "utf8")).resolves.toBe(
+          localContent,
+        );
+      } else {
+        expect(applied).toMatchObject({ manifestRef: base.manifestRef, conflictPaths: [] });
+        expect(journal.begin).not.toHaveBeenCalled();
+        expect(f.record).toHaveBeenCalledExactlyOnceWith(ref);
+        expect(await readStagedWorkerWorkspaceResult(root, ref)).toMatchObject({
+          baseManifestRef: base.manifestRef,
+          currentManifestRef: base.manifestRef,
+          changed: false,
+        });
+        await expect(hasRef(prepared)).resolves.toBe(false);
+      }
+    },
+  );
 
-    const applied = await verifyReconciledWorkspaceFinal(reconciliation, quiescence);
-
-    expect(applied).toMatchObject({ manifestRef: base.manifestRef, conflictPaths: [] });
-    expect(fixture.verifyStable).toHaveBeenCalledOnce();
-    expect(quiescence.assertActive).toHaveBeenCalledOnce();
-    expect(journal.begin).not.toHaveBeenCalled();
-    expect(journal.commit).toHaveBeenCalledExactlyOnceWith(base.manifestRef);
-    expect(fixture.publishAcceptedManifest).not.toHaveBeenCalled();
-    expect(fixture.record).toHaveBeenCalledExactlyOnceWith(ref);
-    const staged = await readStagedWorkerWorkspaceResult(root, ref);
-    expect(staged).toMatchObject({
-      baseManifestRef: base.manifestRef,
-      currentManifestRef: base.manifestRef,
-      changed: false,
-    });
-    await expect(
-      hasWorkerWorkspaceResultRef({ root, stagedResultRef: preparedWorkerWorkspaceResultRef(ref) }),
-    ).resolves.toBe(false);
-  });
-
-  it("keeps the full apply path when only the remote workspace is unchanged", async () => {
-    const fixture = await prepareUnchangedWorkspace({ localContent: "local change\n" });
-    expect(fixture.reconciliation.changed).toBe(false);
-    expect(fixture.reconciliation.acceptUnchangedStagedResult).toBeUndefined();
-
-    const applied = await verifyReconciledWorkspaceFinal(
-      fixture.reconciliation,
-      fixture.quiescence,
-    );
-
-    expect(applied?.manifestRef).not.toBe(fixture.base.manifestRef);
-    expect(fixture.verifyStable).toHaveBeenCalledTimes(3);
-    expect(fixture.quiescence.assertActive).toHaveBeenCalledTimes(2);
-    expect(fixture.publishAcceptedManifest).toHaveBeenCalledOnce();
-    expect(fixture.journal.commit).toHaveBeenCalledExactlyOnceWith(applied?.manifestRef);
-    await expect(fs.readFile(path.join(fixture.root, "result.txt"), "utf8")).resolves.toBe(
-      "local change\n",
-    );
-  });
-
-  it.each(["remote", "local"] as const)(
-    "rejects a late %s write after the final renewal without accepting the result",
+  it.each(["remote", "local", "owner"] as const)(
+    "rejects a late %s change after renewal without accepting the result",
     async (side) => {
+      let current = true;
       let remoteChanged = false;
-      const fixture = await prepareUnchangedWorkspace({
+      const f = await prepareUnchangedWorkspace({
+        assertCurrent: () => {
+          if (!current) {
+            throw new Error("stale result owner");
+          }
+        },
         onRenew: async (root) => {
           if (side === "local") {
             await fs.writeFile(path.join(root, "result.txt"), "late local write\n");
-          } else {
+          } else if (side === "remote") {
             remoteChanged = true;
           }
         },
         beforeRemoteFence: async () => {
+          if (side === "owner") {
+            current = false;
+          }
           if (remoteChanged) {
             throw new Error("late remote write");
           }
         },
       });
-
-      await expect(
-        verifyReconciledWorkspaceFinal(fixture.reconciliation, fixture.quiescence),
-      ).rejects.toMatchObject({ reclaimDisposition: "retry" });
-
-      expect(fixture.journal.commit).not.toHaveBeenCalled();
-      expect(fixture.record).not.toHaveBeenCalled();
-      await expect(
-        hasWorkerWorkspaceResultRef({ root: fixture.root, stagedResultRef: fixture.ref }),
-      ).resolves.toBe(false);
-      await expect(
-        hasWorkerWorkspaceResultRef({
-          root: fixture.root,
-          stagedResultRef: preparedWorkerWorkspaceResultRef(fixture.ref),
-        }),
-      ).resolves.toBe(false);
+      const final = verifyReconciledWorkspaceFinal(f.reconciliation, f.quiescence);
+      if (side === "owner") {
+        await expect(final).rejects.toThrow("stale result owner");
+      } else {
+        await expect(final).rejects.toMatchObject({ reclaimDisposition: "retry" });
+      }
+      expect(f.journal.commit).not.toHaveBeenCalled();
+      expect(f.record).not.toHaveBeenCalled();
+      if (side !== "owner") {
+        for (const stagedResultRef of [f.ref, preparedWorkerWorkspaceResultRef(f.ref)]) {
+          await expect(
+            hasWorkerWorkspaceResultRef({ root: f.root, stagedResultRef }),
+          ).resolves.toBe(false);
+        }
+      }
     },
   );
-
-  it("revalidates the result owner before committing an unchanged workspace", async () => {
-    let current = true;
-    const fixture = await prepareUnchangedWorkspace({
-      assertCurrent: () => {
-        if (!current) {
-          throw new Error("stale result owner");
-        }
-      },
-      beforeRemoteFence: async () => {
-        current = false;
-      },
-    });
-
-    await expect(
-      verifyReconciledWorkspaceFinal(fixture.reconciliation, fixture.quiescence),
-    ).rejects.toThrow("stale result owner");
-
-    expect(fixture.journal.commit).not.toHaveBeenCalled();
-    expect(fixture.record).not.toHaveBeenCalled();
-  });
 });

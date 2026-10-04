@@ -3,6 +3,7 @@ import { supportsClaudeInHistorySystemMessages } from "@openclaw/llm-core";
 import type { SessionTranscriptRuntimeTarget } from "../../../config/sessions/session-accessor.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../../context-engine/host-compat.js";
 import type { ContextEngine } from "../../../context-engine/types.js";
+import { isRuntimeContextMessage, setRuntimeContextRetention } from "../../../llm/types.js";
 import {
   attachRuntimePromptMediaFacts,
   readPersistedMediaFacts,
@@ -30,6 +31,7 @@ import {
   type CreateAgentSessionOptions,
   SessionManager,
 } from "../../sessions/index.js";
+import { DefaultResourceLoader } from "../../sessions/resource-loader.js";
 import { createAgentSessionForEmbeddedRunner } from "../../sessions/sdk.js";
 import { withSessionManagerWrite } from "../../sessions/session-manager-write-admission.js";
 import { wrapToolDefinition } from "../../sessions/tools/tool-definition-wrapper.js";
@@ -38,7 +40,6 @@ import { runContextEngineMaintenance } from "../context-engine-maintenance.js";
 import { buildEmbeddedExtensionFactories } from "../extensions.js";
 import { log } from "../logger.js";
 import { declarePromptHistoryRewrite } from "../prompt-cache-observability.js";
-import { createEmbeddedAgentResourceLoader } from "../resource-loader.js";
 import { recordRuntimeContextProjection } from "../session-prompt-state.js";
 import { resolveEmbeddedAgentApiKey } from "../stream-resolution.js";
 import { applySystemPromptToSession } from "../system-prompt.js";
@@ -64,6 +65,7 @@ import {
   preparePersistedCurrentUserTurn,
   reconcilePrePersistedCurrentUserTurn,
 } from "./pre-persisted-user-turn.js";
+import { setSteeringRuntimeContextRetention } from "./runtime-context-prompt.js";
 import { resolveSessionBoundaryPromptCacheKey } from "./session-boundary-prompt-cache-key.js";
 import { resolveEmbeddedSessionContextLimits } from "./session-context-limits.js";
 import { withEmbeddedAttemptToolActivity } from "./tool-activity-heartbeat.js";
@@ -132,7 +134,7 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
     sessionKey: attempt.sessionKey ?? attempt.sandboxSessionKey,
     runId: attempt.runId,
   });
-  const resourceLoader = createEmbeddedAgentResourceLoader({
+  const resourceLoader = new DefaultResourceLoader({
     cwd: input.effectiveCwd,
     agentDir: input.agentDir,
     settingsManager,
@@ -315,6 +317,7 @@ export async function prepareEmbeddedAttemptSessionBoundary(input: {
   setCurrentUserTimestampOverride: (override: CurrentUserTimestampOverride | undefined) => void;
 }> {
   const { activeSession, attempt, isRawModelRun, sessionManager } = input;
+  setSteeringRuntimeContextRetention(activeSession, input.appendOnlyRuntimeContext === true);
   const preserveExactPrompt = isRawModelRun || attempt.operation === "settled-tool-finalization";
   if (isRawModelRun) {
     // Raw probes measure only the requested provider prompt. Restored history,
@@ -434,8 +437,8 @@ export async function prepareEmbeddedAttemptSessionBoundary(input: {
         : relocateCurrentRuntimeContextCarrierToTail(normalized),
     );
     for (const message of converted) {
-      if (message.role === "user" && message.runtimeContextCarrier) {
-        message.runtimeContextCarrierRetained = input.appendOnlyRuntimeContext;
+      if (isRuntimeContextMessage(message)) {
+        setRuntimeContextRetention(message, input.appendOnlyRuntimeContext);
       }
     }
     if (

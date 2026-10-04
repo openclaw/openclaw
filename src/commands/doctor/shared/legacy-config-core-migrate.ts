@@ -1,6 +1,7 @@
 // Core doctor compatibility migration pipeline for current config objects.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readAgentRosterProperty } from "../../../agents/agent-scope-config.js";
+import type { OpenClawConfigWithLegacyRoster } from "../../../config/legacy.roster.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { HeartbeatSchema } from "../../../config/zod-schema.agent-runtime.js";
 import { runPluginSetupConfigMigrations } from "../../../plugins/setup-registry.js";
@@ -110,21 +111,24 @@ function repairNullAgentWorkspaces(cfg: OpenClawConfig, changes: string[]): Open
   return next;
 }
 
-/** Normalize current config through core, plugin setup, channel, and secret-ref migrations. */
+/** Normalize pre-admission config through core, plugin setup, channel, and secret-ref migrations. */
 export function normalizeCompatibilityConfigValues(
-  cfg: OpenClawConfig,
+  raw: unknown,
   options: {
     blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>;
     sourceRaw?: unknown;
   } = {},
 ): {
-  config: OpenClawConfig;
+  config: OpenClawConfigWithLegacyRoster;
   changes: string[];
   warnings?: string[];
 } {
+  if (!isRecord(raw)) {
+    throw new TypeError("Compatibility config normalization requires an object");
+  }
   const changes: string[] = [];
   const warnings: string[] = [];
-  const reservedMcpServerNames = migrateReservedMcpServerNames(cfg, options.sourceRaw);
+  const reservedMcpServerNames = migrateReservedMcpServerNames(raw, options.sourceRaw);
   changes.push(...reservedMcpServerNames.changes);
   let next = normalizeBaseCompatibilityConfigValues(
     reservedMcpServerNames.config,

@@ -85,8 +85,10 @@ import type { GatewayBroadcastOpts } from "./server-broadcast-types.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
 import {
   agentBroadcastCalls,
+  answerCandidate,
   chatBroadcastCalls,
   createAgentEventTestHarness,
+  widgetResult,
   type AgentEventTestHarnessOptions,
 } from "./server-chat.agent-events.test-harness.js";
 import { createChatAbortMarker, type AgentEventHandlerOptions } from "./server-chat.js";
@@ -169,38 +171,6 @@ describe("agent event handler", () => {
       storeKeys: [canonicalKey],
       legacyKey: undefined,
     });
-  }
-
-  function answerCandidate(
-    itemId: string,
-    progressText: string,
-    status: "candidate" | "selected" | "superseded" = "candidate",
-  ) {
-    return {
-      itemId,
-      kind: "answer_candidate",
-      title: "Answer candidate",
-      phase: "update",
-      status,
-      progressText,
-      source: "codex-app-server",
-      hideFromChannelProgress: true,
-    };
-  }
-
-  function widgetResult(id: string, target = "assistant_message", title = id) {
-    return {
-      content: [
-        {
-          type: "text",
-          text: JSON.stringify({
-            kind: "canvas",
-            presentation: { target, title, sandbox: "scripts" },
-            view: { id, url: `/__openclaw__/canvas/documents/${id}/index.html` },
-          }),
-        },
-      ],
-    };
   }
 
   it("projects successful widgets into live assistant snapshots without final text", () => {
@@ -2151,9 +2121,13 @@ describe("agent event handler", () => {
     expect(agentCall?.[1].session).toMatchObject({ key: "global", sessionId: "main-global" });
   });
 
-  it("routes hidden bare global chat events to the configured default agent subscriber", () => {
+  it("routes hidden bare global chat events to the configured system agent subscriber", () => {
     vi.mocked(getRuntimeConfig).mockReturnValue({
-      agents: { list: [{ id: "main" }, { id: "ops", default: true }] },
+      agents: {
+        ownership: "explicit",
+        defaults: { systemAgent: { agentId: "ops" } },
+        entries: { main: {}, ops: {} },
+      },
     });
     const h = createHarness();
     h.sessionMessageSubscribers.subscribe("conn-main", "agent:main:global");
@@ -2622,7 +2596,7 @@ describe("agent event handler", () => {
     async (stream, data) => {
       const hidden = stream !== "lifecycle";
       const config = {
-        agents: { ownership: "explicit" as const, list: [{ id: "main" }, { id: "work" }] },
+        agents: { ownership: "explicit" as const, entries: { main: {}, work: {} } },
       };
       vi.mocked(getRuntimeConfig).mockReturnValue(config);
       const runId = `run-owned-${stream}`;

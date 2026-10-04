@@ -1,8 +1,11 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import {
+  createRetainedOperation,
+  type RetainedOperation,
+} from "@openclaw/worker-runtime/lifecycle";
 import { afterEach, expect, it, vi } from "vitest";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
-import { createRetainedOperation, type RetainedOperation } from "../infra/retained-operation.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";

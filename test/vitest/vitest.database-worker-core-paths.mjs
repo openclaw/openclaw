@@ -1,5 +1,6 @@
 // These consumers need the host-owned SQLite broker, which runs in forked processes.
 export const databaseWorkerCoreTestFiles = [
+  "src/agents/subagents/spawn/acp-parent-stream-store.sqlite.test.ts",
   "src/state/openclaw-agent-execution-incognito.compute.test.ts",
   "src/state/openclaw-agent-execution-incognito.lifecycle.test.ts",
   "src/state/openclaw-agent-execution-incognito.history.test.ts",
@@ -19,6 +20,8 @@ export const databaseWorkerCoreTestFiles = [
   "src/system-agent/transcript-store.test.ts",
   "src/infra/restart-sentinel.update-result.test.ts",
   "src/auto-reply/reply/conversation-turn-capture.test.ts",
+  "src/auto-reply/reply/agent-runner-result-accounting.persistence.test.ts",
+  "src/auto-reply/reply/dispatch-from-config.pending-final.test.ts",
   "src/auto-reply/reply/queue.pending-inputs.test.ts",
   "src/auto-reply/reply/session-reset-prompt.test.ts",
   "src/status/status-plugin-health.runtime.test.ts",
@@ -615,6 +618,8 @@ export const databaseWorkerCoreTestFiles = [
   "src/auto-reply/reply/route-reply.prepared.test.ts",
   "src/auto-reply/reply/route-reply.recovery-owner.test.ts",
   "src/media/store.cleanup.test.ts",
+  "src/media/generated-html-provenance.test.ts",
+  "src/media/web-media.test.ts",
   "src/state/agent-provenance.test.ts",
   "src/state/user-profiles.avatar-worker.test.ts",
   "src/state/user-channel-identities.test.ts",

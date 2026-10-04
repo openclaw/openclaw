@@ -127,11 +127,12 @@ describe("buildContextEngineCompactionSessionTarget", () => {
     });
   });
 
-  it("uses the configured default agent without inventing a session key", () => {
+  it("uses the explicit agent owner without inventing a session key", () => {
     expect(
       buildContextEngineCompactionSessionTarget({
+        agentId: "worker",
         config: {
-          agents: { list: [{ id: "main" }, { id: "worker", default: true }] },
+          agents: { ownership: "explicit", entries: { main: {}, worker: {} } },
           session: { store: "/tmp/{agentId}/sessions.json" },
         },
         sessionFile: "compat-session",
@@ -269,7 +270,7 @@ describe("fixed-store session bootstrap", () => {
         sessionKey: "global",
         storePath: "/tmp/shared-sessions.json",
       }),
-      undefined,
+      expect.any(Function),
     );
   });
 

@@ -24,16 +24,28 @@ function contained(root, target) {
   return physical;
 }
 
-function qualifiedPackage(checkout, root, specifier, consumer) {
-  const name = specifier
+function packageName(specifier) {
+  return specifier
     .split("/")
     .slice(0, specifier.startsWith("@") ? 2 : 1)
     .join("/");
-  const manifest = JSON.parse(readFileSync(join(checkout, "package.json"), "utf8"));
-  const required =
+}
+
+function declaredVersion(manifest, name) {
+  return (
     manifest.dependencies?.[name] ??
     manifest.devDependencies?.[name] ??
-    manifest.optionalDependencies?.[name];
+    manifest.optionalDependencies?.[name]
+  );
+}
+
+function readManifest(checkout) {
+  return JSON.parse(readFileSync(join(checkout, "package.json"), "utf8"));
+}
+
+function qualifiedPackage(manifest, root, specifier, consumer) {
+  const name = packageName(specifier);
+  const required = declaredVersion(manifest, name);
   const modules = realpathSync(join(root, "node_modules"));
   // A workspace link would execute another checkout's source. Only installed
   // third-party packages can fill missing dependencies in this checkout.
@@ -138,7 +150,7 @@ export function toolingDependencyOptions(checkout, consumer, { tsx = false } = {
   hook.searchParams.set("consumer", consumer);
   let tsxImport;
   if (tsx) {
-    const directory = qualifiedPackage(checkout, root, "tsx/esm", consumer);
+    const directory = qualifiedPackage(readManifest(checkout), root, "tsx/esm", consumer);
     const require = createRequire(join(directory, "package.json"));
     tsxImport = pathToFileURL(contained(directory, require.resolve("tsx/esm"))).href;
   }
@@ -152,55 +164,49 @@ const root = params.get("root");
 if (root) {
   const checkout = params.get("checkout");
   const consumer = params.get("consumer");
+  const manifest = readManifest(checkout);
   const parentURL = pathToFileURL(join(root, "package.json")).href;
+  // Checkout source keeps what resolves inside the checkout; its other declared
+  // packages belong to the qualified tooling root. An ancestor install can be
+  // stale and either succeed with old exports or reject newer subpaths.
+  const rootOwned = (specifier, context) => {
+    const importer = context.parentURL?.startsWith("file:")
+      ? fileURLToPath(context.parentURL)
+      : undefined;
+    return Boolean(
+      importer &&
+      isWithin(checkout, importer) &&
+      !relative(checkout, importer).split(sep).includes("node_modules") &&
+      declaredVersion(manifest, packageName(specifier)),
+    );
+  };
   registerHooks({
     resolve(specifier, context, nextResolve) {
+      if (isAbsolute(specifier) || /^(?:\.{1,2}(?:\/|$)|[a-z][a-z\d+.-]*:|#)/i.test(specifier)) {
+        return nextResolve(specifier, context);
+      }
       let resolved;
       try {
         resolved = nextResolve(specifier, context);
       } catch (error) {
-        if (
-          error?.code !== "ERR_MODULE_NOT_FOUND" ||
-          isAbsolute(specifier) ||
-          /^(?:\.{1,2}(?:\/|$)|[a-z][a-z\d+.-]*:|#)/i.test(specifier)
-        ) {
+        if (error?.code !== "ERR_MODULE_NOT_FOUND" && !rootOwned(specifier, context)) {
           throw error;
         }
       }
       if (resolved) {
-        const importer = context.parentURL?.startsWith("file:")
-          ? fileURLToPath(context.parentURL)
-          : undefined;
         const target = resolved.url.startsWith("file:") ? fileURLToPath(resolved.url) : undefined;
+        // Dependency-owned imports retain their own private versions.
         if (
-          !importer ||
           !target ||
-          isAbsolute(specifier) ||
-          /^(?:\.{1,2}(?:\/|$)|[a-z][a-z\d+.-]*:|#)/i.test(specifier) ||
-          !isWithin(checkout, importer) ||
-          relative(checkout, importer).split(sep).includes("node_modules") ||
           isWithin(checkout, target) ||
-          !target.split(sep).includes("node_modules")
+          !target.split(sep).includes("node_modules") ||
+          !rootOwned(specifier, context)
         ) {
           return resolved;
         }
-        const name = specifier
-          .split("/")
-          .slice(0, specifier.startsWith("@") ? 2 : 1)
-          .join("/");
-        const manifest = JSON.parse(readFileSync(join(checkout, "package.json"), "utf8"));
-        if (
-          !manifest.dependencies?.[name] &&
-          !manifest.devDependencies?.[name] &&
-          !manifest.optionalDependencies?.[name]
-        ) {
-          return resolved;
-        }
-        // Candidate source must not inherit an ancestor install before donor qualification.
-        // Dependency-owned imports retain their own private versions above.
       }
       resolved = nextResolve(specifier, { ...context, parentURL });
-      const directory = qualifiedPackage(checkout, root, specifier, consumer);
+      const directory = qualifiedPackage(manifest, root, specifier, consumer);
       contained(directory, fileURLToPath(resolved.url));
       return resolved;
     },

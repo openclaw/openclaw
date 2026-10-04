@@ -159,13 +159,6 @@ function collectPackageDistExclusionRules(rootPackageJson: unknown): PackageDist
   };
 }
 
-async function collectPackageDistExclusionRulesForRoot(
-  packageRoot: string,
-): Promise<PackageDistExclusionRules> {
-  const packageJsonPath = path.join(packageRoot, "package.json");
-  return collectPackageDistExclusionRules(await readJsonIfExists<unknown>(packageJsonPath));
-}
-
 function isPackageFilesExcludedDistPath(
   relativePath: string,
   exclusions: PackageDistExclusionRules,
@@ -277,7 +270,9 @@ export async function collectPackageDistInventory(
   const rules = options.includePackageExcludedFiles
     ? { ...collectPackageDistExclusionRules({}), includePackageExcludedFiles: true }
     : options.packageManifest === undefined
-      ? await collectPackageDistExclusionRulesForRoot(packageRoot)
+      ? collectPackageDistExclusionRules(
+          await readJsonIfExists<unknown>(path.join(packageRoot, "package.json")),
+        )
       : collectPackageDistExclusionRules(options.packageManifest);
   const fsLimit = pLimit(PACKAGE_DIST_INVENTORY_SCAN_CONCURRENCY);
   return await collectRelativeFiles(

@@ -54,15 +54,10 @@ import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
 import { createSkillCommandLoaders } from "./skill-command-loaders.js";
 import type { TypingController } from "./typing.js";
 
-type SkillToolDispatchRuntime = typeof import("../../skills/runtime/tool-dispatch.js");
-type SkillToolDispatchDependencies = Parameters<
-  SkillToolDispatchRuntime["resolveSkillDispatchTools"]
->[1];
-
 const skillCommandsRuntimeLoader = createLazyImportLoader(
   () => import("../../skills/discovery/chat-commands.runtime.js"),
 );
-const skillToolDispatchRuntimeLoader = createLazyImportLoader<SkillToolDispatchRuntime>(
+const skillToolDispatchRuntimeLoader = createLazyImportLoader(
   () => import("../../skills/runtime/tool-dispatch.js"),
 );
 const abortCutoffRuntimeLoader = createLazyImportLoader(() => import("./abort-cutoff.runtime.js"));
@@ -174,7 +169,6 @@ export async function handleInlineActions(params: {
   directiveAck?: ReplyPayload;
   abortedLastRun: boolean;
   skillFilter?: string[];
-  skillToolDispatchDependencies?: SkillToolDispatchDependencies;
 }): Promise<InlineActionResult> {
   const {
     ctx,
@@ -354,8 +348,7 @@ export async function handleInlineActions(params: {
     if (dispatch?.kind === "tool") {
       const rawArgs = (skillInvocation.args ?? "").trim();
       const { resolveSkillDispatchTools } = await skillToolDispatchRuntimeLoader.load();
-      const dependencies =
-        params.skillToolDispatchDependencies ?? (await import("../../agents/openclaw-tools.js"));
+      const dependencies = await import("../../agents/openclaw-tools.js");
       const authorizedTools = resolveSkillDispatchTools(
         {
           message: {

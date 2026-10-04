@@ -14,6 +14,7 @@ import {
   resolveWindowsConsoleEncoding,
 } from "../infra/windows-encoding.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { sleep } from "../utils/sleep.js";
 import {
   EXIT_STDIO_GRACE_MS,
   hasChildProcessExited,
@@ -639,9 +640,7 @@ async function runCommandWithOutputEncoding(
       ) {
         break;
       }
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, WINDOWS_CLOSE_STATE_POLL_MS);
-      });
+      await sleep(WINDOWS_CLOSE_STATE_POLL_MS);
     }
   }
   if (

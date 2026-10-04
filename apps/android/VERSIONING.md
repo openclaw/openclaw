@@ -251,6 +251,13 @@ point to existing source commits; they create no commits or PRs. Existing refs
 are immutable: the same ref at the same SHA is accepted, while a different SHA
 fails. `GOOGLE_PLAY_VALIDATE_ONLY=1` does not record an uploaded-build ref.
 
+Source-ref reads and writes tolerate recognized transient Git failures, including
+GitHub's workflow-check timeout, with up to four attempts and waits of 5, 10, and
+20 seconds. Every push is reconciled against the remote ref before another
+attempt; an unreadable remote never authorizes another push. Authentication
+failures and conflicting source SHAs stop the release. These retries do not
+repeat the build or upload.
+
 For release-note generation, each public phone or Wear code resolves through its
 v2 ref. Legacy Wear codes resolve to their paired phone ref by subtracting `50`.
 Phone and Wear may have different public baselines. If a historical public

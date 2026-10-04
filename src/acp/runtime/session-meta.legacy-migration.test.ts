@@ -82,7 +82,7 @@ async function seedRetainedSource(
       },
     }),
   );
-  const cfg: OpenClawConfig = { agents: { entries: { main: { default: true } } } };
+  const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
   await state.writeConfig(cfg);
   await recordDeferredPluginMigrations({
     env: state.env,

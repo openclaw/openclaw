@@ -72,6 +72,12 @@ export function registerCodexFastModeTests({
       configuredServiceTier: "flex",
       expectedServiceTier: "flex",
     },
+    {
+      name: "configured Ultrafast without a shared selection",
+      fastMode: undefined,
+      configuredServiceTier: "ultrafast",
+      expectedServiceTier: "priority",
+    },
   ] satisfies Array<{
     name: string;
     fastMode: EmbeddedRunAttemptParams["fastMode"];
@@ -149,30 +155,46 @@ export function registerCodexFastModeTests({
       name: "explicit Ultrafast",
       supported: true,
       fastMode: "ultrafast" as const,
-      enableUltrafast: false,
       expected: "ultrafast",
+      catalogRequests: 1,
+    },
+    {
+      name: "explicit Ultrafast with the switch enabled",
+      supported: true,
+      fastMode: "ultrafast" as const,
+      enableUltrafast: true,
+      expected: "ultrafast",
+      catalogRequests: 1,
+    },
+    {
+      name: "explicit Ultrafast with the switch disabled",
+      supported: true,
+      fastMode: "ultrafast" as const,
+      enableUltrafast: false,
+      expected: "priority",
     },
     {
       name: "unsupported Ultrafast",
       supported: false,
       fastMode: "ultrafast" as const,
       expected: "priority",
+      catalogRequests: 1,
     },
     {
       name: "Fast by default",
       supported: true,
       fastMode: true,
-      expected: "ultrafast",
+      expected: "priority",
     },
     {
-      name: "Fast with existing Ultrafast opt-in",
+      name: "Fast with the Ultrafast switch enabled",
       supported: true,
       fastMode: true,
       enableUltrafast: true,
-      expected: "ultrafast",
+      expected: "priority",
     },
     {
-      name: "Fast with explicit Ultrafast opt-out",
+      name: "Fast with the Ultrafast switch disabled",
       supported: true,
       fastMode: true,
       enableUltrafast: false,
@@ -185,13 +207,13 @@ export function registerCodexFastModeTests({
       expected: "priority",
     },
     { name: "Fast off", supported: true, fastMode: false, expected: null },
-    { name: "unspecified Fast mode", supported: true, fastMode: undefined, expected: "ultrafast" },
+    { name: "unspecified Fast mode", supported: true, fastMode: undefined, expected: undefined },
     {
       name: "auto activates after resume",
       supported: true,
       fastMode: false,
       activateAuto: true,
-      expected: "ultrafast",
+      expected: "priority",
     },
     {
       name: "inactive Auto",
@@ -201,7 +223,7 @@ export function registerCodexFastModeTests({
       expected: null,
     },
     {
-      name: "auto with explicit Ultrafast opt-out",
+      name: "auto with the Ultrafast switch disabled",
       supported: true,
       fastMode: false,
       activateAuto: true,
@@ -216,8 +238,16 @@ export function registerCodexFastModeTests({
       expected: "priority",
     },
   ])(
-    "applies optional Ultrafast for $name at the actual turn boundary",
-    async ({ supported, fastMode, activateAuto, automatic, enableUltrafast, expected }) => {
+    "requires explicit Ultrafast for $name at the actual turn boundary",
+    async ({
+      supported,
+      fastMode,
+      activateAuto,
+      automatic,
+      enableUltrafast,
+      expected,
+      catalogRequests = 0,
+    }) => {
       const { sessionFile, workspaceDir } = createRunPaths();
       await writeExistingBinding(sessionFile, workspaceDir, { model: "gpt-5.2" });
       const harness = createResumeHarness("thread-existing", async (method) => {
@@ -265,16 +295,19 @@ export function registerCodexFastModeTests({
       ).toMatchObject({
         serviceTier: expected,
       });
+      expect(harness.requests.filter((request) => request.method === "model/list")).toHaveLength(
+        catalogRequests,
+      );
     },
   );
 
   it.each([
     {
-      name: "default enablement",
+      name: "unspecified Fast mode",
       fastMode: undefined,
       supported: true,
       baseline: undefined,
-      expected: "ultrafast",
+      expected: null,
     },
     { name: "Fast off", fastMode: false, supported: true, baseline: undefined, expected: null },
     {
@@ -282,7 +315,7 @@ export function registerCodexFastModeTests({
       fastMode: true,
       supported: true,
       baseline: undefined,
-      expected: "ultrafast",
+      expected: "priority",
     },
     {
       name: "revoked Ultrafast",
@@ -312,8 +345,15 @@ export function registerCodexFastModeTests({
       baseline: undefined,
       expected: null,
     },
+    {
+      name: "configured Ultrafast without a shared selection",
+      fastMode: undefined,
+      supported: true,
+      baseline: "ultrafast" as const,
+      expected: "priority",
+    },
   ])(
-    "selects optional Ultrafast for $name across warm turns",
+    "reselects the tier for $name after an explicit Ultrafast warm turn",
     async ({ fastMode, supported, baseline, expected }) => {
       const { sessionFile, workspaceDir } = createRunPaths();
       await writeExistingBinding(sessionFile, workspaceDir, { model: "gpt-5.2" });
@@ -343,7 +383,7 @@ export function registerCodexFastModeTests({
       for (let turn = 0; turn < 2; turn += 1) {
         catalogSupported = turn === 0 || supported;
         const params = createParams(sessionFile, workspaceDir);
-        params.fastMode = turn === 0 ? undefined : fastMode;
+        params.fastMode = turn === 0 ? "ultrafast" : fastMode;
         const run = runCodexAppServerAttempt(params, {
           pluginConfig: { appServer: { serviceTier: baseline } },
         });
@@ -356,6 +396,9 @@ export function registerCodexFastModeTests({
           .filter((request) => request.method === "turn/start")
           .map((request) => (request.params as { serviceTier?: string | null }).serviceTier),
       ).toEqual(["ultrafast", expected]);
+      expect(harness.requests.filter((request) => request.method === "model/list")).toHaveLength(
+        fastMode === "ultrafast" ? 2 : 1,
+      );
     },
   );
 }

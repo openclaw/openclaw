@@ -77,8 +77,12 @@ extension ChatSessionSidebar {
             .accessibilityLabel(String(localized: "View options"))
             .accessibilityIdentifier("chat-sidebar-view-options")
             .popover(isPresented: self.$isPresentingFilters) {
-                ChatSessionSidebarFilters(options: self.filterBinding, ownership: ownership)
-                    .onExitCommand { self.isPresentingFilters = false }
+                VStack(spacing: 0) {
+                    ChatSessionSidebarFilters(options: self.filterBinding, ownership: ownership)
+                    ChatSidebarCatalogVisibilityOptions(data: self.catalogData, ownerFilter: self.$sessionOwnerFilter)
+                        .padding(16)
+                }
+                .onExitCommand { self.isPresentingFilters = false }
             }
         }
         .padding(.top, 14)
@@ -165,31 +169,6 @@ extension ChatSessionSidebar {
             return String(format: String(localized: "%lld queued"), summary.queuedCount)
         }
         return activity.text
-    }
-
-    var connectionFooter: some View {
-        HStack(spacing: 6) {
-            Circle()
-                .fill(self.viewModel.healthOK ? .green : .orange)
-                .frame(width: 7, height: 7)
-            Text(self.viewModel.healthOK
-                ? String(localized: "Gateway connected")
-                : String(localized: "Connecting…"))
-                .font(OpenClawChatTypography.caption)
-                .foregroundStyle(.secondary)
-            Spacer(minLength: 0)
-            if self.groupLoadFailed {
-                Button {
-                    self.groupRefreshNonce += 1
-                } label: {
-                    Image(systemName: "arrow.clockwise")
-                }
-                .buttonStyle(.borderless)
-                .help(String(localized: "Retry thread groups"))
-            }
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 12)
     }
 }
 
