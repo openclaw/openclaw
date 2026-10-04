@@ -108,7 +108,6 @@ export function scheduleStoredChatOutboxRetry(
   scope: StoredChatOutboxScope,
   delayMs: number,
   dependencies: ChatOutboxDrainDependencies,
-  suppressGenericWake = true,
 ) {
   const key = storedChatOutboxScopeKey(scope);
   scheduleChatOutboxRetry(
@@ -116,7 +115,6 @@ export function scheduleStoredChatOutboxRetry(
     key,
     delayMs,
     (owner) => void scheduleStoredChatOutboxDrain(owner, scope, dependencies),
-    suppressGenericWake,
   );
 }
 

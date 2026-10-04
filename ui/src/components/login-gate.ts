@@ -129,27 +129,6 @@ function renderRefreshAction(feedback: LoginFailureFeedback, action: RefreshActi
   `;
 }
 
-function renderSecretToggle(
-  revealed: boolean,
-  labels: [string, string, string],
-  onToggle: () => void,
-) {
-  const [show, hide, toggle] = labels;
-  return html`
-    <openclaw-tooltip .content=${revealed ? hide : show}>
-      <button
-        type="button"
-        class="settings-secret__toggle"
-        aria-label=${toggle}
-        aria-pressed=${revealed}
-        @click=${onToggle}
-      >
-        ${revealed ? icons.eye : icons.eyeOff}
-      </button>
-    </openclaw-tooltip>
-  `;
-}
-
 function renderForm(params: {
   props: LoginGateProps;
   feedback: LoginFailureFeedback | null;
@@ -203,11 +182,19 @@ function renderForm(params: {
             @keydown=${submitOnEnter}
             placeholder=${t("login.secretPlaceholder")}
           />
-          ${renderSecretToggle(
-            props.showGatewaySecret,
-            [t("login.showSecret"), t("login.hideSecret"), t("login.toggleSecretVisibility")],
-            props.onToggleGatewaySecret,
-          )}
+          <openclaw-tooltip
+            .content=${t(props.showGatewaySecret ? "login.hideSecret" : "login.showSecret")}
+          >
+            <button
+              type="button"
+              class="settings-secret__toggle"
+              aria-label=${t("login.toggleSecretVisibility")}
+              aria-pressed=${props.showGatewaySecret}
+              @click=${props.onToggleGatewaySecret}
+            >
+              ${props.showGatewaySecret ? icons.eye : icons.eyeOff}
+            </button>
+          </openclaw-tooltip>
         </span>
         ${isSetupCode ? html`<p id="login-gate-secret-hint" class="muted" role="status">${t("login.setupCodeHint")}</p>` : nothing}
       </div>

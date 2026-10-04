@@ -104,22 +104,20 @@ export function latestTranscriptAnnouncement(
             0,
           );
           const source = group.senderSession?.label ?? group.senderSession?.sessionKey;
-          const label = source
-            ? t(
-                count === 1
-                  ? "chat.messages.interSessionUpdateFrom"
-                  : "chat.messages.interSessionUpdatesFrom",
-                { count: String(count) },
-              ) +
-              " " +
-              source
-            : t(
-                count === 1
-                  ? "chat.messages.interSessionUpdate"
-                  : "chat.messages.interSessionUpdates",
-                { count: String(count) },
-              );
-          return announcement(group.messages.at(-1)?.key ?? group.key, label);
+          const label = t(
+            source
+              ? count === 1
+                ? "chat.messages.interSessionUpdateFrom"
+                : "chat.messages.interSessionUpdatesFrom"
+              : count === 1
+                ? "chat.messages.interSessionUpdate"
+                : "chat.messages.interSessionUpdates",
+            { count: String(count) },
+          );
+          return announcement(
+            group.messages.at(-1)?.key ?? group.key,
+            source ? `${label} ${source}` : label,
+          );
         }
         const source = assistantGroupAnnouncementSource(group, messageText);
         if (source) {

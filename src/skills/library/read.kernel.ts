@@ -3,16 +3,11 @@ import {
   SKILL_LIBRARY_MAX_SELECTIONS,
   type SkillLibrarySelection,
   type SkillsLibraryActivateParams,
-  type SkillsLibraryListParams,
 } from "../../../packages/gateway-protocol/src/schema/skill-library.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import { SkillLibraryError } from "../skill-library-error.js";
-import type {
-  SkillLibraryReadInput,
-  SkillLibraryReadOutput,
-  SkillLibraryReadQueries,
-} from "./read.contract.js";
+import type { SkillLibraryReadInput, SkillLibraryReadOutput } from "./read.contract.js";
 import {
   hydrateSkillLibraryWorkerAuthority,
   listSkillLibraryInDatabase,
@@ -89,78 +84,13 @@ function change(
   );
 }
 
-const readers = {
-  presentation: (db: DatabaseSync, a: SkillLibraryAuthority, _input: undefined) =>
-    resolveSkillLibraryPresentationInDatabase(db, a),
-  list: (db: DatabaseSync, a: SkillLibraryAuthority, input: SkillsLibraryListParams) =>
-    listSkillLibraryInDatabase(db, a, input),
-  profile: (db: DatabaseSync, a: SkillLibraryAuthority, _input: undefined) =>
-    requireSkillLibraryProfile(db, a),
-  entry: (
-    db: DatabaseSync,
-    a: SkillLibraryAuthority,
-    input: { skillId: string; write?: boolean },
-  ) => requireSkillLibraryEntry(db, input.skillId, a, input.write),
-  read: (
-    db: DatabaseSync,
-    a: SkillLibraryAuthority,
-    input: { skillId: string; revision?: string; selectedRevision?: string },
-  ) =>
-    readSkillLibraryMetadataInDatabase(
-      db,
-      a,
-      input.skillId,
-      input.revision,
-      input.selectedRevision,
-    ),
-  upload: (db: DatabaseSync, a: SkillLibraryAuthority, input: { uploadId: string }) =>
-    requireSkillLibraryUpload(db, input.uploadId, a),
-  seed: (db: DatabaseSync, a: SkillLibraryAuthority, _input: undefined) => seed(db, a),
-  change: (
-    db: DatabaseSync,
-    a: SkillLibraryAuthority,
-    input: { current: readonly SkillLibrarySelection[]; params: SkillsLibraryActivateParams },
-  ) => change(db, a, input.current, input.params),
-  pins: (db: DatabaseSync, a: SkillLibraryAuthority, input: readonly SkillLibrarySelection[]) =>
-    input.map((pin) => {
-      const row = selectSkillLibraryRow(db, pin.skillId);
-      const entry = row && projectSkillLibraryEntry(db, row, a, pin.revision, true);
-      if (!entry) {
-        throw new SkillLibraryError(
-          "NOT_FOUND",
-          "A pinned skill revision is unavailable. Restore the library or detach it explicitly.",
-        );
-      }
-      return {
-        ...pin,
-        slug: entry.slug,
-        description: entry.description,
-        ownerLabel: entry.ownerLabel,
-      };
-    }),
-} satisfies {
-  [K in keyof SkillLibraryReadQueries]: (
-    db: DatabaseSync,
-    authority: SkillLibraryAuthority,
-    input: SkillLibraryReadQueries[K]["input"],
-  ) => SkillLibraryReadQueries[K]["output"];
-};
 export const skillLibraryReadOperations = {
   "skillLibrary.read": (input: SkillLibraryReadInput, db: DatabaseSync): SkillLibraryReadOutput => {
     const profileIds = new Set<string>();
     const authority = hydrateSkillLibraryWorkerAuthority(input.authority, profileIds);
-    // SAFETY: The mapped readers contract binds input and output to each query kind.
-    const read = readers[input.kind] as (
-      db: DatabaseSync,
-      a: SkillLibraryAuthority,
-      p: SkillLibraryReadInput["params"],
-    ) => SkillLibraryReadOutput["value"];
     const value = runSqliteDeferredTransactionSync(db, () => {
       if (
-        input.kind !== "profile" &&
-        input.kind !== "presentation" &&
-        input.kind !== "list" &&
-        input.kind !== "seed" &&
+        !["profile", "presentation", "list", "seed"].includes(input.kind) &&
         !tableExists(db, "skill_library_entries")
       ) {
         if (input.kind === "pins" && !input.params.length) {
@@ -168,13 +98,54 @@ export const skillLibraryReadOperations = {
         }
         throw new SkillLibraryError("NOT_FOUND", "Skill not found in your accessible library.");
       }
-      return read(db, authority, input.params);
+      switch (input.kind) {
+        case "presentation":
+          return resolveSkillLibraryPresentationInDatabase(db, authority);
+        case "list":
+          return listSkillLibraryInDatabase(db, authority, input.params);
+        case "profile":
+          return requireSkillLibraryProfile(db, authority);
+        case "entry":
+          return requireSkillLibraryEntry(db, input.params.skillId, authority, input.params.write);
+        case "read":
+          return readSkillLibraryMetadataInDatabase(
+            db,
+            authority,
+            input.params.skillId,
+            input.params.revision,
+            input.params.selectedRevision,
+          );
+        case "upload":
+          return requireSkillLibraryUpload(db, input.params.uploadId, authority);
+        case "seed":
+          return seed(db, authority);
+        case "change":
+          return change(db, authority, input.params.current, input.params.params);
+        case "pins":
+          break;
+      }
+      return input.params.map((pin) => {
+        const row = selectSkillLibraryRow(db, pin.skillId);
+        const entry = row && projectSkillLibraryEntry(db, row, authority, pin.revision, true);
+        if (!entry) {
+          throw new SkillLibraryError(
+            "NOT_FOUND",
+            "A pinned skill revision is unavailable. Restore the library or detach it explicitly.",
+          );
+        }
+        return {
+          ...pin,
+          slug: entry.slug,
+          description: entry.description,
+          ownerLabel: entry.ownerLabel,
+        };
+      });
     });
     return {
       type: "skillLibrary.read",
       kind: input.kind,
       value,
       profileIds: [...profileIds],
-    } as SkillLibraryReadOutput; // SAFETY: The result came from the reader bound to input.kind.
+    } as SkillLibraryReadOutput; // SAFETY: Each input.kind selects its matching result above.
   },
 };

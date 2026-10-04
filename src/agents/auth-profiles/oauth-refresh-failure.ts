@@ -131,13 +131,6 @@ function readProviderOAuthRefreshFailure(error: unknown): OAuthRefreshFailurePre
   };
 }
 
-type StructuredClaudeCliAuthFailure = {
-  provider?: unknown;
-  rawError?: unknown;
-  reason?: unknown;
-  status?: unknown;
-};
-
 /** Error type that carries provider and classified OAuth refresh failure reason. */
 export class OAuthRefreshFailureError extends Error {
   readonly errorType?: string;
@@ -314,27 +307,16 @@ function isClaudeCliExpiredOAuthMessage(message: string): boolean {
   return CLAUDE_CLI_AUTH_FAILURE_RE.test(message);
 }
 
-function readStructuredClaudeCliAuthFailure(err: unknown): StructuredClaudeCliAuthFailure | null {
-  if (!err || typeof err !== "object") {
-    return null;
-  }
-  const candidate = err as StructuredClaudeCliAuthFailure & { name?: unknown };
-  if (
-    candidate.name !== "FailoverError" ||
-    candidate.provider !== "claude-cli" ||
-    candidate.reason !== "auth" ||
-    candidate.status !== 401
-  ) {
-    return null;
-  }
-  return candidate;
-}
-
 function classifyStructuredClaudeCliOAuthFailureReason(
   err: unknown,
 ): OAuthRefreshFailureReason | null {
-  const failure = readStructuredClaudeCliAuthFailure(err);
-  if (!failure) {
+  const failure = asOptionalObjectRecord(err);
+  if (
+    failure?.name !== "FailoverError" ||
+    failure.provider !== "claude-cli" ||
+    failure.reason !== "auth" ||
+    failure.status !== 401
+  ) {
     return null;
   }
   const rawError = typeof failure.rawError === "string" ? failure.rawError : "";
