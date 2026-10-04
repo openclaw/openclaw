@@ -296,4 +296,27 @@ describe("authorization-backed exec allowlist", () => {
       }),
     );
   });
+
+  it("does not satisfy allowlists when vertical whitespace hides a command as a comment", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const dir = makeExecApprovalsTempDir();
+    const lsPath = makeExecutable(dir, "ls");
+    makeExecutable(dir, "touch");
+    const env = makePathEnv(dir);
+
+    const result = await evaluateShellAllowlistWithAuthorization({
+      command: "ls \v#;touch pwned",
+      allowlist: [{ pattern: lsPath }],
+      safeBins: new Set(),
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+
+    expect(result.analysisOk).toBe(false);
+    expect(result.allowlistSatisfied).toBe(false);
+  });
 });

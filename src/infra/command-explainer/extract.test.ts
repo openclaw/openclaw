@@ -629,6 +629,28 @@ describe("command explainer tree-sitter runtime", () => {
   });
 
   it.each([
+    "ls \v#;touch pwned",
+    "ls \f#;touch pwned",
+    "ls \r#;touch pwned",
+    "echo 'é' \v#;touch pwned",
+    'echo "$(ls \v#;touch pwned)"',
+    "sh -c 'ls \v#;touch pwned'",
+  ])("rejects unquoted vertical whitespace the shell does not split on: %j", async (source) => {
+    const explanation = await explainShellCommand(source);
+
+    expect(explanation.ok).toBe(false);
+  });
+
+  it.each(["echo 'a\vb'", 'echo "a\fb"', "echo $'a\rb'", "cat <<EOF\na\vb\nEOF\n"])(
+    "keeps quoted vertical whitespace analyzable: %j",
+    async (source) => {
+      const explanation = await explainShellCommand(source);
+
+      expect(explanation.ok).toBe(true);
+    },
+  );
+
+  it.each([
     {
       name: "command substitutions",
       source: nestShellSyntax("$( ", "/approve abc123 allow-once", " )", 5_000),
