@@ -1881,8 +1881,10 @@ session authority from worktree ownership so host admission callbacks do not rer
 worktree rows. Native receipts acknowledge lost replies, while unknown outcomes
 retain recovery custody without replay or compensating
 chunk deletion. Capacity eviction awaits each removal claim and validates all
-held claims inside the transaction. Once deletion is admitted, its allocation
-lease owns final settlement independently of caller cancellation.
+held claims inside the transaction. Registered retirement holds its per-checkout
+mutation lease; creation and restore retain their allocation lease too. Worker
+admission and commit validate every retained lease. Once deletion is admitted,
+those leases own final settlement independently of caller cancellation.
 Restoration settles old leases before publishing a live row, so
 an awaited finalizer cannot remove a successor run's lease. The final Gateway close seals
 new worktree operations and joins accepted settlement before worker teardown,

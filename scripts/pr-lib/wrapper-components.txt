@@ -289,8 +289,11 @@ src/agents/workspace-dirs.ts
 src/agents/workspace-state-identity.ts
 src/agents/worktrees/allocation.ts
 src/agents/worktrees/branches.runtime.ts
+src/agents/worktrees/capacity-contract.ts
+src/agents/worktrees/capacity-store.ts
 src/agents/worktrees/capacity.runtime.ts
 src/agents/worktrees/capacity.ts
+src/agents/worktrees/capacity.worker.ts
 src/agents/worktrees/checkout-apfs.ts
 src/agents/worktrees/checkout-git-config.ts
 src/agents/worktrees/checkout.ts
@@ -302,6 +305,7 @@ src/agents/worktrees/filesystem-native.ts
 src/agents/worktrees/filesystem-refs.native.ts
 src/agents/worktrees/gc-dependencies.ts
 src/agents/worktrees/gc-fingerprint.runtime.ts
+src/agents/worktrees/git-lock.ts
 src/agents/worktrees/git-path-inventory.ts
 src/agents/worktrees/git-worktree-operations.runtime.ts
 src/agents/worktrees/git.ts
@@ -318,6 +322,8 @@ src/agents/worktrees/repository-paths.ts
 src/agents/worktrees/run-end-lifecycle.ts
 src/agents/worktrees/run-lease-owner.ts
 src/agents/worktrees/run-lease-store.kernel.ts
+src/agents/worktrees/run-lease-store.ts
+src/agents/worktrees/run-lease.ts
 src/agents/worktrees/service-preparation.ts
 src/agents/worktrees/snapshot-exact-state.ts
 src/agents/worktrees/snapshot-index-objects.ts
@@ -1675,6 +1681,7 @@ src/state/openclaw-state-lease-options.ts
 src/state/openclaw-state-lease-process-exit.ts
 src/state/openclaw-state-lease-storage.ts
 src/state/openclaw-state-lease-store.ts
+src/state/openclaw-state-lease-worker-operation.ts
 src/state/openclaw-state-lease-worker-owner.ts
 src/state/openclaw-state-lease-worker-storage.ts
 src/state/openclaw-state-lease-worker.ts

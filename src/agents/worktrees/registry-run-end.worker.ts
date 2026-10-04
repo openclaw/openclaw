@@ -10,7 +10,7 @@ import {
 } from "../../infra/sqlite-worker-operation-admission.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
-import { assertOpenClawStateLeaseWorkerOwnedInTransaction } from "../../state/openclaw-state-lease-worker.js";
+import { assertOpenClawStateLeasesWorkerOwnedInTransaction } from "../../state/openclaw-state-lease-worker.js";
 import type { OpenClawStateLeaseIdentity } from "../../state/openclaw-state-lease.types.js";
 import type { WorkerOperationContext } from "../../state/worker-operation-registry.js";
 import {
@@ -34,7 +34,7 @@ const query = (db: DatabaseSync) => getNodeSqliteKysely<Pick<DB, "worktrees" | "
 export type WorktreeRunEndInput<T> = {
   value: T;
   receipt: string;
-  lease?: OpenClawStateLeaseIdentity;
+  leases?: readonly OpenClawStateLeaseIdentity[];
   predicates?: readonly WorktreeRegistryPredicate[];
 };
 
@@ -211,6 +211,15 @@ function assertPredicate(db: DatabaseSync, predicate: WorktreeRegistryPredicate)
   }
 }
 
+export function assertWorktreeRegistryPredicates(
+  db: DatabaseSync,
+  predicates: readonly WorktreeRegistryPredicate[] = [],
+): void {
+  for (const predicate of predicates) {
+    assertPredicate(db, predicate);
+  }
+}
+
 export function worktreeRunEndMutation<Input>(
   operationLabel: string,
   mutate: (db: DatabaseSync, input: Input) => void,
@@ -220,16 +229,14 @@ export function worktreeRunEndMutation<Input>(
     runOpenClawStateWriteTransaction(
       ({ db }) => {
         const admit = (stage: "transaction" | "commit") => {
-          if (input.lease) {
-            assertOpenClawStateLeaseWorkerOwnedInTransaction(db, input.lease, "write", stage);
+          if (input.leases) {
+            assertOpenClawStateLeasesWorkerOwnedInTransaction(db, input.leases, stage);
           } else {
             requestSqliteWorkerOperationAdmission({ stage, facts: undefined });
           }
         };
         admit("transaction");
-        for (const predicate of input.predicates ?? []) {
-          assertPredicate(db, predicate);
-        }
+        assertWorktreeRegistryPredicates(db, input.predicates);
         mutate(db, input.value);
         admit("commit");
         deferSqliteWorkerCommitReceipt(db, input.receipt);

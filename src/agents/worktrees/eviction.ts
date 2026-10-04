@@ -48,7 +48,7 @@ async function evictAcceptedWorktree(
 ): Promise<WorktreeEvictionReason | "dirty-purged"> {
   const { env, record, guard } = params;
   const authority = guard.workerAuthority;
-  if (!authority?.lease) {
+  if (!authority?.leaseSet) {
     throw new Error("Worktree eviction requires the allocation lease's worker authority");
   }
   const token = randomUUID();
@@ -127,6 +127,7 @@ async function evictAcceptedWorktree(
                 signal,
                 assertCurrent: beforeRun,
                 workerAuthority: heldClaimsAuthority(),
+                requireDiskSpace: guard.requireDiskSpace,
               });
               snapshotRef = snapshot.snapshotRef;
               beforeRun();
@@ -190,7 +191,7 @@ async function evictAcceptedWorktree(
                 assertCurrent: assertEffectCurrent,
                 workerAuthority: deletionAdmitted
                   ? {
-                      lease: authority.lease,
+                      leaseSet: authority.leaseSet,
                       predicates: [{ kind: "binding", record }, claimsPredicate()],
                     }
                   : heldClaimsAuthority(),
@@ -243,7 +244,7 @@ async function evictAcceptedWorktree(
           env,
           { worktreeId: record.id, lastActiveAt: record.lastActiveAt, removedAt, token },
           // Deletion already holds custody; caller cancellation cannot abandon its settlement.
-          { lease: authority.lease, predicates: [claimsPredicate()] },
+          { leaseSet: authority.leaseSet, predicates: [claimsPredicate()] },
         );
         const reason = dirty || snapshotError ? "dirty-purged" : params.reason;
         log.warn(
