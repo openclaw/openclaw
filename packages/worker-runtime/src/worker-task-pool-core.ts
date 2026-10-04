@@ -213,7 +213,7 @@ export class WorkerTaskPoolCore<Input, Output> {
       read: () => completion.operation.read(),
       id: ++this.nextTaskId,
       runInContext: AsyncLocalStorage.snapshot(),
-      controller: new AbortController(),
+      controller: undefined,
       inputConsumed: false,
       executionNotified: false,
       exchangeSequence: 0,
@@ -681,7 +681,7 @@ export class WorkerTaskPoolCore<Input, Output> {
     }
     this.finishHostWait(task);
     task.done = true;
-    task.runInContext(() => task.controller.abort());
+    task.runInContext(() => task.controller?.abort());
     clearTimeout(task.timer);
     task.deadline = undefined;
     task.options.signal?.removeEventListener("abort", task.abort);

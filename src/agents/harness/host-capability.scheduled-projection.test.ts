@@ -35,7 +35,7 @@ afterEach(() => {
 describe("agent harness scheduled tool projection", () => {
   it("issues scheduled shell projections only from this host-created tool surface", async () => {
     const host = await createHost("run-scheduled-tool-projection");
-    const sourceTools = host.hostCapabilities.createToolSurface?.({}) ?? [];
+    const sourceTools = (await host.hostCapabilities.createToolSurfaceAsync?.({})) ?? [];
     const execTool = sourceTools.find((tool) => tool.name === "exec");
     const createProjection = resolveAgentHarnessScheduledToolProjectionCapability({
       hostCapabilities: host.hostCapabilities,

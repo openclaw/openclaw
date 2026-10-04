@@ -820,6 +820,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/embedded-agent-runner/run/runtime-preparation.thinking.test.ts",
   "src/agents/embedded-agent-runner/run/run-attempt-dispatch.owner.test.ts",
   "src/agents/tools-effective-inventory.cold-provider.test.ts",
+  "src/agents/tools-effective-inventory.policy.test.ts",
   "src/agents/models-config.providers.endpoint.test.ts",
   "src/agents/models-config.root-authorship.test.ts",
   "src/agents/models-config.runtime-source-snapshot.test.ts",

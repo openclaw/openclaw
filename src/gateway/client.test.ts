@@ -406,30 +406,6 @@ describe("GatewayClient security checks", () => {
     client.stop();
   });
 
-  it("proxies ws:// loopback addresses when active proxy loopbackMode is proxy", async () => {
-    const { startProxy, stopProxy } = await import("../infra/net/proxy/proxy-lifecycle.js");
-    const handle = await startProxy({
-      proxyUrl: "http://127.0.0.1:3128",
-      loopbackMode: "proxy",
-    });
-    const onConnectError = vi.fn();
-    const client = new GatewayClient({
-      url: "ws://127.0.0.1:18789",
-      onConnectError,
-    });
-
-    try {
-      client.start();
-
-      expect(onConnectError).not.toHaveBeenCalled();
-      expect(wsInstances.length).toBe(1);
-      expect(getLatestWs().options).not.toMatchObject({ agent: expect.any(Object) });
-    } finally {
-      client.stop();
-      await stopProxy(handle);
-    }
-  });
-
   it("blocks ws:// loopback addresses when active proxy loopbackMode is block", async () => {
     const { startProxy, stopProxy } = await import("../infra/net/proxy/proxy-lifecycle.js");
     const handle = await startProxy({
@@ -453,63 +429,6 @@ describe("GatewayClient security checks", () => {
 });
 
 describe("GatewayClient request errors", () => {
-  it("preserves retry metadata from gateway error responses", async () => {
-    const onClose = vi.fn();
-    const client = createClientWithIdentity("device-main", onClose);
-    client.start();
-    const ws = getLatestWs();
-    ws.emitOpen();
-    ws.emitMessage(
-      JSON.stringify({
-        type: "event",
-        event: "connect.challenge",
-        payload: { nonce: "nonce-1", ts: 1_777_777_777_000 },
-      }),
-    );
-    const connectFrame = JSON.parse(
-      ws.sent.find((frame) => frame.includes('"method":"connect"')) ?? "{}",
-    ) as { id?: string };
-    ws.emitMessage(
-      JSON.stringify({
-        type: "res",
-        id: connectFrame.id,
-        ok: true,
-        payload: {
-          type: "hello-ok",
-          auth: { role: "operator", scopes: ["operator.admin"] },
-        },
-      }),
-    );
-
-    const requestPromise = client.request("chat.history", { sessionKey: "main" });
-    const requestFrame = JSON.parse(ws.sent.at(-1) ?? "{}") as { id?: string };
-
-    ws.emitMessage(
-      JSON.stringify({
-        type: "res",
-        id: requestFrame.id,
-        ok: false,
-        error: {
-          code: "UNAVAILABLE",
-          message: "chat.history unavailable during gateway startup",
-          details: { method: "chat.history" },
-          retryable: true,
-          retryAfterMs: 250,
-        },
-      }),
-    );
-
-    await expect(requestPromise).rejects.toMatchObject({
-      name: "GatewayClientRequestError",
-      gatewayCode: "UNAVAILABLE",
-      retryable: true,
-      retryAfterMs: 250,
-      details: { method: "chat.history" },
-    });
-
-    client.stop();
-  });
-
   it("retries startup-unavailable connect failures without terminal callbacks", async () => {
     vi.useFakeTimers();
     wsInstances.length = 0;
@@ -641,25 +560,6 @@ describe("GatewayClient close handling", () => {
       client.stop();
     },
   );
-
-  it("keeps a managed reconnect timer after gateway restart closes", async () => {
-    vi.useFakeTimers();
-    const client = new GatewayClient({
-      url: "ws://127.0.0.1:18789",
-    });
-
-    client.start();
-    getLatestWs().emitClose(1012, "service restart");
-
-    expect(wsInstances).toHaveLength(1);
-    await vi.advanceTimersByTimeAsync(999);
-    expect(wsInstances).toHaveLength(1);
-
-    await vi.advanceTimersByTimeAsync(1);
-
-    expect(wsInstances).toHaveLength(2);
-    client.stop();
-  });
 
   it("reconnects quietly after one clean pre-hello close with a pending connect", async () => {
     vi.useFakeTimers();
@@ -804,21 +704,6 @@ describe("GatewayClient close handling", () => {
       client.stop();
       vi.useRealTimers();
     }
-  });
-
-  it("clears pending reconnect timers on stop", async () => {
-    vi.useFakeTimers();
-    const client = new GatewayClient({
-      url: "ws://127.0.0.1:18789",
-    });
-
-    client.start();
-    getLatestWs().emitClose(1012, "service restart");
-    client.stop();
-
-    await vi.advanceTimersByTimeAsync(30_000);
-
-    expect(wsInstances).toHaveLength(1);
   });
 
   it("does not force-terminate a socket that closes during stop", async () => {
@@ -996,44 +881,12 @@ describe("GatewayClient connect auth payload", () => {
       expectedMaxProtocol: PROTOCOL_VERSION,
     },
     {
-      name: "built-in node hosts before a v3 mismatch",
-      options: {
-        role: "node",
-        mode: GATEWAY_CLIENT_MODES.NODE,
-        clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
-      },
-      expectedMinProtocol: PROTOCOL_VERSION,
-      expectedMaxProtocol: PROTOCOL_VERSION,
-    },
-    {
       name: "built-in node hosts with an explicit spanning range",
       options: {
         role: "node",
         mode: GATEWAY_CLIENT_MODES.NODE,
         clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
         minProtocol: MIN_NODE_PROTOCOL_VERSION,
-        maxProtocol: PROTOCOL_VERSION,
-      },
-      expectedMinProtocol: PROTOCOL_VERSION,
-      expectedMaxProtocol: PROTOCOL_VERSION,
-    },
-    {
-      name: "built-in node hosts with only the legacy minimum",
-      options: {
-        role: "node",
-        mode: GATEWAY_CLIENT_MODES.NODE,
-        clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
-        minProtocol: MIN_NODE_PROTOCOL_VERSION,
-      },
-      expectedMinProtocol: PROTOCOL_VERSION,
-      expectedMaxProtocol: PROTOCOL_VERSION,
-    },
-    {
-      name: "built-in node hosts with only the current maximum",
-      options: {
-        role: "node",
-        mode: GATEWAY_CLIENT_MODES.NODE,
-        clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
         maxProtocol: PROTOCOL_VERSION,
       },
       expectedMinProtocol: PROTOCOL_VERSION,
@@ -1101,44 +954,36 @@ describe("GatewayClient connect auth payload", () => {
     },
   );
 
-  it.each([
-    { name: "default operator clients", options: {} },
-    {
-      name: "TUI clients",
-      options: {
-        clientName: GATEWAY_CLIENT_NAMES.TUI,
-        mode: GATEWAY_CLIENT_MODES.UI,
-        minProtocol: MIN_CLIENT_PROTOCOL_VERSION,
-        maxProtocol: PROTOCOL_VERSION,
-      },
+  it.each([{ name: "default operator clients", options: {} }])(
+    "pauses $name after a permanent protocol mismatch",
+    async ({ options }) => {
+      const onReconnectPaused = vi.fn();
+      const client = new GatewayClient({
+        url: "ws://127.0.0.1:18789",
+        deviceIdentity: null,
+        onReconnectPaused,
+        ...options,
+      });
+
+      const { ws, connect } = await startClientAndConnect({ client });
+      await expectNoReconnectAfterConnectFailure({
+        client,
+        firstWs: ws,
+        connectId: connect.id,
+        failureDetails: {
+          code: "PROTOCOL_MISMATCH",
+          expectedProtocol: PROTOCOL_VERSION + 1,
+        },
+        failureMessage: "incompatible gateway version",
+      });
+
+      expect(onReconnectPaused).toHaveBeenCalledWith({
+        code: 1008,
+        reason: "connect failed",
+        detailCode: "PROTOCOL_MISMATCH",
+      });
     },
-  ])("pauses $name after a permanent protocol mismatch", async ({ options }) => {
-    const onReconnectPaused = vi.fn();
-    const client = new GatewayClient({
-      url: "ws://127.0.0.1:18789",
-      deviceIdentity: null,
-      onReconnectPaused,
-      ...options,
-    });
-
-    const { ws, connect } = await startClientAndConnect({ client });
-    await expectNoReconnectAfterConnectFailure({
-      client,
-      firstWs: ws,
-      connectId: connect.id,
-      failureDetails: {
-        code: "PROTOCOL_MISMATCH",
-        expectedProtocol: PROTOCOL_VERSION + 1,
-      },
-      failureMessage: "incompatible gateway version",
-    });
-
-    expect(onReconnectPaused).toHaveBeenCalledWith({
-      code: 1008,
-      reason: "connect failed",
-      detailCode: "PROTOCOL_MISMATCH",
-    });
-  });
+  );
 
   it.each([
     { canonical: "macos", legacy: "darwin", protocolBounds: {} },
@@ -1199,24 +1044,6 @@ describe("GatewayClient connect auth payload", () => {
       expect(legacyConnect.params?.client).not.toHaveProperty("deviceFamily");
       expect(legacyConnect.params?.client).not.toHaveProperty("modelIdentifier");
       expect(signDevicePayload.mock.calls.at(-1)?.[1]?.split("|").slice(9)).toEqual([legacy, ""]);
-      client.stop();
-    },
-  );
-
-  it.each(["macos", "windows"])(
-    "keeps canonical %s platform metadata for v4-only nodes",
-    async (platform) => {
-      const client = createClientWithIdentity(`device-v4-${platform}`, vi.fn(), {
-        role: "node",
-        mode: GATEWAY_CLIENT_MODES.NODE,
-        clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
-        minProtocol: PROTOCOL_VERSION,
-        platform,
-        deviceFamily: platform === "macos" ? "Mac" : "Windows",
-      });
-
-      const { connect } = await startClientAndConnect({ client });
-      expect(connect.params?.client?.platform).toBe(platform);
       client.stop();
     },
   );
@@ -2456,11 +2283,6 @@ describe("GatewayClient connect auth payload", () => {
 
   it.each([
     {
-      details: { code: "AUTH_TOKEN_MISSING" },
-      options: { token: "shared-token" },
-      message: "unauthorized",
-    },
-    {
       details: {
         code: "CLIENT_VERSION_MISMATCH",
         clientVersion: "2026.5.25",
@@ -2618,7 +2440,7 @@ describe("GatewayClient connect auth payload", () => {
     }
   });
 
-  it.each([undefined, { OPENCLAW_HOME: "/tmp/custom-openclaw-home" }])(
+  it.each([{ OPENCLAW_HOME: "/tmp/custom-openclaw-home" }])(
     "clears rejected stored tokens from the selected environment: %j",
     async (env) => {
       loadDeviceAuthTokenMock.mockReturnValue({

@@ -4,6 +4,7 @@ import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { resolveUserPath } from "../utils.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-records.js";
 import { isPathInside, safeRealpathSync, safeStatSync } from "./path-safety.js";
+import { formatPluginTrustDiagnostic } from "./plugin-trust.js";
 import type { PluginRecord, PluginRegistry } from "./registry.js";
 import type { PluginLogger } from "./types.js";
 
@@ -190,7 +191,7 @@ export function warnWhenAllowlistIsOpen(params: {
   );
 }
 
-/** Adds diagnostics for loaded plugins without install or load-path provenance. */
+/** Reports untracked plugins and unverified install provenance without refusing runtime access. */
 export function warnAboutUntrackedLoadedPlugins(params: {
   registry: PluginRegistry;
   provenance: PluginProvenanceIndex;
@@ -205,11 +206,19 @@ export function warnAboutUntrackedLoadedPlugins(params: {
     if (plugin.status !== "loaded" || plugin.origin === "bundled") {
       continue;
     }
-    if (allowSet.has(plugin.id)) {
+    const reason = plugin.trust?.reason;
+    const unverifiedInstall =
+      reason === "provenance-missing" ||
+      reason === "provenance-invalid" ||
+      reason === "owner-ambiguous" ||
+      reason === "install-path-mismatch" ||
+      (reason === "record-missing" && plugin.origin === "global");
+    if (!unverifiedInstall && allowSet.has(plugin.id)) {
       continue;
     }
     const installOwner = params.installOwnerByPluginId.get(plugin.id);
     if (
+      !unverifiedInstall &&
       installOwner &&
       isTrackedByProvenance({
         pluginId: installOwner,
@@ -220,7 +229,8 @@ export function warnAboutUntrackedLoadedPlugins(params: {
     ) {
       continue;
     }
-    const message = `OpenClaw can't verify where this plugin came from. Review it with '${formatPluginInspectCommand(plugin.id)}'. Adding it to plugins.allow lets it load, but does not make it trusted. If it's an official plugin, reinstall it from its official npm package or its official ClawHub listing to enable trusted features.`;
+    const diagnostic = plugin.trust ? ` ${formatPluginTrustDiagnostic(plugin.trust)}.` : "";
+    const message = `OpenClaw can't verify where this plugin came from. Review it with '${formatPluginInspectCommand(plugin.id)}'. Adding it to plugins.allow lets it load, but does not make it trusted. If it's an official plugin, reinstall it from its official npm package or its official ClawHub listing to enable trusted features.${diagnostic}`;
     if (
       params.registry.diagnostics.some(
         (entry) => entry.pluginId === plugin.id && entry.message === message,

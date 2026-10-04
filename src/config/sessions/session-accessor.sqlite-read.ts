@@ -542,18 +542,41 @@ export function findTranscriptEventInDatabase(
   database: Pick<OpenClawAgentDatabase, "db">,
   sessionId: string,
   match: (event: TranscriptEvent) => boolean,
+  navigationMatch?: (event: TranscriptEvent) => boolean,
 ): { event: TranscriptEvent } | undefined {
   return readHotSessionTranscriptSnapshot(database, sessionId, "match", () => {
-    const db = getSessionKysely(database.db);
-    const rows = iterateSqliteQuerySync(
+    const events = getSessionKysely(database.db)
+      .selectFrom("transcript_events")
+      .where("session_id", "=", sessionId);
+    const selection = navigationMatch
+      ? transcriptEventNavigationSql()
+      : transcriptEventJsonSql(database.db);
+    for (const row of iterateSqliteQuerySync(
       database.db,
-      db
-        .selectFrom("transcript_events")
-        .select(transcriptEventJsonSql(database.db).as("event_json"))
-        .where("session_id", "=", sessionId)
+      events
+        .select(["seq", selection.as("event_json")])
+        .select((eb) => eb("navigation_json", "is not", null).as("projected"))
         .orderBy("seq", "desc"),
-    );
-    return findTranscriptEventInRows(rows, match);
+    )) {
+      const prefilter = row.projected ? navigationMatch : undefined;
+      if (prefilter && !findTranscriptEventInRows([row], prefilter)) {
+        continue;
+      }
+      // Identity TEXT already is the canonical payload, including exceptional JSON.
+      const payload = prefilter
+        ? executeSqliteQueryTakeFirstSync(
+            database.db,
+            events
+              .select(transcriptEventJsonSql(database.db).as("event_json"))
+              .where("seq", "=", row.seq),
+          )
+        : row;
+      const found = payload && findTranscriptEventInRows([payload], match);
+      if (found) {
+        return found;
+      }
+    }
+    return undefined;
   });
 }
 
@@ -563,47 +586,14 @@ export function findAssistantTranscriptEventInDatabase(
   sessionId: string,
   idempotencyKey?: string,
 ): { event: TranscriptEvent } | undefined {
-  return readHotSessionTranscriptSnapshot(database, sessionId, "match", () => {
-    const db = getSessionKysely(database.db);
-    const matches = (event: TranscriptEvent) => {
-      const message = readTranscriptEventMessage(event);
-      return (
-        message?.role === "assistant" &&
-        (idempotencyKey === undefined || message.idempotencyKey === idempotencyKey)
-      );
-    };
-    for (const row of iterateSqliteQuerySync(
-      database.db,
-      db
-        .selectFrom("transcript_events")
-        .select(["seq", transcriptEventNavigationSql().as("event_json")])
-        .select((eb) => eb("navigation_json", "is not", null).as("projected"))
-        .where("session_id", "=", sessionId)
-        .orderBy("seq", "desc"),
-    )) {
-      const candidate = findTranscriptEventInRows([row], matches);
-      if (!candidate) {
-        continue;
-      }
-      // Identity TEXT already is the canonical payload, including exceptional JSON.
-      if (!row.projected) {
-        return candidate;
-      }
-      const payload = executeSqliteQueryTakeFirstSync(
-        database.db,
-        db
-          .selectFrom("transcript_events")
-          .select(transcriptEventJsonSql(database.db).as("event_json"))
-          .where("session_id", "=", sessionId)
-          .where("seq", "=", row.seq),
-      );
-      const found = payload && findTranscriptEventInRows([payload], matches);
-      if (found) {
-        return found;
-      }
-    }
-    return undefined;
-  });
+  const matches = (event: TranscriptEvent) => {
+    const message = readTranscriptEventMessage(event);
+    return (
+      message?.role === "assistant" &&
+      (idempotencyKey === undefined || message.idempotencyKey === idempotencyKey)
+    );
+  };
+  return findTranscriptEventInDatabase(database, sessionId, matches, matches);
 }
 
 function findTranscriptEventInRows(

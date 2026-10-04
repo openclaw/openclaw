@@ -184,8 +184,9 @@ every 3 hours at minute 7 UTC (`7 */3 * * *`) so release readiness stays current
 as commits land, with the `stable` profile, soak and blocking performance,
 `reuse_evidence=true`, `rerun_group=all`, and `main-qualification` purpose.
 It checks out the scheduler's exact main SHA and runs the SHA-pinned helper
-(`pnpm ci:full-release --sha <sha> --workflow-sha <sha>`), which uses that SHA as
-both Validation and Tooling SHA and dispatches from an immutable
+(`pnpm ci:full-release --sha <sha> --workflow-sha <sha> --trusted-workflow-ref main`),
+explicitly retaining the scheduled, non-publishing main-qualification route. It
+uses that SHA as both Validation and Tooling SHA and dispatches from an immutable
 `release-ci/<sha12>-<id>` transport ref. A raw dispatch from `main` fails once
 `main` moves, because the parent refuses to dispatch children from a moved
 workflow ref. A still-active parent for the same SHA shares the SHA-specific

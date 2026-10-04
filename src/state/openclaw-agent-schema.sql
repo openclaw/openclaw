@@ -665,8 +665,7 @@ CREATE TABLE IF NOT EXISTS trajectory_runtime_events (
 ) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_agent_trajectory_runtime_run
-  ON trajectory_runtime_events(session_id, run_id, seq)
-  WHERE run_id IS NOT NULL;
+  ON trajectory_runtime_events(session_id, run_id, created_at, octet_length(event_json));
 
 CREATE TABLE IF NOT EXISTS acp_parent_stream_events (
   session_id TEXT NOT NULL,

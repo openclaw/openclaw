@@ -12,7 +12,7 @@ import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { createBundleLspToolRuntime } from "../agent-bundle-lsp-runtime.js";
 import { createBundleMcpToolRuntime } from "../agent-bundle-mcp-tools.js";
-import { createOpenClawCodingToolsInternal } from "../agent-tools.js";
+import { createOpenClawCodingToolsInternalAsync } from "../agent-tools.js";
 import { createSkillInstructionDeliveryCache } from "../agent-tools.read.js";
 import { hasAnyAuthProfileStoreSourceAsync } from "../auth-profiles/source-check.js";
 import { listActiveProcessSessionReferences } from "../bash-process-references.js";
@@ -303,7 +303,7 @@ export async function buildPreparedCompactionRuntime(
     params.abortSignal?.throwIfAborted();
     const skillInstructionDeliveryCache = createSkillInstructionDeliveryCache();
     const toolsRaw = toolsEnabled
-      ? createOpenClawCodingToolsInternal(
+      ? await createOpenClawCodingToolsInternalAsync(
           {
             ...conversationContext,
             authProfileStoreSource,

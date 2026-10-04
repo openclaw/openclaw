@@ -55,38 +55,40 @@ vi.mock("../server-plugin-in-process-dispatch.js", () => ({
 }));
 
 // Prepare the tool surface before case deadlines; execution resolves the current Gateway context.
-const promptUpdateCases = (
-  [
-    { channel: "slack", supervisor: "launchd" },
-    { channel: "discord", supervisor: null },
-  ] as const
-).map(({ channel, supervisor }) => {
-  const config: OpenClawConfig = {
-    plugins: { enabled: false },
-    tools: { profile: "coding" },
-    commands: { ownerAllowFrom: [`${channel}:owner`] },
-  };
-  const { tools } = resolveGatewayScopedTools({
-    cfg: config,
-    sessionKey: `agent:main:${channel}:dm:owner`,
-    messageProvider: channel,
-    accountId: "primary",
-    agentTo: "owner",
-    senderIsOwner: true,
-    channelContext: { sender: { id: "owner" } },
-    surface: "loopback",
-  });
-  return {
-    channel,
-    supervisor,
-    config,
-    toolNames: tools.map((candidate) => candidate.name),
-    tool: expectDefined(
-      tools.find((candidate) => candidate.name === "gateway"),
-      "Gateway-scoped update tool",
-    ),
-  };
-});
+const promptUpdateCases = await Promise.all(
+  (
+    [
+      { channel: "slack", supervisor: "launchd" },
+      { channel: "discord", supervisor: null },
+    ] as const
+  ).map(async ({ channel, supervisor }) => {
+    const config: OpenClawConfig = {
+      plugins: { enabled: false },
+      tools: { profile: "coding" },
+      commands: { ownerAllowFrom: [`${channel}:owner`] },
+    };
+    const { tools } = await resolveGatewayScopedTools({
+      cfg: config,
+      sessionKey: `agent:main:${channel}:dm:owner`,
+      messageProvider: channel,
+      accountId: "primary",
+      agentTo: "owner",
+      senderIsOwner: true,
+      channelContext: { sender: { id: "owner" } },
+      surface: "loopback",
+    });
+    return {
+      channel,
+      supervisor,
+      config,
+      toolNames: tools.map((candidate) => candidate.name),
+      tool: expectDefined(
+        tools.find((candidate) => candidate.name === "gateway"),
+        "Gateway-scoped update tool",
+      ),
+    };
+  }),
+);
 
 describe("update.run current owner authority", () => {
   let config: OpenClawConfig;

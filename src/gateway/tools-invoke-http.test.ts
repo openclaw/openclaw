@@ -97,8 +97,7 @@ vi.mock("../plugins/config-state.js", async (importOriginal) => {
   };
 });
 
-// Perf: the real tool factory instantiates many tools per request; for these HTTP
-// routing/policy tests we only need a small set of tool names.
+// mock-isolation: Exercise invocation policy without loading unrelated tool implementations.
 vi.mock("../agents/openclaw-tools.js", async () => {
   const { createTerminalTool } = await import("../agents/tools/terminal-tool.js");
   const { createUploadToolFixtures, createClientUploadToolFixture } =
@@ -223,7 +222,7 @@ vi.mock("../agents/openclaw-tools.js", async () => {
   ];
 
   return {
-    createOpenClawTools: (ctx: OpenClawToolsOptions) => {
+    createOpenClawToolsAsync: async (ctx: OpenClawToolsOptions) => {
       lastCreateOpenClawToolsContext = ctx;
       const selected = ctx.disablePluginTools
         ? tools.filter((tool) => tool.name !== "browser")
