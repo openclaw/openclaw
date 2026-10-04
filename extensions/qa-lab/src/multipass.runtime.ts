@@ -189,7 +189,9 @@ function createQaMultipassPlan(params: {
       ? liveProviderConfig.path
       : undefined;
   const vmName = `openclaw-qa-${createQaArtifactRunId()}`;
-  const guestOutputDir = resolveMountedOutputPath(params.repoRoot, outputDir);
+  const guestMountedOutputDir = resolveMountedOutputPath(params.repoRoot, outputDir);
+  const relativeOutputDir = path.posix.relative(MULTIPASS_MOUNTED_REPO_PATH, guestMountedOutputDir);
+  const guestOutputDir = path.posix.join(MULTIPASS_GUEST_REPO_PATH, relativeOutputDir);
   const qaCommand = [
     "pnpm",
     "openclaw",
@@ -200,7 +202,7 @@ function createQaMultipassPlan(params: {
     "--provider-mode",
     providerMode,
     "--output-dir",
-    guestOutputDir,
+    relativeOutputDir,
     ...(params.primaryModel ? ["--model", params.primaryModel] : []),
     ...(params.alternateModel ? ["--alt-model", params.alternateModel] : []),
     ...(params.fastMode ? ["--fast"] : []),
@@ -240,6 +242,7 @@ function createQaMultipassPlan(params: {
       : undefined,
     guestMountedRepoPath: MULTIPASS_MOUNTED_REPO_PATH,
     guestRepoPath: MULTIPASS_GUEST_REPO_PATH,
+    guestMountedOutputDir,
     guestOutputDir,
     guestScriptPath: `/tmp/${vmName}-qa-suite.sh`,
     guestBootstrapLogPath: `/tmp/${vmName}-bootstrap.log`,
@@ -352,11 +355,13 @@ function renderQaMultipassGuestScript(
     `mkdir -p ${shellQuote(path.posix.dirname(plan.guestRepoPath))}`,
     `rm -rf ${shellQuote(plan.guestRepoPath)}`,
     `mkdir -p ${shellQuote(plan.guestRepoPath)}`,
-    `mkdir -p ${shellQuote(plan.guestOutputDir)}`,
     rsyncCommand,
     `cd ${shellQuote(plan.guestRepoPath)}`,
     'pnpm install --frozen-lockfile >>"$BOOTSTRAP_LOG" 2>&1',
     'pnpm build >>"$BOOTSTRAP_LOG" 2>&1',
+    `mkdir -p ${shellQuote(plan.guestOutputDir)}`,
+    // Bind after building so dependency installation and compilation stay guest-local.
+    `sudo mount --bind ${shellQuote(plan.guestMountedOutputDir)} ${shellQuote(plan.guestOutputDir)}`,
     qaCommand,
     "",
   ];
