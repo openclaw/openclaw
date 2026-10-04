@@ -691,103 +691,80 @@ describe("OpenClaw shell deleted-session recovery", () => {
     expect(toast.querySelectorAll(".app-toast")).toHaveLength(1);
   });
 
-  it("replaces an unresolvable session with the owning agent's main chat", () => {
-    const { replace, setSessionKey, shell } = createSessionRecoveryShell({
+  it.each([
+    {
+      name: "unresolvable session",
       activeSessionKey: deletedKey,
       sessionKeys: [mainKey],
-    });
-
-    shell.recoverNotFoundRoute();
-
-    expect(setSessionKey).toHaveBeenCalledExactlyOnceWith(mainKey);
-    expect(replace).toHaveBeenCalledExactlyOnceWith("chat", { pathname: "/chat/main" });
-  });
-
-  it("preserves the owning non-default agent when its session is deleted", () => {
-    const researchKey = "agent:research:main";
-    const { replace, setSessionKey, shell } = createSessionRecoveryShell({
+      selected: mainKey,
+      pathname: "/chat/main",
+    },
+    {
+      name: "non-default owner",
       activeSessionKey: "agent:research:deleted-thread",
       agentIds: ["main", "research"],
-      sessionKeys: [mainKey, researchKey],
-    });
-
-    shell.recoverNotFoundRoute();
-
-    expect(setSessionKey).toHaveBeenCalledExactlyOnceWith(researchKey);
-    expect(replace).toHaveBeenCalledExactlyOnceWith("chat", { pathname: "/chat/research" });
-  });
-
-  it("recovers to a known agent when the deleted session's owner was removed", () => {
-    const { replace, setSessionKey, shell } = createSessionRecoveryShell({
+      sessionKeys: [mainKey, "agent:research:main"],
+      selected: "agent:research:main",
+      pathname: "/chat/research",
+    },
+    {
+      name: "removed owner",
       activeSessionKey: "agent:retired:deleted-thread",
       agentIds: ["main"],
       sessionKeys: [mainKey],
-    });
-
-    shell.recoverNotFoundRoute();
-
-    expect(setSessionKey).toHaveBeenCalledExactlyOnceWith(mainKey);
-    expect(replace).toHaveBeenCalledExactlyOnceWith("chat", { pathname: "/chat/main" });
-  });
-
-  it("does not replace a main route with the same deleted main session", () => {
-    const { replace, setSessionKey, shell } = createSessionRecoveryShell({
+      selected: mainKey,
+      pathname: "/chat/main",
+    },
+    {
+      name: "deleted main route",
       activeSessionKey: mainKey,
       deletedSessionKeys: [mainKey],
       sessionKeys: [mainKey],
-    });
-
-    shell.recoverNotFoundRoute();
-
-    expect(setSessionKey).not.toHaveBeenCalled();
-    expect(replace).not.toHaveBeenCalled();
-  });
-
-  it("keeps a resolvable active session when a different chat route is not found", () => {
-    const existingKey = "agent:main:existing-thread";
-    const { replace, setSessionKey, shell } = createSessionRecoveryShell({
-      activeSessionKey: existingKey,
-      sessionKeys: [existingKey],
-    });
-
-    shell.recoverNotFoundRoute();
-
-    expect(setSessionKey).not.toHaveBeenCalled();
-    expect(replace).toHaveBeenCalledExactlyOnceWith("chat", {
+      selected: null,
+      pathname: null,
+    },
+    {
+      name: "resolvable active session",
+      activeSessionKey: "agent:main:existing-thread",
+      sessionKeys: ["agent:main:existing-thread"],
+      selected: null,
       pathname: "/chat/main/existing-thread",
-    });
-  });
-
-  it("keeps an active session outside the filtered list when another route fails", () => {
-    const existingKey = "agent:main:outside-window";
-    const { replace, setSessionKey, shell } = createSessionRecoveryShell({
-      activeSessionKey: existingKey,
+    },
+    {
+      name: "active session outside the list",
+      activeSessionKey: "agent:main:outside-window",
       sessionKeys: [mainKey],
-    });
-    shell.routeState = {
-      routeId: "chat",
-      location: { pathname: "/chat/main/unrelated-missing", search: "", hash: "" },
-    };
-
-    shell.recoverNotFoundRoute();
-
-    expect(setSessionKey).not.toHaveBeenCalled();
-    expect(replace).toHaveBeenCalledExactlyOnceWith("chat", {
+      attemptedPath: "/chat/main/unrelated-missing",
+      selected: null,
       pathname: "/chat/main/outside-window",
-    });
-  });
-
-  it("honors a deleted session event before its stale cached row is refreshed", () => {
-    const { replace, setSessionKey, shell } = createSessionRecoveryShell({
+    },
+    {
+      name: "deleted event before roster refresh",
       activeSessionKey: deletedKey,
       deletedSessionKeys: [deletedKey],
       sessionKeys: [deletedKey, mainKey],
-    });
-
+      selected: mainKey,
+      pathname: "/chat/main",
+    },
+  ])("recovers a failed route with a $name", (scenario) => {
+    const { replace, setSessionKey, shell } = createSessionRecoveryShell(scenario);
+    if (scenario.attemptedPath) {
+      shell.routeState = {
+        routeId: "chat",
+        location: { pathname: scenario.attemptedPath, search: "", hash: "" },
+      };
+    }
     shell.recoverNotFoundRoute();
-
-    expect(setSessionKey).toHaveBeenCalledExactlyOnceWith(mainKey);
-    expect(replace).toHaveBeenCalledExactlyOnceWith("chat", { pathname: "/chat/main" });
+    if (scenario.selected) {
+      expect(setSessionKey).toHaveBeenCalledExactlyOnceWith(scenario.selected);
+    } else {
+      expect(setSessionKey).not.toHaveBeenCalled();
+    }
+    if (scenario.pathname) {
+      expect(replace).toHaveBeenCalledExactlyOnceWith("chat", { pathname: scenario.pathname });
+    } else {
+      expect(replace).not.toHaveBeenCalled();
+    }
   });
 
   it("rejects a late route commit for a session already marked deleted", () => {

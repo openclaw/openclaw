@@ -40,7 +40,7 @@ export type PreparedNativeSessionRuntime = {
 function prepareNativeSessionRuntime(
   runParams: RunEmbeddedAgentInternalParams,
   harness: AgentHarness,
-  admission: ReturnType<typeof assertAgentHarnessRunAdmission>,
+  admission: Awaited<ReturnType<typeof assertAgentHarnessRunAdmission>>,
 ): PreparedNativeSessionRuntime | undefined {
   const pinnedHarnessId = resolveSessionPinnedHarnessId(admission?.entry);
   if (!admission || !pinnedHarnessId || !harness.resolveSessionRuntimeOwnership) {
@@ -121,7 +121,7 @@ function prepareNativeSessionRuntime(
 export async function resolveEmbeddedRunModelSetup(params: {
   assertCurrent: () => void;
   runParams: RunEmbeddedAgentInternalParams;
-  sessionAdmission?: ReturnType<typeof assertAgentHarnessRunAdmission>;
+  sessionAdmission?: Awaited<ReturnType<typeof assertAgentHarnessRunAdmission>>;
   provider: string;
   modelId: string;
   agentDir: string;

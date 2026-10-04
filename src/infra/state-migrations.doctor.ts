@@ -1679,7 +1679,7 @@ export async function planLegacyStateMigrationsReadOnly(params: {
   const oauthDirOutsideSnapshot =
     callerOAuthDir !== undefined && !isPathInside(requestedSnapshot.stateDir, callerOAuthDir);
   const pendingStateDirMigration = resolvePendingLegacyStateDirMigrationPaths({
-    env: callerEnv,
+    env: params.env,
     homedir: () => requestedSnapshot.homeDir,
   });
   // This exported boundary authorizes the paths recorded in the plan. Capture

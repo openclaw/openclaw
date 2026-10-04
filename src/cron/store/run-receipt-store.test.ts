@@ -12,7 +12,7 @@ import { recordAgentDatabaseAdmissions } from "../../state/agent-database-admiss
 import { StateDatabaseReadAdmissionInvalidatedError } from "../../state/openclaw-state-db-async-lifecycle.js";
 import {
   closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseByPath,
+  closeOpenClawStateDatabaseByPathAsync,
 } from "../../state/openclaw-state-db-cache.js";
 import {
   openOpenClawStateDatabase,
@@ -631,7 +631,7 @@ describe("cron run receipt store", () => {
           // Preserve the receipt rows while restoring the pre-feature database shape.
           database.db.exec("DROP TABLE IF EXISTS cron_run_trigger_state_retirements");
         }
-        closeOpenClawStateDatabaseByPath(database.path);
+        await closeOpenClawStateDatabaseByPathAsync(database.path);
         database = openOpenClawStateDatabase();
         const previousTable =
           storage === "present" ? { name: "cron_run_trigger_state_retirements" } : undefined;
@@ -671,7 +671,7 @@ describe("cron run receipt store", () => {
             .get(untouchedReceipt.receiptId),
         ).toBeUndefined();
 
-        closeOpenClawStateDatabaseByPath(database.path);
+        await closeOpenClawStateDatabaseByPathAsync(database.path);
         database = openOpenClawStateDatabase();
         expect(readRetirements()).toEqual({ edited: true, untouched: false });
         expect(

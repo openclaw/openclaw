@@ -8,6 +8,7 @@ import {
   registerOpenClawStateDatabaseAsyncResource,
 } from "../../../state/openclaw-state-db-cache.js";
 import { withOpenClawStateDatabaseReadSnapshot } from "../../../state/openclaw-state-db-readonly.js";
+import * as stateReads from "../../../state/openclaw-state-db-readonly.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../../state/openclaw-state-db.generated.js";
 import { openOpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
@@ -398,6 +399,39 @@ it.each(["malformed payload", "duplicate identity", "topology", "unrelated row"]
     });
   },
 );
+
+it("returns revoked maintenance facts without rereading during publication churn", async () => {
+  await withPersistedReads(async () => {
+    const entry = retainedRun();
+    saveSubagentRegistryToSqlite(new Map([[entry.runId, entry]]));
+    const read = stateReads.executeExistingOpenClawStateRead;
+    let publications = 0;
+    const reads = vi
+      .spyOn(stateReads, "executeExistingOpenClawStateRead")
+      .mockImplementation(async (...args) => {
+        const reply = await read(...args);
+        if (publications < 3) {
+          publications += 1;
+          persistRegistryFixture(
+            new Map([[entry.runId, { ...entry, cleanupCompletedAt: publications }]]),
+            [entry.runId],
+          );
+        }
+        return reply;
+      });
+    try {
+      const prepared = await prepareSubagentMaintenanceRunsSnapshotForRead(new Map());
+      try {
+        expect(() => prepared.capture()).toThrow("maintenance facts changed");
+        expect(reads).toHaveBeenCalledTimes(1);
+      } finally {
+        prepared.dispose();
+      }
+    } finally {
+      reads.mockRestore();
+    }
+  });
+});
 
 it.each(["named", "full"] as const)(
   "keeps prepared maintenance facts across payload-only %s publication and refuses changed protection",

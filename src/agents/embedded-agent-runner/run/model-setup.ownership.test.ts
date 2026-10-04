@@ -123,14 +123,14 @@ async function createFixture(
         }),
   };
   await replaceSessionEntry(target, entry);
-  const resolve = (
+  const resolve = async (
     assertCurrent = () => {},
     preparedModelRuntime: PreparedModelRuntimeSnapshot = generation.preparedModelRuntime,
   ) =>
     resolveEmbeddedRunModelSetup({
       assertCurrent,
       runParams,
-      sessionAdmission: assertAgentHarnessRunAdmission(runParams),
+      sessionAdmission: await assertAgentHarnessRunAdmission(runParams),
       provider: generation.provider,
       modelId: generation.modelId,
       agentDir: generation.preparedModelRuntime.agentDir,
@@ -163,7 +163,7 @@ async function createFixture(
       runtime = await prepareEmbeddedRunRuntime({
         assertCurrent: () => {},
         runParams: { ...actualParams, preparedRunAdmission: admission },
-        sessionAdmission: assertAgentHarnessRunAdmission(actualParams),
+        sessionAdmission: await assertAgentHarnessRunAdmission(actualParams),
         provider: actualParams.provider ?? generation.provider,
         modelId: actualParams.model ?? generation.modelId,
         agentDir: generation.preparedModelRuntime.agentDir,

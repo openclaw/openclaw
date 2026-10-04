@@ -87,86 +87,74 @@ describe("chat history run ownership recovery", () => {
   );
 
   it.each([
-    { name: "still includes the local run", row: { activeRunIds: ["run-owned", "run-history"] } },
-    { name: "omits exact active identities", row: { activeRunIds: undefined } },
-    { name: "belongs to a replacement session", row: { sessionId: "different-session" } },
-  ])("retains local ownership when history $name", async ({ row }) => {
-    const history = activeHistory("run-history");
-    history.sessionInfo = { ...history.sessionInfo!, sessionId: "same-session", ...row };
-    const state = createState(history);
-    state.currentSessionId = "same-session";
-    adoptStartedChatRun(state, "run-owned", 1);
-    state.chatStream = "Still locally owned.";
-
-    await loadChatHistory(state);
-
-    expect(state.chatRunId).toBe("run-owned");
-    expect(state.chatStream).toBe("Still locally owned.");
-  });
-
-  it.each(["live delta", "lifecycle restart", "pending send"] as const)(
-    "does not replace an owned run after a %s while history is pending",
-    async (change) => {
-      const history = activeHistory("run-history");
-      history.sessionInfo!.sessionId = "same-session";
-      const pending = createDeferred<ChatHistoryResult>();
-      const request = vi.fn().mockReturnValue(pending.promise);
-      const state = createState(history);
-      state.client = { request } as unknown as GatewayBrowserClient;
-      state.currentSessionId = "same-session";
-      adoptStartedChatRun(state, "run-owned", 1);
-      const loading = loadChatHistory(state);
-      expect(request).toHaveBeenCalledOnce();
-      if (change === "lifecycle restart") {
-        reconcileChatRunLifecycle(state, { clearLocalRun: true, requestUpdate: false });
-        adoptStartedChatRun(state, "run-owned", 2);
-      } else if (change === "pending send") {
-        state.chatQueue.push({
-          id: "pending",
-          text: "Newer request",
-          createdAt: 2,
-          sendState: "sending",
-          sendRunId: "run-pending",
-        });
-      } else {
-        handleChatGatewayEvent(state, {
-          sessionKey: "main",
-          runId: "run-owned",
-          state: "delta",
-          message: { role: "assistant", content: "Newer live response." },
-        });
-      }
-      const stream = state.chatStream;
-      pending.resolve(history);
-      await loading;
-
-      expect(state.chatRunId).toBe("run-owned");
-      expect(state.chatStream).toBe(stream);
-    },
-  );
-
-  it("does not replace a late consumer's run with history issued for another pane", async () => {
+    "active local run",
+    "unknown active identities",
+    "replacement session",
+    "live delta",
+    "lifecycle restart",
+    "pending send",
+    "late consumer",
+  ] as const)("retains local ownership across %s", async (change) => {
     const history = activeHistory("run-history");
     history.sessionInfo!.sessionId = "same-session";
+    if (change === "active local run") {
+      history.sessionInfo!.activeRunIds = ["run-owned", "run-history"];
+    } else if (change === "unknown active identities") {
+      history.sessionInfo!.activeRunIds = undefined;
+    } else if (change === "replacement session") {
+      history.sessionInfo!.sessionId = "different-session";
+    }
     const pending = createDeferred<ChatHistoryResult>();
     const request = vi.fn().mockReturnValue(pending.promise);
-    const first = createState(history);
-    first.client = { request } as unknown as GatewayBrowserClient;
-    first.currentSessionId = "same-session";
-    adoptStartedChatRun(first, "run-owned", 1);
-    const second = createState(history);
-    second.client = first.client;
-    second.sessions = first.sessions;
-    second.currentSessionId = "same-session";
-    adoptStartedChatRun(second, "run-owned", 1);
-
-    const firstLoad = loadChatHistory(first);
-    const secondLoad = loadChatHistory(second);
+    const state = createState(history);
+    state.client = { request } as unknown as GatewayBrowserClient;
+    state.currentSessionId = "same-session";
+    adoptStartedChatRun(state, "run-owned", 1);
+    const snapshotOnly = [
+      "active local run",
+      "unknown active identities",
+      "replacement session",
+    ].includes(change);
+    if (snapshotOnly) {
+      state.chatStream = "Still locally owned.";
+    }
+    const first = change === "late consumer" ? createState(history) : state;
+    if (first !== state) {
+      first.client = state.client;
+      first.sessions = state.sessions;
+      first.currentSessionId = "same-session";
+      adoptStartedChatRun(first, "run-owned", 1);
+    }
+    const firstLoad = first !== state ? loadChatHistory(first) : undefined;
+    const loading = loadChatHistory(state);
     expect(request).toHaveBeenCalledOnce();
+    if (change === "lifecycle restart") {
+      reconcileChatRunLifecycle(state, { clearLocalRun: true, requestUpdate: false });
+      adoptStartedChatRun(state, "run-owned", 2);
+    } else if (change === "pending send") {
+      state.chatQueue.push({
+        id: "pending",
+        text: "Newer request",
+        createdAt: 2,
+        sendState: "sending",
+        sendRunId: "run-pending",
+      });
+    } else if (change === "live delta") {
+      handleChatGatewayEvent(state, {
+        sessionKey: "main",
+        runId: "run-owned",
+        state: "delta",
+        message: { role: "assistant", content: "Newer live response." },
+      });
+    }
+    const stream = state.chatStream;
     pending.resolve(history);
-    await Promise.all([firstLoad, secondLoad]);
+    await Promise.all([firstLoad, loading]);
 
-    expect(first.chatRunId).toBe("run-history");
-    expect(second.chatRunId).toBe("run-owned");
+    expect(state.chatRunId).toBe("run-owned");
+    expect(state.chatStream).toBe(snapshotOnly ? "Still locally owned." : stream);
+    if (first !== state) {
+      expect(first.chatRunId).toBe("run-history");
+    }
   });
 });

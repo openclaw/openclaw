@@ -4,3 +4,10 @@ export class SqliteSessionMutationConflictError extends Error {
     this.name = "SqliteSessionMutationConflictError";
   }
 }
+
+export class SessionEntryLifecycleUpsertConflictError extends Error {
+  constructor(readonly sessionKey: string) {
+    super(`SQLite session entry changed before lifecycle upsert for ${sessionKey}`);
+    this.name = "SessionEntryLifecycleUpsertConflictError";
+  }
+}

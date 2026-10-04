@@ -40,14 +40,21 @@ vi.mock("../../infra/sqlite-worker-operation-admission.js", async (importOrigina
     ...actual,
     createSqliteWorkerOperationAdmission: (
       ...args: Parameters<typeof actual.createSqliteWorkerOperationAdmission>
-    ) =>
-      new Proxy(actual.createSqliteWorkerOperationAdmission(...args), {
-        get(target, key, receiver) {
-          return resultDelivery.hideReceipt && (key === "committed" || key === "settlement")
-            ? undefined
-            : Reflect.get(target, key, receiver);
-        },
-      }),
+    ) => {
+      const admission = actual.createSqliteWorkerOperationAdmission(...args);
+      const descriptors = Object.getOwnPropertyDescriptors(admission);
+      const readCommitted = expectDefined(descriptors.committed.get, "commit getter");
+      const readSettlement = expectDefined(descriptors.settlement.get, "settlement getter");
+      const committed = vi.spyOn(admission, "committed", "get");
+      committed.mockImplementation(() =>
+        resultDelivery.hideReceipt ? undefined : readCommitted.call(admission),
+      );
+      const settlement = vi.spyOn(admission, "settlement", "get");
+      settlement.mockImplementation(() =>
+        resultDelivery.hideReceipt ? undefined : readSettlement.call(admission),
+      );
+      return admission;
+    },
   };
 });
 vi.mock("../../state/openclaw-state-worker-store.js", async (importOriginal) => {

@@ -12,7 +12,7 @@ import { FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE } from "../../bootstrap-files.js";
 import { isHeartbeatLifecycleRunKind } from "../../bootstrap-mode.js";
 import { countActiveToolExecutions } from "../../embedded-agent-subscribe.handlers.tools.js";
 import { isSignalTimeoutReason } from "../../failover-error.js";
-import { runAgentEndSideEffects } from "../../harness/agent-end-side-effects.js";
+import { runAgentEndSideEffectsAsync } from "../../harness/agent-end-side-effects.js";
 import { finalizeHarnessContextEngineTurn } from "../../harness/context-engine-lifecycle.js";
 import { bindAgentHarnessHookMessages } from "../../harness/lifecycle-hook-messages.js";
 import type { AgentSession, SessionMessageEntry } from "../../sessions/index.js";
@@ -315,7 +315,7 @@ export async function completeEmbeddedAttemptAfterTurn(
       entry = entry.parentId ? sessionManager.getEntry(entry.parentId) : undefined;
     }
     const reachedPromptBoundary = transcriptLeafId === null || entry?.id === transcriptLeafId;
-    runAgentEndSideEffects({
+    await runAgentEndSideEffectsAsync({
       skillExperienceReviewSource:
         sourceTarget && terminalEntry && reachedPromptBoundary
           ? { ...sourceTarget, entryId: terminalEntry.id }

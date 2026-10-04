@@ -5,6 +5,7 @@ import {
   readActiveTranscriptEntryAnchor,
   rewriteTranscriptMessageAtAnchor,
 } from "../../config/sessions/session-accessor.js";
+import { readActiveTranscriptEntryAnchorAsync } from "../../config/sessions/session-transcript-anchor-read.js";
 import {
   captureOwnedTranscriptWriteAssertion,
   runWithOwnedSessionTranscriptWrite,
@@ -134,13 +135,15 @@ export function observeChatSendCommentaryMedia(params: {
       previous
         .then(async () => {
           assertCurrent();
-          let anchor = readActiveTranscriptEntryAnchor({ ...scope, entryId: messageId });
+          let anchor = await readActiveTranscriptEntryAnchorAsync({ ...scope, entryId: messageId });
+          assertCurrent();
           if (!anchor) {
             const { waitForSessionTranscriptProjection } =
               await import("../../config/sessions/session-transcript-reconcile.js");
             await waitForSessionTranscriptProjection(scope, params.abortSignal);
             assertCurrent();
-            anchor = readActiveTranscriptEntryAnchor({ ...scope, entryId: messageId });
+            anchor = await readActiveTranscriptEntryAnchorAsync({ ...scope, entryId: messageId });
+            assertCurrent();
           }
           if (!anchor) {
             return;

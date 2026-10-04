@@ -28,7 +28,7 @@ export type PreparedRepositoryPublicationSnapshot = {
 export async function prepareRepositoryOwner(session: PublicationSessionIdentity) {
   const current = await prepareGitHubPublicationWorkspaceOwner(session);
   return () => {
-    const owner = current();
+    const owner = current.current();
     if (owner.kind !== "repository") {
       throw new Error("GitHub publication repository owner changed.");
     }
