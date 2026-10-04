@@ -47,6 +47,8 @@ export class RealtimeAudioPacer {
   private streamClockMs: number | null = null;
   private playbackSegments: RealtimePlaybackSegment[] = [];
   private sentAudioMs = 0;
+  /** Wall-clock time (Date.now) at which the last sent frame finishes playing on the line. */
+  private playoutEndsAt = 0;
   private retiredAudioMs = 0;
   private confirmedPlayedMs = 0;
   private readonly playbackMarkPrefix = `openclaw-playout-${randomUUID()}`;
@@ -184,6 +186,15 @@ export class RealtimeAudioPacer {
     return clearedAudioBytes;
   }
 
+  /**
+   * Wall-clock time (Date.now) at which audio already sent to the carrier finishes playing.
+   * Sent audio keeps playing after the queue drains: up to the pacing lead, or a whole chunk
+   * when the carrier is handed audio faster than real time.
+   */
+  getPlayoutEndsAt(): number {
+    return this.playoutEndsAt;
+  }
+
   /** True while queued audio or a paced send timer can still reach the telephony stream. */
   hasPendingAudio(): boolean {
     return !this.closed && (this.queuedAudioBytes > 0 || this.timer !== null);
@@ -213,6 +224,8 @@ export class RealtimeAudioPacer {
   }
 
   private resetPlaybackState(): void {
+    // A clear stops carrier playout now; a close ends the stream.
+    this.playoutEndsAt = Math.min(this.playoutEndsAt, Date.now());
     this.playbackSegments = [];
     this.queuedAudioBytes = 0;
     this.sentAudioMs = 0;
@@ -316,6 +329,12 @@ export class RealtimeAudioPacer {
       item.segment.lastSentEndMs = this.sentAudioMs;
     }
     this.streamClockMs = (this.streamClockMs ?? performance.now()) + item.durationMs;
+    if (sent) {
+      // The stream clock restarts whenever the local queue drains, but the carrier keeps
+      // playing what it was already handed. Accumulate on the wall clock so rapid short
+      // bursts retain their backlog; an elapsed deadline re-anchors to now after real idle.
+      this.playoutEndsAt = Math.max(Date.now(), this.playoutEndsAt) + item.durationMs;
+    }
     if (
       !sent ||
       item.segment.itemId === undefined ||

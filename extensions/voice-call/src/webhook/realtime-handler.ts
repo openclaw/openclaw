@@ -62,6 +62,10 @@ const MAX_REALTIME_MESSAGE_BYTES = 256 * 1024;
 const MAX_REALTIME_WS_BUFFERED_BYTES = 1024 * 1024;
 const REALTIME_MEDIA_INACTIVITY_TIMEOUT_MS = 30_000;
 const REALTIME_DISCONNECT_HANGUP_GRACE_MS = 2_000;
+// Assistant audio leaks back through the line and looks like caller speech to the local RMS gate,
+// so the gate is masked until paced playout has finished plus this tail. The tail runs from the
+// end of carrier playout, not from when the provider handed us the audio.
+const ASSISTANT_SPEECH_TAIL_MS = 400;
 const FORCED_CONSULT_FALLBACK_DELAY_MS = 200;
 const FORCED_CONSULT_NATIVE_DEDUPE_MS = 2_000;
 const FORCED_CONSULT_RESULT_MAX_CHARS = 1800;
@@ -920,6 +924,9 @@ export class RealtimeCallHandler {
     const nativeConsultOwner: { current?: ActiveRealtimeVoiceBridge } = {};
     let provisionalCloseReason: RealtimeVoiceCloseReason | undefined;
     let sessionClosed = false;
+    const isAssistantAudioActive = () =>
+      audioPacer.hasPendingAudio() ||
+      Date.now() < audioPacer.getPlayoutEndsAt() + ASSISTANT_SPEECH_TAIL_MS;
     // Provisional ownership accepts callbacks fired during createBridge. Commit
     // retires the predecessor only after creation succeeds; failure restores it.
     const userTranscriptAdoption = this.beginUserTranscriptOwnerAdoption(callId);
@@ -1054,6 +1061,9 @@ export class RealtimeCallHandler {
           return;
         }
         const turnId = harness.ensureTurn();
+        // Provider transcripts are emitted and persisted as delivered, even while our own audio is
+        // on the line. The provider owns barge-in and transcription; the host cannot reliably tell
+        // echo text from caller text at the media frame, so it must not drop committed turns.
         const eventType =
           role === "assistant"
             ? isFinal
@@ -1340,7 +1350,11 @@ export class RealtimeCallHandler {
       if (sessionClosed) {
         return;
       }
-      if (speechDetector.accept({ rms: calculateMulawRms(audio), peak: 0 })) {
+      // Echo of our own playback is indistinguishable from the caller by level alone, so the local
+      // gate hears silence while assistant audio is on the line; the provider's own barge-in still
+      // sees the audio forwarded below.
+      const inputRms = isAssistantAudioActive() ? 0 : calculateMulawRms(audio);
+      if (speechDetector.accept({ rms: inputRms, peak: 0 })) {
         console.log(
           `[voice-call] realtime local speech detected callId=${callId} providerCallId=${callSid}`,
         );

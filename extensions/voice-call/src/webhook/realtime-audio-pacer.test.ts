@@ -347,6 +347,29 @@ describe("RealtimeAudioPacer playout state", () => {
     expect(pacer.getPlaybackState()).toEqual([]);
   });
 
+  it("retains the carrier backlog in the playout deadline across rapid short bursts", async () => {
+    const { pacer, sent } = createPlaybackPacer();
+    const startedAt = Date.now();
+
+    // Each one-frame send drains the local queue synchronously, restarting the pacing clock.
+    for (let index = 0; index < 50; index += 1) {
+      pacer.sendAudio(createSequencedAudio(1));
+    }
+
+    expect(sent).toHaveLength(50);
+    expect(pacer.hasPendingAudio()).toBe(false);
+    expect(pacer.getPlayoutEndsAt()).toBe(startedAt + 1000);
+
+    // After the projected playout has elapsed, the deadline re-anchors to the next send.
+    await vi.advanceTimersByTimeAsync(1500);
+    pacer.sendAudio(createSequencedAudio(1));
+    expect(pacer.getPlayoutEndsAt()).toBe(startedAt + 1520);
+
+    pacer.sendAudio(createSequencedAudio(10));
+    pacer.clearAudio();
+    expect(pacer.getPlayoutEndsAt()).toBe(Date.now());
+  });
+
   it("keeps the drained carrier lead unconfirmed until its played mark arrives", async () => {
     const { pacer, sent } = createPlaybackPacer();
 

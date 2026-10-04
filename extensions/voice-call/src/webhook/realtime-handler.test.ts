@@ -762,27 +762,48 @@ describe("RealtimeCallHandler path routing", () => {
     expect(markAcknowledged).toBe(false);
   });
 
-  it("lets a session bridge override provider-level barge-in capabilities", async () => {
+  it("lets a session bridge override provider-level barge-in capabilities once playout ends", async () => {
     const { callbacks, call, handleBargeIn, outboundMessages, sendAudio, ws } =
       await bargeInHarness({
         bridgeHandlesInputAudioBargeIn: false,
         handlesProviderBargeIn: true,
         providerCallId: "CA-bridge-local-barge-in",
       });
-    callbacks?.onAudio?.(Buffer.from([1, 2, 3]));
-    for (let i = 0; i < 4; i += 1) {
-      sendMedia(ws, Buffer.alloc(160, 0x00));
-    }
+    const sendLoudFrames = () => {
+      for (let i = 0; i < 4; i += 1) {
+        sendMedia(ws, Buffer.alloc(160, 0x00));
+      }
+    };
+    // Only the wall clock is faked: it ends the assistant playout window without real sleeps.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      callbacks?.onAudio?.(Buffer.from([1, 2, 3]));
+      await expectFrame(outboundMessages, "media");
 
-    await waitForRealtimeTest(() => {
-      expect(sendAudio).toHaveBeenCalledTimes(4);
-      expect(requireCancelledTurn(call).turnId).toMatch(/^turn-\d+$/);
-      expect(outboundMessages.some((message) => message.event === "clear")).toBe(true);
-    });
+      // Loud frames while assistant audio plays out may be echo: the local gate is masked.
+      sendLoudFrames();
+      await waitForRealtimeTest(() => expect(sendAudio).toHaveBeenCalledTimes(4));
+      expect(handleBargeIn).not.toHaveBeenCalled();
+      expect(outboundMessages.some((message) => message.event === "clear")).toBe(false);
+
+      // The bridge override still hands barge-in to the local gate after playout ends.
+      vi.advanceTimersByTime(1_000);
+      sendLoudFrames();
+      await waitForRealtimeTest(() => {
+        expect(sendAudio).toHaveBeenCalledTimes(8);
+        expect(requireCancelledTurn(call).turnId).toMatch(/^turn-\d+$/);
+        expect(outboundMessages.some((message) => message.event === "clear")).toBe(true);
+      });
+    } finally {
+      vi.useRealTimers();
+    }
     expect(handleBargeIn).toHaveBeenCalledWith({ audioPlaybackActive: true });
+    expect(
+      recentTalkEvents(call).findLast((event) => event.type === "output.audio.done")?.turnId,
+    ).toBe(requireCancelledTurn(call).turnId);
   });
 
-  it("clears remote playback after local pacing and output state have finished", async () => {
+  it("clears remote playback after paced playout and output state have finished", async () => {
     const { callbacks, call, handleBargeIn, outboundMessages, ws } = await bargeInHarness({
       providerCallId: "CA-late-local-barge-in",
     });
@@ -793,16 +814,23 @@ describe("RealtimeCallHandler path routing", () => {
       (message) => message.event === "clear",
     ).length;
 
-    for (let i = 0; i < 4; i += 1) {
-      sendMedia(ws, Buffer.alloc(160, 0x00));
-    }
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      // Caller frames arrive after paced playout and its tail, so the local gate hears them.
+      vi.advanceTimersByTime(1_000);
+      for (let i = 0; i < 4; i += 1) {
+        sendMedia(ws, Buffer.alloc(160, 0x00));
+      }
 
-    await waitForRealtimeTest(() => {
-      expect(handleBargeIn).toHaveBeenCalledWith({ audioPlaybackActive: false });
-      expect(outboundMessages.filter((message) => message.event === "clear").length).toBe(
-        clearCountBeforeBargeIn + 1,
-      );
-    });
+      await waitForRealtimeTest(() => {
+        expect(handleBargeIn).toHaveBeenCalledWith({ audioPlaybackActive: false });
+        expect(outboundMessages.filter((message) => message.event === "clear").length).toBe(
+          clearCountBeforeBargeIn + 1,
+        );
+      });
+    } finally {
+      vi.useRealTimers();
+    }
     expect(talkEvents(call, "turn.cancelled")).toHaveLength(0);
   });
 
