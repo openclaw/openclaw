@@ -537,7 +537,10 @@ describe("Scheduled Task stop/restart cleanup", () => {
       spawnSync.mockImplementation((command, args, options) => {
         expect(options?.env).toBeDefined();
         expect(options?.env).not.toHaveProperty("BOUNDARY_PARENT_ONLY");
-        if (args?.includes("-EncodedCommand")) {
+        if (
+          args?.includes("-EncodedCommand") ||
+          (args?.join(" ") ?? "").includes("Schedule.Service")
+        ) {
           return scheduledTaskProbeResult();
         }
         const executable = command.toLowerCase();
