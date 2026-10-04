@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { theme } from "../../packages/terminal-core/src/theme.js";
+import { resolveMemoryPluginStatus } from "../status/memory-plugin.js";
 import type { HealthSummary } from "./health.js";
 import {
   buildStatusHealthRows,
@@ -277,4 +278,22 @@ it("warns when deep health says the retained Node executable is gone", () => {
     Status: "warn(WARN)",
     Detail: `Gateway runtime is stale after Node upgrade: child workers are using ${execPath}, which no longer exists. Restart the Gateway.`,
   });
+});
+
+it.each(["memory-core", "records"])("renders explicitly disabled memory plugin %s", (slot) => {
+  const memoryPlugin = resolveMemoryPluginStatus({
+    plugins: { slots: { memory: slot }, entries: { [slot]: { enabled: false } } },
+  });
+
+  expect(
+    buildStatusMemoryValue({ memory: null, memoryPlugin, memoryUnavailableLabel: "not checked" }),
+  ).toBe(`disabled (plugins.entries.${slot}.enabled=false)`);
+});
+
+it("keeps unprobed selected memory plugins not checked", () => {
+  const memoryPlugin = resolveMemoryPluginStatus({ plugins: { slots: { memory: "records" } } });
+
+  expect(
+    buildStatusMemoryValue({ memory: null, memoryPlugin, memoryUnavailableLabel: "not checked" }),
+  ).toBe("enabled (plugin records) · not checked");
 });

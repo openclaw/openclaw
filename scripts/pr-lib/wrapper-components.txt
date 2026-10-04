@@ -1144,6 +1144,7 @@ src/plugins/compat/watched-sessions.ts
 src/plugins/compat/workspace-mutation-guard.ts
 src/plugins/config-activation-shared.ts
 src/plugins/config-contract-matches.ts
+src/plugins/config-normalization-core.ts
 src/plugins/config-normalization-shared.ts
 src/plugins/config-policy.ts
 src/plugins/config-state.ts

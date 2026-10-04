@@ -1,9 +1,5 @@
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.js";
-import { defaultSlotIdForKey } from "../plugins/slots.js";
+import { normalizePluginsConfigWithResolverCore } from "../plugins/config-normalization-core.js";
 
 export type MemoryPluginStatus = {
   enabled: boolean;
@@ -13,13 +9,16 @@ export type MemoryPluginStatus = {
 
 /** Resolves whether memory status should be shown and which slot owns it. */
 export function resolveMemoryPluginStatus(cfg: OpenClawConfig): MemoryPluginStatus {
-  const pluginsEnabled = cfg.plugins?.enabled !== false;
-  if (!pluginsEnabled) {
+  const plugins = normalizePluginsConfigWithResolverCore(cfg.plugins);
+  if (!plugins.enabled) {
     return { enabled: false, slot: null, reason: "plugins disabled" };
   }
-  const raw = normalizeOptionalString(cfg.plugins?.slots?.memory) ?? "";
-  if (normalizeOptionalLowercaseString(raw) === "none") {
+  const slot = plugins.slots.memory;
+  if (!slot) {
     return { enabled: false, slot: null, reason: 'plugins.slots.memory="none"' };
   }
-  return { enabled: true, slot: raw || defaultSlotIdForKey("memory") };
+  if (plugins.entries[slot]?.enabled === false) {
+    return { enabled: false, slot, reason: `plugins.entries.${slot}.enabled=false` };
+  }
+  return { enabled: true, slot };
 }
