@@ -1,4 +1,5 @@
 import { AGENT_LIST_RUNTIME_PROJECTION_COMPAT_RECORDS } from "./agent-list-runtime-projection-records.js";
+import { CHANNEL_PAIRING_COMPAT_RECORD } from "./channel-pairing-record.js";
 import { DEPRECATION_MARKING_COMPAT_RECORDS } from "./deprecation-marking.js";
 import { MEDIA_LEGACY_PROJECTION_COMPAT_RECORD } from "./media-legacy-projection.js";
 import { MENTION_INBOX_COMPAT_RECORD } from "./mention-inbox-record.js";
@@ -22,6 +23,7 @@ const ACTIVATION_HINT_METADATA = {
 } as const;
 
 export const PLUGIN_COMPAT_RECORDS = [
+  CHANNEL_PAIRING_COMPAT_RECORD,
   MENTION_INBOX_COMPAT_RECORD,
   MODEL_ACCOUNT_CONNECT_COMPAT_RECORD,
   WORKSPACE_MUTATION_GUARD_COMPAT_RECORD,

@@ -17,7 +17,8 @@ import {
 import { createModelAccountConnectService } from "./model-account-connect.js";
 
 const resolveMethod = vi.hoisted(() => vi.fn());
-vi.mock("../plugins/personal-account-auth.js", () => ({
+vi.mock("../plugins/personal-account-auth.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/personal-account-auth.js")>()),
   listPersonalAccountAuthChoices: () => [],
   resolvePersonalAccountAuthMethod: resolveMethod,
 }));

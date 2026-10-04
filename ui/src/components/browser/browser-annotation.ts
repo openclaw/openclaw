@@ -92,30 +92,24 @@ const ANNOTATION_DISPLAY_URL_MAX_LENGTH = 160;
 
 function sanitizePageUrl(value: string): string {
   const normalized = sanitizePageText(value, ANNOTATION_CONTEXT_URL_MAX_LENGTH);
-  try {
-    const parsed = new URL(normalized);
-    if (!parsed.username && !parsed.password) {
-      return normalized;
-    }
-    parsed.username = "";
-    parsed.password = "";
-    return truncateUtf16Safe(parsed.href, ANNOTATION_CONTEXT_URL_MAX_LENGTH);
-  } catch {
+  const parsed = URL.parse(normalized);
+  if (!parsed) {
     const withoutUserInfo = normalized.replace(/^([a-z][a-z\d+.-]*:\/\/)[^/?#\s]*@/i, "$1");
     return truncateUtf16Safe(withoutUserInfo, ANNOTATION_CONTEXT_URL_MAX_LENGTH);
   }
+  if (!parsed.username && !parsed.password) {
+    return normalized;
+  }
+  parsed.username = "";
+  parsed.password = "";
+  return truncateUtf16Safe(parsed.href, ANNOTATION_CONTEXT_URL_MAX_LENGTH);
 }
 
 function annotationDisplayUrl(url: string): string {
-  try {
-    const hostname = new URL(url).hostname;
-    if (hostname) {
-      return sanitizePageText(hostname, ANNOTATION_DISPLAY_URL_MAX_LENGTH);
-    }
-  } catch {
-    // The bounded credential-free URL remains useful for opaque or malformed schemes.
-  }
-  return truncateUtf16Safe(url, ANNOTATION_DISPLAY_URL_MAX_LENGTH);
+  const hostname = URL.parse(url)?.hostname;
+  return hostname
+    ? sanitizePageText(hostname, ANNOTATION_DISPLAY_URL_MAX_LENGTH)
+    : truncateUtf16Safe(url, ANNOTATION_DISPLAY_URL_MAX_LENGTH);
 }
 
 /** Selector fragments (tag/id/class) are page-controlled too: keep only

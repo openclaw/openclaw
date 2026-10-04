@@ -42,39 +42,50 @@ vi.mock("../../state/user-profiles.js", async (importOriginal) => {
     getUserProfileRole: () => null,
   };
 });
-vi.mock("../../state/user-channel-identity-operations.js", () => ({
+vi.mock("../../state/user-channel-identity-operations.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../state/user-channel-identity-operations.js")>()),
   prepareUserProfileSelectionAuthority,
 }));
 vi.mock("../../state/user-profile-events.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../state/user-profile-events.js")>()),
   captureUserProfileModelAccountLinksAuthority: () => modelAccountLinksCurrent,
 }));
-vi.mock("../../state/user-profile-email.js", () => ({
+vi.mock("../../state/user-profile-email.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../state/user-profile-email.js")>()),
   ensureProfileIdForEmail: async () => "profile-1",
 }));
-vi.mock("../../state/openclaw-state-worker-context.js", () => ({
+vi.mock("../../state/openclaw-state-worker-context.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../state/openclaw-state-worker-context.js")>()),
   captureOpenClawStateWorkerContext: () => ({}),
 }));
-vi.mock("../../state/user-model-accounts.js", () => ({ isUserModelAuthProfileOwner }));
-vi.mock("../../state/user-model-account-operations.js", () => ({
+vi.mock("../../state/user-model-accounts.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../state/user-model-accounts.js")>()),
+  isUserModelAuthProfileOwner,
+}));
+vi.mock("../../state/user-model-account-operations.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../state/user-model-account-operations.js")>()),
   connectUserModelAccountAsync: connectUserModelAccount,
   listUserProfileAuthLinksAsync: listUserProfileAuthLinks,
   listUserModelAccountsAsync: listUserModelAccounts,
   readUserModelAccountSummaryAsync: readUserModelAccountSummary,
-  isUserModelAuthProfileOwner,
   readSelectedUserModelAccountAsync: readSelectedUserModelAccount,
   setUserProfileAuthLinkAsync: setUserProfileAuthLink,
   clearUserProfileAuthLinkAsync: clearUserProfileAuthLink,
 }));
-vi.mock("../../agents/auth-profiles/shared-main-dir.js", () => ({
+vi.mock("../../agents/auth-profiles/shared-main-dir.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/auth-profiles/shared-main-dir.js")>()),
   resolveSharedMainAuthAgentDir: () => "/tmp/shared-main-agent",
 }));
 vi.mock("../../agents/auth-profiles/store-runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../agents/auth-profiles/store-runtime.js")>()),
   ensureAuthProfileStoreWithoutExternalProfiles,
 }));
-vi.mock("../../logging/secret-redaction-registry.js", () => ({ registerSecretValueForRedaction }));
-vi.mock("../../plugins/personal-account-auth.js", () => ({
+vi.mock("../../logging/secret-redaction-registry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../logging/secret-redaction-registry.js")>()),
+  registerSecretValueForRedaction,
+}));
+vi.mock("../../plugins/personal-account-auth.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../plugins/personal-account-auth.js")>()),
   listPersonalAccountAuthChoices,
   resolvePersonalAccountAuthMethod,
 }));

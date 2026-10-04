@@ -106,6 +106,22 @@ TypeScript marks those adapters deprecated. They retain their result shapes and
 completion timing until the next Plugin SDK major and an explicitly approved
 breaking release. No schema, retained data, or update migration changes.
 
+### Channel pairing allowlists
+
+`readChannelAllowFromStoreSync` from `openclaw/plugin-sdk/channel-pairing` is
+deprecated as of October 3, 2026. Await `readChannelAllowFromStore` from the same
+subpath with the same channel, environment, and optional account ID. Both APIs
+shipped in OpenClaw 2026.9.8; the synchronous API keeps its signature and native
+behavior until the next Plugin SDK major and explicit breaking-release approval.
+
+The async API and bundled channel callers read current allowlist rows in the
+shared-state worker. Account normalization, entry ordering, and ingress policy
+gates are unchanged. A missing store returns an empty allowlist without creating
+storage; boot and Doctor own initialization and migrations. Read failures
+propagate to the caller, and ingress retains its fail-closed handling. Prepared
+entries do not replace current message or channel authority. No schema, retention,
+or update migration is required, and no runtime warning is emitted.
+
 ### Watched-session harness context
 
 `buildWatchedSessionsHarnessContext` from

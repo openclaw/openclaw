@@ -36,16 +36,12 @@ type NextcloudTalkBotResponseFeatureProbe = {
 };
 
 function normalizeUrlForMatch(value: string | undefined): string {
-  if (!value?.trim()) {
-    return "";
-  }
-  try {
-    const url = new URL(value.trim());
+  const trimmed = value?.trim() ?? "";
+  const url = URL.parse(trimmed);
+  if (url) {
     url.hash = "";
-    return url.toString().replace(/\/$/, "");
-  } catch {
-    return value.trim().replace(/\/$/, "");
   }
+  return (url?.toString() ?? trimmed).replace(/\/$/, "");
 }
 
 function formatMissingResponseFeatureMessage(bot: NextcloudTalkBotAdminEntry, features?: number) {

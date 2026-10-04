@@ -100,13 +100,8 @@ export async function releaseDesktopObserverToken(
   if (!connId || !requester.isCurrent()) {
     return false;
   }
-  let resource: URL;
-  try {
-    resource = new URL(wsPath, "http://127.0.0.1");
-  } catch {
-    return false;
-  }
-  if (resource.pathname !== DESKTOP_OBSERVE_PATH) {
+  const resource = URL.parse(wsPath, "http://127.0.0.1");
+  if (resource?.pathname !== DESKTOP_OBSERVE_PATH) {
     return false;
   }
   const entry = observerTokens.consume(
