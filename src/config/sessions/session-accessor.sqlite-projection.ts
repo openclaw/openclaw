@@ -317,7 +317,7 @@ export async function applySessionEntryLifecycleMutation(
       "session.lifecycle.mutate",
       params.withCommit,
       undefined,
-      useWorker ? "worker" : "foreground",
+      useWorker && upserts.length === 0 ? "worker" : "foreground",
     );
     const committed = preparedWrite.result;
 

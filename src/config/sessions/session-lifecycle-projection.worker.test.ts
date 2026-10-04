@@ -10,10 +10,14 @@ import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import { applySessionEntryLifecycleMutation } from "./session-accessor.sqlite-projection.js";
 import { registerSessionMaintenancePreserveKeysProvider } from "./store-maintenance-preserve.js";
 
-vi.mock("./session-accessor.sqlite-maintenance-kick.js", () => ({
+vi.mock("./session-accessor.sqlite-maintenance-kick.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./session-accessor.sqlite-maintenance-kick.js")>()),
   kickSessionEntryMaintenanceAfterWrite() {},
 }));
-vi.mock("./session-history-eviction.js", () => ({ kickSessionHistoryDiskBudgetMaintenance() {} }));
+vi.mock("./session-history-eviction.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./session-history-eviction.js")>()),
+  kickSessionHistoryDiskBudgetMaintenance() {},
+}));
 
 const delivery = vi.hoisted(() => ({
   currentCommand: "",

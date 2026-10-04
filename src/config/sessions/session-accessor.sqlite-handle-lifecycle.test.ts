@@ -280,24 +280,37 @@ describe("SQLite session handle lifecycle", () => {
     expect(loadSessionEntry(staleDashboardScope)?.archivedAt).toBeUndefined();
   });
 
-  it("commits a lifecycle projection after its async builder loses the cached handle", async () => {
-    await expect(
-      applySessionEntryLifecycleMutation({
+  it.each(["cache eviction", "database retirement"] as const)(
+    "retains lifecycle builder authority across %s only while its owner remains live",
+    async (closure) => {
+      const planningDatabase = openOpenClawAgentDatabase({ agentId: "main", path: databasePath });
+      const operation = applySessionEntryLifecycleMutation({
         storePath: scope.storePath,
         skipMaintenance: true,
         upserts: [
           {
             sessionKey: scope.sessionKey,
             buildEntry: async ({ currentEntry }) => {
-              expect(closeOpenClawAgentDatabaseByPath(databasePath)).toBe(true);
+              if (closure === "database retirement") {
+                expect(closeOpenClawAgentDatabaseByPath(databasePath)).toBe(true);
+              } else {
+                closeCachedOpenClawAgentDatabase(planningDatabase, { eviction: true });
+                expect(planningDatabase.db.isOpen).toBe(false);
+              }
               return { ...currentEntry!, label: "built after close" };
             },
           },
         ],
-      }),
-    ).resolves.toMatchObject({ afterCount: 1 });
-    expect(loadSessionEntry(scope)).toMatchObject({ label: "built after close" });
-  });
+      });
+      if (closure === "database retirement") {
+        await expect(operation).rejects.toThrow("Agent database execution admission is closed");
+        expect(loadSessionEntry(scope)?.label).toBeUndefined();
+      } else {
+        await expect(operation).resolves.toMatchObject({ afterCount: 1 });
+        expect(loadSessionEntry(scope)).toMatchObject({ label: "built after close" });
+      }
+    },
+  );
 
   it("revalidates label ownership after the planning handle closes", async () => {
     const planningDatabase = openOpenClawAgentDatabase({ agentId: "main", path: databasePath });
