@@ -120,6 +120,7 @@ it.each([false, true])(
           return {
             agentId: "main",
             workspaceDir: "/tmp/library-workspace",
+            mcpConfigToolDenylist: [],
             captureFinalCronCreatorTools: undefined,
             tools: capability
               ? [
