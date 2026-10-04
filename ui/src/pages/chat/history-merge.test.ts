@@ -17,6 +17,7 @@ import {
   setChatRunOwner,
   publishChatSessionProjection,
   publishChatSessionProjectionMessages,
+  reconcileChatInputCustody,
 } from "./history-merge.ts";
 import type { CompactionStatus } from "./tool-stream-contract.ts";
 import { buildInitialChatSubmission } from "./user-message-content.ts";
@@ -476,6 +477,27 @@ describe("pane-owned canonical session projection", () => {
     expect(owner.chatMessages).toContain(imported);
     expect(owner.chatMessages).not.toContain(handoff.message);
     expect(chatSubmissions.readInitial(sessionKey, client)?.pending).toBe(false);
+  });
+
+  it("keeps the initial optimistic bubble on a pending receipt, retires it when consumed", () => {
+    const { owner, initial } = createInitialHandoffFixture(true);
+    reduceChatSessionProjection(owner, {
+      type: "sendPending",
+      runId: "initial-run",
+      message: initial.message,
+    });
+    expect(owner.chatMessages).toContain(initial.message);
+
+    // A pending receipt only confirms server custody; with no rendered custody or
+    // canonical row it must not drop the just-sent bubble (the reported vanish).
+    reconcileChatInputCustody(owner, undefined, [{ runId: "initial-run", state: "pending" }]);
+    expect(owner.chatMessages).toContain(initial.message);
+
+    // A consumed receipt means the input joined the transcript and retires it.
+    reconcileChatInputCustody(owner, undefined, [
+      { runId: "initial-run", state: "consumed", consumedByEventId: "aggregate" },
+    ]);
+    expect(owner.chatMessages).not.toContain(initial.message);
   });
 
   it("keeps each split pane's live projection independent", () => {
