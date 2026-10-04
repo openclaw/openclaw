@@ -3,6 +3,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { isMainThread } from "node:worker_threads";
 import { resolveStateDir } from "../config/paths.js";
 import { isGatewayExternallySupervised } from "../infra/gateway-supervision.js";
+import { registerNodeSqliteDisposeCallback } from "../infra/kysely-sync-cache-state.js";
 import { enableNodeSqliteKyselyStatementCache } from "../infra/kysely-sync.js";
 import {
   openNodeSqliteDatabase,
@@ -46,6 +47,7 @@ import {
   registerAgentDeletionDatabaseCleanup,
 } from "./agent-deletion-cleanup.js";
 import { readAgentDeletionJournal } from "./agent-deletion-journal.js";
+import { assertCanonicalSessionValidationSchema } from "./openclaw-agent-canonical-validation-schema.js";
 import { createOpenClawAgentDatabaseAdmissionOwner } from "./openclaw-agent-db-admission.js";
 import type {
   OpenClawAgentDatabase,
@@ -269,13 +271,14 @@ function* openOpenClawAgentDatabaseSteps(
     });
     ensureOpenClawAgentSchema(db, agentId, pathname);
     admitSqliteSchema(db);
+    assertCanonicalSessionValidationSchema(db);
     registerOpenClawAgentDatabaseIdentity(db);
     const database = { agentId, db, path: pathname, walMaintenance };
     cache.incognito.add(database);
     cache.unregisterExitClose ??= registerSqliteCacheExitClose(closeOpenClawAgentDatabases);
     cache.databases.set(pathname, database);
     cache.generation += 1;
-    retainIncognitoSharedState(db, options.env);
+    registerNodeSqliteDisposeCallback(db, retainIncognitoSharedState(options.env));
     getOpenClawDatabaseMaintenanceScope()?.own(database.db, "agent-handles", () =>
       closeMaintenanceAgentDatabase(database),
     );
@@ -420,7 +423,6 @@ function* openOpenClawAgentDatabaseSteps(
         diagnostics,
         verification,
         isValidatedReopen && reuseIntegrity,
-        true,
       );
       assertCurrent(validationDatabase);
       if (!diagnostics.integrityGateOutcome || diagnostics.integrityGateOutcome === "cached") {
@@ -474,6 +476,7 @@ function* openOpenClawAgentDatabaseSteps(
     assertCurrent({ db, path: pathname });
     ensureOpenClawAgentDatabasePermissions(pathname, databaseOptions);
     admitSqliteSchema(db);
+    assertCanonicalSessionValidationSchema(db);
     const database = { agentId, db, path: pathname, walMaintenance };
     openedDatabase = database;
     if (hasAgentDatabaseMaintenanceAuthority()) {

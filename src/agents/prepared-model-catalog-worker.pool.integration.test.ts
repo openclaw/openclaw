@@ -300,9 +300,37 @@ describe("Gateway catalog worker pool", () => {
           })!;
         const entered = observeCatalogEntry(fixture.marker, original.agentDir);
         fs.writeFileSync(`${fixture.marker}.hold`, "");
-        renewal = original.loadFullModelCatalog!({ refresh: true });
+        const foregroundDeadlines: Array<() => void> = [];
+        const schedule = globalThis.setTimeout;
+        const deadlineSpy = vi
+          .spyOn(globalThis, "setTimeout")
+          .mockImplementation((callback, ms, ...args) => {
+            if (ms !== 5_000) {
+              return schedule(callback, ms, ...args);
+            }
+            let fired = false;
+            const expire = () => {
+              if (fired) {
+                return;
+              }
+              fired = true;
+              clearTimeout(timer);
+              callback(...args);
+            };
+            // Retain the native fallback so an earlier assertion cannot strand cleanup.
+            const timer = schedule(expire, ms);
+            foregroundDeadlines.push(expire);
+            return timer;
+          });
+        try {
+          renewal = original.loadFullModelCatalog!({ refresh: true });
+        } finally {
+          deadlineSpy.mockRestore();
+        }
         void renewal.catch(() => undefined);
         await entered(renewal, signal);
+        expect(foregroundDeadlines).toHaveLength(1);
+        foregroundDeadlines[0]!();
         // The foreground deadline returns retained data while acquisition stays behind the barrier.
         await expect(renewal).resolves.toBe(accepted);
         const worker = observed.spawned[0]!;

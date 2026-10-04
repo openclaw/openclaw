@@ -190,7 +190,10 @@ export {
   type RestartTombstoneRecoveryResult,
 } from "./session-accessor.sqlite-recovery.js";
 export { assignSessionOwner } from "./session-accessor.sqlite-owner.js";
-export { updateSessionProfileInvolvement } from "./session-accessor.sqlite-involvement.js";
+export {
+  updateSessionProfileInvolvement,
+  updateSessionProfileInvolvementAsync,
+} from "./session-involvement-store.js";
 export {
   MAX_SESSION_PARTICIPANTS,
   recordSessionParticipant,

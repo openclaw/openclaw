@@ -136,43 +136,38 @@ describe("resolveSystemAgentConfiguredRouteFromConfig", () => {
     ).toBe(true);
   });
 
-  it("uses the explicit utility during first-run setup without manufacturing a primary", async () => {
-    const config = utilityConfig();
-    const original = structuredClone(config);
+  it.each([undefined, "openai/gpt-5.5"])(
+    "resolves utility with primary %s without changing config or credential ownership",
+    async (primaryModel) => {
+      const config = utilityConfig(primaryModel);
+      const original = structuredClone(config);
+      const primary = primaryModel
+        ? await resolveSystemAgentConfiguredRouteFromConfig(config)
+        : undefined;
+      const utility = await resolveSystemAgentConfiguredRouteFromConfig(
+        config,
+        undefined,
+        primaryModel ? { modelTarget: "utility" } : undefined,
+      );
 
-    const route = await resolveSystemAgentConfiguredRouteFromConfig(config);
-
-    expect(route).toMatchObject({
-      runner: "embedded",
-      modelTarget: "utility",
-      modelLabel: "local-utility/tiny",
-      provider: "local-utility",
-      model: "tiny",
-      agentId: "dev",
-      agentDir: resolveAgentDir(config, "dev"),
-    });
-    expect(route?.runConfig.agents?.defaults?.model).toBeUndefined();
-    expect(config).toEqual(original);
-  });
-
-  it("verifies the utility role alongside a primary without moving the credential owner", async () => {
-    const config = utilityConfig("openai/gpt-5.5");
-
-    const primary = await resolveSystemAgentConfiguredRouteFromConfig(config);
-    const utility = await resolveSystemAgentConfiguredRouteFromConfig(config, undefined, {
-      modelTarget: "utility",
-    });
-
-    expect(primary).toMatchObject({ modelLabel: "openai/gpt-5.5", agentId: "dev" });
-    expect(primary).not.toHaveProperty("modelTarget");
-    expect(utility).toMatchObject({
-      modelTarget: "utility",
-      modelLabel: "local-utility/tiny",
-      agentId: "dev",
-      agentDir: primary?.agentDir,
-    });
-    expect(utility?.runConfig.agents?.defaults?.model).toBe("openai/gpt-5.5");
-  });
+      if (primaryModel) {
+        expect(primary).toMatchObject({ modelLabel: primaryModel, agentId: "dev" });
+        expect(primary).not.toHaveProperty("modelTarget");
+        expect(utility?.agentDir).toBe(primary?.agentDir);
+      }
+      expect(utility).toMatchObject({
+        runner: "embedded",
+        modelTarget: "utility",
+        modelLabel: "local-utility/tiny",
+        provider: "local-utility",
+        model: "tiny",
+        agentId: "dev",
+        agentDir: resolveAgentDir(config, "dev"),
+      });
+      expect(utility?.runConfig.agents?.defaults?.model).toBe(primaryModel);
+      expect(config).toEqual(original);
+    },
+  );
 
   it.each(["defaults", "agent"] as const)(
     "invalidates utility verification after a %s utility change while preserving the primary route",

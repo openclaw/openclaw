@@ -50,7 +50,9 @@ that depends on the operation. Dismissal IDs retain exact-match semantics.
 Replace `recordCommittedInput(input)` with `await recordCommittedInputAsync(input)`
 and `invalidate(sessionKey)` with `await invalidateAsync(sessionKey)`. Await
 recording before reading the resulting Inbox, and await invalidation before
-depending on refreshed connected views.
+depending on refreshed connected views. Recording also awaits the collaboration
+writer's session involvement update before saving Inbox items. Both writes retain
+their existing owners and settle before Gateway worker shutdown.
 
 The shipped `list`, `dismiss`, `recordCommittedInput`, and `invalidate` methods
 remain synchronous third-party adapters until the next Plugin SDK major and

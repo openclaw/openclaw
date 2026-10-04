@@ -9,7 +9,6 @@ import darkTheme from "../modes/interactive/theme/dark.json" with { type: "json"
 import type { ExtensionFactory } from "./extensions/types.js";
 import { loadPromptTemplates } from "./prompt-templates.js";
 import { DefaultResourceLoader } from "./resource-loader.js";
-import { SettingsManager } from "./settings-manager.js";
 import type { SourceScope } from "./source-info.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -34,13 +33,7 @@ describe("DefaultResourceLoader", () => {
       await writeFile(join(path, "shared.md"), `Prompt from ${path}`);
       await writeFile(join(path, "shared.json"), JSON.stringify({ ...darkTheme, name: "shared" }));
     }
-    const loader = createLoader(root, {
-      settingsManager: SettingsManager.inMemory({
-        packages: [paths[0]],
-        prompts: [paths[0]],
-        themes: [paths[0]],
-      }),
-    });
+    const loader = createLoader(root);
 
     await loader.reload();
     expect(loader.getPrompts()).toEqual({ prompts: [], diagnostics: [] });
@@ -108,9 +101,7 @@ describe("DefaultResourceLoader", () => {
       await symlink(target, join(resources, `linked.${extension}`), "file");
       await symlink(join(root, "absent"), join(resources, `broken.${extension}`), "file");
     }
-    const loader = createLoader(root, {
-      settingsManager: SettingsManager.inMemory(),
-    });
+    const loader = createLoader(root, {});
 
     await loader.reload();
     const entry = { path: alias, metadata: sourceMetadata(alias, "extension", "temporary") };
@@ -156,9 +147,7 @@ describe("DefaultResourceLoader", () => {
       const root = tempDirs.make("openclaw-resource-unreadable-");
       const resources = join(root, "resources");
       await mkdir(resources);
-      const loader = createLoader(root, {
-        settingsManager: SettingsManager.inMemory(),
-      });
+      const loader = createLoader(root, {});
       await chmod(resources, 0);
       try {
         await loader.reload();
@@ -182,18 +171,19 @@ describe("DefaultResourceLoader", () => {
 
   it("reports tool and flag conflicts in extension order while retaining the first owner", async () => {
     const root = tempDirs.make("openclaw-resource-loader-conflicts-");
+    let description = "Initial registration";
     const factory: ExtensionFactory = (api) => {
       api.registerTool({
         name: "shared",
         label: "Shared",
-        description: "Synthetic conflict fixture",
+        description,
         parameters: Type.Object({}),
         execute: async () => ({ content: [], details: undefined }),
       });
       api.registerFlag("shared", { type: "boolean" });
+      api.registerCommand("shared", { handler: async () => {} });
     };
     const loader = createLoader(root, {
-      settingsManager: SettingsManager.inMemory(),
       extensionFactories: [factory, factory, factory],
     });
 
@@ -206,6 +196,24 @@ describe("DefaultResourceLoader", () => {
       { path: "<inline:3>", error: 'Flag "--shared" conflicts with <inline:1>' },
     ]);
     expect(loader.getExtensions().extensions).toHaveLength(3);
+
+    description = "Reloaded registration";
+    await loader.reload();
+    expect(loader.getExtensions().extensions).toHaveLength(3);
+    for (const [index, extension] of loader.getExtensions().extensions.entries()) {
+      const sourceInfo = {
+        path: `<inline:${index + 1}>`,
+        source: "inline",
+        scope: "temporary",
+        origin: "top-level",
+      };
+      expect(extension.sourceInfo).toMatchObject(sourceInfo);
+      expect(extension.tools.get("shared")).toMatchObject({
+        definition: { description: "Reloaded registration" },
+        sourceInfo,
+      });
+      expect(extension.commands.get("shared")).toMatchObject({ sourceInfo });
+    }
   });
 
   it("inherits Windows source metadata across case-variant resource roots", async () => {
@@ -228,7 +236,6 @@ describe("DefaultResourceLoader", () => {
     await withMockedWindowsPlatform(async () => {
       const loader = createLoader(root, {
         agentDir: variantAgentDir,
-        settingsManager: SettingsManager.inMemory(),
       });
       await loader.reload();
       loader.extendResources({

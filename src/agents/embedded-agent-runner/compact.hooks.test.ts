@@ -110,6 +110,10 @@ import {
   type CompactHooksQueuedCompaction,
 } from "./compact.hooks.metadata.test-support.js";
 import {
+  mockPendingContextEngineCompaction,
+  mockPendingNativeCompaction,
+} from "./compact.hooks.pending.test-support.js";
+import {
   abortEmbeddedAgentRun,
   clearActiveEmbeddedRun,
   isEmbeddedAgentRunActive,
@@ -143,42 +147,6 @@ type PostCompactionSyncParams = {
   sessions?: Array<{ agentId: string; sessionId: string; sessionKey?: string }>;
 };
 type PostCompactionSync = (params?: unknown) => Promise<void>;
-function mockPendingContextEngineCompaction() {
-  const pending = {
-    signal: undefined as AbortSignal | undefined,
-    started: createDeferred(),
-    release: createDeferred(),
-  };
-  contextEngineCompactMock.mockImplementationOnce(async (...args: unknown[]) => {
-    const [params] = args;
-    pending.signal = (params as { abortSignal?: AbortSignal }).abortSignal;
-    pending.started.resolve(undefined);
-    await pending.release.promise;
-    return {
-      ok: true,
-      compacted: true,
-      reason: undefined,
-      result: { summary: "engine-summary", tokensBefore: 120, tokensAfter: 50 },
-    };
-  });
-  return pending;
-}
-
-function mockPendingNativeCompaction() {
-  const pending = {
-    signal: undefined as AbortSignal | undefined,
-    started: createDeferred(),
-    terminal: createDeferred<{ ok: false; compacted: false; reason: string }>(),
-  };
-  maybeCompactAgentHarnessSessionMock.mockImplementationOnce(async (...args: unknown[]) => {
-    const [params] = args;
-    pending.signal = (params as { abortSignal?: AbortSignal }).abortSignal;
-    pending.started.resolve(undefined);
-    return await pending.terminal.promise;
-  });
-  return pending;
-}
-
 function plannedCompactionPluginSelections(
   config: OpenClawConfig,
   metadataSnapshot = createPluginMetadataSnapshotFixture({ plugins: [] }),

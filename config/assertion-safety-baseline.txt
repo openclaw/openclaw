@@ -1340,7 +1340,6 @@ src/agents/embedded-agent-runner/run.overflow-compaction.harness.ts	4
 src/agents/embedded-agent-runner/run/attempt-client-tools.ts	2
 src/agents/embedded-agent-runner/run/attempt-context-summary.ts	2
 src/agents/embedded-agent-runner/run/attempt-execution-phase.ts	1
-src/agents/embedded-agent-runner/run/attempt-finalize.ts	2
 src/agents/embedded-agent-runner/run/attempt-history.ts	11
 src/agents/embedded-agent-runner/run/attempt-llm-boundary.ts	11
 src/agents/embedded-agent-runner/run/attempt-normalization.ts	1
@@ -1476,7 +1475,6 @@ src/agents/session-suspension.ts	1
 src/agents/session-tool-result-guard.ts	3
 src/agents/session-transcript-repair.ts	2
 src/agents/sessions/agent-session-base.ts	3
-src/agents/sessions/agent-session-extensions.ts	1
 src/agents/sessions/agent-session-models.ts	1
 src/agents/sessions/agent-session-tree.ts	1
 src/agents/sessions/agent-session-utils.ts	1

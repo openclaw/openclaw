@@ -284,6 +284,72 @@ released synchronous SDK helper and production host routing stay unchanged.
 This stage changes no schema, retention, durability, update behavior, operator
 configuration, or memory cap and retires no T1 sites.
 
+### Incognito ACP and shared authority (P6, inactive)
+
+ACP entry reads and finite field changes can use the captured actor while ACP
+metadata keeps its existing shared-state owner, persistence, and retention.
+The actor borrow exposes this composition through its lazy `acp` capability;
+production callers do not acquire the actor or select this capability until P7.
+Setting metadata touches the entry before publishing the shared row. Clearing
+metadata patches the entry before clearing the shared row. Runtime uses canonical
+ACP keys; Doctor owns legacy repair. Missing-entry linking uses the same entry
+kernel. No operation holds an actor FIFO turn while awaiting shared-state work.
+The actor lifetime joins the complete composition; each SQL transaction remains
+synchronous in its original worker. Shared publication revalidates the captured
+actor revision, including pending or uncertain mutations, without querying that
+actor from a grant. Commit receipts still belong to the existing settlement owners.
+
+Controller policy can consume typed transaction-local sharing facts while its
+same-session host projection is pending. Outside grants, it checks the retained
+actor claim and committed facts. Board approval preparation accepts an actor-bound
+entry and revision assertion and checks both after policy and reviewer waits.
+Preparation must run outside grants; final Board writes must retain that source
+assertion. Nested host grants preserve the outer same-actor reentrancy fence.
+
+The actor reuses the native owner's shared-state idle pin. It observes matching
+already-open and subsequently opened handles without creating shared storage.
+Accepted work, worker loss, and failed cleanup retain the pin until native cleanup
+settles. Old actor handles continue to report `INCOGNITO_SESSION_ENDED`.
+
+Production remains host-owned until P7. This stage changes no schema, stored
+metadata, retention, durability, update behavior, or operator configuration and
+retires no T1 sites. The following audit is an activation checklist, not a claim
+that current production has already completed the cutover.
+
+#### Remaining synchronous contracts before P7
+
+All synchronous kernels below must execute only inside the actor after activation,
+or refuse an actor-owned target with an error naming its awaited replacement.
+Retained durable SDK and offline kernels do not justify a native incognito fallback.
+
+| Surface                                                                                                                                                                                                                                                                            | Required cutover or retained contract                                                                                                                                                                                                                                                                |
+| ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `SessionManager.open`, `openBounded`, `openDetachedBounded`, `openModelContext`, `setSessionTarget`, `reloadPersistedTranscript`, `prepareTranscriptRewrite`, `appendMessageToTranscript`                                                                                          | Deprecated SDK; reject actor-owned incognito before native access, naming the matching `Async` method.                                                                                                                                                                                               |
+| `appendMessage`, `appendMessageWithTranscriptAnchor`, `appendCompaction`, `appendResetBoundary`, `appendCustomEntry`, `appendSessionInfo`, `appendCustomMessageEntry`, `appendLeafControl`, `appendLabelChange`, `branch`, `branchWithSummary`, `persist`, `removeTrailingEntries` | The same SDK refusal must precede detached-view or tool-result-guard side effects. Durable compatibility lasts until the next Plugin SDK major.                                                                                                                                                      |
+| `SessionManager.readSessionContext`; `resolveCurrentTurnEntryId` with `includeOmittedCustomMessages: true`                                                                                                                                                                         | Add an awaited context reader and refuse native actor access. The omitted-message path uses stored anchors/events; ordinary loaded-view traversal stays synchronous.                                                                                                                                 |
+| `readAcpSessionEntry`, `readAcpSessionMeta`, ACP manager `resolveSession`                                                                                                                                                                                                          | Deprecated SDK readers must name `readAcpSessionEntryAsync`, `readAcpSessionMetaAsync`, and `resolveSessionAsync`. Preserve the refusal through `readSessionEntryFromStore` error handling.                                                                                                          |
+| `readCodexSessionContext` and synchronous context admission/version validation                                                                                                                                                                                                     | Retained SDK contract; inject the awaited `createCodexSessionContextReader` for actor paths and reject unsupported synchronous actor reads.                                                                                                                                                          |
+| Entry/discovery and authority facades                                                                                                                                                                                                                                              | Switch `session-entry-read-runtime`, `session-entry-current-runtime`, `session-accessor.entry`, `combined-store-gateway`, `session-placement-evidence`, `session-sharing-preparation`, `session-delivery-generation`, private-row materialization, and expiry topology to actor facts/commands.      |
+| Collaboration, reactions, heartbeat, progress-card reads                                                                                                                                                                                                                           | P3 commands exist; remove native incognito dispatch when activating their runtime facades.                                                                                                                                                                                                           |
+| Reports/outbox, deletion/reclamation/fork and SessionManager writes                                                                                                                                                                                                                | P4 commands retain their settlement owner. Finish the general SessionManager metadata, suffix/rewrite, and admission composition before routing every awaited twin to the actor.                                                                                                                     |
+| Hydration, context/history, title/preview, search/match, branches/stats/watermarks/receipts, usage/projection, Memory and Codex history                                                                                                                                            | P5 adapters exist; switch all runtime entry points together and remove native extraction/reverse-RPC branches.                                                                                                                                                                                       |
+| Pending-input source/history/store/withdrawal, message-tool run outcomes, cold-storage inspection, historical eviction, maintenance sizing and page reclamation                                                                                                                    | Audit and route these remaining native branches; a maintenance filename is not proof of an offline-only contract.                                                                                                                                                                                    |
+| `SqliteBoardStore.requireExistingSession`, native `write` and sentinel `consumeRead`                                                                                                                                                                                               | Add actor Board commands using transaction-local `hasBoardSession`; host grants consume prepared routing/authority. Do not replace the native opening guard with same-actor RPC.                                                                                                                     |
+| ACP projection and lifecycle consumers                                                                                                                                                                                                                                             | Supply awaited metadata to `readAcpMetaForDeletedAgentCheck` and `resolveGatewaySessionRuntimeProjection`; keep controller shared-row predicates separate from actor predicates. Discord and Telegram startup reconciliation must not treat a refused join as absent metadata or delete its binding. |
+
+`readAcpSessionMetaForEntry` and `readAcpSessionMetaBatch` read shared metadata,
+not the actor database. Their synchronous SDK/runtime callers remain separate
+shared-state migration work. ACP Doctor and `writeAcpSessionMetaForMigration`
+retain their offline contracts. ACP resume enumeration currently selects durable
+configured stores; it must not discover actor sessions through that synchronous
+loop. Mixed ACP and maintenance files are not automatically worker-only.
+
+The legacy replay adapter's `appendCustomEntry` catch must propagate the typed
+incognito refusal. Extension append/name/label adapters and the tool-result guard
+must do the same. Detached SessionManager getters, `inMemory`, `fromEntries`, and
+ordinary current-turn traversal remain synchronous because they use loaded views.
+No synchronous bridge, fire-and-forget persistence, or fallback database is allowed.
+
 ### Existing worker flows
 
 Shared-state transaction diagnostics inherit the executing worker command name
@@ -1564,6 +1630,16 @@ Edit and dismiss resolutions retain caller authority through finalization. These
 guards reuse committed in-memory facts for process-held incognito sessions without
 adding native SQL reads. Stored formats, schemas, retention, and update behavior
 are unchanged.
+
+Committed human mentions and personal session visibility write involvement through
+the existing collaboration worker. The profile owner prepares merge aliases before
+the agent transaction and revalidates them at admission and commit; the worker
+rereads the exact session incarnation and preserves mention source ordering.
+Acknowledged results invalidate session rows through their existing owner.
+The Inbox FIFO joins accepted involvement and Inbox persistence before shutdown
+closes either database owner. Unknown outcomes are never replayed. The deprecated
+synchronous MentionInbox SDK contract remains until the next Plugin SDK major.
+Schemas, stored bytes, retention, permissions, and update behavior are unchanged.
 
 Sharing management retains the original session and physical source before
 membership preparation yields. Member add/remove grants and list disclosure

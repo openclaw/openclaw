@@ -1,29 +1,34 @@
-import path from "node:path";
 import { isSqliteCorruptionError } from "../infra/sqlite-error-diagnostics.js";
 import { throwSqliteLifecycleErrors } from "../infra/sqlite-lifecycle-errors.js";
 import {
+  admitSqliteSchema,
   getAdmittedSqliteSchemaFacts,
   runSqliteReadOperationSync,
 } from "../infra/sqlite-schema-facts.js";
-import type { createSqliteTerminalOpenLatch } from "../infra/sqlite-terminal-open-latch.js";
 import { isSqliteSchemaVersionError } from "../infra/sqlite-user-version.js";
 import type { CachedOpenClawStateDatabase } from "./openclaw-state-db-cache.types.js";
 import type { OpenClawStateDatabase } from "./openclaw-state-db-contract.js";
 import { markOpenClawStateDatabaseFailure } from "./openclaw-state-db-failure.js";
 import { assertSupportedStateSchemaVersion } from "./openclaw-state-db-schema-version.js";
 
-type FailureOwner = {
+type CacheAdmissionOwner = {
   cachedDatabases: Map<string, CachedOpenClawStateDatabase>;
-  latch: ReturnType<typeof createSqliteTerminalOpenLatch>;
   evict(database: OpenClawStateDatabase): boolean;
   recordSchemaFailure(pathname: string, error: Error): void;
   invalidate(pathname: string): void;
   notifyTerminalFailure(pathname: string, error: Error): void;
 };
 
-/** Runtime validation uses the cache's existing handles, version counters, and terminal latch. */
-export function createOpenClawStateDatabaseRuntimeFailureOwner(owner: FailureOwner) {
+/** Refresh cached-handle admission and settle failures against its exact native owner. */
+export function createStateDatabaseCacheAdmission(owner: CacheAdmissionOwner) {
   return {
+    initialize(database: OpenClawStateDatabase) {
+      admitSqliteSchema(database.db);
+      return runSqliteReadOperationSync(database.db, () => {
+        assertSupportedStateSchemaVersion(database.db, database.path);
+        return getAdmittedSqliteSchemaFacts(database.db);
+      });
+    },
     closeTerminalFailure(pathname: string, error: Error): void {
       markOpenClawStateDatabaseFailure(error, pathname);
       owner.invalidate(pathname);
@@ -43,37 +48,26 @@ export function createOpenClawStateDatabaseRuntimeFailureOwner(owner: FailureOwn
       }
       throwSqliteLifecycleErrors(errors, "Terminal shared-state failure cleanup failed");
     },
-    get: (pathname: string): Error | undefined => {
-      const resolvedPath = path.resolve(pathname);
-      const latched = owner.latch.get(resolvedPath);
-      if (latched) {
-        return latched;
-      }
-      const cached = owner.cachedDatabases.get(resolvedPath);
-      if (!cached?.db.isOpen) {
-        return undefined;
-      }
+    refresh(database: CachedOpenClawStateDatabase): boolean {
       try {
-        runSqliteReadOperationSync(cached.db, () => {
-          const schema = getAdmittedSqliteSchemaFacts(cached.db);
-          // The schema owner observes foreign commits and local DDL. Revalidate only
-          // changed facts; dynamic authorizers deliberately cannot retain admission.
-          if (!schema || schema !== cached.schemaFacts) {
-            assertSupportedStateSchemaVersion(cached.db, resolvedPath);
-            cached.schemaFacts = schema;
+        runSqliteReadOperationSync(database.db, () => {
+          const facts = getAdmittedSqliteSchemaFacts(database.db);
+          if (!facts || facts !== database.schemaFacts) {
+            assertSupportedStateSchemaVersion(database.db, database.path);
+            database.schemaFacts = facts;
           }
         });
-        return undefined;
+        return true;
       } catch (error) {
         const failure = error instanceof Error ? error : new Error(String(error));
         if (isSqliteCorruptionError(failure)) {
-          owner.evict(cached);
-          return undefined;
+          owner.evict(database);
+          return false;
         }
         if (isSqliteSchemaVersionError(failure)) {
-          owner.recordSchemaFailure(resolvedPath, failure);
+          owner.recordSchemaFailure(database.path, failure);
         }
-        return failure;
+        throw failure;
       }
     },
   };

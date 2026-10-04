@@ -148,52 +148,28 @@ it.each(["missing", "drifted"] as const)(
   },
 );
 
-it("reports every refused database and its missing indexes without mutating any agent", async () => {
-  const { env, config, agents, before } = await createFixture(
-    ["work", "memes", "main", "friends"],
-    "missing table",
-  );
-  const message = await assertOpenClawDatabasesReady({
-    env,
-    operation: "gateway-startup",
-    config,
-  }).then(
-    () => "",
-    (error: unknown) => String(error),
-  );
-  const rows = message.split("\n").filter((line) => line.startsWith("agent "));
-  expect(rows).toEqual(
-    agents
-      .toSorted((a, b) => a.agentId.localeCompare(b.agentId))
-      .map((agent) => expect.stringContaining(`agent ${agent.agentId} ${agent.path}:`)),
-  );
-  for (const row of rows) {
-    expect(row).toContain("missing table session_key_contract");
-    expect(row).toContain("missing or drifted index idx_agent_session_nodes_active");
-    expect(row).toContain("openclaw doctor --fix");
-  }
-  deepStrictEqual(
-    agents.map((agent) => fs.readFileSync(agent.path)),
-    before,
-  );
-});
-
 it.each([
+  ["unscoped", "schema", "schema", 78],
   ["unscoped", "unavailable", "schema", 78],
   ["unscoped", "schema", "unavailable", 78],
   ["unscoped", "unavailable", "unavailable", 1],
   ["scoped", "schema", "unavailable", 78],
   ["scoped", "unavailable", "schema", 1],
 ] as const)("classifies %s %s / %s startup as exit %i", async (scope, first, second, exitCode) => {
-  const { env, config, agents, before } = await createFixture(["main", "worker"], "missing table");
-  const failures = [first, second];
+  const allSchema = first === "schema" && second === "schema";
+  const { env, config, agents, before } = await createFixture(
+    allSchema ? ["work", "memes", "main", "friends"] : ["main", "worker"],
+    "missing table",
+  );
+  const failures = allSchema ? agents.map(() => first) : [first, second];
   const unavailable = agents
     .filter((_, index) => failures[index] === "unavailable")
     .map((agent) => agent.agentId);
-  const preload = path.join(env.OPENCLAW_STATE_DIR, "schema-read-failure.cjs");
-  fs.writeFileSync(
-    preload,
-    `const { DatabaseSync } = require('node:sqlite');
+  if (unavailable.length > 0) {
+    const preload = path.join(env.OPENCLAW_STATE_DIR, "schema-read-failure.cjs");
+    fs.writeFileSync(
+      preload,
+      `const { DatabaseSync } = require('node:sqlite');
      const prepare = DatabaseSync.prototype.prepare;
      DatabaseSync.prototype.prepare = function(sql) {
        if (sql === 'PRAGMA table_list' &&
@@ -203,9 +179,10 @@ it.each([
        }
        return prepare.call(this, sql);
      };`,
-  );
-  for (const [key, value] of Object.entries(sqliteWorkerPreloadEnv(preload))) {
-    vi.stubEnv(key, value);
+    );
+    for (const [key, value] of Object.entries(sqliteWorkerPreloadEnv(preload))) {
+      vi.stubEnv(key, value);
+    }
   }
   const inspect = () =>
     assertOpenClawDatabasesReady({
@@ -228,9 +205,15 @@ it.each([
   if (scope === "unscoped") {
     const rows = message.split("\n").filter((line) => line.startsWith("agent "));
     expect(rows).toEqual(
-      agents.map((agent) => expect.stringContaining(`agent ${agent.agentId} ${agent.path}:`)),
+      (allSchema ? agents.toSorted((a, b) => a.agentId.localeCompare(b.agentId)) : agents).map(
+        (agent) => expect.stringContaining(`agent ${agent.agentId} ${agent.path}:`),
+      ),
     );
     for (const [index, kind] of failures.entries()) {
+      if (kind === "schema") {
+        expect(rows[index]).toContain("missing or drifted index idx_agent_session_nodes_active");
+        expect(rows[index]).toContain("openclaw doctor --fix");
+      }
       expect(rows[index]).toContain(
         kind === "schema"
           ? "missing table session_key_contract"

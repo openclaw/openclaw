@@ -180,3 +180,90 @@ export async function completePackageActivationCustody(
   }
   journal.transition(record, "prepared", null, assertCurrent);
 }
+
+export async function supersedePackageActivationCustody(
+  anchor: string,
+  journal: PackageActivationJournal,
+  initial: PackageActivationRecord,
+  assertion: () => void,
+) {
+  let record = initial;
+  const descriptor = record.descriptor;
+  const live = descriptor.authority.installKey;
+  const replacementIdentity = packageActivationIdentity(live, true);
+  if ([descriptor.previous.identity, descriptor.candidate.identity].includes(replacementIdentity)) {
+    throw new Error("A recorded package generation still requires its original recovery.");
+  }
+  const retained = `${anchor}.superseded-${descriptor.operationId}`;
+  const assertSupersession = () => {
+    assertion();
+    journal.assertCurrent(record);
+    if (packageActivationIdentity(live, true) !== replacementIdentity) {
+      throw new Error("The manually installed package changed during recovery settlement.");
+    }
+  };
+  const transfers = [
+    { source: anchor, target: retained, identity: descriptor.anchorIdentity, directory: true },
+    {
+      source: resolvePackageActivationHelper(anchor),
+      target: path.join(retained, "recovery.mjs"),
+      identity: descriptor.helperIdentity,
+      directory: false,
+    },
+  ];
+  const inspectTransfer = (entry: (typeof transfers)[number]) => {
+    assertSupersession();
+    const source = packageActivationIdentityOrAbsent(entry.source, entry.directory);
+    const target = packageActivationIdentityOrAbsent(entry.target, entry.directory);
+    if (source === null && target === entry.identity && record.phase === "superseded") {
+      return true;
+    }
+    if (source !== entry.identity || target !== null) {
+      throw new Error(
+        "Superseded package recovery artifacts changed or collide with the retained copy.",
+      );
+    }
+    return false;
+  };
+  for (const entry of transfers) {
+    inspectTransfer(entry);
+  }
+  if (record.phase !== "superseded") {
+    // Disarm even an old sealed helper before moving evidence. No old package
+    // or launcher is restored over the operator's manual installation.
+    record = journal.transition(
+      record,
+      "superseded",
+      {
+        kind: "superseded-by-manual-install",
+        replacementIdentity,
+        settled: false,
+      },
+      assertSupersession,
+    );
+  }
+  for (const entry of transfers) {
+    if (!inspectTransfer(entry)) {
+      await fsp.rename(entry.source, entry.target);
+    }
+    for (const directory of new Set([path.dirname(entry.source), path.dirname(entry.target)])) {
+      assertSupersession();
+      if (!inspectTransfer(entry)) {
+        throw new Error("Superseded package recovery transfer is incomplete.");
+      }
+      requireDirectorySync(await syncDirectory(directory), "Superseded package recovery");
+    }
+    assertSupersession();
+    inspectTransfer(entry);
+  }
+  if (record.intent?.kind !== "superseded-by-manual-install") {
+    throw new Error("Package supersession fact is missing.");
+  }
+  record = journal.transition(
+    record,
+    "superseded",
+    { ...record.intent, settled: true },
+    assertSupersession,
+  );
+  return retained;
+}

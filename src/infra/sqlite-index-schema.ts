@@ -7,7 +7,6 @@ import {
   sqliteIntegrityCheckSteps,
   type SqliteIntegrityDiagnostics,
   type SqliteIntegrityOperation,
-  type SqliteIntegrityTableCheck,
 } from "./sqlite-integrity.js";
 import { runSqlitePinnedReadSnapshotSync } from "./sqlite-pinned-read-snapshot.js";
 import type { SqliteIndexListRow } from "./sqlite-schema-contract-assembly.js";
@@ -55,16 +54,15 @@ export function* verifyAndRepairCanonicalSqliteIndexSteps(
   options: Omit<RepairCanonicalSqliteIndexesOptions, "verifyPhysicalIntegrity"> & {
     diagnostics?: SqliteIntegrityDiagnostics;
     reuseIntegrity?: boolean;
-    integrityTables?: SqliteIntegrityTableCheck[];
   } = {},
 ): SqliteIntegrityOperation<string[]> {
-  const { diagnostics, reuseIntegrity, integrityTables, ...repairOptions } = options;
+  const { diagnostics, reuseIntegrity, ...repairOptions } = options;
   if (reuseIntegrity) {
     if (diagnostics) {
       diagnostics.integrityGateOutcome = "cached";
     }
   } else {
-    yield* sqliteIntegrityCheckSteps(db, databaseLabel, diagnostics, integrityTables);
+    yield* sqliteIntegrityCheckSteps(db, databaseLabel, diagnostics);
   }
 
   const indexesStartedAt = performance.now();

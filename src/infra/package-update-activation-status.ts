@@ -140,3 +140,13 @@ export function readPackageActivationRecordStatus(
     installKey: record.descriptor.authority.installKey,
   };
 }
+
+export const selectedPackageRetirementGeneration = (record: PackageActivationRecord) =>
+  record.intent?.kind === "remove" ||
+  record.intent?.kind === "retire" ||
+  record.intent?.kind === "remove-anchor" ||
+  record.intent?.kind === "unlink-helper"
+    ? record.intent.selected
+    : record.phase === "publication-complete"
+      ? "candidate"
+      : "previous";

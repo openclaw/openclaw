@@ -611,5 +611,35 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
     }
   }
 
-  return { tree, rootEntry, directoryIdentity, launcher, exists, entries, observe };
+  async function copiedTree(
+    root: string,
+    originalRoot: string,
+    source: PackageIntegrityFingerprint,
+  ): Promise<PackageIntegrityFingerprint> {
+    const copied = await tree(root, originalRoot);
+    const before = observations.get(source);
+    const after = observations.get(copied);
+    if (!before || !after) {
+      throw new Error("Package copy verification requires the source inventory.");
+    }
+    // New inodes and timestamps are expected; bytes, links, permissions and
+    // ownership must survive before the copy can become rollback custody.
+    const fields = ["mode", "uid", "gid", "sha256", "target"];
+    const matches =
+      before.size === after.size &&
+      [...before].every(([name, entry]) => {
+        const actual = after.get(name);
+        return (
+          actual &&
+          fields.every((field) => entry.fields.get(field) === actual.fields.get(field)) &&
+          (!entry.fields.has("sha256") || entry.fields.get("size") === actual.fields.get("size"))
+        );
+      });
+    if (!matches || source.version !== copied.version) {
+      throw new Error("Package copy inventory does not match the original package.");
+    }
+    return copied;
+  }
+
+  return { tree, copiedTree, rootEntry, directoryIdentity, launcher, exists, entries, observe };
 }
