@@ -5,7 +5,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { serializeRequestBody } from "./rest-body.js";
-import { DiscordError, RateLimitError, RequestClient } from "./rest.js";
+import { RateLimitError, RequestClient } from "./rest.js";
 import { createJsonResponse } from "./test-builders.test-support.js";
 
 async function expectRateLimitError(
@@ -25,17 +25,6 @@ async function expectRateLimitError(
   if (expected.discordCode !== undefined) {
     expect(rateLimit.discordCode).toBe(expected.discordCode);
   }
-}
-
-async function expectDiscordErrorStatus(promise: Promise<unknown>, status: number) {
-  let error: unknown;
-  try {
-    await promise;
-  } catch (caught) {
-    error = caught;
-  }
-  expect(error).toBeInstanceOf(DiscordError);
-  expect((error as DiscordError).status).toBe(status);
 }
 
 describe("RequestClient", () => {

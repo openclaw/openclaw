@@ -884,11 +884,11 @@ export function writeDiagnosticStabilityBundleForFailureSync(
     });
     pruneOldBundles(dir, file);
     return { status: "written", path: file, message: `wrote stability bundle: ${file}` };
-  } catch (error) {
+  } catch (writeError) {
     return {
       status: "failed",
-      error,
-      message: `failed to write stability bundle: ${String(error)}`,
+      error: writeError,
+      message: `failed to write stability bundle: ${String(writeError)}`,
     };
   }
 }

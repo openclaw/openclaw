@@ -153,9 +153,10 @@ export async function prepareNodeHostRuntime(params?: {
   });
   const availabilityContext = { config, env };
   const resolvePluginNodeHost = () =>
-    listRegisteredNodeHostCapsAndCommands(availabilityContext, {
-      ...(commandAllowlist ? { commandAllowlist } : {}),
-    });
+    listRegisteredNodeHostCapsAndCommands(
+      availabilityContext,
+      commandAllowlist ? { commandAllowlist } : {},
+    );
   const pluginNodeHost = resolvePluginNodeHost();
   // Opt-in and binary resolution are node-local enforcement points. A Gateway
   // cannot advertise or enable this command on the host's behalf.
