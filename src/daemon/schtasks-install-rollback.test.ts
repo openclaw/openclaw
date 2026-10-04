@@ -331,6 +331,22 @@ function installWithCustody(
   );
 }
 
+it("restores Password-task launchers after failed activation without re-registering credentials", async () => {
+  const f = await fixture();
+  const originalTask = f.registration.xml.replace(
+    "<Task>",
+    "<Task><Principals><Principal><UserId>operator</UserId><LogonType>Password</LogonType></Principal></Principals>",
+  );
+  f.registration.xml = originalTask;
+  native.run.mockRejectedValueOnce(new Error("activation rejected"));
+
+  await expect(installScheduledTask(f.args)).rejects.toThrow("activation rejected");
+  expect(f.registration.xml).toBe(originalTask);
+  expect(await fs.readFile(f.scriptPath)).toEqual(f.original);
+  expect(await fs.readFile(f.launcherPath, "utf8")).toBe("original hidden launcher");
+  expect(native.exec.mock.calls.some(([args]) => args[0] === "/Create")).toBe(false);
+});
+
 it("leaves both original launchers intact when staging cannot capture the hidden launcher", async () => {
   const { args, scriptPath, launcherPath, original } = await fixture();
   await fs.unlink(launcherPath);

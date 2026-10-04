@@ -706,7 +706,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
 
   it.each([
     { platform: "linux", deadlineMs: 45_000, probeTimeoutMs: 10_000, healthTimeoutMs: 10_000 },
-    { platform: "win32", deadlineMs: 90_000, probeTimeoutMs: 15_000, healthTimeoutMs: 90_000 },
+    { platform: "win32", deadlineMs: 5_400_000, probeTimeoutMs: 15_000, healthTimeoutMs: 90_000 },
   ] as const)(
     "uses managed daemon health timing on $platform",
     async ({ platform, deadlineMs, probeTimeoutMs, healthTimeoutMs }) => {
