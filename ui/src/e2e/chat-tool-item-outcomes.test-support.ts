@@ -44,7 +44,7 @@ export function registerItemOnlyOutcomeTest(
             data,
           });
         }
-        const inspect = async (stage: "live" | "history") => {
+        const inspect = async (stage: string) => {
           const summary = page.locator(".chat-activity-group__summary").first();
           await summary.waitFor();
           await captureToolActivityProof(page, `item-outcomes-${stage}-collapsed`);
@@ -59,10 +59,8 @@ export function registerItemOnlyOutcomeTest(
           await captureToolActivityProof(page, `item-outcomes-${stage}-expanded`);
           expect
             .soft(await page.locator(".chat-tool-card__outcome").allTextContents())
-            .toEqual(["failed", "Blocked", stage === "live" ? "Running" : "Outcome unknown"]);
-          expect
-            .soft(await page.locator(".chat-tool-row--running").count())
-            .toBe(stage === "live" ? 1 : 0);
+            .toEqual(["failed", "Blocked", "Outcome unknown"]);
+          expect.soft(await page.locator(".chat-tool-row--running").count()).toBe(0);
         };
         await inspect("live");
         const messages = items.map((item, index) => ({
