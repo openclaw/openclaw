@@ -77,16 +77,6 @@ vi.mock("../../status/summary.js", () => ({
   getStatusSummary: vi.fn().mockResolvedValue({ ok: true }),
 }));
 
-function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean): number {
-  let count = 0;
-  for (const item of items) {
-    if (predicate(item)) {
-      count += 1;
-    }
-  }
-  return count;
-}
-
 function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
   if (!record || typeof record !== "object") {
     throw new Error("Expected record");
@@ -1948,7 +1938,7 @@ describe("exec approval handlers", () => {
 
         expect(firstResolveRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
         expect(repeatResolveRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
-        expect(countMatching(broadcasts, (entry) => entry.event === "exec.approval.resolved")).toBe(
+        expect(broadcasts.filter((entry) => entry.event === "exec.approval.resolved")).toHaveLength(
           resolvedBroadcastCount,
         );
         expect(mockCallArg(conflictingResolveRespond)).toBe(false);
