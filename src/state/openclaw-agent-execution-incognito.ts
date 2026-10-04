@@ -1,7 +1,11 @@
 import { randomUUID } from "node:crypto";
+import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import type { IncognitoAcpSessionAccess } from "../acp/runtime/session-meta-incognito.types.js";
+import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { resolveStateDir } from "../config/paths.js";
+import { captureRuntimeConfigWithSource } from "../config/runtime-config-capture-state.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   createIncognitoSessionFacts,
   type IncognitoSessionActor,
@@ -342,6 +346,45 @@ function createIncognitoAgentExecutionOwner(
           track(track(work), borrowedWork),
         ),
         acp: {
+          prepareEntryRead(params) {
+            const authority = params.authority;
+            const env = cloneEnvWithPlatformSemantics(params.env);
+            env.OPENCLAW_STATE_DIR = resolveStateDir(env);
+            const shared = captureOpenClawStateReadWorkerContext({
+              env,
+              path: params.databasePath ? path.resolve(params.databasePath) : undefined,
+            });
+            const input = {
+              cfg: captureRuntimeConfigWithSource(params.cfg, params.cfg),
+              sessionKey: params.sessionKey,
+              env,
+              databasePath: shared.admission.databasePath,
+              storePath: resolveSessionStorePathCore(params.cfg.session?.store, {
+                agentId: execution.agentId,
+                env,
+              }),
+            };
+            const assertCurrent = () => {
+              execution.assertCurrent();
+              authority.assertCurrent();
+              shared.maintenanceScope?.assertAdmission();
+              shared.admission.assertCurrent();
+            };
+            assertCurrent();
+            return execution.sessions.withSharedState(async () => {
+              const { prepareIncognitoAcpSessionEntryRead } =
+                await import("../acp/runtime/session-meta-worker-mutation.js");
+              assertCurrent();
+              return prepareIncognitoAcpSessionEntryRead({
+                ...input,
+                actor: execution,
+                authority: {
+                  assertCurrent,
+                  authorize: (stage, facts) => authority.authorize?.(stage, facts),
+                },
+              });
+            });
+          },
           readEntry(params) {
             return execution.sessions.withSharedState(async () => {
               const { readIncognitoAcpSessionEntry } =

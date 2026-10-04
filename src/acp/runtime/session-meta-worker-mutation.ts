@@ -13,8 +13,9 @@ import {
   type SqliteWorkerOperationAdmission,
 } from "../../infra/sqlite-worker-operation-admission.js";
 import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-worker-operation-settlement.js";
-import { isIncognitoSessionKey } from "../../routing/session-key.js";
+import { isIncognitoSessionKey, parseAgentSessionKey } from "../../routing/session-key.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
@@ -25,6 +26,7 @@ import type {
   IncognitoAcpSessionParams,
 } from "./session-meta-incognito.types.js";
 import { buildAcpDatabaseSessionKey } from "./session-meta-keys.js";
+import type { PreparedAcpSessionEntryRead } from "./session-meta-read.types.js";
 import { readAcpSessionMetaForEntries } from "./session-meta-readonly.js";
 import type {
   AcpSessionMutationCommit,
@@ -199,6 +201,7 @@ function captureTarget(params: Target) {
   assertCurrent();
   if (
     !isIncognitoSessionKey(sessionKey) ||
+    parseAgentSessionKey(sessionKey)?.agentId !== actor.agentId ||
     actor.path !==
       resolveIncognitoOpenClawAgentSqlitePath({ agentId: actor.agentId, env: context.environment })
   ) {
@@ -214,7 +217,7 @@ export async function readIncognitoAcpSessionEntry(
   return (await prepareIncognitoAcpSessionEntry(params)).entry;
 }
 
-export function prepareIncognitoAcpSessionEntry(params: Target) {
+function prepareIncognitoAcpSessionEntry(params: Target) {
   const { actor, authority, sessionKey, context, assertCurrent } = captureTarget(params);
   return actor.sessions.withSharedState(async () => {
     const { entry, claim, snapshot } = await actor.sessions.read(authority, { sessionKey });
@@ -237,6 +240,62 @@ export function prepareIncognitoAcpSessionEntry(params: Target) {
       entry: entry && acp ? { ...entry, acp } : entry,
       assertCurrent: assertPreparedCurrent,
     };
+  });
+}
+
+/** Inactive cleanup composition; both source fences remain owned until release. */
+export function prepareIncognitoAcpSessionEntryRead(
+  params: Target & { storePath: string },
+): Promise<PreparedAcpSessionEntryRead> {
+  const { actor, sessionKey } = captureTarget(params);
+  const cfg = params.cfg;
+  const storePath = params.storePath;
+  const logicalSessionKey = params.sessionKey.trim();
+  return actor.sessions.withSharedState(async () => {
+    const released = createDeferredCore();
+    void actor.sessions.withSharedState(() => released.promise);
+    let active = true;
+    let changed = false;
+    const unsubscribe = sessionChanges.subscribeFacts((change) => {
+      if (
+        "all" in change ||
+        (change.sessionKey === sessionKey && (!change.agentId || change.agentId === actor.agentId))
+      ) {
+        changed = true;
+      }
+    });
+    const release = () => {
+      active = false;
+      unsubscribe();
+      released.resolve();
+    };
+    try {
+      const prepared = await prepareIncognitoAcpSessionEntry(params);
+      const assertCurrent = () => {
+        // Shared ACP publication can follow its actor-entry commit; retain both fences.
+        prepared.assertCurrent();
+        if (!active || changed) {
+          throw new Error("Prepared ACP session changed before binding cleanup");
+        }
+      };
+      assertCurrent();
+      return {
+        session: {
+          cfg,
+          agentId: actor.agentId,
+          storePath,
+          sessionKey: logicalSessionKey,
+          storeSessionKey: sessionKey,
+          entry: prepared.entry,
+          acp: prepared.entry?.acp,
+        },
+        assertCurrent,
+        release,
+      };
+    } catch (error) {
+      release();
+      throw error;
+    }
   });
 }
 

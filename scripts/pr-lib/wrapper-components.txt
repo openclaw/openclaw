@@ -592,6 +592,7 @@ src/acp/runtime/session-control-owner.ts
 src/acp/runtime/session-meta-entry.kernel.ts
 src/acp/runtime/session-meta-keys.ts
 src/acp/runtime/session-meta-readonly.ts
+src/acp/runtime/session-meta-read.types.ts
 src/config/sessions/session-incognito-actor.ts
 src/config/sessions/session-collaboration-scope.ts
 src/config/sessions/session-incognito-compute-contract.ts

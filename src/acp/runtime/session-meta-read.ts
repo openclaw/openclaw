@@ -6,13 +6,9 @@ import type { IncognitoSessionAuthority } from "../../config/sessions/session-in
 import { normalizeStoreSessionKey } from "../../config/sessions/store-entry.js";
 import type { SessionAcpMeta } from "../../config/sessions/types.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
-import { sessionChanges } from "../../sessions/session-row-changes.js";
-import { createDeferredCore } from "../../shared/deferred.js";
 import type { IncognitoAgentDatabaseExecution } from "../../state/openclaw-agent-execution-incognito.js";
-import {
-  captureAcpSessionReadContext,
-  type AcpSessionReadContextInput,
-} from "./session-meta-read-context.js";
+import { captureAcpSessionReadContext } from "./session-meta-read-context.js";
+import type { AcpSessionEntryReadInput } from "./session-meta-read.types.js";
 import {
   readAcpSessionMetaForEntries,
   readAcpSessionMetaForEntry,
@@ -23,21 +19,11 @@ import {
   type AcpSessionStoreEntry,
 } from "./session-meta-store.js";
 
-export type AcpSessionEntryReadInput = AcpSessionReadContextInput & {
-  sessionKey: string;
-  agentId?: string;
-  clone?: boolean;
-};
-
-export type PreparedAcpSessionEntryRead = {
-  session: AcpSessionStoreEntry | null;
-  assertCurrent(this: void): void;
-  release(): void;
-};
-
-export type AcpSessionEntryPreparer = (
-  params: AcpSessionEntryReadInput,
-) => Promise<PreparedAcpSessionEntryRead> | undefined;
+export type {
+  AcpSessionEntryPreparer,
+  AcpSessionEntryReadInput,
+  PreparedAcpSessionEntryRead,
+} from "./session-meta-read.types.js";
 
 /** Retain the canonical session source through its lifecycle-bound ACP metadata join. */
 export async function readAcpSessionEntryAsync(
@@ -49,24 +35,10 @@ export async function readAcpSessionEntryAsync(
   if (!incognito || !sessionKey) {
     return withAcpSessionEntryRead(params, (entry) => entry);
   }
-  const prepared = await prepareIncognitoAcpSessionEntryRead(params, incognito);
-  try {
-    prepared.assertCurrent();
-    return prepared.session;
-  } finally {
-    prepared.release();
-  }
-}
-
-/** Inactive cleanup composition; the prepared source remains owned until release. */
-export async function prepareIncognitoAcpSessionEntryRead(
-  params: AcpSessionEntryReadInput,
-  incognito: { actor: IncognitoAgentDatabaseExecution; authority: IncognitoSessionAuthority },
-): Promise<PreparedAcpSessionEntryRead> {
   const { actor, authority } = incognito;
   actor.assertCurrent();
   authority.assertCurrent();
-  const input = { ...params, sessionKey: params.sessionKey.trim() };
+  const input = { ...params, sessionKey };
   const context = captureAcpSessionReadContext(input);
   return actor.sessions.withSharedState(async () => {
     const captured = await context;
@@ -74,60 +46,22 @@ export async function prepareIncognitoAcpSessionEntryRead(
     if (target.agentId !== actor.agentId) {
       throw new Error("ACP read differs from its captured incognito actor");
     }
-    const released = createDeferredCore();
-    void actor.sessions.withSharedState(() => released.promise);
-    let active = true;
-    let changed = false;
-    const unsubscribe = sessionChanges.subscribeFacts((change) => {
-      if (
-        "all" in change ||
-        (change.sessionKey === target.storeSessionKey &&
-          (!change.agentId || change.agentId === actor.agentId))
-      ) {
-        changed = true;
-      }
+    const prepared = await actor.acp.prepareEntryRead({
+      ...captured,
+      sessionKey: target.storeSessionKey,
+      authority: {
+        assertCurrent() {
+          captured.assertCurrent();
+          authority.assertCurrent();
+        },
+        authorize: (stage, facts) => authority.authorize?.(stage, facts),
+      },
     });
-    const release = () => {
-      active = false;
-      unsubscribe();
-      released.resolve();
-    };
     try {
-      const { prepareIncognitoAcpSessionEntry } = await import("./session-meta-worker-mutation.js");
-      const prepared = await prepareIncognitoAcpSessionEntry({
-        ...captured,
-        actor,
-        sessionKey: target.storeSessionKey,
-        authority: {
-          assertCurrent() {
-            captured.assertCurrent();
-            authority.assertCurrent();
-          },
-          authorize: (stage, facts) => authority.authorize?.(stage, facts),
-        },
-      });
-      const assertCurrent = () => {
-        // Shared ACP publication can follow its actor-entry commit; retain both fences.
-        prepared.assertCurrent();
-        if (!active || changed) {
-          throw new Error("Prepared ACP session changed before binding cleanup");
-        }
-      };
-      assertCurrent();
-      return {
-        session: {
-          ...target,
-          cfg: captured.cfg,
-          sessionKey: input.sessionKey,
-          entry: prepared.entry,
-          acp: prepared.entry?.acp,
-        },
-        assertCurrent,
-        release,
-      };
-    } catch (error) {
-      release();
-      throw error;
+      prepared.assertCurrent();
+      return prepared.session ? { ...prepared.session, sessionKey: input.sessionKey } : null;
+    } finally {
+      prepared.release();
     }
   });
 }
