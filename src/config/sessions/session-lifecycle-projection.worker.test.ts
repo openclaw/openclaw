@@ -142,19 +142,63 @@ function maintenanceFixture() {
   };
 }
 
-function atLifecycleCommit(run: () => void) {
-  const changed = vi.fn(run);
-  const create = admission.createSqliteWorkerOperationAdmission;
-  vi.spyOn(admission, "createSqliteWorkerOperationAdmission").mockImplementation(
-    (callback, attachment) =>
-      create((request, grant) => {
-        if (delivery.currentCommand === "session.lifecycle.project" && request.stage === "commit") {
+async function runMaintenanceDrift(
+  f: ReturnType<typeof maintenanceFixture>,
+  drift: { preserve: () => string[]; change: () => void; removalOnly?: boolean; commits?: boolean },
+) {
+  const committed = vi.fn();
+  const changed = vi.fn(drift.change);
+  const stopPreserving = registerSessionMaintenancePreserveKeysProvider(drift.preserve);
+  if (drift.removalOnly) {
+    const authorize = reclamation.withSqliteReclamationAuthorization;
+    vi.spyOn(reclamation, "withSqliteReclamationAuthorization").mockImplementation(
+      (gate, database, assertCurrent, run) => {
+        const assertAfterDrift = () => {
           changed();
-        }
-        callback(request, grant);
-      }, attachment),
-  );
-  return changed;
+          assertCurrent();
+        };
+        return authorize(gate, database, assertAfterDrift, run);
+      },
+    );
+  } else {
+    const create = admission.createSqliteWorkerOperationAdmission;
+    vi.spyOn(admission, "createSqliteWorkerOperationAdmission").mockImplementation(
+      (callback, attachment) =>
+        create((request, grant) => {
+          if (
+            delivery.currentCommand === "session.lifecycle.project" &&
+            request.stage === "commit"
+          ) {
+            changed();
+          }
+          callback(request, grant);
+        }, attachment),
+    );
+  }
+  try {
+    const operation = applySessionEntryLifecycleMutation({
+      ...f.scope,
+      ...(drift.removalOnly
+        ? { removals: [{ sessionKey: f.scope.sessionKey, expectedEntry: f.read() }] }
+        : { activeSessionKey: f.scope.sessionKey, upserts: f.upserts }),
+      maintenanceOverride: {
+        ...f.maintenanceOverride,
+        ...(drift.removalOnly ? { maxEntries: 1 } : {}),
+      },
+      onLifecycleCommitted: committed,
+    });
+    // Keep providers registered through settlement; each case asserts the original outcome.
+    await Promise.allSettled([operation]);
+    expect(committed).toHaveBeenCalledTimes(drift.commits ? 1 : 0);
+    if (drift.removalOnly) {
+      expect(changed).toHaveBeenCalled();
+    } else {
+      expect(changed).toHaveBeenCalledOnce();
+    }
+    return operation;
+  } finally {
+    stopPreserving();
+  }
 }
 
 it("moves lifecycle counts and snapshot writes off the host while preserving maintenance", async () => {
@@ -268,209 +312,115 @@ it.each([
   "lifecycle session id",
   "work session id",
   "work normalized key",
-] as const)(
-  "rolls back snapshots when an archived sibling gains protection by %s before commit",
-  async (identityKind) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const f = maintenanceFixture();
-      const before = f.read();
-      const siblingBefore = f.read(f.siblingKey);
-      const committed = vi.fn();
-      let preserve = false;
-      const release = createDeferredCore();
-      let lifecycle: Promise<void> | undefined;
-      let work: Awaited<ReturnType<typeof beginSessionWorkAdmission>> | undefined;
-      const stopPreserving = registerSessionMaintenancePreserveKeysProvider(() =>
-        preserve ? [f.siblingKey] : [],
-      );
-      const changed = atLifecycleCommit(() => {
-        if (identityKind === "provider key") {
-          preserve = true;
-        } else if (identityKind === "lifecycle session id") {
-          lifecycle = runExclusiveSessionLifecycleMutation("patch", {
-            scope: f.scope.storePath,
-            identities: [` ${f.siblingId} `],
-            run: () => release.promise,
-          });
-          expect(isSessionLifecycleMutationActive(f.scope.storePath, [f.siblingId])).toBe(true);
-        }
-      });
-      delivery.beforeCommand = async (type) => {
-        if (type === "session.lifecycle.project" && identityKind.startsWith("work ")) {
-          work = await beginSessionWorkAdmission({
-            scope: f.scope.storePath,
-            identities: [
-              identityKind === "work session id"
-                ? ` ${f.siblingId} `
-                : " AGENT:MAIN:LIFECYCLE-OLD ",
-            ],
-            assertAllowed: () => {},
-          });
-        }
-      };
-      try {
-        const operation = applySessionEntryLifecycleMutation({
-          ...f.scope,
-          activeSessionKey: f.scope.sessionKey,
-          upserts: f.upserts,
-          maintenanceOverride: f.maintenanceOverride,
-          onLifecycleCommitted: committed,
-        });
-        await expect(operation).rejects.toBeInstanceOf(SessionMaintenancePreservationConflictError);
-        await expect(operation).rejects.toThrow(
-          "Session maintenance protection changed before lifecycle commit",
-        );
-        expect(changed).toHaveBeenCalledOnce();
-        expect(committed).not.toHaveBeenCalled();
-        expect(f.read()).toEqual(before);
-        expect(f.read(f.siblingKey)).toEqual(siblingBefore);
-        expect(f.read(f.createdKey)).toBeUndefined();
-      } finally {
-        work?.release();
-        stopPreserving();
-        release.resolve();
-        await lifecycle;
-      }
-    });
-  },
-);
-
-it("commits when unrelated maintenance protection changes before the commit grant", async () => {
+  "removal unrelated key",
+] as const)("rolls back snapshots when maintenance protection rejects %s", async (identityKind) => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const f = maintenanceFixture();
-    const committed = vi.fn();
-    let preserve = ["agent:main:unrelated-old"];
-    const stopPreserving = registerSessionMaintenancePreserveKeysProvider(() => preserve);
-    const changed = atLifecycleCommit(() => {
-      preserve = ["agent:main:unrelated-new"];
-    });
+    const removalOnly = identityKind === "removal unrelated key";
+    if (removalOnly) {
+      replaceSessionEntrySync({ ...f.scope, sessionKey: f.createdKey }, f.upserts[1].entry);
+    }
+    const before = [f.read(), f.read(f.siblingKey), f.read(f.createdKey)];
+    let preserve = removalOnly ? [f.siblingKey] : [];
+    const release = createDeferredCore();
+    let lifecycle: Promise<void> | undefined;
+    let work: Awaited<ReturnType<typeof beginSessionWorkAdmission>> | undefined;
+    delivery.beforeCommand = async (type) => {
+      if (type === "session.lifecycle.project" && identityKind.startsWith("work ")) {
+        work = await beginSessionWorkAdmission({
+          scope: f.scope.storePath,
+          identities: [
+            identityKind === "work session id" ? ` ${f.siblingId} ` : " AGENT:MAIN:LIFECYCLE-OLD ",
+          ],
+          assertAllowed: () => {},
+        });
+      }
+    };
     try {
-      await expect(
-        applySessionEntryLifecycleMutation({
-          ...f.scope,
-          activeSessionKey: f.scope.sessionKey,
-          upserts: f.upserts,
-          maintenanceOverride: f.maintenanceOverride,
-          onLifecycleCommitted: committed,
-        }),
-      ).resolves.toMatchObject({
-        beforeCount: 2,
-        afterCount: 3,
-        archived: 1,
-        capArchived: 1,
-        capped: 1,
-        pruned: 0,
-        removedEntries: 0,
+      const operation = runMaintenanceDrift(f, {
+        removalOnly,
+        preserve: () => preserve,
+        change: () => {
+          if (removalOnly || identityKind === "provider key") {
+            preserve = removalOnly ? [f.siblingKey, "agent:main:unrelated"] : [f.siblingKey];
+          } else if (identityKind === "lifecycle session id") {
+            lifecycle = runExclusiveSessionLifecycleMutation("patch", {
+              scope: f.scope.storePath,
+              identities: [` ${f.siblingId} `],
+              run: () => release.promise,
+            });
+            expect(isSessionLifecycleMutationActive(f.scope.storePath, [f.siblingId])).toBe(true);
+          }
+        },
       });
-      expect(changed).toHaveBeenCalledOnce();
-      expect(committed).toHaveBeenCalledOnce();
-      expect(f.read()?.skillsSnapshot).toEqual(f.upserts[0].entry.skillsSnapshot);
-      expect(f.read(f.siblingKey)).toMatchObject({ archiveReason: "active-session-cap" });
-      expect(f.read(f.createdKey)).toMatchObject({ sessionId: "new-session" });
+      await expect(operation).rejects.toBeInstanceOf(SessionMaintenancePreservationConflictError);
+      await expect(operation).rejects.toThrow(
+        "Session maintenance protection changed before lifecycle commit",
+      );
+      expect([f.read(), f.read(f.siblingKey), f.read(f.createdKey)]).toEqual(before);
     } finally {
-      stopPreserving();
+      work?.release();
+      release.resolve();
+      await lifecycle;
     }
   });
 });
 
-it("ignores protection that disappeared before the commit grant", async () => {
+it.each([
+  {
+    name: "commits when unrelated maintenance protection changes before the commit grant",
+    disappears: false,
+    removalOnly: false,
+  },
+  {
+    name: "ignores protection that disappeared before the commit grant",
+    disappears: true,
+    removalOnly: false,
+  },
+  {
+    name: "allows removal-only reclamation when protection disappeared",
+    disappears: true,
+    removalOnly: true,
+  },
+])("$name", async ({ disappears, removalOnly }) => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const f = maintenanceFixture();
+    if (removalOnly) {
+      replaceSessionEntrySync({ ...f.scope, sessionKey: f.createdKey }, f.upserts[1].entry);
+    }
     const siblingBefore = f.read(f.siblingKey);
-    const committed = vi.fn();
-    let preserve = true;
-    const stopPreserving = registerSessionMaintenancePreserveKeysProvider(() =>
-      preserve ? [f.siblingKey] : [],
-    );
-    const changed = atLifecycleCommit(() => {
-      preserve = false;
+    let preserve = disappears ? [f.siblingKey] : ["agent:main:unrelated-old"];
+    const operation = runMaintenanceDrift(f, {
+      commits: true,
+      removalOnly,
+      preserve: () => preserve,
+      change: () => {
+        preserve = disappears ? [] : ["agent:main:unrelated-new"];
+      },
     });
-    try {
-      await expect(
-        applySessionEntryLifecycleMutation({
-          ...f.scope,
-          activeSessionKey: f.scope.sessionKey,
-          upserts: f.upserts,
-          maintenanceOverride: f.maintenanceOverride,
-          onLifecycleCommitted: committed,
-        }),
-      ).resolves.toMatchObject({ beforeCount: 2, afterCount: 3, archived: 1, capped: 1 });
-      expect(changed).toHaveBeenCalledOnce();
-      expect(committed).toHaveBeenCalledOnce();
+    await expect(operation).resolves.toMatchObject({
+      beforeCount: removalOnly ? 3 : 2,
+      afterCount: removalOnly ? 2 : 3,
+      archived: 1,
+      capArchived: 1,
+      capped: 1,
+      pruned: 0,
+      removedEntries: removalOnly ? 1 : 0,
+    });
+    if (removalOnly) {
+      expect(f.read()).toBeUndefined();
+    } else {
       expect(f.read()?.skillsSnapshot).toEqual(f.upserts[0].entry.skillsSnapshot);
+    }
+    expect(f.read(f.createdKey)).toMatchObject({ sessionId: "new-session" });
+    if (disappears) {
       expect(f.read(f.siblingKey)).toEqual(siblingBefore);
-      expect(f.read(f.createdKey)).toMatchObject({
-        sessionId: "new-session",
-        archiveReason: "active-session-cap",
-      });
-    } finally {
-      stopPreserving();
+      expect(f.read(f.createdKey)).toMatchObject({ archiveReason: "active-session-cap" });
+    } else {
+      expect(f.read(f.siblingKey)).toMatchObject({ archiveReason: "active-session-cap" });
     }
   });
 });
-
-it.each(["disappeared", "grew"] as const)(
-  "allows removal-only reclamation only when protection has not grown (%s)",
-  async (drift) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const f = maintenanceFixture();
-      const before = f.read();
-      const siblingBefore = f.read(f.siblingKey);
-      const created = f.upserts[1];
-      replaceSessionEntrySync({ ...f.scope, sessionKey: created.sessionKey }, created.entry);
-      const createdBefore = f.read(f.createdKey);
-      const committed = vi.fn();
-      let changed = false;
-      const stopPreserving = registerSessionMaintenancePreserveKeysProvider(() =>
-        changed ? (drift === "grew" ? [f.siblingKey, "agent:main:unrelated"] : []) : [f.siblingKey],
-      );
-      const authorize = reclamation.withSqliteReclamationAuthorization;
-      vi.spyOn(reclamation, "withSqliteReclamationAuthorization").mockImplementation(
-        (gate, database, assertCurrent, run) =>
-          authorize(
-            gate,
-            database,
-            () => {
-              changed = true;
-              assertCurrent();
-            },
-            run,
-          ),
-      );
-      try {
-        const operation = applySessionEntryLifecycleMutation({
-          ...f.scope,
-          removals: [{ sessionKey: f.scope.sessionKey, expectedEntry: before }],
-          maintenanceOverride: { ...f.maintenanceOverride, maxEntries: 1 },
-          onLifecycleCommitted: committed,
-        });
-        if (drift === "grew") {
-          await expect(operation).rejects.toBeInstanceOf(
-            SessionMaintenancePreservationConflictError,
-          );
-          expect(committed).not.toHaveBeenCalled();
-          expect(f.read()).toEqual(before);
-          expect(f.read(f.createdKey)).toEqual(createdBefore);
-        } else {
-          await expect(operation).resolves.toMatchObject({
-            beforeCount: 3,
-            afterCount: 2,
-            archived: 1,
-            capped: 1,
-            removedEntries: 1,
-          });
-          expect(committed).toHaveBeenCalledOnce();
-          expect(f.read()).toBeUndefined();
-          expect(f.read(f.createdKey)).toMatchObject({ archiveReason: "active-session-cap" });
-        }
-        expect(changed).toBe(true);
-        expect(f.read(f.siblingKey)).toEqual(siblingBefore);
-      } finally {
-        stopPreserving();
-      }
-    });
-  },
-);
 
 it("publishes the acknowledged lifecycle once after losing its worker reply", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {

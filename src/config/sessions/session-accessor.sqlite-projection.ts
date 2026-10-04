@@ -92,46 +92,32 @@ function assertMaintenancePreservationCompatible(
   current: SessionMaintenancePreservationSnapshot,
   plans?: readonly SessionEntryMaintenancePlan[],
 ): void {
-  const added = (before: string[], after: string[]) => {
-    const previous = new Set(before.map((identity) => identity.trim()));
-    return new Set(
-      after.map((identity) => identity.trim()).filter((id) => id && !previous.has(id)),
-    );
-  };
-  const providerKeys = added(sent.providerKeys, current.providerKeys);
-  const work = added(sent.workIdentities, current.workIdentities);
-  const lifecycle = added(sent.lifecycleIdentities, current.lifecycleIdentities);
+  const added = new Set(
+    (["providerKeys", "workIdentities", "lifecycleIdentities"] as const).flatMap((kind) => {
+      const previous = new Set(sent[kind].map((id) => id.trim()));
+      return current[kind]
+        .flatMap((id) => (previous.has(id.trim()) ? [] : [id.trim(), normalizeStoreSessionKey(id)]))
+        .filter(Boolean);
+    }),
+  );
   // Lost protection only over-preserves the sent plan, so it cannot invalidate a commit.
-  if (providerKeys.size + work.size + lifecycle.size === 0) {
+  if (added.size === 0) {
     return;
   }
-  // Reclamation/native bindings cannot refresh a plan already sent to their worker.
-  if (!plans) {
-    throw new SessionMaintenancePreservationConflictError();
-  }
-  const workKeys = new Set([...work].map(normalizeStoreSessionKey));
-  const protectsSessionId = (sessionId: string | undefined) =>
-    Boolean(sessionId && (work.has(sessionId) || lifecycle.has(sessionId.trim())));
-  const protectsRow = (sessionKey: string, sessionId: string | undefined) => {
-    const normalized = normalizeStoreSessionKey(sessionKey);
-    return (
-      providerKeys.has(normalized) ||
-      workKeys.has(normalized) ||
-      lifecycle.has(sessionKey.trim()) ||
-      lifecycle.has(normalized) ||
-      protectsSessionId(sessionId)
-    );
-  };
+  // Matching provider keys against session IDs only makes rare conflicts more conservative.
+  const protectsRow = (sessionKey: string, sessionId?: string) =>
+    added.has(sessionKey.trim()) ||
+    added.has(normalizeStoreSessionKey(sessionKey)) ||
+    (sessionId && added.has(sessionId.trim()));
   if (
+    !plans ||
     plans.some(
       (plan) =>
-        plan.entryRemovals.some(({ sessionKey, expectedEntry }) =>
-          protectsRow(sessionKey, expectedEntry?.sessionId),
+        plan.entryRemovals.some((row) =>
+          protectsRow(row.sessionKey, row.expectedEntry?.sessionId),
         ) ||
-        plan.archivedEntries.some(({ sessionKey, sessionId }) =>
-          protectsRow(sessionKey, sessionId),
-        ) ||
-        plan.stateDeletePlans.some(({ sessionId }) => protectsSessionId(sessionId)),
+        plan.archivedEntries.some((row) => protectsRow(row.sessionKey, row.sessionId)) ||
+        plan.stateDeletePlans.some((row) => protectsRow("", row.sessionId)),
     )
   ) {
     throw new SessionMaintenancePreservationConflictError();
