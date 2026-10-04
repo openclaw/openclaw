@@ -1,4 +1,5 @@
 // Irc tests cover client plugin behavior.
+import type { Socket } from "node:net";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { withTimeout } from "openclaw/plugin-sdk/security-runtime";
 import { describe, expect, it } from "vitest";
@@ -333,4 +334,194 @@ describe("irc client PRIVMSG chunking on the wire", () => {
       }
     },
   );
+});
+
+async function startWritableLoopbackIrcServer(options?: {
+  onRegistered?: (socket: Socket) => void;
+}): Promise<
+  LoopbackIrcServer & {
+    openSocketCount: () => number;
+    writeToClients: (data: string) => void;
+    peerClosed: Promise<void>;
+    pongReceived: Promise<void>;
+  }
+> {
+  const lines: string[] = [];
+  const sockets = new Set<Socket>();
+  const peerClosed = createDeferred<void>();
+  const pongReceived = createDeferred<void>();
+  const server = await startIrcTestServer((socket) => {
+    sockets.add(socket);
+    socket.on("error", () => {});
+    socket.on("close", () => {
+      sockets.delete(socket);
+      peerClosed.resolve();
+    });
+    onIrcTestLine(socket, (line) => {
+      lines.push(line);
+      if (line.startsWith("PONG :")) {
+        pongReceived.resolve();
+      }
+      if (line.startsWith("USER ")) {
+        if (options?.onRegistered) {
+          options.onRegistered(socket);
+        } else {
+          socket.write(":server 001 bot :welcome\r\n");
+        }
+      }
+    });
+  });
+  return {
+    ...server,
+    lines,
+    openSocketCount: () => sockets.size,
+    writeToClients: (data) => {
+      for (const socket of sockets) {
+        socket.write(data);
+      }
+    },
+    peerClosed: peerClosed.promise,
+    pongReceived: pongReceived.promise,
+    quitReceived: Promise.resolve(),
+  };
+}
+
+describe("irc client inbound line byte limit", () => {
+  it("reports an error and closes on an oversized unterminated line", async () => {
+    const server = await startWritableLoopbackIrcServer();
+    const errors: Error[] = [];
+    let disconnects = 0;
+    try {
+      const client = await connectIrcClient({
+        host: "127.0.0.1",
+        port: server.port,
+        tls: false,
+        nick: "bot",
+        username: "bot",
+        realname: "OpenClaw Bot",
+        connectTimeoutMs: 5000,
+        onError: (error) => errors.push(error),
+        onDisconnect: () => {
+          disconnects += 1;
+        },
+      });
+
+      server.writeToClients("x".repeat(1024 * 1024));
+
+      await withTimeout(server.peerClosed, 1000, "oversized IRC input to close the socket");
+      expect(errors.map((error) => error.message)).toContain(
+        "IRC inbound line exceeds the 512-byte limit",
+      );
+      expect(disconnects).toBe(1);
+      expect(client.isReady()).toBe(false);
+      expect(server.openSocketCount()).toBe(0);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("accepts a legal 510-byte line split across socket writes", async () => {
+    const server = await startWritableLoopbackIrcServer();
+    const receivedLines: string[] = [];
+    const line = `PING :${"x".repeat(504)}`;
+    const lineReceived = createDeferred<void>();
+    let disconnects = 0;
+    try {
+      const client = await connectIrcClient({
+        host: "127.0.0.1",
+        port: server.port,
+        tls: false,
+        nick: "bot",
+        username: "bot",
+        realname: "OpenClaw Bot",
+        connectTimeoutMs: 5000,
+        onDisconnect: () => {
+          disconnects += 1;
+        },
+        onLine: (entry) => {
+          receivedLines.push(entry);
+          if (entry === line) {
+            lineReceived.resolve();
+          }
+        },
+      });
+
+      server.writeToClients(line.slice(0, 300));
+      server.writeToClients(`${line.slice(300)}\r\n`);
+
+      await withTimeout(
+        Promise.all([lineReceived.promise, server.pongReceived]),
+        1000,
+        "split legal IRC line",
+      );
+      expect(Buffer.byteLength(`${line}\r\n`, "utf8")).toBe(512);
+      expect(receivedLines).toContain(line);
+      expect(client.isReady()).toBe(true);
+      client.close();
+      expect(disconnects).toBe(0);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("applies the inbound limit to UTF-8 bytes", async () => {
+    const server = await startWritableLoopbackIrcServer();
+    const errors: Error[] = [];
+    let disconnects = 0;
+    try {
+      await connectIrcClient({
+        host: "127.0.0.1",
+        port: server.port,
+        tls: false,
+        nick: "bot",
+        username: "bot",
+        realname: "OpenClaw Bot",
+        connectTimeoutMs: 5000,
+        onError: (error) => errors.push(error),
+        onDisconnect: () => {
+          disconnects += 1;
+        },
+      });
+
+      server.writeToClients(`NOTICE bot :${"猫".repeat(167)}\r\n`);
+
+      await withTimeout(server.peerClosed, 1000, "multibyte oversized IRC line to close");
+      expect(errors.map((error) => error.message)).toContain(
+        "IRC inbound line exceeds the 512-byte limit",
+      );
+      expect(disconnects).toBe(1);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("stays quiet when an oversized line arrives before registration", async () => {
+    let disconnects = 0;
+    const server = await startWritableLoopbackIrcServer({
+      onRegistered: (socket) => {
+        socket.write("x".repeat(600));
+      },
+    });
+    try {
+      await expect(
+        connectIrcClient({
+          host: "127.0.0.1",
+          port: server.port,
+          tls: false,
+          nick: "bot",
+          username: "bot",
+          realname: "OpenClaw Bot",
+          connectTimeoutMs: 1000,
+          onDisconnect: () => {
+            disconnects += 1;
+          },
+        }),
+      ).rejects.toThrow("IRC inbound line exceeds the 512-byte limit");
+      await withTimeout(server.peerClosed, 1000, "pre-registration oversized IRC close");
+      expect(disconnects).toBe(0);
+      expect(server.openSocketCount()).toBe(0);
+    } finally {
+      await server.close();
+    }
+  });
 });
