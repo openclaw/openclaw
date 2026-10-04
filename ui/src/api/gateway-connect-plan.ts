@@ -196,6 +196,7 @@ export async function buildBrowserGatewayConnectPlan({
         caps: [
           "agent-kind",
           "approvals",
+          "device-pairing-wait",
           "task-suggestions",
           "terminal-offset-seq",
           "terminal-session-metadata",
