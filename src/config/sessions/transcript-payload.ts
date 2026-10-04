@@ -272,41 +272,54 @@ export function prepareTranscriptPayload(
   return { ...identity, event_json: null, event_zstd: compressed, navigation_json: navigation };
 }
 
+function decodeCompressedPayload(bytes: unknown, rawBytes: unknown): string {
+  if (
+    !(bytes instanceof Uint8Array) ||
+    bytes.byteLength === 0 ||
+    bytes.byteLength > MAX_COMPRESSED_EVENT_BYTES ||
+    typeof rawBytes !== "number" ||
+    !Number.isSafeInteger(rawBytes) ||
+    rawBytes < 1 ||
+    rawBytes > MAX_COMPRESSED_EVENT_BYTES
+  ) {
+    throw new Error("Invalid compressed transcript payload bounds");
+  }
+  const codec = resolveZstdCodec();
+  if (!codec) {
+    throw new Error("Cannot decode compressed transcript payload: this runtime lacks zstd support");
+  }
+  const decoded = codec.decompress(bytes, rawBytes);
+  if (decoded.byteLength !== rawBytes) {
+    throw new Error("Compressed transcript payload length does not match its recorded UTF-8 size");
+  }
+  return utf8Decoder.decode(decoded);
+}
+
 function registerDecoder(database: DatabaseSync): void {
   if (registeredDecoders.has(database)) {
     return;
   }
-  database.function(
-    DECODE_FUNCTION,
-    { deterministic: true, directOnly: true },
-    (bytes, rawBytes) => {
-      if (
-        !(bytes instanceof Uint8Array) ||
-        bytes.byteLength === 0 ||
-        bytes.byteLength > MAX_COMPRESSED_EVENT_BYTES ||
-        typeof rawBytes !== "number" ||
-        !Number.isSafeInteger(rawBytes) ||
-        rawBytes < 1 ||
-        rawBytes > MAX_COMPRESSED_EVENT_BYTES
-      ) {
-        throw new Error("Invalid compressed transcript payload bounds");
-      }
-      const codec = resolveZstdCodec();
-      if (!codec) {
-        throw new Error(
-          "Cannot decode compressed transcript payload: this runtime lacks zstd support",
-        );
-      }
-      const decoded = codec.decompress(bytes, rawBytes);
-      if (decoded.byteLength !== rawBytes) {
-        throw new Error(
-          "Compressed transcript payload length does not match its recorded UTF-8 size",
-        );
-      }
-      return utf8Decoder.decode(decoded);
-    },
+  database.function(DECODE_FUNCTION, { deterministic: true, directOnly: true }, (bytes, rawBytes) =>
+    decodeCompressedPayload(bytes, rawBytes),
   );
   registeredDecoders.add(database);
+}
+
+/** Stored payload columns, captured raw so decoding can run after the read transaction closes. */
+export type TranscriptEventPayloadColumns = Pick<
+  TranscriptPayloadRecord,
+  "event_json" | "event_zstd" | "event_utf8_bytes"
+>;
+
+export const TRANSCRIPT_EVENT_PAYLOAD_COLUMNS = [
+  "event_json",
+  "event_zstd",
+  "event_utf8_bytes",
+] as const;
+
+/** Same bytes as `transcriptEventJsonSql`, decoded in JavaScript outside any SQLite transaction. */
+export function decodeTranscriptEventPayload(row: TranscriptEventPayloadColumns): string {
+  return row.event_json ?? decodeCompressedPayload(row.event_zstd, row.event_utf8_bytes);
 }
 
 /** Only selected bodies decode; identity TEXT remains inside SQLite for native repairs. */

@@ -51,9 +51,12 @@ import type { SessionTranscriptReadSnapshot } from "./session-history-read.types
 import { SessionTranscriptStorageUnavailableError } from "./session-transcript-projection-error.js";
 import { resolveSqliteSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 import {
+  decodeTranscriptEventPayload,
+  TRANSCRIPT_EVENT_PAYLOAD_COLUMNS,
   transcriptEventJsonSql,
   transcriptEventNavigationSql,
   transcriptEventResetNavigationSql,
+  type TranscriptEventPayloadColumns,
 } from "./transcript-payload.js";
 
 export type SqliteTranscriptSnapshotRow = {
@@ -129,12 +132,29 @@ export function readTranscriptExportSnapshotReadOnlySync(
                 .where("session_id", "=", resolved.sessionId)
                 .limit(1),
             )?.session_key;
-          return {
-            events: loadTranscriptEventsFromDatabase(database, resolved.sessionId, {
+          const readOptions = {
+            beforeEventSeq: fence?.beforeRawSeq,
+            maxEventBytes: scope.maxEventBytes,
+          };
+          // Reset navigation is a small native projection. Full payloads are captured raw:
+          // decoding and projecting them inside the hold pins the reader snapshot for seconds.
+          let materialize: () => TranscriptEvent[];
+          if (options.projection === "reset-boundary") {
+            const events = loadTranscriptEventsFromDatabase(database, resolved.sessionId, {
               ...options,
-              beforeEventSeq: fence?.beforeRawSeq,
-              maxEventBytes: scope.maxEventBytes,
-            }),
+              ...readOptions,
+            });
+            materialize = () => events;
+          } else {
+            const payloads = readTranscriptEventPayloadRowsFromDatabase(
+              database,
+              resolved.sessionId,
+              readOptions,
+            );
+            materialize = () => decodeTranscriptEventPayloadRows(payloads, options.projectEvent);
+          }
+          return {
+            materialize,
             stats: readTranscriptStatsFromDatabase(database, resolved.sessionId),
             sessionKey,
           };
@@ -143,7 +163,11 @@ export function readTranscriptExportSnapshotReadOnlySync(
       ),
     toDatabaseOptions(resolved),
   );
-  return result.found ? result.value : undefined;
+  if (!result.found) {
+    return undefined;
+  }
+  const { materialize, stats, sessionKey } = result.value;
+  return { events: materialize(), stats, sessionKey };
 }
 
 /** Pair loaded bytes with the watermark that also fences opaque navigation edits. */
@@ -158,7 +182,7 @@ export function loadTranscriptReadSnapshotSync(
       () => {
         const fence = resolveSqliteSessionTranscriptReadFence({ database, ...resolved });
         return {
-          events: loadTranscriptEventsFromDatabase(database, resolved.sessionId, {
+          payloads: readTranscriptEventPayloadRowsFromDatabase(database, resolved.sessionId, {
             beforeEventSeq: fence?.beforeRawSeq,
             maxEventBytes: scope.maxEventBytes,
           }),
@@ -168,14 +192,21 @@ export function loadTranscriptReadSnapshotSync(
       { databaseLabel: database.path, operationLabel: "session transcript fenced read" },
     );
   const databaseOptions = toDatabaseOptions(resolved);
+  const decode = ({
+    payloads,
+    version,
+  }: ReturnType<typeof read>): SessionTranscriptReadSnapshot => ({
+    events: decodeTranscriptEventPayloadRows(payloads),
+    version,
+  });
   if (!options.readOnly) {
-    return read(openOpenClawAgentDatabase(databaseOptions));
+    return decode(read(openOpenClawAgentDatabase(databaseOptions)));
   }
   const result = withOpenClawAgentDatabaseReadOnly(read, databaseOptions);
   if (!result.found) {
     throw new SessionTranscriptStorageUnavailableError(result.reason);
   }
-  return result.value;
+  return decode(result.value);
 }
 
 /** Reads a complete maintenance transcript and its lifecycle snapshot from one transaction. */
@@ -359,6 +390,46 @@ export function loadTranscriptEventsFromDatabase(
       return options.projectEvent ? options.projectEvent(event) : event;
     });
   });
+}
+
+/** Captures stored payload columns for the fenced rows without decoding them. */
+function readTranscriptEventPayloadRowsFromDatabase(
+  database: Pick<OpenClawAgentDatabase, "db">,
+  sessionId: string,
+  options: { beforeEventSeq?: number; maxEventBytes?: number } = {},
+): TranscriptEventPayloadColumns[] {
+  return readHotSessionTranscriptSnapshot(database, sessionId, "events", () => {
+    const rows = iterateSqliteQuerySync(
+      database.db,
+      prepareTranscriptEventReadQuery(database, sessionId, options)
+        .select([...TRANSCRIPT_EVENT_PAYLOAD_COLUMNS])
+        .orderBy("seq", "asc"),
+    );
+    // Array.from closes the iterator on failure; no live cursor escapes a fenced read.
+    return Array.from(rows, (row) => ({
+      event_json: row.event_json,
+      event_zstd: row.event_zstd,
+      event_utf8_bytes: row.event_utf8_bytes,
+    }));
+  });
+}
+
+/** Decodes captured rows after their transaction closed, releasing each as it is consumed. */
+function decodeTranscriptEventPayloadRows(
+  rows: Array<TranscriptEventPayloadColumns | undefined>,
+  projectEvent?: (event: TranscriptEvent) => TranscriptEvent,
+): TranscriptEvent[] {
+  const events: TranscriptEvent[] = [];
+  for (let index = 0; index < rows.length; index++) {
+    const row = rows[index];
+    if (!row) {
+      continue;
+    }
+    rows[index] = undefined;
+    const event: TranscriptEvent = JSON.parse(decodeTranscriptEventPayload(row));
+    events.push(projectEvent ? projectEvent(event) : event);
+  }
+  return events;
 }
 
 export function readTranscriptSnapshot(
