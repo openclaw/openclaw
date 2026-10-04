@@ -16281,12 +16281,13 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
 
     const canonicalExtendedStableDispatch = [
       'VALIDATION_SHA="<exact-candidate-sha>"',
-      'TOOLING_SHA="<recorded-full-main-ancestor-sha>"',
+      'PUBLISHER_SHA="<recorded-full-trusted-main-ancestor-sha>"',
       'CONTEXT_REF="extended-stable/YYYY.M.33"',
       "pnpm ci:full-release",
       '--sha "$VALIDATION_SHA"',
       '--target-ref "$CONTEXT_REF"',
-      '--workflow-sha "$TOOLING_SHA"',
+      '--admission-workflow-sha "$PUBLISHER_SHA"',
+      "--admission-workflow-ref main",
       "-f release_profile=stable",
       "-f run_release_soak=true",
       "-f fail_fast=false",
@@ -16301,11 +16302,10 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
       expect(text).not.toContain('-f ref="$CONTEXT_REF"');
     }
     expectTextToIncludeAll(releaseCi, [
-      "`--ref` accepts a branch or tag name, not a raw commit",
-      '{"fullRef":"refs/heads/main","ref":"main","sha":"<tooling-sha>"}',
-      "Outside this extended-stable procedure, a direct canonical-branch dispatch",
-      "Current extended-stable validation requires distinct",
-      "Direct canonical-branch and mutable-`main` dispatches are not valid",
+      "Only the helper creates the immutable",
+      "Never raw-dispatch, manually create its ref, or mint",
+      "A new explicit main/protected route is diagnostic",
+      "cannot replace this admitted Q=C publish proof",
     ]);
     expectTextToIncludeAll(releaseCi, [
       "Current all-group FRV also owns read-only core and selected-plugin npm",
@@ -16318,10 +16318,11 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
       'VALIDATION_SHA="<full-commit-sha>"',
       '-f ref="$VALIDATION_SHA"',
       '-f expected_sha="$VALIDATION_SHA"',
-      'TOOLING_SHA="<recorded-full-main-ancestor-sha>"',
+      'PUBLISHER_SHA="<recorded-full-trusted-main-ancestor-sha>"',
       'VALIDATION_SHA="<full-release-candidate-sha>"',
       "--target-ref release/YYYY.M.PATCH",
-      '--workflow-sha "$TOOLING_SHA"',
+      '--admission-workflow-sha "$PUBLISHER_SHA"',
+      "--admission-workflow-ref main",
     ]);
   });
 
