@@ -89,18 +89,12 @@ describe("warm boot app root", () => {
     }
   });
 
-  it("renders the shell during the first connection when a boot record is present", () => {
-    const { container, draw } = createWarmSurface();
+  it("keeps the credential-scoped warm shell after an unreachable connection retries", () => {
+    const { snapshot, container, draw } = createWarmSurface();
     draw();
-
     expect(container.querySelector("openclaw-app-shell")).not.toBeNull();
     expect(container.querySelector(".connect-splash")).toBeNull();
     expect(container.querySelector("openclaw-login-gate")).toBeNull();
-  });
-
-  it("keeps the credential-scoped warm shell after an unreachable connection retries", () => {
-    const { snapshot, container, draw } = createWarmSurface();
-    snapshot.phase = "connecting";
     snapshot.lastError = "Connection interrupted; retrying";
     snapshot.lastErrorCode = null;
     draw();
@@ -111,32 +105,10 @@ describe("warm boot app root", () => {
     expect(container.querySelector("openclaw-app-shell")).toBeNull();
   });
 
-  it("does not treat a retryable pairing rejection as warm offline admission", () => {
-    const { snapshot, container, draw } = createWarmSurface();
-    snapshot.phase = "connecting";
-    snapshot.lastError = "Pairing required";
-    snapshot.lastErrorCode = "PAIRING_REQUIRED";
-    draw();
-    expect(container.querySelector("openclaw-app-shell")).toBeNull();
-    expect(container.querySelector("openclaw-login-gate")).not.toBeNull();
-  });
-
-  it("returns to the login gate after a warm connection fails", () => {
+  it("keeps saved-sign-in recovery reachable after auth fails without admitting other routes", async () => {
     const { snapshot, container, draw } = createWarmSurface();
     draw();
     expect(container.querySelector("openclaw-app-shell")).not.toBeNull();
-
-    snapshot.phase = "offline";
-    snapshot.lastError = "Authentication rejected";
-    snapshot.lastErrorCode = "AUTH_TOKEN_MISMATCH";
-    draw();
-
-    expect(container.querySelector("openclaw-login-gate")).not.toBeNull();
-    expect(container.querySelector("openclaw-app-shell")).toBeNull();
-  });
-
-  it("keeps saved-sign-in recovery reachable after auth fails without admitting other routes", async () => {
-    const { snapshot, container, draw } = createWarmSurface();
     const gateway = runtime!.context.gateway;
     let stored = true;
     gateway.hasStoredDeviceToken = () => stored;
@@ -148,6 +120,7 @@ describe("warm boot app root", () => {
       props: { onOpenGatewaySettings: () => void };
     };
     expect(gate).not.toBeNull();
+    expect(container.querySelector("openclaw-app-shell")).toBeNull();
     const navigation = vi.spyOn(runtime!.router, "navigate");
     gate.props.onOpenGatewaySettings();
     await expectDefined(navigation.mock.results[0], "Gateway settings navigation").value;
@@ -161,26 +134,36 @@ describe("warm boot app root", () => {
     expect(container.querySelector("openclaw-login-gate")).not.toBeNull();
   });
 
-  it("keeps cold first connections on the existing splash", () => {
-    const { container, draw } = createWarmSurface(false);
-    draw();
-
-    expect(container.querySelector(".connect-splash")).not.toBeNull();
-    expect(container.querySelector("openclaw-app-shell")).toBeNull();
-  });
-
-  it.each(["connecting", "starting"] as const)(
-    "does not replace a manual login submission with warm shell during %s",
-    (phase) => {
-      const { app, snapshot, container, draw } = createWarmSurface();
-      Object.assign(app, { loginGatePinned: true });
+  const admissionCases: Array<{
+    name: string;
+    warm?: boolean;
+    pinned?: boolean;
+    phase?: "connecting" | "starting";
+    error?: string;
+    code?: string;
+    surface: string;
+  }> = [
+    { name: "cold connection", warm: false, surface: ".connect-splash" },
+    {
+      name: "pairing rejection",
+      error: "Pairing required",
+      code: "PAIRING_REQUIRED",
+      surface: "openclaw-login-gate",
+    },
+    { name: "manual login", pinned: true, surface: "openclaw-login-gate" },
+    { name: "manual startup", pinned: true, phase: "starting", surface: ".connect-splash" },
+  ];
+  it.each(admissionCases)(
+    "keeps $name outside the warm shell",
+    ({ warm = true, pinned = false, phase = "connecting", error = null, code = null, surface }) => {
+      const { app, snapshot, container, draw } = createWarmSurface(warm);
+      Object.assign(app, { loginGatePinned: pinned });
       snapshot.phase = phase;
+      snapshot.lastError = error;
+      snapshot.lastErrorCode = code;
       draw();
-
       expect(container.querySelector("openclaw-app-shell")).toBeNull();
-      expect(
-        container.querySelector(phase === "starting" ? ".connect-splash" : "openclaw-login-gate"),
-      ).not.toBeNull();
+      expect(container.querySelector(surface)).not.toBeNull();
     },
   );
 });

@@ -1986,7 +1986,7 @@
     "test:channels": "node scripts/run-vitest.mjs run --config test/vitest/vitest.channels.config.ts",
     "test:contracts": "pnpm test:contracts:channels && pnpm test:contracts:plugins",
     "test:contracts:channels": "node --import ./scripts/tsx.mjs scripts/test-projects.mts --maxWorkers=1 test/vitest/vitest.contracts-channel-surface.config.ts test/vitest/vitest.contracts-channel-config.config.ts test/vitest/vitest.contracts-channel-registry.config.ts test/vitest/vitest.contracts-channel-session.config.ts",
-    "test:contracts:plugins": "node scripts/run-vitest.mjs run --config test/vitest/vitest.contracts-plugin.config.ts --maxWorkers=1",
+    "test:contracts:plugins": "node --import ./scripts/tsx.mjs scripts/test-projects.mts --maxWorkers=1 src/plugins/contracts",
     "test:coverage": "node scripts/run-vitest.mjs run --config test/vitest/vitest.unit.config.ts --coverage",
     "test:coverage:changed": "node scripts/run-vitest.mjs run --config test/vitest/vitest.unit.config.ts --coverage --changed origin/main",
     "test:docker:agent-bundle-mcp-tools": "bash scripts/e2e/agent-bundle-mcp-tools-docker.sh",

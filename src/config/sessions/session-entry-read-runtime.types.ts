@@ -12,7 +12,7 @@ export type SessionStoreWorkerReadScope = {
 export type SessionEntryWorkerRead = SessionStoreWorkerReadScope &
   SessionExactEntriesWorkerSelection & {
     lifecycleSessionKey?: string;
-    projection?: "full" | "sharing" | "list";
+    projection?: "full" | "sharing" | "list" | "exact";
     includeMembers?: boolean;
     includeParticipantRecords?: boolean;
     includeAuthorization?: boolean;
