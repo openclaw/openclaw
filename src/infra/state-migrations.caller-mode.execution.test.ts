@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import * as fsSafeAdvanced from "@openclaw/fs-safe/advanced";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { pluginDoctorContractRegistryLoaderState } from "../plugins/doctor-contract-registry-loader-state.js";
@@ -299,6 +300,8 @@ describe("legacy state migration caller execution", () => {
       OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
     };
     delete env.OPENCLAW_STATE_DIR;
+    delete env.OPENCLAW_HOME;
+    delete env.OPENCLAW_CONFIG_PATH;
 
     const result = await autoMigrateLegacyState({
       cfg: {},
@@ -313,7 +316,7 @@ describe("legacy state migration caller execution", () => {
       target: [{ kind: "path", path: stateDir }],
       outcome: "completed",
     });
-    expect(fs.realpathSync(legacyStateDir)).toBe(fs.realpathSync(stateDir));
+    expect(fs.existsSync(legacyStateDir)).toBe(false);
     expect(fs.existsSync(execPath)).toBe(false);
     expect(result.stepReceipts.find((receipt) => receipt.id === "exec-approvals")).toMatchObject({
       source: [
@@ -343,6 +346,7 @@ describe("legacy state migration caller execution", () => {
     writeLegacyDoctorSources(legacyStateDir);
     const env: NodeJS.ProcessEnv = { ...process.env, HOME: root };
     delete env.OPENCLAW_STATE_DIR;
+    delete env.OPENCLAW_HOME;
     delete env.OPENCLAW_CONFIG_PATH;
 
     const plan = await planLegacyStateMigrationsReadOnly({
@@ -388,13 +392,17 @@ describe("legacy state migration caller execution", () => {
     const legacyStateDir = path.join(root, ".clawdbot");
     const stateDir = path.join(root, ".openclaw");
     fs.mkdirSync(legacyStateDir, { recursive: true });
-    fs.mkdirSync(stateDir, { recursive: true });
-    fs.writeFileSync(path.join(stateDir, "existing-state"), "occupied\n");
+
     const env: NodeJS.ProcessEnv = { ...process.env, HOME: root };
     delete env.OPENCLAW_STATE_DIR;
+    delete env.OPENCLAW_HOME;
+    delete env.OPENCLAW_CONFIG_PATH;
     const sourcePath = path.join(root, "wal-source.sqlite");
     const source = new DatabaseSync(sourcePath);
-    const databasePath = resolveOpenClawStateSqlitePath(env);
+    const databasePath = resolveOpenClawStateSqlitePath({
+      ...env,
+      OPENCLAW_STATE_DIR: legacyStateDir,
+    });
     try {
       source.exec(`
         PRAGMA journal_mode = WAL;
@@ -409,6 +417,13 @@ describe("legacy state migration caller execution", () => {
       source.close();
     }
     const databaseArtifactsBefore = snapshotSqliteArtifacts(databasePath);
+    const publish = fsSafeAdvanced.retainEntryForPublication;
+    vi.spyOn(fsSafeAdvanced, "retainEntryForPublication").mockImplementation((options) => {
+      if (options.source.basename === ".clawdbot") {
+        fs.mkdirSync(stateDir);
+      }
+      return publish(options);
+    });
     const { execPath } = writeLegacyDoctorSources(legacyStateDir);
     // Preserve the native method so the spy can inspect each opened database before delegating.
     // oxlint-disable-next-line typescript/unbound-method
@@ -456,7 +471,8 @@ describe("legacy state migration caller execution", () => {
       ),
     );
     expect(result.stepReceipts.some((receipt) => receipt.id === "exec-approvals")).toBe(true);
-    expect(result.warnings.join("\n")).toContain("State dir migration skipped");
+    expect(result.warnings.join("\n")).toContain("legacy rename");
+    expect(fs.readdirSync(stateDir)).toEqual([]);
     expect(fs.existsSync(execPath)).toBe(true);
     expect(postRefusalQueries).toEqual([]);
     expect(snapshotSqliteArtifacts(databasePath)).toEqual(databaseArtifactsBefore);

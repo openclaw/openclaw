@@ -317,11 +317,11 @@ export async function beginDoctorMaintenance(
   };
   const admitRepair = async () => {
     inspectingActivation = false;
-    await assertLegacyGatewayStoppedForMaintenance(env);
+    await assertLegacyGatewayStoppedForMaintenance(state.env);
     // Retain one process owner across every migration and its resource drainage.
     await acquireStoppedMaintenanceResources();
     assertUpdateAdmissionCurrent?.();
-    await assertDoctorAgentLeaseAdmission(env);
+    await assertDoctorAgentLeaseAdmission(state.env);
     repairStoresMayBeOpen = true;
   };
   let admissionFailureHandled = false;
@@ -389,7 +389,7 @@ export async function beginDoctorMaintenance(
     warnings.push(message);
     params.runtime.error(message);
   });
-  const state = createDoctorMaintenanceState({
+  const state = await createDoctorMaintenanceState({
     params,
     env,
     signal: exit.signal,
@@ -462,7 +462,7 @@ export async function beginDoctorMaintenance(
           // A running managed Gateway legitimately owns this state until its
           // service is stopped. Any other holder is knowable before that mutation.
           const observationSignal = resolveCommandProcessSignal(exit.signal) ?? exit.signal;
-          const servingOwner = await readDoctorGatewayOwnerLease(env, observationSignal);
+          const servingOwner = await readDoctorGatewayOwnerLease(state.env, observationSignal);
           const legacyGatewayLock = servingOwner
             ? undefined
             : await readActiveGatewayLockIdentity({

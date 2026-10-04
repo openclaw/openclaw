@@ -506,6 +506,8 @@ module.exports = { stateMigrations: [{
       };
       if (legacyRoot) {
         delete env.OPENCLAW_STATE_DIR;
+        delete env.OPENCLAW_HOME;
+        delete env.OPENCLAW_CONFIG_PATH;
       }
       if (legacySchema) {
         const databasePath = resolveOpenClawStateSqlitePath(env);
@@ -571,7 +573,7 @@ module.exports = { stateMigrations: [{
       expect(preludeReceipt, JSON.stringify(preludeReceipt)).toMatchObject({
         outcome: legacyRoot ? "completed" : "skipped",
       });
-      expect(fs.realpathSync(legacyStateDir)).toBe(fs.realpathSync(stateDir));
+      expect(fs.existsSync(legacyStateDir)).toBe(!legacyRoot);
       expect(result.warnings).toEqual([]);
       if (legacySchema) {
         expect(result.stepReceipts.find((receipt) => receipt.id === "state-schema")).toMatchObject({
