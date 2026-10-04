@@ -404,6 +404,13 @@ export function isGenericUnknownStreamErrorMessage(raw: string): boolean {
 export function isExactUnknownNoDetailsError(raw: string): boolean {
   return normalizeOptionalLowercaseString(raw) === "unknown error (no error details in response)";
 }
+export function isClaudeCliTransientRefreshError(raw: string, provider?: string): boolean {
+  if (normalizeOptionalLowercaseString(provider) !== "claude-cli") {
+    return false;
+  }
+  return /failed to refresh oauth token:.*(?:another claude code process is refreshing|exited mid-refresh)/i.test(raw);
+}
+
 export function isClaudeCliAuthError(raw: string, provider?: string): boolean {
   // These upstream phrases overlap generic session/auth wording. Provider identity
   // must come from runner metadata so other CLIs cannot inherit Claude policy.
