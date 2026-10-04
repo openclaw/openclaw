@@ -32,6 +32,7 @@ Linux-compatible Gateway runtime.
 - Azure (Linux VM): [Azure](/install/azure)
 - Daytona (cloud sandbox): [Daytona](/install/daytona)
 - EasyRunner (Podman + Caddy): [EasyRunner](/platforms/easyrunner)
+- Everpod (managed private VM): [Everpod](/install/everpod)
 - exe.dev (VM + HTTPS proxy): [exe.dev](/install/exe-dev)
 - Fly.io: [Fly.io](/install/fly)
 - GCP (Compute Engine): [GCP](/install/gcp)
