@@ -115,6 +115,8 @@ describe("Codex bounded assistant continuity", () => {
           web_search: "disabled",
         }),
       });
+      // Continuity owns logical attempt time while real worker preparation completes.
+      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
       const harness = mode === "resumed" ? createResumeHarness() : createStartedThreadHarness();
       const run = runCodexAppServerAttempt(params);
       await harness.waitForMethod("turn/start");
