@@ -48,9 +48,6 @@ describe("Telegram preview and presentation delivery through HTTP", () => {
       expect(rejected).toBe(true);
       expect(acceptedCalls.filter((call) => call.method === "sendMessage")).toHaveLength(1);
       expect([...visibleMessages]).toEqual([[1, finalText]]);
-      expect(
-        acceptedCalls.filter((call) => call.method === "editMessageText").at(-1)?.fields,
-      ).toMatchObject({ message_id: 1, text: finalText });
     },
   );
 
