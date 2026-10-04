@@ -101,7 +101,7 @@ describe("update-cli", () => {
     [
       ...vi
         .mocked(runUtf8CommandWithTimeout)
-        .map(([argv], index) => ({
+        .mock.calls.map(([argv], index) => ({
           runner: argv[0],
           commandArgs: argv.slice(2),
           order: vi.mocked(runUtf8CommandWithTimeout).mock.invocationCallOrder[index] ?? 0,
@@ -110,7 +110,7 @@ describe("update-cli", () => {
         .filter((call) => call.entrypoint === entrypoint && call.commandArgs[0] === "doctor"),
       ...vi
         .mocked(runExec)
-        .map(([runner, args], index) => ({
+        .mock.calls.map(([runner, args], index) => ({
           runner,
           commandArgs: args.slice(1),
           order: vi.mocked(runExec).mock.invocationCallOrder[index] ?? 0,
