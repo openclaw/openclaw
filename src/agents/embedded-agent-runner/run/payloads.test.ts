@@ -977,29 +977,6 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     expect(payloads[0]?.text).toBeUndefined();
   });
 
-  it("lets a silent terminal attachment supersede an earlier completed answer", () => {
-    const silentVoice = "NO_REPLY\nMEDIA:/tmp/openclaw/tts-a/voice-a.opus";
-    const earlier = {
-      role: "assistant",
-      stopReason: "stop",
-      content: [{ type: "text", text: "Earlier answer." }],
-    } as AssistantMessage;
-    const terminal = {
-      role: "assistant",
-      stopReason: "stop",
-      content: [{ type: "text", text: silentVoice }],
-    } as AssistantMessage;
-    const payloads = buildPayloads({
-      assistantTexts: ["Earlier answer.", silentVoice],
-      inputAnswer: { assistant: earlier, messageIndex: 1 },
-      lastAssistant: terminal,
-    });
-
-    expect(payloads.map(({ text, mediaUrl }) => ({ text, mediaUrl }))).toEqual([
-      { text: undefined, mediaUrl: "/tmp/openclaw/tts-a/voice-a.opus" },
-    ]);
-  });
-
   it("preserves media directives when stored assistant text was reduced to visible text only", () => {
     const payloads = buildPayloads({
       assistantTexts: ["Attached image"],

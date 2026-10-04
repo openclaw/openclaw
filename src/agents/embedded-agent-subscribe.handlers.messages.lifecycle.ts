@@ -5,6 +5,7 @@ import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import type { AssistantMessage } from "../llm/types.js";
 import { coerceChatContentText } from "../shared/chat-content.js";
 import { resolveAssistantMessagePhase } from "../shared/chat-message-content.js";
 import {
@@ -40,6 +41,21 @@ import {
   promoteThinkingTagsToBlocks,
 } from "./embedded-agent-utils.js";
 import type { AgentEvent, AgentMessage } from "./runtime/index.js";
+
+/** Visible text of a final answer that ended its model response, if the message is one. */
+function resolveCompletedAnswerText(ctx: EmbeddedAgentSubscribeContext, message: AssistantMessage) {
+  if (
+    ctx.params.silentExpected ||
+    message.stopReason !== "stop" ||
+    resolveAssistantMessagePhase(message) !== "final_answer" ||
+    message.content.some((item) => item.type === "toolCall")
+  ) {
+    return undefined;
+  }
+  const { text, isSilent } = parseReplyDirectives(extractAssistantVisibleText(message));
+  return isSilent ? undefined : text.trim() || undefined;
+}
+
 export function handleMessageStart(
   ctx: EmbeddedAgentSubscribeContext,
   evt: AgentEvent & { message: AgentMessage },
@@ -49,6 +65,22 @@ export function handleMessageStart(
     return;
   }
 
+  // Like Codex, a final answer that ended its model response is delivered even when the model
+  // keeps working on the same input, for example on async tool results. Seal it as an answer.
+  const previous = ctx.state.lastAssistant;
+  if (
+    previous &&
+    previous !== ctx.state.answerSegments.at(-1)?.lastAssistant &&
+    resolveCompletedAnswerText(ctx, previous)
+  ) {
+    ctx.state.answerSegments.push({
+      textEnd: ctx.state.assistantTexts.length,
+      messageEnd: ctx.state.assistantMessageIndex,
+      finalMessageStart: ctx.state.assistantMessageStartIndex,
+      lastAssistant: previous,
+      continued: true,
+    });
+  }
   // Only message_start opens another message's stream and block replies.
   ctx.resetAssistantMessageState(ctx.state.assistantTexts.length);
   ctx.state.assistantMessageStartIndex = ctx.state.assistantMessageIndex;
@@ -67,9 +99,7 @@ export function handleMessageEnd(
       messageEnd: ctx.state.assistantMessageIndex,
       finalMessageStart: ctx.state.assistantMessageStartIndex,
       lastAssistant: ctx.state.lastAssistant,
-      answer: ctx.state.inputAnswer,
     });
-    ctx.state.inputAnswer = undefined;
     ctx.state.sourceReplyDeliveryState = "missing";
     ctx.state.messageToolOnlySourceReplyDelivered = false;
     ctx.state.deterministicApprovalPromptPending = false;
@@ -273,16 +303,11 @@ export function handleMessageEnd(
     addedDuringMessage,
     chunkerHasBuffered,
   });
-  if (
-    !ctx.params.silentExpected &&
-    assistantMessage.stopReason === "stop" &&
-    !parsedText.isSilent &&
-    (cleanedText.trim() || mediaUrls.length > 0)
-  ) {
-    ctx.state.inputAnswer = {
-      assistant: assistantMessage,
-      messageIndex: ctx.state.assistantMessageIndex,
-    };
+  const sealed = ctx.state.answerSegments.at(-1);
+  const answerText = sealed?.continued && resolveCompletedAnswerText(ctx, assistantMessage);
+  // An exact repeat restates the sealed answer, so it is delivered once, at its later position.
+  if (answerText && answerText === resolveCompletedAnswerText(ctx, sealed.lastAssistant)) {
+    ctx.state.answerSegments.pop();
   }
 
   const onBlockReply = ctx.params.onBlockReply;

@@ -105,7 +105,6 @@ function createResultFixture(params?: {
       activeCount: 0,
     }),
     getLastAssistantTextMessageIndex: () => undefined,
-    getInputAnswer: () => undefined,
     getLastCompactionTokensAfter: () => undefined,
     getLastToolError: () => undefined,
     getLatestMcpAppChannelView: () => params?.latestMcpAppChannelView,

@@ -95,9 +95,6 @@ export type StreamBlockState = {
   pendingTagFragment?: string;
 };
 
-/** A response-ending answer and the message index its reply payload belongs to. */
-export type CompletedAssistantAnswer = { assistant: AssistantMessage; messageIndex: number };
-
 /** Mutable subscription state shared by embedded-agent event handlers. */
 export type EmbeddedAgentSubscribeState = {
   assistantTexts: string[];
@@ -106,10 +103,9 @@ export type EmbeddedAgentSubscribeState = {
     messageEnd: number;
     finalMessageStart: number;
     lastAssistant: AssistantMessage;
-    answer?: CompletedAssistantAnswer;
+    /** A final answer that ended a model response before more work on the same input. */
+    continued?: true;
   }>;
-  /** Latest response-ending answer to the current input; a later NO_REPLY does not revoke it. */
-  inputAnswer?: CompletedAssistantAnswer;
   toolMetas: Array<{
     toolName?: string;
     toolCallId?: string;

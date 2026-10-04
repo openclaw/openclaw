@@ -323,24 +323,33 @@ describe("Responses final delivery", () => {
       contextWindow: 200000,
       maxTokens: 8192,
     };
-    const lookupCall = {
+    const toolCall = (n: number) => ({
       type: "function_call" as const,
-      id: "fc_lookup",
-      call_id: "call_lookup",
+      id: `fc_lookup_${n}`,
+      call_id: `call_lookup_${n}`,
       name: "lookup",
       arguments: "{}",
       status: "completed",
       async: true,
+    });
+    const lookupCall = toolCall(1);
+    type MessageItem = {
+      type: "message";
+      id: string;
+      role: string;
+      status: string;
+      phase: string;
+      content: Array<{ type: string; text: string; annotations: unknown[] }>;
     };
-    const finalAnswer = (id: string, text: string) => ({
-      type: "message" as const,
+    const finalAnswer = (id: string, text: string, phase = "final_answer"): MessageItem => ({
+      type: "message",
       id,
       role: "assistant",
       status: "completed",
-      phase: "final_answer",
+      phase,
       content: [{ type: "output_text", text, annotations: [] }],
     });
-    type WireItem = typeof lookupCall | ReturnType<typeof finalAnswer>;
+    type WireItem = typeof lookupCall | MessageItem;
     // Each model request is a real Responses wire stream through the shipped transport.
     function responsesStream(id: string, items: WireItem[]) {
       async function* wire() {
@@ -389,6 +398,19 @@ describe("Responses final delivery", () => {
     }
 
     const answeredTail = ["toolUse:toolCall", "stop:text", "stop:text"];
+    // Incident 2: the tail answer is followed by more tool work and a new answer.
+    const continuedWork = [
+      [lookupCall, finalAnswer("msg_answer", "Use counter B.")],
+      [toolCall(2)],
+      "Counter B is next to the north exit.",
+    ];
+    const continuedTranscript = [
+      "toolUse:toolCall",
+      "stop:text",
+      "toolUse:toolCall",
+      "stop:",
+      "stop:text",
+    ];
     it.each([
       {
         name: "a later NO_REPLY keeps the completed answer",
@@ -404,6 +426,20 @@ describe("Responses final delivery", () => {
         transcript: answeredTail,
         delivered: ["Use counter B."],
         heartbeat: true,
+      },
+      {
+        name: "a completed answer is delivered before the answer to later tool work",
+        delivery: "deferred",
+        requests: continuedWork,
+        transcript: continuedTranscript,
+        delivered: ["Use counter B.", "Counter B is next to the north exit."],
+      },
+      {
+        name: "a quiet channel without block streaming delivers both authored answers",
+        delivery: "off",
+        requests: continuedWork,
+        transcript: continuedTranscript,
+        delivered: ["Use counter B.", "Counter B is next to the north exit."],
       },
       {
         name: "live blocks of a two-item answer are not resent after NO_REPLY",
@@ -429,21 +465,11 @@ describe("Responses final delivery", () => {
         delivered: ["First part.", "Second part."],
       },
       {
-        name: "a repeated answer is delivered once",
+        name: "an exact repeat is delivered once",
         delivery: "deferred",
         requests: [[lookupCall, finalAnswer("msg_answer", "Use counter B.")], "Use counter B."],
         transcript: answeredTail,
         delivered: ["Use counter B."],
-      },
-      {
-        name: "a later answer supersedes the completed answer",
-        delivery: "deferred",
-        requests: [
-          [lookupCall, finalAnswer("msg_answer", "Use counter B.")],
-          "Correction: use counter C.",
-        ],
-        transcript: answeredTail,
-        delivered: ["Correction: use counter C."],
       },
       {
         name: "a later NO_REPLY keeps pre-tool progress silent",
@@ -453,16 +479,45 @@ describe("Responses final delivery", () => {
         delivered: [],
       },
       {
-        name: "quiet mode keeps the completed answer private",
+        name: "commentary before a call is not delivered",
         delivery: "deferred",
-        requests: [[lookupCall, finalAnswer("msg_answer", "Use counter B.")], "NO_REPLY"],
-        transcript: answeredTail,
+        requests: [
+          [finalAnswer("msg_commentary", "Checking counter B.", "commentary"), lookupCall],
+          "Use counter B.",
+        ],
+        transcript: ["toolUse:text+toolCall", "stop:", "stop:text"],
+        delivered: ["Use counter B."],
+      },
+      ...["Completed answer.", "NO_REPLY"].map((terminal) => ({
+        // #141444: answers written beside calls are superseded by the terminal answer.
+        name: `obsolete tool-turn answers stay superseded by ${terminal}`,
+        delivery: "deferred",
+        requests: [
+          [finalAnswer("msg_obsolete_1", "Obsolete preflight answer."), lookupCall],
+          [finalAnswer("msg_obsolete_2", "Obsolete follow-up answer."), toolCall(2)],
+          terminal,
+        ],
+        transcript: [
+          "toolUse:text+toolCall",
+          "stop:",
+          "toolUse:text+toolCall",
+          "stop:",
+          "stop:text",
+        ],
+        delivered: terminal === "NO_REPLY" ? [] : [terminal],
+      })),
+      {
+        // Tool-only source replies disable block streaming; automatic text stays private.
+        name: "message-tool-only turns keep completed answers private",
+        delivery: "off",
+        requests: continuedWork,
+        transcript: continuedTranscript,
         delivered: ["Sent with the message tool."],
-        quiet: true,
+        messageToolOnly: true,
       },
     ] as const)("$name", async ({ delivery, requests, transcript, delivered, ...row }) => {
       const heartbeat = "heartbeat" in row;
-      const quiet = "quiet" in row;
+      const messageToolOnly = "messageToolOnly" in row;
       const sent: string[] = [];
       const blockStreamingEnabled = delivery !== "off";
       const pipeline = createBlockReplyPipeline({
@@ -561,13 +616,12 @@ describe("Responses final delivery", () => {
       const payloads = buildEmbeddedRunPayloads({
         assistantTexts: h.subscription.assistantTexts,
         answerSegments: h.subscription.answerSegments,
-        inputAnswer: h.subscription.getInputAnswer(),
         assistantMessageIndex: h.subscription.getLastAssistantTextMessageIndex(),
         lastAssistant: current,
         currentAssistant: current ?? null,
         sessionKey: "agent:main:telegram:direct:astra",
         isHeartbeatTrigger: heartbeat,
-        ...(quiet
+        ...(messageToolOnly
           ? {
               sourceReplyDeliveryMode: "message_tool_only" as const,
               didSendViaMessagingTool: true,
