@@ -43,7 +43,9 @@ describe("mcp.reloadRuntimes", () => {
     await handler(options);
 
     expect(respond.mock.calls[0]?.[0]).toBe(false);
-    expect(String(respond.mock.calls[0]?.[2])).toContain("reload boom");
+    expect(respond.mock.calls[0]?.[2]).toMatchObject({
+      message: expect.stringContaining("reload boom"),
+    });
     vi.restoreAllMocks();
   });
 });
