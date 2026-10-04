@@ -30,10 +30,17 @@ beforeAll(async () => {
   vi.doMock("../agents/embedded-agent-runner/runs.js", () => runs);
   vi.doMock("/src/agents/embedded-agent-runner/runs.js", () => runs);
 });
-const sessionKey = "agent:main:acp:binding:discord:default:feedface";
-vi.mock("../auto-reply/reply/commands-acp/targets.js", () => ({
-  resolveBoundAcpThreadSessionKey: async () => sessionKey,
+const { sessionKey } = vi.hoisted(() => ({
+  sessionKey: "agent:main:acp:binding:discord:default:feedface",
 }));
+vi.mock("../auto-reply/reply/commands-acp/targets.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../auto-reply/reply/commands-acp/targets.js")>();
+  return {
+    ...actual,
+    resolveBoundAcpThreadSessionKey: async () => sessionKey,
+  };
+});
 
 const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
 afterEach(() => closeOpenClawStateDatabaseForTest());
