@@ -32,7 +32,6 @@ import { runWithAgentCommandRecoveryOwner } from "./agent-command-recovery-owner
 import {
   bindCommandHarnessCompletionAssertion,
   resolveCommandRecoveryOptions,
-  shouldPersistRestartRecoveryContextClaim,
 } from "./agent-command-restart-recovery.js";
 import { runAcpAgentCommand } from "./command/acp-execution.js";
 import { repairPendingAssistantTranscriptTurns } from "./command/assistant-transcript-repair.js";
@@ -285,6 +284,7 @@ async function agentCommandInternal(
       }
 
       let currentRunDeliveryPrepared = false;
+      let isAdmittedHarnessCompletion = false;
       const prepareDeliveryForRun = async (candidateSessionEntry?: typeof sessionEntry) => {
         if (currentRunDeliveryPrepared || opts.deliver !== true) {
           return;
@@ -336,7 +336,7 @@ async function agentCommandInternal(
         const isSessionRollover = isNewSession && initialEntry.sessionId !== sessionId;
         const entry = isSessionRollover ? clearRotatedSessionMetadata(initialEntry) : initialEntry;
         await prepareDeliveryForRun(entry);
-        const { nextEntry, guardedHarnessCompletion, isCompletionCurrent } =
+        const { nextEntry, guardedHarnessCompletion, shouldPersist } =
           prepareCommandSessionRecoveryEntry({
             entry,
             sessionId,
@@ -347,6 +347,7 @@ async function agentCommandInternal(
             deliveryContext: currentRunDeliveryContext,
             now,
             isSessionRollover,
+            allowCreateRestartRecoveryEntry,
           });
         assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
         const persisted = await persistAgentSession({
@@ -360,17 +361,7 @@ async function agentCommandInternal(
           assertCommitAllowed: operatorSession?.assertCurrent,
           shouldPersist: (current) => {
             operatorSession?.assertAuthorized(current);
-            return (
-              isCompletionCurrent(current) &&
-              (isSessionRollover
-                ? current?.sessionId === initialEntry.sessionId
-                : shouldPersistRestartRecoveryContextClaim(
-                    current,
-                    sessionId,
-                    runId,
-                    allowCreateRestartRecoveryEntry,
-                  ))
-            );
+            return shouldPersist(current);
           },
         });
         // The commit already happened. Cleanup must retain ownership even if
@@ -384,6 +375,14 @@ async function agentCommandInternal(
           storePath,
           opts,
         });
+        // Only the bound host claim can make a requester completion optional.
+        isAdmittedHarnessCompletion = Boolean(
+          guardedHarnessCompletion &&
+          opts.inputProvenance?.kind === "inter_session" &&
+          opts.inputProvenance.sourceChannel === "internal" &&
+          opts.inputProvenance.sourceTool === "agent_harness_completion" &&
+          opts.inputProvenance.sourceSessionKey === guardedHarnessCompletion.taskRunId,
+        );
         if (operatorSession && (!persisted || persisted.sessionId !== sessionId)) {
           throw createSessionWorkStartChangedError(sessionKey);
         }
@@ -523,6 +522,7 @@ async function agentCommandInternal(
       const embeddedAttempt = await runEmbeddedAgentAttempt({
         prepared: attemptPrepared,
         opts,
+        isAdmittedHarnessCompletion,
         sessionEntry,
         lifecycleGeneration,
         onLifecycleGenerationChanged: (nextLifecycleGeneration) => {

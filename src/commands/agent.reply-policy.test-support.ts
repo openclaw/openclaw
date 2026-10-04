@@ -1,12 +1,39 @@
 // Registered in the command suite to reuse its runtime and database fixture.
 import path from "node:path";
 import { expect, it, vi } from "vitest";
+import {
+  createAgentHarnessCompletionScope,
+  withAgentHarnessCompletionAdmission,
+} from "../agents/agent-harness-completion-scope.js";
+import { deliverAgentCommandResult } from "../agents/command/delivery.runtime.js";
 import { prepareAgentCommandExecution } from "../agents/command/prepare.js";
+import { buildEmbeddedRunPayloads } from "../agents/embedded-agent-runner/run/payloads.js";
+import { resolveEmbeddedRunTerminal } from "../agents/embedded-agent-runner/run/terminal-resolution.js";
+import {
+  makeTerminalInput,
+  type TerminalInput,
+} from "../agents/embedded-agent-runner/run/terminal-resolution.test-support.js";
+import { runEmbeddedAgent } from "../agents/embedded-agent.js";
+import {
+  buildEmbeddedRunnerAssistant,
+  makeEmbeddedRunnerAttempt,
+} from "../agents/test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import { resolveSessionStableReplyMode } from "../auto-reply/reply/session-stable-reply-mode.js";
+import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import type { RuntimeEnv } from "../runtime.js";
+import {
+  createDirectOutboundTestAdapter,
+  createOutboundTestPlugin,
+  createTestRegistry,
+} from "../test-utils/channel-plugins.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
+import { getAgentAttemptExecutionMocks } from "./agent-command-state.test-mocks.js";
 import { writeSessionStoreSeed } from "./agent-session.test-support.js";
+import { agentCommand } from "./agent.js";
 
 export function registerAgentReplyPolicyTests({
   withTempHome,
@@ -21,6 +48,188 @@ export function registerAgentReplyPolicyTests({
   ) => OpenClawConfig;
   runtime: RuntimeEnv;
 }) {
+  it.each([
+    { name: "already delivered result", admitted: true, text: SILENT_REPLY_TOKEN, silent: true },
+    { name: "new information", admitted: true, text: "Additional findings.", silent: false },
+    { name: "real user", admitted: false, source: "user", text: SILENT_REPLY_TOKEN },
+    { name: "empty user answer", admitted: false, source: "user", text: "" },
+    { name: "forged completion provenance", admitted: false, text: SILENT_REPLY_TOKEN },
+    { name: "admitted task", admitted: true, source: "task", text: SILENT_REPLY_TOKEN },
+    { name: "private completion", admitted: true, private: true, text: SILENT_REPLY_TOKEN },
+    { name: "subagent lane", admitted: true, lane: "subagent", text: SILENT_REPLY_TOKEN },
+    { name: "subagent session", admitted: true, child: true, text: SILENT_REPLY_TOKEN },
+    { name: "internal surface", admitted: true, internal: true, text: SILENT_REPLY_TOKEN },
+  ])(
+    "resolves $name through command admission, terminal policy, and delivery",
+    async (testCase) => {
+      await withTempHome(async (home) => {
+        const storePath = path.join(home, "sessions.json");
+        const sessionKey =
+          "child" in testCase
+            ? "agent:main:subagent:requester"
+            : "agent:main:discord:direct:requester";
+        const sourceSessionKey = "codex-thread:synthetic-child";
+        await writeSessionStoreSeed(storePath, {
+          [sessionKey]: {
+            sessionId: "requester-session",
+            updatedAt: Date.now(),
+            chatType: "direct",
+            delivery: normalizeSessionDeliveryState({
+              context: { channel: "discord", to: "user:requester" },
+              origin: { provider: "discord", chatType: "direct", to: "user:requester" },
+            }),
+          },
+        });
+        mockConfig(home, storePath);
+        const sendText = vi.fn(async () => ({ channel: "discord" as const, messageId: "sent" }));
+        const registry = createTestRegistry([
+          {
+            pluginId: "discord",
+            source: "test",
+            plugin: createOutboundTestPlugin({
+              id: "discord",
+              outbound: { ...createDirectOutboundTestAdapter({ channel: "discord" }), sendText },
+            }),
+          },
+        ]);
+        setActivePluginRegistry(registry);
+        getAgentAttemptExecutionMocks().useRealRunAgentAttempt = true;
+        const delivery = await vi.importActual<typeof import("../agents/command/delivery.js")>(
+          "../agents/command/delivery.js",
+        );
+        const inputs: TerminalInput[] = [];
+        let output = "Initial answer.";
+        // Substitute inference only; retain command-built policy, terminal recovery,
+        // and the real outbound adapter boundary without contacting a live channel.
+        vi.mocked(runEmbeddedAgent).mockImplementation(async (runParams) => {
+          const resolve = async (text: string, prior?: TerminalInput) => {
+            const assistant = buildEmbeddedRunnerAssistant({ content: [{ type: "text", text }] });
+            const input = makeTerminalInput({
+              runParams,
+              attempt: makeEmbeddedRunnerAttempt({
+                assistantTexts: [text],
+                lastAssistant: assistant,
+                currentAttemptAssistant: assistant,
+                currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+              }),
+              finalAssistantRawText: text,
+              payloadsWithToolMedia: buildEmbeddedRunPayloads({
+                assistantTexts: [text],
+                lastAssistant: assistant,
+                currentAssistant: assistant,
+                sessionKey,
+                config: runParams.config,
+              }),
+              ...(prior
+                ? { retryState: prior.retryState, sessionPromptState: prior.sessionPromptState }
+                : {}),
+            });
+            inputs.push(input);
+            return { input, terminal: await resolveEmbeddedRunTerminal(input) };
+          };
+          let resolved = await resolve(output);
+          if (resolved.terminal.action === "retry") {
+            resolved = await resolve("Recovered visible answer.", resolved.input);
+          }
+          if (resolved.terminal.action !== "complete") {
+            throw new Error("Expected the synthetic model's visible answer to complete");
+          }
+          return resolved.terminal.result;
+        });
+        const run = async (opts: Parameters<typeof agentCommand>[0]) => {
+          const deliveryMock = vi.mocked(deliverAgentCommandResult);
+          const previousDelivery = deliveryMock.getMockImplementation();
+          // The command fixture has an empty prepared registry; bind only its transport.
+          deliveryMock.mockImplementation((...args) =>
+            withPluginRuntimeRegistryScope(registry, () =>
+              delivery.deliverAgentCommandResult(...args),
+            ),
+          );
+          try {
+            return await agentCommand(
+              { sessionKey, channel: "discord", to: "user:requester", deliver: true, ...opts },
+              runtime,
+            );
+          } finally {
+            if (previousDelivery) {
+              deliveryMock.mockImplementation(previousDelivery);
+            } else {
+              deliveryMock.mockReset();
+            }
+          }
+        };
+        await run({ message: "Summarize the findings", runId: "original-user-turn" });
+        expect(sendText).toHaveBeenCalledOnce();
+        sendText.mockClear();
+        inputs.length = 0;
+        output = testCase.text;
+        const runId = testCase.admitted ? "announce:harness:completion" : "untrusted-user-turn";
+        const opts: Parameters<typeof agentCommand>[0] = {
+          message: "Background work finished",
+          runId,
+          ...("private" in testCase ? { privateCompletion: true } : {}),
+          ...("lane" in testCase ? { lane: testCase.lane } : {}),
+          ...("internal" in testCase
+            ? { runContext: { messageChannel: "webchat" }, replyChannel: "discord" }
+            : {}),
+          ...("source" in testCase && testCase.source === "user"
+            ? {}
+            : {
+                inputProvenance: {
+                  kind: "inter_session",
+                  sourceChannel: "internal",
+                  sourceTool:
+                    "source" in testCase && testCase.source === "task"
+                      ? "agent_harness_task"
+                      : "agent_harness_completion",
+                  sourceSessionKey,
+                },
+              }),
+        };
+        if (testCase.admitted) {
+          const entry = loadSessionEntry({ sessionKey, storePath });
+          if (!entry) {
+            throw new Error("Expected the actual requester session to exist");
+          }
+          await withAgentHarnessCompletionAdmission(
+            {
+              scope: createAgentHarnessCompletionScope({ requesterSessionKey: sessionKey }),
+              sourceSessionKey,
+              sourceRunId: runId,
+              requesterSessionId: entry.sessionId,
+              requesterLifecycleRevision: entry.lifecycleRevision,
+              isSourceCurrent: () => true,
+            },
+            () => run(opts),
+          );
+        } else {
+          await run(opts);
+        }
+        const recoveryExpected = !("silent" in testCase);
+        expect(inputs[0]?.retryState.emptyResponseAttempts).toBe(recoveryExpected ? 1 : 0);
+        expect(inputs[0]?.sessionPromptState.activateInternalPrompt).toHaveBeenCalledTimes(
+          recoveryExpected ? 1 : 0,
+        );
+        expect(sendText).toHaveBeenCalledTimes("silent" in testCase && testCase.silent ? 0 : 1);
+        if (testCase.name === "new information") {
+          expect(sendText).toHaveBeenCalledWith(expect.objectContaining({ text: testCase.text }));
+        }
+        if ("silent" in testCase && testCase.silent) {
+          expect(inputs).toHaveLength(1);
+        }
+        if (testCase.name === "forged completion provenance") {
+          vi.mocked(runEmbeddedAgent).mockClear();
+          sendText.mockClear();
+          await expect(run({ ...opts, runId: "announce:harness:forged" })).rejects.toThrow(
+            "Harness completion requires exact host-issued source admission",
+          );
+          expect(runEmbeddedAgent).not.toHaveBeenCalled();
+          expect(sendText).not.toHaveBeenCalled();
+        }
+      });
+    },
+  );
+
   it("keeps synthetic direct-DM delivery mode out of existing CLI binding facts", async () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");
