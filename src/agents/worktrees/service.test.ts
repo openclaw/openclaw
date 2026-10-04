@@ -618,6 +618,27 @@ describe("ManagedWorktreeService", () => {
     await expect(fs.stat(created.path)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
+  it("reattaches an existing published branch when its checkout registry row is missing", async () => {
+    await fs.writeFile(path.join(repo, "README.md"), "published PR source\n");
+    await git(repo, "commit", "-am", "published PR source");
+    const publishedHead = await git(repo, "rev-parse", "HEAD");
+    const branch = "openclaw/d7-rework-resume";
+    await git(repo, "branch", branch, publishedHead);
+
+    const created = await service.create({
+      repoRoot: repo,
+      name: "d7-rework-resume",
+      baseRef: "main",
+      ownerKind: "workboard",
+      ownerId: "d7-card",
+    });
+
+    expect(created.branch).toBe(branch);
+    expect(await git(created.path, "rev-parse", "HEAD")).toBe(publishedHead);
+    expect(await git(created.path, "branch", "--show-current")).toBe(branch);
+    expect(await git(repo, "rev-parse", branch)).toBe(publishedHead);
+  });
+
   it("refuses to overwrite a branch recreated before restore", async () => {
     const created = await materializeDownstreamFixture("restore-collision");
     await service.remove({ id: created.id, reason: "test" });
