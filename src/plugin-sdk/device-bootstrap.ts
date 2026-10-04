@@ -1,6 +1,7 @@
 // Shared bootstrap/pairing helpers for plugins that provision remote devices.
 import { createLazyRuntimeMethod } from "../shared/lazy-runtime.js";
 
+export { resolveDevicePairingApprovalDenial } from "../gateway/server-methods/device-management-authz.js";
 export { approveDevicePairing } from "../infra/device-pairing-approval.js";
 export { listDevicePairing } from "../infra/device-pairing.js";
 export {
