@@ -359,4 +359,24 @@ describe("transcripts read actions", () => {
       await expect(run({ action: "show", ...params })).rejects.toThrow("exactly one");
     },
   );
+
+  it("stops a fully denied list at the page ceiling instead of draining the store", async () => {
+    const listed = vi
+      .spyOn(TranscriptsStore.prototype, "listReadEntries")
+      .mockImplementation(async (options) => {
+        const offset = options.offset ?? 0;
+        return Array.from({ length: 200 }, (_, index) => ({
+          session: {
+            sessionId: `hidden-${offset + index}`,
+            title: "Hidden",
+            startedAt: "2026-08-02T14:00:00.000Z",
+            source: { providerId: "voice", guildId: "other" },
+          },
+        }));
+      });
+    const result = await run({ action: "list", limit: 20 }, true);
+    expect(listed).toHaveBeenCalledTimes(20);
+    expect(result.details).toMatchObject({ truncated: true, sessions: [] });
+    expect(JSON.stringify(result.content)).toContain("page budget");
+  });
 });

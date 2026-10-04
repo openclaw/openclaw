@@ -18,6 +18,9 @@ import {
 
 const TRANSCRIPTS_SHOW_MAX_CHARS = 12_000;
 const TRANSCRIPTS_LIST_MAX_CHARS = 4_000;
+const TRANSCRIPTS_LIST_PAGE_SIZE = 200;
+/** Authorized rows are counted after paging, so a denied caller must not drain the store. */
+const MAX_TRANSCRIPT_LIST_PAGES = 20;
 type ReadParams = {
   ctx: TranscriptsRuntimeContext;
   store: TranscriptsStore;
@@ -32,8 +35,14 @@ export async function listPastTranscripts({ ctx, store, rawParams }: ReadParams)
   const sessions: Omit<TranscriptSessionSummary, "overview">[] = [];
   // Page before authorization, but limit after it: hidden meetings must not crowd
   // accessible captures out of the result. No per-meeting database queries.
-  for (let offset = 0; sessions.length < limit; offset += 200) {
-    const entries = await store.listReadEntries({ limit: 200, offset });
+  // A denied caller never increments the authorized count, so the page ceiling is
+  // the only bound that stops a model-invoked list from draining the store.
+  let truncated = false;
+  for (let page = 0; page < MAX_TRANSCRIPT_LIST_PAGES && sessions.length < limit; page++) {
+    const entries = await store.listReadEntries({
+      limit: TRANSCRIPTS_LIST_PAGE_SIZE,
+      offset: page * TRANSCRIPTS_LIST_PAGE_SIZE,
+    });
     ctx.assertCallerActive?.();
     for (const entry of entries) {
       if (!(await canAccessTranscriptSession(ctx, entry.session, "list"))) {
@@ -49,8 +58,11 @@ export async function listPastTranscripts({ ctx, store, rawParams }: ReadParams)
         break;
       }
     }
-    if (entries.length < 200) {
+    if (entries.length < TRANSCRIPTS_LIST_PAGE_SIZE) {
       break;
+    }
+    if (page === MAX_TRANSCRIPT_LIST_PAGES - 1 && sessions.length < limit) {
+      truncated = true;
     }
   }
   ctx.assertCallerActive?.();
@@ -69,7 +81,15 @@ export async function listPastTranscripts({ ctx, store, rawParams }: ReadParams)
     }
     lines.push(line);
   }
-  return toolText(lines.join("\n") || "No accessible meeting transcripts found.", { sessions });
+  if (truncated && lines.length === 0) {
+    lines.push(
+      "No accessible transcripts within the page budget. Narrow the query instead of treating this as an empty store.",
+    );
+  }
+  return toolText(lines.join("\n") || "No accessible meeting transcripts found.", {
+    sessions,
+    ...(truncated ? { truncated: true } : {}),
+  });
 }
 
 export async function showPastTranscript(params: ReadParams) {
