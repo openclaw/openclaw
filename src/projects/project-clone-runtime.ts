@@ -365,6 +365,7 @@ export async function ensureProjectCheckoutCommit(
   }
   const fetched = await command([
     "fetch",
+    "--no-auto-maintenance",
     "--no-tags",
     "--no-recurse-submodules",
     "--",

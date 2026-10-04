@@ -48,6 +48,24 @@ it("keeps empty and reset-archive lookup results without creating a missing data
           parentId: null,
           message: { role: "user", content: "Retained reset message" },
         },
+        {
+          type: "message",
+          id: "archived-announce",
+          parentId: "archived",
+          message: {
+            role: "user",
+            timestamp: 1000,
+            content: "Archived completion",
+            provenance: { kind: "inter_session", sourceTool: "subagent_announce" },
+          },
+        },
+        {
+          type: "message",
+          id: "archived-pair",
+          parentId: "archived-announce",
+          timestamp: 1000,
+          message: { role: "assistant", content: "x".repeat(256 * 1024) },
+        },
       ]
         .map((event) => JSON.stringify(event))
         .join("\n") + "\n",
@@ -62,6 +80,18 @@ it("keeps empty and reset-archive lookup results without creating a missing data
         allowResetArchiveFallback: true,
       }),
     ).toEqual({ found: false, oversized: false });
+    expect(
+      await readSessionMessageByIdAsync(scope, "archived-pair", {
+        allowResetArchiveFallback: true,
+        historyVisibility: { sessionStartedAt: 2000 },
+      }),
+    ).toEqual({ found: false, oversized: false, historyHidden: true });
+    expect(
+      await readSessionMessageByIdAsync(scope, "archived-pair", {
+        allowResetArchiveFallback: true,
+        historyVisibility: { sessionStartedAt: 500 },
+      }),
+    ).toEqual({ found: true, oversized: true, seq: 3 });
     expect(await readSessionMessageCountAsync(scope)).toBe(0);
     expect(fs.existsSync(scope.storePath)).toBe(false);
 

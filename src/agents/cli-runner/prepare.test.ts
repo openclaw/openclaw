@@ -104,7 +104,7 @@ import {
   getCliSessionBinding,
   hashCliSessionText,
 } from "../cli-session.js";
-import { resetContextWindowCacheForTest } from "../context.js";
+import { resetContextWindowCacheForTest } from "../context.test-support.js";
 import { waitForDeferredTurnMaintenanceForSession } from "../embedded-agent-runner/context-engine-maintenance.js";
 import { createContextEngineLogicalTurnLease } from "../harness/context-engine-logical-turn.js";
 import { claimPendingAgentQuestionAnswerFromCaller } from "../harness/gateway-question.js";

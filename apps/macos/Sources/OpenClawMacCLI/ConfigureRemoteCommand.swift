@@ -269,9 +269,9 @@ private func writeAppDefaults(opts: ConfigureRemoteOptions, target: String, targ
         setDefaultString(defaults, key: "openclaw.remoteTarget", value: target)
         defaults.set(true, forKey: "openclaw.onboardingSeen")
         defaults.set(appOnboardingVersion, forKey: "openclaw.onboardingVersion")
-        setDefaultStringIfProvided(defaults, key: "openclaw.remoteIdentity", value: opts.identity)
-        setDefaultStringIfProvided(defaults, key: "openclaw.remoteProjectRoot", value: opts.projectRoot)
-        setDefaultStringIfProvided(defaults, key: "openclaw.remoteCliPath", value: opts.cliPath)
+        setDefaultString(defaults, key: "openclaw.remoteIdentity", value: opts.identity)
+        setDefaultString(defaults, key: "openclaw.remoteProjectRoot", value: opts.projectRoot)
+        setDefaultString(defaults, key: "openclaw.remoteCliPath", value: opts.cliPath)
         defaults.synchronize()
     }
 }
@@ -328,28 +328,18 @@ private func isTrustedPlaintextRemoteHost(_ host: String) -> Bool {
     return LoopbackHost.isPrivateOrTailnetIPv4Literal(lower)
 }
 
-private func setDefaultStringIfProvided(_ defaults: UserDefaults, key: String, value: String?) {
+private func setDefaultString(_ defaults: UserDefaults, key: String, value: String?) {
     guard let value else { return }
-    setDefaultString(defaults, key: key, value: value)
-}
-
-private func setDefaultString(_ defaults: UserDefaults, key: String, value: String) {
-    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-    if trimmed.isEmpty {
-        defaults.removeObject(forKey: key)
-    } else {
+    if let trimmed = value.trimmedNonEmpty {
         defaults.set(trimmed, forKey: key)
+    } else {
+        defaults.removeObject(forKey: key)
     }
 }
 
 private func updateStringIfProvided(_ dictionary: inout [String: Any], key: String, value: String?) {
     guard let value else { return }
-    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-    if trimmed.isEmpty {
-        dictionary.removeValue(forKey: key)
-    } else {
-        dictionary[key] = trimmed
-    }
+    dictionary[key] = value.trimmedNonEmpty
 }
 
 private func parsePort(_ raw: String) -> Int? {

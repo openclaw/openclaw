@@ -9,8 +9,13 @@ import { readPackageVersion } from "./package-json.js";
 import * as fileHashing from "./package-update-integrity-hasher.js";
 import { UPDATE_RUNNER_TIMEOUT_MS } from "./update-run-timeouts.js";
 
-const MAX_TREE_BYTES = 1024 * 1024 * 1024;
-const MAX_TREE_ENTRIES = 50_000;
+// The shared deadline bounds elapsed time. At ~200 bytes per entry, 500,000
+// entries budget ~100 MB for observations and bound directory enumeration.
+// Hashing streams bytes; 8 GiB bounds total input rather than a buffer allocation.
+// Both allow roughly 10x a ~50,000-entry / ~570 MiB installation to grow without
+// making ordinary package size a verification failure, while retaining finite caps.
+const MAX_TREE_BYTES = 8 * 1024 * 1024 * 1024;
+const MAX_TREE_ENTRIES = 500_000;
 const MAX_MANIFEST_BYTES = 1024 * 1024;
 const MAX_LAUNCHER_BYTES = 1024 * 1024;
 const SETTLED_CTIME_MARGIN_MS = 5_000;

@@ -6,6 +6,7 @@ import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import { t } from "../../../i18n/index.ts";
 import type { ToolCard } from "../../../lib/chat/chat-types.ts";
 import { createSidebarFullMessageLoader } from "../chat-pane-sidebar-layout.ts";
+import { createTestChatPane } from "../chat-pane.test-support.ts";
 import "./chat-detail-slot.ts";
 import type {
   SidebarContent,
@@ -283,10 +284,10 @@ describe("tool output inspection", () => {
         },
       };
     });
-    const loader = createSidebarFullMessageLoader(
-      { client: { request } as unknown as GatewayBrowserClient, connected: true },
-      false,
-    )!;
+    const { state, pane } = createTestChatPane({
+      client: { request } as unknown as GatewayBrowserClient,
+    });
+    const loader = createSidebarFullMessageLoader(state, pane.context.gateway)!;
     const panel = mount(outputCard(), loader);
     await vi.waitFor(() =>
       expect(panel.querySelector(".chat-tool-output__text")?.textContent?.length).toBe(text.length),

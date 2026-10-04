@@ -862,7 +862,6 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/sandbox/registry.test.ts",
   "src/agents/sandbox/runtime-reservation.test.ts",
   "src/agents/sandbox.context.attachments.test.ts",
-  "src/commands/doctor-sandbox-legacy-registry.test.ts",
   "src/agents/tools/sessions-tool.batch.test.ts",
   "src/agents/subagents/announce/subagent-announce.requester-settle-cancel.test.ts",
   "src/agents/subagents/completion/subagent-completion-admission.store.test.ts",
@@ -957,6 +956,7 @@ export const databaseWorkerCoreTestFiles = [
   "test/helpers/stage-live-auth-profiles.test.ts",
   "src/agents/embedded-agent-runner/run/failover-retry-controller.inline-auth.worker.test.ts",
   "src/agents/embedded-agent-runner/run/auth-profile-personal-usage.worker.test.ts",
+  "src/agents/embedded-agent-runner/run/auth-profile-shared-usage.worker.test.ts",
   "src/agents/auth-profiles.markauthprofilefailure.test.ts",
 
   "src/node-host/node-worker-launch-store.test.ts",

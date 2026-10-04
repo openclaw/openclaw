@@ -203,14 +203,7 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_MODELS = [
   defineLegacyConfigMigration({
     id: "agents.defaults.models.vllm.params.qwenThinkingFormat->models.providers.vllm.models.compat.thinkingFormat",
     describe: "Move legacy vLLM Qwen thinking params to model compat metadata",
-    legacyRules: [
-      vllm.LEGACY_VLLM_QWEN_AGENT_THINKING_FORMAT_RULE,
-      vllm.LEGACY_VLLM_QWEN_PROVIDER_THINKING_FORMAT_RULE,
-      vllm.LEGACY_VLLM_QWEN_PROVIDER_MODEL_THINKING_FORMAT_RULE,
-      vllm.LEGACY_VLLM_QWEN_NORMALIZED_PROVIDER_THINKING_FORMAT_RULE,
-      vllm.LEGACY_VLLM_QWEN_DEFAULT_PARAMS_THINKING_FORMAT_RULE,
-      vllm.LEGACY_VLLM_QWEN_AGENT_PARAMS_THINKING_FORMAT_RULE,
-    ],
+    legacyRules: vllm.LEGACY_VLLM_QWEN_THINKING_FORMAT_RULES,
     apply: (raw, changes) => {
       const agentsDefaults = getRecord(getRecord(raw.agents)?.defaults);
       const defaultModels = getRecord(agentsDefaults?.models);

@@ -4,10 +4,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, test, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import {
-  readAcpSessionMeta,
-  writeAcpSessionMetaForMigration,
-} from "../acp/runtime/session-meta.js";
+import { seedCanonicalAcpSessionMeta } from "../acp/runtime/session-meta-fixture.test-support.js";
+import { readAcpSessionMeta } from "../acp/runtime/session-meta.js";
 import {
   loadSessionEntry,
   loadTranscriptEvents,
@@ -648,11 +646,11 @@ test("sessions.delete closes child ACP runtimes spawned from the deleted parent"
       }),
     },
   });
-  writeAcpSessionMetaForMigration({
+  seedCanonicalAcpSessionMeta({
     sessionKey: "agent:main:acp-parent",
     meta: acpMeta("agent:main:acp-parent"),
   });
-  writeAcpSessionMetaForMigration({
+  seedCanonicalAcpSessionMeta({
     sessionKey: "agent:main:acp-child",
     meta: acpMeta("agent:main:acp-child"),
   });

@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { capturePluginGenerationArtifact } from "./plugin-generation-artifact.js";
@@ -25,9 +26,9 @@ function fixture(bytes: Buffer, basename = "fixture.bin") {
   fs.writeFileSync(filename, bytes, { mode: 0o755 });
   return {
     filename,
-    capture() {
+    capture(entry?: string) {
       const artifact = withPluginSourceCaptureDirectory(captures, () =>
-        capturePluginGenerationArtifact(source),
+        capturePluginGenerationArtifact(source, entry, (run) => run()),
       );
       artifacts.push(artifact);
       return artifact;
@@ -131,7 +132,8 @@ it("bounds fresh verification when a source keeps growing during reads", () => {
 });
 
 it("captures from the pinned descriptor when descriptor paths are unavailable", () => {
-  const source = fixture(Buffer.from("captured"));
+  const source = fixture(Buffer.from("captured"), "fixture.js");
+  const opens = vi.spyOn(fs, "openSync");
   const copyFileSync = fs.copyFileSync;
   vi.spyOn(fs, "copyFileSync").mockImplementation((from, to, mode) => {
     if (typeof from === "string" && /^\/(?:proc\/self|dev)\/fd\//.test(from)) {
@@ -140,9 +142,79 @@ it("captures from the pinned descriptor when descriptor paths are unavailable", 
     return copyFileSync(from, to, mode);
   });
   const artifact = source.capture();
-  expect(fs.readFileSync(artifact.resolve(source.filename), "utf8")).toBe("captured");
+  const captured = artifact.resolve(source.filename);
+  // Receipt admission reopens the private copy once. A separate initial hash
+  // would repeat the expensive Windows open without strengthening that admission.
+  expect(
+    opens.mock.calls.filter(
+      ([filename, flags]) => filename === captured && flags !== "w" && flags !== "w+",
+    ),
+  ).toHaveLength(1);
+  expect(fs.readFileSync(captured, "utf8")).toBe("captured");
   expect(artifact.assertSourceCurrent).not.toThrow();
 });
+
+it.each(["cold", "warm", "lazy"] as const)(
+  "rejects a copied destination replaced before receipt admission (%s)",
+  (phase) => {
+    const source = fixture(Buffer.from("captured"), "fixture.js");
+    fs.writeFileSync(path.join(path.dirname(source.filename), "native.bin"), "native");
+    const entry = path.join(path.dirname(source.filename), "entry.js");
+    fs.writeFileSync(entry, "export const ready = true;");
+    if (phase === "warm") {
+      source.capture();
+    }
+    const lazy = phase === "lazy" ? source.capture(entry) : undefined;
+    const openSync = fs.openSync;
+    const closeSync = fs.closeSync;
+    const copyFileSync = fs.copyFileSync;
+    let destination: { path: string; fd: number } | undefined;
+    let replaced = false;
+    vi.spyOn(fs, "copyFileSync").mockImplementation((from, to, mode) => {
+      if (typeof from === "string" && /^\/(?:proc\/self|dev)\/fd\//.test(from)) {
+        throw Object.assign(new Error("Descriptor paths are unavailable"), { code: "ENOENT" });
+      }
+      return copyFileSync(from, to, mode);
+    });
+    vi.spyOn(fs, "openSync").mockImplementation((filename, flags, mode) => {
+      const fd = openSync(filename, flags, mode);
+      if (
+        typeof filename === "string" &&
+        filename !== source.filename &&
+        path.basename(filename) === "fixture.js" &&
+        (flags === "w" || flags === "w+")
+      ) {
+        destination = { path: filename, fd };
+      }
+      return fd;
+    });
+    vi.spyOn(fs, "closeSync").mockImplementation((fd) => {
+      closeSync(fd);
+      if (!replaced && destination?.fd === fd) {
+        replaced = true;
+        fs.renameSync(destination.path, `${destination.path}.original`);
+        fs.writeFileSync(destination.path, "replaced");
+      }
+    });
+
+    const capture = () => (lazy ? lazy.captureResolvedModule(source.filename) : source.capture());
+    expect(capture).toThrow("Plugin source changed while preparing its reload");
+    if (lazy) {
+      // A failed acquisition must not make the substituted pathname reusable.
+      expect(capture).toThrow("Plugin source changed while preparing its reload");
+      for (const specifier of [pathToFileURL(source.filename).href, "./fixture.js"]) {
+        expect(() =>
+          lazy.captureModule(lazy.resolve(entry), specifier, ["node", "import"]),
+        ).toThrow("Plugin source changed while preparing its reload");
+      }
+      expect(lazy.captureRecoverySource).toThrow(
+        "Plugin source changed while preparing its reload",
+      );
+    }
+    expect(replaced).toBe(true);
+    expect(fs.readFileSync(source.filename, "utf8")).toBe("captured");
+  },
+);
 
 const descriptorCopyCases = [
   {

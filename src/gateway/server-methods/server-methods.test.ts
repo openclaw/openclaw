@@ -27,9 +27,9 @@ import { resetLogger, setLoggerOverride } from "../../logging.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { waitForAgentJob } from "../agent-turn/agent-job.js";
+import { dropPreSessionStartAnnouncePairs } from "../chat-display-projection.history.js";
 import {
   augmentChatHistoryWithCanvasBlocks,
-  dropPreSessionStartAnnouncePairs,
   projectChatDisplayMessages,
 } from "../chat-display-projection.js";
 import { sanitizeChatHistoryMessages } from "../chat-display-projection.sanitize.js";

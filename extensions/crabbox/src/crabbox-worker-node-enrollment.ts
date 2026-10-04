@@ -89,6 +89,7 @@ delete process.env.${CLOUD_BOOTSTRAP_TOKEN_ENV};
 delete process.env.${CLOUD_SETUP_CODE_ENV};
 if (process.platform !== "win32") process.umask(0o077);
 let phase;
+const failureMessage = (artifact, failedPhase, code, origin) => "Cloud worker " + artifact + " " + failedPhase + " failed" + (code ? " (" + code + ")" : "") + (origin ? " from " + origin : "");
 const setPhase = (next) => {
   if (phase === next) return;
   phase = next;
@@ -271,13 +272,17 @@ setPhase("preparation");
   };
   const downloadArchive = async (artifact, token, archive, reportPhase = setPhase) => {
     let downloadPhase;
+    let origin;
+    const downloadArtifact = artifact === workerBundle ? "archive" : "node bootstrap";
     const progress = (next) => { downloadPhase = next; reportPhase(next); };
     let attempt = 1;
     let retries = 0;
     let noProgressFailures = 0;
     let offset = 0;
+    let retainedAnyBytes = false;
     const partial = archive + ".partial";
     try {
+      origin = new URL(artifact.url).origin;
       for (;;) {
         try {
           if (retries > 0) await delay(Math.round(250 * 2 ** Math.min(retries - 1, 3) * (0.5 + Math.random())), undefined, { signal: downloadAbort.signal });
@@ -296,18 +301,22 @@ setPhase("preparation");
             // Count retained progress, not bytes replayed by a proxy that ignores Range.
             noProgressFailures = retainedBytes > offset ? 0 : noProgressFailures + 1;
             offset = retainedBytes;
+            retainedAnyBytes ||= retainedBytes > 0;
           }
           if (!transient || noProgressFailures === 3) {
-            throw Object.assign(new Error(error.message + " (download attempt " + attempt + (noProgressFailures === 3 ? "; 3 consecutive no-progress failures" : "") + ")", { cause: error }), { code: error.code });
+            const hint = !retainedAnyBytes && ["ECONNRESET", "ECONNREFUSED", "ETIMEDOUT", "EHOSTUNREACH", "ENETUNREACH", "EAI_AGAIN"].includes(error.code)
+              ? " The worker could not reach the Gateway public origin <" + origin + ">; verify the provider's network can reach it (for example with curl from a sandbox) or configure gateway.publicOrigin on a reachable hostname."
+              : "";
+            throw Object.assign(new Error(error.message + " (download attempt " + attempt + (noProgressFailures === 3 ? "; 3 consecutive no-progress failures" : "") + ")" + hint, { cause: error }), { code: error.code });
           }
           if (!busy) attempt++;
           retries++;
-          console.error("Cloud worker bootstrap " + downloadPhase + " failed (" + (error.code || "HTTP_" + error.statusCode) + "); retrying download attempt " + attempt + " (" + noProgressFailures + "/3 consecutive no-progress failures)");
+          console.error(failureMessage("bootstrap", downloadPhase, error.code || "HTTP_" + error.statusCode, origin) + "; retrying download attempt " + attempt + " (" + noProgressFailures + "/3 consecutive no-progress failures)");
         }
       }
     } catch (error) {
       if (!downloadAbort.signal.aborted) {
-        downloadAbort.abort(Object.assign(error, { downloadPhase, downloadArtifact: artifact === workerBundle ? "archive" : "node bootstrap" }));
+        downloadAbort.abort(Object.assign(new Error(failureMessage(downloadArtifact, downloadPhase || phase, error.code, origin) + ": " + error.message, { cause: error }), { code: error.code, downloadPhase, downloadArtifact }));
       }
       throw downloadAbort.signal.reason;
     } finally { fs.rmSync(partial, { force: true }); }
@@ -457,7 +466,7 @@ setPhase("preparation");
   await launchNodeProcess();
   if (desktopTarget !== "macos") finishDesktopSetup();
   setPhase("complete");
-})().catch((error) => { console.error("Cloud worker " + (error.downloadArtifact || "node bootstrap") + " " + (error.downloadPhase || phase) + " failed" + (error.code ? " (" + error.code + ")" : "") + ": " + error.message); process.exitCode = 1; });
+})().catch((error) => { console.error(error.downloadArtifact ? error.message : failureMessage("node bootstrap", error.downloadPhase || phase, error.code) + ": " + error.message); process.exitCode = 1; });
 `;
   return {
     command: wrapCrabboxNodeScript(

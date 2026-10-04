@@ -3,11 +3,9 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, onTestFinished, test } from "vitest";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
-import { getContextWindowCaches } from "../agents/context-cache.js";
-import {
-  applyDiscoveredContextWindows,
-  resetContextWindowCacheForTest,
-} from "../agents/context.js";
+import { prepareDiscoveredContextTokenCache } from "../agents/context-cache-projection.js";
+import { replaceDiscoveredContextTokenCache } from "../agents/context-cache.js";
+import { resetContextWindowCacheForTest } from "../agents/context.test-support.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { loadSessionEntry, loadTranscriptEvents } from "../config/sessions/session-accessor.js";
 import {
@@ -402,10 +400,13 @@ test.each([
     });
     const selectable = model === "gpt-selectable";
     if (!window) {
-      applyDiscoveredContextWindows({
-        cache: getContextWindowCaches().discoveredTokenCache,
-        models: [{ id: model, provider: "other-provider", contextTokens: 300_000 }],
-      });
+      replaceDiscoveredContextTokenCache(
+        await prepareDiscoveredContextTokenCache({
+          modelCatalog: {
+            entries: [{ id: model, provider: "other-provider", contextTokens: 300_000 }],
+          },
+        }),
+      );
     } else {
       agentDiscoveryMock.models = [
         {

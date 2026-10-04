@@ -16,7 +16,7 @@ export type ChannelSetupCliOptionValueMetadata = {
 // one even when the value placeholder differs, so dedupe by switch identity or
 // one plugin's `--url <server>` next to another's `--url <url>` would throw and
 // break `channels add` registration entirely.
-export function channelCliOptionSwitchKey(flags: string): string {
+function channelCliOptionSwitchKey(flags: string): string {
   const option = new Option(flags);
   return option.long ?? option.short ?? option.flags;
 }

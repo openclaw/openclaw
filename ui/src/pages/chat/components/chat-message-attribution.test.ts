@@ -101,7 +101,6 @@ it.each(["loaded", "fetched"] as const)(
         revision: 0,
         navigationId: null,
         read: () => message,
-        request: () => undefined,
         open: () => undefined,
       },
     });

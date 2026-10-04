@@ -94,7 +94,6 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
             Array.isArray(entry.keys) &&
             entry.keys.length <= 3 &&
             entry.keys.every((key) => typeof key === "string") &&
-            (entry.legacyKey === undefined || typeof entry.legacyKey === "string") &&
             (entry.entry === undefined ||
               (isRecord(entry.entry) &&
                 (entry.entry.lifecycleRevision === undefined ||

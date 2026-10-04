@@ -2,7 +2,7 @@
 import type { Command } from "commander";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
-import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
+import { theme } from "../../packages/terminal-core/src/theme.js";
 import { AgentSelectionRequiredError, listAgentIds } from "../agents/agent-scope-config.js";
 import { readConfigFileSnapshot, replaceConfigFile } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -321,10 +321,7 @@ function buildExecPolicyShowScope(snapshot: ExecPolicyScopeSnapshot): ExecPolicy
 }
 
 function renderExecPolicyShow(payload: ExecPolicyShowPayload): void {
-  const rich = isRich();
-  const heading = (text: string) => (rich ? theme.heading(text) : text);
-  const muted = (text: string) => (rich ? theme.muted(text) : text);
-  defaultRuntime.log(heading("Exec Policy"));
+  defaultRuntime.log(theme.heading("Exec Policy"));
   defaultRuntime.log(
     renderTable({
       width: getTerminalTableWidth(),
@@ -345,7 +342,7 @@ function renderExecPolicyShow(payload: ExecPolicyShowPayload): void {
     }).trimEnd(),
   );
   defaultRuntime.log("");
-  defaultRuntime.log(heading("Effective Policy"));
+  defaultRuntime.log(theme.heading("Effective Policy"));
   defaultRuntime.log(
     renderTable({
       width: getTerminalTableWidth(),
@@ -374,7 +371,7 @@ function renderExecPolicyShow(payload: ExecPolicyShowPayload): void {
     }).trimEnd(),
   );
   defaultRuntime.log("");
-  defaultRuntime.log(muted(payload.effectivePolicy.note));
+  defaultRuntime.log(theme.muted(payload.effectivePolicy.note));
 }
 
 async function applyLocalExecPolicy(policy: ExecPolicyResolved): Promise<ExecPolicyShowPayload> {
@@ -465,7 +462,7 @@ export function registerExecPolicyCli(program: Command) {
       } else if (payload.toolAccessSelectionRequired) {
         const { agentIds, hint } = payload.toolAccessSelectionRequired;
         const title = `TERMINAL ACCESS — ${agentIds.length ? "SELECT AGENT" : "NO AGENT CONFIGURED"}`;
-        defaultRuntime.log(isRich() ? theme.heading(title) : title);
+        defaultRuntime.log(theme.heading(title));
         if (agentIds.length > 0) {
           defaultRuntime.log(
             `Configured agents: ${agentIds.map(sanitizeExecPolicyTableCell).join(", ")}`,
@@ -473,7 +470,7 @@ export function registerExecPolicyCli(program: Command) {
         }
         defaultRuntime.log("");
         const approvalsTitle = "── COMMAND APPROVALS (LOCAL) ──────────────────";
-        defaultRuntime.log(isRich() ? theme.heading(approvalsTitle) : approvalsTitle);
+        defaultRuntime.log(theme.heading(approvalsTitle));
         defaultRuntime.log("");
         defaultRuntime.log(
           formatExecPolicyCommandApprovals({
@@ -484,7 +481,7 @@ export function registerExecPolicyCli(program: Command) {
         );
         defaultRuntime.log("");
         const nextStep = "── NEXT STEP ─────────────────────────────────";
-        defaultRuntime.log(isRich() ? theme.heading(nextStep) : nextStep);
+        defaultRuntime.log(theme.heading(nextStep));
         defaultRuntime.log("");
         defaultRuntime.log(sanitizeExecPolicyTableCell(hint));
         if (!opts.verbose) {
