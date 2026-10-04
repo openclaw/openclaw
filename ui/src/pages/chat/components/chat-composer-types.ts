@@ -144,6 +144,8 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   realtimeTalkVideoPending?: boolean;
   realtimeTalkCameraError?: boolean;
   gatewayClient?: GatewayBrowserClient | null;
+  chatMessageMaxWidth?: string | null;
+  onComposerWidthChange?: (value: string | undefined) => void;
   composerHoldToRecord?: boolean;
   realtimeTalkInputDeviceId?: string;
   onComposerHoldToRecordChange?: (enabled: boolean) => void;

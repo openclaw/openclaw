@@ -581,7 +581,7 @@ describe("new-session composer sizing lifecycle", () => {
     expect(textarea.style.height).toBe("150px");
   });
 
-  it("keeps one observer across controlled updates and remeasures programmatic drafts", async () => {
+  it("keeps its sizing observers across controlled updates and remeasures programmatic drafts", async () => {
     const observe = vi.fn();
     const disconnect = vi.fn();
     const resizeObserverConstructed = vi.fn();
@@ -610,7 +610,12 @@ describe("new-session composer sizing lifecycle", () => {
       },
     });
     await Promise.resolve();
+    // Layout attaches after Lit, then schedules the textarea's new cap.
+    await Promise.resolve();
     const readsAfterAttach = scrollHeightReads;
+    // The textarea controller and the shared composer layout each own one
+    // observer. Controlled updates must not recreate either lifecycle.
+    expect(resizeObserverConstructed).toHaveBeenCalledTimes(2);
 
     textarea.value = "typed";
     textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
@@ -638,7 +643,7 @@ describe("new-session composer sizing lifecycle", () => {
     await Promise.resolve();
 
     expect(first.container.querySelector("textarea")).toBe(textarea);
-    expect(resizeObserverConstructed).toHaveBeenCalledOnce();
+    expect(resizeObserverConstructed).toHaveBeenCalledTimes(2);
     expect(disconnect).not.toHaveBeenCalled();
     expect(scrollHeightReads).toBe(readsAfterInput);
 
@@ -665,7 +670,7 @@ describe("new-session composer sizing lifecycle", () => {
 
     expect(scrollHeightReads).toBeGreaterThan(readsAfterInput);
     expect(readsAfterAttach).toBeGreaterThan(0);
-    expect(resizeObserverConstructed).toHaveBeenCalledOnce();
+    expect(resizeObserverConstructed).toHaveBeenCalledTimes(2);
     expect(disconnect).not.toHaveBeenCalled();
     textareaController.disconnect();
     expect(disconnect).toHaveBeenCalledOnce();

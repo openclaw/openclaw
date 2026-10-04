@@ -365,6 +365,7 @@ export function createPageState(
       chatShowToolCalls: next.chatShowToolCalls,
       chatPersistCommentary: next.chatPersistCommentary,
       chatSendShortcut: next.chatSendShortcut,
+      ...("chatMessageMaxWidth" in patch ? { chatMessageMaxWidth: patch.chatMessageMaxWidth } : {}),
     });
     renderLifecycle.invalidate();
   };

@@ -12,6 +12,8 @@ import type { NewSessionComposerTextareaController } from "./composer-controller
 import type { NewSessionVisibility } from "./create-params.ts";
 
 export type NewSessionComposerOptions = {
+  columnWidth?: string;
+  onColumnWidthChange?: (value: string | undefined) => void;
   uploadConfig?: ApplicationConfigCapability;
   renderCritters: (floorEnabled: boolean) => TemplateResult | typeof nothing;
   attachmentLimits?: ChatAttachmentLimits;

@@ -15,7 +15,7 @@
   /* The new-session page reuses this shell outside .chat, where the tokens are
      not defined; the fallbacks keep its geometry identical there. */
   width: calc(100% - var(--chat-composer-side-inset, 36px));
-  max-width: var(--chat-thread-max-width, 48rem);
+  max-width: var(--chat-thread-drag-width, var(--chat-thread-max-width, 48rem));
   margin: var(--chat-composer-top-margin, 8px) auto var(--chat-composer-bottom-gap, 14px);
 }
 .agent-chat__composer-notices {
@@ -94,7 +94,7 @@
 
 .chat-footer > openclaw-plugin-view > .chat-footer__context {
   width: calc(100% - var(--chat-composer-side-inset));
-  max-width: var(--chat-thread-max-width);
+  max-width: var(--chat-thread-drag-width, var(--chat-thread-max-width));
   margin: var(--chat-composer-top-margin) auto 0;
 }
 
@@ -339,9 +339,12 @@
   min-height: calc(var(--chat-composer-editor-line) + 8px);
   /* The editor grows upward against the viewport, not against a line count:
      past this the surface stops moving and the draft scrolls inside it. */
-  max-height: min(
-    25dvh,
-    calc(var(--chat-composer-editor-line) * 6 + var(--chat-composer-editor-inset-block) * 2)
+  max-height: var(
+    --chat-composer-editor-height-limit,
+    min(
+      25dvh,
+      calc(var(--chat-composer-editor-line) * 6 + var(--chat-composer-editor-inset-block) * 2)
+    )
   );
   resize: none;
   padding-block: var(--chat-composer-editor-inset-block);
@@ -1009,7 +1012,7 @@
      .chat-thread's horizontal padding (moved off the scroll container so
      overlay scrollbars sit flush at the pane edge). */
   width: calc(100% - 2 * var(--chat-thread-gutter) - 2 * var(--chat-thread-side-inset));
-  max-width: var(--chat-thread-max-width);
+  max-width: var(--chat-thread-drag-width, var(--chat-thread-max-width));
   margin-inline: auto;
   /* Commit width with the virtual rows, even under the global reduced-motion
      duration; gutter and row measurements must not sample a transition. */
@@ -1272,4 +1275,26 @@
     margin-bottom: 0;
     padding-block: 0;
   }
+}
+
+/* Only the border is interactive; keyboard focus is the sole painted state. */
+.agent-chat__composer-width-edge {
+  position: absolute;
+  z-index: 5;
+  top: 18px;
+  bottom: 18px;
+  left: -4px;
+  width: 8px;
+  background: transparent;
+  cursor: ew-resize;
+  touch-action: none;
+}
+
+.agent-chat__composer-width-edge:focus-visible {
+  outline: 1px solid var(--text-strong);
+  outline-offset: 2px;
+}
+
+.agent-chat__composer-width-edge--dragging {
+  user-select: none;
 }
