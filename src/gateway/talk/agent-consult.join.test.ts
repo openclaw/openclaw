@@ -7,7 +7,9 @@ describe("joinOrStartTalkConsult", () => {
   it("joins repeat calls to the in-flight consult instead of starting more", async () => {
     let starts = 0;
     let release!: () => void;
-    const gate = new Promise<void>((resolve) => (release = resolve));
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
     const live = new Set<string>();
     const call = () =>
       joinOrStartTalkConsult({
