@@ -36,6 +36,16 @@ This directory owns Control UI-specific guidance that should not live in the rep
   owner-prefix boundary uncertainty, and overlapping reads retain an authoritative
   refresh. Events never create filtered list membership; Current Work's complete
   unfiltered active-only window may admit a certified full active row as described below.
+- List callers use compact rows and bounded source attribution. Enrichment flags
+  and inclusion of global/unknown kinds do not change held membership when kind
+  stays unchanged; dashboard filters require matching `hasBoard`/`boardFace`
+  receipts. Gallery pagination extends the shared managed window. Full settings
+  come from row descriptors on demand. Applied row traffic retains one fallback
+  through the refresh coordinator after at least 60 seconds.
+  Child-query membership uses `childOwnerSessionKeys` from the Gateway's retention
+  owner. Parent-only events must certify the complete child window; unheld
+  ancestors need explicit exclusion facts, or an admitted reference resolved
+  through the connection's existing row provenance.
 - Re-adopting cached lineage rows changes presentation without invalidating
   managed list membership. Fresh descriptor reads and Gateway events retain
   their authoritative invalidation paths.

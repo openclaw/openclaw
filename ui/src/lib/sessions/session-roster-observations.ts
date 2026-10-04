@@ -21,7 +21,7 @@ import {
 import type { ObservedSessionList } from "./session-list-query.ts";
 import { createSessionRosterProjection } from "./session-roster-projection.ts";
 import { createSessionRowProvenance } from "./session-row-provenance.ts";
-import type { SessionChangedRowResult } from "./session-row-reconcile.ts";
+import { matchesExistingSession, type SessionChangedRowResult } from "./session-row-reconcile.ts";
 import { createSessionRunTerminalStaging } from "./session-run-terminal.ts";
 
 type ObservedSessionRow = {
@@ -551,6 +551,13 @@ export function createSessionRosterObservations(
     inheritRow,
     mergeRow,
     currentRow,
+    observedRow(this: void, key: string, agentId?: string | null) {
+      return observations.publishedRow(
+        (row, ownerAgentId) =>
+          observations.hasLiveObservation(row) &&
+          matchesExistingSession(row, key, agentId ?? ownerAgentId),
+      );
+    },
     mergeRows: merge,
     publishedRow(
       this: void,
