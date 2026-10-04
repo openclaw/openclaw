@@ -36,7 +36,7 @@ import {
 } from "./session-list-order.js";
 import { bindSessionListRowRead } from "./session-list-read-result.js";
 import { withReadySessionRows } from "./session-row-prepared-read.js";
-import { prepareProjectedSessionPresentation } from "./session-row-presentation.js";
+import { prepareSessionRowPublication } from "./session-row-presentation.js";
 import {
   identity as rowIdentity,
   selectionRow,
@@ -448,10 +448,8 @@ export function prepareProjectedSessionList(params: {
   if (params.searchIdentities && params.searchIdentities.cfg !== projection.state.cfg) {
     throw new Error("Session identity configuration changed while reading; retry the request");
   }
-  const presentation = prepareProjectedSessionPresentation(
-    projection,
+  const presentation = prepareSessionRowPublication(projection, now)(
     client,
-    now,
     context
       ? createVisibleActiveSessionRunProjector(
           context,
@@ -503,7 +501,7 @@ export async function listProjectedSessions(params: {
   context?: GatewayRequestContext;
   client?: GatewayClient | null;
   diagnostics?: SessionListDiagnostics;
-  onResult?: (result: SessionsListResult) => void;
+  onResult?: (result: SessionsListResult, sharedRows: readonly GatewaySessionRow[]) => void;
 }): Promise<SessionsListResult> {
   const { projection, opts, key: exactKey, context, client, diagnostics } = params;
   return projection.withSelectionPreparation(async () => {
@@ -583,6 +581,7 @@ export async function listProjectedSessions(params: {
         try {
           let materializedRowCount = 0;
           projection.setArchivePageSize(selection.entries.length);
+          const sharedRows: GatewaySessionRow[] = [];
           const sessions = selection.entries.flatMap(([key], index) => {
             const target = getTarget(key);
             const record =
@@ -597,21 +596,21 @@ export async function listProjectedSessions(params: {
             }
             const includeTranscriptFields =
               index < SESSIONS_LIST_TRANSCRIPT_LIMIT + selection.ownerCount;
-            const row = presentation.present(record, {
+            const sharedRow = presentation.present(record, {
               includeDerivedTitles: opts.includeDerivedTitles && includeTranscriptFields,
               includeLastMessage: opts.includeLastMessage && includeTranscriptFields,
               includeActivitySummary: opts.includeActivitySummary === true,
+              rowMode: opts.rowMode,
+              omitSentinelChildren: opts.activeOnly && sentinel(record.key),
             });
-            if (!row) {
+            if (!sharedRow) {
               return [];
             }
+            sharedRows.push(sharedRow);
+            const row = { ...sharedRow };
             bindSessionListRowRead(row, { projection, record, client });
             if ((record.materializedSequence ?? 0) > materializedBefore) {
               materializedRowCount++;
-            }
-            if (opts.activeOnly && sentinel(record.key)) {
-              row.childSessions = undefined;
-              row.hasActiveSubagentRun = undefined;
             }
             return [row];
           });
@@ -644,7 +643,7 @@ export async function listProjectedSessions(params: {
           }
           diagnostics?.finishSyncCpu("rowThreadCpuMs", syncCpu);
           syncCpu = undefined;
-          params.onResult?.(result);
+          params.onResult?.(result, sharedRows);
           return result;
         } finally {
           diagnostics?.finishSyncCpu("rowThreadCpuMs", syncCpu);

@@ -17,10 +17,7 @@ import { resolveEnvApiKey } from "../../agents/model-auth-env.js";
 import { resolveUsableCustomProviderApiKey } from "../../agents/model-auth.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { UsageProviderId } from "../../infra/provider-usage.types.js";
-import {
-  listProviderUsagePluginDescriptors,
-  type ProviderUsagePluginDescriptor,
-} from "../../plugins/provider-runtime.js";
+import { listProviderUsagePluginDescriptors } from "../../plugins/provider-runtime.js";
 import { getActivePluginRegistryVersion } from "../../plugins/runtime.js";
 
 type ResolvedDirectApiKey = { apiKey: string; source: string };
@@ -30,8 +27,6 @@ type ProviderUsageRuntimeSnapshot = {
   agentId: string;
   configRef: OpenClawConfig;
   credentialKey: string;
-  descriptors: ProviderUsagePluginDescriptor[];
-  directApiKeys: ReadonlyMap<string, ResolvedDirectApiKey>;
   providerIds: UsageProviderId[];
   store: AuthProfileStore;
 };
@@ -146,8 +141,6 @@ export function getProviderUsageRuntimeSnapshot(params: {
       providerIds,
       store,
     }),
-    descriptors,
-    directApiKeys,
     providerIds,
     store,
     // Building can publish an external-auth overlay, so bind the finished snapshot to its result.

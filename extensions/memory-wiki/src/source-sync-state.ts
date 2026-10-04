@@ -100,21 +100,6 @@ function normalizeSourceSyncEntry(value: unknown): MemoryWikiImportedSourceState
   };
 }
 
-function normalizeSourceSyncState(value: unknown): MemoryWikiImportedSourceState {
-  const parsed = asNullableRecord(value);
-  if (parsed?.version !== 1 || !parsed.entries || typeof parsed.entries !== "object") {
-    return EMPTY_STATE;
-  }
-  const entries: Record<string, MemoryWikiImportedSourceStateEntry> = {};
-  for (const [syncKey, rawEntry] of Object.entries(parsed.entries)) {
-    const entry = normalizeSourceSyncEntry(rawEntry);
-    if (entry) {
-      entries[syncKey] = entry;
-    }
-  }
-  return { version: 1, entries };
-}
-
 function resolveVaultRootKey(vaultRoot: string): string {
   return createHash("sha256").update(path.resolve(vaultRoot), "utf8").digest("hex").slice(0, 32);
 }
@@ -186,17 +171,13 @@ export function createMemoryWikiSourceSyncStateStore(
       assertSourceSyncStateWithinLimit(Object.keys(state.entries).length);
       const vaultRootKey = resolveVaultRootKey(vaultRoot);
       const store = openStore();
-      let nextState = state;
       if (plan) {
         for (const syncKey of plan.deleteKeys) {
           await store.delete(resolveStateEntryKey(vaultRootKey, syncKey));
         }
       } else {
-        nextState = normalizeSourceSyncState(state);
         const nextKeys = new Set(
-          Object.keys(nextState.entries).map((syncKey) =>
-            resolveStateEntryKey(vaultRootKey, syncKey),
-          ),
+          Object.keys(state.entries).map((syncKey) => resolveStateEntryKey(vaultRootKey, syncKey)),
         );
         for (const row of await store.entries()) {
           if (row.value.vaultRootKey === vaultRootKey && !nextKeys.has(row.key)) {
@@ -204,8 +185,8 @@ export function createMemoryWikiSourceSyncStateStore(
           }
         }
       }
-      for (const syncKey of plan?.upsertKeys ?? Object.keys(nextState.entries)) {
-        const entry = nextState.entries[syncKey];
+      for (const syncKey of plan?.upsertKeys ?? Object.keys(state.entries)) {
+        const entry = state.entries[syncKey];
         if (!entry) {
           throw new Error(`Missing tracked Memory Wiki source sync entry: ${syncKey}`);
         }

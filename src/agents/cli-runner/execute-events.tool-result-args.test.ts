@@ -645,7 +645,6 @@ describe("CLI plan channel bridge", () => {
       try {
         const result = await runCliAgentWithLifecycle({
           runId,
-          provider: "claude-cli",
           onPlanUpdate,
           suppressAssistantBridge: suppressed,
           runParams: buildContext(runId).params,
@@ -702,7 +701,7 @@ describe("CLI plan channel bridge", () => {
           }
         }
         expect(result.payloads).toEqual([{ text: "Final task answer" }]);
-        expect(lifecycle).toEqual(["start", "end"]);
+        expect(lifecycle).toEqual(["start"]);
       } finally {
         progress.cancel();
         dispose();

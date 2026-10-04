@@ -6,10 +6,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding } from "../flows/health-checks.js";
 import type { StatusSummary } from "../status/summary.js";
 
-type LocalTuiProcess = {
-  pid: number;
-  command: string;
-};
+type LocalTuiProcess = NonNullable<ReturnType<typeof parsePsPidLine>>;
 
 const LOCAL_TUI_SUBCOMMANDS = new Set(["chat", "terminal", "tui"]);
 const WHATSAPP_RESPONSIVENESS_CHECK_ID = "core/doctor/whatsapp-responsiveness";
@@ -24,7 +21,7 @@ function isLocalTuiCommand(command: string): boolean {
   return executable === "openclaw" && LOCAL_TUI_SUBCOMMANDS.has(argv[1] ?? "");
 }
 
-function parsePsPidLine(line: string): LocalTuiProcess | null {
+function parsePsPidLine(line: string) {
   const match = line.match(/^\s*(\d+)\s+(.+)$/);
   if (!match) {
     return null;

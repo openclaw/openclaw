@@ -75,6 +75,33 @@ describe("Codex agent harness supports()", () => {
     bindingStore: testCodexAppServerBindingStore,
   });
 
+  it.each([
+    { enableUltrafast: false, expected: ["priority", "flex"] },
+    { enableUltrafast: true, expected: ["priority", "ultrafast", "flex"] },
+    { enableUltrafast: undefined, expected: ["priority", "ultrafast", "flex"] },
+  ])(
+    "filters picker tiers with enableUltrafast=$enableUltrafast",
+    ({ enableUltrafast, expected }) => {
+      const configuredHarness = createCodexAppServerAgentHarness({
+        bindingStore: testCodexAppServerBindingStore,
+        pluginConfig: { appServer: { enableUltrafast: !enableUltrafast } },
+      });
+      const serviceTiers = ["priority", "ultrafast", "flex"];
+      expect(
+        configuredHarness.filterModelServiceTiers?.({
+          config: {
+            plugins: { entries: { codex: { config: { appServer: { enableUltrafast } } } } },
+          },
+          agentId: "main",
+          provider: "openai",
+          modelId: "synthetic-tier-model",
+          serviceTiers,
+        }),
+      ).toEqual(expected);
+      expect(serviceTiers).toEqual(["priority", "ultrafast", "flex"]);
+    },
+  );
+
   it.each(["manual", "native-preflight"] as const)(
     "rejects legacy %s compaction input without inventing System authority",
     async (entry) => {

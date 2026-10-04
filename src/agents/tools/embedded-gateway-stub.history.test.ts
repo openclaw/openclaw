@@ -25,7 +25,7 @@ import { createSessionsHistoryTool } from "./sessions-history-tool.js";
 import { createSessionsSearchTool } from "./sessions-search-tool.js";
 
 const config: OpenClawConfig = {
-  agents: { entries: { main: { default: true }, work: {} } },
+  agents: { entries: { main: {}, work: {} } },
   tools: { sessions: { visibility: "agent" } },
 };
 const scope = {

@@ -7,11 +7,12 @@ import {
   resolveAgentRunAbortLifecycleFields,
   resolveFastModeForElapsed,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { reportCodexExecutionNotification } from "./attempt-notification-state.js";
+import { readCodexNotificationItem } from "./attempt-notifications.js";
 import {
   resolveTerminalDynamicToolBatchAction,
   shouldReleaseTurnAfterTerminalDynamicTool,
 } from "./dynamic-tool-execution.js";
+import { itemName } from "./event-projector-items.js";
 import type { CodexServerNotification } from "./protocol.js";
 import { buildCodexLifecycleTerminalMeta } from "./run-attempt-lifecycle-terminal.js";
 import { emitCodexAppServerEvent } from "./run-attempt-lifecycle.js";
@@ -136,7 +137,26 @@ export function createCodexAttemptLifecycleController(
     });
   };
   const reportExecutionNotification = (notification: CodexServerNotification) => {
-    reportCodexExecutionNotification({ notification, emitExecutionPhaseOnce });
+    if (notification.method === "turn/started") {
+      emitExecutionPhaseOnce("turn_accepted", { phase: "turn_accepted" });
+      return;
+    }
+    if (notification.method === "item/agentMessage/delta") {
+      emitExecutionPhaseOnce("assistant_output_started", { phase: "assistant_output_started" });
+      return;
+    }
+    if (notification.method !== "item/started") {
+      return;
+    }
+    const item = readCodexNotificationItem(notification.params);
+    const tool = item ? itemName(item) : undefined;
+    if (item && tool) {
+      emitExecutionPhaseOnce(`tool:${item.id}`, {
+        phase: "tool_execution_started",
+        tool,
+        itemId: item.id,
+      });
+    }
   };
   const emitFastModeAutoProgress = async (payload: {
     enabled: boolean;

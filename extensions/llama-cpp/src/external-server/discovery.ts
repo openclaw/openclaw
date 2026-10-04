@@ -37,7 +37,6 @@ export async function discoverLlamaServer(params: {
   baseUrl?: string;
   apiKey?: string;
   headers?: Record<string, string>;
-  timeoutMs?: number;
   cacheTtlMs?: number;
   signal?: AbortSignal;
 }): Promise<LlamaServerDiscoveryResult> {
@@ -64,7 +63,7 @@ export async function discoverLlamaServer(params: {
         healthPath: "/health",
         modelsPathOrder: "server-first",
         routerModelProps: true,
-        timeoutMs: params.timeoutMs ?? LLAMA_SERVER_DISCOVERY_TIMEOUT_MS,
+        timeoutMs: LLAMA_SERVER_DISCOVERY_TIMEOUT_MS,
         signal: params.signal,
         rawResult: true,
       });

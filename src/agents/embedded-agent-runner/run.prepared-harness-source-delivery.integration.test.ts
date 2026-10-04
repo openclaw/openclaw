@@ -586,10 +586,9 @@ describe("prepared harness source delivery", () => {
       modelFallbacksOverride: ["fast"],
       config: {
         agents: {
-          list: [
-            { id: "main", default: true },
-            {
-              id: "worker",
+          entries: {
+            main: {},
+            worker: {
               models: {
                 "openai/gpt-5.4": { agentRuntime: { id: "codex" } },
                 "custom/plugin-fallback": {
@@ -598,7 +597,7 @@ describe("prepared harness source delivery", () => {
                 },
               },
             },
-          ],
+          },
           defaults: {
             models: {
               "custom/global-fallback": { alias: "fast" },

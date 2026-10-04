@@ -443,7 +443,7 @@ describe("repairStaleConfiguredAuthOrders", () => {
       const mainAgentDir = path.join(stateDir, "agents", "main", "agent");
       writeTokenStore(mainAgentDir, { profileId: "claude-cli:setup-token" });
       const cfg = anthropicOrderConfig("anthropic:removed", {
-        list: [{ id: "work", default: true }],
+        entries: { work: {} },
       });
 
       const result = repairPersisted(cfg, stateDir);
@@ -458,7 +458,7 @@ describe("repairStaleConfiguredAuthOrders", () => {
         profileId: "claude-cli:work-token",
       });
       const cfg = anthropicOrderConfig("anthropic:removed", {
-        list: [{ id: "work", default: true }],
+        entries: { work: {} },
       });
 
       const result = repairPersisted(cfg, stateDir);
@@ -552,7 +552,7 @@ describe("repairStaleConfiguredAuthOrders", () => {
       );
       closeAuthDatabases();
       const cfg = anthropicOrderConfig("anthropic:missing", {
-        list: [{ id: "main", default: true }],
+        entries: { main: {} },
       });
 
       const result = maybeRepairStaleConfiguredAuthOrders({ cfg, env });
@@ -616,7 +616,7 @@ describe("repairStaleConfiguredAuthOrders", () => {
         JSON.stringify(tokenStore({ profileId: "anthropic:legacy", provider: "anthropic" })),
       );
       const cfg = anthropicOrderConfig("anthropic:missing", {
-        list: [{ id: "main", default: true }],
+        entries: { main: {} },
       });
 
       const result = maybeRepairStaleConfiguredAuthOrders({ cfg, env });
@@ -631,7 +631,7 @@ describe("repairStaleConfiguredAuthOrders", () => {
         profileId: "claude-cli:inactive-token",
       });
       const cfg = anthropicOrderConfig("anthropic:missing", {
-        list: [{ id: "main", default: true }],
+        entries: { main: {} },
       });
 
       const result = repairPersisted(cfg, stateDir);
@@ -712,7 +712,7 @@ describe("repairStaleConfiguredAuthOrders", () => {
     await withStateDir("openclaw-runtime-auth-order-", async (stateDir) => {
       const workAgentDir = path.join(stateDir, "agents", "work", "agent");
       const cfg = {
-        agents: { list: [{ id: "work", default: true }] },
+        agents: { entries: { work: {} } },
         auth: { order: { openai: ["openai:runtime-only"] } },
       } satisfies OpenClawConfig;
       writePersistedAuthProfileStoreRaw(
@@ -753,7 +753,7 @@ describe("repairStaleConfiguredAuthOrders", () => {
       await fs.mkdir(workAgentDir, { recursive: true });
       await fs.writeFile(resolveAuthProfileDatabasePath(workAgentDir), "not-a-sqlite-database");
       const cfg = anthropicOrderConfig("anthropic:missing", {
-        list: [{ id: "work", default: true }],
+        entries: { work: {} },
       });
 
       const result = repairPersisted(cfg, stateDir);
@@ -783,7 +783,7 @@ describe("repairStaleConfiguredAuthOrders", () => {
           resolveAuthProfileDatabasePath(workAgentDir),
         );
         const cfg = anthropicOrderConfig("anthropic:missing", {
-          list: [{ id: "work", default: true }],
+          entries: { work: {} },
         });
 
         const result = repairPersisted(cfg, stateDir);
@@ -810,7 +810,7 @@ describe("repairStaleConfiguredAuthOrders", () => {
           resolveAuthStorePath(workAgentDir),
         );
         const cfg = anthropicOrderConfig("anthropic:missing", {
-          list: [{ id: "work", default: true }],
+          entries: { work: {} },
         });
 
         const result = repairPersisted(cfg, stateDir);
@@ -926,7 +926,7 @@ describe("repairStaleConfiguredAuthOrders", () => {
       openOpenClawAgentDatabase({ agentId: "replacement", env, path: databasePath });
       closeAuthDatabases();
       const cfg = anthropicOrderConfig("anthropic:missing", {
-        list: [{ id: "main", default: true }],
+        entries: { main: {} },
       });
 
       const result = maybeRepairStaleConfiguredAuthOrders({ cfg, env });
@@ -954,7 +954,7 @@ describe("repairStaleConfiguredAuthOrders", () => {
       );
       closeAuthDatabases();
       const cfg = anthropicOrderConfig("anthropic:missing", {
-        list: [{ id: "work", default: true, agentDir: customAgentDir }],
+        entries: { work: { agentDir: customAgentDir } },
       });
 
       const result = maybeRepairStaleConfiguredAuthOrders({ cfg, env });
@@ -1015,7 +1015,7 @@ describe("repairStaleConfiguredAuthOrders", () => {
       });
       closeAuthDatabases();
       const cfg = anthropicOrderConfig("anthropic:missing", {
-        list: [{ id: "work", default: true, agentDir: renamedAgentDir }],
+        entries: { work: { agentDir: renamedAgentDir } },
       });
 
       const result = maybeRepairStaleConfiguredAuthOrders({ cfg, env });
@@ -1038,7 +1038,7 @@ describe("repairStaleConfiguredAuthOrders", () => {
       });
       closeAuthDatabases();
       const cfg = anthropicOrderConfig("anthropic:missing", {
-        list: [{ id: "main", default: true }],
+        entries: { main: {} },
       });
 
       const result = maybeRepairStaleConfiguredAuthOrders({ cfg, env });
@@ -1085,7 +1085,7 @@ describe("repairStaleConfiguredAuthOrders", () => {
       rawDatabase.exec("DROP TABLE auth_profile_state;");
       rawDatabase.close();
       const cfg = anthropicOrderConfig("anthropic:missing", {
-        list: [{ id: "work", default: true }],
+        entries: { work: {} },
       });
 
       const result = repairPersisted(cfg, stateDir);
@@ -1130,7 +1130,7 @@ describe("repairStaleConfiguredAuthOrders", () => {
       closeAuthDatabases();
       await fs.rm(databasePath);
       const cfg = anthropicOrderConfig("anthropic:missing", {
-        list: [{ id: "main", default: true }],
+        entries: { main: {} },
       });
 
       const result = maybeRepairStaleConfiguredAuthOrders({ cfg, env });
@@ -1226,7 +1226,7 @@ describe("repairStaleConfiguredAuthOrders", () => {
       writePersistedAuthProfileStateRaw({ version: 1 }, workAgentDir);
       writeMainToken(stateDir);
       const cfg = anthropicOrderConfig("anthropic:missing", {
-        list: [{ id: "work", default: true }],
+        entries: { work: {} },
       });
 
       const result = repairPersisted(cfg, stateDir);
@@ -1245,7 +1245,7 @@ describe("repairStaleConfiguredAuthOrders", () => {
       legacyDatabase.close();
       writeMainToken(stateDir);
       const cfg = anthropicOrderConfig("anthropic:missing", {
-        list: [{ id: "work", default: true }],
+        entries: { work: {} },
       });
 
       const result = repairPersisted(cfg, stateDir);
@@ -1261,7 +1261,7 @@ describe("repairStaleConfiguredAuthOrders", () => {
       await fs.writeFile(resolveLegacyAuthStorePath(workAgentDir), "not-json", "utf8");
       writeMainToken(stateDir);
       const cfg = anthropicOrderConfig("anthropic:missing", {
-        list: [{ id: "work", default: true }],
+        entries: { work: {} },
       });
 
       const result = repairPersisted(cfg, stateDir);

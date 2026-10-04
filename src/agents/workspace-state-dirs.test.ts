@@ -41,7 +41,7 @@ function setup(mode: "all" | "non-main" = "all") {
   const cfg = {
     session: { store: databasePath },
     agents: {
-      entries: { main: { default: true } },
+      entries: { main: {} },
       defaults: {
         workspace: workspaceDir,
         sandbox: { mode, scope: "session", workspaceAccess: "ro", workspaceRoot },

@@ -15,11 +15,7 @@ import {
   resolveFastModeForElapsed,
   type FastModeAutoProgressState,
 } from "../../agents/fast-mode.js";
-import {
-  isAgentRunRestartAbortReason,
-  resolveAgentRunAbortLifecycleFields,
-  resolveAgentRunErrorLifecycleFields,
-} from "../../agents/run-termination.js";
+import { isAgentRunRestartAbortReason } from "../../agents/run-termination.js";
 import { inferToolMetaFromArgsCore, isCommandBearingToolCall } from "../../agents/tool-display.js";
 import { normalizeAgentPlanSteps } from "../../channels/streaming.js";
 import type { AgentEventPayload } from "../../infra/agent-events.js";
@@ -32,7 +28,6 @@ import {
   createAgentEventBridge,
   createAgentEventDeliveryStartOrder,
 } from "./agent-event-bridge.js";
-import { resolveAgentLifecycleTerminalMetadata } from "./agent-lifecycle-terminal.js";
 import { createAssistantTextBridge } from "./cli-assistant-bridge.js";
 
 type RunCliAgentInternalParams = RunCliAgentParams & {
@@ -208,10 +203,8 @@ export function createCliToolSummaryTracker(params: {
 type RunCliAgentWithLifecycleParams = {
   runId: string;
   lifecycleGeneration?: string;
-  provider: string;
   runParams: RunCliAgentInternalParams;
   startedAt?: number;
-  emitLifecycleTerminal?: boolean;
   onAgentRunStart?: () => void;
   suppressAssistantBridge?: boolean;
   /**
@@ -301,19 +294,16 @@ async function runCliAgentWithLifecycleInternal(
     fastModeAutoProgressState.offAnnounced = true;
     await emitFastModeAutoProgress(next);
   };
-  const emitLifecycleTerminal = params.emitLifecycleTerminal ?? true;
-  const emitLifecycleEvent = ({ phase, ...data }: AgentEventPayload["data"]) =>
-    emitAgentEvent({
-      runId: params.runId,
-      ...(params.runParams.agentId ? { agentId: params.runParams.agentId } : {}),
-      ...(params.runParams.sessionKey ? { sessionKey: params.runParams.sessionKey } : {}),
-      ...(params.runParams.sessionId ? { sessionId: params.runParams.sessionId } : {}),
-      ...(params.lifecycleGeneration ? { lifecycleGeneration: params.lifecycleGeneration } : {}),
-      stream: "lifecycle",
-      data: { phase, startedAt, ...data },
-    });
   params.onAgentRunStart?.();
-  emitLifecycleEvent({ phase: "start" });
+  emitAgentEvent({
+    runId: params.runId,
+    ...(params.runParams.agentId ? { agentId: params.runParams.agentId } : {}),
+    ...(params.runParams.sessionKey ? { sessionKey: params.runParams.sessionKey } : {}),
+    ...(params.runParams.sessionId ? { sessionId: params.runParams.sessionId } : {}),
+    ...(params.lifecycleGeneration ? { lifecycleGeneration: params.lifecycleGeneration } : {}),
+    stream: "lifecycle",
+    data: { phase: "start", startedAt },
+  });
   const progressStartOrder = createAgentEventDeliveryStartOrder({
     preserveCallbackStartOrder: params.preserveProgressCallbackStartOrder === true,
   });
@@ -456,7 +446,6 @@ async function runCliAgentWithLifecycleInternal(
       },
     }),
   ].filter((bridge): bridge is AgentEventBridge => bridge !== undefined);
-  let lifecycleTerminalEmitted = false;
   try {
     const rawResult = await runCliAgent({
       ...params.runParams,
@@ -488,28 +477,10 @@ async function runCliAgentWithLifecycleInternal(
       });
     }
 
-    if (emitLifecycleTerminal) {
-      emitLifecycleEvent({
-        phase: "end",
-        endedAt: Date.now(),
-        ...resolveAgentLifecycleTerminalMetadata(result.meta),
-        ...resolveAgentRunAbortLifecycleFields(params.runParams.abortSignal),
-      });
-      lifecycleTerminalEmitted = true;
-    }
     return resultWithReasoning;
   } catch (err) {
     await stopAgentEventBridges(bridges);
     await params.onErrorBeforeLifecycle?.(err);
-    if (emitLifecycleTerminal) {
-      emitLifecycleEvent({
-        phase: "error",
-        endedAt: Date.now(),
-        error: String(err),
-        ...resolveAgentRunErrorLifecycleFields(err, params.runParams.abortSignal),
-      });
-      lifecycleTerminalEmitted = true;
-    }
     throw err;
   } finally {
     for (const bridge of bridges) {
@@ -526,14 +497,6 @@ async function runCliAgentWithLifecycleInternal(
         enabled: true,
         elapsedSeconds: 0,
         fastAutoOnSeconds: fastModeAutoOnSeconds,
-      });
-    }
-    if (emitLifecycleTerminal && !lifecycleTerminalEmitted) {
-      emitLifecycleEvent({
-        phase: "error",
-        endedAt: Date.now(),
-        error: "CLI run completed without lifecycle terminal event",
-        ...resolveAgentRunAbortLifecycleFields(params.runParams.abortSignal),
       });
     }
   }

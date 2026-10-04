@@ -24,7 +24,7 @@ import {
 } from "./accounts.js";
 import { isNumericTelegramSenderUserId, normalizeTelegramAllowFromEntry } from "./allow-from.js";
 import { lookupTelegramChatId } from "./api-fetch.js";
-import { hasTelegramBotEndpointApiRoot, normalizeTelegramApiRoot } from "./api-root.js";
+import { hasTelegramBotEndpointApiRoot } from "./api-root.js";
 import {
   legacyConfigRules as TELEGRAM_LEGACY_CONFIG_RULES,
   normalizeCompatibilityConfig as normalizeTelegramCompatibilityConfig,
@@ -169,10 +169,16 @@ function scanTelegramBotEndpointApiRoots(cfg: OpenClawConfig): TelegramApiRootBo
     if (typeof value !== "string" || !hasTelegramBotEndpointApiRoot(value)) {
       continue;
     }
+    const url = new URL(value.trim());
+    const segments = url.pathname.split("/").filter(Boolean);
+    segments.pop();
+    url.pathname = segments.length > 0 ? `/${segments.join("/")}` : "/";
+    url.search = "";
+    url.hash = "";
     hits.push({
       path: `${scope.prefix}.apiRoot`,
       pathSegments: [...scope.pathSegments, "apiRoot"],
-      normalized: normalizeTelegramApiRoot(value),
+      normalized: url.toString().replace(/\/+$/u, ""),
     });
   }
   return hits;
@@ -187,7 +193,7 @@ function collectTelegramApiRootWarnings(params: {
   }
   const samplePath = sanitizeForLog(params.hits[0]?.path ?? "channels.telegram.apiRoot");
   return [
-    `- ${samplePath} points at a full Telegram bot endpoint; apiRoot must be the Bot API root only. This can make startup calls like deleteWebhook, deleteMyCommands, and setMyCommands fail with 404 even when direct curl commands work.`,
+    `- ${samplePath} points at a full Telegram bot endpoint; apiRoot must be the Bot API root only. Telegram refuses this value until it is repaired.`,
     `- Run "${params.doctorFixCommand}" to remove the trailing /bot<TOKEN> path from Telegram apiRoot.`,
   ];
 }

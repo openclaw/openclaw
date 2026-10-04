@@ -1,8 +1,7 @@
-import type { HealthCheck } from "openclaw/plugin-sdk/health";
+import type { HealthCheck, HealthFinding, HealthRepairContext } from "openclaw/plugin-sdk/health";
 import { repairPolicyAutomaticNarrower } from "./automatic-repairs.js";
-import { createPolicyScopedChecks } from "./check-factory.js";
-import { CHECK_IDS } from "./check-ids.js";
-import { evaluatePolicy, findingsForCheck } from "./evaluation.js";
+import { CHECK_IDS, type POLICY_CHECK_IDS } from "./check-ids.js";
+import { evaluatePolicy } from "./evaluation.js";
 import {
   channelIdsFromFindings,
   disableChannels,
@@ -11,8 +10,18 @@ import {
 } from "./policy-runtime.js";
 import { previewPolicyReviewRequiredRepair } from "./review-required-repairs.js";
 
+type PolicyDoctorCheckDefinition = readonly [
+  id: (typeof POLICY_CHECK_IDS)[number],
+  description: string,
+  repair?: (
+    ctx: HealthRepairContext,
+    findings: readonly HealthFinding[],
+    checkId: (typeof POLICY_CHECK_IDS)[number],
+  ) => ReturnType<NonNullable<HealthCheck["repair"]>>,
+];
+
 export function createPolicyDoctorChecks(): readonly HealthCheck[] {
-  return createPolicyScopedChecks({ evaluatePolicy, findingsForCheck }, [
+  const definitions: readonly PolicyDoctorCheckDefinition[] = [
     [CHECK_IDS.policyMissingFile, "The enabled Policy plugin has a policy file to verify."],
     [CHECK_IDS.policyInvalidFile, "The enabled policy file parses before policy checks run."],
     [CHECK_IDS.policyHashMismatch, "The policy file matches the configured expected hash."],
@@ -290,5 +299,21 @@ export function createPolicyDoctorChecks(): readonly HealthCheck[] {
       CHECK_IDS.policyUnknownToolSensitivity,
       "AGENTS.md tool policy entries use known sensitivity levels.",
     ],
-  ]);
+  ];
+  return definitions.map(([id, description, repair]) => {
+    const check: HealthCheck = {
+      id,
+      kind: "plugin",
+      description,
+      source: "policy",
+      async detect(ctx) {
+        const evaluation = await evaluatePolicy(ctx);
+        return evaluation.findings.filter((finding) => finding.checkId === id);
+      },
+    };
+    if (repair) {
+      check.repair = (ctx, findings) => repair(ctx, findings, id);
+    }
+    return check;
+  });
 }

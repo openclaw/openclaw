@@ -75,7 +75,7 @@ describe("openclaw delegation tool", () => {
     },
     {
       name: "agent-restricted default",
-      options: { config: { agents: { list: [{ id: "main", tools: { exec: { mode: "ask" } } }] } } },
+      options: { config: { agents: { entries: { main: { tools: { exec: { mode: "ask" } } } } } } },
       full: false,
     },
     {

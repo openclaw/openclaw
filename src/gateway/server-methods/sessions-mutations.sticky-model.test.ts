@@ -5,7 +5,7 @@ import {
   loadSessionEntry,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
-import type { AgentConfig } from "../../config/types.agents.js";
+import type { AgentEntryConfig } from "../../config/types.agents.js";
 import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
@@ -84,15 +84,15 @@ import { registerSessionOperatorPreparationTests } from "./sessions-mutations.op
 import { registerSessionRuntimeWindowTests } from "./sessions-mutations.runtime-windows.test-support.js";
 import { registerSessionSandboxStickyModelTests } from "./sessions-mutations.sandbox.test-support.js";
 
-const defaultAgents: AgentConfig[] = [
-  { id: "main", default: true },
-  { id: "work", model: "anthropic/claude-sonnet-4-6" },
-];
+const defaultAgents: Record<string, AgentEntryConfig> = {
+  main: {},
+  work: { model: "anthropic/claude-sonnet-4-6" },
+};
 
 const defaultConfig = {
   agents: {
     defaults: { model: "anthropic/claude-opus-4-6" },
-    list: defaultAgents,
+    entries: defaultAgents,
   },
 } satisfies OpenClawConfig;
 
@@ -312,13 +312,11 @@ describe("sessions.patch sticky model persistence", () => {
       expect(persistedConfig?.agents?.defaults?.model).toBe(
         target === "defaults" ? model : defaultConfig.agents.defaults.model,
       );
-      const expectedAgents = structuredClone(defaultConfig.agents.list);
-      for (const agent of expectedAgents) {
-        if (target === "agent" && agent.id === agentId) {
-          agent.model = model;
-        }
+      const expectedAgents = structuredClone(defaultConfig.agents.entries);
+      if (target === "agent") {
+        expectedAgents[agentId]!.model = model;
       }
-      expect(persistedConfig?.agents?.list).toEqual(expectedAgents);
+      expect(persistedConfig?.agents?.entries).toEqual(expectedAgents);
     },
   );
 
@@ -346,13 +344,11 @@ describe("sessions.patch sticky model persistence", () => {
       expect(persistedConfig?.agents?.defaults?.model).toBe(
         scope === "global" ? model : defaultConfig.agents.defaults.model,
       );
-      const expectedAgents = structuredClone(defaultConfig.agents.list);
-      for (const agent of expectedAgents) {
-        if (scope === "agent" && agent.id === agentId) {
-          agent.model = model;
-        }
+      const expectedAgents = structuredClone(defaultConfig.agents.entries);
+      if (scope === "agent") {
+        expectedAgents[agentId]!.model = model;
       }
-      expect(persistedConfig?.agents?.list).toEqual(expectedAgents);
+      expect(persistedConfig?.agents?.entries).toEqual(expectedAgents);
     },
   );
 

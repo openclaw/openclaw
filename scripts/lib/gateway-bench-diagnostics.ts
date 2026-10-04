@@ -33,6 +33,7 @@ const METRICS = [
   "selectedRowCount",
   "queueMs",
   "preparationMs",
+  "hostWaitMs",
   "runMs",
   "transferMs",
   "pendingTasks",

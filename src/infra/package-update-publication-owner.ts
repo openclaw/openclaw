@@ -19,9 +19,9 @@ import {
   type PackageActivationPhase,
   type PackageActivationRecord,
   type PackageActivationDescriptor,
-  encodePackageActivationLauncher,
   isPackageActivationComplete,
 } from "./package-update-activation-journal.js";
+import { decodePackageActivationLauncher } from "./package-update-activation-launcher.js";
 import { readPackageActivationRecordStatus as packageActivationStatus } from "./package-update-activation-status.js";
 import {
   activateStagedNpmPackageRoot,
@@ -34,10 +34,20 @@ import {
   isPackageIntegrityResourceError,
   packageIntegrityDifferences,
   PackageIntegrityMismatchError,
+  type PackageLauncherFingerprint,
+  packageLauncherDifferences,
 } from "./package-update-integrity.js";
 import { assertManagedUpdateLeaseDatabaseIdentity } from "./update-managed-service-handoff-database.js";
 
 const log = createSubsystemLogger("update/package-integrity");
+
+function matchesLauncher(actual: PackageLauncherFingerprint | null, encoded: string | null) {
+  return actual === null || encoded === null
+    ? actual === null && encoded === null
+    : packageLauncherDifferences(decodePackageActivationLauncher(encoded), actual, {
+        checkMode: true,
+      }).length === 0;
+}
 
 export function createPublicationOwner(
   anchor: string,
@@ -112,9 +122,9 @@ export function createPublicationOwner(
     for (const entry of descriptor.launchers) {
       const destination = path.join(descriptor.binDir, entry.name);
       const fingerprint = (await reader.exists(destination))
-        ? encodePackageActivationLauncher(await reader.launcher(destination))
+        ? await reader.launcher(destination)
         : null;
-      if (fingerprint !== entry[selected]) {
+      if (!matchesLauncher(fingerprint, entry[selected])) {
         throw new Error("Selected package launcher fingerprint changed.");
       }
     }
@@ -243,19 +253,20 @@ export function createPublicationOwner(
       const source = root(`launchers/${entry.name}`);
       if (
         packageActivationIdentity(source, "launcher") !== entry.candidateIdentity ||
-        encodePackageActivationLauncher(await reader.launcher(source)) !== entry.candidate
+        !matchesLauncher(await reader.launcher(source), entry.candidate)
       ) {
         throw new Error("Candidate launcher assets changed.");
       }
       const destination = path.join(descriptor.binDir, entry.name);
       const present = await reader.exists(destination);
       const id = present ? packageActivationIdentity(destination, "launcher") : null;
-      const fingerprint = present
-        ? encodePackageActivationLauncher(await reader.launcher(destination))
-        : null;
-      if (id === entry.previousIdentity && fingerprint === entry.previous) {
+      const fingerprint = present ? await reader.launcher(destination) : null;
+      if (id === entry.previousIdentity && matchesLauncher(fingerprint, entry.previous)) {
         launcherStates.set(entry.name, "previous");
-      } else if (id === published.get(entry.name) && fingerprint === entry.candidate) {
+      } else if (
+        id === published.get(entry.name) &&
+        matchesLauncher(fingerprint, entry.candidate)
+      ) {
         launcherStates.set(entry.name, "candidate");
       } else {
         throw new Error(`Package launcher changed outside its publication intent: ${entry.name}`);
@@ -576,6 +587,86 @@ export function createPublicationOwner(
     retire,
     persistRetirement,
     preflight,
+    async supersede() {
+      const replacementIdentity = packageActivationIdentity(live, true);
+      if (
+        [descriptor.previous.identity, descriptor.candidate.identity].includes(replacementIdentity)
+      ) {
+        throw new Error("A recorded package generation still requires its original recovery.");
+      }
+      const retained = `${anchor}.superseded-${descriptor.operationId}`;
+      const assertSupersession = () => {
+        assertion();
+        assertJournalCurrent(record);
+        if (packageActivationIdentity(live, true) !== replacementIdentity) {
+          throw new Error("The manually installed package changed during recovery settlement.");
+        }
+      };
+      const transfers = [
+        { source: anchor, target: retained, identity: descriptor.anchorIdentity, directory: true },
+        {
+          source: resolvePackageActivationHelper(anchor),
+          target: path.join(retained, "recovery.mjs"),
+          identity: descriptor.helperIdentity,
+          directory: false,
+        },
+      ];
+      const inspectTransfer = (entry: (typeof transfers)[number]) => {
+        assertSupersession();
+        const source = entryIdentity(entry.source, entry.directory);
+        const target = entryIdentity(entry.target, entry.directory);
+        if (source === null && target === entry.identity && record.phase === "superseded") {
+          return true;
+        }
+        if (source !== entry.identity || target !== null) {
+          throw new Error(
+            "Superseded package recovery artifacts changed or collide with the retained copy.",
+          );
+        }
+        return false;
+      };
+      for (const entry of transfers) {
+        inspectTransfer(entry);
+      }
+      if (record.phase !== "superseded") {
+        // Disarm even an old sealed helper before moving evidence. No old package
+        // or launcher is restored over the operator's manual installation.
+        record = journal.transition(
+          record,
+          "superseded",
+          {
+            kind: "superseded-by-manual-install",
+            replacementIdentity,
+            settled: false,
+          },
+          assertSupersession,
+        );
+      }
+      for (const entry of transfers) {
+        if (!inspectTransfer(entry)) {
+          await fsp.rename(entry.source, entry.target);
+        }
+        for (const directory of new Set([path.dirname(entry.source), path.dirname(entry.target)])) {
+          assertSupersession();
+          if (!inspectTransfer(entry)) {
+            throw new Error("Superseded package recovery transfer is incomplete.");
+          }
+          requireDirectorySync(await syncDirectory(directory), "Superseded package recovery");
+        }
+        assertSupersession();
+        inspectTransfer(entry);
+      }
+      if (record.intent?.kind !== "superseded-by-manual-install") {
+        throw new Error("Package supersession fact is missing.");
+      }
+      record = journal.transition(
+        record,
+        "superseded",
+        { ...record.intent, settled: true },
+        assertSupersession,
+      );
+      return retained;
+    },
     async disarmRollback() {
       assertCurrent();
       const observed = await inspect();

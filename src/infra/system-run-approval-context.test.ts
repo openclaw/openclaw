@@ -98,7 +98,7 @@ describe("resolveSystemRunApprovalRequestContext", () => {
 });
 
 describe("parsePreparedSystemRunPayload", () => {
-  test("parses legacy prepared payloads via top-level fallback command text", () => {
+  test.each(["commandText", "cmdText"])("rejects retired top-level %s payloads", (field) => {
     expect(
       parsePreparedSystemRunPayload({
         plan: {
@@ -107,19 +107,22 @@ describe("parsePreparedSystemRunPayload", () => {
           agentId: "main",
           sessionKey: "agent:main:main",
         },
-        commandText: 'bash -lc "jq --version"',
+        [field]: 'bash -lc "jq --version"',
       }),
-    ).toEqual({
-      plan: {
-        argv: ["bash", "-lc", "jq --version"],
-        cwd: "/tmp",
-        commandText: 'bash -lc "jq --version"',
-        commandPreview: null,
-        agentId: "main",
-        sessionKey: "agent:main:main",
-      },
-    });
+    ).toBeNull();
   });
+
+  test.each(["mutableFileOperand", "policySnapshot"])(
+    "does not reconstruct plans rejected for invalid %s",
+    (field) => {
+      expect(
+        parsePreparedSystemRunPayload({
+          plan: { argv: ["jq", "--version"], commandText: "jq --version", [field]: null },
+          commandText: "jq --version",
+        }),
+      ).toBeNull();
+    },
+  );
 
   test("parses prepared exec policy metadata", () => {
     expect(

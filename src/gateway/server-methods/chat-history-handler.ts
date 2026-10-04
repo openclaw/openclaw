@@ -600,7 +600,6 @@ export async function handleChatHistoryRequest({
 
 export const chatHistoryHandlers: GatewayRequestHandlers = {
   "chat.history": (opts) => handleChatHistoryRequest({ ...opts, method: "chat.history" }),
-  "chat.startup": (opts) =>
-    handleChatStartupRequest(opts, handleChatHistoryRequest, respondChatHistoryUnavailable),
+  "chat.startup": (opts) => handleChatStartupRequest(opts, handleChatHistoryRequest),
   "chat.metadata": handleChatMetadataRequest,
 };

@@ -73,15 +73,11 @@ beforeEach(() => {
     .mockImplementation(resolveApiKeyForProfileMock);
   vi.stubGlobal("fetch", fetchMock);
   storeMocks.updateAuthProfileStoreWithLock.mockResolvedValue({ version: 1, profiles: {} });
-  authProfileUsageTesting.setDepsForTest({
-    updateAuthProfileStoreWithLock: storeMocks.updateAuthProfileStoreWithLock,
-  });
 });
 
 afterEach(() => {
   resolveApiKeyForProfileSpy?.mockRestore();
   resolveApiKeyForProfileSpy = undefined;
-  authProfileUsageTesting.setDepsForTest(null);
   authProfileUsageTesting.resetWhamReprobeStateForTest();
   vi.unstubAllGlobals();
   vi.useRealTimers();

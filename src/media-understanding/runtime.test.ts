@@ -222,7 +222,7 @@ describe("media-understanding runtime", () => {
       filePath: "/tmp/sample.ogg",
       mime: "audio/ogg",
       cfg: {
-        agents: { list: [{ id: "worker", agentDir: "/tmp/worker-agent" }] },
+        agents: { entries: { worker: { agentDir: "/tmp/worker-agent" } } },
       } as OpenClawConfig,
       agentId: "worker",
     });
@@ -729,7 +729,7 @@ describe("media-understanding runtime", () => {
       model: "vision-v1",
       prompt: "Describe the sample.",
       cfg: {
-        agents: { list: [{ id: "worker", agentDir: "/tmp/worker-agent" }] },
+        agents: { entries: { worker: { agentDir: "/tmp/worker-agent" } } },
       } as OpenClawConfig,
       agentId: "worker",
       agentDir: undefined,

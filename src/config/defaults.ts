@@ -376,32 +376,34 @@ export function applyModelDefaults(
   }
 
   let nextAgents = nextCfg.agents;
-  const rawAgentList = nextAgents?.list;
-  if (Array.isArray(rawAgentList)) {
-    let listMutated = false;
-    const agentList = rawAgentList.map((agent) => {
-      if (!isRecord(agent)) {
-        return agent;
-      }
-      let nextAgent = agent;
-      if (Object.hasOwn(agent, "model")) {
-        const normalizedModel = normalizeAgentModelSelectionForConfig(agent.model);
-        if (normalizedModel !== agent.model) {
-          nextAgent = { ...nextAgent, model: normalizedModel as typeof agent.model };
-          listMutated = true;
+  const agentEntries = nextAgents?.entries;
+  if (agentEntries) {
+    let entriesMutated = false;
+    const entries = Object.fromEntries(
+      Object.entries(agentEntries).map(([id, agent]) => {
+        if (!isRecord(agent)) {
+          return [id, agent];
         }
-      }
-      if (isRecord(agent.models)) {
-        const normalizedModels = normalizeAgentModelMapForConfig(agent.models);
-        if (normalizedModels !== agent.models) {
-          nextAgent = { ...nextAgent, models: normalizedModels };
-          listMutated = true;
+        let nextAgent = agent;
+        if (Object.hasOwn(agent, "model")) {
+          const normalizedModel = normalizeAgentModelSelectionForConfig(agent.model);
+          if (normalizedModel !== agent.model) {
+            nextAgent = { ...nextAgent, model: normalizedModel as typeof agent.model };
+            entriesMutated = true;
+          }
         }
-      }
-      return nextAgent;
-    });
-    if (listMutated) {
-      nextAgents = { ...nextAgents, list: agentList };
+        if (isRecord(agent.models)) {
+          const normalizedModels = normalizeAgentModelMapForConfig(agent.models);
+          if (normalizedModels !== agent.models) {
+            nextAgent = { ...nextAgent, models: normalizedModels };
+            entriesMutated = true;
+          }
+        }
+        return [id, nextAgent];
+      }),
+    );
+    if (entriesMutated) {
+      nextAgents = { ...nextAgents, entries };
       mutated = true;
     }
   }

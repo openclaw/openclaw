@@ -4,6 +4,14 @@ import { formatUiError } from "../lib/format-error.ts";
 import { icon } from "./icons.ts";
 import { renderLoadingState } from "./loading-state.ts";
 
+export function renderAgentStartupState() {
+  return html`<section class="agent-startup-state" role="status" aria-live="polite">
+    <span class="btn__spinner" aria-hidden="true"></span>
+    <div>${t("agentStartup.title")}</div>
+    <div>${t("agentStartup.description")}</div>
+  </section>`;
+}
+
 type LazyElementState =
   | { status: "loading"; element: { label: string } }
   | { status: "error"; element: { label: string }; error: unknown; stale: boolean };

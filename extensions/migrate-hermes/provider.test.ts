@@ -179,7 +179,7 @@ describe("Hermes migration provider", () => {
         config: {
           agents: {
             defaults: { workspace: defaultWorkspace },
-            list: [{ id: "research", workspace: targetWorkspace }],
+            entries: { research: { workspace: targetWorkspace } },
           },
         },
         targetAgentId: "research",

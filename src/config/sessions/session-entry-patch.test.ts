@@ -32,6 +32,7 @@ import { appendExpectedSessionTranscriptTurn } from "./session-accessor.sqlite-t
 import { readSessionTranscriptWatermarkInDatabase } from "./session-accessor.sqlite-transcript-watermark.js";
 import { commitSessionEntryPatch } from "./session-entry-patch.worker.js";
 import { readSessionEntryInWorker } from "./session-entry-read-runtime.js";
+import { SqliteSessionMutationConflictError } from "./session-mutation-conflict-error.js";
 import { markSessionTranscriptIndexDirtyInTransaction } from "./session-transcript-index.js";
 import * as reconcile from "./session-transcript-reconcile.js";
 import type { SessionEntry } from "./types.js";
@@ -417,12 +418,12 @@ it("settles false before CAS and later throwing authority, while null updates st
     ).resolves.toBeNull();
     expect(f.read()?.label).toBe("newer");
     vi.restoreAllMocks();
-    await expect(
-      patchSessionEntryCore(f.scope, () => {
-        replaceSessionEntrySync(f.scope, { sessionId: "another", updatedAt: 3 });
-        return null;
-      }),
-    ).rejects.toThrow("state changed while preparing");
+    const conflict = patchSessionEntryCore(f.scope, () => {
+      replaceSessionEntrySync(f.scope, { sessionId: "another", updatedAt: 3 });
+      return null;
+    });
+    await expect(conflict).rejects.toBeInstanceOf(SqliteSessionMutationConflictError);
+    await expect(conflict).rejects.toThrow("state changed while preparing");
   });
 });
 

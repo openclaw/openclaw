@@ -441,10 +441,11 @@ describe("Telegram registered plugin delivery", () => {
     const cfg = pluginConfig();
     cfg.agents = {
       entries: {
-        main: { default: true, workspace: otherWorkspace },
+        main: { workspace: otherWorkspace },
         attachments: { workspace: routedWorkspace },
       },
     };
+    cfg.bindings = [{ agentId: "main", match: { channel: "telegram", accountId: "default" } }];
     cfg.channels!.telegram!.groupPolicy = "open";
     cfg.channels!.telegram!.groupAllowFrom = [String(from.id)];
     cfg.channels!.telegram!.groups = {

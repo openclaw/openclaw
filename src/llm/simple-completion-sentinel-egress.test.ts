@@ -9,8 +9,8 @@ import { applyLocalNoAuthHeaderOverride } from "../agents/model-auth-model.js";
 import {
   attachModelProviderRequestTransport,
   getModelProviderRequestTransport,
-  type ProviderRequestAuthOverride,
 } from "../agents/provider-request-config.js";
+import type { ProviderRequestAuthOverride } from "../agents/provider-request-config.types.js";
 import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
 import { attachModelProviderRuntimePluginHandle } from "../plugins/provider-hook-runtime.js";
 import type { ProviderPlugin } from "../plugins/provider-plugin.types.js";

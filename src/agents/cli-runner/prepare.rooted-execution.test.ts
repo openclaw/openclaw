@@ -212,7 +212,7 @@ describe("rooted CLI preparation", () => {
           config: {
             agents: {
               entries: {
-                main: { default: true, sandbox: { mode: "off" } },
+                main: { sandbox: { mode: "off" } },
                 other: { sandbox: { mode: "all", workspaceAccess } },
               },
             },

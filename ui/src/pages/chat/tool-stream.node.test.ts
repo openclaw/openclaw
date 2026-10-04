@@ -2,7 +2,7 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { readToolApprovalReviews } from "../../lib/chat/tool-approval-reviews.ts";
 import { readPreparedActivity, summarizeToolGroup } from "../../lib/chat/tool-call-grouping.ts";
-import { extractToolCardsCached } from "../../lib/chat/tool-cards.ts";
+import { extractToolCardsCached, resolveToolCardOutcome } from "../../lib/chat/tool-cards.ts";
 import { coalesceToolActivityMessages } from "./chat-tool-activity-coalesce.ts";
 import type { ToolStreamEntry } from "./tool-stream-contract.ts";
 import { buildToolStreamIdentity } from "./tool-stream-identity.ts";
@@ -46,106 +46,151 @@ afterAll(() => {
 afterEach(() => vi.useRealTimers());
 
 describe("app-tool-stream approval lifecycle", () => {
-  it("keeps raw details while terminal prepared activity wins history and reconnect replay", () => {
-    const host = createHost({ chatRunId: "run-1" });
-    const started = {
-      itemId: "tool:call",
-      toolCallId: "call",
-      kind: "tool",
-      name: "process",
-      title: "Check process",
-      phase: "start",
-      status: "running",
-      hideFromChannelProgress: true,
-    };
-    const completed = {
-      ...started,
-      phase: "end",
-      status: "completed",
-      title: "Stop process",
-      hideFromChannelProgress: false,
-    };
-    const completedEvent = Object.freeze({ ...completed, diagnostic: { source: "native-tool" } });
-    handleAgentEvent(
-      host,
-      agentEvent("run-1", 1, "tool", {
+  it.each([
+    { withResult: true, kind: "tool" },
+    { withResult: false, kind: "tool" },
+    { withResult: false, kind: "command" },
+  ])(
+    "keeps terminal $kind activity through history and replay (result: $withResult)",
+    ({ withResult, kind }) => {
+      const host = createHost({ chatRunId: "run-1" });
+      const started = {
+        itemId: "tool:call",
         toolCallId: "call",
+        kind,
         name: "process",
+        title: "Check process",
         phase: "start",
-        args: { action: "poll" },
-      }),
-    );
-    handleAgentEvent(host, agentEvent("run-1", 2, "item", started));
+        status: "running",
+        hideFromChannelProgress: true,
+      };
+      const completed = {
+        ...started,
+        phase: "end",
+        status: withResult ? "completed" : undefined,
+        title: "Stop process",
+        hideFromChannelProgress: false,
+      };
+      const completedEvent = Object.freeze({ ...completed, diagnostic: { source: "native-tool" } });
+      handleAgentEvent(
+        host,
+        agentEvent("run-1", 1, "tool", {
+          toolCallId: "call",
+          name: "process",
+          phase: "start",
+          args: { action: "poll" },
+        }),
+      );
+      handleAgentEvent(host, agentEvent("run-1", 2, "item", started));
+      if (withResult) {
+        handleAgentEvent(
+          host,
+          agentEvent("run-1", 3, "tool", {
+            toolCallId: "call",
+            name: "process",
+            phase: "result",
+            isError: false,
+            result: "raw execution result",
+          }),
+        );
+      }
+      handleAgentEvent(host, agentEvent("run-1", 4, "item", completedEvent));
+      handleAgentEvent(host, agentEvent("run-1", 2, "item", started));
+      const live = [...host.toolStreamById.values()][0]!.message;
+      const reconciled = coalesceToolActivityMessages([
+        {
+          kind: "message",
+          key: "history",
+          message: {
+            role: "assistant",
+            runId: "run-1",
+            __openclaw: { id: "history-call" },
+            content: [
+              { type: "toolCall", id: "call", name: "process", arguments: { action: "poll" } },
+            ],
+            activity: [started],
+          },
+        },
+        { kind: "message", key: "live", message: live },
+      ]);
+      const messages = reconciled.flatMap((item) =>
+        item.kind === "message" ? [item.message] : [],
+      );
+      const activity = messages.flatMap(readPreparedActivity);
+      expect(activity).toEqual([completed]);
+      expect(summarizeToolGroup(activity)).toBe(
+        withResult ? "1 other operation" : "1 other operation · 1 unknown",
+      );
+      expect(activity[0]).not.toHaveProperty("diagnostic");
+      expect(completedEvent.diagnostic).toEqual({ source: "native-tool" });
+      const cards = messages.flatMap(extractToolCardsCached);
+      expect(cards).toMatchObject([{ args: { action: "poll" }, completed: true }]);
+      expect(cards.map((card) => card.outputText)).toEqual([
+        withResult ? "raw execution result" : undefined,
+      ]);
+      expect(cards.map((card) => resolveToolCardOutcome(card, true))).toEqual([
+        withResult ? "succeeded" : "unknown",
+      ]);
+      expect(messages[0]).toMatchObject({ __openclawToolStreamResultReceived: withResult });
+      const quietHistory = coalesceToolActivityMessages([
+        {
+          kind: "message",
+          key: "call",
+          message: {
+            role: "assistant",
+            runId: "run-1",
+            activity: [started],
+            content: [
+              { type: "toolCall", id: "call", name: "process", arguments: { action: "poll" } },
+            ],
+          },
+        },
+        {
+          kind: "message",
+          key: "result",
+          message: {
+            role: "toolResult",
+            runId: "run-1",
+            toolCallId: "call",
+            toolName: "process",
+            isError: false,
+            content: "raw wait result",
+            activity: [],
+          },
+        },
+      ]);
+      expect(
+        quietHistory.flatMap((item) =>
+          item.kind === "message" ? readPreparedActivity(item.message) : [],
+        ),
+      ).toEqual([]);
+      resetToolStream(host);
+    },
+  );
+
+  it("keeps suppressed native item completion from settling the visible call", () => {
+    const host = createHost({ chatRunId: "run-1" });
+    emitTool(host, "run-1", 1, {
+      toolCallId: "call",
+      name: "exec",
+      phase: "start",
+      args: { command: "check" },
+    });
     handleAgentEvent(
       host,
-      agentEvent("run-1", 3, "tool", {
+      agentEvent("run-1", 2, "item", {
+        itemId: "native-call",
         toolCallId: "call",
-        name: "process",
-        phase: "result",
-        isError: false,
-        result: "raw execution result",
+        kind: "command",
+        name: "exec",
+        title: "Check",
+        phase: "end",
+        suppressChannelProgress: true,
       }),
     );
-    handleAgentEvent(host, agentEvent("run-1", 4, "item", completedEvent));
-    handleAgentEvent(host, agentEvent("run-1", 2, "item", started));
-    const live = [...host.toolStreamById.values()][0]!.message;
-    const reconciled = coalesceToolActivityMessages([
-      {
-        kind: "message",
-        key: "history",
-        message: {
-          role: "assistant",
-          runId: "run-1",
-          __openclaw: { id: "history-call" },
-          content: [
-            { type: "toolCall", id: "call", name: "process", arguments: { action: "poll" } },
-          ],
-          activity: [started],
-        },
-      },
-      { kind: "message", key: "live", message: live },
-    ]);
-    const messages = reconciled.flatMap((item) => (item.kind === "message" ? [item.message] : []));
-    const activity = messages.flatMap(readPreparedActivity);
-    expect(activity).toEqual([completed]);
-    expect(summarizeToolGroup(activity)).toBe("1 other operation");
-    expect(activity[0]).not.toHaveProperty("diagnostic");
-    expect(completedEvent.diagnostic).toEqual({ source: "native-tool" });
-    expect(messages.flatMap(extractToolCardsCached)).toMatchObject([
-      { args: { action: "poll" }, outputText: "raw execution result", completed: true },
-    ]);
-    const quietHistory = coalesceToolActivityMessages([
-      {
-        kind: "message",
-        key: "call",
-        message: {
-          role: "assistant",
-          runId: "run-1",
-          activity: [started],
-          content: [
-            { type: "toolCall", id: "call", name: "process", arguments: { action: "poll" } },
-          ],
-        },
-      },
-      {
-        kind: "message",
-        key: "result",
-        message: {
-          role: "toolResult",
-          runId: "run-1",
-          toolCallId: "call",
-          toolName: "process",
-          isError: false,
-          content: "raw wait result",
-          activity: [],
-        },
-      },
-    ]);
-    expect(
-      quietHistory.flatMap((item) =>
-        item.kind === "message" ? readPreparedActivity(item.message) : [],
-      ),
-    ).toEqual([]);
+    const [card] = extractToolCardsCached(host.chatToolMessages[0]);
+    expect(resolveToolCardOutcome(card!, true)).toBe("running");
+    expect(card?.outputText).toBeUndefined();
     resetToolStream(host);
   });
 

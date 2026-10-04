@@ -57,7 +57,7 @@ describe("agents skills panel (browser)", () => {
       loading: false,
       error: null,
       activeAgentId: "main",
-      configForm: { agents: { entries: { main: { default: true } } } },
+      configForm: { agents: { entries: { main: {} } } },
       configLoading: false,
       configSaving: false,
       configDirty: false,
@@ -107,7 +107,7 @@ describe("agents skills panel (browser)", () => {
         configForm: {
           agents: {
             defaults: { skills: ["github"] },
-            entries: { main: { default: true } },
+            entries: { main: {} },
           },
         },
         configLoading: false,
@@ -215,7 +215,7 @@ describe("agents skills panel (browser)", () => {
         loading: false,
         error: null,
         activeAgentId: "main",
-        configForm: { agents: { entries: { main: { default: true } } } },
+        configForm: { agents: { entries: { main: {} } } },
         configLoading: false,
         configSaving: false,
         configDirty: false,

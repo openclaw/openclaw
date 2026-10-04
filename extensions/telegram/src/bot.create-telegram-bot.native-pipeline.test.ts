@@ -324,7 +324,8 @@ describe("createTelegramBot typed command pipeline", () => {
       false,
       true,
       {
-        agents: { list: [{ id: "main", default: true }, { id: "topic-agent" }] },
+        agents: { entries: { main: {}, "topic-agent": {} } },
+        bindings: [{ agentId: "main", match: { channel: "telegram", accountId: "work" } }],
         accessGroups: {
           operators: { type: "message.senders", members: { telegram: ["42001"] } },
         },
@@ -515,7 +516,7 @@ describe("createTelegramBot typed command pipeline", () => {
     const config: OpenClawConfig = {
       commands: { native: true },
       channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
-      agents: { list: [{ id: "agent-a", default: true }, { id: "agent-b" }] },
+      agents: { entries: { "agent-a": {}, "agent-b": {} } },
       bindings: [{ agentId: "agent-a", match: { channel: "telegram", accountId: "default" } }],
     };
     const bot = await createBot(true, true, config);

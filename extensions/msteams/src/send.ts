@@ -381,7 +381,6 @@ async function sendTextWithMedia(
       app,
       conversationRef: ref,
       messages,
-      retry: {},
       onRetry: (event) => {
         log.debug?.("retrying send", { conversationId, ...event });
       },

@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  collectChannelConfigDoctorBuildEntries,
+  collectRetainedDoctorBuildEntries,
   collectPluginDeclarationSourceEntries,
   collectRootPackageExcludedExtensionDirs,
   collectSourceCheckoutPluginBuildEntries,
@@ -142,21 +142,49 @@ describe("bundled plugin build entries", () => {
     };
     const manifestPath = path.join(pluginDir, "openclaw.plugin.json");
     fs.writeFileSync(manifestPath, JSON.stringify(manifest));
-    expect(() => collectChannelConfigDoctorBuildEntries({ cwd })).toThrow(
+    expect(() => collectRetainedDoctorBuildEntries({ cwd })).toThrow(
       /Missing config-only doctor entrypoint/,
     );
     fs.writeFileSync(
       path.join(pluginDir, "config-doctor-api.ts"),
       "export const legacyConfigRules = [];\n",
     );
-    expect(collectChannelConfigDoctorBuildEntries({ cwd })).toEqual({
+    expect(collectRetainedDoctorBuildEntries({ cwd })).toEqual({
       "renamed-channel": "extensions/external-owner/config-doctor-api.ts",
     });
     fs.writeFileSync(
       manifestPath,
       JSON.stringify({ ...manifest, doctorContract: { stateMigrations: true } }),
     );
-    expect(collectChannelConfigDoctorBuildEntries({ cwd })).toEqual({});
+    expect(collectRetainedDoctorBuildEntries({ cwd })).toEqual({});
+  });
+
+  it("retains non-channel state checks under plugin IDs while excluding plugin runtimes", () => {
+    const cwd = tempDirs.make("openclaw-state-retention-entries-");
+    const pluginDir = path.join(cwd, "extensions", "external-owner");
+    fs.mkdirSync(pluginDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(cwd, "package.json"),
+      JSON.stringify({
+        files: ["dist/**", "!dist/extensions/external-owner/**"],
+      }),
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: "external-owner",
+        doctorContract: { stateMigrations: [{ id: "retired-log" }] },
+      }),
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "state-retention-api.ts"),
+      "export const stateMigrations = [];\n",
+    );
+    expect(collectRetainedDoctorBuildEntries({ cwd, surface: "state-retention" })).toEqual({
+      "external-owner": "extensions/external-owner/state-retention-api.ts",
+    });
+    expect(collectRetainedDoctorBuildEntries({ cwd })).toEqual({});
+    expect(listBundledPluginPackArtifacts({ cwd })).toEqual([]);
   });
 
   const bundledChannelEntrySources = ["index.ts", "channel-entry.ts", "setup-entry.ts"];

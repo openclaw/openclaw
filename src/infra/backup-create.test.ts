@@ -669,7 +669,7 @@ describe("createBackupArchive", () => {
   it("excludes AppleDouble metadata only from SQLite-owned roots", async () => {
     await withOpenClawTestState({ layout: "state-only", scenario: "minimal" }, async (state) => {
       await state.writeConfig({
-        agents: { entries: { main: { default: true, workspace: state.workspaceDir } } },
+        agents: { entries: { main: { workspace: state.workspaceDir } } },
       });
       const metadata = Buffer.alloc(163);
       APPLE_DOUBLE_MAGIC.copy(metadata);
@@ -1100,7 +1100,7 @@ describe("createBackupArchive", () => {
       await fs.writeFile(path.join(pluginSkillsDir, "generated-skill.md"), "generated\n", "utf8");
       await state.writeConfig({
         agents: {
-          entries: { main: { default: true, agentDir } },
+          entries: { main: { agentDir } },
         },
       });
 
@@ -1170,7 +1170,6 @@ describe("createBackupArchive", () => {
           agents: {
             entries: {
               main: {
-                default: true,
                 agentDir,
                 ...(includeWorkspace ? { workspace: state.workspaceDir } : {}),
               },
@@ -1252,7 +1251,7 @@ describe("createBackupArchive", () => {
       const agentDir = state.path("sidecar-agent");
       await fs.mkdir(agentDir, { recursive: true });
       await state.writeConfig({
-        agents: { entries: { main: { default: true, agentDir } } },
+        agents: { entries: { main: { agentDir } } },
       });
       const dbPath = path.join(agentDir, "openclaw-agent.sqlite");
       createOwnedSqliteDatabase({ sqlitePath: dbPath, role: "agent", agentId: "main" });
@@ -1296,7 +1295,7 @@ describe("createBackupArchive", () => {
     await withBackupState("openclaw-backup-external-agent-owner-", async (state) => {
       const agentDir = state.path("external-agent");
       await fs.mkdir(agentDir, { recursive: true });
-      await state.writeConfig({ agents: { entries: { main: { default: true, agentDir } } } });
+      await state.writeConfig({ agents: { entries: { main: { agentDir } } } });
       registerAgentDatabase(state, path.join(agentDir, "openclaw-agent.sqlite"));
       createOwnedSqliteDatabase({
         sqlitePath: path.join(agentDir, "openclaw-agent.sqlite"),
@@ -1377,7 +1376,7 @@ describe("createBackupArchive", () => {
           await fs.symlink("/outside-backup", path.join(excludedAgentRoot, "unsafe-link"));
         }
         await state.writeConfig({
-          agents: { entries: { main: { default: true, agentDir } } },
+          agents: { entries: { main: { agentDir } } },
           plugins: {
             load: { paths: [pluginRoot] },
             entries: { "backup-owner": { enabled: true } },
@@ -1539,7 +1538,7 @@ describe("createBackupArchive", () => {
         const outputDir = state.path("backups");
         await state.writeConfig({
           agents: {
-            entries: { main: { default: true, workspace: state.workspaceDir } },
+            entries: { main: { workspace: state.workspaceDir } },
           },
         });
         await fs.mkdir(outputDir, { recursive: true });
@@ -3186,7 +3185,7 @@ describe("createBackupArchive", () => {
       const hardlinkedDbPath = state.statePath("state", "._hardlinked-global.sqlite");
       await state.writeConfig({
         agents: {
-          entries: { main: { default: true, workspace: state.workspaceDir } },
+          entries: { main: { workspace: state.workspaceDir } },
         },
       });
       await fs.mkdir(path.dirname(linkedDbPath), { recursive: true });
@@ -3622,8 +3621,9 @@ describe("createBackupArchive", () => {
           configPath,
           `${JSON.stringify({
             agents: {
+              defaults: { systemAgent: { agentId: "main" } },
               entries: {
-                main: { default: true, workspace: workspaceDir },
+                main: { workspace: workspaceDir },
                 external: { workspace: externalTmpWorkspaceDir },
                 worker: { workspace: tmpWorkspaceDir },
                 nested: { workspace: agentTmpWorkspaceDir },

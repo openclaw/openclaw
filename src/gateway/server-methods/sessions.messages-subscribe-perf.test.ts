@@ -96,7 +96,7 @@ it("shares approval replay across 64 subscribers during unrelated approval activ
       return result;
     });
   const context = {
-    getRuntimeConfig: () => ({ agents: { list: [{ id: "main", default: true }] } }),
+    getRuntimeConfig: () => ({ agents: { entries: { main: {} } } }),
     subscribeSessionMessageEvents: subscribers.subscribe,
     listSessionPendingApprovals: runtime.replay,
     logGateway: { error: vi.fn() },

@@ -1,3 +1,4 @@
+import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -11,7 +12,6 @@ import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.
 import { withRuntimeWorkerGeneration } from "../infra/runtime-worker-generation.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { readSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
-import { getTrackedWorkerCpuSources } from "../infra/worker-cpu.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { withAgentDatabaseMaintenanceLease } from "./openclaw-agent-db-maintenance-lease.js";
 import {
@@ -96,7 +96,6 @@ it("rebinds the real shared-state lease worker and joins its retained generation
       leaseMs: 60_000,
       waitMs: 0,
     };
-    const initialWorkers = getTrackedWorkerCpuSources().workers.length;
     await withOpenClawStateLease(options, async (lease) => lease.assertOwned());
     const source = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sharedStateStore);
     const retainedPath = path.join(
@@ -106,20 +105,24 @@ it("rebinds the real shared-state lease worker and joins its retained generation
     await fs.promises.writeFile(retainedPath, `export * from ${JSON.stringify(source.href)};\n`);
     const retained = pathToFileURL(await fs.promises.realpath(retainedPath));
     const dispatch = vi.spyOn(Worker.prototype, "postMessage");
-    await withRuntimeWorkerGeneration(
+    const { worker: retainedWorker, exited } = await withRuntimeWorkerGeneration(
       async (bind) => {
         bind((url) => (url.href === source.href ? retained : url));
         await withOpenClawStateLease(options, async (lease) => lease.assertOwned());
-        expect(
-          dispatch.mock.calls.some(
-            ([request]) =>
-              isRecord(request) && request.type === "open" && request.moduleUrl === retained.href,
-          ),
-        ).toBe(true);
+        const openIndex = dispatch.mock.calls.findIndex(
+          ([request]) =>
+            isRecord(request) && request.type === "open" && request.moduleUrl === retained.href,
+        );
+        const worker = dispatch.mock.contexts[openIndex];
+        if (!(worker instanceof Worker)) {
+          throw new Error("Expected the retained shared-state worker");
+        }
+        return { worker, exited: once(worker, "exit") };
       },
       async () => {},
     );
-    expect(getTrackedWorkerCpuSources().workers).toHaveLength(initialWorkers);
+    expect(retainedWorker.threadId).toBe(-1);
+    await exited;
     await withOpenClawStateLease(options, async (lease) => lease.assertOwned());
   });
 });

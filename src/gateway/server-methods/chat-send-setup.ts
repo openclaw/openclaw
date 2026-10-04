@@ -151,9 +151,9 @@ export async function prepareAndAdmitChatSend(
       return undefined;
     }
     return {
-      normalizedRequest,
-      preparedSession: { ok: true as const, value: session },
-      admitted,
+      request: normalizedRequest.value,
+      session,
+      admission: admitted.value,
     };
   } finally {
     if (!admitted?.ok) {

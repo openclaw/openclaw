@@ -12,10 +12,39 @@ Managed worktrees give an agent task its own git branch and checkout without pla
 
 ## Sandboxed sessions
 
-Sandboxed project sessions use a private source-only Git checkout for execution,
+Sandboxed project sessions use a private Git checkout for execution,
 while the managed worktree remains the canonical owner of accepted changes.
 Docker and Podman support this local projection. The host repository's shared Git
 metadata and ignored-file provisioning are not mounted or copied into it.
+On Btrfs, APFS, and ReFS, new private checkouts with a committed `pnpm-lock.yaml`
+can reuse installed dependencies. OpenClaw prepares the dependencies once in a
+disposable sandbox, then clones the prepared checkout for each session. The first
+checkout pays the install cost; subsequent checkouts arrive with `node_modules`.
+The private checkout storage must support filesystem acceleration, and
+`worktreeAcceleration: false` disables this preparation too.
+
+Dependency preparation uses the selected sandbox image, network restrictions,
+and guest working directory, without configured credentials, custom bind mounts,
+or setup commands. Git metadata stays read-only during installation. Only
+`node_modules` directories are retained as additional output, regardless of Git
+ignore spelling; generated native protocol files and other setup artifacts are
+not shared. Repository code never
+runs on the host as part of this preparation. Existing permission requirements
+for unsandboxed repository setup are unchanged.
+With `network: "none"`, pnpm uses offline mode so a missing package or metadata
+cache falls back promptly instead of waiting through network retries.
+
+The reusable generation binds the source commit, frozen lockfile, immutable image
+(including its Node and pnpm versions), guest path, and sandbox policy. A changed
+generation prepares a new template; the existing seven-day template cleanup also
+retires interrupted builders. Installation failure or changed tracked source
+records a warning and keeps a source-only template for that generation. Missing
+lockfiles, unsupported filesystems, and unavailable images use source-only
+checkout. The agent can install normally in that private checkout. Dependency
+preparation does not update an already-used session when its lockfile changes.
+Layouts whose pnpm virtual store is outside `node_modules` also use the
+source-only fallback, preserving their ordinary installation contract.
+
 See [Workspace access](/gateway/sandboxing/workspace-access#managed-project-workspaces)
 for write policy, reconciliation, and conflict recovery.
 
@@ -69,7 +98,7 @@ New checkouts with no file data, including empty session workspaces, use normal 
 
 If template cleanup cannot acquire its allocation lease or read its cache, OpenClaw logs a warning and continues ordinary worktree and snapshot cleanup. A later cleanup pass retries template retirement.
 
-Templates contain checked-out source only. `.worktreeinclude` provisioning and `.openclaw/worktree-setup.sh` still run separately for each new worktree, under their existing permissions. Dependencies and setup output are not shared through the template. Copy-on-write snapshots share source storage until files change; their actual savings depend on the repository and subsequent writes.
+Canonical worktree templates contain checked-out source only. `.worktreeinclude` provisioning and `.openclaw/worktree-setup.sh` still run separately for each new worktree, under their existing permissions. Private sandbox dependency templates follow the separate preparation contract above; they never copy ignored files from the host repository. Copy-on-write snapshots share storage until files change; their actual savings depend on the repository and subsequent writes.
 
 The first accelerated worktree includes the cost of preparing a template through Git. Later APFS worktrees clone the whole directory in one native operation. OpenClaw reads shared data-stream identities in bounded native batches before updating Git's cached file metadata, avoiding a content reread for proven unchanged files. Git metadata preparation counts toward the timestamp-safety delay, so finishing it after the clone's timestamp boundary does not add another wait. Git still validates the resulting index and detects subsequent edits; unsupported index formats and unverified files receive ordinary Git validation.
 
@@ -142,7 +171,7 @@ The repository fingerprint is the first 16 hexadecimal characters of a SHA-256 h
 
 OpenClaw creates branch `openclaw/<name>` at the requested base ref. Without a base ref, it fetches `origin`, uses the remote default branch when available, and falls back to local `HEAD` when the repository is offline or has no usable remote, including a stale `origin/HEAD` pointing to a deleted branch. An explicitly requested base must resolve to a commit; OpenClaw never substitutes another base for it. Git first registers the branch without materializing files, preserving its normal upstream-tracking rules. OpenClaw then captures that branch's commit and uses it for the size estimate, source template, and checkout. Later changes to the source ref cannot switch the files being written or reuse a smaller commit's allowance.
 
-Git worktree registration and source materialization during creation or snapshot restore each have a five-minute timeout, including a creation retry from local `HEAD`. Fetching missing objects for the size estimate uses the same five-minute budget. Other managed-worktree Git commands keep their two-minute timeout, except admitted checkout deletion, which is joined to completion. The separate `.openclaw/worktree-setup.sh` step also keeps its own two-minute timeout.
+Git worktree registration and source materialization during creation or snapshot restore each have a five-minute timeout, including a creation retry from local `HEAD`. Fetching missing objects for the size estimate uses the same five-minute budget. Other managed-worktree Git commands keep their two-minute timeout, except automatic Git maintenance, which gets 30 minutes, and admitted checkout deletion, which is joined to completion. The separate `.openclaw/worktree-setup.sh` step also keeps its own two-minute timeout.
 
 ## Capacity and disk space
 
@@ -150,13 +179,13 @@ OpenClaw uses 100 live managed worktrees per state directory as a cleanup target
 
 Before allocating a checkout, OpenClaw checks its destination, Git metadata, source checkout, and state volumes. It keeps a fixed 4 GiB operational reserve on each volume, plus twice the estimated Git checkout and provisioned-file size. A validated reusable source template replaces the full Git checkout allowance with an estimate for clone metadata and Git index writes. Btrfs snapshots share directory metadata; APFS and ReFS clones budget metadata per tracked entry, with the ReFS volume allocation size included. Cold templates and every native Git fallback require the full checkout allowance again immediately before allocation. Provisioned files retain their separate full-copy allowance. An executable setup script requires additional room equal to the larger of 4 GiB or the current source checkout footprint excluding Git metadata. Space is checked again before provisioning/setup and after setup. An unavailable capacity reading stops allocation with an actionable error.
 
-For partial clones, OpenClaw inventories missing objects before estimating checkout size and fetches them from the clone's promisor remote in one batch. The batch requests only the missing objects without treating shared commits as proof that their contents are available locally. The size inventory cannot trigger per-object lazy fetches. Partial clones are supported, but full clones are recommended for registry-owned projects to keep checkout and restore independent of missing remote objects. If objects are missing without a promisor remote, fetch or repair the clone before retrying. A Git timeout reports its budget and suggests checking remote reachability, repository locks, and partial-clone behavior.
+For partial clones, OpenClaw inventories missing objects before estimating checkout size and fetches them from the clone's promisor remote in one batch. The batch requests only the missing objects without treating shared commits as proof that their contents are available locally. The size inventory cannot trigger per-object lazy fetches. Allocation fetches skip Git auto-maintenance; the cleanup pass (hourly in the Gateway, or `openclaw worktrees gc`) runs `git maintenance run --auto` for repositories with live managed worktrees. Partial clones are supported, but full clones are recommended for registry-owned projects to keep checkout and restore independent of missing remote objects. If objects are missing without a promisor remote, fetch or repair the clone before retrying. A Git timeout reports its budget and suggests checking remote reachability, repository locks, and partial-clone behavior.
 
 Transient fetch failures, including an incomplete object transfer, retry once after one second within the original fetch timeout. Cancellation and expired workspace authority stop recovery; a second failure surfaces the Git error. See [Retry policy](/concepts/retry#managed-git-operations).
 
 The Git worker reuses a bounded set of successful commit-size estimates while it remains active. Object availability and free disk space are checked on every allocation. Git replacement refs disable reuse of the affected size estimates, and worker shutdown discards them.
 
-Creation, restore, removal, orphan cleanup, and snapshot expiry share one allocation lease across repositories and processes using the same state directory. This prevents cleanup from deleting an unfinished checkout or a snapshot being restored. Requests wait up to 10 minutes for that lease, allowing slow checkout or cleanup work to finish before reporting contention. Caller cancellation and overall request limits can stop the wait earlier. The separate Git and setup timeouts described above still apply. Costs on the same volume are added together. These checks are conservative estimates, not a disk quota: other OpenClaw state directories, shell commands, deployment tools, and arbitrary setup/build output can still consume space. Reusing an existing valid checkout does not allocate another checkout. Worktrees created directly through Git are outside the managed cleanup lifecycle.
+Creation, restore, removal, orphan cleanup, and snapshot expiry share one allocation lease across repositories and processes using the same state directory. This prevents cleanup from deleting an unfinished checkout or a snapshot being restored. A dedicated heartbeat thread renews the lease, which remains held throughout creation, including Git preparation and setup. Requests wait up to 10 minutes for that lease, allowing slow checkout or cleanup work to finish before reporting contention. Caller cancellation and overall request limits can stop the wait earlier. The separate Git and setup timeouts described above still apply. Costs on the same volume are added together. These checks are conservative estimates, not a disk quota: other OpenClaw state directories, shell commands, deployment tools, and arbitrary setup/build output can still consume space. Reusing an existing valid checkout does not allocate another checkout. Worktrees created directly through Git are outside the managed cleanup lifecycle.
 
 Git inventories and directory-size calculations run on bounded background workers. Branch and checkout-context reads use a dedicated worker, separate from diff and snapshot processing. The Gateway keeps ownership of Git subprocesses, cancellation, allocation leases, and registry writes. Canceling an operation waits for its subprocesses and temporary-index cleanup to settle before releasing that ownership. A ref mutation still waiting behind another writer can cancel without waiting for that writer; mutations already running finish their cleanup before cancellation returns. Preparation is cancellable; once destructive checkout deletion starts, it finishes before cancellation returns so a partial checkout cannot replace the complete recovery snapshot on retry.
 

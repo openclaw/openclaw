@@ -28,7 +28,7 @@ export type ExporterHealthUpdate = {
 };
 
 type FailureReason = ExporterHealthReason | "unspecified";
-type PublicExporterHealthUpdate = Omit<ExporterHealthUpdate, "status"> & {
+export type PublicExporterHealthUpdate = Omit<ExporterHealthUpdate, "status"> & {
   status: Exclude<ExporterHealthUpdate["status"], "recovered">;
 };
 type PublicSignalState = {

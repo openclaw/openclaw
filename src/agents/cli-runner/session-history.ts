@@ -163,13 +163,7 @@ export function buildCliSessionHistoryPrompt(params: {
   const summaryRendered = firstIsCompaction ? renderHistoryMessage(firstEntry) : undefined;
   const tailMessages = firstIsCompaction ? params.messages.slice(1) : params.messages;
 
-  const tailRaw = tailMessages
-    .flatMap((message) => {
-      const rendered = renderHistoryMessage(message);
-      return rendered ? [rendered] : [];
-    })
-    .join("\n\n")
-    .trim();
+  const tailRaw = tailMessages.map(renderHistoryMessage).filter(Boolean).join("\n\n").trim();
 
   const truncationMarker = "[OpenClaw reseed history truncated; older turns dropped]";
   const renderTruncatedTail = (raw: string, budget: number): string => {

@@ -63,8 +63,6 @@ type MattermostSendOpts = Pick<
   props?: Record<string, unknown>;
   buttons?: Array<unknown>;
   attachmentText?: string;
-  /** Retry options for DM channel creation */
-  dmRetryOptions?: CreateDmChannelRetryOptions;
   /** Report the provider-finalized send before later fallible bookkeeping. */
   onDeliveryResult?: (result: MattermostSendResult) => Promise<void> | void;
 };
@@ -175,21 +173,6 @@ type ResolveTargetChannelIdParams = {
   logger?: { debug?: (msg: string) => void; warn?: (msg: string) => void };
 };
 
-function mergeDmRetryOptions(
-  base?: CreateDmChannelRetryOptions,
-  override?: CreateDmChannelRetryOptions,
-): CreateDmChannelRetryOptions | undefined {
-  const merged: CreateDmChannelRetryOptions = {
-    maxRetries: override?.maxRetries ?? base?.maxRetries,
-    initialDelayMs: override?.initialDelayMs ?? base?.initialDelayMs,
-    maxDelayMs: override?.maxDelayMs ?? base?.maxDelayMs,
-    timeoutMs: override?.timeoutMs ?? base?.timeoutMs,
-    onRetry: override?.onRetry,
-  };
-
-  return Object.values(merged).some((value) => value !== undefined) ? merged : undefined;
-}
-
 async function resolveTargetChannelId(params: ResolveTargetChannelIdParams): Promise<string> {
   if (params.target.kind === "channel") {
     return params.target.id;
@@ -219,7 +202,6 @@ async function resolveTargetChannelId(params: ResolveTargetChannelIdParams): Pro
     {
       ...params.dmRetryOptions,
       onRetry: (attempt, delayMs, error) => {
-        params.dmRetryOptions?.onRetry?.(attempt, delayMs, error);
         params.logger?.warn?.(
           `DM channel creation retry ${attempt} after ${delayMs}ms: ${error.message}`,
         );
@@ -274,7 +256,13 @@ async function resolveMattermostSendContext(
     allowPrivateNetwork: account.config.network?.dangerouslyAllowPrivateNetwork === true,
     assertRequestCurrent: opts.assertDirectAdapterHandoff,
   });
-  const dmRetryOptions = mergeDmRetryOptions(account.config.dmChannelRetry, opts.dmRetryOptions);
+  const retry = account.config.dmChannelRetry;
+  const dmRetryOptions = retry && {
+    maxRetries: retry.maxRetries,
+    initialDelayMs: retry.initialDelayMs,
+    maxDelayMs: retry.maxDelayMs,
+    timeoutMs: retry.timeoutMs,
+  };
 
   let channelId: string;
   try {

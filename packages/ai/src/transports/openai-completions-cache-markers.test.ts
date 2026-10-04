@@ -137,14 +137,19 @@ describe("managed Completions cache markers", () => {
           ...context,
           messages: [
             ...messages,
-            { role: "user", content: "Runtime facts", runtimeContextCarrier: true, timestamp: 5 },
+            {
+              role: "user",
+              content: "OpenClaw runtime context:\nRuntime facts",
+              timestamp: 5,
+              runtimeContext: {},
+            },
           ],
         },
         undefined,
       );
       const wire = JSON.stringify(payload.messages);
       expect(wire).toContain(JSON.stringify(marked(anchor)));
-      expect(wire).toContain('"content":"Runtime facts"');
+      expect(wire).toContain('"content":"OpenClaw runtime context:\\nRuntime facts"');
       expect(markers(payload)).toHaveLength(3);
     }
   });

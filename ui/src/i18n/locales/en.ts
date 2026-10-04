@@ -30,6 +30,7 @@ export const en: TranslationMap & {
         string
       >;
     pullRequests: TranslationMap;
+    processesPanel: TranslationMap;
   };
   configForm: TranslationMap & { sections: TranslationMap };
   configPage: TranslationMap;
@@ -543,6 +544,11 @@ export const en: TranslationMap & {
         imported: "Profile imported. Review and publish.",
       },
     },
+  },
+  agentStartup: {
+    title: "Starting up",
+    description: "The agent is getting ready. This view will load automatically.",
+    short: "Starting up…",
   },
   lazyView: {
     errorTitle: "Panel failed to load",
@@ -3080,8 +3086,24 @@ export const en: TranslationMap & {
     },
     archivedSessionDisabled: "This session is archived. Unarchive it to continue the conversation.",
     subagentViewOnly: "View-only subagent",
-    subagentSessionDisabled:
-      "This is a subagent of {parent}. Continue the conversation in its parent session.",
+    subagentSessionDisabled: "Continue in {parent}.",
+    processesPanel: { title: "Processes", refresh: "Refresh processes" },
+    subagentsPanel: {
+      title: "Subagents",
+      back: "Back to Subagents",
+      running: "Running ({count})",
+      finished: "Finished ({count})",
+      callsOne: "{count} call",
+      callsMany: "{count} calls",
+      empty: "No subagents in this conversation.",
+      noRunning: "No running subagents",
+      refresh: "Refresh subagents",
+      loadMore: "Show more subagents",
+      stop: "Stop {name}",
+      stopping: "Stopping…",
+      elapsed: "Elapsed time",
+      duration: "Run duration",
+    },
     parentSession: "the parent session",
     openParentSession: "Open parent session",
     parentSessionUnavailable: "Parent session information is unavailable.",
@@ -3472,40 +3494,28 @@ export const en: TranslationMap & {
       label: "Session reset",
       description: "The earlier conversation was cleared.",
     },
-    outboxRecoveryTitle: "{count} saved messages to review",
-    outboxRecoveryTitleOne: "1 saved message to review",
-    outboxRecoveryDraftTitle: "{count} saved drafts",
-    outboxRecoveryDraftTitleOne: "1 saved draft",
-    outboxRecoveryFailedTitle: "Saved messages could not be loaded",
-    outboxRecoveryDescription:
-      "These messages were saved in this browser. Review them before sending, or delete copies you don’t need. Nothing is sent automatically.",
-    outboxRecoveryDraftDescription:
-      "We found unfinished messages saved in this browser. Review them here or delete them. Nothing is sent automatically.",
-    outboxRecoveryDraftDescriptionOne:
-      "We found an unfinished message saved in this browser. Review it here or delete it. Nothing is sent automatically.",
     outboxRecoveryReviewTitle: "Review in this chat?",
-    outboxRecoveryConfirm:
-      "Add this saved copy to “{chat}” for review? Nothing will be sent. Check the original chat before retrying a message that may already have arrived.",
-    outboxRecoveryRestore: "Review in this chat",
+    outboxRecoveryConfirm: "Add this saved copy to “{chat}” for review? Nothing will be sent.",
+    outboxRecoveryRestore: "Restore",
     outboxRecoveryConflict:
       "Keep or clear the draft and pending messages in this chat first, or open another non-Incognito chat. Your saved copy is unchanged.",
     outboxRecoveryStorageFailed:
       "We could not access your saved messages. Reload to try again. Do not clear browser site data if you want to keep them.",
     outboxRecoveryFull:
       "There are more saved messages than we can show. Review or delete the copies below to make room. The remaining messages are still saved in this browser.",
-    outboxRecoveryDraft: "Draft · Not sent",
-    outboxRecoveryQueued: "Saved message · Review before sending",
-    outboxRecoverySource: "From: {chat}",
-    outboxRecoveryUnknownSource: "Original chat unavailable",
+    outboxRecoveryDraft: "Draft",
+    outboxRecoveryQueued: "Unsent",
+    outboxRecoverySource: "from {chat}",
     outboxRecoveryUpdated: "Last updated {time}",
     outboxRecoveryGoal: "Includes an unsent goal change",
     outboxRecoveryReply: "Reply to: {text}",
     outboxRecoveryAttachments: "Attachments: {files}",
+    outboxRecoveryUnconfirmedLabel: "may have been sent",
     outboxRecoveryUnconfirmed:
       "Delivery unconfirmed. This message may already have been sent. Check the original chat before sending it again.",
     outboxRecoveryAttachmentMissing:
       "An attachment could not be loaded. Review the message and reattach the file before sending.",
-    outboxRecoveryDelete: "Delete saved copy",
+    outboxRecoveryDelete: "Delete",
     outboxRecoveryDeleteTitle: "Delete this saved copy?",
     outboxRecoveryDeleteConfirm:
       "This removes the draft and any saved messages or attachments shown with it from this browser. It cannot be undone. Messages already sent to a chat will not be deleted.",
@@ -3814,6 +3824,17 @@ export const en: TranslationMap & {
       videoPreview: "Video preview: {title}",
       closeVideoPreview: "Close video preview",
     },
+    youtube: {
+      provider: "YouTube",
+      video: "YouTube video",
+      player: "YouTube player: {title}",
+      play: "Play {title}",
+      open: "Open on YouTube",
+      openVideo: "Open {title} on YouTube",
+      close: "Close player",
+      strict: "Inline playback is disabled in strict embed mode. Open this video on YouTube.",
+      narrow: "Open this video on YouTube to play it in a larger window.",
+    },
     modelControls: {},
     nativeRuntimeRecovery: {},
     permissionControls: {},
@@ -3903,6 +3924,10 @@ export const en: TranslationMap & {
       filesEmpty: "Browse files, artifacts, and changes from this session.",
       companion: "Side chat",
       companionEmpty: "Ask a focused question about this session.",
+      processes: "Processes",
+      processesEmpty: "Inspect background commands and their output for this conversation.",
+      subagents: "Subagents",
+      subagentsEmpty: "Follow delegated work from this conversation.",
       desktop: "Desktop",
       desktopEmpty: "Connect to an available remote desktop.",
       portal: "Portal",

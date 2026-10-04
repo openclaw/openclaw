@@ -28,7 +28,7 @@ import {
 } from "../model-auth.js";
 import { resolveConfiguredModelRef } from "../model-selection.js";
 
-export type ToolModelConfig = { primary?: string; fallbacks?: string[]; timeoutMs?: number };
+export type ToolModelConfig = Exclude<AgentToolModelConfig, string>;
 
 const OPENAI_PROVIDER_ID = "openai";
 const CODEX_MEDIA_PROVIDER_ID = "codex";

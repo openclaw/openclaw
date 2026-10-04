@@ -461,7 +461,9 @@ async function buildWebFetchPayload(params: {
   const boundProtocolField = (value: string, limit: number): string => {
     const bounded = truncateWebFetchText(value, limit);
     metadataTruncated ||= bounded.truncated;
-    return bounded.text;
+    // The cache outlives the provider payload. Even an in-budget value can be a
+    // slice of a discarded response; copy its UTF-16 units, including lone surrogates.
+    return Buffer.from(bounded.text, "utf16le").toString("utf16le");
   };
   let remainingMetadataChars = Math.min(
     WEB_FETCH_METADATA_MAX_CHARS,

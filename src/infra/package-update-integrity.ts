@@ -83,12 +83,16 @@ export type PackageLauncherFingerprint = {
 export function packageLauncherDifferences(
   expected: PackageLauncherFingerprint,
   actual: PackageLauncherFingerprint,
+  options?: { checkMode?: boolean },
 ): string[] {
   const symlink = expected.type === "symlink" && actual.type === "symlink";
   // A copied launcher must restore the same bytes or link target; npm may
   // recreate its metadata. Exact-object mutation authority is checked separately.
-  return (["type", "contents"] as const)
-    .filter((field) => expected[field] !== actual[field])
+  return (["type", "mode", "contents"] as const)
+    .filter(
+      (field) =>
+        (field !== "mode" || options?.checkMode === true) && expected[field] !== actual[field],
+    )
     .map((field) =>
       field === "contents" && symlink
         ? `target (expected ${JSON.stringify(expected.contents)}, actual ${JSON.stringify(actual.contents)})`

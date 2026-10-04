@@ -5,7 +5,7 @@ import type {
   ModelsListParams,
   ModelsListResult,
 } from "../../../packages/gateway-protocol/src/schema/model-catalog.js";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { resolveAgentWorkspaceDir, resolveAmbientOwnerAgentId } from "../../agents/agent-scope.js";
 import { resolveConfiguredModelEntries } from "../../agents/configured-model-entries.js";
 import { DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
@@ -16,7 +16,6 @@ import {
   resolveCatalogDecisionRuntime,
   type ModelCatalogDecisionParams,
 } from "../../agents/model-catalog-decisions.js";
-import { resolveModelCatalogServiceTiers } from "../../agents/model-catalog-service-tiers.js";
 import {
   createModelCatalogView,
   selectModelCatalogRuntimeEntry,
@@ -55,7 +54,6 @@ import { getRuntimeConfig, getRuntimeConfigSourceSnapshot } from "../../config/c
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveProviderModelCatalogId } from "../../plugins/provider-model-routes.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
-import { normalizeAgentId } from "../../routing/session-key.js";
 import { loadDeferredCatalog, readPreparedCatalog } from "../server-model-catalog-auth.js";
 import { resolveGatewayModelThinkingProfile } from "../session-utils-model.js";
 import { projectWorkerPlacementAgentRuntime } from "../worker-environments/placement-session-runtime.js";
@@ -70,6 +68,7 @@ import {
 import type { ModelsListCatalogSource } from "./models-list-context.js";
 import {
   buildPublicModelProjection,
+  projectModelServiceTiers,
   projectProviderCatalogOutcomes,
 } from "./models-list-public-projection.js";
 import { resolveDefaultModelsPreview } from "./models-list-result.default-models.js";
@@ -213,7 +212,10 @@ function createPublicModelsListProjector(params: {
       ? evaluation.availability
       : (evaluation.availability ?? false);
     const supportsFastMode = params.fastMode(entry, evaluation, preparedEntry.agentRuntime?.id);
-    const serviceTiers = resolveModelCatalogServiceTiers({
+    const serviceTiers = projectModelServiceTiers({
+      config: params.cfg,
+      agentId: params.agentId,
+      pluginRegistry: params.pluginRegistry,
       snapshot: params.snapshot,
       entry,
       evaluation,
@@ -299,7 +301,7 @@ export async function prepareModelsListResult(
   const publishedOwner = source.kind === "published" ? source.owner : undefined;
   const requestConfig = currentConfig();
   const initialConfig = publishedOwner?.config ?? requestConfig;
-  const initialAgentId = normalizeAgentId(params.agentId ?? resolveDefaultAgentId(initialConfig));
+  const initialAgentId = resolveAmbientOwnerAgentId(initialConfig, params.agentId);
   const profiles = resolveSessionCatalogProfiles(sessionEntry, initialConfig, initialAgentId);
   const view = params.params.view ?? "default";
   const refresh = params.params.refresh === true;

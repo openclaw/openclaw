@@ -442,31 +442,28 @@ export function createProjectsHandlers(service: ProjectWorktreeService): Gateway
         assertCurrent();
         diagnostics?.mark("response");
         assertCurrent();
-        if (canWrite()) {
-          respond(
-            true,
-            {
-              projects,
-              ...(canCreateSession() ? { githubHost: resolveConfiguredGitHubHost(cfg) } : {}),
-              ...(defaultRepository ? { defaultRepository } : {}),
-              ...(recents ? { recents } : {}),
-              ...(observedProjects ? { observedProjects } : {}),
-            },
-            undefined,
-          );
-          return;
-        }
+        const writable = canWrite();
+        const canCreate = canCreateSession();
         // Project identity is read-safe; host paths, origins, folders, and observed checkouts are
         // placement details reserved for clients that can create sessions.
         respond(
           true,
           {
-            projects: projects.map(({ id, displayName, source, agentId }) =>
-              agentId ? { id, displayName, source, agentId } : { id, displayName, source },
-            ),
-            ...(canCreateSession() ? { githubHost: resolveConfiguredGitHubHost(cfg) } : {}),
-            ...(defaultRepository && canCreateSession() ? { defaultRepository } : {}),
-            ...(recents ? { recents: recents.filter((recent) => recent.kind === "project") } : {}),
+            projects: writable
+              ? projects
+              : projects.map(({ id, displayName, source, agentId }) =>
+                  agentId ? { id, displayName, source, agentId } : { id, displayName, source },
+                ),
+            ...(canCreate ? { githubHost: resolveConfiguredGitHubHost(cfg) } : {}),
+            ...(defaultRepository && (writable || canCreate) ? { defaultRepository } : {}),
+            ...(recents
+              ? {
+                  recents: writable
+                    ? recents
+                    : recents.filter((recent) => recent.kind === "project"),
+                }
+              : {}),
+            ...(writable && observedProjects ? { observedProjects } : {}),
           },
           undefined,
         );

@@ -34,11 +34,41 @@ This directory owns Control UI-specific guidance that should not live in the rep
   envelope. Unknown rows, incomplete ancestor coverage, broad changes, catalog
   changes, Gateway-owned filters, failed reads,
   owner-prefix boundary uncertainty, and overlapping reads retain an authoritative
-  refresh. Events never create list membership.
+  refresh. Events never create filtered list membership; Current Work's complete
+  unfiltered active-only window may admit a certified full active row as described below.
 - Re-adopting cached lineage rows changes presentation without invalidating
   managed list membership. Fresh descriptor reads and Gateway events retain
   their authoritative invalidation paths.
 - Descriptor observations apply admitted rows immediately; incomplete ancestor coverage retains one paced authoritative descriptor refresh through the coordinator instead of a read per event.
+- Activity's current-work and unfiltered history views apply admitted row events without refetching the list.
+  History uses the shared row-provenance owner: admitted live rows retain field clocks,
+  including recap updates and clearing receipts, while returned lists remain the sole
+  membership authority. Its `excludeSubagents` query ignores key-proven child exclusions
+  only with complete access-scoped ancestor coverage; held parent snapshots and certified
+  references still update locally. Missing held parents or supplied unheld ancestors
+  require authority; named unheld parents absent from certified coverage may be invisible.
+  Refreshes merge those live facts instead of replaying/coalescing
+  History packets; missing initial membership retains a catch-up read. Query/connection
+  changes reset provenance. Current Work coalesces only consecutive full active snapshots
+  for one generation, retaining the first receipt and latest tail. Partial events,
+  references, terminal snapshots, and other identities are FIFO barriers. A complete Current Work window below its limit
+  admits a certified active snapshot sampled after the accepted list and that session
+  generation's observed retirement and liveness clocks, with a real session ID and kind, preserving
+  the Gateway's cron-run exclusion. Truncated/full windows, conflicting generations,
+  partial unknown rows, ambiguous settlement, and removals from an incomplete window require an authoritative
+  refresh. History requires forward activity clocks and retains omitted recap enrichment;
+  person/search filters keep authoritative refreshes. Healthy row traffic retains one
+  fallback refresh after at least 60 seconds, including whole-query people and pulse facets.
+  Current Work applies supplied ancestor snapshots and references through the shared
+  row reconciler; pending references retain their prerequisite full row receipts.
+  Its controller retains at most 1,000 fence records, coalesced by session generation;
+  the Current Work reconciler owns their independent retirement, liveness-observation,
+  and generation-authority facts. Only retirements prune stale returned rows. A fresh
+  certified full row can resolve older clocked liveness, while unclocked observations
+  and conflicting generations require a list read. Query/connection changes clear
+  records; an authoritative list clears uncertainty and covered retirements before
+  pending events replay, preserving later retirements. Saturation blocks
+  unseen admission until an authoritative read restores the bounded state.
 - `lib/sessions/event-refresh-coordinator.ts` owns automatic refresh pacing:
   collect events in a four-to-five-second window sampled once when armed so
   browsers spread their reads and subsequent events cannot postpone them.

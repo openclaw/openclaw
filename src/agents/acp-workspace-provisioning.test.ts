@@ -61,7 +61,7 @@ function acpBinding(params: {
 const baseCfg: OpenClawConfig = {
   agents: {
     defaults: { workspace: "/shared-ws" },
-    list: [{ id: "main" }, { id: "codex", runtime: { type: "acp" } }],
+    entries: { main: {}, codex: { runtime: { type: "acp" } } },
   },
 };
 
@@ -190,10 +190,10 @@ describe("resolveAcpAgentWorkspaceProvisioningForTurn", () => {
     const cfg: OpenClawConfig = {
       agents: {
         defaults: { workspace: "/shared-ws" },
-        list: [
-          { id: "work", runtime: { type: "embedded" } },
-          { id: "pinned", workspace: "/explicit-ws", runtime: { type: "acp" } },
-        ],
+        entries: {
+          work: { runtime: { type: "embedded" } },
+          pinned: { workspace: "/explicit-ws", runtime: { type: "acp" } },
+        },
       },
     };
     await expect(
@@ -216,7 +216,7 @@ describe("resolveAcpAgentWorkspaceProvisioningForTurn", () => {
     const cfg: OpenClawConfig = {
       agents: {
         defaults: { workspace: "/shared-ws" },
-        list: [{ id: "codex", runtime: { type: "acp", acp: { cwd: "/projects/app" } } }],
+        entries: { codex: { runtime: { type: "acp", acp: { cwd: "/projects/app" } } } },
       },
     };
     await expect(

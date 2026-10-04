@@ -297,7 +297,7 @@ describe("realtime voice agent consult runtime", () => {
     ]);
 
     const result = await runConsult({
-      cfg: { agents: { list: [{ id: "operator", default: true }] } } as never,
+      cfg: { agents: { entries: { operator: {} } } },
       agentRuntime: runtime as never,
       sessionKey: "voice:15550001234",
       runIdPrefix: "voice-realtime-consult:call-1",
@@ -581,7 +581,7 @@ describe("realtime voice agent consult runtime", () => {
     const { runtime, runEmbeddedAgent } = createAgentRuntime();
 
     await runConsult({
-      cfg: { agents: { list: [{ id: "operator", default: true }] } } as never,
+      cfg: { agents: { entries: { operator: {} } } },
       agentRuntime: runtime as never,
       agentId: "voice",
       sessionKey: "voice:15550001234",

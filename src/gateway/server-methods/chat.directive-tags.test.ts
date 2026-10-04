@@ -80,6 +80,7 @@ import { readChatSendDedupeResponse } from "./chat-send-pre-admission.js";
 import {
   ChatDirectiveDedupe,
   createChatDirectiveReplyBackend,
+  createGlobalChatDirectiveConfig,
   createChatDirectiveSuiteResources,
   createChatDirectiveUserMessageReader,
   expectManagedAudioBlock,
@@ -848,10 +849,7 @@ function useChatTestModel(model: "vision-model" | "text-only", configured = fals
 }
 
 async function createGlobalTranscriptFixture(prefix: string, agentId = "main") {
-  mockState.config = {
-    agents: { list: [{ id: "main", default: true }, { id: "work" }] },
-    session: { scope: "global" },
-  };
+  mockState.config = createGlobalChatDirectiveConfig();
   return await createTranscriptFixture(prefix, { agentId, sessionKey: "global" });
 }
 
@@ -2514,7 +2512,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     );
   });
 
-  it("registers default global tool-event recipients for unscoped global sends", async () => {
+  it("registers migrated default global tool-event recipients for unscoped global sends", async () => {
     await createGlobalTranscriptFixture("openclaw-chat-send-global-tool-events-");
     mockState.finalText = "ok";
     mockState.triggerAgentRunStart = true;
@@ -4949,17 +4947,14 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     mockState.finalText = "ok";
     mockState.config = {
       agents: {
-        list: [
-          {
-            id: "vision",
-            default: true,
+        entries: {
+          vision: {
             model: "test-provider/vision-model",
           },
-          {
-            id: "writer",
+          writer: {
             model: "test-provider/text-only",
           },
-        ],
+        },
       },
     };
     mockState.modelCatalog = [

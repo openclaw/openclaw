@@ -15,6 +15,7 @@ import {
   parseUpdateAdmissionVerdict,
   type UpdateAdmissionVerdict,
 } from "../../infra/update-run-schema.js";
+import * as pluginMigrationResources from "../../plugins/doctor-migration-resources.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-contract.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
@@ -144,6 +145,29 @@ afterEach(() => {
 });
 
 describe("candidate update admission", () => {
+  it.each(["retired call log", "Cannot inspect source: EACCES"])(
+    "returns a published-driver refusal for plugin state failure: %s",
+    async (message) => {
+      vi.spyOn(pluginMigrationResources, "assertPluginStateRetention").mockRejectedValue(
+        new Error(message),
+      );
+      const before = snapshotFiles();
+      await updateAdmitCommand(contextPath);
+      expect(process.exitCode).toBe(3);
+      expect(readVerdict()).toMatchObject({
+        verdict: "refuse",
+        reasons: [
+          expect.objectContaining({
+            code: "plugin-state-retention",
+            message: expect.stringContaining(message),
+          }),
+        ],
+      });
+      expect(stderr).toBe("");
+      expect(snapshotFiles()).toEqual(before);
+    },
+  );
+
   it.each([
     {
       supervisor: "2026.9.8",

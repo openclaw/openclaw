@@ -7,6 +7,7 @@ import {
   sameFileContentsSync,
   sameFileIdentity,
 } from "@openclaw/fs-safe/advanced";
+import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { backupNodeSqliteDatabase } from "./sqlite-backup.js";
 import { setSqliteBusyTimeout } from "./sqlite-busy-timeout.js";
@@ -451,7 +452,7 @@ async function createStableReadOnlyCopy(
     if (!removed) {
       throw createSqliteLifecycleAggregateError(
         errors,
-        "SQLite snapshot preparation and cleanup failed",
+        `SQLite snapshot preparation and cleanup failed: ${coerceErrorMessage(error)}`,
         error,
       );
     }
@@ -509,7 +510,7 @@ export async function createOnlineReadOnlyBackup(
     if (!removed) {
       throw createSqliteLifecycleAggregateError(
         errors,
-        "SQLite online backup and cleanup failed",
+        `SQLite online backup and cleanup failed: ${coerceErrorMessage(stagingError)}`,
         stagingError,
       );
     }
@@ -740,7 +741,7 @@ export async function prepareSqliteReadOnlyLocationFromOwnedDatabase(
     if (!removed && cleanupMode === "async") {
       throw createSqliteLifecycleAggregateError(
         errors,
-        "Owned SQLite snapshot preparation and cleanup failed",
+        `Owned SQLite snapshot preparation and cleanup failed: ${coerceErrorMessage(error)}`,
         error,
       );
     }

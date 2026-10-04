@@ -152,7 +152,7 @@ describe("bootstrapOutboundChannelPlugin", () => {
         },
       },
       channels: { discord: {} },
-    }).config as OpenClawConfig;
+    }).config;
     const handle = createEmptyPluginRegistry();
     handle.channels = [
       {
@@ -177,7 +177,7 @@ describe("bootstrapOutboundChannelPlugin", () => {
     });
     await expect(handler.sendText("hello")).resolves.toMatchObject({ messageId: "1" });
 
-    expect(migrated.agents?.entries?.ops?.default).toBeUndefined();
+    expect(migrated.agents?.entries?.ops).not.toHaveProperty("default");
     expect(loaderMocks.resolveDiscoverableScopedChannelPluginIds).toHaveBeenCalledWith(
       expect.objectContaining({ workspaceDir: path.resolve("/tmp/openclaw-legacy") }),
     );

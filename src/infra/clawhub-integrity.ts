@@ -1,5 +1,3 @@
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-
 /** Normalizes ClawHub SHA-256 metadata into Subresource Integrity format. */
 export function normalizeClawHubSha256Integrity(value: string): string | null {
   const trimmed = value.trim();
@@ -34,5 +32,5 @@ export function normalizeClawHubSha256Hex(value: string): string | null {
   if (!/^[A-Fa-f0-9]{64}$/.test(trimmed)) {
     return null;
   }
-  return normalizeLowercaseStringOrEmpty(trimmed);
+  return trimmed.toLowerCase();
 }

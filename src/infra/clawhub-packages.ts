@@ -320,11 +320,8 @@ export async function fetchClawHubPackageDetail(
   },
 ): Promise<ClawHubPackageDetail> {
   return await fetchClawHubJson<ClawHubPackageDetail>({
-    baseUrl: params.baseUrl,
+    ...params,
     path: `/api/v1/packages/${encodeURIComponent(params.name)}`,
-    token: params.token,
-    timeoutMs: params.timeoutMs,
-    fetchImpl: params.fetchImpl,
   });
 }
 
@@ -335,13 +332,10 @@ export async function fetchClawHubPackageVersion(
   },
 ): Promise<ClawHubPackageVersion> {
   return await fetchClawHubJson<ClawHubPackageVersion>({
-    baseUrl: params.baseUrl,
+    ...params,
     path: `/api/v1/packages/${encodeURIComponent(params.name)}/versions/${encodeURIComponent(
       params.version,
     )}`,
-    token: params.token,
-    timeoutMs: params.timeoutMs,
-    fetchImpl: params.fetchImpl,
   });
 }
 
@@ -352,13 +346,10 @@ export async function fetchClawHubPackageArtifact(
   },
 ): Promise<ClawHubPackageArtifactResolverResponse> {
   return await fetchClawHubJson<ClawHubPackageArtifactResolverResponse>({
-    baseUrl: params.baseUrl,
+    ...params,
     path: `/api/v1/packages/${encodeURIComponent(params.name)}/versions/${encodeURIComponent(
       params.version,
     )}/artifact`,
-    token: params.token,
-    timeoutMs: params.timeoutMs,
-    fetchImpl: params.fetchImpl,
   });
 }
 
@@ -369,13 +360,10 @@ export async function fetchClawHubPackageSecurity(
   },
 ): Promise<ClawHubPackageSecurityResponse> {
   const response = await fetchClawHubJson<unknown>({
-    baseUrl: params.baseUrl,
+    ...params,
     path: `/api/v1/packages/${encodeURIComponent(params.name)}/versions/${encodeURIComponent(
       params.version,
     )}/security`,
-    token: params.token,
-    timeoutMs: params.timeoutMs,
-    fetchImpl: params.fetchImpl,
   });
   return parseClawHubPackageSecurityResponse(response);
 }
@@ -388,11 +376,8 @@ export async function searchClawHubPackages(
   },
 ): Promise<ClawHubPackageSearchResult[]> {
   const result = await fetchClawHubJson<{ results: ClawHubPackageSearchResult[] }>({
-    baseUrl: params.baseUrl,
+    ...params,
     path: "/api/v1/packages/search",
-    token: params.token,
-    timeoutMs: params.timeoutMs,
-    fetchImpl: params.fetchImpl,
     search: {
       q: params.query.trim(),
       family: params.family,

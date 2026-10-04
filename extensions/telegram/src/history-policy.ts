@@ -104,7 +104,6 @@ export async function isTelegramHistorySenderAllowed(
   assertCurrent();
   if (
     !evaluateTelegramGroupBaseAccess({
-      isGroup: true,
       groupConfig,
       topicConfig,
       hasGroupAllowOverride: groupAllowOverride !== undefined,
@@ -159,11 +158,8 @@ export async function isTelegramHistorySenderAllowed(
         accountId: params.accountId,
         groupId: String(chatId),
       }),
-    enforcePolicy: true,
     enforceAllowlistAuthorization: !ownBot && !commandAccess?.authorizedByConfig,
     allowEmptyAllowlistEntries: false,
-    requireSenderForAllowlistAuthorization: true,
-    checkChatAllowlist: true,
   }).allowed;
 }
 

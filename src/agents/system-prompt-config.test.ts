@@ -435,7 +435,7 @@ describe("buildConfiguredAgentSystemPrompt", () => {
       config: {
         agents: {
           defaults: { subagents: { delegationMode: "suggest" } },
-          list: [{ id: "coordinator", subagents: { delegationMode: "prefer" } }],
+          entries: { coordinator: { subagents: { delegationMode: "prefer" } } },
         },
       } satisfies OpenClawConfig,
       agentId: "coordinator",
