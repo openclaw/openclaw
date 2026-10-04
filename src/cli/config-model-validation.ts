@@ -202,7 +202,12 @@ function collectTouchedTextModelRefs(params: {
       return touched;
     }
     const previousRef = previousRefsByIdentity.get(modelRefComparisonKey(ref));
-    const ownerChanged = previousRef?.agentId !== ref.agentId;
+    // An ownership change is a ref whose identity moved to another agent, which is only
+    // observable against a previous entry. A ref with no previous entry at this identity
+    // is the operator's own new value, and marking it a dependency hid both the value and
+    // the resolver's reason behind "<configured model reference>" and "Unable to resolve
+    // authored model reference" for the ordinary "add a fallback to an agent" write.
+    const ownerChanged = previousRef !== undefined && previousRef.agentId !== ref.agentId;
     if (ownerChanged) {
       ref.dependency = true;
     }
