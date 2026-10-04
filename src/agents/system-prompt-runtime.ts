@@ -2,7 +2,7 @@ import {
   normalizePromptCapabilityIds,
   SYSTEM_PROMPT_RELOCATABLE_BOUNDARY_END,
 } from "@openclaw/ai/internal/shared";
-import { parseCronRunScopeSuffix } from "../sessions/session-key-utils.js";
+import { parseCacheStableSessionScope } from "../sessions/session-key-utils.js";
 import { sanitizeForPromptLiteral } from "./sanitize-for-prompt.js";
 import type { SystemPromptRuntimeInfo } from "./system-prompt.types.js";
 
@@ -12,9 +12,10 @@ export function buildRuntimeLine(
   runtimeCapabilities: string[] = [],
 ): string {
   const normalizedRuntimeCapabilities = normalizePromptCapabilityIds(runtimeCapabilities);
-  // Transcript ids rotate on rewind; isolated cron keys also carry per-run ids.
-  // Keep only stable session identity in the cached Runtime line.
-  const { baseSessionKey } = parseCronRunScopeSuffix(runtimeInfo?.sessionKey);
+  // Transcript ids rotate on rewind; isolated cron runs, dashboard chats and subagent spawns
+  // each carry a per-run/per-chat id. Keep only stable session identity in the cached Runtime
+  // line, which sits inside the prompt prefix that a provider-side cache reuses.
+  const { baseSessionKey } = parseCacheStableSessionScope(runtimeInfo?.sessionKey);
   const fields = {
     name: runtimeInfo?.agentName,
     agent: runtimeInfo?.agentId,
