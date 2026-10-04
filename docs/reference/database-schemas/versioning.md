@@ -143,6 +143,10 @@ owners can restore their prior definition on downgrade or rollback without
 changing event rows; strict read-only admission can require that repair first.
 During the v17 upgrade, Doctor completes the legacy data migrations before
 repairing canonical indexes and validating the target schema in the same transaction.
+Before general migration DDL, it normalizes supported legacy memory metadata and
+additive session fields, then validates the historical structure while deferring
+index repair. Missing canonical tables and other non-additive drift refuse the
+upgrade and roll back those preliminary repairs.
 See the [storage design](/reference/database-schemas/storage-changes#trajectory-retention-covering-index).
 
 Removing the Tasks and TaskFlow runtime does not change the shared-state or agent

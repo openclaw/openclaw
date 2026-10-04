@@ -51,6 +51,7 @@ import {
   getOpenClawAgentMigrationSchema,
   assertExistingAgentSchemaOwner,
   assertOpenClawAgentCurrentRuntimeSchema,
+  assertOpenClawAgentSchemaContains,
   assertSupportedAgentSchemaVersion,
   assertAgentSchemaVersion,
   hasPendingCurrentVersionAgentDatabaseMigration,
@@ -387,8 +388,18 @@ function ensureAgentSchema(
       if (previousVersion === AGENT_MEDIA_SCHEMA_VERSION) {
         ensureSessionAdditiveColumns(db);
         assertSqliteIntegrity(db, pathname);
-        // Index repair and whole-schema validation run in finishAgentSchemaMigration
-        // after legacy memory and participant shapes converge, in this transaction.
+        if (hasPendingMemoryChunkMetadataMigration(db)) {
+          migrateMemoryChunkMetadataSchema(db);
+        }
+        // Validate before general migration DDL can recreate missing canonical tables.
+        // Only index repair waits for the finalizer; these repairs roll back on refusal.
+        assertOpenClawAgentSchemaContains(
+          db,
+          pathname,
+          getOpenClawAgentMigrationSchema(previousVersion),
+          "legacy",
+          true,
+        );
       }
       migrateRetiredAgentStateLeaseSchema(db, pathname, targetVersion);
       if (previousVersion === targetVersion) {
