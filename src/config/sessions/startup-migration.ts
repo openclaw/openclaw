@@ -13,7 +13,10 @@ import {
   readAgentDatabaseDeletionSnapshot,
   readAgentDeletionJournalStatusInWorker,
 } from "../../state/agent-deletion-journal.read.js";
-import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-contract.js";
+import {
+  AGENT_DATABASE_PREFLIGHT_CONCURRENCY,
+  OPENCLAW_AGENT_SCHEMA_VERSION,
+} from "../../state/openclaw-agent-db-contract.js";
 import { listOpenClawRegisteredAgentDatabases } from "../../state/openclaw-agent-db-registry.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
@@ -22,7 +25,6 @@ import {
   resolveOpenClawAgentSqlitePath,
   type OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
-import { AGENT_DATABASE_PREFLIGHT_CONCURRENCY } from "../../state/openclaw-database-preflight-agent-scheduler.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import type { OpenClawConfig } from "../types.openclaw.js";

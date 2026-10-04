@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { statSync } from "node:fs";
+import pLimit from "p-limit";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
@@ -18,7 +19,10 @@ import {
   type AgentDatabaseAdmissionRefusal,
 } from "./agent-database-admission.js";
 import { readAgentDeletionJournalStatusInWorker } from "./agent-deletion-journal.read.js";
-import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
+import {
+  AGENT_DATABASE_PREFLIGHT_CONCURRENCY,
+  OPENCLAW_AGENT_SCHEMA_VERSION,
+} from "./openclaw-agent-db-contract.js";
 import type { OpenClawDatabaseSchemaPreflight } from "./openclaw-database-preflight.types.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 
@@ -35,6 +39,7 @@ type PreparationInput = {
 };
 type Activation = {
   isCurrent: () => boolean;
+  openAgent: (input: PreparationInput) => Promise<void>;
   prepareAgent: (input: PreparationInput) => Promise<void>;
 };
 type SchemaSourceWitness = Array<FileMutationFingerprint | undefined>;
@@ -86,6 +91,7 @@ class AgentDatabaseStartupAdmission {
   private stopped = false;
   private stopping?: Promise<void>;
   private preparation: Promise<void> = Promise.resolve();
+  private readonly opening = pLimit(AGENT_DATABASE_PREFLIGHT_CONCURRENCY);
   private preparedSchemaHeaders?: PreparedSchemaHeaders;
 
   get signal(): AbortSignal {
@@ -263,6 +269,7 @@ class AgentDatabaseStartupAdmission {
               throw new Error(`Agent ${agentId} was deleted during startup inspection`);
             }
           };
+          const preparationComplete = createDeferredCore();
           try {
             assertCurrent();
             for (const result of results) {
@@ -287,13 +294,19 @@ class AgentDatabaseStartupAdmission {
               async () => {
                 await assertNotDeleted();
                 await preparePendingAgentDatabase(refusal, { env, assertCurrent }, async () => {
-                  await activation.prepareAgent({
+                  const input = {
                     agentId,
                     paths,
                     env,
                     signal: this.signal,
                     assertCurrent,
-                  });
+                  };
+                  await this.opening(() => activation.openAgent(input));
+                  // Keep the revision until admission publishes after its final journal check.
+                  const previous = this.preparation;
+                  this.preparation = preparationComplete.promise;
+                  await previous;
+                  await activation.prepareAgent(input);
                   await assertNotDeleted();
                 });
               },
@@ -313,11 +326,10 @@ class AgentDatabaseStartupAdmission {
             if (this.pending.get(agentId) === refusal) {
               this.pending.delete(agentId);
             }
+            preparationComplete.resolve();
           }
         };
-        const prepared = this.preparation.then(prepare);
-        this.preparation = prepared.catch(() => {});
-        await prepared;
+        await prepare();
       })();
       this.track(recovery);
     }
