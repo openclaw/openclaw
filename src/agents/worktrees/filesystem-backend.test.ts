@@ -1,12 +1,16 @@
-import os from "node:os";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { detectWorktreeFilesystemBackend } from "./filesystem-backend.js";
 import { nativeWorktreeFilesystem } from "./filesystem-native.js";
 
-const readDirectoryAcl = vi.hoisted(() => vi.fn(() => "none"));
+const { readDirectoryAcl, rosetta } = vi.hoisted(() => ({
+  readDirectoryAcl: vi.fn(() => "none"),
+  rosetta: vi.fn(() => false),
+}));
 // mock-isolation: the real module loads libSystem through koffi at import, unavailable off macOS.
 vi.mock("./filesystem-apfs.native.js", () => ({ apfsFilesystem: { readDirectoryAcl } }));
+// mock-isolation: the real detector reads and caches the test host's CPU brand.
+vi.mock("../../shared/rosetta-translation.js", () => ({ isRosettaTranslatedProcess: rosetta }));
 
 describe.skipIf(process.platform === "win32")("worktree filesystem backend", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -21,11 +25,7 @@ describe.skipIf(process.platform === "win32")("worktree filesystem backend", () 
 
   it("keeps Rosetta-translated APFS worktrees on Git checkout", async () => {
     const root = tempDirs.make("openclaw-filesystem-backend-");
-    vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
-    vi.spyOn(process, "arch", "get").mockReturnValue("x64");
-    vi.spyOn(os, "cpus").mockReturnValue([
-      { model: "Apple M3 Ultra", speed: 0, times: { user: 0, nice: 0, sys: 0, idle: 0, irq: 0 } },
-    ]);
+    rosetta.mockReturnValueOnce(true);
     vi.spyOn(nativeWorktreeFilesystem, "probe").mockResolvedValue("apfs");
     await expect(detectWorktreeFilesystemBackend(root, options)).resolves.toBeNull();
     expect(readDirectoryAcl).not.toHaveBeenCalled();
