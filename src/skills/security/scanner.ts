@@ -320,7 +320,7 @@ function isBenignDangerousExecMatch(
   // method. This excludes RegExp.exec and similarly named bundled helpers.
   if (charAtMatch === '"' || charAtMatch === "'") {
     receiver = prefix.match(/(\w+)\s*\[\s*$/)?.[1];
-  } else if (memberReceiver) {
+  } else if (memberReceiver || inlineChildProcessReceiver) {
     receiver = memberReceiver;
   } else {
     return !methodAliases.has(command);
