@@ -100,49 +100,40 @@ it("distinguishes unreported permissions from an explicit empty grant", async ()
   );
 });
 
-it("retires displayed grants on disconnect and uses the newly negotiated scopes", async () => {
-  const harness = createConnectedContext(
-    vi.fn(async () => ({})) as GatewayBrowserClient["request"],
-  );
-  harness.emitHello(gatewayHelloForMethods([], ["operator.admin"]));
-  const page = mountProfilePage(harness.context);
-  await page.updateComplete;
-  expect(page.querySelector(".settings-row__value")?.textContent).toBe("operator.admin");
+it.each(["operator.admin", "operator.read"])(
+  "reconnects %s through the connection owner, retiring grants and preserving the editor",
+  async (scope) => {
+    const harness = createConnectedContext(
+      vi.fn(async () => ({})) as GatewayBrowserClient["request"],
+    );
+    harness.emitHello(gatewayHelloForMethods([], [scope]));
+    vi.mocked(harness.context.gateway.connect).mockImplementation(() =>
+      harness.emitConnected(false),
+    );
+    const page = mountProfilePage(harness.context);
+    await page.updateComplete;
+    expect(page.querySelector(".settings-row__value")?.textContent).toBe(scope);
 
-  harness.emitConnected(false);
-  await page.updateComplete;
-  expect(page.querySelector("#settings-profile-access")).toBeNull();
-  expect(page.textContent).not.toContain("You have permission to manage this server.");
-  expect(page.querySelector('[role="status"]')?.textContent).toContain("Connecting…");
+    const reconnect = page.querySelector<HTMLButtonElement>("#settings-profile-access button");
+    const personalEditor = page.querySelector("openclaw-personal-instructions");
+    expect(personalEditor).not.toBeNull();
+    expect(reconnect?.textContent?.trim()).toBe("Reconnect");
+    reconnect?.click();
+    expect(harness.context.gateway.connect).toHaveBeenCalledExactlyOnceWith();
+    await page.updateComplete;
+    expect(page.querySelector("#settings-profile-access")).toBeNull();
+    expect(page.textContent).not.toContain("You have permission to manage this server.");
+    expect(page.querySelector('[role="status"]')?.textContent).toContain("Connecting…");
+    expect(page.querySelector("openclaw-personal-instructions")).toBe(personalEditor);
 
-  harness.emitHello(gatewayHelloForMethods([], ["operator.read"]));
-  harness.emitConnected(true);
-  await page.updateComplete;
-  expect(page.querySelector(".settings-row__value")?.textContent).toBe("operator.read");
+    harness.emitHello(gatewayHelloForMethods([], ["operator.read"]));
+    harness.emitConnected(true);
+    await page.updateComplete;
+    expect(page.querySelector(".settings-row__value")?.textContent).toBe("operator.read");
 
-  // Narrow-grant updates do not change the profile editor's broad write permission.
-  harness.emitHello(gatewayHelloForMethods([], ["operator.sessions.read"]));
-  await page.updateComplete;
-  expect(page.querySelector(".settings-row__value")?.textContent).toBe("operator.sessions.read");
-});
-
-it("reconnects through the existing connection owner without requesting broader access", async () => {
-  const harness = createConnectedContext(
-    vi.fn(async () => ({})) as GatewayBrowserClient["request"],
-  );
-  harness.emitHello(gatewayHelloForMethods([], ["operator.read"]));
-  vi.mocked(harness.context.gateway.connect).mockImplementation(() => harness.emitConnected(false));
-  const page = mountProfilePage(harness.context);
-  await page.updateComplete;
-
-  const reconnect = page.querySelector<HTMLButtonElement>("#settings-profile-access button");
-  const personalEditor = page.querySelector("openclaw-personal-instructions");
-  expect(personalEditor).not.toBeNull();
-  expect(reconnect?.textContent?.trim()).toBe("Reconnect");
-  reconnect?.click();
-  expect(harness.context.gateway.connect).toHaveBeenCalledExactlyOnceWith();
-  await page.updateComplete;
-  expect(page.querySelector("#settings-profile-access")).toBeNull();
-  expect(page.querySelector('[role="status"]')?.textContent).toContain("Connecting…");
-  expect(page.querySelector("openclaw-personal-instructions")).toBe(personalEditor);
-});
+    // Narrow-grant updates do not change the profile editor's broad write permission.
+    harness.emitHello(gatewayHelloForMethods([], ["operator.sessions.read"]));
+    await page.updateComplete;
+    expect(page.querySelector(".settings-row__value")?.textContent).toBe("operator.sessions.read");
+  },
+);
