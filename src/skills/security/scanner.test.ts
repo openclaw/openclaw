@@ -372,7 +372,7 @@ run("node server.js");
       name: "detects exec destructured from a child_process namespace",
       source: `
 const cp = require("node:child_process");
-const { exec } = cp;
+const { exec } = cp, marker = 0;
 exec("node server.js");
 `,
       expected: { ruleId: "dangerous-exec", severity: "critical" as const },
