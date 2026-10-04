@@ -2,7 +2,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 /* @vitest-environment jsdom */
 
 const toastMock = vi.hoisted(() => ({ showToast: vi.fn(() => true) }));
-vi.mock("../lib/toast.ts", () => toastMock);
+vi.mock("../lib/toast.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../lib/toast.ts")>()),
+  ...toastMock,
+}));
 
 // Preload the lazily imported save path so clicks settle within a few ticks.
 import "../lib/download.ts";
