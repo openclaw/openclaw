@@ -191,4 +191,8 @@ struct GatewayEnvironmentTests {
             profile: work) == work.defaultGatewayPort)
         #expect(AppProfile(environment: [:]).defaultGatewayPort == 18789)
     }
+
+    @Test func `dev profile uses the CLI dev gateway port`() {
+        #expect(AppProfile(environment: ["OPENCLAW_PROFILE": "dev"]).defaultGatewayPort == 19001)
+    }
 }

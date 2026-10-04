@@ -2,7 +2,11 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { normalizeProfileName, resolveProfileStateDir } from "../cli/profile-utils.js";
+import {
+  DEV_PROFILE_GATEWAY_PORT,
+  normalizeProfileName,
+  resolveProfileStateDir,
+} from "../cli/profile-utils.js";
 import { resolveGatewayNativeServiceIdentityConflict } from "../daemon/constants.js";
 import {
   resolveHomeRelativePath,
@@ -430,6 +434,9 @@ export function resolveGatewayPort(
   const profile = normalizeProfileName(env.OPENCLAW_PROFILE);
   if (!profile) {
     return DEFAULT_GATEWAY_PORT;
+  }
+  if (profile === "dev") {
+    return DEV_PROFILE_GATEWAY_PORT;
   }
   // Keep byte-for-byte aligned with AppProfile.defaultGatewayPort in
   // apps/macos/Sources/OpenClaw/AppProfile.swift so both surfaces connect to the same Gateway.

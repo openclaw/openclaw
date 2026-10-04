@@ -371,6 +371,13 @@ describe("gateway port resolution", () => {
     expect(port).toBeLessThan(60000);
   });
 
+  it("keeps the dev profile on the dev gateway port", () => {
+    expect(resolveGatewayPort({}, { OPENCLAW_PROFILE: "dev" })).toBe(19001);
+    expect(resolveGatewayPort({ gateway: { port: 19002 } }, { OPENCLAW_PROFILE: "dev" })).toBe(
+      19002,
+    );
+  });
+
   it.each([undefined, "default", "Default", "../escape"])(
     "keeps the default port for profile %j",
     (profile) => {
