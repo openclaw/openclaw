@@ -55,6 +55,7 @@ export type OllamaEmbeddingClient = {
   baseUrl: string;
   headers: Record<string, string>;
   ssrfPolicy?: SsrFPolicy;
+  allowUnspecifiedIpv4Range: boolean;
   model: string;
   outputDimensionality?: number;
   localServiceTarget?: Parameters<MemoryCoreAcquireLocalService>[0];
@@ -328,6 +329,10 @@ async function resolveOllamaEmbeddingClient(
     baseUrl,
     headers,
     ssrfPolicy: ssrfPolicyFromHttpBaseUrlAllowedOrigin(baseUrl),
+    // Chat already trusts the provider-owned host with allowPrivateNetwork. Embeddings
+    // take only the 0.0.0.0/8 exemption container host gateways need (OrbStack's
+    // host.docker.internal), and never for a separate remote embedding host.
+    allowUnspecifiedIpv4Range: providerOwnsHost,
     model,
     outputDimensionality: options.dimensions,
     ...(localService && baseUrlOrigin !== "remote-config"
@@ -360,6 +365,7 @@ export async function createOllamaEmbeddingProvider(
         url: embedUrl,
         policy: client.ssrfPolicy,
         configuredLocalOriginBaseUrl: client.baseUrl,
+        allowUnspecifiedIpv4Range: client.allowUnspecifiedIpv4Range,
         auditContext: "ollama-memory-embedding",
         signal,
         init: {

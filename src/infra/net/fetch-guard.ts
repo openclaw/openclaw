@@ -10,6 +10,7 @@ import {
 } from "../fetch-headers.js";
 import { cancelUnreadResponseBody } from "../http-body.js";
 import {
+  resolveConfiguredLocalOriginHopPolicy,
   shouldUseConfiguredLocalOriginManagedProxyBypass,
   shouldResolveConfiguredLocalOriginManagedProxyBypass,
   type ConfiguredLocalOriginManagedProxyBypass,
@@ -24,6 +25,7 @@ import {
   isMockedFetch,
   type DispatcherAwareRequestInit,
 } from "./runtime-fetch.js";
+import { hasTrustedHostUnspecifiedIpv4Exemption } from "./ssrf-trusted-host-exemptions.js";
 import {
   assertHostnameAllowedWithPolicy,
   closeDispatcher,
@@ -128,6 +130,8 @@ type GuardedFetchInternalOptions = GuardedFetchOptions & {
 
 type GuardedFetchConfiguredLocalOriginOptions = GuardedFetchOptions & {
   configuredLocalOriginBaseUrl: string;
+  /** Let the configured origin's trusted hostname resolve into nonzero IPv4 0.0.0.0/8. */
+  allowUnspecifiedIpv4Range?: boolean;
 };
 
 type GuardedFetchPresetOptions = Omit<
@@ -400,6 +404,7 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
 
 export async function fetchConfiguredLocalOriginWithSsrFGuard({
   configuredLocalOriginBaseUrl,
+  allowUnspecifiedIpv4Range,
   ...params
 }: GuardedFetchConfiguredLocalOriginOptions): Promise<GuardedFetchResult> {
   return await fetchWithSsrFGuardInternal({
@@ -407,6 +412,7 @@ export async function fetchConfiguredLocalOriginWithSsrFGuard({
     managedProxyBypass: {
       kind: "configured-local-origin",
       baseUrl: configuredLocalOriginBaseUrl,
+      ...(allowUnspecifiedIpv4Range === true ? { allowUnspecifiedIpv4Range } : {}),
     },
   });
 }
@@ -495,7 +501,11 @@ async function fetchWithSsrFGuardInternal(
       await (dispatcherLease ? dispatcherLease.release() : closeDispatcher(dispatcher));
     };
     // Resolve inside the redirect loop so exact-origin trust never carries across origins.
-    const policyForUrl = resolveSsrFPolicyForUrl(parsedUrl, params.policy);
+    const policyForUrl = resolveConfiguredLocalOriginHopPolicy({
+      url: parsedUrl,
+      policy: resolveSsrFPolicyForUrl(parsedUrl, params.policy),
+      managedProxyBypass: params.managedProxyBypass,
+    });
     const dispatcherPolicy = params.resolveDispatcherPolicy?.(parsedUrl) ?? params.dispatcherPolicy;
     const resolvePinnedHostname = async () =>
       await resolvePinnedHostnameWithPolicy(parsedUrl.hostname, {
@@ -603,6 +613,8 @@ async function fetchWithSsrFGuardInternal(
             timeoutMs: timeoutMs ?? null,
             familyConnect: familyConnect ?? null,
             policy: policyForUrl ?? null,
+            // Host exemptions live outside the policy's JSON shape.
+            unspecifiedIpv4Exempt: hasTrustedHostUnspecifiedIpv4Exemption(policyForUrl),
           });
           dispatcherLease = params.dispatcherPool.acquire({
             key,
