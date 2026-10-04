@@ -777,6 +777,15 @@ Store close rejects new publications, joins accepted work and lease release, the
 releases its database borrow. Normal idle retirement and per-command authority
 checks remain unchanged; updates need no schema or state migration.
 
+An accepted Memory sync generation retains a lazy executor borrow through its
+final publication and worker cleanup. Its publication adapter selects
+`retainExecutionUntilClose` only within that generation, so shutdown cache reads,
+cache writes, and index publication share native admission. Each command still
+acquires its own FIFO turn and checks current transaction and commit authority.
+Cached publication stores outside a sync generation keep the ordinary shutdown
+release behavior; settled leases do not wait for unrelated cleanup. This changes
+neither persisted retention nor update behavior.
+
 Memory Core standing-intent operations queue through the canonical agent writer
 before acquiring their database generation. Their connection-bound worker handles
 creation, listing, cancellation, matching, and lifecycle maintenance. Schema
