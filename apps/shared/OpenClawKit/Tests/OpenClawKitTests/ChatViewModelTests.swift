@@ -6129,10 +6129,9 @@ struct ChatViewModelTests {
             })
         try await loadAndWaitBootstrap(vm: vm, sessionId: sessionId)
 
-        await sendUserMessage(vm, text: "same active request")
-        try await waitUntil("steering adoption send refresh completes") {
-            await historyCount.current() >= 2
-        }
+        let send = await sendUserMessage(vm, text: "same active request")
+        await send?.value
+        #expect(await historyCount.current() >= 2)
         transport.emit(
             .chat(
                 OpenClawChatEventPayload(
@@ -6145,10 +6144,8 @@ struct ChatViewModelTests {
                         timestamp: now + 1,
                         idempotencyKey: remoteRunId),
                     errorMessage: nil)))
-        try await waitUntil("provisional reply precedes steering row") {
-            await MainActor.run {
-                vm.messages.contains { $0.role == "assistant" && $0.content.first?.text == "steered reply" }
-            }
+        await waitForObservedState {
+            vm.messages.contains { $0.role == "assistant" && $0.content.first?.text == "steered reply" }
         }
         let provisionalID = try await MainActor.run {
             try #require(vm.messages.first(where: {
@@ -6178,22 +6175,34 @@ struct ChatViewModelTests {
                     messageId: "srv-steered-reply",
                     messageSeq: 3)))
 
-        try await waitUntil("canonical reply after steering adopts provisional row") {
-            await MainActor.run {
-                guard vm.messages.count(where: { $0.role == "assistant" }) == 1,
-                      let reply = vm.messages.first(where: { $0.id == provisionalID }),
-                      reply.content.first?.text == "canonical steered reply",
-                      reply.timestamp == now + 3,
-                      let steeringIndex = vm.messages.firstIndex(where: {
-                          $0.role == "user" && $0.content.first?.text == "steer the active run"
-                      }),
-                      let replyIndex = vm.messages.firstIndex(where: { $0.id == provisionalID })
-                else {
-                    return false
-                }
-                return steeringIndex < replyIndex
+        await waitForObservedState {
+            guard vm.messages.count(where: { $0.role == "assistant" }) >= 1,
+                  let reply = vm.messages.first(where: { $0.id == provisionalID }),
+                  reply.content.first?.text == "canonical steered reply",
+                  reply.timestamp == now + 3,
+                  let steeringIndex = vm.messages.firstIndex(where: {
+                      $0.role == "user" && $0.content.first?.text == "steer the active run"
+                  }),
+                  let replyIndex = vm.messages.firstIndex(where: { $0.id == provisionalID })
+            else {
+                return false
             }
+            return steeringIndex < replyIndex
         }
+        #expect(await MainActor.run {
+            guard vm.messages.count(where: { $0.role == "assistant" }) == 1,
+                  let reply = vm.messages.first(where: { $0.id == provisionalID }),
+                  reply.content.first?.text == "canonical steered reply",
+                  reply.timestamp == now + 3,
+                  let steeringIndex = vm.messages.firstIndex(where: {
+                      $0.role == "user" && $0.content.first?.text == "steer the active run"
+                  }),
+                  let replyIndex = vm.messages.firstIndex(where: { $0.id == provisionalID })
+            else {
+                return false
+            }
+            return steeringIndex < replyIndex
+        })
         await finalRefreshGate.release()
     }
 
@@ -6225,10 +6234,9 @@ struct ChatViewModelTests {
             })
         try await loadAndWaitBootstrap(vm: vm, sessionId: sessionId)
 
-        await sendUserMessage(vm, text: "same active request")
-        try await waitUntil("channel boundary send refresh completes") {
-            await historyCount.current() >= 2
-        }
+        let send = await sendUserMessage(vm, text: "same active request")
+        await send?.value
+        #expect(await historyCount.current() >= 2)
         transport.emit(
             .chat(
                 OpenClawChatEventPayload(
@@ -6241,10 +6249,8 @@ struct ChatViewModelTests {
                         timestamp: now + 1,
                         idempotencyKey: remoteRunId),
                     errorMessage: nil)))
-        try await waitUntil("reused provisional reply is visible") {
-            await MainActor.run {
-                vm.messages.contains { $0.role == "assistant" && $0.content.first?.text == "same reply" }
-            }
+        await waitForObservedState {
+            vm.messages.contains { $0.role == "assistant" && $0.content.first?.text == "same reply" }
         }
         let provisionalID = try await MainActor.run {
             try #require(vm.messages.first(where: {
@@ -6273,22 +6279,34 @@ struct ChatViewModelTests {
                     messageId: "srv-channel-reply",
                     messageSeq: 3)))
 
-        try await waitUntil("independent channel reply remains distinct") {
-            await MainActor.run {
-                let replies = vm.messages.filter {
-                    $0.role == "assistant" && $0.content.first?.text == "same reply"
-                }
-                guard replies.count == 2, replies.first?.id == provisionalID else { return false }
-                guard let userIndex = vm.messages.firstIndex(where: {
-                    $0.role == "user" && $0.content.first?.text == "independent channel request"
-                }),
-                    let canonicalIndex = vm.messages.firstIndex(where: { $0.id == replies[1].id })
-                else {
-                    return false
-                }
-                return userIndex < canonicalIndex
+        await waitForObservedState {
+            let replies = vm.messages.filter {
+                $0.role == "assistant" && $0.content.first?.text == "same reply"
             }
+            guard replies.count >= 2, replies.first?.id == provisionalID else { return false }
+            guard let userIndex = vm.messages.firstIndex(where: {
+                $0.role == "user" && $0.content.first?.text == "independent channel request"
+            }),
+                let canonicalIndex = vm.messages.firstIndex(where: { $0.id == replies[1].id })
+            else {
+                return false
+            }
+            return userIndex < canonicalIndex
         }
+        #expect(await MainActor.run {
+            let replies = vm.messages.filter {
+                $0.role == "assistant" && $0.content.first?.text == "same reply"
+            }
+            guard replies.count == 2, replies.first?.id == provisionalID else { return false }
+            guard let userIndex = vm.messages.firstIndex(where: {
+                $0.role == "user" && $0.content.first?.text == "independent channel request"
+            }),
+                let canonicalIndex = vm.messages.firstIndex(where: { $0.id == replies[1].id })
+            else {
+                return false
+            }
+            return userIndex < canonicalIndex
+        })
         await finalRefreshGate.release()
     }
 
@@ -6314,18 +6332,15 @@ struct ChatViewModelTests {
             })
         try await loadAndWaitBootstrap(vm: vm, sessionId: sessionId)
 
-        await sendUserMessage(vm, text: "same active request")
+        let send = await sendUserMessage(vm, text: "same active request")
         await responseGate.open()
-        try await waitUntil("optimistic user adopts reused run identity") {
-            await MainActor.run {
-                vm.messages.contains(where: { message in
-                    message.role == "user" && message.idempotencyKey == "\(remoteRunId):user"
-                })
-            }
-        }
-        try await waitUntil("post-ack history refresh completes") {
-            await historyCount.current() >= 2
-        }
+        await send?.value
+        #expect(await MainActor.run {
+            vm.messages.contains(where: { message in
+                message.role == "user" && message.idempotencyKey == "\(remoteRunId):user"
+            })
+        })
+        #expect(await historyCount.current() >= 2)
 
         transport.emit(
             .sessionMessage(
@@ -6360,11 +6375,9 @@ struct ChatViewModelTests {
                         idempotencyKey: "other-client-run:user"),
                     messageId: "srv-newer-user",
                     messageSeq: 3)))
-        try await waitUntil("canonical user transformation and newer turn arrive") {
-            await MainActor.run {
-                vm.messages.containsUserText("canonical redacted request") &&
-                    vm.messages.containsUserText("newer request from another client")
-            }
+        await waitForObservedState {
+            vm.messages.containsUserText("canonical redacted request") &&
+                vm.messages.containsUserText("newer request from another client")
         }
 
         transport.emit(
@@ -6380,13 +6393,16 @@ struct ChatViewModelTests {
                         idempotencyKey: remoteRunId),
                     errorMessage: nil)))
 
-        try await waitUntil("late canonical adoption does not duplicate reused final") {
-            await MainActor.run {
-                vm.pendingRunCount == 0 &&
-                    vm.messages
-                    .count(where: { $0.role == "assistant" && $0.content.first?.text == "active reply" }) == 1
-            }
+        await waitForObservedState {
+            vm.pendingRunCount == 0 &&
+                vm.messages
+                .count(where: { $0.role == "assistant" && $0.content.first?.text == "active reply" }) >= 1
         }
+        #expect(await MainActor.run {
+            vm.pendingRunCount == 0 &&
+                vm.messages
+                .count(where: { $0.role == "assistant" && $0.content.first?.text == "active reply" }) == 1
+        })
         await finalRefreshGate.release()
     }
 
@@ -6428,7 +6444,7 @@ struct ChatViewModelTests {
             })
         try await loadAndWaitBootstrap(vm: vm, sessionId: sessionId)
 
-        await sendUserMessage(vm, text: "same active request")
+        let send = await sendUserMessage(vm, text: "same active request")
         transport.emit(
             .chat(
                 OpenClawChatEventPayload(
@@ -6441,11 +6457,9 @@ struct ChatViewModelTests {
                         timestamp: now + 1,
                         idempotencyKey: remoteRunId),
                     errorMessage: nil)))
-        try await waitUntil("early final is visible before acknowledgement") {
-            await MainActor.run {
-                vm.messages.contains {
-                    $0.role == "assistant" && $0.content.first?.text == "early final reply"
-                }
+        await waitForObservedState {
+            vm.messages.contains {
+                $0.role == "assistant" && $0.content.first?.text == "early final reply"
             }
         }
         let provisionalID = try await MainActor.run {
@@ -6455,28 +6469,25 @@ struct ChatViewModelTests {
         }
 
         await historyGate.open()
-        try await waitUntil("history adopts early final before newer user") {
-            await MainActor.run {
-                guard let replyIndex = vm.messages.firstIndex(where: { $0.id == provisionalID }),
-                      let newerUserIndex = vm.messages.firstIndex(where: {
-                          $0.role == "user" && $0.content.first?.text == "newer channel request"
-                      })
-                else {
-                    return false
-                }
-                return replyIndex < newerUserIndex && vm.messages[replyIndex].timestamp == now + 2
+        await waitForObservedState {
+            guard let replyIndex = vm.messages.firstIndex(where: { $0.id == provisionalID }),
+                  let newerUserIndex = vm.messages.firstIndex(where: {
+                      $0.role == "user" && $0.content.first?.text == "newer channel request"
+                  })
+            else {
+                return false
             }
+            return replyIndex < newerUserIndex && vm.messages[replyIndex].timestamp == now + 2
         }
 
         await responseGate.open()
-        try await waitUntil("early final run acknowledgement rekeys optimistic user") {
-            await MainActor.run {
-                vm.pendingRunCount == 0 &&
-                    vm.messages.count(where: {
-                        $0.role == "user" && $0.idempotencyKey == "\(remoteRunId):user"
-                    }) == 1
-            }
-        }
+        await send?.value
+        #expect(await MainActor.run {
+            vm.pendingRunCount == 0 &&
+                vm.messages.count(where: {
+                    $0.role == "user" && $0.idempotencyKey == "\(remoteRunId):user"
+                }) == 1
+        })
 
         transport.emit(
             .sessionMessage(
@@ -6490,21 +6501,32 @@ struct ChatViewModelTests {
                     messageId: "srv-early-final-reply",
                     messageSeq: 2)))
 
-        try await waitUntil("delayed canonical event preserves history order") {
-            await MainActor.run {
-                guard vm.messages.count(where: {
-                    $0.role == "assistant" && $0.idempotencyKey == remoteRunId
-                }) == 1,
-                    let replyIndex = vm.messages.firstIndex(where: { $0.id == provisionalID }),
-                    let newerUserIndex = vm.messages.firstIndex(where: {
-                        $0.role == "user" && $0.content.first?.text == "newer channel request"
-                    })
-                else {
-                    return false
-                }
-                return replyIndex < newerUserIndex && vm.messages[replyIndex].timestamp == now + 2
+        await waitForObservedState {
+            guard vm.messages.count(where: {
+                $0.role == "assistant" && $0.idempotencyKey == remoteRunId
+            }) >= 1,
+                let replyIndex = vm.messages.firstIndex(where: { $0.id == provisionalID }),
+                let newerUserIndex = vm.messages.firstIndex(where: {
+                    $0.role == "user" && $0.content.first?.text == "newer channel request"
+                })
+            else {
+                return false
             }
+            return replyIndex < newerUserIndex && vm.messages[replyIndex].timestamp == now + 2
         }
+        #expect(await MainActor.run {
+            guard vm.messages.count(where: {
+                $0.role == "assistant" && $0.idempotencyKey == remoteRunId
+            }) == 1,
+                let replyIndex = vm.messages.firstIndex(where: { $0.id == provisionalID }),
+                let newerUserIndex = vm.messages.firstIndex(where: {
+                    $0.role == "user" && $0.content.first?.text == "newer channel request"
+                })
+            else {
+                return false
+            }
+            return replyIndex < newerUserIndex && vm.messages[replyIndex].timestamp == now + 2
+        })
     }
 
     @Test func `terminal timeout send ack surfaces error and allows next send`() async throws {
@@ -6521,18 +6543,14 @@ struct ChatViewModelTests {
             })
         try await loadAndWaitBootstrap(vm: vm, sessionId: sessionId)
 
-        await sendUserMessage(vm, text: "first")
-        try await waitUntil("timeout ack clears pending run") {
-            await MainActor.run { vm.pendingRunCount == 0 && !vm.isSending }
-        }
+        await sendUserMessage(vm, text: "first")?.value
+        #expect(await MainActor.run { vm.pendingRunCount == 0 && !vm.isSending })
         #expect(await transport.sentRunIds().count == 1)
         #expect(await MainActor.run { vm.errorText } == "Chat failed before the run started; try again.")
         #expect(await MainActor.run { !vm.messages.containsUserText("first") })
 
-        await sendUserMessage(vm, text: "second")
-        try await waitUntil("second send is accepted after timeout ack") {
-            await transport.sentRunIds().count == 2
-        }
+        await sendUserMessage(vm, text: "second")?.value
+        #expect(await transport.sentRunIds().count == 2)
     }
 
     @Test func `keeps optimistic user message when final refresh returns only assistant history`() async throws {
@@ -6629,26 +6647,26 @@ struct ChatViewModelTests {
                     ])
             })
         try await loadAndWaitBootstrap(vm: vm, sessionId: sessionId)
-        await sendUserMessage(vm, text: "hello from mac webchat")
-        try await waitUntil("canonical refresh starts") { await historyCallCount.current() == 2 }
+        let send = await sendUserMessage(vm, text: "hello from mac webchat")
+        await historyCallCount.wait { $0 >= 2 }
+        #expect(await historyCallCount.current() == 2)
         let optimisticID = try await MainActor.run {
             try #require(vm.messages.last(where: { $0.role == "user" })?.id)
         }
         await refreshGate.open()
 
-        try await waitUntil("send acknowledgement refresh keeps one user message") {
-            await MainActor.run {
-                let userMessages = vm.messages.filter { message in
-                    message.role == "user" &&
-                        message.content.compactMap(\.text).joined(separator: "\n") == "hello from mac webchat"
-                }
-                let hasAssistant = vm.messages.contains { message in
-                    message.role == "assistant" &&
-                        message.content.compactMap(\.text).joined(separator: "\n") == "final answer"
-                }
-                return hasAssistant && userMessages.count == 1
+        await send?.value
+        #expect(await MainActor.run {
+            let userMessages = vm.messages.filter { message in
+                message.role == "user" &&
+                    message.content.compactMap(\.text).joined(separator: "\n") == "hello from mac webchat"
             }
-        }
+            let hasAssistant = vm.messages.contains { message in
+                message.role == "assistant" &&
+                    message.content.compactMap(\.text).joined(separator: "\n") == "final answer"
+            }
+            return hasAssistant && userMessages.count == 1
+        })
         #expect(await MainActor.run { vm.messages.last(where: { $0.role == "user" })?.id } == optimisticID)
     }
 
@@ -6680,24 +6698,24 @@ struct ChatViewModelTests {
                     ])
             })
         try await loadAndWaitBootstrap(vm: vm, sessionId: sessionId)
-        await sendUserMessage(vm, text: "legacy echo")
-        try await waitUntil("legacy refresh starts") { await historyCallCount.current() == 2 }
+        let send = await sendUserMessage(vm, text: "legacy echo")
+        await historyCallCount.wait { $0 >= 2 }
+        #expect(await historyCallCount.current() == 2)
         let optimisticID = try await MainActor.run {
             try #require(vm.messages.last(where: { $0.role == "user" })?.id)
         }
         await refreshGate.open()
 
-        try await waitUntil("metadata free canonical refresh preserves both user rows") {
-            await MainActor.run {
-                vm.messages.count(where: { message in
-                    message.role == "user" &&
-                        message.content.compactMap(\.text).joined(separator: "\n") == "legacy echo"
-                }) == 2 && vm.messages.contains(where: { message in
-                    message.role == "assistant" &&
-                        message.content.compactMap(\.text).joined(separator: "\n") == "legacy answer"
-                })
-            }
-        }
+        await send?.value
+        #expect(await MainActor.run {
+            vm.messages.count(where: { message in
+                message.role == "user" &&
+                    message.content.compactMap(\.text).joined(separator: "\n") == "legacy echo"
+            }) == 2 && vm.messages.contains(where: { message in
+                message.role == "assistant" &&
+                    message.content.compactMap(\.text).joined(separator: "\n") == "legacy answer"
+            })
+        })
         #expect(await MainActor.run { vm.messages.contains(where: { $0.id == optimisticID }) })
     }
 
@@ -6723,17 +6741,15 @@ struct ChatViewModelTests {
                     ])
             })
         try await loadAndWaitBootstrap(vm: vm, sessionId: sessionId)
-        await sendUserMessage(vm, text: "same words")
+        await sendUserMessage(vm, text: "same words")?.value
 
-        try await waitUntil("foreign identical turn and local echo both survive") {
-            await MainActor.run {
-                vm.pendingRunCount == 0 &&
-                    vm.messages.count(where: { message in
-                        message.role == "user" &&
-                            message.content.compactMap(\.text).joined(separator: "\n") == "same words"
-                    }) == 2
-            }
-        }
+        #expect(await MainActor.run {
+            vm.pendingRunCount == 0 &&
+                vm.messages.count(where: { message in
+                    message.role == "user" &&
+                        message.content.compactMap(\.text).joined(separator: "\n") == "same words"
+                }) == 2
+        })
         #expect(await transport.sentRunIds().count == 1)
     }
 
@@ -7071,7 +7087,8 @@ struct ChatViewModelTests {
         let (transport, vm) = await makeViewModel(historyResponses: [history1, history2])
 
         await MainActor.run { vm.load() }
-        try await waitUntil("bootstrap history loaded") { await MainActor.run { vm.messages.count == 1 } }
+        await vm.bootstrapTask?.value
+        #expect(await MainActor.run { vm.messages.count == 1 })
 
         transport.emit(
             .chat(
@@ -7082,9 +7099,8 @@ struct ChatViewModelTests {
                     message: nil,
                     errorMessage: nil)))
 
-        try await waitUntil("history refresh after canonical external event") {
-            await MainActor.run { vm.messages.count == 2 }
-        }
+        await waitForObservedState { vm.messages.count >= 2 }
+        #expect(await MainActor.run { vm.messages.count == 2 })
     }
 
     @Test func `appends external session user message for active session`() async throws {
@@ -7107,13 +7123,16 @@ struct ChatViewModelTests {
                     messageId: "msg-1",
                     messageSeq: 1)))
 
-        try await waitUntil("external transcript visible") {
-            await MainActor.run {
-                vm.messages.count == 1 &&
-                    vm.messages.first?.role == "user" &&
-                    vm.messages.first?.content.first?.text == "spoken transcript"
-            }
+        await waitForObservedState {
+            vm.messages.count >= 1 &&
+                vm.messages.first?.role == "user" &&
+                vm.messages.first?.content.first?.text == "spoken transcript"
         }
+        #expect(await MainActor.run {
+            vm.messages.count == 1 &&
+                vm.messages.first?.role == "user" &&
+                vm.messages.first?.content.first?.text == "spoken transcript"
+        })
     }
 
     @Test func `appends global session user message for selected agent`() async throws {
@@ -7138,13 +7157,16 @@ struct ChatViewModelTests {
                     messageId: "msg-global-work",
                     messageSeq: 1)))
 
-        try await waitUntil("selected agent global transcript visible") {
-            await MainActor.run {
-                vm.messages.count == 1 &&
-                    vm.messages.first?.role == "user" &&
-                    vm.messages.first?.content.first?.text == "global transcript"
-            }
+        await waitForObservedState {
+            vm.messages.count >= 1 &&
+                vm.messages.first?.role == "user" &&
+                vm.messages.first?.content.first?.text == "global transcript"
         }
+        #expect(await MainActor.run {
+            vm.messages.count == 1 &&
+                vm.messages.first?.role == "user" &&
+                vm.messages.first?.content.first?.text == "global transcript"
+        })
     }
 
     @Test func `ignores global session user message for different agent`() async throws {
@@ -7299,8 +7321,8 @@ struct ChatViewModelTests {
         try await loadAndWaitBootstrap(vm: vm)
         #expect(await MainActor.run { vm.messages.isEmpty })
 
-        await sendUserMessage(vm, text: "ping")
-        try await waitUntil("local run pending") { await MainActor.run { vm.pendingRunCount == 1 } }
+        await sendUserMessage(vm, text: "ping")?.value
+        #expect(await MainActor.run { vm.pendingRunCount == 1 })
 
         transport.emit(
             .sessionMessage(
@@ -7313,13 +7335,11 @@ struct ChatViewModelTests {
                     messageId: "msg-assistant-1",
                     messageSeq: 2)))
 
-        try await waitUntil("assistant transcript visible while pending") {
-            await MainActor.run {
-                vm.messages.contains(where: { msg in
-                    msg.role == "assistant" &&
-                        msg.content.first?.text == "agent reply"
-                })
-            }
+        await waitForObservedState {
+            vm.messages.contains(where: { msg in
+                msg.role == "assistant" &&
+                    msg.content.first?.text == "agent reply"
+            })
         }
     }
 
@@ -7488,9 +7508,8 @@ struct ChatViewModelTests {
             ])
 
         await MainActor.run { vm.load() }
-        try await waitUntil("bootstrap history loaded") {
-            await MainActor.run { vm.messages.count == 1 }
-        }
+        await vm.bootstrapTask?.value
+        #expect(await MainActor.run { vm.messages.count == 1 })
 
         transport.emit(
             .sessionMessage(
@@ -7503,13 +7522,16 @@ struct ChatViewModelTests {
                     messageId: "msg-repeat-2",
                     messageSeq: 2)))
 
-        try await waitUntil("repeated user transcript appended") {
-            await MainActor.run {
-                vm.messages.count(where: { msg in
-                    msg.role == "user" && msg.content.first?.text == "repeat"
-                }) == 2
-            }
+        await waitForObservedState {
+            vm.messages.count(where: { msg in
+                msg.role == "user" && msg.content.first?.text == "repeat"
+            }) >= 2
         }
+        #expect(await MainActor.run {
+            vm.messages.count(where: { msg in
+                msg.role == "user" && msg.content.first?.text == "repeat"
+            }) == 2
+        })
     }
 
     @Test func `ignores external session user message for other session`() async throws {
@@ -7546,12 +7568,14 @@ struct ChatViewModelTests {
         let (transport, vm) = await makeViewModel(historyResponses: [history1, history2])
 
         await MainActor.run { vm.load() }
-        try await waitUntil("bootstrap history loaded") { await MainActor.run { vm.messages.count == 1 } }
+        await vm.bootstrapTask?.value
+        #expect(await MainActor.run { vm.messages.count == 1 })
         let firstIdBefore = try #require(await MainActor.run { vm.messages.first?.id })
 
         emitExternalFinal(transport: transport)
 
-        try await waitUntil("history refresh") { await MainActor.run { vm.messages.count == 2 } }
+        await waitForObservedState { vm.messages.count >= 2 }
+        #expect(await MainActor.run { vm.messages.count == 2 })
         let firstIdAfter = try #require(await MainActor.run { vm.messages.first?.id })
         #expect(firstIdAfter == firstIdBefore)
     }
@@ -7565,14 +7589,13 @@ struct ChatViewModelTests {
         emitAssistantText(transport: transport, runId: sessionId, text: "external stream")
         emitToolStart(transport: transport, runId: sessionId)
 
-        try await waitUntil("streaming active") {
-            await MainActor.run { vm.streamingAssistantText == "external stream" }
-        }
-        try await waitUntil("tool call pending") { await MainActor.run { vm.pendingToolCalls.count == 1 } }
+        await waitForObservedState { vm.streamingAssistantText == "external stream" }
+        await waitForObservedState { vm.pendingToolCalls.count >= 1 }
+        #expect(await MainActor.run { vm.pendingToolCalls.count == 1 })
 
         emitExternalFinal(transport: transport)
 
-        try await waitUntil("streaming cleared") { await MainActor.run { vm.streamingAssistantText == nil } }
+        await waitForObservedState { vm.streamingAssistantText == nil }
         #expect(await MainActor.run { vm.pendingToolCalls.isEmpty })
     }
 
@@ -7628,7 +7651,8 @@ struct ChatViewModelTests {
 
         let (_, vm) = await makeViewModel(historyResponses: [history], sessionsResponses: [sessions])
         await MainActor.run { vm.load() }
-        try await waitUntil("sessions loaded") { await MainActor.run { !vm.sessions.isEmpty } }
+        await vm.bootstrapTask?.value
+        #expect(await MainActor.run { !vm.sessions.isEmpty })
 
         let keys = await MainActor.run { vm.sessionChoices.map(\.key) }
         #expect(keys == ["main", "recent-1", "recent-2"])
@@ -7657,14 +7681,12 @@ struct ChatViewModelTests {
             sessionsResponses: [sessions, sessions])
 
         await MainActor.run { vm.load() }
-        try await waitUntil("main context usage loaded") {
-            await MainActor.run { vm.contextUsageFraction == 0.2 }
-        }
+        await vm.bootstrapTask?.value
+        #expect(await MainActor.run { vm.contextUsageFraction == 0.2 })
 
         await MainActor.run { vm.switchSession(to: "other") }
-        try await waitUntil("other context usage selected") {
-            await MainActor.run { vm.contextUsageFraction == 0.8 }
-        }
+        await vm.bootstrapTask?.value
+        #expect(await MainActor.run { vm.contextUsageFraction == 0.8 })
     }
 
     @Test func `session choices include current when missing`() async throws {
@@ -7680,7 +7702,8 @@ struct ChatViewModelTests {
             historyResponses: [history],
             sessionsResponses: [sessions])
         await MainActor.run { vm.load() }
-        try await waitUntil("sessions loaded") { await MainActor.run { !vm.sessions.isEmpty } }
+        await vm.bootstrapTask?.value
+        #expect(await MainActor.run { !vm.sessions.isEmpty })
 
         let keys = await MainActor.run { vm.sessionChoices.map(\.key) }
         #expect(keys == ["main", "custom"])
@@ -7710,7 +7733,8 @@ struct ChatViewModelTests {
             historyResponses: [history],
             sessionsResponses: [sessions])
         await MainActor.run { vm.load() }
-        try await waitUntil("sessions loaded") { await MainActor.run { !vm.sessions.isEmpty } }
+        await vm.bootstrapTask?.value
+        #expect(await MainActor.run { !vm.sessions.isEmpty })
 
         let keys = await MainActor.run { vm.sessionChoices.map(\.key) }
         #expect(keys == ["Luke’s MacBook Pro", "recent-1"])
@@ -7743,7 +7767,8 @@ struct ChatViewModelTests {
             historyResponses: [history],
             sessionsResponses: [sessions])
         await MainActor.run { vm.load() }
-        try await waitUntil("sessions loaded") { await MainActor.run { !vm.sessions.isEmpty } }
+        await vm.bootstrapTask?.value
+        #expect(await MainActor.run { !vm.sessions.isEmpty })
 
         let keys = await MainActor.run { vm.sessionChoices.map(\.key) }
         #expect(keys == ["agent:main:main"])
@@ -7767,18 +7792,12 @@ struct ChatViewModelTests {
             historyResponses: [before, after],
             sessionsResponses: [sessions])
         try await loadAndWaitBootstrap(vm: vm)
-        try await waitUntil("initial history loaded") {
-            await MainActor.run { vm.messages.first?.content.first?.text == "before new" }
-        }
+        #expect(await MainActor.run { vm.messages.first?.content.first?.text == "before new" })
 
-        await MainActor.run {
-            vm.input = "/new"
-            vm.send()
-        }
+        await sendUserMessage(vm, text: "/new")?.value
 
-        try await waitUntil("fresh agent session selected") {
-            await MainActor.run { vm.sessionKey.hasPrefix("agent:aiden:ios-") && vm.messages.isEmpty }
-        }
+        await vm.bootstrapTask?.value
+        #expect(await MainActor.run { vm.sessionKey.hasPrefix("agent:aiden:ios-") && vm.messages.isEmpty })
         let createdKeys = await transport.createdSessionKeys()
         #expect(createdKeys.count == 1)
         #expect(createdKeys.first?.hasPrefix("agent:aiden:ios-") == true)
@@ -7786,11 +7805,8 @@ struct ChatViewModelTests {
         #expect(await transport.resetSessionKeys().isEmpty)
         #expect(await transport.lastSentRunId() == nil)
 
-        await sendUserMessage(vm, text: "hello fresh session")
-        try await waitUntil("send uses fresh session") {
-            let key = await transport.lastSentSessionKey()
-            return key?.hasPrefix("agent:aiden:ios-") == true
-        }
+        await sendUserMessage(vm, text: "hello fresh session")?.value
+        #expect(await transport.lastSentSessionKey()?.hasPrefix("agent:aiden:ios-") == true)
     }
 
     @Test func `new trigger falls back to reset when create session is unsupported`() async throws {
@@ -7811,21 +7827,13 @@ struct ChatViewModelTests {
             historyResponses: [before, after],
             createSessionHook: { _, _ in throw unsupported })
         try await loadAndWaitBootstrap(vm: vm)
-        try await waitUntil("initial history loaded") {
-            await MainActor.run { vm.messages.first?.content.first?.text == "before new" }
-        }
+        #expect(await MainActor.run { vm.messages.first?.content.first?.text == "before new" })
 
-        await MainActor.run {
-            vm.input = "/new"
-            vm.send()
-        }
+        await sendUserMessage(vm, text: "/new")?.value
 
-        try await waitUntil("reset fallback called") {
-            await transport.resetSessionKeys() == ["main"]
-        }
-        try await waitUntil("history reloaded") {
-            await MainActor.run { vm.messages.first?.content.first?.text == "after reset fallback" }
-        }
+        #expect(await transport.resetSessionKeys() == ["main"])
+        await vm.bootstrapTask?.value
+        #expect(await MainActor.run { vm.messages.first?.content.first?.text == "after reset fallback" })
         #expect(await transport.createdSessionKeys().isEmpty)
         #expect(await MainActor.run { vm.sessionKey } == "main")
         #expect(await MainActor.run { vm.errorText } == nil)
@@ -7873,14 +7881,10 @@ struct ChatViewModelTests {
             historyResponses: [historyPayload(sessionKey: "global"), historyPayload()])
         try await loadAndWaitBootstrap(vm: vm)
 
-        await MainActor.run {
-            vm.input = "/new"
-            vm.send()
-        }
+        await sendUserMessage(vm, text: "/new")?.value
 
-        try await waitUntil("fresh selected-agent session created") {
-            await MainActor.run { vm.sessionKey.hasPrefix("agent:reviewer:ios-") }
-        }
+        await vm.bootstrapTask?.value
+        #expect(await MainActor.run { vm.sessionKey.hasPrefix("agent:reviewer:ios-") })
         #expect(await transport.createdSessionKeys().first?.hasPrefix("agent:reviewer:ios-") == true)
         #expect(await transport.createdParentSessionKeys() == ["global"])
     }
@@ -7892,14 +7896,10 @@ struct ChatViewModelTests {
             historyResponses: [historyPayload(sessionKey: "agent:alice:main"), historyPayload()])
         try await loadAndWaitBootstrap(vm: vm)
 
-        await MainActor.run {
-            vm.input = "/new"
-            vm.send()
-        }
+        await sendUserMessage(vm, text: "/new")?.value
 
-        try await waitUntil("fresh explicit-agent session created") {
-            await MainActor.run { vm.sessionKey.hasPrefix("agent:alice:ios-") }
-        }
+        await vm.bootstrapTask?.value
+        #expect(await MainActor.run { vm.sessionKey.hasPrefix("agent:alice:ios-") })
         #expect(await transport.createdSessionKeys().first?.hasPrefix("agent:alice:ios-") == true)
         #expect(await transport.createdParentSessionKeys() == ["agent:alice:main"])
     }
@@ -7909,15 +7909,12 @@ struct ChatViewModelTests {
             historyResponses: [historyPayload()],
             healthResponses: [false])
         await MainActor.run { vm.load() }
-        try await waitUntil("bootstrap records stale health") {
-            await MainActor.run { vm.sessionId == "sess-main" && !vm.healthOK }
-        }
+        await vm.bootstrapTask?.value
+        #expect(await MainActor.run { vm.sessionId == "sess-main" && !vm.healthOK })
 
-        await sendUserMessage(vm, text: "hello despite stale health")
+        await sendUserMessage(vm, text: "hello despite stale health")?.value
 
-        try await waitUntil("send reaches transport") {
-            await transport.lastSentSessionKey() == "main"
-        }
+        #expect(await transport.lastSentSessionKey() == "main")
         #expect(await MainActor.run { vm.errorText } == nil)
     }
 
@@ -7933,21 +7930,13 @@ struct ChatViewModelTests {
 
         let (transport, vm) = await makeViewModel(historyResponses: [before, after])
         try await loadAndWaitBootstrap(vm: vm)
-        try await waitUntil("initial history loaded") {
-            await MainActor.run { vm.messages.first?.content.first?.text == "before reset" }
-        }
+        #expect(await MainActor.run { vm.messages.first?.content.first?.text == "before reset" })
 
-        await MainActor.run {
-            vm.input = "/reset"
-            vm.send()
-        }
+        await sendUserMessage(vm, text: "/reset")?.value
 
-        try await waitUntil("reset called") {
-            await transport.resetSessionKeys() == ["main"]
-        }
-        try await waitUntil("history reloaded") {
-            await MainActor.run { vm.messages.first?.content.first?.text == "after reset" }
-        }
+        #expect(await transport.resetSessionKeys() == ["main"])
+        await vm.bootstrapTask?.value
+        #expect(await MainActor.run { vm.messages.first?.content.first?.text == "after reset" })
         #expect(await transport.lastSentRunId() == nil)
     }
 
@@ -7995,33 +7984,27 @@ struct ChatViewModelTests {
         await MainActor.run { vm.toggleComposerSkill(disabledSkill) }
         #expect(await transport.sessionSettingsPatches().isEmpty)
         await MainActor.run { vm.selectComposerPermissionMode(.full) }
-        try await waitUntil("permission patch settled") {
-            let count = await transport.sessionSettingsPatches().count
-            let settled = await MainActor.run { !vm.composerCapabilityMutationDisabled }
-            return count == 1 && settled
-        }
+        await vm.waitForPendingSessionSettings(for: vm.currentModelPatchTarget())
+        #expect(await transport.sessionSettingsPatches().count == 1)
+        #expect(await MainActor.run { !vm.composerCapabilityMutationDisabled })
         #expect(await MainActor.run { vm.composerPermissionMode } == .full)
         #expect(await MainActor.run { vm.composerCapabilityNotice } == "New permissions apply to the next run.")
         await MainActor.run { vm.dismissComposerCapabilityNotice() }
         #expect(await MainActor.run { vm.composerCapabilityNotice } == nil)
 
         await MainActor.run { vm.toggleComposerWebSearch() }
-        try await waitUntil("web search patch settled") {
-            let count = await transport.sessionSettingsPatches().count
-            let settled = await MainActor.run { !vm.composerCapabilityMutationDisabled }
-            return count == 2 && settled
-        }
+        await vm.waitForPendingSessionSettings(for: vm.currentModelPatchTarget())
+        #expect(await transport.sessionSettingsPatches().count == 2)
+        #expect(await MainActor.run { !vm.composerCapabilityMutationDisabled })
         #expect(await MainActor.run { !vm.composerWebSearchEnabled })
         #expect(await MainActor.run { vm.composerCapabilityNotice } ==
             "Tool changes apply to the next run.")
         await MainActor.run { vm.dismissComposerCapabilityNotice() }
 
         await MainActor.run { vm.toggleComposerSkill(skill) }
-        try await waitUntil("skill patch settled") {
-            let count = await transport.sessionSettingsPatches().count
-            let settled = await MainActor.run { !vm.composerCapabilityMutationDisabled }
-            return count == 3 && settled
-        }
+        await vm.waitForPendingSessionSettings(for: vm.currentModelPatchTarget())
+        #expect(await transport.sessionSettingsPatches().count == 3)
+        #expect(await MainActor.run { !vm.composerCapabilityMutationDisabled })
         let patches = await transport.sessionSettingsPatches()
         #expect(patches.allSatisfy { $0.expectedSessionID == "sess-main" })
         #expect((patches[0].permissionMode ?? nil) == .full)
@@ -8063,13 +8046,9 @@ struct ChatViewModelTests {
         await vm.loadComposerCapabilities()
 
         await MainActor.run { vm.selectComposerPermissionMode(.guarded) }
-        try await waitUntil("restrictive patch starts") {
-            await patchCalls.current() == 1
-        }
-        await MainActor.run {
-            vm.input = "wait for restrictions"
-            vm.send()
-        }
+        await patchCalls.wait { $0 >= 1 }
+        #expect(await patchCalls.current() == 1)
+        let send = await sendUserMessage(vm, text: "wait for restrictions")
         try await Task.sleep(for: .milliseconds(50))
 
         #expect(await transport.sentRunIds().isEmpty)
@@ -8078,9 +8057,7 @@ struct ChatViewModelTests {
         #expect(await transport.sessionSettingsPatches().map(\.expectedSessionID) == ["sess-main"])
 
         await releasePatch.open()
-        try await waitUntil("restrictive patch precedes send") {
-            await transport.sentRunIds().count == 1
-        }
+        await send?.value
         #expect(await MainActor.run { vm.composerPermissionMode } == .guarded)
         #expect(await transport.sentRunIds().count == 1)
         #expect(await transport.sentSettingsExpectations() == [
@@ -8120,26 +8097,23 @@ struct ChatViewModelTests {
         try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
         await vm.loadComposerCapabilities()
 
-        await MainActor.run {
+        let send = await MainActor.run {
             vm.selectComposerPermissionMode(.guarded)
             vm.input = "do not send with full access"
-            vm.send()
+            return vm.send()
         }
         await patchStarted.wait()
-        try await waitUntil("failed restriction restores the draft") {
-            await MainActor.run {
-                vm.input == "do not send with full access" &&
-                    vm.errorText == "Restriction was not saved."
-            }
-        }
+        await send?.value
+        #expect(await MainActor.run {
+            vm.input == "do not send with full access" &&
+                vm.errorText == "Restriction was not saved."
+        })
 
         #expect(await transport.sentRunIds().isEmpty)
         #expect(await MainActor.run { vm.composerPermissionMode } == .full)
 
-        await MainActor.run { vm.send() }
-        try await waitUntil("later send uses the visible unchanged permission") {
-            await transport.sentRunIds().count == 1
-        }
+        await vm.send()?.value
+        #expect(await transport.sentRunIds().count == 1)
         #expect(await transport.sentSettingsExpectations() == [
             OpenClawChatSessionSettingsExpectation(
                 permissionMode: .full,
@@ -8174,16 +8148,11 @@ struct ChatViewModelTests {
         try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
         await vm.loadComposerCapabilities()
 
-        await MainActor.run {
-            vm.input = "keep this draft"
-            vm.send()
-        }
-        try await waitUntil("settings conflict restores the draft") {
-            await MainActor.run {
-                vm.input == "keep this draft" &&
-                    vm.errorText?.contains("Session settings changed before send. Retry.") == true
-            }
-        }
+        await sendUserMessage(vm, text: "keep this draft")?.value
+        #expect(await MainActor.run {
+            vm.input == "keep this draft" &&
+                vm.errorText?.contains("Session settings changed before send. Retry.") == true
+        })
 
         #expect(await transport.sentSettingsExpectations() == [
             OpenClawChatSessionSettingsExpectation(
@@ -8220,11 +8189,9 @@ struct ChatViewModelTests {
             "Not enabled for this agent. Enable for this session.")
 
         await MainActor.run { vm.toggleComposerSkill(skill) }
-        try await waitUntil("agent filtered skill patch settles") {
-            let patches = await transport.sessionSettingsPatches()
-            guard patches.count == 1 else { return false }
-            return await MainActor.run { !vm.composerCapabilityMutationDisabled }
-        }
+        await vm.waitForPendingSessionSettings(for: vm.currentModelPatchTarget())
+        #expect(await transport.sessionSettingsPatches().count == 1)
+        #expect(await MainActor.run { !vm.composerCapabilityMutationDisabled })
 
         let patch = try #require(await transport.sessionSettingsPatches().first)
         #expect((patch.toolOverrides ?? nil)?.skills["weather"] == true)
@@ -8325,21 +8292,17 @@ struct ChatViewModelTests {
             !vm.composerToolEnabled(server: "github", tool: "create_issue")
         })
         await MainActor.run { vm.toggleComposerConnector(connector) }
-        try await waitUntil("connector patch settled") {
-            let count = await transport.sessionSettingsPatches().count
-            let settled = await MainActor.run { !vm.composerCapabilityMutationDisabled }
-            return count == 1 && settled
-        }
+        await vm.waitForPendingSessionSettings(for: vm.currentModelPatchTarget())
+        #expect(await transport.sessionSettingsPatches().count == 1)
+        #expect(await MainActor.run { !vm.composerCapabilityMutationDisabled })
         #expect(await MainActor.run { !vm.composerConnectorEnabled(connector) })
 
         await MainActor.run {
             vm.toggleComposerTool(server: "github", tool: "create_issue")
         }
-        try await waitUntil("tool access patch settled") {
-            let count = await transport.sessionSettingsPatches().count
-            let settled = await MainActor.run { !vm.composerCapabilityMutationDisabled }
-            return count == 2 && settled
-        }
+        await vm.waitForPendingSessionSettings(for: vm.currentModelPatchTarget())
+        #expect(await transport.sessionSettingsPatches().count == 2)
+        #expect(await MainActor.run { !vm.composerCapabilityMutationDisabled })
 
         let patches = await transport.sessionSettingsPatches()
         #expect((patches[0].toolOverrides ?? nil)?.mcpServers["github"] == false)
@@ -8349,11 +8312,9 @@ struct ChatViewModelTests {
         })
 
         await MainActor.run { vm.clearComposerToolOverrides() }
-        try await waitUntil("clear tool overrides patch settled") {
-            let count = await transport.sessionSettingsPatches().count
-            let settled = await MainActor.run { !vm.composerCapabilityMutationDisabled }
-            return count == 3 && settled
-        }
+        await vm.waitForPendingSessionSettings(for: vm.currentModelPatchTarget())
+        #expect(await transport.sessionSettingsPatches().count == 3)
+        #expect(await MainActor.run { !vm.composerCapabilityMutationDisabled })
         #expect(await (transport.sessionSettingsPatches())[2].toolOverrides == .some(nil))
         #expect(await MainActor.run { vm.composerCapabilityNotice } ==
             "Tool overrides will be cleared for the next run.")
@@ -8389,20 +8350,18 @@ struct ChatViewModelTests {
             !vm.composerToolEnabled(server: "github", tool: "create_issue")
         })
         await MainActor.run { vm.toggleComposerTool(server: "github", tool: "create_issue") }
-        try await waitUntil("tool enable patch settles") {
-            guard await transport.sessionSettingsPatches().count == 1 else { return false }
-            return await MainActor.run { !vm.composerCapabilityMutationDisabled }
-        }
+        await vm.waitForPendingSessionSettings(for: vm.currentModelPatchTarget())
+        #expect(await transport.sessionSettingsPatches().count == 1)
+        #expect(await MainActor.run { !vm.composerCapabilityMutationDisabled })
         #expect(await MainActor.run {
             vm.composerToolEnabled(server: "github", tool: "create_issue")
         })
         #expect(await transport.sessionSettingsPatches()[0].toolOverrides == .some(nil))
 
         await MainActor.run { vm.toggleComposerTool(server: "github", tool: "create_issue") }
-        try await waitUntil("tool denial patch settles") {
-            guard await transport.sessionSettingsPatches().count == 2 else { return false }
-            return await MainActor.run { !vm.composerCapabilityMutationDisabled }
-        }
+        await vm.waitForPendingSessionSettings(for: vm.currentModelPatchTarget())
+        #expect(await transport.sessionSettingsPatches().count == 2)
+        #expect(await MainActor.run { !vm.composerCapabilityMutationDisabled })
         #expect(await MainActor.run {
             !vm.composerToolEnabled(server: "github", tool: "create_issue")
         })
@@ -8411,10 +8370,9 @@ struct ChatViewModelTests {
             .mcpToolsDeny["github"] == ["create_issue"])
 
         await MainActor.run { vm.clearComposerToolOverrides() }
-        try await waitUntil("clear tool denial settles") {
-            guard await transport.sessionSettingsPatches().count == 3 else { return false }
-            return await MainActor.run { !vm.composerCapabilityMutationDisabled }
-        }
+        await vm.waitForPendingSessionSettings(for: vm.currentModelPatchTarget())
+        #expect(await transport.sessionSettingsPatches().count == 3)
+        #expect(await MainActor.run { !vm.composerCapabilityMutationDisabled })
         #expect(await MainActor.run {
             vm.composerToolEnabled(server: "github", tool: "create_issue")
         })
@@ -8453,10 +8411,9 @@ struct ChatViewModelTests {
             !vm.composerToolEnabled(server: "github", tool: "create_issue")
         })
         await MainActor.run { vm.toggleComposerTool(server: "github", tool: "create_issue") }
-        try await waitUntil("effective denial enable patch settles") {
-            guard await transport.sessionSettingsPatches().count == 1 else { return false }
-            return await MainActor.run { !vm.composerCapabilityMutationDisabled }
-        }
+        await vm.waitForPendingSessionSettings(for: vm.currentModelPatchTarget())
+        #expect(await transport.sessionSettingsPatches().count == 1)
+        #expect(await MainActor.run { !vm.composerCapabilityMutationDisabled })
 
         let patch = try #require(await transport.sessionSettingsPatches().first)
         #expect((patch.toolOverrides ?? nil)?.webSearch == false)
@@ -8504,34 +8461,31 @@ struct ChatViewModelTests {
         })
 
         await MainActor.run { vm.toggleComposerTool(server: "github", tool: "create_issue") }
-        try await waitUntil("inherited denial clears") {
-            guard await transport.sessionSettingsPatches().count == 1 else { return false }
-            return await MainActor.run {
-                !vm.composerCapabilityMutationDisabled &&
-                    vm.composerToolEnabled(server: "github", tool: "create_issue")
-            }
-        }
+        await vm.waitForPendingSessionSettings(for: vm.currentModelPatchTarget())
+        #expect(await transport.sessionSettingsPatches().count == 1)
+        #expect(await MainActor.run {
+            !vm.composerCapabilityMutationDisabled &&
+                vm.composerToolEnabled(server: "github", tool: "create_issue")
+        })
         #expect(await transport.sessionSettingsPatches()[0].toolOverrides == .some(nil))
 
         await MainActor.run { vm.toggleComposerTool(server: "github", tool: "create_issue") }
-        try await waitUntil("explicit denial applies") {
-            guard await transport.sessionSettingsPatches().count == 2 else { return false }
-            return await MainActor.run {
-                !vm.composerCapabilityMutationDisabled &&
-                    !vm.composerToolEnabled(server: "github", tool: "create_issue")
-            }
-        }
+        await vm.waitForPendingSessionSettings(for: vm.currentModelPatchTarget())
+        #expect(await transport.sessionSettingsPatches().count == 2)
+        #expect(await MainActor.run {
+            !vm.composerCapabilityMutationDisabled &&
+                !vm.composerToolEnabled(server: "github", tool: "create_issue")
+        })
         #expect(await (transport.sessionSettingsPatches()[1].toolOverrides ?? nil)?
             .mcpToolsDeny["github"] == ["create_issue"])
 
         await MainActor.run { vm.clearComposerToolOverrides() }
-        try await waitUntil("explicit denial clears") {
-            guard await transport.sessionSettingsPatches().count == 3 else { return false }
-            return await MainActor.run {
-                !vm.composerCapabilityMutationDisabled &&
-                    vm.composerToolEnabled(server: "github", tool: "create_issue")
-            }
-        }
+        await vm.waitForPendingSessionSettings(for: vm.currentModelPatchTarget())
+        #expect(await transport.sessionSettingsPatches().count == 3)
+        #expect(await MainActor.run {
+            !vm.composerCapabilityMutationDisabled &&
+                vm.composerToolEnabled(server: "github", tool: "create_issue")
+        })
         #expect(await transport.sessionSettingsPatches()[2].toolOverrides == .some(nil))
     }
 
@@ -8682,15 +8636,14 @@ struct ChatViewModelTests {
         try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-original")
         await vm.loadComposerCapabilities()
 
+        let patchTarget = await vm.currentModelPatchTarget()
         await MainActor.run { vm.selectComposerPermissionMode(.full) }
-        try await waitUntil("capability lease acquisition started") {
-            await leaseStarted.current() == 1
-        }
+        await leaseStarted.wait { $0 >= 1 }
+        #expect(await leaseStarted.current() == 1)
         await MainActor.run { vm.sessionId = "sess-replacement" }
         await leaseGate.open()
-        try await waitUntil("stale capability mutation released") {
-            await MainActor.run { !vm.composerCapabilityState.isMutating }
-        }
+        await vm.waitForPendingSessionSettings(for: patchTarget)
+        #expect(await MainActor.run { !vm.composerCapabilityState.isMutating })
 
         #expect(await transport.sessionSettingsPatches().isEmpty)
         #expect(await MainActor.run { vm.composerPermissionMode } == .guarded)
@@ -8729,15 +8682,15 @@ struct ChatViewModelTests {
         try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
         await vm.loadComposerCapabilities()
 
+        let patchTarget = await vm.currentModelPatchTarget()
         await MainActor.run { vm.selectComposerPermissionMode(.full) }
-        try await waitUntil("capability lease acquisition started") {
-            await leaseStarted.current() == 1
-        }
+        await leaseStarted.wait { $0 >= 1 }
+        #expect(await leaseStarted.current() == 1)
         await MainActor.run { vm.switchSession(to: "other") }
 
         #expect(await MainActor.run { !vm.composerCapabilityState.isMutating })
         await leaseGate.open()
-        try await Task.sleep(for: .milliseconds(20))
+        await vm.waitForPendingSessionSettings(for: patchTarget)
         #expect(await transport.sessionSettingsPatches().isEmpty)
     }
 
@@ -8767,22 +8720,18 @@ struct ChatViewModelTests {
         #expect(await MainActor.run { vm.composerCapabilityCatalog.canSelectFullPermission })
 
         transport.emit(.health(ok: false))
-        try await waitUntil("disconnect clears composer capability grants") {
-            await MainActor.run {
-                !vm.composerCapabilityCatalog.permissionMutationAvailable &&
-                    !vm.composerCapabilityCatalog.canSelectFullPermission
-            }
+        await waitForObservedState {
+            !vm.composerCapabilityCatalog.permissionMutationAvailable &&
+                !vm.composerCapabilityCatalog.canSelectFullPermission
         }
         transport.emit(.health(ok: true))
-        try await waitUntil("reconnect reloads same-session capability grants") {
-            let count = await calls.current()
-            let loaded = await MainActor.run {
-                vm.composerCapabilityCatalog.permissionMutationAvailable &&
-                    !vm.composerCapabilityCatalog.toolOverrideMutationAvailable &&
-                    !vm.composerCapabilityCatalog.canSelectFullPermission
-            }
-            return count == 2 && loaded
+        await calls.wait { $0 >= 2 }
+        await waitForObservedState {
+            vm.composerCapabilityCatalog.permissionMutationAvailable &&
+                !vm.composerCapabilityCatalog.toolOverrideMutationAvailable &&
+                !vm.composerCapabilityCatalog.canSelectFullPermission
         }
+        #expect(await calls.current() == 2)
 
         await MainActor.run {
             vm.selectComposerPermissionMode(.full)
@@ -8824,7 +8773,8 @@ struct ChatViewModelTests {
         #expect(await MainActor.run { vm.composerCapabilityCatalog.skills.map(\.key) == ["stale"] })
 
         let load = Task { await vm.loadComposerCapabilities(force: true) }
-        try await waitUntil("capability reload started") { await calls.current() == 2 }
+        await calls.wait { $0 >= 2 }
+        #expect(await calls.current() == 2)
         #expect(await MainActor.run {
             vm.composerCapabilityCatalog.skills.isEmpty && vm.composerCapabilityMutationDisabled
         })
@@ -8859,21 +8809,13 @@ struct ChatViewModelTests {
 
         let (transport, vm) = await makeViewModel(historyResponses: [before, after])
         try await loadAndWaitBootstrap(vm: vm)
-        try await waitUntil("initial history loaded") {
-            await MainActor.run { vm.messages.first?.content.first?.text == "before compact" }
-        }
+        #expect(await MainActor.run { vm.messages.first?.content.first?.text == "before compact" })
 
-        await MainActor.run {
-            vm.input = "/compact"
-            vm.send()
-        }
+        await sendUserMessage(vm, text: "/compact")?.value
 
-        try await waitUntil("compact called") {
-            await transport.compactSessionKeys() == ["main"]
-        }
-        try await waitUntil("history reloaded") {
-            await MainActor.run { vm.messages.first?.content.first?.text == "after compact" }
-        }
+        #expect(await transport.compactSessionKeys() == ["main"])
+        await vm.bootstrapTask?.value
+        #expect(await MainActor.run { vm.messages.first?.content.first?.text == "after compact" })
         #expect(await transport.lastSentRunId() == nil)
     }
 
@@ -8889,22 +8831,15 @@ struct ChatViewModelTests {
             })
         try await loadAndWaitBootstrap(vm: vm)
 
-        await MainActor.run {
-            vm.input = "/compact"
-            vm.send()
-        }
+        await sendUserMessage(vm, text: "/compact")?.value
 
-        try await waitUntil("compact command settled") {
-            let keys = await transport.compactSessionKeys()
-            return await MainActor.run { keys == ["main"] && !vm.isSubmittingDraft }
-        }
-        try await waitUntil("compact failure settled") {
-            await MainActor.run { !vm.isLoading && vm.canRequestSessionCompact }
-        }
+        #expect(await transport.compactSessionKeys() == ["main"])
+        #expect(await MainActor.run { !vm.isSubmittingDraft })
+        #expect(await MainActor.run { !vm.isLoading && vm.canRequestSessionCompact })
         #expect(await MainActor.run { vm.errorText } == "Unable to compact the thread. Please try again.")
     }
 
-    @Test func `compact trigger ignores concurrent and immediate repeat requests`() async throws {
+    @Test @MainActor func `compact trigger ignores concurrent and immediate repeat requests`() async throws {
         let before = historyPayload(
             messages: [
                 chatTextMessage(role: "assistant", text: "before compact", timestamp: 1),
@@ -8920,40 +8855,31 @@ struct ChatViewModelTests {
                 await gate.wait()
             })
         try await loadAndWaitBootstrap(vm: vm)
-        #expect(await MainActor.run { vm.canRequestSessionCompact })
+        #expect(vm.canRequestSessionCompact)
 
-        await MainActor.run {
-            vm.input = "/compact"
-            vm.send()
-            vm.input = "/compact"
-            vm.send()
-        }
+        vm.input = "/compact"
+        let compact = vm.send()
+        vm.input = "/compact"
+        vm.send()
 
-        try await waitUntil("single compact request issued") {
-            await transport.compactSessionKeys() == ["main"]
-        }
-        #expect(await MainActor.run { !vm.canRequestSessionCompact })
-        #expect(await MainActor.run { vm.errorText } == nil)
+        await transport.waitForState { $0.compactSessionKeys.count >= 1 }
+        #expect(await transport.compactSessionKeys() == ["main"])
+        #expect(!vm.canRequestSessionCompact)
+        #expect(vm.errorText == nil)
 
         await gate.open()
-        try await waitUntil("history reloaded after compact") {
-            await MainActor.run {
-                vm.messages.first?.content.first?.text == "after compact" && !vm.isLoading
-            }
-        }
-        #expect(await MainActor.run { vm.canRequestSessionCompact })
+        await compact?.value
+        #expect(vm.canRequestSessionCompact)
 
-        await MainActor.run {
-            vm.input = "/compact"
-            vm.send()
-        }
+        // Retry before the separately scheduled bootstrap can consume the cooldown under actor load.
+        vm.input = "/compact"
+        await vm.send()?.value
 
-        try await waitUntil("compact cooldown rejects immediate retry") {
-            await MainActor.run {
-                vm.errorText == "Please wait before compacting this thread again."
-            }
-        }
+        #expect(vm.errorText == "Please wait before compacting this thread again.")
         #expect(await transport.compactSessionKeys() == ["main"])
+        await vm.bootstrapTask?.value
+        #expect(vm.messages.first?.content.first?.text == "after compact" && !vm.isLoading)
+        #expect(vm.canRequestSessionCompact)
     }
 
     @Test func `compact trigger allows immediate retry after failure`() async throws {
@@ -8972,29 +8898,17 @@ struct ChatViewModelTests {
             })
         try await loadAndWaitBootstrap(vm: vm)
 
-        await MainActor.run {
-            vm.input = "/compact"
-            vm.send()
-        }
+        await sendUserMessage(vm, text: "/compact")?.value
 
-        try await waitUntil("first compact command settled") {
-            let keys = await transport.compactSessionKeys()
-            return await MainActor.run { keys == ["main"] && !vm.isSubmittingDraft }
-        }
-        try await waitUntil("first compact failure settled") {
-            await MainActor.run { !vm.isLoading && vm.canRequestSessionCompact }
-        }
+        #expect(await transport.compactSessionKeys() == ["main"])
+        #expect(await MainActor.run { !vm.isSubmittingDraft })
+        #expect(await MainActor.run { !vm.isLoading && vm.canRequestSessionCompact })
         #expect(await MainActor.run { vm.errorText } == "Unable to compact the thread. Please try again.")
 
-        await MainActor.run {
-            vm.input = "/compact"
-            vm.send()
-        }
+        await sendUserMessage(vm, text: "/compact")?.value
 
-        try await waitUntil("second compact command settled") {
-            let keys = await transport.compactSessionKeys()
-            return await MainActor.run { keys == ["main", "main"] && !vm.isSubmittingDraft }
-        }
+        #expect(await transport.compactSessionKeys() == ["main", "main"])
+        #expect(await MainActor.run { !vm.isSubmittingDraft })
         #expect(await MainActor.run { vm.errorText } == nil)
     }
 
@@ -9017,9 +8931,7 @@ struct ChatViewModelTests {
             commandResponses: [commands])
 
         await MainActor.run { vm.loadSlashCommandsIfNeeded() }
-        try await waitUntil("slash commands loaded") {
-            await MainActor.run { vm.hasLoadedSlashCommands }
-        }
+        await waitForObservedState { vm.hasLoadedSlashCommands }
 
         let allMatches = await MainActor.run {
             vm.slashCommandMatches(query: "/", filter: .all).map(\.name)
@@ -9072,9 +8984,7 @@ struct ChatViewModelTests {
             commandResponses: [commands])
 
         await MainActor.run { vm.loadSlashCommandsIfNeeded() }
-        try await waitUntil("slash commands loaded") {
-            await MainActor.run { vm.hasLoadedSlashCommands }
-        }
+        await waitForObservedState { vm.hasLoadedSlashCommands }
 
         #expect(await transport.commandSessionKeys() == ["agent:reviewer:main"])
     }
@@ -9127,13 +9037,6 @@ struct ChatViewModelTests {
             modelResponses: [models])
 
         try await loadAndWaitBootstrap(vm: vm)
-        try await waitUntil("model metadata bootstrap") {
-            await MainActor.run {
-                vm.showsModelPicker
-                    && vm.modelSelectionID == "anthropic/claude-opus-4-6"
-                    && vm.defaultModelLabel == "Default: openai/gpt-4.1-mini"
-            }
-        }
 
         #expect(await MainActor.run { vm.showsModelPicker })
         #expect(await MainActor.run { vm.modelSelectionID } == "anthropic/claude-opus-4-6")
@@ -9174,9 +9077,8 @@ struct ChatViewModelTests {
         #expect(vm.modelSelectionTargetDescription == "Changes the global default")
 
         vm.selectModel("openai/gpt-5.4")
-        try await waitUntil("model selection completed") {
-            await transport.patchedModels() == ["openai/gpt-5.4"]
-        }
+        await vm.waitForPendingSessionSettings(for: vm.currentModelPatchTarget())
+        #expect(await transport.patchedModels() == ["openai/gpt-5.4"])
         #expect(vm.modelSelectionTargetDescription == "Changes the global default")
         #expect(modelPickerStore.favorites == [pinnedID])
 
@@ -9245,10 +9147,9 @@ struct ChatViewModelTests {
             vm.handleTransportEvent(.routeChanged)
         } else {
             vm.switchSession(to: "other")
+            await vm.bootstrapTask?.value
         }
-        try await waitUntil("replacement catalog applies") {
-            await MainActor.run { vm.modelChoices == [current] }
-        }
+        await waitForObservedState { vm.modelChoices == [current] }
         await gate.release()
         await pending.value
 
@@ -9392,16 +9293,12 @@ struct ChatViewModelTests {
         vm.input = "hello"
         #expect(!vm.canSend)
 
-        transport.emit(.chatMetadataChanged)
-        try await waitUntil("credential recovery refreshes model catalog") {
-            await MainActor.run { vm.modelChoices.first?.available == true }
-        }
+        await vm.handleTransportEvent(.chatMetadataChanged)?.value
+        #expect(await MainActor.run { vm.modelChoices.first?.available == true })
         #expect(vm.canSend)
 
         transport.emit(.seqGap)
-        try await waitUntil("sequence recovery refreshes model catalog") {
-            await MainActor.run { vm.modelChoices.first?.unavailableReason == "cooldown" }
-        }
+        await waitForObservedState { vm.modelChoices.first?.unavailableReason == "cooldown" }
         #expect(vm.canSend)
     }
 
@@ -9431,14 +9328,12 @@ struct ChatViewModelTests {
         #expect(vm.modelChoices.first?.available == false)
 
         vm.handleTransportEvent(.seqGap)
-        try await waitUntil("sequence recovery catalog refresh starts") {
-            await transport.modelAgentIDs().count >= 2
-        }
-        vm.handleTransportEvent(.chatMetadataChanged)
+        await transport.waitForState { $0.modelAgentIDs.count >= 2 }
+        #expect(await transport.modelAgentIDs().count >= 2)
+        let metadata = vm.handleTransportEvent(.chatMetadataChanged)
         await sequenceRecoveryGate.open()
-        try await waitUntil("metadata refresh clears the stale auth gate") {
-            await MainActor.run { vm.modelChoices.first?.available == true }
-        }
+        await metadata?.value
+        #expect(await MainActor.run { vm.modelChoices.first?.available == true })
     }
 
     @Test(arguments: ["main", "agent:main:main"], [false, true])
@@ -9449,7 +9344,7 @@ struct ChatViewModelTests {
     {
         let recovered = chatTextMessage(role: "assistant", text: "Stored message recovered", timestamp: 1)
         let historyCalls = AsyncCounter()
-        let (transport, vm) = await makeViewModel(
+        let (_, vm) = await makeViewModel(
             activeAgentId: "main",
             historyResponses: [
                 historyPayload(canonicalKey: "agent:main:main", agentId: "main"),
@@ -9472,16 +9367,16 @@ struct ChatViewModelTests {
         try await loadAndWaitBootstrap(vm: vm)
         #expect(vm.messages.isEmpty)
 
-        transport.emit(.sessionsChanged(.init(
+        vm.handleTransportEvent(.sessionsChanged(.init(
             sessionKey: eventSessionKey,
             agentId: "main",
             phase: "message")))
 
-        try await waitUntil("committed message recovers after invalidation") {
-            await MainActor.run {
-                vm.messages.contains { $0.content.contains { $0.text == "Stored message recovered" } }
-            }
-        }
+        let refresh = try #require(vm.historyInvalidationRefresh?.task)
+        await refresh.value
+        #expect(await MainActor.run {
+            vm.messages.contains { $0.content.contains { $0.text == "Stored message recovered" } }
+        })
         #expect(await historyCalls.current() == (refusesFirstRefresh ? 3 : 2))
     }
 
@@ -9507,7 +9402,8 @@ struct ChatViewModelTests {
         do {
             try await loadAndWaitBootstrap(vm: vm)
             transport.emit(.sessionsChanged(.init(sessionKey: "main", agentId: "main", phase: "message")))
-            try await waitUntil("refused invalidation retries its history read") { await historyCalls.current() == 3 }
+            await historyCalls.wait { $0 >= 3 }
+            #expect(await historyCalls.current() == 3)
             refresh = vm.historyInvalidationRefresh?.task
             let pending = try #require(refresh)
 
@@ -9515,16 +9411,12 @@ struct ChatViewModelTests {
                 sessionKey: "agent:main:main",
                 message: cacheMessage(role: "assistant", text: "Incremental message B", timestamp: 2),
                 messageId: "message-b", messageSeq: 2)))
-            try await waitUntil("newer incremental message is visible before recovery") {
-                await MainActor.run {
-                    vm.messages.contains { $0.content.contains { $0.text == "Incremental message B" } }
-                }
+            await waitForObservedState {
+                vm.messages.contains { $0.content.contains { $0.text == "Incremental message B" } }
             }
             await recoveryGate.open()
-            try await waitUntil("incremental message recovery settles") {
-                await MainActor.run { vm.historyInvalidationRefresh == nil }
-            }
             await pending.value
+            #expect(vm.historyInvalidationRefresh == nil)
             #expect(vm.messages.flatMap { $0.content.compactMap(\.text) } == [
                 "Missing message A", "Incremental message B",
             ])
@@ -9565,26 +9457,26 @@ struct ChatViewModelTests {
         do {
             try await loadAndWaitBootstrap(vm: vm)
             transport.emit(.sessionsChanged(.init(sessionKey: "global", agentId: "main", phase: "message")))
-            try await waitUntil("invalidation history read starts") { await historyCalls.current() == 2 }
+            await historyCalls.wait { $0 >= 2 }
+            #expect(await historyCalls.current() == 2)
             refresh = vm.historyInvalidationRefresh?.task
             let pending = try #require(refresh)
+            var replacement: Task<Void, Never>?
             switch retirement {
             case "session": vm.switchSession(to: "other")
             case "agent": vm.syncActiveAgentId("other")
-            case "route": transport.emit(.routeChanged)
+            case "route": replacement = vm.handleTransportEvent(.routeChanged)
             case "newer-history": vm.refresh()
             default: vm.detachTransport()
             }
             if retirement != "detach" {
-                try await waitUntil("replacement history applies before refusal") {
-                    await MainActor.run { vm.sessionId == "replacement" }
-                }
+                if retirement != "route" { replacement = vm.bootstrapTask }
+                await replacement?.value
+                #expect(await MainActor.run { vm.sessionId == "replacement" })
             }
             await refusalGate.open()
-            try await waitUntil("retired invalidation owner settles") {
-                await MainActor.run { vm.historyInvalidationRefresh == nil }
-            }
             await pending.value
+            #expect(vm.historyInvalidationRefresh == nil)
             #expect(await historyCalls.current() == (retirement == "detach" ? 2 : 3))
             #expect(vm.messages.flatMap { $0.content.compactMap(\.text) } ==
                 (retirement == "detach" ? [] : ["Current transcript"]))
@@ -9622,14 +9514,13 @@ struct ChatViewModelTests {
         do {
             try await loadAndWaitBootstrap(vm: vm)
             transport.emit(.sessionsChanged(.init(sessionKey: "main", agentId: "main", phase: "message")))
-            try await waitUntil("authoritative history refusal starts") { await historyCalls.current() == 2 }
+            await historyCalls.wait { $0 >= 2 }
+            #expect(await historyCalls.current() == 2)
             refresh = vm.historyInvalidationRefresh?.task
             let pending = try #require(refresh)
             await refusalGate.open()
-            try await waitUntil("authoritative history refusal settles") {
-                await MainActor.run { vm.historyInvalidationRefresh == nil }
-            }
             await pending.value
+            #expect(vm.historyInvalidationRefresh == nil)
             #expect(await historyCalls.current() == 2)
             #expect(vm.messages.isEmpty)
         } catch {
@@ -9663,14 +9554,13 @@ struct ChatViewModelTests {
             #expect(discarded.value?.isLoading == false)
             #expect(discarded.value?.healthOK == true)
             transport.emit(.sessionsChanged(.init(sessionKey: "main", agentId: "main", phase: "message")))
-            try await waitUntil("abandonment history refusal starts") { await historyCalls.current() == 2 }
+            await historyCalls.wait { $0 >= 2 }
+            #expect(await historyCalls.current() == 2)
             refresh = viewModel?.historyInvalidationRefresh?.task
             let pending = try #require(refresh)
             viewModel = nil
-            try await waitUntil("retry backoff releases its abandoned presentation") {
-                await MainActor.run { discarded.value == nil }
-            }
             await pending.value
+            #expect(discarded.value == nil)
             #expect(await historyCalls.current() == 2)
         } catch {
             let pending = refresh ?? discarded.value?.historyInvalidationRefresh?.task
@@ -9695,7 +9585,7 @@ struct ChatViewModelTests {
             name: "Claude Opus 4.6",
             available: false,
             unavailableReason: "cooldown")
-        let (transport, vm) = await makeViewModel(
+        let (_, vm) = await makeViewModel(
             historyResponses: [historyPayload()],
             sessionsResponses: [sessionsResponse(sessionEntry(
                 key: "main",
@@ -9708,16 +9598,12 @@ struct ChatViewModelTests {
         vm.input = "hello"
         #expect(!vm.canSend)
 
-        transport.emit(.sessionsChanged(.init(sessionKey: "main", reason: "patch")))
-        try await waitUntil("patch refresh clears auth gate") {
-            await MainActor.run { vm.modelChoices.first?.available == true }
-        }
+        await vm.handleTransportEvent(.sessionsChanged(.init(sessionKey: "main", reason: "patch")))?.value
+        #expect(await MainActor.run { vm.modelChoices.first?.available == true })
         #expect(vm.canSend)
 
-        transport.emit(.sessionsChanged(.init(sessionKey: "main", reason: "command-metadata")))
-        try await waitUntil("command metadata refresh replaces availability") {
-            await MainActor.run { vm.modelChoices.first?.unavailableReason == "cooldown" }
-        }
+        await vm.handleTransportEvent(.sessionsChanged(.init(sessionKey: "main", reason: "command-metadata")))?.value
+        #expect(await MainActor.run { vm.modelChoices.first?.unavailableReason == "cooldown" })
         #expect(vm.canSend)
     }
 
@@ -9753,9 +9639,8 @@ struct ChatViewModelTests {
         #expect(!vm.canSend)
 
         let staleRefresh = Task { await vm.fetchModels() }
-        try await waitUntil("stale catalog refresh starts") {
-            await transport.modelAgentIDs().count >= 2
-        }
+        await transport.waitForState { $0.modelAgentIDs.count >= 2 }
+        #expect(await transport.modelAgentIDs().count >= 2)
         await vm.fetchModels()
         #expect(vm.canSend)
         await staleRefreshGate.open()
@@ -9791,13 +9676,11 @@ struct ChatViewModelTests {
         try await loadAndWaitBootstrap(vm: vm)
 
         let refresh = Task { await vm.fetchModels() }
-        try await waitUntil("catalog refresh starts") {
-            await transport.modelAgentIDs().count >= 2
-        }
+        await transport.waitForState { $0.modelAgentIDs.count >= 2 }
+        #expect(await transport.modelAgentIDs().count >= 2)
         vm.selectModel(next.selectionID)
-        try await waitUntil("model selection completes") {
-            await transport.patchedModels() == [next.selectionID]
-        }
+        await vm.waitForPendingSessionSettings(for: vm.currentModelPatchTarget())
+        #expect(await transport.patchedModels() == [next.selectionID])
         await refreshGate.open()
         await refresh.value
 
@@ -9893,7 +9776,7 @@ struct ChatViewModelTests {
             modelAvailabilityIsSessionScoped: true)
         try await loadAndWaitBootstrap(vm: vm)
         transport.emit(.health(ok: false))
-        try await waitUntil("chat becomes offline") { await MainActor.run { !vm.healthOK } }
+        await waitForObservedState { !vm.healthOK }
         vm.input = "queue me"
 
         #expect(vm.composerModelAvailabilityMessage == nil)
@@ -9921,10 +9804,8 @@ struct ChatViewModelTests {
 
         await MainActor.run { vm.selectModel(OpenClawChatViewModel.defaultModelSelectionID) }
 
-        try await waitUntil("session model patched") {
-            let patched = await transport.patchedModels()
-            return patched == [nil]
-        }
+        await vm.waitForPendingSessionSettings(for: vm.currentModelPatchTarget())
+        #expect(await transport.patchedModels() == [nil])
 
         #expect(await MainActor.run { vm.modelSelectionID } == OpenClawChatViewModel.defaultModelSelectionID)
     }
@@ -9951,9 +9832,8 @@ struct ChatViewModelTests {
 
         try await loadAndWaitBootstrap(vm: vm)
         await MainActor.run { vm.selectModel(selectedID) }
-        try await waitUntil("successful model selection recorded as recent") {
-            await MainActor.run { vm.modelPickerSections.recent.map(\.selectionID) == [selectedID] }
-        }
+        await vm.waitForPendingSessionSettings(for: vm.currentModelPatchTarget())
+        #expect(await MainActor.run { vm.modelPickerSections.recent.map(\.selectionID) == [selectedID] })
         #expect(await transport.patchedModels() == [selectedID])
         #expect(modelPickerStore.recents == [selectedID])
 
@@ -9990,10 +9870,8 @@ struct ChatViewModelTests {
 
         await MainActor.run { vm.selectModel("openai/gpt-4.1-mini") }
 
-        try await waitUntil("provider-qualified model patched") {
-            let patched = await transport.patchedModels()
-            return patched == ["openai/gpt-4.1-mini"]
-        }
+        await vm.waitForPendingSessionSettings(for: vm.currentModelPatchTarget())
+        #expect(await transport.patchedModels() == ["openai/gpt-4.1-mini"])
     }
 
     @Test func `slash model I ds stay provider qualified in selection and patch`() async throws {
@@ -10018,10 +9896,8 @@ struct ChatViewModelTests {
 
         await MainActor.run { vm.selectModel("vercel-ai-gateway/openai/gpt-5.4") }
 
-        try await waitUntil("slash model patched with provider-qualified ref") {
-            let patched = await transport.patchedModels()
-            return patched == ["vercel-ai-gateway/openai/gpt-5.4"]
-        }
+        await vm.waitForPendingSessionSettings(for: vm.currentModelPatchTarget())
+        #expect(await transport.patchedModels() == ["vercel-ai-gateway/openai/gpt-5.4"])
     }
 
     @Test @MainActor func `stale model patch completions do not overwrite newer selection`() async throws {
@@ -10099,17 +9975,14 @@ struct ChatViewModelTests {
             vm.selectModel("openai/gpt-first")
             vm.selectModel("openai/gpt-second")
         }
-        try await waitUntil("first model patch starts") {
-            await transport.patchedModels() == ["openai/gpt-first"]
-        }
+        await transport.waitForState { $0.patchedModels.count >= 1 }
+        #expect(await transport.patchedModels() == ["openai/gpt-first"])
         try await Task.sleep(for: .milliseconds(50))
         #expect(await transport.patchedModels() == ["openai/gpt-first"])
 
         await firstPatchGate.open()
-        try await waitUntil("second model patch follows first") {
-            await transport.patchedModels() == ["openai/gpt-first", "openai/gpt-second"]
-        }
-        await vm.waitForPendingSessionSettings(in: "main")
+        await vm.waitForPendingSessionSettings(for: vm.currentModelPatchTarget())
+        #expect(await transport.patchedModels() == ["openai/gpt-first", "openai/gpt-second"])
         #expect(await MainActor.run { vm.modelSelectionID } == "openai/gpt-second")
         #expect(await MainActor.run { vm.sessions.first?.model } == "gpt-second")
     }
