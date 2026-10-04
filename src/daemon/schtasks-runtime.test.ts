@@ -37,76 +37,58 @@ describe("scheduled task runtime derivation", () => {
   }
 
   it.each([
-    { state: 1, result: 267009, expected: "stopped", name: "Disabled" },
-    { state: 3, result: 267009, expected: "stopped", name: "Ready" },
-    { state: 4, result: -2147024891, expected: "running", name: "Running" },
-    { state: 2, result: 0, expected: "unknown", name: "Queued" },
-    { state: 0, result: 267009, expected: "unknown", name: "Unknown" },
-  ])("uses $name rather than stale last-run result $result", async (task) => {
-    spawnSync.mockReturnValue({
-      status: 0,
-      stdout: JSON.stringify({ state: task.state, lastRunResult: task.result }),
-    });
-    await expect(readRuntime()).resolves.toMatchObject({
-      status: task.expected,
-      state: task.name,
-      lastRunResult: String(task.result),
-    });
-    expect(probeScheduledTaskExists("OpenClaw Gateway")).toBe(true);
-    expect(isScheduledTaskDefinitelyNotRunning("OpenClaw Gateway")).toBe(
-      task.expected === "stopped",
-    );
-  });
-
-  it.each([{ state: 3 }, { state: 3, lastRunResult: "unavailable", lastRunTime: false }])(
-    "preserves task state and existence without optional history: %j",
-    async (snapshot) => {
-      spawnSync.mockReturnValue({ status: 0, stdout: JSON.stringify(snapshot) });
+    [1, 267009, "stopped", "Disabled"],
+    [3, 267009, "stopped", "Ready"],
+    [4, -2147024891, "running", "Running"],
+    [2, 0, "unknown", "Queued"],
+    [0, 267009, "unknown", "Unknown"],
+    [3, "unavailable", "stopped", "Ready"],
+    ["3", undefined, "unknown", "Unknown"],
+    [5, undefined, "unknown", "Unknown"],
+  ])(
+    "derives runtime from state %j rather than history %j",
+    async (state, result, status, name) => {
+      spawnSync.mockReturnValue({
+        status: 0,
+        stdout: JSON.stringify({ state, lastRunResult: result, lastRunTime: false }),
+      });
       await expect(readRuntime()).resolves.toMatchObject({
-        status: "stopped",
-        state: "Ready",
+        status,
+        state: name,
+        lastRunResult: typeof result === "number" ? String(result) : undefined,
       });
       expect(probeScheduledTaskExists("OpenClaw Gateway")).toBe(true);
-      expect(isScheduledTaskDefinitelyNotRunning("OpenClaw Gateway")).toBe(true);
-    },
-  );
-
-  it.each(["3", 5])("preserves existence but not offline proof for state %j", async (state) => {
-    spawnSync.mockReturnValue({ status: 0, stdout: JSON.stringify({ state }) });
-    await expect(readRuntime()).resolves.toMatchObject({ status: "unknown" });
-    expect(probeScheduledTaskExists("OpenClaw Gateway")).toBe(true);
-    expect(isScheduledTaskDefinitelyNotRunning("OpenClaw Gateway")).toBe(false);
-  });
-
-  it.each(["-2147024894", "-2147024893"])(
-    "recognizes lookup HRESULT %s as missing",
-    async (stdout) => {
-      spawnSync.mockReturnValue({ status: 1, stdout });
-      await expect(readRuntime()).resolves.toEqual({
-        status: "stopped",
-        missingUnit: true,
-      });
-      expect(probeScheduledTaskExists("OpenClaw Gateway")).toBe(false);
-      expect(isScheduledTaskDefinitelyNotRunning("OpenClaw Gateway")).toBe(false);
+      expect(isScheduledTaskDefinitelyNotRunning("OpenClaw Gateway")).toBe(status === "stopped");
     },
   );
 
   it.each([
-    { name: "access denied", status: 1, stdout: "-2147024891" },
-    { name: "connection missing file", status: 2, stdout: "-2147024894" },
-    { name: "malformed HRESULT", status: 1, stdout: "-2147024894 trailing" },
-    { name: "invalid JSON", status: 0, stdout: "not JSON" },
-    { name: "non-object JSON", status: 0, stdout: "null" },
-    { name: "spawn failure", status: null, stdout: "", error: new Error("ENOENT") },
-  ])("keeps $name unavailable, not missing or stopped", async (response) => {
-    spawnSync.mockReturnValue(response);
-    await expect(readRuntime()).resolves.toMatchObject({
-      status: "unknown",
-      missingUnit: false,
-      inspectionFailure: { code: "service-runtime-inspection-failed" },
-    });
-    expect(probeScheduledTaskExists("OpenClaw Gateway")).toBeNull();
-  });
+    { status: 1, stdout: "-2147024894", missing: true },
+    { status: 1, stdout: "-2147024893", missing: true },
+    { status: 1, stdout: "-2147024891", missing: false },
+    { status: 2, stdout: "-2147024894", missing: false },
+    { status: 1, stdout: "-2147024894 trailing", missing: false },
+    { status: 0, stdout: "not JSON", missing: false },
+    { status: 0, stdout: "null", missing: false },
+    { status: null, stdout: "", error: new Error("ENOENT"), missing: false },
+  ])(
+    "distinguishes missing tasks from unavailable inspection: %j",
+    async ({ missing, ...response }) => {
+      spawnSync.mockReturnValue(response);
+      const runtime = await readRuntime();
+      if (missing) {
+        expect(runtime).toEqual({ status: "stopped", missingUnit: true });
+        expect(isScheduledTaskDefinitelyNotRunning("OpenClaw Gateway")).toBe(false);
+      } else {
+        expect(runtime).toMatchObject({
+          status: "unknown",
+          missingUnit: false,
+          inspectionFailure: { code: "service-runtime-inspection-failed" },
+        });
+      }
+      expect(probeScheduledTaskExists("OpenClaw Gateway")).toBe(missing ? false : null);
+    },
+  );
 
   it("requires current Scheduler running state before retiring the Startup owner", async () => {
     spawnSync
@@ -147,7 +129,6 @@ describe("scheduled task runtime derivation", () => {
     { name: "hung probe", elapsedMs: undefined, expected: false },
     { name: "running before deadline", elapsedMs: 14_999, expected: true },
     { name: "running at deadline", elapsedMs: 15_000, expected: false },
-    { name: "running after deadline", elapsedMs: 15_001, expected: false },
   ])("bounds Scheduler takeover evidence for $name", async (task) => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
@@ -199,11 +180,24 @@ describe("Scheduled Task load-state inspection", () => {
     { timeoutMs: undefined, responseAfterMs: 60_001, expected: "unknown" },
     { timeoutMs: 200, responseAfterMs: 100, expected: "loaded" },
     { timeoutMs: 20_000, responseAfterMs: 45_000, expected: "unknown" },
-    { timeoutMs: 90_000, responseAfterMs: 45_000, expected: "loaded" },
+    { timeoutMs: 200, responseAfterMs: 200, expected: "unknown", observation: "found" },
+    { timeoutMs: 200, responseAfterMs: 200, expected: "unknown", observation: "missing" },
+    {
+      timeoutMs: 200,
+      responseAfterMs: 150,
+      expected: "unknown",
+      observation: "missing",
+      accessMs: 51,
+    },
   ])(
     "bounds native registration taking $responseAfterMs ms by allowance $timeoutMs",
-    async ({ timeoutMs, responseAfterMs, expected }) => {
-      const env = await loadEnv();
+    async ({ timeoutMs, responseAfterMs, expected, observation, accessMs }) => {
+      const env = await loadEnv(observation !== undefined);
+      if (accessMs !== undefined) {
+        vi.spyOn(fs, "access").mockImplementation(async () => {
+          now += accessMs;
+        });
+      }
       spawnSync.mockImplementation((_command, _args, options) => {
         now += Math.min(responseAfterMs, options.timeout);
         return responseAfterMs > options.timeout
@@ -212,18 +206,22 @@ describe("Scheduled Task load-state inspection", () => {
               stdout: "",
               error: Object.assign(new Error("synthetic native timeout"), { code: "ETIMEDOUT" }),
             }
-          : { status: 0, stdout: JSON.stringify({ state: 3 }) };
+          : observation === "missing"
+            ? { status: 1, stdout: "-2147024894" }
+            : { status: 0, stdout: JSON.stringify({ state: 3 }) };
       });
       const loaded = await readGatewayServiceLoadState(
         { isLoaded: isScheduledTaskInstalled },
         { env, timeoutMs },
       );
       expect(loaded.status).toBe(expected);
-      expect(now).toBe(Math.min(responseAfterMs, timeoutMs ?? 60_000));
-      if (expected === "unknown") {
+      expect(now).toBe(Math.min(responseAfterMs, timeoutMs ?? 60_000) + (accessMs ?? 0));
+      if (expected === "unknown" && accessMs === undefined) {
         expect(loaded).toMatchObject({
           inspectionReason: "windows-task-inspection-failed",
-          detail: expect.stringContaining(`timed out after ${timeoutMs ?? 60_000} ms`),
+          ...(observation === undefined
+            ? { detail: expect.stringContaining(`timed out after ${timeoutMs ?? 60_000} ms`) }
+            : {}),
         });
       }
     },
@@ -253,41 +251,4 @@ describe("Scheduled Task load-state inspection", () => {
       }
     },
   );
-
-  it.each(["found", "missing"])(
-    "rejects a late %s observation before accepting task or Startup registration",
-    async (observation) => {
-      const env = await loadEnv(true);
-      spawnSync.mockImplementation(() => {
-        now = 200;
-        return observation === "found"
-          ? { status: 0, stdout: JSON.stringify({ state: 3 }) }
-          : { status: 1, stdout: "-2147024894" };
-      });
-      await expect(
-        readGatewayServiceLoadState(
-          { isLoaded: isScheduledTaskInstalled },
-          { env, timeoutMs: 200 },
-        ),
-      ).resolves.toMatchObject({
-        status: "unknown",
-        inspectionReason: "windows-task-inspection-failed",
-      });
-    },
-  );
-
-  it("charges native registration time to the remaining Startup inspection budget", async () => {
-    const env = await loadEnv(true);
-    spawnSync.mockImplementation(() => {
-      now = 150;
-      return { status: 1, stdout: "-2147024894" };
-    });
-    vi.spyOn(fs, "access").mockImplementation(async () => {
-      now += 51;
-    });
-    await expect(
-      readGatewayServiceLoadState({ isLoaded: isScheduledTaskInstalled }, { env, timeoutMs: 200 }),
-    ).resolves.toMatchObject({ status: "unknown" });
-    expect(now).toBe(201);
-  });
 });

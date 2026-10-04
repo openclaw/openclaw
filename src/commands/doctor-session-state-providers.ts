@@ -63,11 +63,7 @@ function resolveConfiguredDoctorSessionStateRoute(params: {
     return undefined;
   }
   const primary = resolveDefaultModelForAgent({ cfg: params.cfg, agentId });
-  const configuredModelRefs = new Set<string>();
-  const addRef = (provider: string, model: string) => {
-    configuredModelRefs.add(modelKey(provider, model));
-  };
-  addRef(primary.provider, primary.model);
+  const configuredModelRefs = new Set([modelKey(primary.provider, primary.model)]);
   const fallbacks =
     resolveAgentModelFallbacksOverride(params.cfg, agentId) ??
     resolveAgentModelFallbackValues(params.cfg.agents?.defaults?.model);
@@ -77,7 +73,7 @@ function resolveConfiguredDoctorSessionStateRoute(params: {
       allowPluginNormalization: false,
     });
     if (parsed) {
-      addRef(parsed.provider, parsed.model);
+      configuredModelRefs.add(modelKey(parsed.provider, parsed.model));
     }
   }
   const runtime = resolveAgentHarnessPolicy({
@@ -94,7 +90,10 @@ function resolveConfiguredDoctorSessionStateRoute(params: {
   };
 }
 
-function entryMayContainPluginSessionRouteState(sessionKey: string, entry: SessionEntry): boolean {
+function entryMayContainPluginSessionRouteState(
+  sessionKey: string,
+  entry: SessionEntry,
+): entry is SessionEntry & Record<string, unknown> {
   if (isValidAgentHarnessSessionStoreEntry(sessionKey, entry)) {
     return false;
   }
@@ -168,24 +167,6 @@ function addReason(reasons: string[], reason: string) {
   }
 }
 
-function routeAllowsOwnerState(params: {
-  owner: DoctorSessionRouteStateOwner;
-  route: DoctorSessionRouteState | undefined;
-}): boolean {
-  const providerIds = normalizeIdSet(params.owner.providerIds);
-  const runtimeIds = normalizeIdSet(params.owner.runtimeIds);
-  const routeRuntime = normalizeString(params.route?.runtime);
-  if (routeRuntime && runtimeIds.has(normalizeProviderId(routeRuntime))) {
-    return true;
-  }
-  return (
-    params.route?.configuredModelRefs.some((ref) => {
-      const slash = ref.indexOf("/");
-      return slash > 0 && providerIds.has(normalizeProviderId(ref.slice(0, slash)));
-    }) ?? false
-  );
-}
-
 function hasOwnedCliSession(params: {
   entry: Record<string, unknown>;
   cliSessionKeys: readonly string[];
@@ -226,10 +207,16 @@ function scanEntryForOwner(params: {
   const runtimeIds = normalizeIdSet(params.owner.runtimeIds);
   const cliSessionKeys = [...normalizeIdSet(params.owner.cliSessionKeys)];
   const authProfilePrefixes = normalizeStringEntriesLower(params.owner.authProfilePrefixes);
-  const routeAllowsOwner = routeAllowsOwnerState({ owner: params.owner, route: params.route });
   const routeRuntime = normalizeString(params.route?.runtime);
   const routeAllowsOwnerRuntime =
     routeRuntime !== undefined && runtimeIds.has(normalizeProviderId(routeRuntime));
+  const routeAllowsOwner =
+    routeAllowsOwnerRuntime ||
+    (params.route?.configuredModelRefs.some((ref) => {
+      const slash = ref.indexOf("/");
+      return slash > 0 && providerIds.has(normalizeProviderId(ref.slice(0, slash)));
+    }) ??
+      false);
   const reasons: string[] = [];
   const pinnedRuntimeKeys: string[] = [];
   const directOverride = resolvePersistedOverrideModelRef({
@@ -332,9 +319,6 @@ export function createPluginSessionStateDoctorScanner(params: {
       if (!entryMayContainPluginSessionRouteState(key, entry)) {
         return;
       }
-      if (!isRecord(entry)) {
-        return;
-      }
       owners ??= listPluginDoctorSessionRouteStateOwners({ config: params.cfg, env: params.env });
       if (owners.length === 0) {
         return;
@@ -370,14 +354,6 @@ export function createPluginSessionStateDoctorScanner(params: {
       return { repairs, manualReview };
     },
   };
-}
-
-function clearEntryKey(entry: Record<string, unknown>, key: string): boolean {
-  if (entry[key] !== undefined) {
-    delete entry[key];
-    return true;
-  }
-  return false;
 }
 
 function clearRecordKeys(
@@ -419,7 +395,10 @@ function applySessionRouteStateRepair(params: {
   }
   let changed = false;
   const clear = (key: string) => {
-    changed = clearEntryKey(params.entry, key) || changed;
+    if (params.entry[key] !== undefined) {
+      delete params.entry[key];
+      changed = true;
+    }
   };
   if (params.repair.reasons.includes("auto model override")) {
     clear("providerOverride");
@@ -463,13 +442,14 @@ function applySessionRouteStateRepair(params: {
   return changed;
 }
 
-function groupRepairsByOwner(
-  repairs: readonly DoctorSessionRouteStateRepair[],
-): Map<string, DoctorSessionRouteStateRepair[]> {
-  const grouped = new Map<string, DoctorSessionRouteStateRepair[]>();
-  for (const repair of repairs) {
-    const key = repair.ownerLabel;
-    grouped.set(key, [...(grouped.get(key) ?? []), repair]);
+function groupByOwnerLabel<T extends { ownerLabel: string }>(
+  items: readonly T[],
+): Map<string, T[]> {
+  const grouped = new Map<string, T[]>();
+  for (const item of items) {
+    const group = grouped.get(item.ownerLabel) ?? [];
+    group.push(item);
+    grouped.set(item.ownerLabel, group);
   }
   return grouped;
 }
@@ -488,7 +468,7 @@ export async function runPluginSessionStateDoctorRepairs(params: {
 }): Promise<void> {
   const { scan } = params;
   if (scan.repairs.length > 0) {
-    for (const [ownerLabel, repairs] of groupRepairsByOwner(scan.repairs)) {
+    for (const [ownerLabel, repairs] of groupByOwnerLabel(scan.repairs)) {
       const staleCount = countLabel(repairs.length, "session");
       params.warnings.push(
         [
@@ -557,11 +537,7 @@ export async function runPluginSessionStateDoctorRepairs(params: {
     }
   }
   if (scan.manualReview.length > 0) {
-    const grouped = new Map<string, DoctorSessionRouteStateManualReview[]>();
-    for (const hit of scan.manualReview) {
-      grouped.set(hit.ownerLabel, [...(grouped.get(hit.ownerLabel) ?? []), hit]);
-    }
-    for (const [ownerLabel, hits] of grouped) {
+    for (const [ownerLabel, hits] of groupByOwnerLabel(scan.manualReview)) {
       params.warnings.push(
         [
           `- Found explicit ${ownerLabel} model overrides in ${countLabel(

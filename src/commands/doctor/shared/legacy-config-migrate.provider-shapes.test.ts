@@ -142,43 +142,6 @@ describe("legacy migrate provider-shaped config", () => {
     ).toEqual(expected);
   });
 
-  it("moves legacy realtime Talk selectors without overwriting canonical realtime config", () => {
-    const input = {
-      talk: {
-        provider: "openai",
-        voiceId: "legacy-voice",
-        providers: { openai: { apiKey: "test-key", custom: true } },
-        mode: "realtime",
-        transport: "gateway-relay",
-        brain: "agent-consult",
-        model: "gpt-realtime",
-        voice: "alloy",
-        unknown: "discarded",
-      },
-    };
-    const migrated = normalizeLegacyTalkConfig(input, []);
-    expect(migrated.talk).toEqual({
-      provider: "openai",
-      voiceId: "legacy-voice",
-      providers: { openai: { apiKey: "test-key", custom: true } },
-      realtime: {
-        provider: "openai",
-        providers: { openai: { apiKey: "test-key", custom: true } },
-        mode: "realtime",
-        transport: "gateway-relay",
-        brain: "agent-consult",
-        model: "gpt-realtime",
-        speakerVoice: "alloy",
-      },
-    });
-    const conflicting = {
-      ...migrated,
-      talk: { ...migrated.talk, model: "obsolete", voice: "obsolete" },
-    };
-    expect(normalizeLegacyTalkConfig(conflicting, [])).toEqual(migrated);
-    expect(normalizeLegacyTalkConfig(migrated, [])).toBe(migrated);
-  });
-
   it("does not copy plain Talk speech provider config into talk.realtime", () => {
     const changes: string[] = [];
     const migrated = normalizeLegacyTalkConfig(

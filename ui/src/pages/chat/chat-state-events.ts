@@ -10,6 +10,7 @@ import {
   shouldHideAssistantChatMessage,
 } from "../../lib/chat/message-visibility.ts";
 import { pickFreshestObserverDigest } from "../../lib/observer-digest.ts";
+import { visibleSessionMatches } from "../../lib/sessions/navigation.ts";
 import { readSessionChangedEvent } from "../../lib/sessions/reconcile.ts";
 import {
   resolveUiConversationIdentity,
@@ -23,7 +24,7 @@ import {
 import type { SessionChangedRowResult } from "../../lib/sessions/session-row-reconcile.ts";
 import { handleChatGatewayEvent, type ChatEventPayload } from "./chat-gateway.ts";
 import { invalidateChatBranches, loadChatBranches } from "./chat-history-branches.ts";
-import { chatScopedEventSessionMatches, getChatHistoryLoadState } from "./chat-history-state.ts";
+import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import {
   pullRequestLinksIn,
@@ -73,13 +74,6 @@ const PENDING_INPUT_REASONS = new Set(["send", "agent.run.started", "agent.input
 const MISSING_TERMINAL_HISTORY_RETRY_DELAYS_MS = [100, 400, 1_500, 3_000] as const;
 const MAX_REMEMBERED_TERMINAL_RECOVERY_CLAIMS = 64;
 type ChatPanePresentation = () => boolean;
-
-function sessionMessageMatchesChat(
-  state: ChatPageHost,
-  event: NonNullable<ReturnType<typeof readSessionChangedEvent>>,
-): boolean {
-  return chatScopedEventSessionMatches(state, event.key, event.agentId ?? undefined);
-}
 
 function selectedGlobalEventAgentId(state: ChatPageHost, agentId: string | null): string {
   return agentId ? normalizeAgentId(agentId) : resolveUiDefaultAgentId(state);
@@ -136,7 +130,7 @@ function handleSessionMessageEvent(
   if (!event || !globalSessionEventMatchesChat(state, event)) {
     return false;
   }
-  const matchesChat = sessionMessageMatchesChat(state, event);
+  const matchesChat = visibleSessionMatches(state, event.key, event.agentId ?? undefined);
   const isUserMessage =
     readSessionMessageIdentity(asNullableRecord(payload)?.message)?.role === "user";
   if (matchesChat) {
@@ -352,7 +346,9 @@ function handleSessionsChangedEvent(
   const runIdBeforeApply = state.chatRunId;
   const event = readSessionChangedEvent(payload);
   const matchesChat = Boolean(
-    event && globalSessionEventMatchesChat(state, event) && sessionMessageMatchesChat(state, event),
+    event &&
+    globalSessionEventMatchesChat(state, event) &&
+    visibleSessionMatches(state, event.key, event.agentId ?? undefined),
   );
   const source = asNullableRecord(payload);
   const resetsSession = source?.reason === "reset" || source?.phase === "reset";
@@ -468,7 +464,7 @@ function finalAssistantReplyHasPullRequestLink(
 ): boolean {
   if (
     payload?.state !== "final" ||
-    !chatScopedEventSessionMatches(state, payload.sessionKey, payload.agentId)
+    !visibleSessionMatches(state, payload.sessionKey, payload.agentId)
   ) {
     return false;
   }
@@ -535,7 +531,7 @@ export function handlePageGatewayEvent(
         : undefined;
     const apply = () => {
       const sessionMatches = Boolean(
-        payload && chatScopedEventSessionMatches(state, payload.sessionKey, payload.agentId),
+        payload && visibleSessionMatches(state, payload.sessionKey, payload.agentId),
       );
       const recoveryRunId =
         payload?.state === "final" &&
@@ -621,7 +617,7 @@ export function handlePageGatewayEvent(
         : terminalPayload.agentId,
     );
     const connectionEpoch = state.connectionEpoch;
-    const queued = readDeliveredQueuedChatSendForRun(state, terminalPayload.runId, scope)?.item;
+    const queued = readDeliveredQueuedChatSendForRun(state, terminalPayload.runId, scope);
     const ownerIsCurrent = captureOutboxPayloadOwner(state);
     // Keep the complete user display pinned before applying the terminal, but
     // ordinary input retains its durable retry bytes until consumption is proven.
@@ -644,7 +640,7 @@ export function handlePageGatewayEvent(
     const payload = event.payload as SessionObserverDigest | undefined;
     if (
       !payload ||
-      !chatScopedEventSessionMatches(state, payload.sessionKey, payload.agentId) ||
+      !visibleSessionMatches(state, payload.sessionKey, payload.agentId) ||
       !observerDigestMatchesAuthoritativeRun(state, payload)
     ) {
       return;

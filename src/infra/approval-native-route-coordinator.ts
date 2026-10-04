@@ -281,10 +281,6 @@ function didReportDeliverToOrigin(report: ApprovalRouteReport, originAccountId?:
   );
 }
 
-function hasPlannedNativeTargets(report: ApprovalRouteReport): boolean {
-  return report.deliveryPlan.targets.length > 0;
-}
-
 function readAllowedDecisionStrings(request: ApprovalRequest): string[] | undefined {
   const allowedDecisions =
     "allowedDecisions" in request.request ? request.request.allowedDecisions : undefined;
@@ -331,7 +327,7 @@ function resolveApprovalRouteNotice(params: {
     ambiguousOwner || params.reports.some((report) => report.skipReason === "owner-unavailable");
   if (
     !deliveredAnyTarget &&
-    (params.reports.some(hasPlannedNativeTargets) ||
+    (params.reports.some((report) => report.deliveryPlan.targets.length > 0) ||
       requiresManualFallback ||
       params.missingSelectedRuntime)
   ) {

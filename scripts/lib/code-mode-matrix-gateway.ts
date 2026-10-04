@@ -479,7 +479,9 @@ export function collectGatewayMatrixTrace(events: readonly unknown[]): GatewayMa
 }
 
 function callOutcomes(trace: GatewayMatrixTrace, call: ToolCall): ToolOutcome[] {
-  let outcome = trace.outcomes.findLast((item) => item.id === call.id);
+  const outcomeFor = (id: string) =>
+    trace.outcomes.findLast((item) => item.id === id && item.sessionKey === call.sessionKey);
+  let outcome = outcomeFor(call.id);
   const outcomes = outcome ? [outcome] : [];
   let cursor = trace.calls.indexOf(call);
   while (outcome && !outcome.isError && outcome.details.status === "waiting") {
@@ -488,14 +490,18 @@ function callOutcomes(trace: GatewayMatrixTrace, call: ToolCall): ToolOutcome[] 
       break;
     }
     const next = trace.calls.findIndex(
-      (item, index) => index > cursor && item.name === "wait" && item.args.runId === runId,
+      (item, index) =>
+        index > cursor &&
+        item.name === "wait" &&
+        item.args.runId === runId &&
+        item.sessionKey === call.sessionKey,
     );
     const wait = trace.calls[next];
     if (!wait) {
       break;
     }
     cursor = next;
-    outcome = trace.outcomes.findLast((item) => item.id === wait.id);
+    outcome = outcomeFor(wait.id);
     if (outcome) {
       outcomes.push(outcome);
     }

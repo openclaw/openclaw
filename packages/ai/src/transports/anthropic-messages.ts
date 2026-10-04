@@ -7,8 +7,13 @@ import type {
   TextBlockParam,
   ToolResultBlockParam,
 } from "@anthropic-ai/sdk/resources/messages.js";
-import type { Context, Model, Tool } from "@openclaw/llm-core";
-import { supportsClaudeInHistorySystemMessages } from "@openclaw/llm-core";
+import {
+  hasRuntimeContextMarker,
+  supportsClaudeInHistorySystemMessages,
+  type Context,
+  type Model,
+  type Tool,
+} from "@openclaw/llm-core";
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { getAiTransportHost } from "../host.js";
 import {
@@ -124,7 +129,7 @@ async function convertContentBlocks(
       [
         {
           type: "image" as const,
-          data: typeof record.data === "string" ? record.data : "",
+          data: record.data,
           mimeType:
             typeof record.mimeType === "string"
               ? record.mimeType
@@ -195,17 +200,18 @@ async function convertAnthropicMessages(
     }
     if (msg.role === "user") {
       const operatorMessage = inHistorySystemUpdates ? msg.operatorMessage : undefined;
+      const sourceContent = msg.content;
       let content: AnthropicWireMessage["content"];
-      if (typeof msg.content === "string") {
-        if (msg.content.trim().length === 0) {
+      if (typeof sourceContent === "string") {
+        if (sourceContent.trim().length === 0) {
           continue;
         }
-        content = sanitizeTransportPayloadText(msg.content);
+        content = sanitizeTransportPayloadText(sourceContent);
       } else {
         const normalizedContent =
           !managed || model.input.includes("image")
-            ? await normalizeAnthropicInlineContent(msg.content, imageBudget)
-            : msg.content.map((item) =>
+            ? await normalizeAnthropicInlineContent(sourceContent, imageBudget)
+            : sourceContent.map((item) =>
                 item.type === "image"
                   ? { type: "text" as const, text: NON_VISION_USER_IMAGE_PLACEHOLDER }
                   : item,
@@ -243,10 +249,11 @@ async function convertAnthropicMessages(
           : content,
         ...(operatorMessage?.turnScoped ? { clear_at: "next_user_message" as const } : {}),
       });
-      if (
-        msg.runtimeContextCarrier &&
-        !(msg.runtimeContextCarrierRetained ?? modelRetainsRuntimeContext)
-      ) {
+      const runtimeContextRetained =
+        msg.runtimeContext !== undefined
+          ? msg.runtimeContext.retained
+          : msg.runtimeContextCarrierRetained;
+      if (hasRuntimeContextMarker(msg) && !(runtimeContextRetained ?? modelRetainsRuntimeContext)) {
         options.cacheBreakpointOptOutMessageIndexes?.add(params.length - 1);
       }
       continue;
@@ -467,7 +474,7 @@ function buildAnthropicGenerationParams({
 function convertAnthropicTools(
   tools: Tool[],
   isOAuthTokenLocal: boolean,
-  supportsEagerToolInputStreaming = false,
+  supportsEagerToolInputStreaming: boolean,
 ): {
   projection: AnthropicToolProjection;
   tools: AnthropicTool[];

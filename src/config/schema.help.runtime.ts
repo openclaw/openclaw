@@ -98,6 +98,8 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "tools.github.gitAuthor.email": "Optional process-local Git author and committer email.",
   "agents.entries.*.tools.github":
     "Complete managed GitHub CLI identity and Git author override for this agent. Omit it to inherit the system identity.",
+  "agents.entries.*.tools.github.allowInSandbox":
+    "Allows this agent's managed GitHub credentials and Git author inside its own Docker or Podman sandbox (default: false). Shared scope refuses identity injection; other backends reject provisioning. Security audit warns while enabled.",
   "tools.exec.host":
     'Selects execution target strategy for shell commands. Use "auto" for runtime-aware behavior (sandbox when available, otherwise gateway), or pin sandbox/gateway/node explicitly when you need a fixed surface.',
   "tools.exec.mode":
@@ -218,8 +220,10 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Show the community invitation with Reddit, Discord, and X links in the Control UI served by this Gateway (default on). Set false to hide it for every browser using this UI deployment. Changes apply after browser refresh or reconnect; re-enabling preserves browser-local dismissals.",
   "gateway.controlUi.newSessionModelDefaults":
     'Choose "configured" to start fresh Control UI drafts with the selected agent’s configured model, runtime and reasoning defaults instead of remembered selections. Default: "last-used". Explicit draft and conversation choices remain editable; Fast Mode and placement preferences are unchanged. Applies after browser refresh or reconnect.',
+  "gateway.controlUi.github.host":
+    "Host this service credential may access. Omit for github.com; set to gateway.github.host for Enterprise project discovery and account metadata.",
   "gateway.controlUi.github.token":
-    "SecretRef-backed service credential for Control UI project discovery and GitHub hover previews without a managed identity. Hover previews prefer the selected agent's configured GitHub identity, inheriting the system identity when there is no override. Prefer explicit configuration for clear service ownership. Omit it to retain the GH_TOKEN/GITHUB_TOKEN fallback from the shared Gateway process environment. An explicitly configured but unavailable credential fails closed.",
+    "SecretRef-backed service credential for Control UI project discovery and GitHub hover previews without a managed identity. Set gateway.controlUi.github.host for Enterprise; an omitted host means github.com. Hover previews prefer the selected agent's configured GitHub identity. GH_TOKEN/GITHUB_TOKEN fallback applies only to github.com. A mismatched or unavailable credential fails closed.",
   "gateway.controlUi.sessionObserver":
     "Produce live session status digests for subscribed Control UI clients with each agent's utility model (default on). Set false to disable observer model calls gateway-wide; setting agents.defaults.utilityModel to an empty string disables utility-model observation for agents that do not override it.",
   "gateway.controlUi.embedSandbox":

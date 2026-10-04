@@ -1033,18 +1033,15 @@ export async function resolveGlobalInstallTarget(params: {
   const pkgOwnership = params.pkgOwnership ?? createFreeBsdPkgOwnershipInspection(params.timeoutMs);
   await pkgOwnership.assertUnowned(params.pkgRoot);
   const requestedCommand = normalizeGlobalInstallCommand(params.manager, params.pkgRoot);
-  const requestedPnpmGlobalRoot =
-    requestedCommand.manager === "pnpm"
-      ? await resolveGlobalRoot(
-          requestedCommand,
-          params.runCommand,
-          params.timeoutMs,
-          params.pkgRoot,
-        )
-      : null;
+  let requestedPnpmGlobalRoot: Promise<string | null> | undefined;
+  const resolveRequestedPnpmGlobalRoot = () =>
+    (requestedPnpmGlobalRoot ??=
+      requestedCommand.manager === "pnpm"
+        ? resolveGlobalRoot(requestedCommand, params.runCommand, params.timeoutMs, params.pkgRoot)
+        : Promise.resolve(null));
   const inferredPnpmIsolatedGlobalRoot = inferPnpmIsolatedGlobalRootFromPackageRoot(params.pkgRoot);
   const pnpmIsolatedPackage = await resolvePnpmIsolatedGlobalPackage({
-    globalRoot: inferredPnpmIsolatedGlobalRoot || requestedPnpmGlobalRoot,
+    globalRoot: inferredPnpmIsolatedGlobalRoot || (await resolveRequestedPnpmGlobalRoot()),
     packageName: params.packageName,
     pkgRoot: params.pkgRoot,
   });
@@ -1092,7 +1089,7 @@ export async function resolveGlobalInstallTarget(params: {
     (requestedCommand.manager === "pnpm" &&
     command.manager === requestedCommand.manager &&
     command.command === requestedCommand.command
-      ? requestedPnpmGlobalRoot
+      ? await resolveRequestedPnpmGlobalRoot()
       : await resolveGlobalRoot(command, params.runCommand, params.timeoutMs, params.pkgRoot));
   const pnpmIsolatedLayoutVersion =
     pnpmIsolatedPackage?.layoutVersion ??

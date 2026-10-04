@@ -5,10 +5,11 @@ import { property } from "lit/decorators.js";
 import { keyed } from "lit/directives/keyed.js";
 import { createRef, ref } from "lit/directives/ref.js";
 import { isSessionRouteId } from "../app-route-paths.ts";
-import { renderLazyViewError } from "../components/lazy-view-error.ts";
+import { renderAgentStartupState, renderLazyViewError } from "../components/lazy-view-error.ts";
 import { renderLoadingState } from "../components/loading-state.ts";
 import { McpAppUnmountGate } from "../components/mcp-app-unmount.ts";
 import { t } from "../i18n/index.ts";
+import { isAgentDatabaseInspectionPendingError } from "../lib/gateway-availability.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import {
   RouterOutletController,
@@ -81,6 +82,9 @@ function renderError<TRouteId extends string, TLoadContext, TModule, TData>(
   routeId: TRouteId,
   render?: () => unknown,
 ) {
+  if (isAgentDatabaseInspectionPendingError(error)) {
+    return renderAgentStartupState();
+  }
   const staleChunk = isStaleChunkImportError(error);
   if (staleChunk) {
     // Asset failures can mean an interrupted connection or a replaced build.
@@ -231,10 +235,13 @@ class OpenClawRouterOutlet<
   @property({ attribute: false }) retryContext?: TLoadContext;
   @property({ attribute: false }) onNotFound?: () => boolean | void;
   @property({ attribute: false }) notFoundRecoveryReady?: boolean;
+  @property({ attribute: false }) retryEnabled = true;
   private readonly outlet = new LitRouterOutletController(this, () => ({
     router: this.router,
     onNotFound: this.onNotFound,
     notFoundRecoveryReady: this.notFoundRecoveryReady,
+    retryContext: this.retryContext,
+    retryEnabled: this.retryEnabled,
   }));
   @property({ attribute: false }) retentionScope?: object;
   private readonly retainedUnmountGate = new McpAppUnmountGate(this);
@@ -341,6 +348,9 @@ class OpenClawRouterOutlet<
     const retainedKey = `${this.scopeGeneration}:${this.retainedOwnerKey ?? "empty"}`;
     const transientKey = presentRetained ? "empty" : (explicitOwnerKey ?? routeKey);
     const renderTransient = () => {
+      if (snapshot.startupPending) {
+        return renderAgentStartupState();
+      }
       if (isSessionRouteId(renderedMatch?.routeId) && !scopeReady) {
         return !retiredSession && renderedMatch?.error !== undefined
           ? renderError(router, this.retryContext, renderedMatch.error, renderedMatch.routeId)

@@ -138,6 +138,11 @@ Inside those workers, import `serveWorkerTasks` and the
 `WorkerTaskControl` type from `openclaw/plugin-sdk/worker-task-server` to avoid
 loading the host process and pool runtime. Both paths use the same task protocol.
 
+The shared implementation lives in the private `@openclaw/worker-runtime`
+workspace package. Plugins keep using these public SDK entrypoints; OpenClaw's
+host adapter supplies worker creation, resource cleanup, and process accounting
+to the same scheduler.
+
 The older serving exports in `process-runtime` remain for released official
 plugins. Bundled workers use `worker-task-server`; remove the older exports only
 after supported official plugin versions have migrated to hosts with this subpath.
@@ -161,6 +166,13 @@ For stateless computation, `sharedCompute: true` also shares an aggregate
 128-task/256-MiB admission budget and CPU execution capacity with participating
 pools in the same isolate. Dedicated ordered pools retain their own execution
 capacity and still enforce their individual admission limits.
+
+For interactive tasks waiting on a host response, queue pressure can request a
+cooperative checkpoint through `yieldSignal` so queued work can run. The host
+operation retains its own lifetime. Internal `openclaw.worker.task` diagnostics
+include `hostWaitMs` alongside the existing timing fields; host wait is included
+in `runMs`, not added to it. This field is diagnostic data, not a public config
+option.
 
 Pass static Node.js Worker settings in `workerOptions`. For per-worker settings,
 `prepareWorker()` runs once per Worker creation attempt and returns
@@ -380,15 +392,41 @@ limits and timeout defaults. A shipped timeout profile can be preserved with
 `timeouts: { headers, request, socket }` in milliseconds. These are plugin
 registration contracts, not new operator configuration.
 
-The channel owns effective listener resolution: preserve its shipped default when
-`legacyWebhook` is omitted, use an explicit endpoint object when configured, and
-register no legacy listener when it is `false`. Resolve the same endpoint for
+The channel owns effective listener resolution: register a legacy listener only
+for an explicit `legacyWebhook` endpoint object. Omitted settings and `false`
+select Gateway-only ingress. Resolve the same endpoint for
 runtime routing and Doctor guidance. Plugin-owned Doctor contracts can compose
 `createLegacyWebhookListenerDoctorContract` from
 `openclaw/plugin-sdk/runtime-doctor-migrations` to preserve authored ports and
 inherited bind addresses through the normal backed-up config write. An explicit
 legacy host without a port uses the channel's shipped default port. Canonical
 `false` settings remain authoritative when Doctor removes retired keys.
+For retirement of a historical default, export the helper's static
+`historicalWebhookListener` property from the existing config Doctor module and
+its `config-doctor-api` and `doctor-contract-api` entrypoints. This
+`{ channelId, port, host? }` object reuses the helper's historical defaults.
+The host validates that the channel belongs to the plugin, the port is an integer
+from 1 to 65535, and an explicit host is nonblank. Set the factory option
+`preserveAuthoredActivation: true` only when authored listener settings previously
+implied channel activation. The returned static declaration carries this flag;
+the host preserves activation after prior-operation and completion checks, before
+adding implicit pins. The normalizer must not enable the channel itself. Keep
+`doctorContract.configRepair: true` in the manifest. Return
+`historicalWebhookAccountIds` from the existing `normalizeCompatibilityConfig`
+result, using the plugin's account and transport owners to select eligible
+accounts. An empty array means inspection completed with no eligible accounts;
+an `undefined` array entry selects an accountless channel root. Return `null`
+when the current process cannot decide environment-dependent eligibility. Omit
+the field only when the contract is not implemented. The host owns
+prior-operation detection, pin creation, and completion; the normalizer returns
+eligibility without opening listeners or creating implicit endpoints.
+Automatic pins belong to existing accounts, including `accounts.default`, so
+accounts added later do not inherit them. Doctor backs up the config before
+persisting pins with `meta.migrations.webhookListeners`. The marker records exact
+inserted paths per completed channel, or `true` for a fresh installation.
+Removing a pin while retaining this marker does not recreate it on a later
+Doctor run or update. See [webhook migrations](/gateway/doctor/config-migrations#channel-webhook-listeners)
+for read-only config behavior.
 Return normal listener guidance in `runConfigSequence().infoNotes` so Doctor
 labels it as information. Keep actionable configuration problems in
 `warningNotes`; `changeNotes` describe applied repairs.
@@ -533,3 +571,20 @@ Telegram's normal inbound agent path after the handler succeeds. OpenClaw keeps
 the callback button when inbound policy skips the text or processing fails, so
 the user can retry after the blocking condition changes. This result field is
 Telegram-specific; other channels keep their own interactive result contracts.
+
+### Doctor plugin-state repairs
+
+`PluginDoctorStateMigrationContext.repairPluginStateEntries(namespace, replacements)`
+is available during the offline `after-session-repair` phase. Each replacement
+contains an exact `PluginDoctorRawStateEntry` observation from
+`readPluginStateEntriesInKeyRange` and a JSON-compatible `value`. An empty read
+prefix scans the namespace in pages of at most 512 rows. The host binds plugin
+identity and the state location; plugins never supply database paths or SQL.
+
+The host freezes each batch, verifies a backup containing the original row bytes,
+and compares the complete observations under current maintenance authority before
+one transaction replaces their values. Keys, creation timestamps, and expiry
+remain unchanged. Any changed row or database generation refuses the whole batch.
+Plugins keep format interpretation in their Doctor contract and leave credential
+binding and runtime lifecycle decisions with their existing owners. Older hosts
+may omit this optional repair capability.

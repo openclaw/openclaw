@@ -1,6 +1,5 @@
 /** Discovers agent models and auth storage with provider/plugin normalization hooks. */
 import path from "node:path";
-import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { Model } from "../llm/types.js";
@@ -25,7 +24,6 @@ type DiscoverModelsOptions = {
   modelsJsonContents?: string | null;
   pluginCatalogs?: readonly PersistedPluginModelCatalog[];
   staticProviderConfigs?: Readonly<Record<string, ModelProviderConfig>>;
-  providerFilter?: string;
   pluginMetadataSnapshot?: PluginModelCatalogMetadataSnapshot;
   workspaceDir?: string;
   normalizeModels?: boolean;
@@ -71,9 +69,6 @@ function createOpenClawModelRegistry(
   const getAvailable = registry.getAvailable.bind(registry);
   const find = registry.find.bind(registry);
   const refresh = registry.refresh.bind(registry);
-  const providerFilter = options?.providerFilter ? normalizeProviderId(options.providerFilter) : "";
-  const matchesProviderFilter = (entry: Model) =>
-    !providerFilter || normalizeProviderId(entry.provider) === providerFilter;
   const shouldNormalize = options?.normalizeModels !== false;
   const findCache = new Map<string, Model | undefined>();
   const normalizeEntry = (entry: Model) => {
@@ -91,17 +86,10 @@ function createOpenClawModelRegistry(
     });
   };
 
-  registry.getAll = () => {
-    const entries = getAll().filter(matchesProviderFilter);
-    return shouldNormalize ? entries.map(normalizeEntry) : entries;
-  };
-  registry.getAvailable = () => {
-    const entries = getAvailable().filter(matchesProviderFilter);
-    return shouldNormalize ? entries.map(normalizeEntry) : entries;
-  };
+  registry.getAll = () => getAll().map(normalizeEntry);
+  registry.getAvailable = () => getAvailable().map(normalizeEntry);
   registry.find = (provider: string, modelId: string) => {
-    const normalizedProvider = normalizeProviderId(provider);
-    const key = `${normalizedProvider}\0${modelId}`;
+    const key = `${provider}\0${modelId}`;
     if (findCache.has(key)) {
       return findCache.get(key);
     }
@@ -116,14 +104,6 @@ function createOpenClawModelRegistry(
   };
 
   return registry;
-}
-
-/** Builds auth storage for model discovery without prompting for secrets. */
-export function discoverAuthStorage(
-  agentDir: string,
-  options?: DiscoverAuthStorageOptions,
-): AuthStorage {
-  return discoverAuthStorageFacts(agentDir, options).authStorage;
 }
 
 /** Captures the effective profile store and its AuthStorage projection as one generation. */
@@ -142,7 +122,7 @@ export function discoverAuthStorageFacts(
   return { ...facts, authStorage: AuthStorage.inMemory(facts.credentials) };
 }
 
-/** Creates a model registry for one agent directory, optionally filtered and plugin-normalized. */
+/** Creates a model registry for one agent directory with optional plugin normalization. */
 export function discoverModels(
   authStorage: AuthStorage,
   agentDir: string,

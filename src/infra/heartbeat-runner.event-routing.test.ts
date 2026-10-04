@@ -280,7 +280,7 @@ describe("Heartbeat event routing", () => {
         storePath: storeTemplate,
         isolatedSession: true,
       });
-      cfg.agents!.list = [{ id: "ops" }];
+      cfg.agents!.entries = { ops: {} };
       cfg.agents!.defaults!.heartbeat = {
         every: "0m",
         isolatedSession: true,
@@ -607,39 +607,60 @@ describe("Heartbeat cron and exec event ownership", () => {
     expect(replySpy).not.toHaveBeenCalled();
   }
 
-  it("runs the tagged cron payload outside heartbeat active hours", async () => {
-    await withHeartbeat(
-      async (f) => {
-        f.enqueue(reminder, "cron:nightly-report");
-        f.replySpy.mockResolvedValue({ text: "Overnight report sent" });
-        const result = await f.run({
-          sessionKey: f.sessionKey,
-          source: "cron",
-          intent: "immediate",
-          reason: "cron:nightly-report",
-          deps: { nowMs: () => Date.UTC(2025, 0, 1, 7) },
-        });
-        expect(result.status).toBe("ran");
-        expect(f.replySpy).toHaveBeenCalledOnce();
-        expectCronPrompt(getFirstReplyContext(f.replySpy), reminder);
-        expect(f.sendTelegram).toHaveBeenCalled();
-      },
-      { activeHours: { start: "08:00", end: "24:00", timezone: "user" } },
-    );
-  });
-  it("uses a cron prompt when reminders are mixed with heartbeat noise", async () => {
-    await withHeartbeat(async (f) => {
-      f.enqueue("HEARTBEAT_OK");
-      f.enqueue(reminder);
-      f.replySpy.mockResolvedValue({ text: "Relay this reminder now" });
-      expect((await f.run({ reason: "cron:reminder-job" })).status).toBe("ran");
-      expectCronPrompt(getFirstReplyContext(f.replySpy), reminder);
-      expect(f.sendTelegram).toHaveBeenCalled();
-    });
-  });
-  it("blocks an owning cron wake while the nested cron lane is busy", async () => {
-    await withCronOwner(async (f) => expectCronBusy(await runCron(f, 0, 1), f.replySpy));
-  });
+  it.each(["outside active hours", "with heartbeat noise", "without delivery"])(
+    "builds the cron reminder prompt %s",
+    async (scenario) => {
+      const internal = scenario === "without delivery";
+      const outsideHours = scenario === "outside active hours";
+      await withHeartbeat(
+        async (f) => {
+          if (scenario === "with heartbeat noise") {
+            f.enqueue("HEARTBEAT_OK");
+          }
+          f.enqueue(reminder, outsideHours ? "cron:nightly-report" : undefined);
+          f.replySpy.mockResolvedValue({
+            text: internal
+              ? "Handled internally"
+              : outsideHours
+                ? "Overnight report sent"
+                : "Relay this reminder now",
+          });
+          const result = await f.run(
+            outsideHours
+              ? {
+                  sessionKey: f.sessionKey,
+                  source: "cron",
+                  intent: "immediate",
+                  reason: "cron:nightly-report",
+                  deps: { nowMs: () => Date.UTC(2025, 0, 1, 7) },
+                }
+              : { reason: "cron:reminder-job" },
+          );
+          expect(result.status).toBe("ran");
+          if (outsideHours) {
+            expect(f.replySpy).toHaveBeenCalledOnce();
+          }
+          if (internal) {
+            expect(getFirstReplyContext(f.replySpy)).toMatchObject({
+              InternalTurnSource: "cron",
+              Body: expect.stringContaining("Handle this reminder internally"),
+            });
+            expect(f.sendTelegram).not.toHaveBeenCalled();
+            expect(peekSystemEvents(f.sessionKey)).toEqual([]);
+          } else {
+            expectCronPrompt(getFirstReplyContext(f.replySpy), reminder);
+            expect(f.sendTelegram).toHaveBeenCalled();
+          }
+        },
+        internal
+          ? { target: "none" }
+          : outsideHours
+            ? { activeHours: { start: "08:00", end: "24:00", timezone: "user" } }
+            : {},
+      );
+    },
+  );
+
   it("ignores only the exact current command lane task that owns the cron wake", async () => {
     await enqueueCommandInLane(CommandLane.Cron, async (marker) => {
       await withCronOwner(async (f) => {
@@ -650,27 +671,38 @@ describe("Heartbeat cron and exec event ownership", () => {
       await withCronOwner(async (f) => expectCronBusy(await runCron(f, 2), f.replySpy), marker);
     });
   });
-  it("does not let a stale command lane task marker bypass cron pressure", async () => {
-    let staleMarker: CommandLaneTaskMarker | undefined;
-    await enqueueCommandInLane(CommandLane.Cron, async (marker) => {
-      staleMarker = marker;
-    });
-    if (!staleMarker) {
-      throw new Error("expected command lane marker");
-    }
-    await withCronOwner(async (f) => expectCronBusy(await runCron(f, 1), f.replySpy), staleMarker);
-  });
-  it("blocks an unowned cron wake while a job is active", async () => {
-    await withHeartbeat(async (f) => {
-      f.enqueue(reminder, "cron:nightly-report");
-      const marker = markCronJobActive("nightly-report");
-      try {
-        expectCronBusy(await runCron(f), f.replySpy);
-      } finally {
-        clearCronJobActive("nightly-report", marker);
+  it.each(["nested lane", "stale task marker", "unowned job"])(
+    "blocks a cron wake under pressure from %s",
+    async (busy) => {
+      let staleMarker: CommandLaneTaskMarker | undefined;
+      if (busy === "stale task marker") {
+        await enqueueCommandInLane(CommandLane.Cron, async (marker) => {
+          staleMarker = marker;
+        });
+        if (!staleMarker) {
+          throw new Error("expected command lane marker");
+        }
       }
-    });
-  });
+      await withHeartbeat(async (f) => {
+        f.enqueue(reminder, "cron:nightly-report");
+        const owner = markCronJobActive("nightly-report");
+        const release =
+          busy === "unowned job" ? undefined : markCronJobWaitingForHeartbeat(owner, staleMarker);
+        if (release) {
+          f.replySpy.mockResolvedValue({ text: "Handled the reminder" });
+        }
+        try {
+          expectCronBusy(
+            await runCron(f, busy === "stale task marker" ? 1 : 0, busy === "nested lane" ? 1 : 0),
+            f.replySpy,
+          );
+        } finally {
+          release?.();
+          clearCronJobActive("nightly-report", owner);
+        }
+      });
+    },
+  );
   it("retains a suppressed cron reminder until delivery, then consumes it exactly once", async () => {
     await withHeartbeat(async (f) => {
       f.enqueue(reminder, "cron:nightly-report");
@@ -698,55 +730,40 @@ describe("Heartbeat cron and exec event ownership", () => {
       expect(next?.Body).not.toContain(reminder);
     });
   });
-  it("uses an internal-only cron prompt when delivery target is none", async () => {
-    await withHeartbeat(
-      async (f) => {
-        f.enqueue(reminder);
-        f.replySpy.mockResolvedValue({ text: "Handled internally" });
-        expect((await f.run({ reason: "cron:reminder-job" })).status).toBe("ran");
-        expect(getFirstReplyContext(f.replySpy)).toMatchObject({
-          InternalTurnSource: "cron",
-          Body: expect.stringContaining("Handle this reminder internally"),
-        });
-        expect(f.sendTelegram).not.toHaveBeenCalled();
-        expect(peekSystemEvents(f.sessionKey)).toEqual([]);
-      },
-      { target: "none" },
-    );
-  });
-  it("consumes exec completions without dropping later generic events", async () => {
-    await withHeartbeat(async (f) => {
-      f.enqueue("Exec finished (gateway id=abc12345, code 0)\ndeploy succeeded");
-      f.enqueue("Node connected");
-      f.replySpy.mockResolvedValue({ text: "Deploy succeeded" });
-      expect((await f.run({ reason: "exec-event" })).status).toBe("ran");
-      const ctx = getFirstReplyContext(f.replySpy);
-      expect(ctx.InternalTurnSource).toBe("exec");
-      expect(ctx.Body).toContain("deploy succeeded");
-      expect(ctx.Body).not.toContain("Node connected");
-      expect(peekSystemEvents(f.sessionKey)).toEqual(["Node connected"]);
-    });
-  });
-  it("ignores an acknowledged exec wake without consuming unrelated events", async () => {
-    await withHeartbeat(async (f) => {
-      const completion = enqueueSystemEventEntry(
-        "Exec completed (abc12345, code 0) :: deploy succeeded",
-        { sessionKey: f.sessionKey },
-      );
-      if (!completion) {
-        throw new Error("expected exec completion event");
-      }
-      expect(consumeSelectedSystemEventEntries(f.sessionKey, [completion])).toHaveLength(1);
-      f.enqueue("Node connected");
-      expect(await f.run({ reason: "exec-event" })).toEqual({
-        status: "skipped",
-        reason: "no-pending-event",
+  it.each([false, true])(
+    "preserves unrelated events when exec completion is acknowledged=%s",
+    async (acknowledged) => {
+      await withHeartbeat(async (f) => {
+        if (acknowledged) {
+          const completion = enqueueSystemEventEntry(
+            "Exec completed (abc12345, code 0) :: deploy succeeded",
+            { sessionKey: f.sessionKey },
+          );
+          if (!completion) {
+            throw new Error("expected exec completion event");
+          }
+          expect(consumeSelectedSystemEventEntries(f.sessionKey, [completion])).toHaveLength(1);
+        } else {
+          f.enqueue("Exec finished (gateway id=abc12345, code 0)\ndeploy succeeded");
+          f.replySpy.mockResolvedValue({ text: "Deploy succeeded" });
+        }
+        f.enqueue("Node connected");
+        const result = await f.run({ reason: "exec-event" });
+        if (acknowledged) {
+          expect(result).toEqual({ status: "skipped", reason: "no-pending-event" });
+          expect(f.replySpy).not.toHaveBeenCalled();
+          expect(f.sendTelegram).not.toHaveBeenCalled();
+        } else {
+          expect(result.status).toBe("ran");
+          const ctx = getFirstReplyContext(f.replySpy);
+          expect(ctx.InternalTurnSource).toBe("exec");
+          expect(ctx.Body).toContain("deploy succeeded");
+          expect(ctx.Body).not.toContain("Node connected");
+        }
+        expect(peekSystemEvents(f.sessionKey)).toEqual(["Node connected"]);
       });
-      expect(f.replySpy).not.toHaveBeenCalled();
-      expect(f.sendTelegram).not.toHaveBeenCalled();
-      expect(peekSystemEvents(f.sessionKey)).toEqual(["Node connected"]);
-    });
-  });
+    },
+  );
   it.each([false, true])(
     "inspects base-session hook exec completions only outside isolation=%s",
     async (isolatedSession) => {

@@ -1,18 +1,19 @@
 ---
-summary: "Optional Workboard boards for agent-owned cards and utility-model categorized sessions"
+summary: "Optional Workboard boards for agent-owned cards and rule-based session views"
 read_when:
   - You want a Kanban-style workboard in the Control UI
   - You are enabling or disabling the bundled Workboard plugin
   - You want to track planned agent work without an external project manager
-  - You want sessions grouped by run state and utility-model judgment
+  - You want sessions grouped by session status, observer health, and pull-request state
 title: "Workboard plugin"
+doc-schema-version: 1
 ---
 
 The Workboard plugin adds an optional Kanban-style board to the
 [Control UI](/web/control-ui): agent-sized work cards, assignment to agents,
 and a link back to the card's task, run, and Control UI session. A separate
-**Sessions board** groups existing sessions into editable columns using session
-state and the configured utility model.
+**Sessions board** groups existing sessions into editable columns using rules over
+Gateway-owned facts.
 
 Workboard is intentionally small: it tracks local operating work for one
 OpenClaw Gateway. It is not a replacement for GitHub Issues, Linear, Jira, or
@@ -70,6 +71,15 @@ openclaw plugins disable workboard
 
 ## Board appearance
 
+While Workboard is open, its sidebar entry expands to show both Cards and
+Sessions boards, with the open board highlighted. Select a nested board to open it.
+Sidebar labels use the board name; boards with the same name include their kind
+in parentheses, such as **Planning (cards)** and **Planning (sessions)**.
+Boards you create in the Control UI are pinned in the sidebar immediately.
+Use **Customize** to pin any other board or remove a pin; removed pins stay removed.
+Pinned boards remain available as top-level entries when you leave Workboard,
+and you can drag them to reorder them.
+
 Choose **New board**, then **Cards** (the default) or **Sessions**. A Sessions
 board starts with the columns described below. A board's kind is permanent;
 create another board to use the other kind. Existing boards remain Cards boards.
@@ -77,7 +87,8 @@ create another board to use the other kind. Existing boards remain Cards boards.
 Use **Edit board** to change a board's name, icon, and color. **Reset to default**
 clears the icon and color when you save; canceling leaves the saved board unchanged.
 For Sessions boards, the same dialog also edits column labels, colors,
-descriptions, the fallback column, and classification instructions.
+descriptions, column order, and the fallback column. Ask the Board agent to edit
+column rules.
 
 For `workboard.boards.upsert`, omitting `icon` or `color`, passing `null`, or passing
 an empty string preserves the existing value, including for older clients. To clear
@@ -101,60 +112,69 @@ saved board scope.
 **People filter:** Choose **Everyone** (the default), **Involving me**, or a person
 beside the agent filter. Involving me shows sessions you own or previously prompted;
 a person selects their profile associations. The choice is remembered per viewer,
-device, Gateway, and board. It does not change the shared board, classification, or
+device, Gateway, and board. It does not change the shared board, rules, or
 the Board agent. API clients can pass `view: { involvingMe?: boolean,
 involvingProfileId?: string, includePeople?: boolean }` to
 `workboard.sessionsBoard.read`; `includePeople` returns the people facet for the picker.
 
-Classification is shared across the Gateway and uses the configured utility
-model. Reads follow the current caller's session visibility; the board and its
-classification cache follow the Gateway's trusted-operator model.
-Interactive edits are admitted under the caller's live authority immediately before the write, while background classification runs under the plugin service's authority.
-Draft sessions are creator-private and never enter a Sessions board, its facts reads,
-or utility-model requests; incognito sessions are excluded the same way.
+Columns are rules over Gateway-owned session status, observer health, and
+pull-request state. Health comes from the Gateway session observer: live digests
+for sessions someone is watching in the Control UI, and a terminal digest when an
+observed run ends. Sessions nobody watches have no health, so they match only run
+and pull-request rules. Reads follow the current caller's session visibility; board specs and
+pins follow the Gateway's trusted-operator model. Interactive edits are admitted
+under the caller's live authority immediately before the write. Draft and
+incognito sessions never enter a Sessions board or its facts reads.
 
 New Sessions boards use these columns, in this order:
 
-| Column      | Deterministic rule                                                                 | Utility-model guidance                                                  |
-| ----------- | ---------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
-| Needs input | Observer health is `waiting-on-user`.                                              | Questions, approvals, or decisions waiting for the user.                |
-| Working     | Run is active **and** observer health is `on-track`, `grinding`, or `wrapping-up`. | Work in progress, including active runs without an observer digest yet. |
-| Stuck       | Observer health is `stuck` or `failed`.                                            | Failed runs and work that cannot continue without intervention.         |
-| In review   | A pull request is open or draft.                                                   | Work awaiting review.                                                   |
-| Merged      | A pull request is merged.                                                          | Landed work.                                                            |
-| Done        | Observer health is `done`. This is also the fallback column.                       | Idle or finished work with nothing else outstanding.                    |
+| Column      | Rule                                                              |
+| ----------- | ----------------------------------------------------------------- |
+| Needs input | Observer health is `waiting-on-user`.                             |
+| Stuck       | Observer health is `stuck` or `failed`, or run state is `failed`. |
+| Working     | Run is active.                                                    |
+| In review   | A pull request is open or draft.                                  |
+| Merged      | A pull request is merged.                                         |
+| Done        | Observer health is `done`. This is also the fallback column.      |
 
-Placement first checks column `match` rules in their saved order. Every field in
-a rule must match; values within a field are alternatives. The first matching
-column wins. Health rules require an observer digest, which exists only for
-observed runs. Without a matching rule, the utility model chooses from the column
-ids and descriptions using compact session facts. For example, it can recognize
-an idle session whose last reply asks for approval. Missing or invalid model
-placements use the fallback column with the reason `unresolved`.
+Placement uses an operator pin when its column still exists, then the first
+matching column in saved order, then the fallback column. `match` accepts one
+rule or an any-of array such as Stuck's
+`[{health:["stuck","failed"]},{run:["failed"]}]`, with every field within a rule
+required to match. Values within a field are alternatives. Column names
+and descriptions help people understand the board; `match` rules decide placement.
 
-Nonempty board instructions send sessions through utility-model judgment even
-when a state rule matches. Ask for distinctions such as “keep documentation
-reviews separate from code reviews,” then add columns with descriptions explaining
-that distinction. Column names are free-form and do not change card statuses.
+Drag a session into another column, or ask the Board agent to move it, to pin
+its placement. Pins remain in effect when session facts change. If a pinned
+column is removed, the board applies its rules again. Tile tooltips distinguish
+**by rule** and **pinned**.
 
-Drag a session into another column to pin its placement. Pins win over rules and
-the model until the session's placement facts change; classification then resumes.
-Tile tooltips distinguish **by rule**, **by model**, and **pinned**. **Refresh**
-requests reclassification. Reads return cached placements immediately, and an
-inline warning preserves the board when utility-model inference is unavailable.
-An inference failure keeps prior placements; new unresolved sessions use the
-fallback. A missing or failed utility model never falls back to the primary model.
+Facts update live from session changes, with automatic board rereads at most once
+every five seconds. Later events keep invalidating facts without delaying that
+reread. The board reuses unchanged facts across boards until a session change
+invalidates them, and concurrent reads share one facts refresh per board.
+Session visibility and people filters remain specific to each caller.
+Reads use prepared Gateway facts without waiting for Git or pull-request requests.
+Missing pull-request facts refresh in the background and announce a board change
+when ready. An inline warning names the
+reason when facts or pull-request information are unavailable, including on an
+empty board. A failed facts read keeps the last known facts and placement;
+sessions with no known facts use the fallback column with reason
+`facts-unavailable`. A session whose available facts match no rule also uses that
+reason while its pull-request facts are unknown. Opening a board starts any needed
+background refresh; unchanged sessions do not refresh merely because time passed.
 
 When the Control UI host supports a session dock, **Board agent** opens a
 conversation beside the board. Its first use creates and saves a dedicated
-conversation named **Sessions board · &lt;board name&gt;**. Ask that agent to change
-columns, instructions, scope, or placements using these tools:
+conversation named **Sessions board · &lt;board name&gt;**. The Board agent is the
+only model used by the board, invoked on demand to change columns, rules, scope,
+or pins using these tools:
 
-| Tool                              | Arguments and behavior                                                                                                                         |
-| --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| `workboard_sessions_board_read`   | Optional `boardId`; returns board, columns, cached sessions, and any warning.                                                                  |
-| `workboard_sessions_board_update` | Optional `boardId`, plus `columns`, `instructions`, or `scope`. `columns` replaces the complete ordered list; retain ids when renaming labels. |
-| `workboard_sessions_board_move`   | Optional `boardId`, required `sessionKey` and `columnId`; pins that session's placement.                                                       |
+| Tool                              | Arguments and behavior                                                                                                        |
+| --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `workboard_sessions_board_read`   | Optional `boardId`; returns board, columns, sessions, and any warning.                                                        |
+| `workboard_sessions_board_update` | Optional `boardId`, plus `columns` or `scope`. `columns` replaces the complete ordered list; retain ids when renaming labels. |
+| `workboard_sessions_board_move`   | Optional `boardId`, required `sessionKey` and `columnId`; pins that session's placement.                                      |
 
 These three tools are available to every agent once the plugin is enabled; unlike
 the card tools they need no `tools.allow` entry, so the Board agent works out of
@@ -165,37 +185,27 @@ id from that context or from `workboard_boards`.
 
 Specs allow 2–12 columns with unique lowercase slug ids (1–48 characters), labels
 (1–60), and descriptions (1–400). Exactly one column must have `fallback: true`.
-Optional colors use the board palette. Instructions allow up to 2,000 characters.
-`scope` accepts `agentIds`, `includeArchived`, and a positive `maxAgeHours`.
-Rules can match `health`, `run` (`active`, `idle`, `failed`), `pullRequest`
-(`none`, `open`, `draft`, `merged`, `closed`), and `archived`. Unknown pull-request
-state does not count as `none`.
+Optional colors use the board palette. `scope` accepts `agentIds`,
+`includeArchived`, and a positive `maxAgeHours`. Rules can match `health`, `run`
+(`active`, `idle`, `failed`), `pullRequest` (`none`, `open`, `draft`, `merged`,
+`closed`), and `archived`. Unknown pull-request state does not count as `none`.
 
 The Gateway methods are `workboard.sessionsBoard.read` (`operator.read`) and
-`workboard.sessionsBoard.update`, `.move`, and `.refresh` (`operator.write`). All
-require `boardId`. Update takes a `patch` object with the spec fields, including
-the dock's `agentSessionKey`; move additionally requires `sessionKey` and
-`columnId`. Create with `workboard.boards.upsert` and `kind: "sessions"`, or with
+`workboard.sessionsBoard.update` and `.move` (`operator.write`). All require
+`boardId`. Update takes a `patch` object with the spec fields, including the
+dock's `agentSessionKey`; move additionally requires `sessionKey` and `columnId`.
+Create with `workboard.boards.upsert` and `kind: "sessions"`, or with
 `workboard_board_create`. Changing an existing board's kind is rejected.
 
-Classification reuses Workboard's minute session sweep and agent completion
-hooks, but only for boards that an operator or tool read within the last 15
-minutes; an unviewed board costs nothing until it is opened again. Only changed
-session facts or board specs need reclassification; activity timestamps alone do
-not count as a change, so pins survive ordinary session activity. Facts
-reads batch at most 40 sessions. Utility requests classify at most eight sessions
-per call to fit the 600-token response cap, with at least 30 seconds between
-calls for each board. Larger boards classify in the background while prior
-placements or the fallback column remain visible. Previews are bounded and
-redacted before inference. The utility model belongs to the board's
-`orchestration.defaultAssignee`, or the configured default agent when that field
-is unset. Session scope filters do not select the utility model. Session state, observer digests,
-and pull-request state stay owned by the Gateway; Workboard stores only the board
-spec and placement cache in its SQLite tables.
-
+Workboard stores board specs and operator pins in SQLite. Session status,
+observer digests, and pull-request state remain owned by the Gateway. On plugin
+startup, older automatic placements are removed; operator pins are preserved.
+Boards whose rules still match the previous defaults receive the new run-based
+rules; only the old default column order is reordered. Customized rules, labels,
+descriptions, and custom column order are preserved.
 Sessions boards never hold cards: card creation, capture, and dispatch reject a
-Sessions board destination. Deleting one removes its placement cache without
-deleting any sessions or its Board agent conversation.
+Sessions board destination. Deleting one removes its pins without deleting any
+sessions or its Board agent conversation.
 
 ## Card fields
 
@@ -233,6 +243,14 @@ one follow-up read. Workboard defers that read while a card is being dragged,
 edited, or written, then resumes after the local interaction finishes. A
 reconnect always performs a canonical reload. There is no routine full-card
 poll, and **Refresh** remains available as manual recovery.
+
+The Gateway shares one immutable `workboard.cards.list` payload per normalized
+board filter at each store revision, including concurrent reads. Card and board
+writes invalidate it before the next read; the existing change service also
+invalidates it when it observes a commit from another SQLite connection.
+Each response still includes all board summaries, so a change to another board
+invalidates the payload too. Claim tokens remain redacted, and the RPC response
+shape is unchanged.
 
 When more than one board exists, the toolbar includes a **Board** filter backed
 by persisted board metadata rather than only the currently visible cards. Empty
@@ -293,7 +311,7 @@ plugin using the linked run and session lifecycle (see
 | `workboard_attachment_add` / `workboard_attachment_read` / `workboard_attachment_delete`                                                         | Store small card attachments in plugin SQLite state, index on the card, expose in worker context.                                                                                         |
 | `workboard_worker_log` / `workboard_protocol_violation`                                                                                          | Record worker log lines and block a card when an automated worker stops without calling `workboard_complete`/`workboard_block`.                                                           |
 | `workboard_board_create` / `workboard_board_archive` / `workboard_board_delete`                                                                  | Manage persisted board metadata (display name, description, archive state, default workspace).                                                                                            |
-| `workboard_sessions_board_read` / `workboard_sessions_board_update` / `workboard_sessions_board_move`                                            | Read Sessions board placements, edit free-form columns/instructions/scope, or pin a session in a column.                                                                                  |
+| `workboard_sessions_board_read` / `workboard_sessions_board_update` / `workboard_sessions_board_move`                                            | Read Sessions board placements, edit columns, rules, or scope, or pin a session in a column.                                                                                              |
 | `workboard_runs`                                                                                                                                 | Return the persisted run-attempt history for a card.                                                                                                                                      |
 | `workboard_specify`                                                                                                                              | Turn a rough triage/backlog card into a clarified `todo` card; records the spec summary on the card.                                                                                      |
 | `workboard_decompose`                                                                                                                            | Fan a parent orchestration card into linked children, inheriting board/tenant metadata; can complete the parent with a created-card manifest.                                             |
@@ -569,7 +587,7 @@ read/write scopes as boards:
 | `operator.read`  | `cards.list`, `cards.export`, `cards.diagnostics`, attachment list/get, notification event reads, `boards.list`, `cards.stats`, `cards.runs`                                                                                                                                                                                                                                                            |
 | `operator.read`  | `sessionsBoard.read`                                                                                                                                                                                                                                                                                                                                                                                    |
 | `operator.write` | `cards.diagnostics.refresh`, create/captureSession/update/move/delete/comment/link/linkDependency/proof/artifact, attachment add/delete, worker log, protocol violation, claim/heartbeat/release/promote/reassign/reclaim/complete/block/unblock/start, `cards.dispatch`, `cards.bulk`, archive, `boards.upsert`/`archive`/`delete`, `cards.specify`/`decompose`, notification subscribe/delete/advance |
-| `operator.write` | `sessionsBoard.update`, `sessionsBoard.move`, `sessionsBoard.refresh`                                                                                                                                                                                                                                                                                                                                   |
+| `operator.write` | `sessionsBoard.update`, `sessionsBoard.move`                                                                                                                                                                                                                                                                                                                                                            |
 
 `workboard.cards.update`, `workboard.cards.move`, `workboard.cards.archive`, and
 `workboard.cards.delete` accept an optional `expectedUpdatedAt` request field.
@@ -598,8 +616,8 @@ plugin key-value entries). A card export preserves the board narrative
 without inlining attachment blob contents.
 
 Sessions boards add optional `kind` and `sessions_spec` columns to
-`workboard_boards`, plus `workboard_session_placements` for cached column, source,
-reason, facts hash, and update time. Existing board rows are not backfilled;
+`workboard_boards`, plus `workboard_session_placements` for operator pins.
+Existing board rows are not backfilled;
 an absent kind still means a Cards board. Rolling back to a release without Sessions
 boards shows each Sessions board as an empty Cards board and ignores the placement
 table; cards created against it there are rejected once the newer release runs again. Session transcripts and the Board agent
@@ -609,10 +627,10 @@ SQLite opening, queries, and transactions run in a background database worker.
 Disabling or reloading the plugin drains admitted storage work before closing
 its connections.
 
-Installations that used Workboard in the `.28` release can run
-`openclaw doctor --fix` to migrate the shipped legacy plugin-state namespaces
-(`workboard.cards`, `workboard.boards`, `workboard.notify`, and, if present,
-`workboard.attachments`) into the relational database.
+Installations with retained pre-July 2026 Workboard plugin-state KV data must
+upgrade through OpenClaw `2026.9.7` and run `openclaw doctor --fix` before upgrading
+to the latest version. Current Doctor reports this requirement without changing
+the legacy rows; current relational SQLite stores remain supported.
 
 ## Troubleshooting
 

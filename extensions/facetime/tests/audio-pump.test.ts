@@ -60,18 +60,6 @@ describe("FaceTime native audio bridge", () => {
     await activePump.stop();
     vi.useRealTimers();
   });
-  it("routes model audio through the separate SoX playback process", () => {
-    const { pump, processes, spawn } = createPump();
-
-    const outputIndex = spawn.mock.calls.findIndex((call) => call[0].endsWith("sox"));
-    const captureIndex = spawn.mock.calls.findIndex((call) => call[0] === "/capture");
-    expect(outputIndex).toBeGreaterThanOrEqual(0);
-    expect(spawn.mock.calls[outputIndex]?.[1]).toContain("OpenClaw-Feed");
-    pump.writeOutputAudio(Buffer.from([4, 5, 6]));
-    expect(processes[outputIndex]?.stdin.writes).toEqual([Buffer.from([4, 5, 6])]);
-    expect(processes[captureIndex]?.stdin.writes).toEqual([]);
-  });
-
   it("publishes suppression and route readiness from assembled native lines", async () => {
     const onInputAudio = vi.fn();
     const { pump, processes, spawn } = createPump({ onInputAudio });
@@ -109,9 +97,15 @@ describe("FaceTime native audio bridge", () => {
 
   it("reports playback drain after the separate output process should be audible", async () => {
     const onPlaybackDrained = vi.fn();
-    const { pump } = createPump({ onPlaybackDrained });
+    const { pump, processes, spawn } = createPump({ onPlaybackDrained });
 
-    pump.writeOutputAudio(Buffer.alloc(4_800), { itemId: "greeting" });
+    const audio = Buffer.alloc(4_800, 4);
+    pump.writeOutputAudio(audio, { itemId: "greeting" });
+    const outputIndex = spawn.mock.calls.findIndex((call) => call[0].endsWith("sox"));
+    expect(outputIndex).toBeGreaterThanOrEqual(0);
+    expect(spawn.mock.calls[outputIndex]?.[1]).toContain("OpenClaw-Feed");
+    expect(processes[outputIndex]?.stdin.writes).toEqual([audio]);
+    expect(processes[0]?.stdin.writes).toEqual([]);
     pump.finishOutputAudio();
     expect(pump.playedAudioFrames()).toBe(0);
     expect(pump.queuedAudioFrames()).toBe(2_400);

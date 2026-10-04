@@ -29,6 +29,7 @@ export function createSubagentRegistryListener(config: {
   pendingLifecycle: ReturnType<typeof createPendingLifecycleScheduler>;
   onAgentEvent: (listener: (event: AgentEventPayload) => void) => () => void;
   resumeRequesterSettleWake: (runId: string, entry: SubagentRunRecord) => void;
+  adoptPausedSubagentRunIntoSuccessor: (entry: SubagentRunRecord) => Promise<boolean>;
   refreshFrozenResultFromSession: (sessionKey: string) => Promise<unknown>;
   completeSubagentRunWithRecovery: (
     params: SubagentCompletionRequest,
@@ -51,21 +52,18 @@ export function createSubagentRegistryListener(config: {
       return;
     }
     listenerStop = onAgentEvent((evt) => {
-      void (async () => {
-        if (!evt || evt.stream !== "lifecycle") {
-          return;
-        }
+      if (!evt || evt.stream !== "lifecycle") {
+        return;
+      }
+      // Own lifecycle writes before their first await, including restart preservation.
+      void runWithGatewayIndependentRootWorkContinuation(async () => {
         const phase = evt.data?.phase;
         const entry = runs.get(evt.runId);
         if (!entry) {
           if (phase === "end" && typeof evt.sessionKey === "string") {
             const sessionKey = evt.sessionKey;
-            // A replacement generation can finish after its predecessor row is
-            // terminal. Retain its admitted work through capture + persistence,
-            // even if restart or suspension has since closed admission.
-            await runWithGatewayIndependentRootWorkContinuation(async () => {
-              await refreshFrozenResultFromSession(sessionKey);
-            }, "subagents:result-refresh");
+            // A replacement generation can finish after its predecessor row is terminal.
+            await refreshFrozenResultFromSession(sessionKey);
           }
           return;
         }
@@ -196,6 +194,9 @@ export function createSubagentRegistryListener(config: {
             if (paused?.pauseReason === "sessions_yield") {
               // An earlier event can arm grace while this row's publication awaits its ACK.
               pendingLifecycle.clear(evt.runId);
+              if (await config.adoptPausedSubagentRunIntoSuccessor(paused)) {
+                return;
+              }
               if (paused.requesterSettleWake?.pauseNotice) {
                 config.resumeRequesterSettleWake(paused.runId, paused);
               }
@@ -271,7 +272,7 @@ export function createSubagentRegistryListener(config: {
         }
         pendingLifecycle.clear(evt.runId);
         await complete({ status: "ok" }, SUBAGENT_ENDED_REASON_COMPLETE, "lifecycle-ok-event");
-      })().catch((err: unknown) => {
+      }, "subagents:lifecycle-event").catch((err: unknown) => {
         warn("lifecycle event handler failed", { err, runId: evt.runId });
       });
     });

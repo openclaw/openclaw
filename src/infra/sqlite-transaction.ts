@@ -21,6 +21,8 @@ import {
 } from "./sqlite-error-diagnostics.js";
 import { discardSqliteTransactionState } from "./sqlite-post-commit.js";
 import { captureSqliteReaderOwner } from "./sqlite-reader-lifecycle.js";
+import { runSqliteReadOperationSync } from "./sqlite-schema-facts.js";
+import type { SqliteWorkerDatabaseContext } from "./sqlite-worker-database-context.js";
 import { normalizeDatabasePath } from "./sqlite-worker-identity.js";
 
 const DEFAULT_SLOW_BUSY_WAIT_MS = 1_000;
@@ -314,19 +316,6 @@ function execTimedTransactionStep(params: {
   }
 }
 
-function beginTransaction(
-  db: DatabaseSync,
-  options: SqliteTransactionOptions | undefined,
-  mode: SqliteTransactionMode,
-): void {
-  execTimedTransactionStep({
-    db,
-    options,
-    sql: mode === "immediate" ? "BEGIN IMMEDIATE" : "BEGIN",
-    step: "begin",
-  });
-}
-
 function commitImmediateTransaction(
   db: DatabaseSync,
   options: SqliteTransactionOptions | undefined,
@@ -396,7 +385,7 @@ function runSqliteTransactionSync<T>(
     // nested native/SDK calls correct without module-local depth or counters.
     db.exec("SAVEPOINT openclaw_tx_nested");
     try {
-      const result = operation();
+      const result = runSqliteReadOperationSync(db, operation);
       assertSyncTransactionResult(result);
       assertTransactionUsable(db);
       db.exec("RELEASE SAVEPOINT openclaw_tx_nested");
@@ -418,11 +407,18 @@ function runSqliteTransactionSync<T>(
     }
   }
 
-  beginTransaction(db, options, mode);
+  execTimedTransactionStep({
+    db,
+    options,
+    sql: mode === "immediate" ? "BEGIN IMMEDIATE" : "BEGIN",
+    step: "begin",
+  });
   const transactionStartedAt = Date.now();
   let commitStarted = false;
   try {
-    const result = operation();
+    // BEGIN may wait for a foreign writer. Admit its committed schema inside
+    // rollback protection, then share that snapshot's facts with all kernels.
+    const result = runSqliteReadOperationSync(db, operation, "fresh");
     assertSyncTransactionResult(result);
     assertTransactionUsable(db);
     commitStarted = true;
@@ -468,6 +464,28 @@ export function runSqliteImmediateTransactionSync<T>(
   options?: SqliteTransactionOptions,
 ): T {
   return runSqliteTransactionSync(db, operation, "immediate", options);
+}
+
+/** Admit the borrowed worker connection after BEGIN and before its physical commit. */
+export function runSqliteWorkerTransactionSync<T>(
+  context: SqliteWorkerDatabaseContext,
+  operation: () => T,
+  options?: SqliteTransactionOptions,
+): T {
+  return runSqliteImmediateTransactionSync(
+    context.database,
+    () => {
+      context.admit("transaction");
+      return operation();
+    },
+    {
+      ...options,
+      withCommit(commit) {
+        context.admit("commit");
+        return options?.withCommit ? options.withCommit(commit) : commit();
+      },
+    },
+  );
 }
 
 /** Prepare outside the transaction; yield for admission without replaying admitted writes. */

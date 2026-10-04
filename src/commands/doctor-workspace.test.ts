@@ -79,7 +79,7 @@ describe("root memory repair", () => {
   beforeEach(async () => {
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-root-memory-"));
     cfg = {
-      agents: { defaults: { workspace: tmpDir }, entries: { main: { default: true } } },
+      agents: { defaults: { workspace: tmpDir }, entries: { main: {} } },
     };
     prompter = createDoctorPrompter({
       runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },

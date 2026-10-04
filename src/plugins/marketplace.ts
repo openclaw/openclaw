@@ -268,52 +268,27 @@ function marketplaceInstallPolicySource(params: {
   resolvedPath: string;
   source: MarketplaceEntrySource;
 }): InstallPolicySource {
-  const marketplaceMutable = !isImmutableGitCommitRef(params.marketplaceRef);
-  const entryMutable = !isImmutableGitCommitRef(marketplaceEntryGitRef(params.source));
-  if (resolveArchiveKind(params.resolvedPath)) {
-    if (
-      params.marketplaceOrigin === "remote" &&
-      params.source.kind === "path" &&
-      !hasHttpUrlPrefix(params.source.path)
-    ) {
-      return {
-        kind: "archive",
-        authority: "third-party",
-        mutable: marketplaceMutable,
-        network: true,
-      };
-    }
-    if (params.source.kind === "path" && !hasHttpUrlPrefix(params.source.path)) {
-      return { kind: "archive", authority: "user", mutable: true, network: false };
-    }
-    return { kind: "archive", authority: "third-party", mutable: entryMutable, network: true };
-  }
-
-  if (
-    params.marketplaceOrigin === "remote" &&
-    params.source.kind === "path" &&
-    !hasHttpUrlPrefix(params.source.path)
-  ) {
-    return { kind: "git", authority: "third-party", mutable: marketplaceMutable, network: true };
-  }
-
-  if (params.source.kind === "path") {
-    if (hasHttpUrlPrefix(params.source.path)) {
-      return { kind: "archive", authority: "third-party", mutable: true, network: true };
-    }
-    return { kind: "local-path", authority: "user", mutable: true, network: false };
-  }
-
-  if (params.source.kind === "url") {
+  const archive = Boolean(resolveArchiveKind(params.resolvedPath));
+  if (params.source.kind === "path" && !hasHttpUrlPrefix(params.source.path)) {
+    const remote = params.marketplaceOrigin === "remote";
     return {
-      kind: resolveArchiveKind(params.source.url) ? "archive" : "git",
-      authority: "third-party",
-      mutable: entryMutable,
-      network: true,
+      kind: archive ? "archive" : remote ? "git" : "local-path",
+      authority: remote ? "third-party" : "user",
+      mutable: remote ? !isImmutableGitCommitRef(params.marketplaceRef) : true,
+      network: remote,
     };
   }
-
-  return { kind: "git", authority: "third-party", mutable: entryMutable, network: true };
+  return {
+    kind:
+      archive ||
+      params.source.kind === "path" ||
+      (params.source.kind === "url" && resolveArchiveKind(params.source.url))
+        ? "archive"
+        : "git",
+    authority: "third-party",
+    mutable: !isImmutableGitCommitRef(marketplaceEntryGitRef(params.source)),
+    network: true,
+  };
 }
 
 function marketplaceInstallPolicyRequestKind(params: {
@@ -1001,15 +976,11 @@ async function resolveMarketplaceEntryInstallPath(params: {
       params.marketplaceOrigin === "remote"
         ? await fs.realpath(params.marketplaceRootDir)
         : undefined;
-    const resolved = path.isAbsolute(params.source.path)
+    return path.isAbsolute(params.source.path)
       ? { ok: true as const, path: params.source.path }
       : await ensureInsideMarketplaceRoot(params.marketplaceRootDir, params.source.path, {
           canonicalRootDir,
         });
-    if (!resolved.ok) {
-      return resolved;
-    }
-    return { ok: true, path: resolved.path };
   }
 
   if (params.source.kind === "url") {

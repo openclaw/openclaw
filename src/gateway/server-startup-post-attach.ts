@@ -91,18 +91,12 @@ async function hasGatewayStartupInternalHookListeners(): Promise<boolean> {
   return hasInternalHookListeners("gateway", "startup");
 }
 
-async function waitForAcpRuntimeBackendReady(params: {
-  backendId?: string;
-  timeoutMs?: number;
-  pollMs?: number;
-}): Promise<boolean> {
+async function waitForAcpRuntimeBackendReady(backendId?: string): Promise<boolean> {
   const { getAcpRuntimeBackend } = await import("../acp/runtime/registry.js");
-  const timeoutMs = params.timeoutMs ?? ACP_BACKEND_READY_TIMEOUT_MS;
-  const pollMs = params.pollMs ?? ACP_BACKEND_READY_POLL_MS;
-  const deadline = performance.now() + timeoutMs;
+  const deadline = performance.now() + ACP_BACKEND_READY_TIMEOUT_MS;
 
   do {
-    const backend = getAcpRuntimeBackend(params.backendId);
+    const backend = getAcpRuntimeBackend(backendId);
     if (backend) {
       try {
         if (!backend.healthy || backend.healthy()) {
@@ -112,7 +106,7 @@ async function waitForAcpRuntimeBackendReady(params: {
         // Treat transient backend health probe errors like "not ready yet".
       }
     }
-    await sleep(pollMs, undefined, { ref: false });
+    await sleep(ACP_BACKEND_READY_POLL_MS, undefined, { ref: false });
   } while (performance.now() < deadline);
 
   return false;
@@ -315,16 +309,11 @@ export async function startGatewaySidecars(params: {
             },
             Math.max(0, deadlineAtMs - Date.now()),
           );
-          void stopPromise.then(
-            (result) => {
-              clearTimeout(timer);
-              resolve(result);
-            },
-            (error: unknown) => {
-              clearTimeout(timer);
+          void stopPromise
+            .finally(() => clearTimeout(timer))
+            .then(resolve, (error: unknown) => {
               reject(error instanceof Error ? error : new Error(String(error)));
-            },
-          );
+            });
         });
       },
     };
@@ -344,6 +333,7 @@ export async function startGatewaySidecars(params: {
           return;
         }
         await startPluginServices({
+          scheduler: params.scheduler,
           registry: params.pluginRegistry,
           config: params.cfg,
           workspaceDir: params.defaultWorkspaceDir,
@@ -411,7 +401,7 @@ export async function startGatewaySidecars(params: {
         return;
       }
       const ready = await measureStartup(params.startupTrace, "sidecars.acp.runtime-ready", () =>
-        waitForAcpRuntimeBackendReady({ backendId: params.cfg.acp?.backend }),
+        waitForAcpRuntimeBackendReady(params.cfg.acp?.backend),
       );
       params.startupTrace?.detail("sidecars.acp.runtime-ready", [
         ["readyCount", ready ? 1 : 0],

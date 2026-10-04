@@ -50,8 +50,6 @@ import type { MatrixUsageAccounting } from "./lib/code-mode-matrix-usage.ts";
 import { previewForDevToolLog, redactJsonValueForDevToolLog } from "./lib/dev-tooling-safety.ts";
 import { groupBy } from "./lib/group-by.mts";
 
-export { validateQaEvidenceSummaryJson };
-
 const execFileAsync = promisify(execFile);
 const SOURCE_PATH = "scripts/code-mode-model-matrix.ts";
 const MATRIX_SCHEMA_VERSION = 1;
@@ -195,7 +193,6 @@ type MatrixRunDependencies = {
   buildCliArtifacts?: (repoRoot: string) => Promise<void>;
   now?: () => Date;
   readBuildSha256?: (repoRoot: string) => Promise<string>;
-  readGitSha?: (repoRoot: string) => Promise<string>;
   readSourceIdentity?: (repoRoot: string) => Promise<SourceIdentity>;
   runCell?: (params: RunCellParams) => Promise<CodeModeMatrixCellResult>;
 };
@@ -948,7 +945,6 @@ export function classifyCodeModeMatrixCell(params: {
   mode: CodeModeMatrixMode;
   model: string;
   stdoutContractValid?: boolean;
-  task: CodeModeMatrixTask;
 }): {
   failureCategory: CellFailureCategory | null;
   oracle: CodeModeMatrixCellResult["oracle"];
@@ -1284,7 +1280,6 @@ async function runMatrixCell(params: RunCellParams): Promise<CodeModeMatrixCellR
       mode: params.cell.mode,
       model: params.cell.model,
       stdoutContractValid: command.stdoutContractValid,
-      task: params.cell.task,
     });
     return {
       ...(command.envelope.assistantTurns !== undefined
@@ -1519,13 +1514,7 @@ export async function runCodeModeModelMatrix(
   const runtimeRepoRoot = options.runtimeDir ?? options.repoRoot;
   const sourceIdentity = deps.readSourceIdentity
     ? await deps.readSourceIdentity(runtimeRepoRoot)
-    : deps.readGitSha
-      ? {
-          gitSha: await deps.readGitSha(runtimeRepoRoot),
-          sourceDirty: false,
-          sourcePatchSha256: null,
-        }
-      : await readSourceIdentity(runtimeRepoRoot, STRICT_SOURCE_IDENTITY_OPTIONS);
+    : await readSourceIdentity(runtimeRepoRoot, STRICT_SOURCE_IDENTITY_OPTIONS);
   if (options.runtimeDir && sourceIdentity.sourceDirty) {
     throw new Error("--runtime-dir must identify a clean committed checkout.");
   }

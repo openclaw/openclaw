@@ -6,6 +6,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import { resolvePluginDoctorContractArtifact } from "./doctor-contract-artifact.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
+import { createPluginManifestRecordFixture } from "./plugin-metadata.test-support.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 import {
   getRegistryJitiMocks,
@@ -40,8 +41,13 @@ let setPluginDoctorContractRegistryModuleLoaderFactoryForTest:
   | typeof import("./doctor-contract-registry.test-fixtures.js").setPluginDoctorContractRegistryModuleLoaderFactoryForTest
   | undefined;
 
-function mockDoctorPlugins(...plugins: Record<string, unknown>[]): void {
-  mocks.loadPluginManifestRegistry.mockReturnValue({ plugins, diagnostics: [] });
+function mockDoctorPlugins(
+  ...plugins: Parameters<typeof createPluginManifestRecordFixture>[0][]
+): void {
+  mocks.loadPluginManifestRegistry.mockReturnValue({
+    plugins: plugins.map(createPluginManifestRecordFixture),
+    diagnostics: [],
+  });
 }
 
 function makeTempDir(): string {
@@ -191,15 +197,10 @@ describe("doctor-contract-registry module loader", () => {
         return { config: cfg, changes: ["repaired config"] };
       },
     }));
-    mocks.loadPluginManifestRegistry.mockReturnValue({
-      plugins: [
-        {
-          id: "normalizer-only",
-          rootDir: pluginRoot,
-          doctorContract: { configRepair: true },
-        },
-      ],
-      diagnostics: [],
+    mockDoctorPlugins({
+      id: "normalizer-only",
+      rootDir: pluginRoot,
+      doctorContract: { configRepair: true },
     });
 
     const config = {};
@@ -422,11 +423,11 @@ describe("doctor-contract-registry module loader", () => {
     );
     mocks.loadPluginManifestRegistry
       .mockReturnValueOnce({
-        plugins: [{ id: "first-plugin", rootDir: firstRoot }],
+        plugins: [createPluginManifestRecordFixture({ id: "first-plugin", rootDir: firstRoot })],
         diagnostics: [],
       })
       .mockReturnValueOnce({
-        plugins: [{ id: "second-plugin", rootDir: secondRoot }],
+        plugins: [createPluginManifestRecordFixture({ id: "second-plugin", rootDir: secondRoot })],
         diagnostics: [],
       });
 
@@ -450,7 +451,7 @@ describe("doctor-contract-registry module loader", () => {
     (enabled) => {
       const bundledRoot = makeTempDir();
       const externalRoot = makeTempDir();
-      const bundledRecord = {
+      const bundledRecord = createPluginManifestRecordFixture({
         id: "matrix",
         rootDir: bundledRoot,
         origin: "bundled" as const,
@@ -459,11 +460,18 @@ describe("doctor-contract-registry module loader", () => {
         doctorContract: {
           stateMigrations: [{ id: "matrix-inbound-dedupe-to-claimable-dedupe" }],
         },
-      };
+      });
       mocks.loadPluginManifestRegistry
         .mockReturnValueOnce({ plugins: [bundledRecord], diagnostics: [] })
         .mockReturnValueOnce({
-          plugins: [{ ...bundledRecord, rootDir: externalRoot, origin: "global" }],
+          plugins: [
+            createPluginManifestRecordFixture({
+              id: bundledRecord.id,
+              rootDir: externalRoot,
+              origin: "global",
+              doctorContract: bundledRecord.doctorContract,
+            }),
+          ],
           diagnostics: [],
         });
       const config = {
@@ -482,7 +490,7 @@ describe("doctor-contract-registry module loader", () => {
   it("does not grant bundled migration descriptors to an implicitly selected external shadow", () => {
     const bundledRoot = makeTempDir();
     const externalRoot = makeTempDir();
-    const bundledRecord = {
+    const bundledRecord = createPluginManifestRecordFixture({
       id: "matrix",
       rootDir: bundledRoot,
       origin: "bundled" as const,
@@ -491,17 +499,18 @@ describe("doctor-contract-registry module loader", () => {
       doctorContract: {
         stateMigrations: [{ id: "matrix-inbound-dedupe-to-claimable-dedupe" }],
       },
-    };
+    });
     mocks.loadPluginManifestRegistry
       .mockReturnValueOnce({ plugins: [bundledRecord], diagnostics: [] })
       .mockReturnValueOnce({
         plugins: [
-          {
-            ...bundledRecord,
+          createPluginManifestRecordFixture({
+            id: bundledRecord.id,
             rootDir: externalRoot,
             origin: "global",
+            doctorContract: bundledRecord.doctorContract,
             enabledByDefault: true,
-          },
+          }),
         ],
         diagnostics: [],
       });
@@ -515,7 +524,7 @@ describe("doctor-contract-registry module loader", () => {
   });
 
   it("keeps a disabled bundled channel catalog-known without making it executable or unresolved", () => {
-    const bundledRecord = {
+    const bundledRecord = createPluginManifestRecordFixture({
       id: "discord",
       rootDir: makeTempDir(),
       origin: "bundled" as const,
@@ -524,7 +533,7 @@ describe("doctor-contract-registry module loader", () => {
       doctorContract: {
         stateMigrations: [{ id: "discord-legacy-channel-state" }],
       },
-    };
+    });
     mocks.loadPluginManifestRegistry
       .mockReturnValueOnce({ plugins: [bundledRecord], diagnostics: [] })
       .mockReturnValueOnce({ plugins: [bundledRecord], diagnostics: [] });

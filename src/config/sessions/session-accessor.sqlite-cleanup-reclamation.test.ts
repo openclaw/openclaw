@@ -137,7 +137,7 @@ describe("SQLite lifecycle cleanup reclamation", () => {
         }
         return result;
       });
-      const previous = runExclusiveSessionLifecycleMutation({
+      const previous = runExclusiveSessionLifecycleMutation("delete", {
         scope: storePath,
         identities: [current.sessionKey, current.sessionId],
         run: async () => {
@@ -214,12 +214,13 @@ describe("SQLite lifecycle cleanup reclamation", () => {
   it("keeps published history when the entry changes during final materialization", async () => {
     const current = scope("entry-materialization-run");
     const history = { ...current, sessionId: "entry-materialization-history" };
+    const updatedAt = Date.now();
     const events = [{ type: "session", id: current.sessionId, content: "original transcript" }];
-    await replaceSessionEntry(history, { sessionId: history.sessionId, updatedAt: 1 });
+    await replaceSessionEntry(history, { sessionId: history.sessionId, updatedAt });
     await replaceTranscriptEvents(history, [
       { type: "session", id: history.sessionId, content: "already published history" },
     ]);
-    await replaceSessionEntry(current, { sessionId: current.sessionId, updatedAt: 1 });
+    await replaceSessionEntry(current, { sessionId: current.sessionId, updatedAt });
     await replaceTranscriptEvents(current, events);
     const expectedEntry = loadSessionEntry(current);
     if (!expectedEntry) {

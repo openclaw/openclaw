@@ -423,6 +423,11 @@ export async function mutateSubagentRuns<P extends SubagentRunMutation<unknown>>
   const runs = options.runs ?? subagentRuns;
   const recovery = options.gatewayRecovery;
   const recoveredRuntimeKey = recovery ? {} : undefined;
+  const runtimeKeyFor = (current: SubagentRunRecord | undefined, row: SubagentRunRecord) =>
+    recoveredRuntimeKey ??
+    (current && isSameSubagentRun(current, row)
+      ? getSubagentRunRuntimeKey(current)
+      : getSubagentRunRuntimeKey(row));
   const assertRecoveryCurrent = () => {
     if (!recovery) {
       return;
@@ -476,7 +481,6 @@ export async function mutateSubagentRuns<P extends SubagentRunMutation<unknown>>
       for (const runId of runIds) {
         const entry = runs.get(runId);
         if (entry) {
-          getSubagentRunRuntimeKey(entry);
           rows.set(runId, immutableSubagentRun(entry));
         }
       }
@@ -493,13 +497,7 @@ export async function mutateSubagentRuns<P extends SubagentRunMutation<unknown>>
           );
         }
         if (row) {
-          const current = rows.get(id);
-          const key =
-            recoveredRuntimeKey ??
-            (current && isSameSubagentRun(current, row)
-              ? getSubagentRunRuntimeKey(current)
-              : getSubagentRunRuntimeKey(row));
-          bindSubagentRunRuntimeKey(row, key);
+          bindSubagentRunRuntimeKey(row, runtimeKeyFor(rows.get(id), row));
         }
       }
       pending.rekeys = [...(planned.rekeys ?? [])].map(([from, to]) => {
@@ -554,15 +552,11 @@ export async function mutateSubagentRuns<P extends SubagentRunMutation<unknown>>
             );
           }
           if (row) {
-            const current = rows.get(id);
+            // Planned rows were bound before commit; receipt-only rows bind here.
             const plannedRow = planned.postimages?.get(id);
-            const key =
-              recoveredRuntimeKey ??
-              (plannedRow
-                ? getSubagentRunRuntimeKey(plannedRow)
-                : current && isSameSubagentRun(current, row)
-                  ? getSubagentRunRuntimeKey(current)
-                  : getSubagentRunRuntimeKey(row));
+            const key = plannedRow
+              ? getSubagentRunRuntimeKey(plannedRow)
+              : runtimeKeyFor(rows.get(id), row);
             bindSubagentRunRuntimeKey(row, key);
           }
         }

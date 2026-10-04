@@ -136,6 +136,9 @@ owner, so callbacks from the closed Gateway cannot settle the recovered wake.
   An explicit `mode: "followup"` keeps separate activity tracking and leaves the
   child's original result or pending yield intact. Explicit plugin follow-ups
   naming a new requester continue to create their own delivery obligation.
+  A default-delivery follow-up admitted before the pause publishes receives
+  the paused row's requester, completion custody, and settlement obligation
+  when the pause publishes; requester-bound follow-ups keep their own delivery.
 - **Deterministic batches.** Frozen run IDs are sorted. Findings use creation
   time, completion time, and child session identity as tie-breakers. Superseded
   child rows are excluded. Batch identity includes requester identity, child
@@ -151,7 +154,8 @@ owner, so callbacks from the closed Gateway cannot settle the recovered wake.
   in flight, settlement observes the same request without spending failure
   attempts or discarding the child results. Gateway admission and execution
   retain their own timeouts; explicit cancellation still stops the turn.
-  Individual private announcements keep their existing delivery deadline.
+  Individual private announcements keep their delivery deadline until requester
+  execution starts; the Gateway's requester runtime budget then applies.
   Findings are capped at 4,096 characters, individual
   results at 512, and route notices at 1,024. Ambiguous replay reuses its attempt
   key; it does not assert global exactly-once delivery across Gateway restarts.

@@ -11,19 +11,20 @@ import {
 import { wrapToolWithAbortSignal } from "../../agent-tools.abort.js";
 import { resolveToolLoopDetectionConfig } from "../../agent-tools.js";
 import { isCodeModeExecTool } from "../../code-mode-control-tools.js";
-import { addClientToolsToCodeModeCatalog } from "../../code-mode.js";
 import { isCoreToolResultMediaTrustedName } from "../../embedded-agent-tool-media.js";
 import type { AgentTool } from "../../runtime/index.js";
 import {
   createToolDefinitionFromAgentTool,
   wrapToolDefinition,
 } from "../../sessions/tools/tool-definition-wrapper.js";
+import { normalizeToolPolicyName } from "../../tool-policy-shared.js";
 import {
   collectReplaySafeToolNames,
   collectSideEffectToolOwners,
   isAgentToolReplaySafe,
 } from "../../tool-replay-safety.js";
-import { addClientToolsToToolSearchCatalog, type ToolSearchCatalogRef } from "../../tool-search.js";
+import { addClientToolsToToolCatalog } from "../../tool-search-catalog.js";
+import { resolveToolSearchConfig, type ToolSearchCatalogRef } from "../../tool-search.js";
 import { log } from "../logger.js";
 import {
   AGENT_RESERVED_TOOL_NAMES,
@@ -130,6 +131,14 @@ export function prepareEmbeddedAttemptClientTools(params: {
     const codeModeExecToolNames = new Set(
       params.effectiveTools.filter((tool) => isCodeModeExecTool(tool)).map((tool) => tool.name),
     );
+    // Only a tool author can opt a tool into delivering its result as the source reply.
+    // Names are policy-normalized because completion and terminal hooks compare them so.
+    const sourceReplyCapableToolNames = new Set(
+      params.uncompactedEffectiveTools
+        .filter((tool) => "canDeliverSourceReply" in tool && tool.canDeliverSourceReply === true)
+        .map((tool) => normalizeToolPolicyName(tool.name ?? ""))
+        .filter((name) => name.length > 0),
+    );
     const clientConflictToolNames = params.deferredDirectoryToolsCallable
       ? builtinToolNames
       : coreBuiltinToolNames;
@@ -157,20 +166,11 @@ export function prepareEmbeddedAttemptClientTools(params: {
           ),
       },
     );
-    const addClientToolsToCatalog = params.codeModeControlsEnabledForRun
-      ? addClientToolsToCodeModeCatalog
-      : addClientToolsToToolSearchCatalog;
-    const clientToolSearch = addClientToolsToCatalog({
+    const search = resolveToolSearchConfig(params.toolSearchRuntimeConfig);
+    const clientToolSearch = addClientToolsToToolCatalog({
       tools: clientToolDefs,
-      // Activation was resolved for this attempt; only Tool Search still needs
-      // its runtime configuration to choose the catalog layout.
-      config: params.codeModeControlsEnabledForRun
-        ? params.attempt.config
-        : params.toolSearchRuntimeConfig,
-      sessionId: params.attempt.sessionId,
-      sessionKey: params.sandboxSessionKey,
-      agentId: params.sessionAgentId,
-      runId: params.attempt.runId,
+      enabled:
+        params.codeModeControlsEnabledForRun || (search.enabled && search.mode !== "directory"),
       catalogRef: params.toolSearchCatalogRef,
     });
     clientToolDefs = clientToolSearch.tools;
@@ -198,6 +198,7 @@ export function prepareEmbeddedAttemptClientTools(params: {
       replaySafeToolNames,
       replaySafeTools,
       codeModeExecToolNames,
+      sourceReplyCapableToolNames,
       sideEffectToolOwners,
       sessionToolAllowlist,
       trustedLocalMediaToolNames,
@@ -220,6 +221,7 @@ export function prepareEmbeddedAttemptClientTools(params: {
         "coreBuiltinToolNames",
         "replaySafeToolNames",
         "codeModeExecToolNames",
+        "sourceReplyCapableToolNames",
         "trustedLocalMediaToolNames",
       ] as const) {
         current[key].clear();

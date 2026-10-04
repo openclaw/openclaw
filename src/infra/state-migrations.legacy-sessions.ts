@@ -17,7 +17,6 @@ import {
   recordCompletedLegacyAgentDirMigration,
 } from "./state-migrations.agent-dir-receipt.js";
 import {
-  ensureMigrationDir,
   migrationFileExists,
   readSessionStoreJson5,
   type SessionEntryLike,
@@ -463,7 +462,7 @@ export async function migrateLegacyAgentDir(
         continue;
       }
       const stateRoot = fs.realpathSync(detected.stateDir);
-      ensureMigrationDir(targetDir);
+      fs.mkdirSync(targetDir, { recursive: true });
       targetRoot = fs.realpathSync(targetDir);
       if (
         !fs.lstatSync(targetDir).isDirectory() ||

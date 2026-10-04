@@ -33,7 +33,7 @@ import type {
   SessionTranscriptSummaryResult,
 } from "./session-transcript-summary.js";
 
-export type { SessionTranscriptReadScope } from "./session-transcript-read-kernel.js";
+export type { SessionTranscriptReadScope } from "./session-transcript-read.types.js";
 export { capArrayByJsonBytes } from "./session-utils.fs.js";
 export { attachOpenClawTranscriptMeta } from "./session-transcript-entry-message.js";
 export { readSessionTranscriptVisibleMessageDeltaCore } from "../config/sessions/session-accessor.sqlite-active-events.js";
@@ -198,7 +198,7 @@ export async function readSessionMessageByIdAsync(
   if (usesProcessHeldTranscript(target)) {
     return sessionTranscriptReader.readSessionMessageByIdAsync(target, messageId, options);
   }
-  const capturedOptions = options ? { ...options } : undefined;
+  const capturedOptions = options ? structuredClone(options) : undefined;
   const { readSessionHistoryPageInWorker } =
     await import("../config/sessions/session-history-worker-runtime.js");
   return readSessionHistoryPageInWorker({

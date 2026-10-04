@@ -182,16 +182,16 @@ describe("system agent operations", () => {
   });
 
   it("reads canonical array indices after redaction", async () => {
-    const configPath = "agents.list[00].id";
+    const configPath = "agents.entries.main.skills[00]";
     mockConfig.setConfig({
       channels: { modelByChannel: { telegram: { "team.ops[west]": "openai/gpt-5.5" } } },
       models: { providers: { "local.service": { apiKey: "synthetic-key" } } },
-      agents: { list: [{ id: "main" }] },
+      agents: { entries: { main: { skills: ["weather"] } } },
     });
     const operation = parseSystemAgentOperation(`config get ${configPath}`);
     expect(operation).toEqual({ kind: "config-get", path: configPath });
     expect(await executeSystemAgentOperation(operation, runtime)).toEqual({ applied: false });
-    expect(lines).toEqual([`${configPath} = "main"`]);
+    expect(lines).toEqual([`${configPath} = "weather"`]);
   });
 
   it("keeps invalid config reads available without exposing recovery secrets", async () => {
@@ -476,8 +476,8 @@ describe("system agent operations", () => {
       id: "MEMORY_SEARCH_REMOTE_API_KEY",
       secret: "embed-owner-key-7f3c9a1d",
     };
-    const storedEntries = () =>
-      listSecretStoreEntries({ scope: { kind: "team" } }).map((entry) => entry.name);
+    const storedEntries = async () =>
+      (await listSecretStoreEntries({ scope: { kind: "team" } })).map((entry) => entry.name);
     const readStored = (name: string) => readSecretStoreValue({ scope: { kind: "team" }, name });
     const mintedName = expect.stringMatching(/^MEMORY_SEARCH_REMOTE_API_KEY_[0-9A-F]{16}$/);
 
@@ -490,13 +490,13 @@ describe("system agent operations", () => {
       });
 
       expect(result.applied).toBe(true);
-      const [name] = storedEntries();
+      const [name] = await storedEntries();
       expect(name).toEqual(mintedName);
       expect(runConfigSet).toHaveBeenCalledWith({
         path: operation.path,
         cliOptions: { refProvider: "default", refSource: "store", refId: name },
       });
-      expect(readStored(name ?? "")).toMatchObject({ ok: true, value: operation.secret });
+      expect(await readStored(name ?? "")).toMatchObject({ ok: true, value: operation.secret });
       expect(lines.join("\n")).not.toContain(operation.secret);
       expect(JSON.stringify(readLastAuditEntry())).not.toContain(operation.secret);
     });
@@ -514,7 +514,7 @@ describe("system agent operations", () => {
         }),
       ).rejects.toThrow("no longer active");
 
-      expect(storedEntries()).toEqual([]);
+      expect(await storedEntries()).toEqual([]);
       expect(runConfigSet).not.toHaveBeenCalled();
     });
 

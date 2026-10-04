@@ -81,19 +81,6 @@
   );
 }
 
-@media (max-width: 560px) {
-  .chat-main__conversation::before {
-    height: 56px;
-    background: linear-gradient(
-      to bottom,
-      var(--chat-surface) 0,
-      color-mix(in srgb, var(--chat-surface) 72%, transparent) 34%,
-      color-mix(in srgb, var(--chat-surface) 30%, transparent) 72%,
-      transparent 100%
-    );
-  }
-}
-
 @media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
   .chat-main__conversation::before {
     display: none;

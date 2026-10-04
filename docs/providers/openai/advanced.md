@@ -153,6 +153,30 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
     calls without fast mode. The cutoff defaults to 60 seconds; set
     `params.fastAutoOnSeconds` on the active model to change it.
 
+    For the embedded OpenClaw runtime, the Control UI combines provider model
+    limits with account observations when offering Standard, Fast, and Ultrafast.
+    This works for auth profiles, environment keys, and provider config (including
+    SecretRefs). Daybreak Blue supports Standard and Fast; Daybreak Red uses
+    Standard. Neither offers Ultrafast. Custom endpoints and ChatGPT account
+    catalogs retain their own tier policy.
+
+    If a response to an Ultrafast request echoes a different `service_tier`,
+    OpenClaw records the downgrade for that selected credential, model, and route
+    and removes Ultrafast from later model-list results. If the native OpenAI API
+    explicitly rejects `service_tier` before output, tool activity, or active-response
+    steering, OpenClaw automatically retries the same request at a slower tier:
+    Ultrafast → Fast → Standard. It does not retry tier errors after cancellation
+    or an ambiguous connection failure. Rejected tiers are removed from later
+    model-list choices without rewriting saved speed preferences. Explicit
+    low-level tier overrides are still sent as configured and can trigger this
+    rejection recovery again.
+
+    Profile observations clear when account discovery refreshes or credentials
+    change; direct-key observations clear when their configured binding changes.
+    Both clear when the prepared runtime retires and are not persisted across
+    restarts. ChatGPT-account
+    availability remains based on authenticated account catalog discovery.
+
     ```json5
     {
       agents: {
@@ -215,9 +239,9 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
     <Warning>
     `params.serviceTier` is an authored embedded-provider setting, not native
     Codex app-server configuration. It is forwarded only by the embedded
-    runtime to native OpenAI endpoints (`api.openai.com`) and native ChatGPT
-    endpoints (`chatgpt.com/backend-api`). If you route either provider through
-    a proxy, OpenClaw leaves `service_tier` untouched. Configure the native
+    runtime on OpenAI Responses routes, including compatible base URLs, and native
+    ChatGPT endpoints (`chatgpt.com/backend-api`). Compatible endpoints must honor
+    the requested tier; a saved preference does not guarantee fulfillment. Configure the native
     harness separately with `plugins.entries.codex.config.appServer.serviceTier`;
     the shared Fast-mode run control can supersede that value.
     </Warning>
@@ -387,6 +411,8 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
     `strict: false`. Debug logs report the downgrade under `openai-transport`,
     with a bounded sample of incompatible tools. Built-in and managed Responses
     requests share duplicate suppression for the same model and schemas.
+    Compatibility checks inspect schema constraints, not literal names in schema maps
+    or annotation data such as examples and defaults.
 
   </Accordion>
 </AccordionGroup>

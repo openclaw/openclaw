@@ -49,8 +49,6 @@ const STRICT_NON_NEGATIVE_INTEGER_OPTIONS = new Map([
   ["deleteDays", "--delete-days"],
 ]);
 
-type MessagePluginPreloadPlan = { preload: true; channelId?: string } | { preload: false };
-
 function normalizeMessageOptions(opts: Record<string, unknown>): Record<string, unknown> {
   const { account, ...rest } = opts;
   return {
@@ -95,14 +93,6 @@ async function runPluginStopHooks(registry: PluginRegistry): Promise<void> {
   }
 }
 
-function resolveScopedMessageChannel(opts: Record<string, unknown>): string | undefined {
-  return resolveMessageSecretScope({
-    channel: opts.channel,
-    target: opts.target,
-    targets: opts.targets,
-  }).channel;
-}
-
 function asChannelMessageActionName(action: string): ChannelMessageActionName | undefined {
   return CHANNEL_MESSAGE_ACTION_NAME_SET.has(action)
     ? (action as ChannelMessageActionName)
@@ -119,23 +109,6 @@ function isGatewayOwnedMessageAction(action: string, scopedChannel: string | und
     action: messageAction,
   });
   return executionMode === "gateway";
-}
-
-function resolveMessagePluginPreloadPlan(
-  action: string,
-  opts: Record<string, unknown>,
-): MessagePluginPreloadPlan {
-  const scopedChannel = resolveScopedMessageChannel(opts);
-  // Gateway-owned actions can execute without loading channel plugins in the CLI process;
-  // dry-runs, broadcasts, and local actions need registry metadata before building payloads.
-  if (
-    opts.dryRun === true ||
-    action === "broadcast" ||
-    !isGatewayOwnedMessageAction(action, scopedChannel)
-  ) {
-    return { preload: true, ...(scopedChannel ? { channelId: scopedChannel } : {}) };
-  }
-  return { preload: false };
 }
 
 /** Create shared option decorators and the common message action runner. */
@@ -166,24 +139,33 @@ export function createMessageCliHelpers(messageChannelOptions: string) {
             if (action === "poll" && opts.pollAnonymous === true && opts.pollPublic === true) {
               throw new Error("--poll-anonymous and --poll-public are mutually exclusive.");
             }
-            const preloadPlan = resolveMessagePluginPreloadPlan(action, opts);
+            const { channel: scopedChannel } = resolveMessageSecretScope({
+              channel: opts.channel,
+              target: opts.target,
+              targets: opts.targets,
+            });
+            // Gateway-owned actions need no local plugin runtime; previews and broadcasts do.
+            const preloadPlugins =
+              opts.dryRun === true ||
+              action === "broadcast" ||
+              !isGatewayOwnedMessageAction(action, scopedChannel);
             await measureCliCommandStartup("config-ready", async () => {
               const { ensureConfigReady } = await import("../config-guard.js");
               await ensureConfigReady({
                 runtime: defaultRuntime,
                 commandPath: ["message", action],
                 suppressDoctorStdout: opts.json === true,
-                validateConfigOnly: !preloadPlan.preload,
+                validateConfigOnly: !preloadPlugins,
                 measure: (stage, run) => measureCliCommandStartup(stage, run),
               });
             });
-            if (preloadPlan.preload) {
+            if (preloadPlugins) {
               const config = getRuntimeConfig();
-              const pluginIds = preloadPlan.channelId
+              const pluginIds = scopedChannel
                 ? resolveDiscoverableScopedChannelPluginIds({
                     config,
                     activationSourceConfig: config,
-                    channelIds: [preloadPlan.channelId],
+                    channelIds: [scopedChannel],
                     env: process.env,
                   })
                 : resolveConfiguredChannelPluginIds({

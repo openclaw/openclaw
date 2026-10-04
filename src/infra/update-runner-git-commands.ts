@@ -27,10 +27,6 @@ export type StepFactory = (
   env?: NodeJS.ProcessEnv,
 ) => RunStepOptions;
 
-function looksLikeFullCommitSha(value: string): boolean {
-  return /^[0-9a-f]{40}$/i.test(value.trim());
-}
-
 export function resolveTagFetchRef(candidate: string): string | null {
   const ref = candidate.endsWith("^{}") ? candidate.slice(0, -"^{}".length) : candidate;
   return ref.startsWith("refs/tags/") ? ref : null;
@@ -38,7 +34,7 @@ export function resolveTagFetchRef(candidate: string): string | null {
 
 export function buildDevTargetRefResolutionCandidates(devTargetRef: string): string[] {
   const trimmed = devTargetRef.trim();
-  if (looksLikeFullCommitSha(trimmed) || trimmed.startsWith("refs/remotes/")) {
+  if (/^[0-9a-f]{40}$/i.test(trimmed) || trimmed.startsWith("refs/remotes/")) {
     return [trimmed];
   }
   if (trimmed.startsWith("refs/heads/")) {
@@ -182,17 +178,15 @@ export async function prepareCandidateCommandEnv(
   }
   const hasExplicitPreferOffline =
     effectiveEnv.pnpm_config_prefer_offline !== undefined ||
-    effectiveEnv.PNPM_CONFIG_PREFER_OFFLINE !== undefined;
-  const hasConfigPreferOffline = hasExplicitPreferOffline
-    ? false
-    : await hasExplicitPnpmPreferOfflineConfig({ runCommand, cwd, timeoutMs, env: effectiveEnv });
+    effectiveEnv.PNPM_CONFIG_PREFER_OFFLINE !== undefined ||
+    (await hasExplicitPnpmPreferOfflineConfig({ runCommand, cwd, timeoutMs, env: effectiveEnv }));
   const candidateEnv: NodeJS.ProcessEnv = {
     ...resolvePnpmCandidateEnv(effectiveEnv, "node_modules/.pnpm"),
     PNPM_CONFIG_RESOLUTION_MODE: env?.PNPM_CONFIG_RESOLUTION_MODE ?? "highest",
     npm_config_resolution_mode: env?.npm_config_resolution_mode ?? "highest",
     pnpm_config_resolution_mode: env?.pnpm_config_resolution_mode ?? "highest",
   };
-  if (!hasExplicitPreferOffline && !hasConfigPreferOffline) {
+  if (!hasExplicitPreferOffline) {
     candidateEnv.PNPM_CONFIG_PREFER_OFFLINE = "true";
     candidateEnv.pnpm_config_prefer_offline = "true";
   }

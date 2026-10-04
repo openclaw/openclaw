@@ -12,6 +12,7 @@ import {
   mockedGlobalHookRunner,
   mockedClassifyAssistantFailoverReason,
   mockedRunEmbeddedAttempt,
+  mockedBuildEmbeddedRunPayloads,
   createOverflowRunParams,
   resetSharedRunIntegrationHarnessMocks,
   useOpenAIPlatformAuthFixture,
@@ -411,6 +412,15 @@ describe("sessions_yield orchestration", () => {
         const { createRequesterYieldCallback } =
           await import("../openclaw-tools.requester-yield.js");
         const { createSessionsYieldTool } = await import("../tools/sessions-yield-tool.js");
+        const { buildEmbeddedRunPayloads } =
+          await vi.importActual<typeof import("./run/payloads.js")>("./run/payloads.js");
+        mockedBuildEmbeddedRunPayloads.mockImplementation(buildEmbeddedRunPayloads);
+        const accepted = registration === "accepted";
+        const finalText = "Continued after the rejected wait and completed the task.";
+        const finalAssistant = makeAssistantMessageFixture({
+          content: [{ type: "text", text: finalText }],
+          stopReason: "stop",
+        });
         const params = {
           ...createOverflowRunParams(state),
           sessionKey: "agent:main:subagent:message-wait",
@@ -447,9 +457,15 @@ describe("sessions_yield orchestration", () => {
             }),
             onYield,
           });
-          expect((await tool.execute("yield-message", { waitFor: "message" })).details).toEqual({
-            status: "yielded",
-          });
+          const result = await tool.execute("yield-message", { waitFor: "message" });
+          if (accepted) {
+            expect(result.details).toEqual({ status: "yielded" });
+            expect(onYield).toHaveBeenCalledExactlyOnceWith("Turn yielded.", undefined, true);
+          } else {
+            expect(result.details).toMatchObject({ status: "nothing_pending" });
+            expect(onYield).not.toHaveBeenCalled();
+            expect(yieldMessageWaitRegistered).toBeUndefined();
+          }
           expect(
             registry.getSubagentRunByRunId(params.runId)?.requesterSettleWake?.pauseNotice,
           ).toEqual(
@@ -460,21 +476,26 @@ describe("sessions_yield orchestration", () => {
           return makeAttemptResult({
             yieldDetected: onYield.mock.calls.length > 0,
             yieldMessageWaitRegistered,
-            assistantTexts: [],
+            assistantTexts: accepted ? [] : [finalText],
+            ...(!accepted
+              ? { currentAttemptAssistant: finalAssistant, lastAssistant: finalAssistant }
+              : {}),
           });
         });
         try {
           const result = await runEmbeddedAgent(params);
-          expect(result.meta.yielded).toBe(true);
-          expect(result.payloads ?? []).toEqual(
-            registration === "accepted"
-              ? []
-              : [
-                  {
-                    text: "⚠️ Turn yielded without a continuation source. Send a message to resume.",
-                  },
-                ],
-          );
+          if (accepted) {
+            expect(result.meta.yielded).toBe(true);
+            expect(result.meta.livenessState).toBe("paused");
+            expect(result.payloads ?? []).toEqual([]);
+          } else {
+            expect(result.meta.yielded).toBeUndefined();
+            expect(result.meta.livenessState).not.toBe("paused");
+            expect(result.meta.continuationPending).toBeUndefined();
+            expect(result.requesterContinuationSettled).toBeUndefined();
+            expect(result.meta.finalAssistantVisibleText).toBe(finalText);
+            expect(result.payloads).toEqual([expect.objectContaining({ text: finalText })]);
+          }
         } finally {
           await registry.resetSubagentRegistryForTests({ persist: false });
         }

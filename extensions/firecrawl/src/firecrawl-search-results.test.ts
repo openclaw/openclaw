@@ -23,29 +23,20 @@ async function search(payload: Record<string, unknown>, count = 10) {
 }
 
 describe("Firecrawl search result selection", () => {
-  it.each([
-    { data: [first], results: [second] },
-    { results: [first], data: { results: [second] } },
-    { data: { results: [first], data: [second], web: [second] } },
-    { data: { data: [first], web: [second] } },
-    { data: { web: [first] }, web: { results: [second] } },
-    { data: false, results: "invalid", web: { results: [first] } },
-  ])("selects the first supported result array: %j", async (payload) => {
-    expect(await search(payload)).toMatchObject({ count: 1, results: [{ url: first.url }] });
+  it("finds the last supported envelope after malformed candidates", async () => {
+    expect(
+      await search({ data: false, results: "invalid", web: { results: [first] } }),
+    ).toMatchObject({ count: 1, results: [{ url: first.url }] });
   });
 
-  it.each([
-    { label: "empty", entries: [] },
-    { label: "all-invalid", entries: [null, false, 7, "text", []] },
-  ])(
-    "keeps the $label winning array instead of selecting a later envelope",
-    async ({ entries }) => {
-      expect(await search({ data: entries, results: [first] })).toMatchObject({
-        count: 0,
-        results: [],
-      });
-    },
-  );
+  it("keeps an empty winning array instead of selecting a later envelope", async () => {
+    expect(
+      await search({
+        data: { results: [], data: [first], web: [first] },
+        web: { results: [first] },
+      }),
+    ).toMatchObject({ count: 0, results: [] });
+  });
 
   it("counts objects with invalid URLs toward the scan cap after skipping primitive rows", async () => {
     const result = await search({
@@ -80,6 +71,7 @@ describe("Firecrawl search result selection", () => {
   it("fills the requested count after invalid rows and preserves schema field fallbacks", async () => {
     const result = await search(
       {
+        results: [second],
         data: [
           null,
           [],

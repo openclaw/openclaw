@@ -402,7 +402,7 @@ function updateCompletionProfile(
     const next = filtered.join("\n");
     return { next, changed: next !== content, hadExisting };
   }
-  const trimmed = filtered.join("\n").trimEnd();
+  const trimmed = filtered.join("\n").replace(/(?<!\n)\n+$/u, "");
   const block = `# OpenClaw Completion\n${formatCompletionSourceLine(shell, cachePath)}`;
   const next = trimmed ? `${trimmed}\n\n${block}\n` : `${block}\n`;
   return { next, changed: next !== content, hadExisting };

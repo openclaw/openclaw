@@ -322,7 +322,7 @@ export function readSessionLifecycleArtifactCleanup(
   return plan;
 }
 
-function planSessionLifecycleArtifactCleanup(
+export function planSessionLifecycleArtifactCleanup(
   database: OpenClawAgentReadOnlyDatabase,
   params: LifecycleArtifactCleanupInput,
 ): LifecycleArtifactCleanupPlan {

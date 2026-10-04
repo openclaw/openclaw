@@ -82,55 +82,8 @@ function resolveConfiguredSpeechVoice(
   );
 }
 
-function normalizeResponseFormat(params: {
-  providerLabel: string;
-  responseFormats: readonly string[];
-  value: unknown;
-}): string | undefined {
-  const next = normalizeOptionalLowercaseString(params.value);
-  if (!next) {
-    return undefined;
-  }
-  if (params.responseFormats.includes(next)) {
-    return next;
-  }
-  throw new Error(`Invalid ${params.providerLabel} speech responseFormat: ${next}`);
-}
-
 function trimTrailingBaseUrl(value: unknown, fallback: string): string {
   return (trimToUndefined(value) ?? fallback).replace(/\/+$/u, "");
-}
-
-function normalizeBaseUrl(params: {
-  value: unknown;
-  fallback: string;
-  policy?: OpenAiCompatibleSpeechProviderBaseUrlPolicy;
-}): string {
-  const normalized = trimTrailingBaseUrl(params.value, params.fallback);
-  if (params.policy?.kind !== "canonical") {
-    return normalized;
-  }
-  const canonical = trimTrailingBaseUrl(params.fallback, params.fallback);
-  // Some hosted providers publish multiple equivalent URLs. Canonicalizing
-  // aliases keeps SSRF policy and status output stable while still allowing
-  // explicit custom URLs when the provider opts in.
-  const aliases = new Set(
-    [canonical, ...(params.policy.aliases ?? [])].map((entry) =>
-      trimTrailingBaseUrl(entry, canonical),
-    ),
-  );
-  return aliases.has(normalized) || !params.policy.allowCustom ? canonical : normalized;
-}
-
-function resolveProviderConfigRecord(
-  rawConfig: Record<string, unknown>,
-  providerConfigKey: string,
-): Record<string, unknown> | undefined {
-  const providers = asOptionalRecord(rawConfig.providers);
-  return (
-    asOptionalRecord(providers?.[providerConfigKey]) ??
-    asOptionalRecord(rawConfig[providerConfigKey])
-  );
 }
 
 function readModelProviderConfig(
@@ -141,21 +94,6 @@ function readModelProviderConfig(
   const models = asOptionalRecord(root?.models);
   const providers = asOptionalRecord(models?.providers);
   return asOptionalRecord(providers?.[providerConfigKey]);
-}
-
-function readSpeechOverrides(overrides: SpeechProviderOverrides | undefined): {
-  model?: string;
-  voice?: string;
-  speed?: number;
-} {
-  if (!overrides) {
-    return {};
-  }
-  return {
-    model: trimToUndefined(overrides.model ?? overrides.modelId),
-    voice: trimToUndefined(overrides.voice ?? overrides.voiceId),
-    speed: asFiniteNumber(overrides.speed),
-  };
 }
 
 function parseDirectiveToken(
@@ -210,10 +148,35 @@ export function createOpenAiCompatibleSpeechProvider<
     options.normalizeModel ?? ((value, fallback) => trimToUndefined(value) ?? fallback);
   const readExtraConfig = options.readExtraConfig ?? (() => ({}) as ExtraConfig);
 
+  function normalizeResponseFormat(value: unknown): string | undefined {
+    const next = normalizeOptionalLowercaseString(value);
+    if (next && !options.responseFormats.includes(next)) {
+      throw new Error(`Invalid ${options.label} speech responseFormat: ${next}`);
+    }
+    return next;
+  }
+
+  function normalizeBaseUrl(value: unknown): string {
+    const normalized = trimTrailingBaseUrl(value, options.defaultBaseUrl);
+    const policy = options.baseUrlPolicy;
+    if (policy?.kind !== "canonical") {
+      return normalized;
+    }
+    const canonical = trimTrailingBaseUrl(options.defaultBaseUrl, options.defaultBaseUrl);
+    // Hosted aliases share the canonical endpoint and its SSRF policy.
+    const aliases = [canonical, ...(policy.aliases ?? [])];
+    return !policy.allowCustom ||
+      aliases.some((entry) => trimTrailingBaseUrl(entry, canonical) === normalized)
+      ? canonical
+      : normalized;
+  }
+
   function normalizeConfig(
     rawConfig: Record<string, unknown>,
   ): OpenAiCompatibleSpeechProviderConfig<ExtraConfig> {
-    const raw = resolveProviderConfigRecord(rawConfig, providerConfigKey);
+    const raw =
+      asOptionalRecord(asOptionalRecord(rawConfig.providers)?.[providerConfigKey]) ??
+      asOptionalRecord(rawConfig[providerConfigKey]);
     return readProviderConfig(raw, {
       model: options.defaultModel,
       voice: options.defaultVoice,
@@ -234,20 +197,11 @@ export function createOpenAiCompatibleSpeechProvider<
       baseUrl:
         trimToUndefined(config?.baseUrl) == null
           ? normalized.baseUrl
-          : normalizeBaseUrl({
-              value: config?.baseUrl,
-              fallback: options.defaultBaseUrl,
-              policy: options.baseUrlPolicy,
-            }),
+          : normalizeBaseUrl(config?.baseUrl),
       model: normalizeModel(trimToUndefined(config?.model ?? config?.modelId), normalized.model),
       voice: resolveConfiguredSpeechVoice(config) ?? normalized.voice,
       speed: asFiniteNumber(config?.speed) ?? normalized.speed,
-      responseFormat:
-        normalizeResponseFormat({
-          providerLabel: options.label,
-          responseFormats: options.responseFormats,
-          value: config?.responseFormat,
-        }) ?? normalized.responseFormat,
+      responseFormat: normalizeResponseFormat(config?.responseFormat) ?? normalized.responseFormat,
       ...readExtraConfig(config),
     };
   }
@@ -270,13 +224,10 @@ export function createOpenAiCompatibleSpeechProvider<
     cfg?: unknown;
     providerConfig: OpenAiCompatibleSpeechProviderConfig<ExtraConfig>;
   }): string {
-    return normalizeBaseUrl({
-      value:
-        params.providerConfig.baseUrl ??
+    return normalizeBaseUrl(
+      params.providerConfig.baseUrl ??
         trimToUndefined(readModelProviderConfig(params.cfg, providerConfigKey)?.baseUrl),
-      fallback: options.defaultBaseUrl,
-      policy: options.baseUrlPolicy,
-    });
+    );
   }
 
   return {
@@ -290,11 +241,7 @@ export function createOpenAiCompatibleSpeechProvider<
     parseDirectiveToken: (ctx) => parseDirectiveToken(ctx, providerConfigKey),
     resolveTalkConfig: ({ baseTtsConfig, talkProviderConfig }) => {
       const base = normalizeConfig(baseTtsConfig);
-      const responseFormat = normalizeResponseFormat({
-        providerLabel: options.label,
-        responseFormats: options.responseFormats,
-        value: talkProviderConfig.responseFormat,
-      });
+      const responseFormat = normalizeResponseFormat(talkProviderConfig.responseFormat);
       const next: OpenAiCompatibleSpeechProviderConfig<ExtraConfig> = { ...base };
       if (talkProviderConfig.apiKey !== undefined) {
         next.apiKey = normalizeResolvedSecretInputString({
@@ -304,11 +251,7 @@ export function createOpenAiCompatibleSpeechProvider<
       }
       const baseUrl = trimToUndefined(talkProviderConfig.baseUrl);
       if (baseUrl !== undefined) {
-        next.baseUrl = normalizeBaseUrl({
-          value: baseUrl,
-          fallback: options.defaultBaseUrl,
-          policy: options.baseUrlPolicy,
-        });
+        next.baseUrl = normalizeBaseUrl(baseUrl);
       }
       const modelId = trimToUndefined(talkProviderConfig.modelId);
       if (modelId !== undefined) {
@@ -338,7 +281,10 @@ export function createOpenAiCompatibleSpeechProvider<
       Boolean(resolveApiKey({ cfg, providerConfig: readProviderConfig(providerConfig) })),
     synthesize: async (req) => {
       const config = readProviderConfig(req.providerConfig);
-      const overrides = readSpeechOverrides(req.providerOverrides);
+      const overrides = req.providerOverrides;
+      const model = trimToUndefined(overrides?.model ?? overrides?.modelId);
+      const voice = trimToUndefined(overrides?.voice ?? overrides?.voiceId);
+      const speed = asFiniteNumber(overrides?.speed) ?? config.speed;
       const apiKey = resolveApiKey({ cfg: req.cfg, providerConfig: config });
       if (!apiKey) {
         throw new Error(options.missingApiKeyError ?? `${options.label} API key missing`);
@@ -346,7 +292,6 @@ export function createOpenAiCompatibleSpeechProvider<
 
       const baseUrl = resolveBaseUrl({ cfg: req.cfg, providerConfig: config });
       const responseFormat = config.responseFormat ?? options.defaultResponseFormat;
-      const speed = overrides.speed ?? config.speed;
       const {
         assertOkOrThrowHttpError,
         postJsonRequest,
@@ -373,9 +318,9 @@ export function createOpenAiCompatibleSpeechProvider<
         url: `${baseUrl}/audio/speech`,
         headers,
         body: {
-          model: normalizeModel(overrides.model ?? config.model, options.defaultModel),
+          model: normalizeModel(model ?? config.model, options.defaultModel),
           input: req.text,
-          voice: overrides.voice ?? config.voice,
+          voice: voice ?? config.voice,
           response_format: responseFormat,
           ...(speed == null ? {} : { speed }),
           ...buildExtraJsonBodyFields(config, options.extraJsonBodyFields),

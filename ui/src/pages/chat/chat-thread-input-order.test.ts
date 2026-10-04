@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { extractTextCached } from "../../lib/chat/message-extract.ts";
 import { buildChatItems, type BuildChatItemsProps } from "./chat-thread-build.ts";
+import { createProps } from "./chat-thread.test-support.ts";
 import { buildCachedChatItems, resetChatThreadState } from "./chat-thread.ts";
 
 type PendingInput = NonNullable<BuildChatItemsProps["pendingInputs"]>[number];
@@ -41,7 +42,7 @@ function acceptedInput(
 }
 
 function createInput(overrides: Partial<BuildChatItemsProps>): BuildChatItemsProps {
-  return {
+  return createProps({
     paneId: "input-order",
     sessionKey: "agent:main:input-order",
     messages: [
@@ -52,13 +53,8 @@ function createInput(overrides: Partial<BuildChatItemsProps>): BuildChatItemsPro
         __openclaw: { id: "earlier-answer", seq: 1 },
       },
     ],
-    toolMessages: [],
-    streamSegments: [],
-    stream: null,
-    streamStartedAt: null,
-    showToolCalls: true,
     ...overrides,
-  };
+  });
 }
 
 function visibleRows(
@@ -117,27 +113,41 @@ describe("transcript input order", () => {
     },
   );
 
-  it.each(["unconfirmed", "waiting-reconnect"] as const)(
-    "keeps an earlier %s input ahead of a newer submitting input",
-    (sendState) => {
-      expect(
-        visibleRows({
-          queue: [queuedInput("Earlier input", 10, sendState), queuedInput("New input", 20)],
-        }),
-      ).toEqual(["Existing conversation", "Earlier input", "New input"]);
+  it.each(["unconfirmed", "waiting-reconnect", "accepted", "reordered"] as const)(
+    "keeps an earlier %s input ahead of a new submission through custody",
+    (state) => {
+      const reordered = state === "reordered";
+      const earlier = queuedInput(
+        "Earlier input",
+        reordered ? 30 : 10,
+        state === "unconfirmed" || state === "waiting-reconnect" ? state : "submitting",
+      );
+      const later = queuedInput("New input", reordered ? 10 : 20);
+      const queue =
+        state === "accepted"
+          ? [later]
+          : reordered
+            ? [
+                { ...earlier, orderKey: 10 },
+                { ...later, orderKey: 30 },
+              ]
+            : [earlier, later];
+      const pendingInputs = state === "accepted" ? [acceptedInput("Earlier input", 10)] : [];
+      const expected = ["Existing conversation", "Earlier input", "New input"];
+      expect(visibleRows({ queue, pendingInputs })).toEqual(expected);
+      if (state === "accepted" || reordered) {
+        expect(
+          visibleRows({
+            queue,
+            pendingInputs: [
+              ...pendingInputs,
+              acceptedInput(reordered ? "Earlier input" : "New input", reordered ? 40 : 30),
+            ],
+          }),
+        ).toEqual(expected);
+      }
     },
   );
-
-  it("keeps accepted input ahead of a new submission through its custody handoff", () => {
-    const queue = [queuedInput("New input", 20)];
-    const earlier = acceptedInput("Earlier input", 10);
-    const expected = ["Existing conversation", "Earlier input", "New input"];
-
-    expect([
-      visibleRows({ queue, pendingInputs: [earlier] }),
-      visibleRows({ queue, pendingInputs: [earlier, acceptedInput("New input", 30)] }),
-    ]).toEqual([expected, expected]);
-  });
 
   it.each([
     { state: "queued", label: "reversed", timestamps: [30, 20] },
@@ -166,18 +176,6 @@ describe("transcript input order", () => {
       ).toEqual(["Existing conversation", ...expectedInputs]);
     },
   );
-
-  it("preserves a reordered queue when its first input receives custody", () => {
-    const first = { ...queuedInput("Moved first", 30), orderKey: 10 };
-    const second = { ...queuedInput("Moved second", 10), orderKey: 30 };
-    const queue = [first, second];
-    const expected = ["Existing conversation", "Moved first", "Moved second"];
-
-    expect([
-      visibleRows({ queue }),
-      visibleRows({ queue, pendingInputs: [acceptedInput("Moved first", 40)] }),
-    ]).toEqual([expected, expected]);
-  });
 
   it("keeps the displayed order while consumption retires a local custody anchor", () => {
     const earlier = queuedInput("Earlier input", 10, "failed");

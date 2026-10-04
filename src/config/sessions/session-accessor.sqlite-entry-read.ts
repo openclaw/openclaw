@@ -2,6 +2,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { toUSVString } from "node:util";
 import { sql, type Selectable } from "kysely";
 import {
+  createSqliteQueryCache,
   getNodeSqliteKysely,
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -126,19 +127,7 @@ function prepareExactSessionEntryQueries(database: DatabaseSync) {
 
 // Compile fixed reads once per connection; the shared executor still owns fresh
 // bindings, statement invalidation, and schema-driven SELECT * repreparation.
-const exactSessionEntryQueries = new WeakMap<
-  DatabaseSync,
-  ReturnType<typeof prepareExactSessionEntryQueries>
->();
-
-function getExactSessionEntryQueries(database: DatabaseSync) {
-  let queries = exactSessionEntryQueries.get(database);
-  if (!queries) {
-    queries = prepareExactSessionEntryQueries(database);
-    exactSessionEntryQueries.set(database, queries);
-  }
-  return queries;
-}
+const getExactSessionEntryQueries = createSqliteQueryCache(prepareExactSessionEntryQueries);
 
 export type ResolvedSessionEntryRow = {
   entry: SessionEntry;

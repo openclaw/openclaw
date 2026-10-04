@@ -289,7 +289,7 @@ function fromRow(
   };
 }
 
-function parseCleanupPaths(value: string): AgentDeletionJournalCleanupPath[] {
+export function parseCleanupPaths(value: string): AgentDeletionJournalCleanupPath[] {
   const parsed: unknown = JSON.parse(value);
   if (
     !Array.isArray(parsed) ||
@@ -501,6 +501,31 @@ function updateAgentDeletionJournalPaths(
   }, options);
 }
 
+/** Revoke an attempt while retaining its pending cleanup fence for a later owner. */
+export function handoffAgentDeletionJournalInDatabase(
+  database: OpenClawStateDatabase,
+  agentId: string,
+  operationId: string,
+  retryOperationId: string,
+): boolean {
+  assertAgentDeletionJournalAvailable(database.db);
+  const db = getNodeSqliteKysely<AgentDeletionDatabase>(database.db);
+  const result = executeSqliteQuerySync(
+    database.db,
+    db
+      .updateTable("agent_deletion_journal")
+      .set({ operation_id: retryOperationId })
+      .where("agent_id", "=", normalizeAgentId(agentId))
+      .where("operation_id", "=", operationId)
+      .where("cleanup_completed", "=", 0),
+  );
+  const handedOff = result.numAffectedRows === 1n;
+  if (handedOff) {
+    sessionChanges.emit({ all: true, scope: "stores" }, database.db);
+  }
+  return handedOff;
+}
+
 /** Complete a deletion journal inside a caller-owned shared-state transaction. */
 export function completeAgentDeletionJournalInDatabase(
   database: OpenClawStateDatabase,
@@ -542,8 +567,9 @@ export function claimCompletedAgentDeletionJournal(
   agentId: string,
   operationId: string,
   options: OpenClawStateDatabaseOptions = {},
+  publication?: { assertCurrent: () => void; onCommitted: () => void },
 ): boolean {
-  return deleteAgentDeletionJournal(agentId, operationId, true, options);
+  return deleteAgentDeletionJournal(agentId, operationId, true, options, publication);
 }
 
 function deleteAgentDeletionJournal(
@@ -551,9 +577,21 @@ function deleteAgentDeletionJournal(
   operationId: string,
   completedOnly: boolean,
   options: OpenClawStateDatabaseOptions,
+  publication?: { assertCurrent: () => void; onCommitted: () => void },
 ): boolean {
   const id = normalizeAgentId(agentId);
   return runOpenClawStateWriteTransaction((database) => {
+    publication?.assertCurrent();
+    if (
+      publication &&
+      !stageSqliteTransactionState(database.db, {
+        stage() {},
+        rollback() {},
+        commit: publication.onCommitted,
+      })
+    ) {
+      throw new Error("Agent deletion claim publication requires its transaction owner");
+    }
     assertAgentDeletionJournalAvailable(database.db);
     const db = getNodeSqliteKysely<AgentDeletionDatabase>(database.db);
     const query = db
@@ -568,6 +606,7 @@ function deleteAgentDeletionJournal(
     if (removed) {
       sessionChanges.emit({ all: true, scope: "stores" }, database.db);
     }
+    publication?.assertCurrent();
     return removed;
   }, options);
 }

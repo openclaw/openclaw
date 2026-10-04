@@ -51,6 +51,7 @@ import {
   SESSION_PERMISSION_BY_EXEC_MODE,
 } from "../session-permission-exec-mode.js";
 import { detectRuntimeShell } from "../shell-utils.js";
+import { buildConfiguredAgentSystemPrompt } from "../system-prompt-config.js";
 import { resolveRuntimeAgentName } from "../system-prompt-params.js";
 import { toolPolicyRestrictsTools } from "../tool-policy.js";
 import {
@@ -58,7 +59,7 @@ import {
   filterRuntimeCompatibleTools,
 } from "../tool-schema-projection.js";
 import { logRuntimeToolSchemaQuarantine } from "../tool-schema-quarantine.js";
-import { prepareWatchedSessionsPrompt } from "../watched-sessions-prompt.js";
+import { prepareWatchedSessionsPromptAsync } from "../watched-sessions-prompt.js";
 import { resolveCompactionContextTokenBudget } from "./compaction-runtime-context.js";
 import type { DirectCompactionPreparation } from "./direct-compaction-preparation.js";
 import { applyFinalEffectiveToolPolicy } from "./effective-tool-policy.js";
@@ -68,7 +69,6 @@ import { resolveAttemptSpawnWorkspaceDir } from "./run/attempt-thread-helpers.js
 import { applyEmbeddedAttemptToolsAllow } from "./run/attempt-tool-construction-plan.js";
 import { buildEmbeddedSandboxInfo, resolveEmbeddedSandboxInfoExecPolicy } from "./sandbox-info.js";
 import { prepareEmbeddedSkills } from "./skill-runtime.js";
-import { buildEmbeddedSystemPrompt } from "./system-prompt.js";
 import { collectAllowedToolNames } from "./tool-name-allowlist.js";
 import { mapThinkingLevelForProvider } from "./utils.js";
 
@@ -522,17 +522,22 @@ export async function buildPreparedCompactionRuntime(
     });
     // Match live-turn policy gates so restricted endpoint compaction cannot disclose
     // private ambient sections through its model-visible developer prompt.
-    const preparedWatchedSessions = prepareWatchedSessionsPrompt({
+    const preparedWatchedSessions = await prepareWatchedSessionsPromptAsync({
       enabled: promptMode === "full",
       config: params.config,
       sessionKey: params.sessionKey,
       sandboxed: sandboxInfo?.enabled === true,
       toolNames: promptTools.map((tool) => tool.name),
       capabilityToolNames: promptAllowedToolNames,
+      assertCurrent: () => params.abortSignal?.throwIfAborted(),
     });
     const activeProjectKeys = params.preparedModelRuntime?.activeProjectKeys ?? [];
+    const { prepareTtsPreferences } = await import("../../tts/tts-preferences.js");
+    const preparedTtsPreferences =
+      promptMode === "full" ? await prepareTtsPreferences() : undefined;
     const buildSystemPromptText = () => {
-      const builtSystemPrompt = buildEmbeddedSystemPrompt({
+      const builtSystemPrompt = buildConfiguredAgentSystemPrompt({
+        preparedTtsPreferences,
         config: params.config,
         preparedModelRuntime: params.preparedModelRuntime,
         agentId: sessionAgentId,

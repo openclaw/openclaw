@@ -17,6 +17,7 @@ import {
   gatewayMaintenanceBlock,
   handoffUpdateFromGateway,
 } from "./update-command-handoff.js";
+import { createHandoffLifetimePreload } from "./update-command-handoff.test-support.js";
 
 const UPDATE_HANDOFF_IN_PROGRESS_EXIT_CODE = 75;
 
@@ -30,7 +31,9 @@ afterEach(async () => {
   await tempDirs.cleanup();
 });
 
-it.runIf(process.platform === "darwin").each(["cancel", "cancel-output-first", "transfer"])(
+it
+  .runIf(process.platform === "darwin")
+  .each(["cancel", "cancel-output-first", "transfer"] as const)(
   "settles the initiating CLI's owned handoff lifetime: %s",
   async (mode) => {
     const root = await fs.realpath(await tempDirs.make("openclaw-cli-handoff-lifetime-"));
@@ -55,34 +58,7 @@ it.runIf(process.platform === "darwin").each(["cancel", "cancel-output-first", "
     );
     await fs.writeFile(
       preloadPath,
-      `
-const fs=require('node:fs');
-const record=(event,data={})=>fs.appendFileSync(${JSON.stringify(tracePath)},JSON.stringify({event,...data})+'\\n');
-if(process.argv[1]===${JSON.stringify(callerPath)} && ${mode !== "transfer"}) {
-  const sqlite=require('node:sqlite'), Original=sqlite.DatabaseSync;
-  sqlite.DatabaseSync=new Proxy(Original,{construct(target,args,newTarget) {
-    if(String(args[0])===${JSON.stringify(path.join(root, "state/openclaw.sqlite"))}) {
-      const db=new Original(${JSON.stringify(leasePath)},{readOnly:true});
-      const lease=db.prepare('SELECT owner FROM managed_update_handoffs WHERE install_root=?').get(${JSON.stringify(root)});
-      db.close();record('publication-denied',{ready:!!lease});
-      throw Object.assign(new Error('fixture publication denied'),{code:'SQLITE_CANTOPEN'});
-    }
-    return Reflect.construct(target,args,newTarget);
-  }});
-  require('node:module').syncBuiltinESMExports();
-} else if(process.argv[1]?.endsWith('/handoff.cjs')) {
-  const params=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
-  if(params.updateLeaseKey===${JSON.stringify(root)}) {
-    if(params.updateLeaseDatabasePath!==${JSON.stringify(leasePath)} || params.updateLeaseDatabaseIdentity?.databasePath!==${JSON.stringify(leasePath)}) {
-      throw new Error("Fixture handoff escaped its private lease database");
-    }
-    if(${mode === "cancel-output-first"}) {
-      // Close only helper output before native exit; the initiating CLI has no keepalive.
-      process.once('beforeExit',()=>{record('helper-output-closed');process.stdout.end();setTimeout(()=>{},100);});
-    }
-    process.once('exit',()=>record('helper-exit'));
-  }
-}`,
+      createHandoffLifetimePreload({ callerPath, root, leasePath, tracePath, mode }),
     );
     await fs.writeFile(
       callerPath,

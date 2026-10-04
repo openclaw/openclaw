@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { main } from "../../scripts/check-database-worker-ratchet.mts";
+import { inventory } from "../../scripts/database-worker-inventory.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -50,5 +51,78 @@ it("rejects total T1 growth with call sites and allows splits, shrinkage, and wo
   expect(main(root, ["--base", "HEAD"])).toBe(1);
   expect(errors).toHaveBeenCalledWith(
     expect.stringContaining("src/split.ts:2:1 executeSqliteQuerySync"),
+  );
+});
+
+it("keeps operation exceptions scoped across line shifts without masking runtime growth", () => {
+  const root = tempDirs.make("openclaw-sqlite-mixed-ratchet-");
+  const git = (...args: string[]) =>
+    execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", ...args], {
+      cwd: root,
+      stdio: "pipe",
+    });
+  const relative = "src/gateway/worker-environments/placement-turn-claims.ts";
+  const file = path.join(root, relative);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const source = `
+import { executeSqliteQuerySync as query } from "./queries.js";
+function createPlacementTurnClaimOps() {
+  return {
+    releaseTurn() { transaction(() => query(sql)); },
+    clearLocalTurnClaimsAfterRestart: () => query(sql),
+    claimTurn() { query(sql); },
+  };
+}
+function anotherFactory() {
+  return { releaseTurn() { query(sql); } };
+}
+`;
+  fs.writeFileSync(file, source);
+  const eventRelative = "src/sessions/session-state-events.kernel.ts";
+  const eventFile = path.join(root, eventRelative);
+  fs.mkdirSync(path.dirname(eventFile), { recursive: true });
+  const eventSource = `
+import { executeSqliteQuerySync as query } from "./queries.js";
+function recordSessionStateEventInDatabase() {
+  query(sql);
+  const registeredWatcherKeys = notify
+    ? query(sql).rows.map(() => query(sql))
+    : [];
+  const otherKeys = query(sql);
+}
+function anotherRecorder() {
+  const registeredWatcherKeys = query(sql);
+}
+`;
+  fs.writeFileSync(eventFile, eventSource);
+  git("init");
+  git("add", ".");
+  git("commit", "-m", "base");
+  const rows = inventory(root);
+  expect(rows.map(({ tier, calls }) => [tier, calls.length])).toEqual([
+    ["T1", 2],
+    ["T1", 4],
+    ["T2", 1],
+    ["W", 1],
+    ["W", 1],
+  ]);
+  expect(rows.find(({ tier }) => tier === "W")?.calls[0].operation).toBe(
+    "createPlacementTurnClaimOps.releaseTurn",
+  );
+  expect(
+    rows.find((row) => row.file === eventRelative && row.tier === "W")?.calls[0],
+  ).toMatchObject({
+    operation: "recordSessionStateEventInDatabase",
+    binding: "registeredWatcherKeys",
+  });
+  const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+  vi.spyOn(console, "log").mockImplementation(() => {});
+  fs.writeFileSync(file, "\n\n" + source);
+  fs.writeFileSync(eventFile, "\n\n" + eventSource);
+  expect(main(root, ["--base", "HEAD"])).toBe(0);
+  fs.writeFileSync(path.join(root, "src/another-runtime.ts"), "executeSqliteQuerySync(sql);\n");
+  expect(main(root, ["--base", "HEAD"])).toBe(1);
+  expect(errors).toHaveBeenCalledWith(
+    expect.stringContaining("src/another-runtime.ts:1:1 executeSqliteQuerySync"),
   );
 });

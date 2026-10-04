@@ -134,6 +134,186 @@ describe("CodexAppServerEventProjector dynamic tool projection", () => {
     });
   });
 
+  it("records bounded searchable discovery evidence without changing transcript bytes", async () => {
+    vi.stubEnv("OPENCLAW_BUILD_PRIVATE_QA", "1");
+    const recordEvent = vi.fn();
+    const projector = await createProjector(undefined, {
+      trajectoryRecorder: {
+        recordEvent,
+        flush: async () => undefined,
+      },
+    });
+    const searchedTools = [
+      {
+        type: "function",
+        name: "web_search",
+        description: "private-description-marker",
+        defer_loading: true,
+        parameters: {
+          type: "object",
+          properties: { secret: { const: "private-schema-marker" } },
+        },
+      },
+      ...Array.from({ length: 40 }, (_value, index) => ({
+        type: "function",
+        name: `search_result_${index.toString().padStart(2, "0")}`,
+        description: `private-description-${index}`,
+        defer_loading: true,
+        parameters: { type: "object" },
+      })),
+    ];
+
+    await projector.handleNotification(
+      forCurrentTurn("rawResponseItem/completed", {
+        item: {
+          type: "tool_search_call",
+          call_id: "search-call-1",
+          execution: "client",
+          arguments: { query: "private-query-marker" },
+        },
+      }),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("rawResponseItem/completed", {
+        item: {
+          type: "tool_search_output",
+          call_id: "search-call-1",
+          status: "completed",
+          execution: "client",
+          tools: [
+            {
+              type: "namespace",
+              name: "openclaw",
+              description: "private-namespace-marker",
+              tools: searchedTools,
+            },
+          ],
+        },
+      }),
+    );
+    projector.recordDynamicToolCall({
+      callId: "dynamic-call-1",
+      namespace: "openclaw",
+      tool: "web_search",
+      arguments: { query: "release marker" },
+    });
+    projector.recordDynamicToolResult({
+      callId: "dynamic-call-1",
+      tool: "web_search",
+      success: true,
+      contentItems: [{ type: "inputText", text: "synthetic result" }],
+    });
+
+    const evidenceCall = recordEvent.mock.calls.find(([type]) => type === "tool.search.discovery");
+    expect(evidenceCall?.[1]).toEqual({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      search: {
+        callId: "search-call-1",
+        callExecution: "client",
+        outputExecution: "client",
+        outputStatus: "completed",
+        tools: [
+          { namespace: "openclaw", name: "web_search" },
+          ...Array.from({ length: 31 }, (_value, index) => ({
+            namespace: "openclaw",
+            name: `search_result_${index.toString().padStart(2, "0")}`,
+          })),
+        ],
+        truncated: true,
+      },
+      target: {
+        callId: "dynamic-call-1",
+        namespace: "openclaw",
+        name: "web_search",
+        success: true,
+      },
+    });
+    const recordedEvidence = JSON.stringify(recordEvent.mock.calls);
+    expect(recordedEvidence).not.toContain("private-query-marker");
+    expect(recordedEvidence).not.toContain("private-description");
+    expect(recordedEvidence).not.toContain("private-schema-marker");
+    expect(recordedEvidence).not.toContain("private-namespace-marker");
+    expect(
+      JSON.stringify(projector.buildResult(buildEmptyToolTelemetry()).messagesSnapshot),
+    ).not.toContain("tool_search");
+  });
+
+  it.each([
+    { privateQa: false, namespace: "openclaw" },
+    { privateQa: true, namespace: undefined },
+    { privateQa: true, namespace: null },
+    { privateQa: true, namespace: "" },
+    { privateQa: true, namespace: "other" },
+    { privateQa: true, namespace: " openclaw " },
+  ])(
+    "does not credit discovery with privateQa=$privateQa namespace=$namespace",
+    async ({ privateQa, namespace }) => {
+      vi.stubEnv("OPENCLAW_BUILD_PRIVATE_QA", privateQa ? "1" : "0");
+      const recordEvent = vi.fn();
+      const projector = await createProjector(undefined, {
+        trajectoryRecorder: {
+          recordEvent,
+          flush: async () => undefined,
+        },
+      });
+
+      await projector.handleNotification(
+        forCurrentTurn("rawResponseItem/completed", {
+          item: {
+            type: "tool_search_call",
+            call_id: "search-call-1",
+            status: "completed",
+            execution: "client",
+            arguments: { query: "web search" },
+          },
+        }),
+      );
+      await projector.handleNotification(
+        forCurrentTurn("rawResponseItem/completed", {
+          item: {
+            type: "tool_search_output",
+            call_id: "search-call-1",
+            status: "completed",
+            execution: "client",
+            tools: [
+              {
+                type: "namespace",
+                name: "openclaw",
+                tools: [{ type: "function", name: "web_search" }],
+              },
+            ],
+          },
+        }),
+      );
+      projector.recordDynamicToolCall({
+        callId: "dynamic-call-1",
+        namespace,
+        tool: "web_search",
+      });
+      projector.recordDynamicToolResult({
+        callId: "dynamic-call-1",
+        tool: "web_search",
+        success: true,
+        contentItems: [{ type: "inputText", text: "synthetic result" }],
+      });
+
+      expect(recordEvent).not.toHaveBeenCalledWith("tool.search.discovery", expect.anything());
+      const result = projector.buildResult(buildEmptyToolTelemetry());
+      expect(result.messagesSnapshot[1]).toMatchObject({
+        role: "assistant",
+        content: [{ type: "toolCall", id: "dynamic-call-1", name: "web_search" }],
+      });
+      expect(result.messagesSnapshot[2]).toMatchObject({
+        role: "toolResult",
+        toolCallId: "dynamic-call-1",
+        toolName: "web_search",
+        isError: false,
+        content: [{ type: "text", text: "synthetic result" }],
+      });
+    },
+  );
+
   it.each(
     ["item", "turn"].flatMap((source) => [false, true].map((closed) => ({ source, closed }))),
   )(

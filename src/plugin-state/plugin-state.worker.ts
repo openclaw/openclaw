@@ -1,5 +1,5 @@
 import { err, ok } from "@openclaw/normalization-core/result";
-import { requestSessionEntryCurrentAdmission } from "../config/sessions/session-entry-current-admission.worker.js";
+import { requestSessionEntriesCurrentAdmission } from "../config/sessions/session-entry-current-admission.worker.js";
 import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
 import { captureOpenClawStateDatabaseReadAdmission } from "../state/openclaw-state-db-cache.js";
 import type {
@@ -53,7 +53,7 @@ export function executePluginStateCommand(
 ): PluginStateWorkerOperations[keyof PluginStateWorkerOperations]["output"] {
   const description = pluginStateWorkerOperations[command.type];
   const admit = (stage: "transaction" | "commit") =>
-    requestSessionEntryCurrentAdmission(command.input?.sessionEntryCurrentSource, {
+    requestSessionEntriesCurrentAdmission(command.input?.sessionEntryCurrentSources, {
       stage,
       facts: undefined,
     });

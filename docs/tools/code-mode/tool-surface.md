@@ -20,8 +20,12 @@ and structured transforms. Use `wait` only when `exec` returns a resumable
 
 ## `exec`
 
-`exec` starts a code-mode cell and returns one result. Input code is model
-generated and must be treated as hostile.
+`exec` starts a code-mode cell in a fresh JavaScript context and returns one
+result. Variables, functions, and imports never carry over between cells.
+`await store(key, value)` and `await load(key)` keep small JSON values across
+cells and turns in the same session, including restarts. See the
+[session store](/tools/code-mode/guest-api#session-store) for limits and commit
+rules. Input code is model generated and must be treated as hostile.
 
 Model-facing input:
 
@@ -64,7 +68,8 @@ Rules:
   [restart recovery](/gateway/restart-recovery) can reconstruct an interrupted
   turn from its transcript instead of restoring the process-local continuation.
   Recovery remains limited to audited read-only core tools and explicitly
-  replay-safe plugin tools. Leave the field omitted for ordinary calls.
+  replay-safe plugin tools. `store` and `load` are unavailable in `restartSafe`
+  cells. Leave the field omitted for ordinary calls.
 - `exec` rejects `import`, `require`, dynamic import, and module-loader
   patterns.
 - `exec` never exposes the normal shell `exec` implementation recursively.
@@ -81,6 +86,7 @@ type CodeModeResult = CodeModeCompletedResult | CodeModeWaitingResult | CodeMode
 type CodeModeCompletedResult = {
   status: "completed";
   value: unknown;
+  warnings?: string[];
   output?: CodeModeOutput[];
   telemetry: CodeModeTelemetry;
 };
@@ -319,7 +325,8 @@ Inside the guest runtime:
 - JavaScript reserved words, specialized globals, and normalized collisions
   receive a deterministic short suffix derived from the host-only identity.
 - Exact safe names win their unsuffixed spelling. A raw tool never overwrites
-  `catalog`, `MCP`, `API`, `nodes`, `skills`, `namespaces`, output/timer helpers,
+  `catalog`, `MCP`, `API`, `nodes`, `skills`, `namespaces`, `results`, `store`,
+  `load`, output/timer helpers,
   or optional Swarm globals.
 - The normal shell `exec` tool is callable as the `exec(...)` guest global when
   policy allows it. The code-mode control `exec` is not recursively available

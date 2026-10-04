@@ -1,6 +1,6 @@
 /** Regular-agent client for the OpenClaw system agent. */
 import { randomUUID } from "node:crypto";
-import { Type } from "typebox";
+import { Type, type Static } from "typebox";
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import { SYSTEM_AGENT_ID } from "../../system-agent/agent-id.js";
 import {
@@ -26,10 +26,8 @@ const OpenClawDelegateOutputSchema = Type.Object(
   { additionalProperties: false },
 );
 
-type OpenClawDelegateResult = {
+type OpenClawDelegateResult = Static<typeof OpenClawDelegateOutputSchema> & {
   sessionId: string;
-  reply: string;
-  action?: string;
 };
 
 function stableDelegationSessionId(sessionKey: string | undefined, agentId: string): string {

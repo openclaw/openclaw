@@ -105,7 +105,7 @@ vi.mock("./inbound-dispatch.js", async (importOriginal) => {
         ctxPayload: {
           Body: params.combinedBody,
           BodyForAgent: params.bodyForAgent ?? params.msg.payload.body,
-          CommandAuthorized: params.command?.authorization.kind === "authorized",
+          CommandAuthorized: params.command?.authorized === true,
           CommandBody: params.command?.body ?? params.msg.payload.body,
           MediaPath: params.msg.payload.media?.path,
           MediaType: params.msg.payload.media?.type,

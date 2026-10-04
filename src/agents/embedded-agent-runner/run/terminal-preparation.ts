@@ -63,22 +63,7 @@ export function prepareEmbeddedRunTerminal(input: {
   contextRecoveryState: EmbeddedRunContextRecoveryState;
   resolvedToolResultFormat: NonNullable<RunEmbeddedAgentParams["toolResultFormat"]>;
   terminalState: EmbeddedRunTerminalState;
-}): {
-  agentMeta: EmbeddedAgentMeta;
-  replyDeliveryState: ReplyDeliveryState;
-  reportedModelRef: { provider: string; model: string };
-  finalAssistantVisibleText: string | undefined;
-  finalAssistantRawText: string | undefined;
-  payloads: ReturnType<typeof buildEmbeddedRunPayloads>;
-  payloadsWithToolMedia: ReturnType<typeof mergeAttemptToolMediaPayloads>;
-  timedOutDuringPrompt: boolean;
-  recoveredFinalAssistantPayloadsAfterPromptTimeout: EmbeddedAgentRunResult["payloads"];
-  hasSuccessfulFinalAssistantAfterPromptTimeout: boolean;
-  hasPartialAssistantTextAfterPromptTimeout: boolean;
-  attemptToolSummary: ReturnType<typeof buildTraceToolSummary>;
-  failureSignal: ReturnType<typeof resolveEmbeddedRunFailureSignal>;
-  terminalToolFailure: ReturnType<typeof resolveEmbeddedRunTerminalToolFailure>;
-} {
+}) {
   const { runParams, attempt } = input;
   const { timedOutDuringCompaction, timedOutDuringToolExecution } = projectAgentRunAttemptTerminal(
     attempt.terminal,

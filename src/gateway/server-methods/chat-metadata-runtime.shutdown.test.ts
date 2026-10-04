@@ -40,7 +40,7 @@ describe("gateway chat metadata shutdown", () => {
     async (phase) => {
       const agentIds = Array.from({ length: 66 }, (_, index) => `agent-${index}`);
       const harness = createChatMetadataHarness({
-        agents: { list: agentIds.map((id, index) => ({ id, default: index === 0 })) },
+        agents: { entries: Object.fromEntries(agentIds.map((id) => [id, {}])) },
       });
       const release = createDeferred();
       const entered = createDeferred();

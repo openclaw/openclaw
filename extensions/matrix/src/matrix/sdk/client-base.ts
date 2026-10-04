@@ -40,7 +40,6 @@ import { captureMatrixSendCurrentness, withoutMatrixSendCurrentness } from "./se
 import { MatrixSendScheduler } from "./send-scheduler.js";
 import { createMatrixGuardedFetch } from "./transport.js";
 import type { MatrixClientEventMap, MatrixCryptoBootstrapApi, MatrixRawEvent } from "./types.js";
-import type { MatrixVerificationSummary } from "./verification-manager.js";
 
 type MatrixCryptoRuntime = typeof import("./crypto-runtime.js");
 
@@ -57,7 +56,6 @@ export const loadMatrixCryptoRuntime = createLazyRuntimeModule(() =>
 
 export abstract class MatrixClientBase {
   abstract getUserId(): Promise<string>;
-  abstract getJoinedRooms(): Promise<string[]>;
   abstract listOwnDevices(): Promise<MatrixOwnDeviceInfo[]>;
   abstract getOwnDeviceVerificationStatus(): Promise<MatrixOwnDeviceVerificationStatus>;
   abstract getRoomStateEvent(
@@ -103,7 +101,6 @@ export abstract class MatrixClientBase {
   protected readonly autoBootstrapCrypto: boolean;
   protected syncQuiescePromise: Promise<void> | null = null;
   protected stopPersistPromise: Promise<void> | null = null;
-  protected verificationSummaryListenerBound = false;
   protected currentSyncState: MatrixSyncState | null = null;
   protected currentSyncError: unknown = undefined;
   protected currentSyncFromCache = false;
@@ -196,8 +193,7 @@ export abstract class MatrixClientBase {
     this.initialSyncLimit = opts.initialSyncLimit;
     this.syncFilter = opts.syncFilter;
     this.encryptionEnabled = opts.encryption === true;
-    const { password: loginPassword } = opts;
-    this.password = loginPassword;
+    this.password = opts.password;
     this.syncStore = opts.syncStore;
     this.idbSnapshotPath = opts.idbSnapshotPath;
     this.cryptoDatabasePrefix = opts.cryptoDatabasePrefix;
@@ -261,7 +257,7 @@ export abstract class MatrixClientBase {
   ): this;
   on(eventName: string, listener: (...args: unknown[]) => void): this;
   on(eventName: string, listener: (...args: unknown[]) => void): this {
-    this.emitter.on(eventName, listener as (...args: unknown[]) => void);
+    this.emitter.on(eventName, listener);
     return this;
   }
 
@@ -271,7 +267,7 @@ export abstract class MatrixClientBase {
   ): this;
   off(eventName: string, listener: (...args: unknown[]) => void): this;
   off(eventName: string, listener: (...args: unknown[]) => void): this {
-    this.emitter.off(eventName, listener as (...args: unknown[]) => void);
+    this.emitter.off(eventName, listener);
     return this;
   }
 
@@ -305,6 +301,7 @@ export abstract class MatrixClientBase {
     }
 
     this.verificationManager ??= new runtime.MatrixVerificationManager({
+      onSummaryChanged: (summary) => this.emitter.emit("verification.summary", summary),
       trustOwnDeviceAfterSas: async (deviceId: string) => {
         const crypto = this.client.getCrypto() as MatrixCryptoBootstrapApi | undefined;
         if (typeof crypto?.crossSignDevice !== "function") {
@@ -362,12 +359,6 @@ export abstract class MatrixClientBase {
         isRoomEncrypted: async (roomId) =>
           (await this.getMessageWireEventType(roomId)) === "m.room.encrypted",
         downloadContent: (mxcUrl, opts) => this.downloadContent(mxcUrl, opts),
-      });
-    }
-    if (!this.verificationSummaryListenerBound) {
-      this.verificationSummaryListenerBound = true;
-      this.verificationManager.onSummaryChanged((summary: MatrixVerificationSummary) => {
-        this.emitter.emit("verification.summary", summary);
       });
     }
   }

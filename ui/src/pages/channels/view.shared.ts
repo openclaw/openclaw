@@ -1,7 +1,7 @@
 // Channels page shared view helpers.
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing } from "lit";
-import type { ChannelAccountSnapshot } from "../../api/types.ts";
+import type { ChannelAccountSnapshot, ChannelStatus } from "../../api/types.ts";
 import { icons } from "../../components/icons.ts";
 import { renderSettingsRow, renderSettingsStatus } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
@@ -125,11 +125,7 @@ export function renderChannelErrorRow(message: unknown) {
   });
 }
 
-export function renderChannelProbeRow(probe: {
-  ok?: boolean;
-  status?: number | string | null;
-  error?: string | null;
-}) {
+export function renderChannelProbeRow(probe: NonNullable<ChannelStatus["probe"]>) {
   const detail = formatUiExternalText(
     [probe.status ?? "", probe.error ?? ""].filter(Boolean).join(" "),
   );

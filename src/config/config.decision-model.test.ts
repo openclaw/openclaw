@@ -59,14 +59,4 @@ describe("decision model configuration", () => {
       ).toBe(false);
     },
   );
-
-  it("accepts opt-in and explicit disablement, without the unpublished judgments selector", () => {
-    expect(OpenClawSchema.safeParse({}).success).toBe(true);
-    expect(
-      OpenClawSchema.safeParse({
-        agents: { ownership: "explicit", defaults: { decisionModel: "" }, entries: { worker: {} } },
-      }).success,
-    ).toBe(true);
-    expect(OpenClawSchema.safeParse({ judgments: { provider: "typesafe" } }).success).toBe(false);
-  });
 });

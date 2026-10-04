@@ -4,6 +4,7 @@ import {
   listSessionEntriesCore,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
+import * as sqliteSessionScope from "../config/sessions/session-accessor.sqlite-scope.js";
 import {
   SessionTranscriptWriterClaimReboundError,
   withOwnedSessionTranscriptWrites,
@@ -248,8 +249,22 @@ describe("session transcript runtime SDK", () => {
     const steps: string[] = [];
     const firstRead = createDeferredCore();
     const releaseFirst = createDeferredCore();
-    const appendIfMissing = async (label: string) =>
+    const secondQueued = createDeferredCore();
+    const enqueueWrite = sqliteSessionScope.runExclusiveSqliteSessionWrite;
+    let queuedWrites = 0;
+    vi.spyOn(sqliteSessionScope, "runExclusiveSqliteSessionWrite").mockImplementation((...args) => {
+      const pending = enqueueWrite(...args);
+      // This owner enqueues synchronously; observe contention after delegating to the real queue.
+      if (args[2] === "session.transcript.locked-write" && ++queuedWrites === 2) {
+        secondQueued.resolve();
+      }
+      return pending;
+    });
+    let enteredWrites = 0;
+    const appendIfMissing = async () =>
       await withSessionTranscriptWriteLock(scope, async (locked) => {
+        // Target preparation can finish out of order before either caller acquires the lock.
+        const label = ++enteredWrites === 1 ? "first" : "second";
         steps.push(`${label}:read`);
         const events = await locked.readEvents();
         const alreadyAppended = events.some((event) => {
@@ -274,12 +289,12 @@ describe("session transcript runtime SDK", () => {
         steps.push(`${label}:done`);
       });
 
-    const first = appendIfMissing("first");
-    await Promise.resolve();
-    const second = appendIfMissing("second");
+    const first = appendIfMissing();
+    const second = appendIfMissing();
     const writes = Promise.all([first, second]);
     try {
-      await Promise.race([firstRead.promise, writes]);
+      await Promise.race([Promise.all([firstRead.promise, secondQueued.promise]), writes]);
+      expect(steps).toEqual(["first:read"]);
     } finally {
       releaseFirst.resolve();
       await Promise.allSettled([first, second]);

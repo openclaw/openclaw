@@ -1628,17 +1628,14 @@ describe("gateway sessions patch", () => {
       await runPatch({
         cfg: {
           agents: {
-            list: [
-              {
-                id: "main",
-                default: true,
+            entries: {
+              main: {
                 model: { primary: "gmn/gpt-5.4" },
               },
-              {
-                id: "work",
+              work: {
                 model: { primary: "openai/gpt-5.5" },
               },
-            ],
+            },
           },
         } as OpenClawConfig,
         storeKey: "global",

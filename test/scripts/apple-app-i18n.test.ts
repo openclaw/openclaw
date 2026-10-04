@@ -573,7 +573,6 @@ describe("Apple app i18n catalogs", () => {
   });
 
   it("selects InfoPlist candidates by stable ID instead of shared source text", () => {
-    const source = "Use the camera to scan setup codes.";
     const artifact = {
       version: 2,
       locale: "fr",
@@ -583,7 +582,7 @@ describe("Apple app i18n catalogs", () => {
       },
     };
 
-    expect(infoPlistTranslationCandidates(artifact, "native.apple.camera", source)).toEqual([
+    expect(infoPlistTranslationCandidates(artifact, "native.apple.camera")).toEqual([
       "Utilisez l’appareil photo pour scanner les codes de configuration.",
     ]);
   });

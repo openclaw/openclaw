@@ -155,26 +155,20 @@ function guardUnknownToolLoopInMessage(
   params: {
     threshold?: number;
     countAttempt: boolean;
-    resetOnAllowedTool?: boolean;
-    resetOnMissingUnknownTool?: boolean;
-    rewriteMalformedBlankToolName?: boolean;
+    projection: "partial" | "message" | "result";
   },
 ): boolean {
   if (toolCallState?.kind === "allowed") {
-    if (params.resetOnAllowedTool === true) {
+    if (params.projection !== "partial") {
       state.lastUnknownToolName = undefined;
       state.count = 0;
     }
     return false;
   }
   if (toolCallState?.kind === "malformed") {
-    if (params.rewriteMalformedBlankToolName === true) {
+    if (params.projection === "result") {
       rewriteUnknownToolLoopMessage(message, toolCallState.toolName);
       return true;
-    }
-    if (params.countAttempt && params.resetOnMissingUnknownTool !== false) {
-      state.lastUnknownToolName = undefined;
-      state.count = 0;
     }
     return false;
   }
@@ -183,7 +177,7 @@ function guardUnknownToolLoopInMessage(
     return false;
   }
   if (toolCallState?.kind !== "unknown") {
-    if (params.countAttempt && params.resetOnMissingUnknownTool !== false) {
+    if (params.countAttempt && params.projection === "result") {
       state.lastUnknownToolName = undefined;
       state.count = 0;
     }
@@ -239,8 +233,7 @@ function wrapStreamTrimToolCallNames(
     guardUnknownToolLoopInMessage(message, toolCallState, unknownToolGuardState, {
       threshold: options.unknownToolThreshold,
       countAttempt: !streamAttemptAlreadyCounted,
-      resetOnAllowedTool: true,
-      rewriteMalformedBlankToolName: true,
+      projection: "result",
     });
     return message;
   };
@@ -264,8 +257,7 @@ function wrapStreamTrimToolCallNames(
         {
           threshold: options.unknownToolThreshold,
           countAttempt: !streamAttemptAlreadyCounted,
-          resetOnAllowedTool: true,
-          resetOnMissingUnknownTool: false,
+          projection: "message",
         },
       );
       streamAttemptAlreadyCounted ||= countedStreamAttempt;
@@ -275,6 +267,7 @@ function wrapStreamTrimToolCallNames(
       guardUnknownToolLoopInMessage(event.partial, partialState, unknownToolGuardState, {
         threshold: options.unknownToolThreshold,
         countAttempt: false,
+        projection: "partial",
       });
     }
   });

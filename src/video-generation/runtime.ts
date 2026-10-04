@@ -2,7 +2,6 @@
 import { resolveAgentModelTimeoutMsValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { parseVideoGenerationModelRef } from "../media-generation/model-ref.js";
 import { createMediaProviderLookup } from "../media-generation/provider-registry.js";
 import {
   getVideoGenerationProvider,
@@ -11,8 +10,6 @@ import {
 } from "../media-generation/registry.js";
 import {
   buildMediaGenerationNormalizationMetadata,
-  buildNoCapabilityModelConfiguredMessage,
-  resolveCapabilityModelCandidates,
   resolveMediaProviderRequestTimeoutMs,
   runMediaGenerationCandidates,
 } from "../media-generation/runtime-shared.js";
@@ -53,10 +50,7 @@ function validateProviderOptionsAgainstDeclaration(params: {
 }): string | undefined {
   const { providerId, model, providerOptions, declaration } = params;
   const keys = Object.keys(providerOptions);
-  if (keys.length === 0) {
-    return undefined;
-  }
-  if (declaration === undefined) {
+  if (keys.length === 0 || declaration === undefined) {
     return undefined;
   }
   if (Object.keys(declaration).length === 0) {
@@ -82,19 +76,6 @@ function validateProviderOptionsAgainstDeclaration(params: {
     }
   }
   return undefined;
-}
-
-function buildNoVideoGenerationModelConfiguredMessage(
-  cfg: OpenClawConfig,
-  deps: VideoGenerationRuntimeDeps,
-): string {
-  const listProviders = deps.listProviders ?? listVideoGenerationProviders;
-  return buildNoCapabilityModelConfiguredMessage({
-    capabilityLabel: "video-generation",
-    modelConfigKey: "mediaModels.video",
-    providers: listProviders(cfg),
-    getProviderEnvVars: deps.getProviderEnvVars,
-  });
 }
 
 export function listRuntimeVideoGenerationProviders(
@@ -131,18 +112,6 @@ async function runVideoGeneration(
   const requestedTimeoutMs =
     params.timeoutMs ??
     resolveAgentModelTimeoutMsValue(params.cfg.agents?.defaults?.mediaModels?.video);
-  const candidates = resolveCapabilityModelCandidates({
-    cfg: params.cfg,
-    modelConfig: params.cfg.agents?.defaults?.mediaModels?.video,
-    modelOverride: params.modelOverride,
-    parseModelRef: parseVideoGenerationModelRef,
-    agentDir: params.agentDir,
-    listProviders,
-    autoProviderFallback: params.autoProviderFallback,
-  });
-  if (candidates.length === 0) {
-    throw new Error(buildNoVideoGenerationModelConfiguredMessage(params.cfg, deps));
-  }
 
   let skipWarnEmitted = false;
   const warnOnFirstSkip = (reason: string) => {
@@ -154,7 +123,9 @@ async function runVideoGeneration(
   };
 
   return runMediaGenerationCandidates({
-    candidates,
+    request: params,
+    listProviders,
+    getProviderEnvVars: deps.getProviderEnvVars,
     capability: "video",
     getProvider: (providerId) => getProvider(providerId, params.cfg),
     onFailure: (attempt) => {
@@ -199,19 +170,15 @@ async function runVideoGeneration(
         return capabilityMismatch;
       }
 
-      if (
-        params.providerOptions &&
-        typeof params.providerOptions === "object" &&
-        Object.keys(params.providerOptions).length > 0
-      ) {
-        const { capabilities: optCaps } = resolveVideoGenerationModeCapabilities({
-          provider: activeProvider,
-          model: candidate.model,
-          inputImageCount,
-          inputVideoCount,
-        });
+      const { capabilities: modeCapabilities } = resolveVideoGenerationModeCapabilities({
+        provider: activeProvider,
+        model: candidate.model,
+        inputImageCount,
+        inputVideoCount,
+      });
+      if (params.providerOptions) {
         const declaredOptions =
-          optCaps?.providerOptions ?? activeProvider.capabilities.providerOptions ?? undefined;
+          modeCapabilities?.providerOptions ?? activeProvider.capabilities.providerOptions;
         const mismatch = validateProviderOptionsAgainstDeclaration({
           providerId: candidate.provider,
           model: candidate.model,
@@ -236,14 +203,8 @@ async function runVideoGeneration(
       });
       const requestedDuration = params.durationSeconds;
       if (typeof requestedDuration === "number" && Number.isFinite(requestedDuration)) {
-        const { capabilities: durCaps } = resolveVideoGenerationModeCapabilities({
-          provider: activeProvider,
-          model: candidate.model,
-          inputImageCount,
-          inputVideoCount,
-        });
         const maxDuration =
-          durCaps?.maxDurationSeconds ?? activeProvider.capabilities.maxDurationSeconds;
+          modeCapabilities?.maxDurationSeconds ?? activeProvider.capabilities.maxDurationSeconds;
         if (
           !supportedDurations &&
           typeof maxDuration === "number" &&

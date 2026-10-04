@@ -43,11 +43,6 @@ describe("doctor repair sequencing", () => {
       changes: [],
     }));
     mocks.maybeRepairPluginOpenClawHostLinks.mockResolvedValue(false);
-    mocks.maybeRepairLegacyOAuthSidecarProfiles.mockResolvedValue({
-      detected: [],
-      changes: [],
-      warnings: [],
-    });
     mocks.migrateLegacyTailscaleProfileIdentities.mockReturnValue({ changes: [], warnings: [] });
     mocks.repairMergedGatewayOwnerProfile.mockReturnValue({
       repaired: false,
@@ -311,14 +306,6 @@ describe("doctor repair sequencing", () => {
 
   it("repairs stale OAuth shadows before importing and removing auth JSON", async () => {
     const events: string[] = [];
-    mocks.maybeRepairLegacyOAuthSidecarProfiles.mockImplementationOnce(async () => {
-      events.push("sidecar-oauth");
-      return {
-        detected: ["auth-profiles.json"],
-        changes: ["Migrated 1 legacy Codex OAuth profile."],
-        warnings: ["Sidecar warning"],
-      };
-    });
     mocks.repairStaleOAuthProfileShadows.mockImplementationOnce(async () => {
       events.push("stale-oauth-shadows");
       return {
@@ -352,25 +339,13 @@ describe("doctor repair sequencing", () => {
       doctorFixCommand: "openclaw doctor --fix",
     });
 
-    expect(events).toEqual([
-      "sidecar-oauth",
-      "stale-oauth-shadows",
-      "sqlite-migration",
-      "stale-auth-order",
-    ]);
-    expect(mocks.maybeRepairLegacyOAuthSidecarProfiles).toHaveBeenCalledWith({
-      cfg: {},
-      prompter: { confirmAutoFix: expect.any(Function) },
-      emitNotes: false,
-      env: process.env,
-    });
+    expect(events).toEqual(["stale-oauth-shadows", "sqlite-migration", "stale-auth-order"]);
     expect(result.changeNotes).toEqual([
-      "Migrated 1 legacy Codex OAuth profile.",
       "Removed stale OAuth auth profile shadow openai-codex.",
       "Migrated auth profile JSON into SQLite.",
     ]);
     expect(result.state.pendingChanges).toBe(true);
-    expect(result.warningNotes).toEqual(["Sidecar warning"]);
+    expect(result.warningNotes).toEqual([]);
     expect(result.authProfilesRepaired).toBe(true);
   });
 

@@ -1,6 +1,7 @@
 import { isCompactionReplayCheckpoint } from "@openclaw/ai/transports";
 import { sameSessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
 import { captureOwnedTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
+import type { AssistantMessage } from "../../llm/types.js";
 import { calculateContextTokens, estimateContextTokens } from "../runtime/index.js";
 import { AgentSessionModels } from "./agent-session-models.js";
 import {
@@ -117,19 +118,11 @@ export abstract class AgentSessionInspection extends AgentSessionModels {
    * @returns Text content, or undefined if no assistant message exists
    */
   getLastAssistantText(): string | undefined {
-    const messages = this.messages;
-    for (let index = messages.length - 1; index >= 0; index -= 1) {
-      // SAFETY: The reverse index stays within the canonical message array.
-      const message = messages[index]!;
-      if (message.role !== "assistant") {
-        continue;
-      }
-      const content = message.content;
-      if (message.stopReason === "aborted" && !hasPersistedAssistantContent(content)) {
-        continue;
-      }
-      return extractTextContent(content).trim() || undefined;
-    }
-    return undefined;
+    const message = this.messages.findLast(
+      (entry): entry is AssistantMessage =>
+        entry.role === "assistant" &&
+        (entry.stopReason !== "aborted" || hasPersistedAssistantContent(entry.content)),
+    );
+    return message ? extractTextContent(message.content).trim() || undefined : undefined;
   }
 }

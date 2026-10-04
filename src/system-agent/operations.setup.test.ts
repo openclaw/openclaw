@@ -174,7 +174,7 @@ function setModel(options: Options) {
 }
 const verified = () => ({ ok: true as const, modelRef: model, latencyMs: 5 });
 const withModel = (primary = model): OpenClawConfig => ({
-  agents: { defaults: { model: { primary } }, entries: { main: { default: true } } },
+  agents: { defaults: { model: { primary } }, entries: { main: {} } },
 });
 function overview(defaultModel: string | undefined = model): SystemAgentOverview {
   const command = { command: "unused", found: false, error: "not found" };
@@ -253,7 +253,7 @@ function recoveryConfig(
   mockConfig.set({
     agents: {
       defaults: { model: { primary: model }, workspace: approvedWorkspace },
-      entries: { main: { default: true } },
+      entries: { main: {} },
     },
     gateway: { mode: "local" },
     wizard: { securityAcknowledgedAt },
@@ -332,7 +332,7 @@ describe("setup inference", () => {
         meta: { migrations: { utilityModelSeparation: true } },
         agents: {
           defaults: role === "default" ? { model: { primary: model } } : { utilityModel: model },
-          entries: { main: { default: true } },
+          entries: { main: {} },
         },
         gateway: { port: 18789 },
       });
@@ -391,7 +391,7 @@ describe("setup inference", () => {
   );
 
   it("rejects setup without a model before workspace or Gateway writes", async () => {
-    mockConfig.set({ agents: { entries: { main: { default: true } } } });
+    mockConfig.set({ agents: { entries: { main: {} } } });
     await expect(
       setup({
         deps: {
@@ -458,7 +458,7 @@ describe("model changes", () => {
           model: { primary: previousModel, fallbacks: ["openai/gpt-5.2"] },
           systemAgent: { agentId: "main" },
         },
-        entries: { main: { default: true, workspace: "/tmp/main" } },
+        entries: { main: { workspace: "/tmp/main" } },
       },
       gateway: { port: 18789 },
       models: { providers: { openai: { baseUrl: "https://api.openai.com/v1", models: [] } } },
@@ -614,7 +614,7 @@ describe("model changes", () => {
     mockConfig.set({
       agents: {
         defaults: { model: { primary: "anthropic/global-default" } },
-        entries: { work: { default: true, model: { primary: "anthropic/work-default" } } },
+        entries: { work: { model: { primary: "anthropic/work-default" } } },
       },
     });
     const verifyInferenceConfig = vi.fn<Verify>(async ({ config }) => {
@@ -658,7 +658,6 @@ describe("local setup recovery", () => {
   it("completes a v2026.9.4 interrupted runtime-bearing roster at its approved root", async () => {
     const pending = pendingOwner();
     const main = {
-      default: true,
       models: { "anthropic/claude-opus-5": { agentRuntime: { id: "claude-cli" } } },
     };
     const released: OpenClawConfig = {

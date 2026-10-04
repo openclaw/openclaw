@@ -1,3 +1,11 @@
+import {
+  prepareCronReceiptAuthorityPublication,
+  readCronReceiptAuthorityAttachment,
+} from "../cron/store/receipt-authority-publication.js";
+import type {
+  CronReceiptAuthorityAttachment,
+  CronReceiptAuthorityPublication,
+} from "../cron/store/receipt-authority.types.js";
 import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
 import {
   deferSqliteWorkerCommitReceipt,
@@ -11,9 +19,17 @@ import * as store from "./operator-approval-store.kernel.js";
 import { getOperatorApprovalResolutionKey } from "./operator-approval-store.rows.js";
 import * as transitions from "./operator-approval-store.transitions.js";
 
-type Receipt = { type: "operatorApprovals.resolve"; resolutionKey: string };
+export type OperatorApprovalCommitReceipt = {
+  type?: "operatorApprovals.resolve";
+  resolutionKey?: string;
+  receiptAuthority?: CronReceiptAuthorityPublication;
+};
 type Context = WorkerOperationContext & {
-  native?: { assertCurrent: () => void; onCommitted?: (receipt: Receipt) => void };
+  native?: {
+    assertCurrent: () => void;
+    receiptAuthority: CronReceiptAuthorityAttachment;
+    onCommitted: (receipt: OperatorApprovalCommitReceipt) => void;
+  };
 };
 type Input<Handler extends (input: never) => unknown> = Omit<
   NonNullable<Parameters<Handler>[0]>,
@@ -24,8 +40,11 @@ function transact<Payload, Result>(
   input: Payload,
   context: Context,
   apply: (input: Payload & { databaseOptions: OpenClawStateDatabaseOptions }) => Result,
-  receiptOf?: (result: Result) => Receipt | undefined,
+  receiptOf?: (result: Result) => OperatorApprovalCommitReceipt | undefined,
 ): Result {
+  const attachment = context.native
+    ? context.native.receiptAuthority
+    : readCronReceiptAuthorityAttachment();
   const options = { ...context.stateOptions(), database: context.open() };
   const assertCurrent = (stage: "transaction" | "commit") =>
     context.native
@@ -34,11 +53,16 @@ function transact<Payload, Result>(
   return runOpenClawStateWriteTransaction((database) => {
     assertCurrent("transaction");
     const result = apply({ ...input, databaseOptions: { ...options, database } });
-    const receipt = receiptOf?.(result);
-    if (receipt) {
+    const receiptAuthority = attachment
+      ? context.native
+        ? { nonce: attachment.nonce, sequence: 1 }
+        : prepareCronReceiptAuthorityPublication(database.db, attachment)
+      : undefined;
+    const receipt = { ...receiptOf?.(result), ...(receiptAuthority ? { receiptAuthority } : {}) };
+    if (receipt.resolutionKey !== undefined || receipt.receiptAuthority) {
       if (!context.native) {
         deferSqliteWorkerCommitReceipt(database.db, receipt);
-      } else if (context.native.onCommitted) {
+      } else {
         const publish = context.native.onCommitted;
         if (!deferSqlitePostCommitPublication(database.db, () => publish(receipt))) {
           throw new Error("Operator approval commit receipt requires a transaction owner");

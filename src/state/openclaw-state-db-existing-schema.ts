@@ -3,7 +3,6 @@ import { registerNodeSqliteDisposeCallback } from "../infra/kysely-sync-cache-st
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import {
-  assertSqliteSchemaContains,
   createSqliteTableContractReader,
   readSqliteSchemaCookie,
 } from "../infra/sqlite-schema-contract.js";
@@ -19,10 +18,6 @@ import {
   readStateSchemaMigrationVersion,
 } from "./openclaw-state-db-schema-version.js";
 import type { DB } from "./openclaw-state-db.generated.js";
-import {
-  getOpenClawStateRuntimeSchema,
-  STATE_PERSISTENT_SCHEMA_COMPATIBILITY,
-} from "./openclaw-state-schema-compatibility.js";
 
 const validatedSchemas = new WeakMap<DatabaseSync, { cookie: number; unregister: () => void }>();
 
@@ -34,7 +29,7 @@ export function assertExistingOpenClawStateRuntimeMetadata(
   const version = assertSupportedStateSchemaVersion(database, pathname);
   if (readStateSchemaMigrationVersion(database) !== OPENCLAW_STATE_SCHEMA_VERSION) {
     throw new Error(
-      `Existing shared-state database ${pathname} requires schema migration by its owning installation before this node can use it.`,
+      `Existing shared-state database ${pathname} requires schema migration by its owning installation; run openclaw doctor --fix there before using it.`,
     );
   }
   let metadata;
@@ -82,13 +77,6 @@ export function assertExistingOpenClawStateRuntimeSchema(
       const readTable = createSqliteTableContractReader(database);
       assertCurrentStateRuntimeSchema(database, pathname, readTable);
       assertNoLegacyStateRuntimeRepair(database, pathname);
-      assertSqliteSchemaContains(
-        database,
-        pathname,
-        getOpenClawStateRuntimeSchema({ includeVersionLazyAdditiveTables: false }),
-        STATE_PERSISTENT_SCHEMA_COMPATIBILITY,
-        readTable,
-      );
     }
     return currentCookie;
   });

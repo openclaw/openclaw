@@ -38,7 +38,7 @@ const schema = {
 function buildConfig(tools?: OpenClawConfig["tools"]): OpenClawConfig {
   return {
     plugins: { enabled: false },
-    agents: { entries: { main: { default: true } } },
+    agents: { entries: { main: {} } },
     tools: { swarm: true, ...tools },
   } as OpenClawConfig;
 }

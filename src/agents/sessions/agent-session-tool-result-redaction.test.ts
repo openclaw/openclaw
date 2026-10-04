@@ -2,11 +2,16 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { streamAnthropic } from "@openclaw/ai/internal/anthropic";
 import { streamOpenAIResponses } from "@openclaw/ai/internal/openai";
-import type { Context, Model } from "openclaw/plugin-sdk/llm";
+import {
+  createAssistantMessageEventStream,
+  type Context,
+  type Model,
+} from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import { readTranscriptEventRows } from "../../config/sessions/session-accessor.sqlite-read.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
 import { applyLoggingConfig, resetLogger } from "../../logging/logger.js";
 import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
@@ -14,12 +19,12 @@ import { resetSecretRedactionRegistryForTest } from "../../logging/secret-redact
 import {
   closeOpenClawAgentDatabaseByPathAsync,
   closeOpenClawAgentDatabasesAsync,
+  openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { toToolDefinitions } from "../agent-tool-definition-adapter.js";
 import { createOpenClawReadTool } from "../agent-tools.read.js";
 import { createExecTool } from "../bash-tools.exec-run.js";
 import { buildEmbeddedExtensionFactories } from "../embedded-agent-runner/extensions.js";
-import { createEmbeddedAgentResourceLoader } from "../embedded-agent-runner/resource-loader.js";
 import { normalizeMessagesForLlmBoundary } from "../embedded-agent-runner/run/attempt-llm-boundary.js";
 import { installToolResultContextGuard } from "../embedded-agent-runner/tool-result-context-guard.js";
 import { guardSessionManager } from "../session-tool-result-guard-wrapper.js";
@@ -33,7 +38,9 @@ import {
 } from "./agent-session-loop-correctness.test-support.js";
 import { AuthStorage } from "./auth-storage.js";
 import { ModelRegistry } from "./model-registry.js";
+import { DefaultResourceLoader } from "./resource-loader.js";
 import { createAgentSession } from "./sdk.js";
+import type { SessionMessageEntry } from "./session-manager-types.js";
 import { SessionManager } from "./session-manager.js";
 import { SettingsManager } from "./settings-manager.js";
 import { createReadTool } from "./tools/read.js";
@@ -51,6 +58,119 @@ afterEach(resetSecretRedactionRegistryForTest);
 afterEach(resetLogger);
 
 describe("AgentSession model-visible tool-result redaction", () => {
+  it.each(["sync", "async"] as const)(
+    "reprojects %s tool text after commit when settlement registers a new secret",
+    async (mode) => {
+      const cwd = tempDirs.make("openclaw-post-commit-redaction-");
+      const scope = {
+        agentId: "main",
+        sessionId: "post-commit-redaction",
+        sessionKey: "agent:main:post-commit-redaction",
+        storePath: path.join(cwd, "openclaw-agent.sqlite"),
+      };
+      const marker = "postcommitabcdefghijklmnopqrst";
+      const rawText = `VISIBLE ${marker}`;
+      const maskedText = "VISIBLE postco…qrst";
+      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+      const manager = guardSessionManager(await SessionManager.openAsync(scope, cwd), {
+        config: {},
+      });
+      const database = openOpenClawAgentDatabase({ agentId: scope.agentId, path: scope.storePath });
+      let committed: SessionMessageEntry | undefined;
+      let committedRow: ReturnType<typeof readTranscriptEventRows>[number] | undefined;
+      let providerContent: unknown;
+      let terminalContent: unknown;
+      streamMocks.streamSimple
+        .mockImplementationOnce((model) => {
+          const toolCall = {
+            type: "toolCall" as const,
+            id: "settled-lookup",
+            name: "lookup",
+            arguments: {},
+            ...(mode === "async" ? { async: true as const } : {}),
+          };
+          const message = createAssistant(model, [toolCall], mode === "async" ? "stop" : "toolUse");
+          if (mode === "sync") {
+            return createAssistantResultStream(message);
+          }
+          const response = createAssistantMessageEventStream();
+          response.push({ type: "start", partial: createAssistant(model, []) });
+          response.push({ type: "toolcall_end", contentIndex: 0, toolCall, partial: message });
+          response.push({ type: "done", reason: "stop", message });
+          response.end();
+          return response;
+        })
+        .mockImplementation((model: Model, context: Context) => {
+          providerContent = context.messages.findLast(
+            (message) => message.role === "toolResult",
+          )?.content;
+          return createAssistantResultStream(
+            createAssistant(model, [{ type: "text", text: "Lookup complete." }]),
+          );
+        });
+      const { session } = await createTestSession({
+        sessionManager: manager,
+        customTools: toToolDefinitions([
+          {
+            name: "lookup",
+            label: "Lookup",
+            description: "Return synthetic lookup text.",
+            parameters: Type.Object({}),
+            execute: async () => ({ content: [{ type: "text", text: rawText }], details: {} }),
+          },
+        ]),
+        withSessionWriteSettlement: async (run) => {
+          const result = await run();
+          const entry = manager.getLeafEntry();
+          if (!committed && entry?.type === "message" && entry.message.role === "toolResult") {
+            committed = entry;
+            committedRow = readTranscriptEventRows(database, scope.sessionId).at(-1);
+            expect(entry.message.content).toEqual([{ type: "text", text: rawText }]);
+            expect(Object.isFrozen(entry.message)).toBe(true);
+            expect(Object.isFrozen(entry.message.content)).toBe(true);
+            registerSecretValueForRedaction(marker);
+          }
+          return result;
+        },
+      });
+      session.subscribe((event) => {
+        if (event.type === "agent_end") {
+          terminalContent = event.messages.findLast(
+            (message) => message.role === "toolResult",
+          )?.content;
+        }
+      });
+      try {
+        await session.prompt("Run lookup.");
+        expect(streamMocks.streamSimple).toHaveBeenCalledTimes(2);
+        expect(providerContent).toEqual([{ type: "text", text: maskedText }]);
+        expect(terminalContent).toEqual(providerContent);
+        expect(
+          session.agent.state.messages.findLast((message) => message.role === "toolResult")
+            ?.content,
+        ).toEqual(providerContent);
+        expect(session.agent.state.errorMessage).toBeUndefined();
+        expect(session.messages.at(-1)).toMatchObject({
+          role: "assistant",
+          content: [{ type: "text", text: "Lookup complete." }],
+          stopReason: "stop",
+        });
+        expect(committed).toBeDefined();
+        expect(manager.getEntry(committed!.id)).toBe(committed);
+        expect(committed!.message).toHaveProperty("content", [{ type: "text", text: rawText }]);
+        expect(Object.isFrozen(committed!.message)).toBe(true);
+        expect(committedRow).toBeDefined();
+        expect(
+          readTranscriptEventRows(database, scope.sessionId).find(
+            (row) => row.seq === committedRow!.seq,
+          ),
+        ).toEqual(committedRow);
+      } finally {
+        session.dispose();
+      }
+    },
+  );
+
   it.each([
     { kind: "opaque", ambientPolicy: "different", callbackChange: "none" },
     { kind: "opaque", ambientPolicy: "absent", callbackChange: "none" },
@@ -239,10 +359,9 @@ describe("AgentSession model-visible tool-result redaction", () => {
       config: {},
       allowedToolNames: [toolName],
     });
-    const resourceLoader = createEmbeddedAgentResourceLoader({
+    const resourceLoader = new DefaultResourceLoader({
       cwd,
       agentDir: cwd,
-      settingsManager,
       extensionFactories: buildEmbeddedExtensionFactories({
         cfg: {},
         sessionManager,
@@ -298,11 +417,11 @@ describe("AgentSession model-visible tool-result redaction", () => {
       streamSimple: streamMocks.streamSimple,
     });
     const { session } = await createAgentSession({
+      systemPrompt: "Test session prompt",
       cwd,
-      agentDir: cwd,
       model,
+      thinkingLevel: "medium",
       modelRegistry,
-      authStorage,
       tools: [toolName],
       sessionManager,
       settingsManager,

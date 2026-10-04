@@ -263,7 +263,10 @@ export function renderSidebarCustomizeMenu(params: SidebarCustomizeMenuParams) {
       .map((entry) => ({
         value: `plugin:${entry.key}`,
         entry: `plugin:${entry.key}`,
-        icon: "plug" as const,
+        icon:
+          entry.value.icon && Object.hasOwn(icons, entry.value.icon)
+            ? (entry.value.icon as IconName) // SAFETY: the own-key check admits only registered icon names.
+            : ("plug" as const),
         label: entry.value.label,
       })),
   ];

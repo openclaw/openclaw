@@ -12,7 +12,7 @@ import { presentSessionRow } from "./session-utils-row.js";
 
 it("materializes actor-prepared private entries and lineage without host SQLite", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const cfg = { agents: { entries: { main: { default: true } } } };
+    const cfg = { agents: { entries: { main: {} } } };
     const authority = { assertCurrent() {} };
     const actor = await captureOpenClawAgentDatabaseExecution({
       kind: "ephemeral",

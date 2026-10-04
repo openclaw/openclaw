@@ -1,4 +1,5 @@
 // Internal SQLite persistence for channel pairing requests and allow entries.
+import type { DatabaseSync } from "node:sqlite";
 import { parseDateStringTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -9,8 +10,8 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabase,
-  type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
+import type { WorkerOperationHandlers } from "../state/worker-operation-registry.js";
 import {
   dedupePreserveOrder,
   resolveAllowFromAccountId,
@@ -71,9 +72,33 @@ export function resolvePairingRequestAccountId(entry: PairingRequest): string {
   return resolveAllowFromAccountId(entry.meta?.accountId) || DEFAULT_ACCOUNT_ID;
 }
 
-export function sqliteOptionsForEnv(env: NodeJS.ProcessEnv): OpenClawStateDatabaseOptions {
-  return { env };
+function readChannelAllowEntries(database: DatabaseSync, channel: PairingChannel) {
+  const db = getNodeSqliteKysely<PairingDatabase>(database);
+  const rows = executeSqliteQuerySync(
+    database,
+    db
+      .selectFrom("channel_pairing_allow_entries")
+      .selectAll()
+      .where("channel_key", "=", safeChannelKey(channel))
+      .orderBy("account_id", "asc")
+      .orderBy("sort_order", "asc")
+      .orderBy("entry", "asc"),
+  ).rows;
+  const allowFrom: Record<string, string[]> = {};
+  for (const row of rows) {
+    const accountId = resolveAllowFromAccountId(row.account_id);
+    (allowFrom[accountId] ??= []).push(row.entry);
+  }
+  return allowFrom;
 }
+
+export const pairingReadOperations = {
+  "pairing.allowFrom": (input: { channel: string; accountId: string }, db) => ({
+    type: "pairing.allowFrom" as const,
+    // Match the native reader's refusal of inherited, non-array account keys.
+    entries: (readChannelAllowEntries(db, input.channel)[input.accountId] ?? []).slice(),
+  }),
+} satisfies WorkerOperationHandlers<DatabaseSync>;
 
 export function readChannelPairingStateFromDatabase(
   database: OpenClawStateDatabase,
@@ -91,21 +116,7 @@ export function readChannelPairingStateFromDatabase(
       .orderBy("account_id", "asc")
       .orderBy("request_id", "asc"),
   ).rows;
-  const allowRows = executeSqliteQuerySync(
-    database.db,
-    db
-      .selectFrom("channel_pairing_allow_entries")
-      .selectAll()
-      .where("channel_key", "=", channelKey)
-      .orderBy("account_id", "asc")
-      .orderBy("sort_order", "asc")
-      .orderBy("entry", "asc"),
-  ).rows;
-  const allowFrom: Record<string, string[]> = {};
-  for (const row of allowRows) {
-    const accountId = resolveAllowFromAccountId(row.account_id);
-    (allowFrom[accountId] ??= []).push(row.entry);
-  }
+  const allowFrom = readChannelAllowEntries(database.db, channel);
   const requests = requestRows.flatMap((row) => {
     let meta: Record<string, string> | undefined;
     if (row.meta_json) {
@@ -134,10 +145,7 @@ export function readChannelPairingState(
   channel: PairingChannel,
   env: NodeJS.ProcessEnv,
 ): ChannelPairingState {
-  return readChannelPairingStateFromDatabase(
-    openOpenClawStateDatabase(sqliteOptionsForEnv(env)),
-    channel,
-  );
+  return readChannelPairingStateFromDatabase(openOpenClawStateDatabase({ env }), channel);
 }
 
 export function writeChannelPairingStateToDatabase(
@@ -200,10 +208,13 @@ export function updateChannelPairingStateSnapshot<T>(
   env: NodeJS.ProcessEnv,
   update: (state: ChannelPairingState) => T,
 ): T {
-  return runOpenClawStateWriteTransaction((database) => {
-    const state = readChannelPairingStateFromDatabase(database, channel);
-    const result = update(state);
-    writeChannelPairingStateToDatabase(database, channel, state);
-    return result;
-  }, sqliteOptionsForEnv(env));
+  return runOpenClawStateWriteTransaction(
+    (database) => {
+      const state = readChannelPairingStateFromDatabase(database, channel);
+      const result = update(state);
+      writeChannelPairingStateToDatabase(database, channel, state);
+      return result;
+    },
+    { env },
+  );
 }

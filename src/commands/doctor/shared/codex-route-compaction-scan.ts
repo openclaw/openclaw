@@ -198,11 +198,7 @@ export function getSharedDefaultCompactionOverrideConsumers(
     env: params.env,
   });
   if (!defaultUsesCodexCompaction) {
-    consumers.model ||= Boolean(hasDefaultModel);
-    consumers.provider ||= Boolean(hasDefaultProvider);
-    if ((!hasDefaultModel || consumers.model) && (!hasDefaultProvider || consumers.provider)) {
-      return consumers;
-    }
+    return { model: Boolean(hasDefaultModel), provider: Boolean(hasDefaultProvider) };
   }
   for (const { agent: agentRecord, agentId: id } of listMutableCodexRouteAgentEntries(params.cfg)) {
     const compaction = asMutableRecord(agentRecord.compaction);
@@ -245,40 +241,11 @@ export function sharedDefaultLosslessCompactionHasNonCodexConsumer(
   if (!hasDefaultLosslessProvider && !hasDefaultModel) {
     return false;
   }
-  if (
-    !agentUsesCodexRuntimeForCompaction({
-      cfg: params.cfg,
-      agent: defaults,
-      env: params.env,
-    })
-  ) {
-    return true;
-  }
-  const inheritedModelRef = readAgentPrimaryModelRef(defaults);
-  for (const { agent: agentRecord, agentId: id } of listMutableCodexRouteAgentEntries(params.cfg)) {
-    const compaction = asMutableRecord(agentRecord.compaction);
-    const inheritsDefaultProvider =
-      hasDefaultLosslessProvider &&
-      !(typeof compaction?.provider === "string" && compaction.provider.trim());
-    const inheritsDefaultModel =
-      Boolean(hasDefaultModel) &&
-      !(typeof compaction?.model === "string" && compaction.model.trim());
-    if (!inheritsDefaultProvider && !inheritsDefaultModel) {
-      continue;
-    }
-    if (
-      !agentUsesCodexRuntimeForCompaction({
-        cfg: params.cfg,
-        agent: agentRecord,
-        agentId: id,
-        env: params.env,
-        inheritedModelRef,
-      })
-    ) {
-      return true;
-    }
-  }
-  return false;
+  const consumers = getSharedDefaultCompactionOverrideConsumers(params);
+  return (
+    (hasDefaultLosslessProvider && consumers.provider) ||
+    (Boolean(hasDefaultModel) && consumers.model)
+  );
 }
 
 export function legacyLosslessSummaryModels(

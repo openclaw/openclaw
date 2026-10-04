@@ -17,20 +17,16 @@ function stripPackageAlias(spec: string, packageName: string): string {
 }
 
 function isHttpGitUrlSpec(spec: string): boolean {
-  try {
-    const url = new URL(spec);
-    if (url.protocol !== "https:" && url.protocol !== "http:") {
-      return false;
-    }
-    const pathname = url.pathname.replace(/\/+$/u, "");
-    if (pathname.endsWith(".git")) {
-      return true;
-    }
-    const parts = pathname.split("/").filter(Boolean);
-    return url.hostname.toLowerCase() === "github.com" && parts.length === 2;
-  } catch {
+  const url = URL.parse(spec);
+  if (!url || (url.protocol !== "https:" && url.protocol !== "http:")) {
     return false;
   }
+  const pathname = url.pathname.replace(/\/+$/u, "");
+  if (pathname.endsWith(".git")) {
+    return true;
+  }
+  const parts = pathname.split("/").filter(Boolean);
+  return url.hostname.toLowerCase() === "github.com" && parts.length === 2;
 }
 
 function isGitHubShorthandSpec(spec: string): boolean {

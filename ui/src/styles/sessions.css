@@ -501,7 +501,8 @@
   border-radius: var(--radius-sm);
 }
 
-.session-avatar svg {
+.session-avatar svg,
+.session-actions .icon-btn svg {
   width: 14px;
   height: 14px;
   stroke: currentColor;
@@ -745,28 +746,20 @@
     opacity var(--duration-fast) ease;
 }
 
-.session-actions .icon-btn svg {
-  width: 14px;
-  height: 14px;
-  stroke: currentColor;
-  fill: none;
-  stroke-width: 2px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
 .sessions-table tr:hover .session-actions .icon-btn,
 .session-actions .icon-btn:focus-visible {
   opacity: 1;
 }
 
-.session-actions .icon-btn:hover:not(:disabled) {
+.session-actions .icon-btn:hover:not(:disabled),
+.session-details-toggle:hover {
   color: var(--text);
   background: var(--bg-hover);
   border-color: var(--border);
 }
 
-.session-actions .icon-btn:focus-visible {
+.session-actions .icon-btn:focus-visible,
+.session-details-toggle:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
 }
@@ -790,17 +783,6 @@
     color var(--duration-fast) ease,
     background-color var(--duration-fast) ease,
     border-color var(--duration-fast) ease;
-}
-
-.session-details-toggle:hover {
-  color: var(--text);
-  background: var(--bg-hover);
-  border-color: var(--border);
-}
-
-.session-details-toggle:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
 }
 
 .session-details-toggle svg {

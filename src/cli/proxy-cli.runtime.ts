@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import process from "node:process";
 import { expectDefined } from "@openclaw/normalization-core";
-import { colorize, isRich, theme } from "../../packages/terminal-core/src/theme.js";
+import { theme } from "../../packages/terminal-core/src/theme.js";
 import { loadPinnedRuntimeConfigAsync } from "../config/runtime-snapshot.js";
 import {
   runProxyValidation,
@@ -169,31 +169,15 @@ function redactProxyUrl(value: string | undefined): string | undefined {
   }
 }
 
-function getProxyValidationTextColors() {
-  const rich = isRich();
-  const apply = (color: (value: string) => string) => (value: string) =>
-    colorize(rich, color, value);
-  return {
-    heading: apply(theme.heading),
-    success: apply(theme.success),
-    error: apply(theme.error),
-    muted: apply(theme.muted),
-    warn: apply(theme.warn),
-  };
-}
-
-function formatProxyCheckLine(
-  check: ProxyValidationResult["checks"][number],
-  colors: ReturnType<typeof getProxyValidationTextColors>,
-): string {
-  const icon = check.ok ? colors.success("✓") : colors.error("✗");
-  const paddedKind = colors.muted(check.kind.padEnd(7, " "));
+function formatProxyCheckLine(check: ProxyValidationResult["checks"][number]): string {
+  const icon = check.ok ? theme.success("✓") : theme.error("✗");
+  const paddedKind = theme.muted(check.kind.padEnd(7, " "));
   const status =
     check.status === undefined
       ? ""
-      : ` ${check.ok ? colors.success(`HTTP ${check.status}`) : colors.error(`HTTP ${check.status}`)}`;
+      : ` ${check.ok ? theme.success(`HTTP ${check.status}`) : theme.error(`HTTP ${check.status}`)}`;
   const detail = check.error
-    ? ` — ${check.ok ? colors.muted(check.error) : colors.error(check.error)}`
+    ? ` — ${check.ok ? theme.muted(check.error) : theme.error(check.error)}`
     : "";
   return `  ${icon} ${paddedKind} ${check.url}${status}${detail}`;
 }
@@ -218,33 +202,32 @@ function formatProxyValidationNextStep(result: ProxyValidationResult): string | 
 }
 
 function formatProxyValidationText(result: ProxyValidationResult): string {
-  const colors = getProxyValidationTextColors();
   const redactedProxyUrl = redactProxyUrl(result.config.proxyUrl);
   const lines = [
-    result.ok ? colors.success("Proxy validation passed") : colors.error("Proxy validation failed"),
+    result.ok ? theme.success("Proxy validation passed") : theme.error("Proxy validation failed"),
     "",
-    colors.heading("Proxy"),
-    `  Source: ${colors.muted(result.config.source)}`,
-    `  URL:    ${redactedProxyUrl ?? colors.muted("not configured")}`,
+    theme.heading("Proxy"),
+    `  Source: ${theme.muted(result.config.source)}`,
+    `  URL:    ${redactedProxyUrl ?? theme.muted("not configured")}`,
   ];
 
   if (result.config.errors.length > 0) {
-    lines.push("", colors.heading("Problems"));
+    lines.push("", theme.heading("Problems"));
     for (const error of result.config.errors) {
-      lines.push(`  - ${colors.error(error)}`);
+      lines.push(`  - ${theme.error(error)}`);
     }
   }
 
   if (result.checks.length > 0) {
-    lines.push("", colors.heading("Checks"));
+    lines.push("", theme.heading("Checks"));
     for (const check of result.checks) {
-      lines.push(formatProxyCheckLine(check, colors));
+      lines.push(formatProxyCheckLine(check));
     }
   }
 
   const nextStep = formatProxyValidationNextStep(result);
   if (nextStep) {
-    lines.push("", colors.heading("Next steps"), `  ${colors.warn(nextStep)}`);
+    lines.push("", theme.heading("Next steps"), `  ${theme.warn(nextStep)}`);
   }
 
   return `${lines.join("\n")}\n`;

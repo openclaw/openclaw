@@ -212,7 +212,7 @@ describe("sessions_spawn lifecycle", () => {
       messages: { queue: {} },
       agents: {
         defaults: { subagents: { allowAgents: ["bot-alpha"] } },
-        list: [{ id: "main" }, { id: "bot-alpha" }],
+        entries: { main: {}, "bot-alpha": {} },
       },
       bindings: [
         {

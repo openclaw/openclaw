@@ -388,13 +388,6 @@ class LogbookDatabaseStore {
     return row ? toBatch(row) : null;
   }
 
-  batchFrames(batchId: number): LogbookFrame[] {
-    return executeSqliteQuerySync(
-      this.db,
-      this.framesQuery.where("batch_id", "=", batchId),
-    ).rows.map(toFrame);
-  }
-
   sampledBatchFrames(batchId: number): LogbookFrame[] {
     // The ordinal scan and sampled payload read share one SQLite statement.
     return this.statements.sampledBatchFrames(batchId).rows.map(toFrame);
@@ -666,8 +659,6 @@ export function createSqliteWorkerBackend(
           return store.resetErrorBatches();
         case "nextPendingBatch":
           return store.nextPendingBatch();
-        case "batchFrames":
-          return store.batchFrames(command.input.batchId);
         case "sampledBatchFrames":
           return store.sampledBatchFrames(command.input.batchId);
         case "replaceObservations":

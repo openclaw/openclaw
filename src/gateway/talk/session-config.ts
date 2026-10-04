@@ -22,7 +22,7 @@ import type {
   RealtimeVoiceBrowserSession,
   RealtimeVoiceProviderConfig,
 } from "../../talk/provider-types.js";
-import type { TalkBrain, TalkEvent, TalkMode, TalkTransport } from "../../talk/talk-events.js";
+import type { TalkBrain, TalkMode, TalkTransport } from "../../talk/talk-events.js";
 import {
   getVoiceProviderConfig,
   providerMatchesId,
@@ -64,31 +64,6 @@ export async function resolveTalkRealtimeProviderInstructions(params: {
   return [params.configuredInstructions, await resolveRealtimeVoiceAgentContextInstructions(params)]
     .filter((entry): entry is string => Boolean(entry?.trim()))
     .join("\n\n");
-}
-
-export function broadcastTalkRoomEvents(
-  context: {
-    broadcastToConnIds: (
-      event: string,
-      payload: unknown,
-      connIds: Set<string>,
-      opts?: { dropIfSlow?: boolean },
-    ) => void;
-  },
-  connId: string | undefined,
-  params: { handoffId: string; roomId: string; events: TalkEvent[] },
-): void {
-  if (!connId || params.events.length === 0) {
-    return;
-  }
-  for (const talkEvent of params.events) {
-    context.broadcastToConnIds(
-      "talk.event",
-      { handoffId: params.handoffId, roomId: params.roomId, talkEvent },
-      new Set([connId]),
-      { dropIfSlow: true },
-    );
-  }
 }
 
 function normalizeRealtimeTransport(value: unknown): TalkRealtimeConfig["transport"] {
@@ -387,7 +362,7 @@ function pickRealtimeVoiceLaunchOptions(
   params: RealtimeVoiceLaunchOptionInput,
 ): RealtimeVoiceLaunchOptions {
   const options: RealtimeVoiceLaunchOptions = {};
-  for (const key of ["model", "voice"] as const) {
+  for (const key of ["model", "voice", "reasoningEffort"] as const) {
     const value = normalizeOptionalString(params[key]);
     if (value) {
       options[key] = value;
@@ -398,10 +373,6 @@ function pickRealtimeVoiceLaunchOptions(
     if (typeof value === "number" && Number.isFinite(value)) {
       options[key] = value;
     }
-  }
-  const reasoningEffort = normalizeOptionalString(params.reasoningEffort);
-  if (reasoningEffort) {
-    options.reasoningEffort = reasoningEffort;
   }
   return options;
 }

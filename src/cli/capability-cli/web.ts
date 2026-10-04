@@ -104,7 +104,7 @@ async function runWebFetchCommand(params: { url: string; provider?: string; form
   }
   const result = await resolved.definition.execute({
     url: params.url,
-    format: params.format,
+    extractMode: params.format,
   });
   return { provider: resolved.provider.id, result };
 }

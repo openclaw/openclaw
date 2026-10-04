@@ -149,7 +149,7 @@ describe("memory manager reindex recovery", () => {
         defaults: {
           workspace: workspaceDir,
         },
-        list: [{ id: "main", default: true }],
+        entries: { main: {} },
       },
     });
   }

@@ -316,10 +316,15 @@ export async function runCodeModeScriptHeadless(params: {
           return { kind: "checkpoint" };
         }
         let onPressure: (() => void) | undefined;
+        const settlement = new AbortController();
         try {
           const ready = await abortScope.wait(
             Promise.race([
-              waitForPendingBridgeSettlement(pending, boundary.settlementMode).then(() => true),
+              waitForPendingBridgeSettlement(
+                pending,
+                boundary.settlementMode,
+                settlement.signal,
+              ).then(() => true),
               new Promise<false>((resolve) => {
                 onPressure = () => resolve(false);
                 context.yieldSignal.addEventListener("abort", onPressure, { once: true });
@@ -346,6 +351,7 @@ export async function runCodeModeScriptHeadless(params: {
             onConsumed: delivery.release,
           };
         } finally {
+          settlement.abort();
           if (onPressure) {
             context.yieldSignal.removeEventListener("abort", onPressure);
           }
@@ -407,7 +413,9 @@ export async function runCodeModeScriptHeadless(params: {
           toolCallCount,
         });
       }
-      await abortScope.wait(waitForPendingBridgeSettlement(pending, settlementMode));
+      await abortScope.wait(
+        waitForPendingBridgeSettlement(pending, settlementMode, abortScope.signal),
+      );
       const delivery = takeSettledBridgeRequests(pending);
       pending = pending.filter((entry) => !entry.settled);
       try {

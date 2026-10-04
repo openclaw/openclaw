@@ -54,15 +54,10 @@ import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
 import { createSkillCommandLoaders } from "./skill-command-loaders.js";
 import type { TypingController } from "./typing.js";
 
-type SkillToolDispatchRuntime = typeof import("../../skills/runtime/tool-dispatch.js");
-type SkillToolDispatchDependencies = Parameters<
-  SkillToolDispatchRuntime["resolveSkillDispatchTools"]
->[1];
-
 const skillCommandsRuntimeLoader = createLazyImportLoader(
   () => import("../../skills/discovery/chat-commands.runtime.js"),
 );
-const skillToolDispatchRuntimeLoader = createLazyImportLoader<SkillToolDispatchRuntime>(
+const skillToolDispatchRuntimeLoader = createLazyImportLoader(
   () => import("../../skills/runtime/tool-dispatch.js"),
 );
 const abortCutoffRuntimeLoader = createLazyImportLoader(() => import("./abort-cutoff.runtime.js"));
@@ -174,7 +169,6 @@ export async function handleInlineActions(params: {
   directiveAck?: ReplyPayload;
   abortedLastRun: boolean;
   skillFilter?: string[];
-  skillToolDispatchDependencies?: SkillToolDispatchDependencies;
 }): Promise<InlineActionResult> {
   const {
     ctx,
@@ -246,19 +240,18 @@ export async function handleInlineActions(params: {
   let skillSelections: ExplicitSkillSelection[] | undefined;
   const targetSessionEntry = sessionStore?.[sessionKey] ?? sessionEntry;
 
-  const isStopLikeInbound = isAbortRequestText(command.rawBodyNormalized);
-  if (!isStopLikeInbound && targetSessionEntry) {
+  if (targetSessionEntry && !isAbortRequestText(command.rawBodyNormalized)) {
     const cutoff = readAbortCutoffFromSessionEntry(targetSessionEntry);
     const incoming = resolveAbortCutoffFromContext(ctx);
-    const shouldSkip = cutoff
-      ? shouldSkipMessageByAbortCutoff({
-          cutoffMessageSid: cutoff.messageSid,
-          cutoffTimestamp: cutoff.timestamp,
-          messageSid: incoming?.messageSid,
-          timestamp: incoming?.timestamp,
-        })
-      : false;
-    if (shouldSkip) {
+    if (
+      cutoff &&
+      shouldSkipMessageByAbortCutoff({
+        cutoffMessageSid: cutoff.messageSid,
+        cutoffTimestamp: cutoff.timestamp,
+        messageSid: incoming?.messageSid,
+        timestamp: incoming?.timestamp,
+      })
+    ) {
       const runState = resolveReplyOperationRunState(opts);
       if (runState) {
         // The stop owner cancelled this queued input; no answer remains due.
@@ -281,13 +274,12 @@ export async function handleInlineActions(params: {
     }
   }
 
-  const isEmptyConfig = Object.keys(cfg).length === 0;
   const skipWhenConfigEmpty = command.channelId
     ? Boolean(getChannelPlugin(command.channelId)?.commands?.skipWhenConfigEmpty)
     : false;
   if (
     skipWhenConfigEmpty &&
-    isEmptyConfig &&
+    Object.keys(cfg).length === 0 &&
     command.from &&
     command.to &&
     command.from !== command.to
@@ -338,7 +330,7 @@ export async function handleInlineActions(params: {
       : skillCommands;
 
   const skillInvocation =
-    allowTextCommands && skillCommands.length > 0
+    skillCommands.length > 0
       ? resolveSkillCommandInvocation({
           commandBodyNormalized: command.commandBodyNormalized,
           skillCommands,
@@ -356,8 +348,7 @@ export async function handleInlineActions(params: {
     if (dispatch?.kind === "tool") {
       const rawArgs = (skillInvocation.args ?? "").trim();
       const { resolveSkillDispatchTools } = await skillToolDispatchRuntimeLoader.load();
-      const dependencies =
-        params.skillToolDispatchDependencies ?? (await import("../../agents/openclaw-tools.js"));
+      const dependencies = await import("../../agents/openclaw-tools.js");
       const authorizedTools = resolveSkillDispatchTools(
         {
           message: {

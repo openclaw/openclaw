@@ -67,7 +67,7 @@ function createTimedOpen(validationMs: number, indexRepairMs = 0, integrityCheck
       const prepare = database.prepare.bind(database);
       vi.spyOn(database, "prepare").mockImplementation((sql) => {
         const statement = prepare(sql);
-        if (sql === "PRAGMA integrity_check('sqlite_schema');") {
+        if (sql === "PRAGMA integrity_check;") {
           const all = statement.all.bind(statement);
           vi.spyOn(statement, "all").mockImplementation((...parameters) => {
             try {
@@ -241,14 +241,7 @@ describe("agent database open timings", () => {
       integrityGateMs: 1_120,
       integrityGateOutcome: "healthy",
       integrityGateReason: "revoked",
-      integrityGateMode: "tables",
-      integrityTableTimings: expect.arrayContaining([
-        { table: "sqlite_schema", check: "integrity_check", elapsedMs: 120 },
-      ]),
-      integrityTableTotals: {
-        integrity_check: { tableCount: expect.any(Number), elapsedMs: 120 },
-        quick_check: { tableCount: 1, elapsedMs: 0 },
-      },
+      integrityGateMode: "full",
       integrityCheckSyncMs: 120,
       integrityOutsideCheckMs: 1_000,
       canonicalIndexMs: 0,
@@ -318,12 +311,7 @@ describe("agent database open timings", () => {
         integrityGateMs: 1_000,
         integrityGateOutcome: "healthy",
         integrityGateReason: "revoked",
-        integrityGateMode: "tables",
-        integrityTableTimings: expect.any(Array),
-        integrityTableTotals: {
-          integrity_check: { tableCount: expect.any(Number), elapsedMs: expect.any(Number) },
-          quick_check: { tableCount: 1, elapsedMs: expect.any(Number) },
-        },
+        integrityGateMode: "full",
         integrityWorkerCheckMs: expect.any(Number),
         integrityWorkerLifetimeMs: 0,
         integrityOutsideWorkerMs: 1_000,

@@ -198,14 +198,13 @@ Ignore this.
             postCompactionMaxChars: 1800,
           },
         },
-        list: [
-          {
-            id: "writer",
+        entries: {
+          writer: {
             contextLimits: {
               postCompactionMaxChars: 300,
             },
           },
-        ],
+        },
       },
     } as OpenClawConfig;
 

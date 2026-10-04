@@ -236,17 +236,15 @@ export async function resolveReusableWorkspaceSkillSnapshot(
     }
   };
 
+  const rebuilt = await cachedRebuild();
   const snapshot =
-    !params.existingSnapshot || shouldRefresh
-      ? await cachedRebuild()
-      : await cachedRebuild().then(
-          (rebuilt) =>
-            rebuilt && {
-              ...params.existingSnapshot!,
-              resolvedSkills: rebuilt.resolvedSkills,
-              discoverySkills: rebuilt.discoverySkills,
-            },
-        );
+    rebuilt && params.existingSnapshot && !shouldRefresh
+      ? {
+          ...params.existingSnapshot,
+          resolvedSkills: rebuilt.resolvedSkills,
+          discoverySkills: rebuilt.discoverySkills,
+        }
+      : rebuilt;
   if (!snapshot || !projectionIsCurrent()) {
     const currentVersion = getSkillsSnapshotVersion(watcherWorkspaceDir);
     return resolveReusableWorkspaceSkillSnapshot({

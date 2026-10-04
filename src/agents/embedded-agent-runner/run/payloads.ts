@@ -6,6 +6,7 @@ import {
 } from "../../../auto-reply/heartbeat-tool-response.js";
 import { buildProviderLoginRecovery } from "../../../auto-reply/provider-login-recovery.js";
 import {
+  addReplyPayloadMediaFailures,
   copyReplyPayloadMetadata,
   getReplyPayloadMetadata,
   hasReplyPayloadSpeechContent,
@@ -117,6 +118,8 @@ export function buildEmbeddedRunPayloads(params: {
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
     didDeliverSourceReplyViaMessageTool: params.didDeliverSourceReplyViaMessageTool,
     runId: params.runId,
+    sessionKey: params.sessionKey,
+    agentId: params.agentId,
   });
   if (params.heartbeatToolResponse) {
     const heartbeatPayload = createHeartbeatToolResponsePayload(params.heartbeatToolResponse);
@@ -291,6 +294,7 @@ export function buildEmbeddedRunPayloads(params: {
         const {
           text: cleanedText,
           mediaUrls,
+          mediaFailures,
           audioAsVoice,
           replyToId,
           replyToTag,
@@ -317,9 +321,16 @@ export function buildEmbeddedRunPayloads(params: {
         }
         const replyPayload = {
           text: cleanedText,
-          media: mediaUrls,
-          ...delivery,
+          ...(mediaUrls?.[0] ? { mediaUrl: mediaUrls[0] } : {}),
+          ...(mediaUrls?.length ? { mediaUrls } : {}),
+          ...(delivery.audioAsVoice ? { audioAsVoice: true } : {}),
+          ...(delivery.replyToId ? { replyToId: delivery.replyToId } : {}),
+          ...(delivery.replyToTag !== undefined ? { replyToTag: delivery.replyToTag } : {}),
+          ...(delivery.replyToCurrent !== undefined
+            ? { replyToCurrent: delivery.replyToCurrent }
+            : {}),
         };
+        addReplyPayloadMediaFailures(replyPayload, mediaFailures);
         if (assistantMessageIndex !== undefined) {
           setReplyPayloadMetadata(replyPayload, { assistantMessageIndex });
         }
@@ -405,27 +416,9 @@ export function buildEmbeddedRunPayloads(params: {
       const assistantMessageIndex =
         getReplyPayloadMetadata(item)?.assistantMessageIndex ?? params.assistantMessageIndex;
       const payload: ReplyPayload = copyReplyPayloadMetadata(item, {
+        ...item,
         text: trimTextPreservingCode(item.text ?? "") || undefined,
       });
-      const mediaUrl = item.mediaUrl ?? item.media?.[0];
-      if (mediaUrl) {
-        payload.mediaUrl = mediaUrl;
-      }
-      if (item.media?.length) {
-        payload.mediaUrls = item.media;
-      }
-      if (item.attachments?.length) {
-        payload.attachments = item.attachments;
-      }
-      if (item.trustedLocalMedia !== undefined) {
-        payload.trustedLocalMedia = item.trustedLocalMedia;
-      }
-      if (item.isError !== undefined) {
-        payload.isError = item.isError;
-      }
-      if (item.isReasoning === true) {
-        payload.isReasoning = true;
-      }
       if (
         item.isError === true &&
         params.sourceReplyDeliveryMode === "message_tool_only" &&
@@ -445,7 +438,7 @@ export function buildEmbeddedRunPayloads(params: {
       ) {
         setReplyPayloadMetadata(payload, {
           ...(assistantMessageIndex !== undefined ? { assistantMessageIndex } : {}),
-          ...(item.media?.length ? { assistantTranscriptMediaUrls: [...item.media] } : {}),
+          ...(item.mediaUrls?.length ? { assistantTranscriptMediaUrls: [...item.mediaUrls] } : {}),
           ...(params.assistantTranscriptOwned === true ? { assistantTranscriptOwned: true } : {}),
           ...(params.assistantTranscriptIdempotencyKey
             ? {
@@ -454,44 +447,8 @@ export function buildEmbeddedRunPayloads(params: {
             : {}),
         });
       }
-      if (item.replyToId) {
-        payload.replyToId = item.replyToId;
-      }
-      if (item.replyToTag !== undefined) {
-        payload.replyToTag = item.replyToTag;
-      }
-      if (item.replyToCurrent !== undefined) {
-        payload.replyToCurrent = item.replyToCurrent;
-      }
-      if (item.audioAsVoice || Boolean(hasAudioAsVoiceTag && item.media?.length)) {
+      if (hasAudioAsVoiceTag && item.mediaUrls?.length) {
         payload.audioAsVoice = true;
-      }
-      if (item.presentation) {
-        payload.presentation = item.presentation;
-      }
-      if (item.interactive) {
-        payload.interactive = item.interactive;
-      }
-      if (item.channelData) {
-        payload.channelData = item.channelData;
-      }
-      if (item.sourceReplyMirror) {
-        // Source-reply mirrors are transcript artifacts, not channel sends.
-        markReplyPayloadForSourceSuppressionDelivery(payload);
-        if (params.sessionKey) {
-          setReplyPayloadMetadata(payload, {
-            sourceReplyTranscriptMirror: {
-              sessionKey: params.sessionKey,
-              ...(params.agentId ? { agentId: params.agentId } : {}),
-              ...(payload.text ? { text: payload.text } : {}),
-              ...(payload.mediaUrls?.length ? { mediaUrls: payload.mediaUrls } : {}),
-              ...(item.sourceReplyMirror.idempotencyKey
-                ? { idempotencyKey: item.sourceReplyMirror.idempotencyKey }
-                : {}),
-              ...(item.sourceReplyMirror.transcriptOwner ? { transcriptOwner: true } : {}),
-            },
-          });
-        }
       }
       if (payload.text && isSilentReplyPayloadText(payload.text, SILENT_REPLY_TOKEN)) {
         payload.text = undefined;

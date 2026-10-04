@@ -8,6 +8,7 @@ import { i18n, t } from "../../../i18n/index.ts";
 import type { ChatItem } from "../../../lib/chat/chat-types.ts";
 import { formatCompactTokenCount } from "../../../lib/format.ts";
 import type { TurnRecap } from "../chat-progress.ts";
+import type { ChatSubagentWait } from "../chat-subagent-wait.ts";
 import { selectWorkingClawSurprise } from "./chat-working-indicator-surprise.ts";
 
 const TURN_RECAP_DURATION_UNITS = [
@@ -49,31 +50,39 @@ function outputTokensLabel(outputTokens: number): string {
 }
 
 export function renderChatWorkingIndicator(
-  part: Extract<ChatItem, { kind: "reading-indicator" }>,
+  part: Omit<Extract<ChatItem, { kind: "reading-indicator" }>, "startedAt"> & {
+    startedAt: number | null;
+  },
   options: {
     mascot?: ThemeMascot;
     workingPhrases?: readonly string[];
     waitingApproval?: boolean;
+    waitingSubagents?: ChatSubagentWait;
+    onOpenSession?: (key: string) => void;
     startupLabel?: string;
     outputTokens?: number | null;
     presentation?: "standalone" | "continuation";
   } = {},
 ) {
   const waitingApproval = options.waitingApproval === true;
+  const waitingSubagents = options.waitingSubagents;
+  const child = waitingSubagents?.child;
   const neutral = (options.mascot ?? currentThemeBranding().mascot) === "none";
   const continuation = options.presentation === "continuation";
-  const statusLabel = waitingApproval
-    ? t("chat.waitingForApproval")
-    : options.startupLabel || t("common.working");
-  const working = !waitingApproval && !options.startupLabel;
+  const statusLabel = waitingSubagents
+    ? t("chat.waitingOnSubagents")
+    : waitingApproval
+      ? t("chat.waitingForApproval")
+      : options.startupLabel || t("common.working");
+  const working = !waitingSubagents && !waitingApproval && !options.startupLabel;
   // Providers report exact usage at response boundaries, not per text delta.
   // Keep the latest count visible while the run continues through tools.
-  const outputTokens = options.outputTokens;
+  const outputTokens = waitingSubagents ? null : options.outputTokens;
   // The animated claw stays decorative; the text status exposes progress without
   // announcing every elapsed-time tick to screen readers.
   return html`
     <div
-      class="chat-working-indicator ${continuation ? "chat-working-indicator--continuation" : ""}"
+      class="chat-working-indicator ${continuation ? "chat-working-indicator--continuation" : ""} ${waitingSubagents ? "chat-working-indicator--subagents" : ""}"
       role="status"
       aria-live="off"
     >
@@ -86,7 +95,7 @@ export function renderChatWorkingIndicator(
                   neutral
                     ? "chat-reading-indicator--neutral"
                     : selectWorkingClawSurprise(part.key, {
-                        eligible: !waitingApproval,
+                        eligible: !waitingApproval && !waitingSubagents,
                       })
                 }"
                 aria-hidden="true"
@@ -98,7 +107,19 @@ export function renderChatWorkingIndicator(
       <span class="chat-working-indicator__status">
         <span class=${working && !continuation ? "sr-only" : ""}>${statusLabel}</span>
         ${
-          waitingApproval
+          child && options.onOpenSession
+            ? html`<button
+                class="chat-working-indicator__child"
+                type="button"
+                title=${child.label}
+                @click=${() => options.onOpenSession?.(child.key)}
+              >
+                ${child.label}
+              </button>`
+            : nothing
+        }
+        ${
+          waitingApproval || part.startedAt === null
             ? nothing
             : html`
                 <openclaw-elapsed-time

@@ -84,7 +84,7 @@ describe("gateway chat metadata runtime", () => {
   test.each(["commands", "projection"] as const)(
     "publishes without fleet preparation and serves health and another agent during slow %s",
     async (phase) => {
-      const config = { agents: { list: [{ id: "main", default: true }, { id: "second" }] } };
+      const config = { agents: { entries: { main: {}, second: {} } } };
       const harness = createChatMetadataHarness(config);
       const mainOwner = createChatMetadataOwner(config, "main-model");
       let secondOwner = createChatMetadataOwner(config, "second-model");
@@ -161,7 +161,7 @@ describe("gateway chat metadata runtime", () => {
     "rechecks %s publication before returning a suspended agent projection",
     async (changed) => {
       const harness = createChatMetadataHarness({
-        agents: { list: [{ id: "main", default: true }, { id: "second" }] },
+        agents: { entries: { main: {}, second: {} } },
       });
       const mainEntered = createDeferred();
       const releaseMain = createDeferred();
@@ -328,7 +328,7 @@ describe("gateway chat metadata runtime", () => {
       await vi.waitFor(() => expect(harness.buildProjection).toHaveBeenCalledTimes(2));
 
       const nextConfig = {
-        agents: { list: [{ id: "main", default: true }] },
+        agents: { entries: { main: {} } },
         tools: { swarm: { enabled: true } },
       };
       harness.setConfig(nextConfig);

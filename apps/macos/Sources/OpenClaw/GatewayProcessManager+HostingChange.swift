@@ -23,6 +23,7 @@ extension GatewayProcessManager {
         } catch {
             guard admitted else { throw error }
             let failure = error.localizedDescription
+            if failure.contains(GatewayLaunchAgentManager.runtimePinSelectionChanged) { throw error }
             do {
                 try await operations.recover()
                 try await operations.verifyHealth()
@@ -151,6 +152,12 @@ extension GatewayProcessManager {
                 }))
         } catch {
             change.recoveryFailure = error.localizedDescription
+            if error.localizedDescription.contains(GatewayLaunchAgentManager.runtimePinSelectionChanged) {
+                self.desiredActive = false
+                self.status = .failed(error.localizedDescription)
+                self.lastFailureReason = error.localizedDescription
+                self.appendLog("[gateway] \(error.localizedDescription)\n")
+            }
             throw error
         }
     }
@@ -232,6 +239,9 @@ extension GatewayProcessManager {
             serviceForRestoration: cli,
             expectedServiceAuthority: change.expectedService.serviceAuthority(),
             mutationCheck: { try await self.checkHostingChange(change, requiresActive: true) })
+        if let failure = result.error, failure.contains(GatewayLaunchAgentManager.runtimePinSelectionChanged) {
+            throw GatewayHostingError(message: failure)
+        }
         do {
             change.expectedService = try await ManagedNodeGatewayMigration.installedServiceCustody(
                 runtime: selectedRuntime,

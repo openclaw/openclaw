@@ -37,6 +37,7 @@ it.each(["Doctor repair", "Gateway readiness"] as const)(
       const configPath = path.join(stateDir, "openclaw.json");
       const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
       const retained = {
+        meta: { migrations: { webhookListeners: true } },
         gateway: { mode: "local" },
         plugins: { enabled: false },
         legacyFixture: "retained",

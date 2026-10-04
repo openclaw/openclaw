@@ -179,7 +179,7 @@ suite.define(() => {
             value: undefined,
           });
         });
-        const config = { agents: { list: [{ id: "main" }, { id: "emoji" }] } };
+        const config = { agents: { entries: { main: {}, emoji: {} } } };
         const hydratedEmojiAgent = { id: "emoji", identity: { name: "Rocket" }, name: "Rocket" };
         const gateway = await installMockGateway(page, {
           defaultAgentId: "main",

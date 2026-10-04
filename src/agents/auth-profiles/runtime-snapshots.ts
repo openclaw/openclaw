@@ -4,6 +4,7 @@ import path from "node:path";
  * Snapshots are cloned at boundaries so callers cannot mutate shared state.
  */
 import { isDeepStrictEqual } from "node:util";
+import { registerListener } from "../../shared/listeners.js";
 import { cloneAuthProfileStore } from "./clone.js";
 import { observeCachedCanonicalAuthProfileCredentials } from "./credential-observation.js";
 import {
@@ -217,8 +218,7 @@ function authProfileSetChanged(
 export function registerRuntimeAuthProfileStoreMutationListener(
   listener: RuntimeAuthProfileStoreMutationListener,
 ): () => void {
-  runtimeAuthStoreMutationListeners.add(listener);
-  return () => runtimeAuthStoreMutationListeners.delete(listener);
+  return registerListener(runtimeAuthStoreMutationListeners, listener);
 }
 
 /** Reads a cloned runtime auth profile store snapshot for an agent dir. */

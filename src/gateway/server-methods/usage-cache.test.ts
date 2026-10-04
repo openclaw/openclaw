@@ -27,11 +27,64 @@ describe("usage result cache", () => {
     vi.restoreAllMocks();
   });
 
+  it("replaces previous usage revisions without retaining historical query results", async () => {
+    const params = { cache, cacheKey: "all-sessions", configRef: {}, load: loadSummary };
+    for (let revision = 1; revision <= 32; revision++) {
+      loadSummary.mockResolvedValueOnce(createSummary(revision));
+      const revisionParams = { ...params, revision };
+      expect((await loadUsageResultCached(revisionParams)).totals.totalTokens).toBe(revision);
+      expect(cache.size).toBe(1);
+    }
+    expect(loadSummary).toHaveBeenCalledTimes(32);
+  });
+
+  it("does not let a displaced revision overwrite the current result", async () => {
+    const pending = createDeferredCore<Summary>();
+    const params = { cache, cacheKey: "all-sessions", configRef: {}, load: loadSummary };
+    loadSummary.mockReturnValueOnce(pending.promise).mockResolvedValueOnce(createSummary(2));
+    const oldRevision = { ...params, revision: 1 };
+    const currentRevision = { ...params, revision: 2 };
+    const oldResult = loadUsageResultCached(oldRevision);
+    const currentResult = loadUsageResultCached(currentRevision);
+    try {
+      pending.resolve(createSummary(1));
+      expect((await currentResult).totals.totalTokens).toBe(2);
+      expect((await oldResult).totals.totalTokens).toBe(1);
+      expect((await loadUsageResultCached(currentRevision)).totals.totalTokens).toBe(2);
+      expect(cache.size).toBe(1);
+      expect(loadSummary).toHaveBeenCalledTimes(2);
+    } finally {
+      pending.resolve(createSummary(1));
+      await Promise.allSettled([oldResult, currentResult]);
+    }
+  });
+
+  it.each([true, false])(
+    "reclaims expired query variants before the count cap is reached (complete=%s)",
+    async (complete) => {
+      const configRef = {};
+      for (let index = 0; index < 32; index++) {
+        const params = {
+          cache,
+          cacheKey: `date-range-${index}`,
+          configRef,
+          revision: 0,
+          load: loadSummary,
+          isComplete: () => complete,
+        };
+        await loadUsageResultCached(params);
+        expect(cache.size).toBe(1);
+        now += 30_001;
+      }
+      expect(loadSummary).toHaveBeenCalledTimes(32);
+    },
+  );
+
   it("retains a stale refresh after its cache entry is replaced", async () => {
     const owner = new AsyncWorkScope();
     const replacementOwner = new AsyncWorkScope();
     const gate = createDeferredCore<Summary>();
-    const params = { cache, cacheKey: "stale", configRef: {}, load: loadSummary };
+    const params = { cache, cacheKey: "stale", configRef: {}, revision: 0, load: loadSummary };
     const first = await owner.track(() => loadUsageResultCached(params));
     expect(cache.get(params.cacheKey)?.updatedAt).toBe(now);
     now = 31_000;
@@ -66,18 +119,21 @@ describe("usage result cache", () => {
     const configRef = {};
     const pending = createDeferredCore<Summary>();
     loadSummary.mockReturnValueOnce(pending.promise);
-    const params = { cache, cacheKey: "active", configRef, load: loadSummary };
+    const params = { cache, cacheKey: "active", configRef, revision: 0, load: loadSummary };
     const inFlight = loadUsageResultCached(params);
     let repeated: typeof inFlight | undefined;
     try {
       await Promise.resolve();
+      now += 30_001;
       for (let i = 0; i < 256; i++) {
-        await loadUsageResultCached({
+        const settledParams = {
           cache,
           cacheKey: String(i),
           configRef,
+          revision: 0,
           load: loadSummary,
-        });
+        };
+        await loadUsageResultCached(settledParams);
       }
       repeated = loadUsageResultCached(params);
       await Promise.resolve();
@@ -97,6 +153,7 @@ describe("usage result cache", () => {
       cache,
       cacheKey: "partial",
       configRef: {},
+      revision: 0,
       load: loadSummary,
       isComplete: (summary: Summary) => summary.complete !== false,
     };

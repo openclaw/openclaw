@@ -924,7 +924,6 @@ export function createClient(repository, dependencies = {}) {
       }
     },
     rerunFailed: (runId) => rerun(runId, "rerun-failed-jobs"),
-    cancelRun: (runId) => rerun(runId, "cancel"),
     rerunRun: (runId) => rerun(runId, "rerun"),
     listRuns: (query) => listReleasePriorityRuns(query, apiJson, apiText),
     async getVariable(name) {

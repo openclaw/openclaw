@@ -1,7 +1,7 @@
-import type { DatabaseSync } from "node:sqlite";
 import { sql, type InferResult, type RawBuilder } from "kysely";
 import type { TranscriptDisplayPosition } from "../../chat/transcript-display-position.js";
 import {
+  createSqliteQueryCache,
   getNodeSqliteKysely,
   prepareSqliteQueryIterator,
   prepareSqliteQuerySync,
@@ -102,7 +102,7 @@ const EMPTY_PROJECTION_STATE: SessionTranscriptProjectionState = {
   needsRebuild: false,
 };
 
-export function getActiveTranscriptKysely(database: TranscriptReadDatabase) {
+export function getActiveTranscriptKysely(database: Pick<TranscriptReadDatabase, "db">) {
   return getNodeSqliteKysely<ActiveTranscriptDatabase>(database.db);
 }
 
@@ -131,7 +131,7 @@ export type MessageRangeSelection =
 type MessageRangeParameters = { sessionId: string; start: number; endExclusive: number };
 
 export function selectMessageRows(
-  database: CurrentTranscriptProjection["database"],
+  database: Pick<TranscriptReadDatabase, "db">,
   sessionId: string | RawBuilder<string>,
   selection:
     | { positions: number[] }
@@ -167,7 +167,7 @@ export function selectMessageRows(
 }
 
 export function selectMessagePayload(
-  database: CurrentTranscriptProjection["database"],
+  database: Pick<TranscriptReadDatabase, "db">,
   query: ReturnType<typeof selectMessageRows>,
 ) {
   return query.select([
@@ -187,7 +187,7 @@ export function selectMessageMetadata(query: ReturnType<typeof selectMessageRows
     .$narrowType<{ message_position: number }>();
 }
 
-function createMessageRangeReaders(database: CurrentTranscriptProjection["database"]) {
+function createMessageRangeReaders(database: Pick<TranscriptReadDatabase, "db">) {
   const metadata = (direction: "asc" | "desc") =>
     prepareSqliteQueryIterator<
       MessageRangeParameters,
@@ -247,22 +247,14 @@ function createMessageRangeReaders(database: CurrentTranscriptProjection["databa
   };
 }
 
-const messageRangeReaders = new WeakMap<
-  DatabaseSync,
-  ReturnType<typeof createMessageRangeReaders>
->();
+const messageRangeReaders = createSqliteQueryCache((db) => createMessageRangeReaders({ db }));
 
 export function getMessageRangeReaders(database: CurrentTranscriptProjection["database"]) {
-  let readers = messageRangeReaders.get(database.db);
-  if (!readers) {
-    readers = createMessageRangeReaders(database);
-    messageRangeReaders.set(database.db, readers);
-  }
-  return readers;
+  return messageRangeReaders(database.db);
 }
 
 function buildProjectionSnapshotQuery(
-  database: TranscriptReadDatabase,
+  database: Pick<TranscriptReadDatabase, "db">,
   sessionId: RawBuilder<string>,
 ) {
   const db = getActiveTranscriptKysely(database);
@@ -331,31 +323,20 @@ function buildProjectionSnapshotQuery(
 }
 
 // Cache compilation only; bindings and rows belong to each read snapshot.
-const projectionSnapshotReaders = new WeakMap<
-  DatabaseSync,
-  ReturnType<
-    typeof prepareSqliteQuerySync<
-      string,
-      InferResult<ReturnType<typeof buildProjectionSnapshotQuery>>[number]
-    >
-  >
->();
+const projectionSnapshotReader = createSqliteQueryCache((db) =>
+  prepareSqliteQuerySync<
+    string,
+    InferResult<ReturnType<typeof buildProjectionSnapshotQuery>>[number]
+  >(db, (parameter) =>
+    buildProjectionSnapshotQuery(
+      { db },
+      parameter((id) => id),
+    ),
+  ),
+);
 
 function readProjectionSnapshot(database: TranscriptReadDatabase, sessionId: string) {
-  let read = projectionSnapshotReaders.get(database.db);
-  if (!read) {
-    read = prepareSqliteQuerySync<
-      string,
-      InferResult<ReturnType<typeof buildProjectionSnapshotQuery>>[number]
-    >(database.db, (parameter) =>
-      buildProjectionSnapshotQuery(
-        database,
-        parameter((id) => id),
-      ),
-    );
-    projectionSnapshotReaders.set(database.db, read);
-  }
-  const row = read(sessionId).rows[0]!;
+  const row = projectionSnapshotReader(database.db)(sessionId).rows[0]!;
   return {
     cold: Boolean(row.is_cold),
     generation: row.generation ?? undefined,

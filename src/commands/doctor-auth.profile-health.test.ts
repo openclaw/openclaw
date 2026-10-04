@@ -54,11 +54,8 @@ describe("noteAuthProfileHealth", () => {
   function configForAgents(...ids: string[]): OpenClawConfig {
     return {
       agents: {
-        list: ids.map((id, index) =>
-          Object.assign(
-            { id, agentDir: path.join(tempDir, `${id}-agent`) },
-            index === 0 ? { default: true } : {},
-          ),
+        entries: Object.fromEntries(
+          ids.map((id) => [id, { agentDir: path.join(tempDir, `${id}-agent`) }]),
         ),
       },
     };
@@ -426,7 +423,7 @@ describe("noteAuthProfileHealth", () => {
   it("skips external auth profile resolution when no auth source exists", async () => {
     await noteAuthProfileHealth({
       cfg: {
-        agents: { entries: { main: { default: true } } },
+        agents: { entries: { main: {} } },
         channels: { telegram: { enabled: true } },
       } as OpenClawConfig,
       prompter: {} as DoctorPrompter,
@@ -581,7 +578,7 @@ describe("noteAuthProfileHealth", () => {
     await noteAuthProfileHealth({
       cfg: {
         agents: {
-          list: [{ id: "main", default: true, agentDir }],
+          entries: { main: { agentDir } },
         },
       } as OpenClawConfig,
       prompter: {
@@ -614,10 +611,10 @@ describe("noteAuthProfileHealth", () => {
     await noteAuthProfileHealth({
       cfg: {
         agents: {
-          list: [
-            { id: "main", default: true, agentDir: path.join(tempDir, "main-agent") },
-            { id: "coder", agentDir: coderDir },
-          ],
+          entries: {
+            main: { agentDir: path.join(tempDir, "main-agent") },
+            coder: { agentDir: coderDir },
+          },
         },
       } as OpenClawConfig,
       prompter: {
@@ -670,7 +667,7 @@ describe("noteAuthProfileHealth", () => {
 
       await noteAuthProfileHealth({
         cfg: {
-          agents: { list: [{ id: "main", default: true, agentDir }] },
+          agents: { entries: { main: { agentDir } } },
         } as OpenClawConfig,
         prompter: { confirmAutoFix: vi.fn(async () => true) } as unknown as DoctorPrompter,
         allowKeychainPrompt: false,

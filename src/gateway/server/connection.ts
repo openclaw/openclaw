@@ -325,7 +325,10 @@ export function attachGatewayConnection(params: AttachGatewayConnectionParams) {
       } else {
         socket.send(encoded, { binary: false });
       }
-      return { kind: "sent" } as const;
+      return {
+        kind: "sent",
+        bytes: typeof encoded === "string" ? Buffer.byteLength(encoded) : encoded.byteLength,
+      } as const;
     } catch {
       socket.terminate();
       retireConnection();

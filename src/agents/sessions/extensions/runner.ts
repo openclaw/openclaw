@@ -1,5 +1,6 @@
 import type { KeyId } from "@earendil-works/pi-tui";
 import type { ImageContent, Model } from "../../../llm/types.js";
+import { registerListener } from "../../../shared/listeners.js";
 import { interactiveAgentTheme as theme } from "../../modes/interactive/theme/theme.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { isToolResultError } from "../../tool-result-error.js";
@@ -7,7 +8,7 @@ import type { ResourceDiagnostic } from "../diagnostics.js";
 import type { KeybindingsConfig } from "../keybindings.js";
 import type { ModelRegistry } from "../model-registry.js";
 import type { SessionManager } from "../session-manager.js";
-import type { BuildSystemPromptOptions } from "../system-prompt.js";
+import type { BuildSystemPromptOptions } from "../system-prompt-metadata.js";
 import { reportExtensionHandlerError } from "./handler-error.js";
 import {
   bindExtensionMetadataActions,
@@ -455,8 +456,7 @@ export class ExtensionRunner {
   }
 
   onError(listener: ExtensionErrorListener): () => void {
-    this.errorListeners.add(listener);
-    return () => this.errorListeners.delete(listener);
+    return registerListener(this.errorListeners, listener);
   }
 
   emitError(error: ExtensionError): void {

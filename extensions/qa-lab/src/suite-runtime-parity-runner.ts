@@ -100,7 +100,6 @@ export async function runQaRuntimeParitySuite(
   let parentTransportCleaned = false;
   let terminalScenarios: QaSuiteScenarioResult[] | undefined;
   let transportArtifacts: QaRunnerTransportArtifacts | undefined;
-  let publishTerminalResult: (() => Promise<QaSuiteResult>) | undefined;
   const startedScenarioIndexes = new Set<number>();
   try {
     if (params.channelDriver === "live") {
@@ -312,38 +311,6 @@ export async function runQaRuntimeParitySuite(
 
     transportArtifacts = await transport.captureArtifacts?.({ outputDir: params.outputDir });
     terminalScenarios = scenarios;
-    publishTerminalResult = async () => {
-      const finishedAt = new Date();
-      return await completeQaSuiteRun(
-        {
-          outputDir: params.outputDir,
-          startedAt: params.startedAt,
-          finishedAt,
-          scenarios,
-          recordedEvidence: recording.snapshot(),
-          transport,
-          providerMode: params.providerMode,
-          primaryModel: params.primaryModel,
-          alternateModel: params.alternateModel,
-          fastMode: params.fastMode,
-          concurrency: params.concurrency,
-          channel: params.channelId ?? transport.id,
-          channelDriver: transportFactoryResult.driver,
-          transportArtifacts,
-          scenarioIds:
-            params.scenarioIds && params.scenarioIds.length > 0
-              ? params.selectedScenarios.map((scenario) => scenario.id)
-              : undefined,
-          runtimePair: params.runtimePair,
-          writeEvidenceFile: params.writeEvidenceFile,
-        },
-        lab,
-        progress,
-        params.selectedScenarios
-          .filter((_scenario, index) => startedScenarioIndexes.has(index))
-          .map((scenario) => scenario.id),
-      );
-    };
   } catch (error) {
     runFailed = true;
     runError = error;
@@ -362,10 +329,36 @@ export async function runQaRuntimeParitySuite(
       scenarios: terminalScenarios,
     });
   }
-  if (!publishTerminalResult) {
-    throw new Error("QA runtime parity suite completed without a result");
-  }
-  const result = await publishTerminalResult();
+  const finishedAt = new Date();
+  const result = await completeQaSuiteRun(
+    {
+      outputDir: params.outputDir,
+      startedAt: params.startedAt,
+      finishedAt,
+      scenarios: terminalScenarios,
+      recordedEvidence: recording.snapshot(),
+      transport,
+      providerMode: params.providerMode,
+      primaryModel: params.primaryModel,
+      alternateModel: params.alternateModel,
+      fastMode: params.fastMode,
+      concurrency: params.concurrency,
+      channel: params.channelId ?? transport.id,
+      channelDriver: transportFactoryResult.driver,
+      transportArtifacts,
+      scenarioIds:
+        params.scenarioIds && params.scenarioIds.length > 0
+          ? params.selectedScenarios.map((scenario) => scenario.id)
+          : undefined,
+      runtimePair: params.runtimePair,
+      writeEvidenceFile: params.writeEvidenceFile,
+    },
+    lab,
+    progress,
+    params.selectedScenarios
+      .filter((_scenario, index) => startedScenarioIndexes.has(index))
+      .map((scenario) => scenario.id),
+  );
   writeQaSuiteProgress(params.progressEnabled, "run complete");
   return result;
 }

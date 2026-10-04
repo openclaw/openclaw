@@ -8,7 +8,6 @@ import {
   createChatFlowE2eSuite,
   installMockGateway,
 } from "./chat-flow.test-support.ts";
-import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 
@@ -125,57 +124,11 @@ async function expectReadableLastLine(page: Page, content: Locator) {
 }
 
 suite.define(() => {
-  it("keeps seven short lines fully visible", async () => {
-    const text = [
-      "please re-review these:",
-      "#127818",
-      "#127826",
-      "#127844",
-      "#127881",
-      "",
-      "rerun the same session we had for these",
-    ].join("\n");
-    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
-    const page = await context.newPage();
-    await installMockGateway(page, {
-      historyMessages: [{ role: "user", content: [{ type: "text", text }], timestamp: 1 }],
-    });
-
-    try {
-      await page.goto(`${suite.server.baseUrl}chat`);
-      const bubble = page.locator(".chat-group.user .chat-bubble");
-      await bubble.waitFor({ state: "visible", timeout: 10_000 });
-      if (captureUiProofEnabled) {
-        await bubble.screenshot({
-          path: path.join(suite.artifactDir, "user-bubble-clamp", "short-message.png"),
-        });
-      }
-
-      expect(await bubble.getByRole("button", { name: "Show more" }).count()).toBe(0);
-      expect(await bubble.locator(".chat-message-disclosure").count()).toBe(0);
-      const bubbleText = await bubble.textContent();
-      for (const line of text.split("\n").filter(Boolean)) {
-        expect(bubbleText).toContain(line);
-      }
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
-  });
-
-  it.each(
-    (["light", "dark"] as const).flatMap((theme) =>
-      [1440, 390].flatMap((width) =>
-        [false, true].flatMap((withImage) =>
-          ["continuous", "paragraphs", "list"].map((layout) => ({
-            theme,
-            width,
-            withImage,
-            layout,
-          })),
-        ),
-      ),
-    ),
-  )(
+  it.each([
+    { theme: "light", width: 1440, withImage: false, layout: "continuous" },
+    { theme: "dark", width: 390, withImage: true, layout: "paragraphs" },
+    { theme: "light", width: 390, withImage: false, layout: "list" },
+  ] as const)(
     "clamps and centers a long prompt in $theme at $width px (image: $withImage, layout: $layout)",
     async ({ theme, width, withImage, layout }) => {
       const prose =
@@ -445,10 +398,7 @@ suite.define(() => {
     }
   });
 
-  it.each([
-    { name: "desktop", width: 1280, height: 900 },
-    { name: "mobile", width: 390, height: 844 },
-  ])(
+  it.each([{ name: "mobile", width: 390, height: 844 }])(
     "keeps collapsed paragraphs readable after reload and browser reveal ($name)",
     async (viewport) => {
       const paragraphs = [

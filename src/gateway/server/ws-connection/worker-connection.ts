@@ -20,6 +20,7 @@ import {
   WORKER_GATEWAY_TOOLS_PROTOCOL_FEATURE,
 } from "../../../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
 import { WORKER_INFERENCE_METHODS } from "../../../../packages/gateway-protocol/src/schema/worker-inference.js";
+import { WORKER_PROTOCOL_MAX_CONCURRENT_TOOLS } from "../../../../packages/gateway-protocol/src/schema/worker-protocol-primitives.js";
 import { GATEWAY_STARTUP_RETRY_AFTER_MS } from "../../../../packages/gateway-protocol/src/startup-unavailable.js";
 import { isWorkerTranscriptFrameWithinBudget } from "../../../../packages/gateway-protocol/src/worker-transcript-budget.js";
 import { rawDataByteLength } from "../../../infra/ws.js";
@@ -31,7 +32,6 @@ import {
 } from "../../../process/gateway-work-admission.js";
 import { AUTH_RATE_LIMIT_SCOPE_WORKER_ADMISSION } from "../../auth-rate-limit.js";
 import type { GatewayConnectionWork } from "../../server-connection-work.js";
-import { MAX_RUNNING_WORKER_SESSION_TOOL_OPERATIONS } from "../../worker-environments/placement-session-tool-operations.js";
 import { runWorkerTurnAdmissionContinuation } from "../../worker-environments/placement-turn-claim-events.js";
 import type { PublicWorkerIngressContext } from "../public-worker-ingress-context.js";
 import { raiseGatewayReceiverPayloadLimit } from "../ws-receiver.js";
@@ -40,6 +40,7 @@ import type { GatewayWsMessageHandlerParams } from "./message-handler-types.js";
 import {
   captureGatewayRpcReceivedAt,
   createWorkerRpcDiagnostics,
+  GatewayRpcDiagnostics,
   type GatewayRpcQueueTiming,
 } from "./request-diagnostics.js";
 import { runWorkerAdmissionBoundary } from "./worker-admission-boundary.js";
@@ -253,7 +254,9 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
       return;
     }
     const response = { type: "res", id, ok: true, payload: hello };
-    if (Buffer.byteLength(JSON.stringify(response), "utf8") > WORKER_PROTOCOL_MAX_PAYLOAD_BYTES) {
+    if (
+      Buffer.byteLength(JSON.stringify(response), "utf8") > workerMaxPayload(admission.identity)
+    ) {
       rejectAdmission({
         id,
         reason: "invalid-handshake",
@@ -392,7 +395,10 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
           ? { type: "res", id: parsed.id, ok, payload }
           : { type: "res", id: parsed.id, ok, error },
       );
-      diagnostics?.response(result.kind === "sent" ? (ok ? "ok" : "error") : "unavailable");
+      diagnostics?.response(
+        result.kind === "sent" ? (ok ? "ok" : "error") : "unavailable",
+        result.kind === "sent" ? result.bytes : undefined,
+      );
     };
     const dispatch = (signal?: AbortSignal) => {
       const invoke = () =>
@@ -411,7 +417,7 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
           warn: (message) => params.logGateway.warn(message),
           ...(signal ? { signal } : {}),
         });
-      return diagnostics ? diagnostics.runHandler(invoke) : invoke();
+      return GatewayRpcDiagnostics.runHandler(invoke, diagnostics);
     };
     const isLongToolOperation =
       parsed.method === "worker.computer" || parsed.method === WORKER_GATEWAY_TOOL_METHODS.invoke;
@@ -421,7 +427,7 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
         diagnostics?.finish("rejected");
         return;
       }
-      if (toolOperations.size >= MAX_RUNNING_WORKER_SESSION_TOOL_OPERATIONS) {
+      if (toolOperations.size >= WORKER_PROTOCOL_MAX_CONCURRENT_TOOLS) {
         respond(false, undefined, workerProtocolError("gateway-unavailable"));
         diagnostics?.finish("rejected");
         return;

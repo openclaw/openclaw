@@ -3,10 +3,11 @@ import {
   createWorkerOperationRegistry,
   type WorkerOperations,
 } from "../state/worker-operation-registry.js";
+import type { immutableInstallReadOperations } from "./package-update-activation-immutable.js";
 import type { SqliteReadOnlyOperationContext } from "./sqlite-readonly-operation-types.js";
 
 export type SqliteReadOnlyOperations = WorkerOperations<
-  ReturnType<typeof createPluginModelCatalogReadOperations>
+  ReturnType<typeof createPluginModelCatalogReadOperations> & typeof immutableInstallReadOperations
 >;
 
 export const sqliteReadOnlyOperations = createWorkerOperationRegistry<
@@ -16,5 +17,9 @@ export const sqliteReadOnlyOperations = createWorkerOperationRegistry<
   pluginCatalog: () =>
     import("../agents/plugin-model-catalog.kernel.js").then(
       (module) => module.pluginModelCatalogReadOperations,
+    ),
+  immutableInstall: () =>
+    import("./package-update-activation-immutable.js").then(
+      (module) => module.immutableInstallReadOperations,
     ),
 });

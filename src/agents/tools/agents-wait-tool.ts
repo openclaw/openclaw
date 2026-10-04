@@ -75,7 +75,7 @@ const AgentsWaitOutputSchema = Type.Object(
   { additionalProperties: false },
 );
 
-type WaitError = { runId: string; error: "not_found" | "not_owner" };
+type WaitError = NonNullable<Static<typeof AgentsWaitOutputSchema>["errors"]>[number];
 
 function ownsRun(
   entry: SubagentRunRecord,
@@ -311,7 +311,7 @@ export function createAgentsWaitTool(opts: {
     parameters: AgentsWaitToolSchema,
     outputSchema: AgentsWaitOutputSchema,
     execute: async (_toolCallId, args, signal) => {
-      const params = args as { ids: string[]; timeoutSeconds?: number; required?: boolean };
+      const params = args as Static<typeof AgentsWaitToolSchema>;
       if (params.required !== undefined && typeof params.required !== "boolean") {
         throw new ToolInputError("agents_wait required must be a boolean.");
       }

@@ -35,6 +35,7 @@ import {
   releaseClaimIfOwned,
   requireActivePlacement,
   resolvePlacementIdentity,
+  resolveWorkerPlacementRuntimeOverride,
   waitForPendingWorkerResult,
   waitForInitialWorkerPlacement,
   waitForWorkerRuntimeRefresh,
@@ -47,6 +48,7 @@ import {
   type WorkerTurnEnvironmentService,
 } from "./worker-turn-failure.js";
 import { createWorkerTurnRunOwner, type ActiveWorkerTurn } from "./worker-turn-run-owner.js";
+import { AcceptedWorkspacePublicationIndeterminateError } from "./workspace-accepted-publication.js";
 import type { WorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
 
 const loadWorkerTurnExecution = createLazyRuntimeModule(() => import("./worker-turn-execution.js"));
@@ -97,16 +99,8 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
       workspaceDir: string;
     }): Promise<SandboxContext | null>;
   } = {
-    resolveRuntimeOverride(identity) {
-      const placement = options.placements.get(identity.sessionId);
-      return placement &&
-        placement.state !== "local" &&
-        placement.executionMode === "worker-turn" &&
-        (identity.agentId === undefined || placement.agentId === identity.agentId) &&
-        (identity.sessionKey === undefined || placement.sessionKey === identity.sessionKey)
-        ? "openclaw"
-        : undefined;
-    },
+    resolveRuntimeOverride: (identity) =>
+      resolveWorkerPlacementRuntimeOverride(options.placements, identity),
     assertCompactionSuccessorAllowed({ currentTarget }) {
       const placement = options.placements.get(currentTarget.sessionId);
       // Remote-exec has a local turn claim but still owns remote workspace state.
@@ -118,10 +112,15 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
         );
       }
     },
-    recoverTerminalTurn(session) {
+    async recoverTerminalTurn(session, assertCurrent) {
       const active = activeWorkerTurns.get(session.sessionId);
       return active && (!session.sessionKey || active.sessionKey === session.sessionKey)
-        ? active.recoverTerminal?.()
+        ? await active.recoverTerminal?.(() => {
+            assertCurrent?.();
+            if (activeWorkerTurns.get(session.sessionId) !== active) {
+              throw new Error("Terminal worker recovery lost its active run owner");
+            }
+          })
         : undefined;
     },
     async resolveSandbox(params) {
@@ -198,15 +197,24 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
             assertRunCurrent?.();
           },
         });
-      const current = options.placements.get(claim.sessionId);
+      const prepared = await options.placements.prepareRuntimeRefresh(claim.sessionId);
+      let current: WorkerSessionPlacementRecord | undefined;
+      try {
+        inputTurn.abortSignal?.throwIfAborted();
+        assertRunCurrent?.();
+        prepared.assertCurrent();
+        current = prepared.placement;
+      } finally {
+        prepared.release();
+      }
       if (!current && inputTurn.modelRun === true && !claim.sessionKey?.trim()) {
         return await runLocal();
       }
       if (!current || current.state === "local") {
         return await runLocalTurn();
       }
-      const hasPendingWorkspaceResultToSettle = (sessionId: string, runId: string) =>
-        options.placements.listPendingWorkspaceResults(sessionId).some(
+      const hasPendingWorkspaceResultToSettle = async (sessionId: string, runId: string) =>
+        (await options.placements.listPendingWorkspaceResultsAsync(sessionId)).some(
           (pending) =>
             pending.sessionId === sessionId &&
             // A restarted run has no live claim, even when it reuses the retained run ID.
@@ -280,7 +288,7 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
             routablePlacement,
           );
         }
-        if (hasPendingWorkspaceResultToSettle(identity.sessionId, claim.runId)) {
+        if (await hasPendingWorkspaceResultToSettle(identity.sessionId, claim.runId)) {
           await waitForPendingWorkerResult({
             placements: options.placements,
             sessionId: identity.sessionId,
@@ -329,53 +337,23 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
             );
           }
         };
-        if (placement.executionMode === "remote-exec") {
-          try {
-            turnClaim = await options.placements.claimTurn(
-              {
-                ...identity,
-                claimId: randomUUID(),
-                runId: claim.runId,
-                owner: placementTurnOwner(placement),
-              },
-              assertClaimCurrent,
-            );
-          } catch (error) {
-            if (error instanceof WorkerRuntimeRefreshInFlightError) {
-              const refreshed = readRoutablePlacement(
-                "Cloud worker placement disappeared during runtime refresh admission",
-                error,
-              );
-              if (refreshed.state === "local") {
-                return await runLocalTurn();
-              }
-              routablePlacement = refreshed;
-              continue;
-            }
-            if (
-              !(error instanceof ActiveTurnClaimError) ||
-              !hasPendingWorkspaceResultToSettle(identity.sessionId, claim.runId)
-            ) {
-              throw error;
-            }
-            await waitForPendingWorkerResult({
-              placements: options.placements,
-              sessionId: identity.sessionId,
-              ...(turn.abortSignal ? { signal: turn.abortSignal } : {}),
-            });
-            const refreshed = readRoutablePlacement(
-              "Cloud worker placement disappeared after workspace reconciliation",
-              error,
-            );
-            if (refreshed.state === "local") {
-              return await runLocalTurn();
-            }
-            routablePlacement = refreshed;
-            continue;
-          }
-        } else {
-          let admitted: Awaited<ReturnType<typeof claimWorkerTurn>>;
-          try {
+        const remoteExec = placement.executionMode === "remote-exec";
+        let admitted: Awaited<ReturnType<typeof claimWorkerTurn>>;
+        try {
+          if (remoteExec) {
+            admitted = {
+              placement,
+              turnClaim: await options.placements.claimTurn(
+                {
+                  ...identity,
+                  claimId: randomUUID(),
+                  runId: claim.runId,
+                  owner: placementTurnOwner(placement),
+                },
+                assertClaimCurrent,
+              ),
+            };
+          } else {
             admitted = await claimWorkerTurn({
               placements: options.placements,
               identity,
@@ -390,34 +368,47 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
               },
               ...(turn.abortSignal ? { signal: turn.abortSignal } : {}),
             });
-          } catch (error) {
-            if (!(error instanceof WorkerRuntimeRefreshInFlightError)) {
+          }
+        } catch (error) {
+          const refreshing = error instanceof WorkerRuntimeRefreshInFlightError;
+          if (!refreshing) {
+            if (
+              !remoteExec ||
+              !(error instanceof ActiveTurnClaimError) ||
+              !(await hasPendingWorkspaceResultToSettle(identity.sessionId, claim.runId))
+            ) {
               throw error;
             }
-            const refreshed = readRoutablePlacement(
-              "Cloud worker placement disappeared during runtime refresh admission",
-              error,
-            );
-            if (refreshed.state === "local") {
-              return await runLocalTurn();
-            }
-            routablePlacement = refreshed;
-            continue;
+            await waitForPendingWorkerResult({
+              placements: options.placements,
+              sessionId: identity.sessionId,
+              ...(turn.abortSignal ? { signal: turn.abortSignal } : {}),
+            });
           }
-          if (!admitted) {
-            const refreshed = readRoutablePlacement(
-              "Cloud worker placement disappeared after workspace reconciliation",
-            );
-            if (refreshed.state === "local") {
-              return await runLocalTurn();
-            }
-            routablePlacement = refreshed;
-            continue;
+          const refreshed = readRoutablePlacement(
+            refreshing
+              ? "Cloud worker placement disappeared during runtime refresh admission"
+              : "Cloud worker placement disappeared after workspace reconciliation",
+            error,
+          );
+          if (refreshed.state === "local") {
+            return await runLocalTurn();
           }
-          placement = admitted.placement;
-          turnClaim = admitted.turnClaim;
+          routablePlacement = refreshed;
+          continue;
         }
-        const remoteExec = placement.executionMode === "remote-exec";
+        if (!admitted) {
+          const refreshed = readRoutablePlacement(
+            "Cloud worker placement disappeared after workspace reconciliation",
+          );
+          if (refreshed.state === "local") {
+            return await runLocalTurn();
+          }
+          routablePlacement = refreshed;
+          continue;
+        }
+        placement = admitted.placement;
+        turnClaim = admitted.turnClaim;
         let activeWorkerTurn: ActiveWorkerTurn | undefined;
         let handedOff = false;
         let terminalReceiptRequired = false;
@@ -514,7 +505,10 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
             assertRunCurrent: remoteExec ? assertRunCurrent : assertPreparationCurrent,
           });
         } catch (error) {
-          if (workspaceResolutionFailed) {
+          if (
+            workspaceResolutionFailed ||
+            error instanceof AcceptedWorkspacePublicationIndeterminateError
+          ) {
             throw error;
           }
           const abortReason = turn.abortSignal?.reason;
@@ -532,12 +526,13 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
             error instanceof WorkerRuntimeRefreshPendingError ||
             disconnectedBeforeHandoff
           ) {
+            const pendingResults = await options.placements.listPendingWorkspaceResultsAsync(
+              placement.sessionId,
+            );
             const canRecoverAdmission =
               !handedOff &&
               options.placements.validateTurnClaim(turnClaim) &&
-              !options.placements
-                .listPendingWorkspaceResults(placement.sessionId)
-                .some((pending) => pending.sessionId === placement.sessionId);
+              !pendingResults.some((pending) => pending.sessionId === placement.sessionId);
             if (canRecoverAdmission) {
               // This claim never launched work. Release it so runtime refresh does not
               // mistake admission for an executing turn that must finish first.
@@ -565,6 +560,9 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
                   waitTimeoutMs,
                 );
                 timeout.unref?.();
+                const admissionFacts = await options.placements.prepareRuntimeRefresh(
+                  placement.sessionId,
+                );
                 try {
                   markDiagnosticRunProgress({
                     sessionId: placement.sessionId,
@@ -579,6 +577,7 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
                     assertCurrent: () => {
                       reconnectSignal.throwIfAborted();
                       assertAdmissionCurrent();
+                      admissionFacts.assertCurrent();
                       const waitingPlacement = options.placements.get(placement.sessionId);
                       if (
                         !matchesWorkerPlacementTarget(waitingPlacement, placement) ||
@@ -586,8 +585,7 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
                         waitingPlacement?.sessionKey !== identity.sessionKey ||
                         waitingPlacement?.agentId !== identity.agentId ||
                         waitingPlacement?.executionMode !== placement.executionMode ||
-                        options.placements.listPendingWorkspaceResults(placement.sessionId).length >
-                          0
+                        admissionFacts.pendingResult
                       ) {
                         throw new Error(
                           "Worker placement changed while waiting for node admission",
@@ -597,6 +595,7 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
                     },
                   });
                 } finally {
+                  admissionFacts.release();
                   clearTimeout(timeout);
                 }
               }
@@ -641,7 +640,7 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
               requireActivePlacement(reconciled);
             }
           }
-          const pendingWorkspaceResult = findPendingWorkerWorkspaceResult(
+          const pendingWorkspaceResult = await findPendingWorkerWorkspaceResult(
             options.placements,
             turnClaim,
           );
@@ -649,11 +648,14 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
             if (turnClaim.owner.kind === "local") {
               // The Gateway-owned run is already terminal. Atomically record the
               // reconciliation failure before teardown so reclaim cannot see live work.
-              options.placements.failWorkspaceResultAndReleaseTurn(pendingWorkspaceResult, error);
+              await options.placements.failWorkspaceResultAndReleaseTurn(
+                pendingWorkspaceResult,
+                error,
+              );
             } else {
               // A recovery sweep owns the still-live worker claim. Teardown here
               // could discard the terminal event's durably fenced file results.
-              options.placements.handoffWorkspaceResultRecovery(turnClaim);
+              await options.placements.handoffWorkspaceResultRecovery(turnClaim);
             }
             await options.reconcileActivePlacement(placement.environmentId);
             throw error;
@@ -699,7 +701,7 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
                 ? {
                     terminal: {
                       observedAtMs: terminalAtMs,
-                      registerRecovery: (recover: () => string | undefined) => {
+                      registerRecovery: (recover) => {
                         terminalOwner.recoverTerminal = recover;
                       },
                     },

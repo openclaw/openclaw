@@ -402,7 +402,7 @@ describe("skills proposal gateway handlers", () => {
   it("inspects and applies proposals in a configured agent directory", async () => {
     const agentDir = await tempDirs.make("openclaw-skills-proposals-gateway-agent-dir-");
     const config = {
-      agents: { entries: { main: { default: true, agentDir } } },
+      agents: { entries: { main: { agentDir } } },
     };
     const context = { getRuntimeConfig: () => config };
     const create = await callHandler(

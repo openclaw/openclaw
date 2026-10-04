@@ -22,17 +22,14 @@ function buildTailscaleExposureArgs(opts: {
   return [opts.mode, "--bg", "--yes", ...portArgs, "--set-path", opts.path, opts.localUrl ?? "off"];
 }
 
-async function runTailscaleCommand(
-  args: string[],
-  timeoutMs = 2500,
-): Promise<{ code: number; stdout: string }> {
+async function runTailscaleCommand(args: string[]): Promise<{ code: number; stdout: string }> {
   try {
     const result = await runCommandWithTimeout(["tailscale", ...args], {
       killProcessTree: true,
       maxOutputBytes: { stdout: TAILSCALE_COMMAND_STDOUT_MAX_BYTES, stderr: 1 },
       outputCapture: "head",
       terminateOnOutputLimit: { stdout: true },
-      timeoutMs,
+      timeoutMs: 2500,
     });
     if (result.termination !== "exit" || result.outputLimitExceeded) {
       return { code: -1, stdout: "" };

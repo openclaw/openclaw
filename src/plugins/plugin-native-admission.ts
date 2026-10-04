@@ -388,7 +388,7 @@ export function createPluginNativeAdmission(
     hostRoot = fs.realpathSync(selectedHost);
     for (const namespace of namespaces()) {
       if (namespace.referenceRoot) {
-        assertPluginNativeNamespaceHost(namespace, hostRoot);
+        assertPluginNativeNamespaceHost(namespace, hostRoot, rootDir);
         continue;
       }
       const link = path.join(namespace.capturedRoot, "node_modules", "openclaw");

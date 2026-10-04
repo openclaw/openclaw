@@ -15,11 +15,13 @@ import type {
   PluginDiscoveryResult,
   PluginInstallRequest,
 } from "../../lib/plugins/index.ts";
+import { renderCatalogGridSkeleton } from "./catalog-skeleton.ts";
 import { renderArtTile } from "./consent-dialog.ts";
 import type { PluginInstallProgress } from "./install-progress.ts";
 import {
-  renderPluginCardIdentity,
+  renderPluginAuthor,
   renderPluginCardSummary,
+  renderPluginOfficialBadge,
   renderPluginStateStatus,
 } from "./plugin-card.ts";
 import { renderPluginRowMessage, type PluginRowMessage } from "./plugin-row-message.ts";
@@ -39,9 +41,7 @@ export type PluginCatalogResultsProps = {
   categoriesError: string | null;
   onRetryCategories: () => void;
   featured: readonly PluginDiscoveryEntry[];
-  featuredLoading: boolean;
   trending: readonly PluginDiscoveryEntry[];
-  trendingLoading: boolean;
   loadingMore: boolean;
   loadMoreError: string | null;
   intent: PluginDiscoveryIntent;
@@ -214,14 +214,13 @@ function renderCatalogCard(
         >
           ${renderCatalogIcon(plugin, props)}
         </span>
-        ${renderPluginCardIdentity({
-          name: plugin.catalog.name,
-          attribution: {
-            ...(plugin.catalog.author ? { author: plugin.catalog.author } : {}),
-            official: plugin.catalog.official,
-          },
-          linkedAuthor: true,
-        })}
+        <div class="installed-plugins-card__identity">
+          <div class="plugin-card-title-row">
+            <h3>${plugin.catalog.name}</h3>
+            ${plugin.catalog.official ? renderPluginOfficialBadge() : nothing}
+          </div>
+          ${renderPluginAuthor(plugin.catalog.author, { linked: true })}
+        </div>
       </div>
       <div class="plugin-catalog-card__action">
         ${
@@ -247,42 +246,6 @@ function renderCatalogCard(
           : undefined,
     })}
   </article>`;
-}
-
-// Mirrors renderCatalogCard's geometry (art tile, title, action slot, two summary
-// lines) inside the real grid so the layout does not jump on load. Fills are kept
-// light and sparse on purpose: eight cards of solid bars read as a wall.
-function renderCatalogGridSkeleton(params: { label?: string; cards: number }): TemplateResult {
-  return html`<div
-    class="plugin-catalog-grid plugin-catalog-grid--skeleton"
-    role="status"
-    aria-busy="true"
-    aria-label=${params.label ?? t("common.loading")}
-  >
-    ${Array.from(
-      { length: params.cards },
-      () => html`<div
-        class="plugin-catalog-card oc-card plugin-catalog-card--skeleton"
-        aria-hidden="true"
-      >
-        <div class="plugin-catalog-card__head">
-          <div class="installed-plugins-card__head">
-            <span class="skeleton plugin-catalog-card__skeleton-art"></span>
-            <div class="installed-plugins-card__identity">
-              <span class="skeleton plugin-catalog-card__skeleton-title"></span>
-            </div>
-          </div>
-          <div class="plugin-catalog-card__action">
-            <span class="skeleton plugin-catalog-card__skeleton-action"></span>
-          </div>
-        </div>
-        <span class="plugin-catalog-card__skeleton-summary">
-          <span class="skeleton plugin-catalog-card__skeleton-line"></span>
-          <span class="skeleton plugin-catalog-card__skeleton-line"></span>
-        </span>
-      </div>`,
-    )}
-  </div>`;
 }
 
 function renderError(error: string, onRetry: () => void): TemplateResult {
@@ -392,10 +355,9 @@ function renderCategoryChips(props: PluginCatalogResultsProps): TemplateResult {
 function renderRawResults(props: PluginCatalogResultsProps): TemplateResult {
   const items = props.result?.items ?? [];
   if (props.loading) {
-    return renderCatalogGridSkeleton({
-      label: t("pluginsPage.loadingDiscovery"),
-      cards: SECTION_SIZE,
-    });
+    return html`<openclaw-plugin-catalog-skeleton
+      .label=${t("pluginsPage.loadingDiscovery")}
+    ></openclaw-plugin-catalog-skeleton>`;
   }
   if (props.error) {
     return renderError(props.error, props.onRetry);
@@ -466,14 +428,7 @@ function renderGroupedCatalog(props: PluginCatalogResultsProps): TemplateResult 
     items.some((plugin) =>
       categories.some((category) => plugin.catalog.categories.includes(category.slug)),
     );
-  if (
-    !hasAnySection &&
-    !props.loading &&
-    !props.featuredLoading &&
-    !props.trendingLoading &&
-    !props.error &&
-    !props.remoteError
-  ) {
+  if (!hasAnySection && !props.loading && !props.error && !props.remoteError) {
     return renderPanelEmptyState({
       icon: icons.search,
       heading: t("pluginsPage.noDiscoveryResults"),
@@ -487,7 +442,7 @@ function renderGroupedCatalog(props: PluginCatalogResultsProps): TemplateResult 
         id: intent,
         title: t(label),
         items: props[intent],
-        loading: props[`${intent}Loading`],
+        loading: props.loading,
         onViewAll: () => props.onIntentChange(intent),
         props,
       }),

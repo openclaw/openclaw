@@ -1,4 +1,3 @@
-// Adapts node:sqlite sync database calls for Kysely-style query execution.
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import { toUSVString } from "node:util";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
@@ -26,9 +25,6 @@ const supportsRepreparedAll =
   ((nodeVersion?.major === 24 &&
     isNodeVersionAtLeast(nodeVersion, { major: 24, minor: 20, patch: 0 })) ||
     isNodeVersionAtLeast(nodeVersion, { major: 26, minor: 6, patch: 0 }));
-
-// Sync query helpers execute compiled Kysely SQL against node:sqlite without
-// going through Kysely's async driver path.
 
 export {
   clearNodeSqliteKyselyCacheForDatabase,
@@ -176,6 +172,21 @@ export function executeSqliteQuerySync<Row>(
 type SqliteQueryBindingBuilder<Params, Row> = (
   parameter: <Value extends SQLInputValue>(read: (params: Params) => Value) => RawBuilder<Value>,
 ) => Compilable<Row>;
+
+/** Cache compiled query functions or bundles by native connection. */
+export function createSqliteQueryCache<Queries extends object>(
+  create: (database: DatabaseSync) => Queries,
+): (database: DatabaseSync) => Queries {
+  const queriesByDatabase = new WeakMap<DatabaseSync, Queries>();
+  return (database) => {
+    let queries = queriesByDatabase.get(database);
+    if (queries === undefined) {
+      queries = create(database);
+      queriesByDatabase.set(database, queries);
+    }
+    return queries;
+  };
+}
 
 /** Compile fixed SQL and fresh bindings without taking ownership of a native statement. */
 export function compileSqliteQueryBindings<Params, Row = unknown>(

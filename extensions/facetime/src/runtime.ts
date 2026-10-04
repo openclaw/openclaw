@@ -39,7 +39,6 @@ import {
   retainOutboundDialHelperPeers,
   readOutboundCallUUID,
   readOutboundProxyIdentifier,
-  retainHelperResultPeers,
 } from "./runtime-helper-results.js";
 import type { ActiveFaceTimeCall, FaceTimeRuntimeStatus } from "./runtime-state.js";
 import { buildFaceTimeRuntimeStatus } from "./runtime-status.js";
@@ -105,12 +104,11 @@ export async function createFaceTimeRuntime(params: {
   });
   let stopping = false;
   let helperStopped = false;
-  const helperRef: { current?: FaceTimeHelperSocketServer } = {};
   const helperSupervisor = new FaceTimeHelperSupervisor({
     pluginRoot: params.pluginRoot,
     logger: params.logger,
     runCommandWithTimeout: params.runtime.system.runCommandWithTimeout,
-    connectedBundles: () => helperRef.current?.connectedHelperBundles ?? [],
+    connectedBundles: () => helper.connectedHelperBundles,
   });
   const pendingOperations = new Set<Promise<void>>();
   const observePendingOperation = (operation: Promise<void>) => {
@@ -264,9 +262,6 @@ export async function createFaceTimeRuntime(params: {
   };
   let helperTopologyVersion = 0;
   const helperEndpoint = resolveFaceTimeHelperEndpoint();
-  const callEventRef: {
-    current?: ReturnType<typeof createFaceTimeCallEventHandler>;
-  } = {};
   const helper = new FaceTimeHelperSocketServer({
     ...helperEndpoint,
     logger: params.logger,
@@ -289,16 +284,13 @@ export async function createFaceTimeRuntime(params: {
       }
       const event = normalizeFaceTimeCallEvent(message);
       if (event) {
-        const operation = callEventRef.current?.handleCallEvent(event, peer);
-        if (operation) {
-          return observePendingOperation(operation);
-        }
+        return observePendingOperation(callEvents.handleCallEvent(event, peer));
       }
       return undefined;
     },
     onConnect(bundleIdentifier) {
       helperTopologyVersion += 1;
-      helperSupervisor?.connected(bundleIdentifier);
+      helperSupervisor.connected(bundleIdentifier);
       for (const call of calls.values()) {
         if (call.carrierHangupPending) {
           void attemptCarrierHangup(call, "helper-reconnected");
@@ -312,7 +304,7 @@ export async function createFaceTimeRuntime(params: {
     },
     onDisconnect(bundleIdentifier) {
       helperTopologyVersion += 1;
-      helperSupervisor?.disconnected(bundleIdentifier);
+      helperSupervisor.disconnected(bundleIdentifier);
       if (stopping || calls.size === 0) {
         return;
       }
@@ -328,11 +320,9 @@ export async function createFaceTimeRuntime(params: {
       }
     },
     onStale(bundleIdentifier, processId) {
-      helperSupervisor?.stale(bundleIdentifier, processId);
+      helperSupervisor.stale(bundleIdentifier, processId);
     },
   });
-  helperRef.current = helper;
-
   const callControl = createFaceTimeCallControl({
     calls,
     helper,
@@ -343,10 +333,9 @@ export async function createFaceTimeRuntime(params: {
     captureBinary,
     isStopping: () => stopping,
     getHelperTopologyVersion: () => helperTopologyVersion,
-    retainHelperResultPeers,
   });
   const { attemptCarrierHangup, stopCall } = callControl;
-  callEventRef.current = createFaceTimeCallEventHandler({
+  const callEvents = createFaceTimeCallEventHandler({
     calls,
     helper,
     config,

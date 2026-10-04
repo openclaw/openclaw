@@ -149,7 +149,13 @@ function deliverAnnouncement(
 }
 
 describe("queued completion handoff", () => {
-  it.each(["source retired", "long execution", "delivery deadline", "private"] as const)(
+  it.each([
+    "source retired",
+    "long execution",
+    "post-start expiry",
+    "delivery deadline",
+    "private",
+  ] as const)(
     "keeps an accepted busy-parent completion pending until execution: %s",
     async (outcome) => {
       vi.useFakeTimers();
@@ -158,6 +164,13 @@ describe("queued completion handoff", () => {
       const executionSettled = createDeferredCore();
       const executionStarted = createDeferredCore();
       const deliveryDeadline = new AbortController();
+      const expiryTimer =
+        outcome === "post-start expiry"
+          ? setTimeout(
+              () => deliveryDeadline.abort(new Error("completion delivery expired")),
+              180_000,
+            )
+          : undefined;
       let sourceAllowed = true;
       let executed = false;
       const dispatchGatewayMethodInProcess: typeof runtimeDispatchGatewayMethodInProcess = async <
@@ -213,6 +226,7 @@ describe("queued completion handoff", () => {
           : {}),
         isSourceSessionEffectsAllowed: () => sourceAllowed,
         signal: deliveryDeadline.signal,
+        onExecutionStarted: () => clearTimeout(expiryTimer),
       }).finally(() => {
         finished = true;
       });
@@ -231,7 +245,7 @@ describe("queued completion handoff", () => {
         }
         sourceAllowed = outcome !== "source retired";
         parentSettled.resolve();
-        if (outcome === "long execution") {
+        if (outcome === "long execution" || outcome === "post-start expiry") {
           await executionStarted.promise;
           await vi.advanceTimersByTimeAsync(120_001);
           expect(finished).toBe(false);
@@ -245,6 +259,7 @@ describe("queued completion handoff", () => {
         );
         expect(executed).toBe(sourceAllowed);
       } finally {
+        clearTimeout(expiryTimer);
         parentSettled.resolve();
         executionSettled.resolve();
         await delivery;
@@ -590,7 +605,7 @@ describe("deliverSubagentAnnouncement active requester steering", () => {
   const sharedStore = "/stores/shared.sqlite";
   const configuredAgents: NonNullable<OpenClawConfig["agents"]> = {
     ownership: "explicit",
-    list: [{ id: "ops" }, { id: "research" }],
+    entries: { ops: {}, research: {} },
   };
   function announce(overrides: Partial<AnnouncementInput> = {}) {
     const requesterSessionKey = overrides.requesterSessionKey ?? "agent:eng:paperclip:issue:123";
@@ -1156,7 +1171,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         session: { scope: "global" },
         agents: {
           ownership: "explicit",
-          list: [{ id: "ops" }, { id: "research" }],
+          entries: { ops: {}, research: {} },
         },
       },
       internalEvents: taskCompletionEvents({ childSessionId: "child-session-id" }),
@@ -1682,18 +1697,18 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     });
     expect(callGateway).toHaveBeenCalledTimes(1);
     expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenCalledTimes(2);
-    for (const attempt of [1, 2]) {
-      expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenNthCalledWith(
-        attempt,
-        "requester-session-4",
-        "child done",
-        expect.objectContaining({
-          debounceMs: 500,
-          deliveryTimeoutMs: 120_000,
-          steeringMode: "all",
-          waitForTranscriptCommit: true,
-          userTurnTranscriptRecorder: expect.any(Object),
-        }),
+    const calls = queueEmbeddedAgentMessageWithOutcome.mock.calls;
+    expect(calls.map(([session, prompt]) => [session, prompt])).toEqual([
+      ["requester-session-4", "Continue the OpenClaw runtime event."],
+      ["requester-session-4", "Continue the OpenClaw runtime event."],
+    ]);
+    for (const call of calls) {
+      expect(call[2]).toMatchObject({
+        waitForTranscriptCommit: true,
+        userTurnTranscriptRecorder: expect.any(Object),
+      });
+      expect(call[2]?.currentInboundContext?.fragments).toContainEqual(
+        expect.objectContaining({ kind: "runtime-instruction" }),
       );
     }
     expect(callOrder).toEqual(["queue", "gateway", "queue"]);
@@ -1799,7 +1814,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       expect(rawMessages).toEqual([
         expect.objectContaining({
           role: "user",
-          content: "child done",
+          content: "Continue the OpenClaw runtime event.",
           provenance: expect.objectContaining({
             kind: "inter_session",
             sourceTool: "subagent_announce",

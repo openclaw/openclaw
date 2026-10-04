@@ -6,8 +6,6 @@ import { emitSessionShutdownEvent } from "./extensions/runner.js";
 import type { ResourceExtensionPaths } from "./resource-loader.js";
 import type { SlashCommandInfo } from "./slash-commands.js";
 import { createSyntheticSourceInfo } from "./source-info.js";
-import { createAllToolDefinitions } from "./tools/index.js";
-import { createToolDefinitionFromAgentTool } from "./tools/tool-definition-wrapper.js";
 
 export abstract class AgentSessionExtensions extends AgentSessionCompaction {
   async bindExtensions(bindings: ExtensionBindings): Promise<void> {
@@ -53,7 +51,6 @@ export abstract class AgentSessionExtensions extends AgentSessionCompaction {
     };
 
     this.sessionResourceLoader.extendResources(extensionPaths);
-    this.baseSystemPrompt = this.rebuildSystemPrompt(this.getActiveToolNames());
     this.agent.state.systemPrompt = this.baseSystemPrompt;
   }
 
@@ -64,29 +61,21 @@ export abstract class AgentSessionExtensions extends AgentSessionCompaction {
     metadata: { source: string; scope: "temporary"; origin: "top-level"; baseDir?: string };
   }> {
     return entries.map((entry) => {
-      const source = this.getExtensionSourceLabel(entry.extensionPath);
-      const baseDir = entry.extensionPath.startsWith("<")
-        ? undefined
-        : dirname(entry.extensionPath);
+      const synthetic = entry.extensionPath.startsWith("<");
       return {
         path: entry.path,
         metadata: {
-          source,
+          source: `extension:${
+            synthetic
+              ? entry.extensionPath.replace(/[<>]/g, "")
+              : basename(entry.extensionPath).replace(/\.(ts|js)$/, "")
+          }`,
           scope: "temporary",
           origin: "top-level",
-          baseDir,
+          baseDir: synthetic ? undefined : dirname(entry.extensionPath),
         },
       };
     });
-  }
-
-  private getExtensionSourceLabel(extensionPath: string): string {
-    if (extensionPath.startsWith("<")) {
-      return `extension:${extensionPath.replace(/[<>]/g, "")}`;
-    }
-    const base = basename(extensionPath);
-    const name = base.replace(/\.(ts|js)$/, "");
-    return `extension:${name}`;
   }
 
   private applyExtensionBindings(runner: ExtensionRunner): void {
@@ -243,121 +232,31 @@ export abstract class AgentSessionExtensions extends AgentSessionCompaction {
   replaceCustomTools(customTools: ToolDefinition[], activeToolNames: string[]): void {
     this.customTools = customTools;
     this.allowedToolNames = new Set(activeToolNames);
-    this.refreshToolRegistry({ activeToolNames });
+    this.refreshToolRegistry(activeToolNames);
   }
 
-  private refreshToolRegistry(options?: {
-    activeToolNames?: string[];
-    includeAllExtensionTools?: boolean;
-  }): void {
-    const previousRegistryNames = new Set(this.toolRegistry.keys());
-    const previousActiveToolNames = this.getActiveToolNames();
-    const allowedToolNames = this.allowedToolNames;
-    const isDisabledBuiltInToolName = (name: string): boolean =>
-      this.disableBuiltInTools && this.baseToolDefinitions.has(name);
-    const isAllowedTool = (name: string): boolean =>
-      !isDisabledBuiltInToolName(name) && (!allowedToolNames || allowedToolNames.has(name));
-
-    const registeredTools = this.currentExtensionRunner.getAllRegisteredTools();
+  private refreshToolRegistry(activeToolNames = this.getActiveToolNames()): void {
     const allCustomTools = [
-      ...registeredTools,
+      ...this.currentExtensionRunner.getAllRegisteredTools(),
       ...this.customTools.map((definition) => ({
         definition,
         sourceInfo: createSyntheticSourceInfo(`<sdk:${definition.name}>`, { source: "sdk" }),
       })),
-    ].filter((tool) => isAllowedTool(tool.definition.name));
-    const builtInTools = Array.from(this.baseToolDefinitions.entries()).map(
-      ([name, definition]) =>
-        [
-          name,
-          {
-            definition,
-            sourceInfo: createSyntheticSourceInfo(`<builtin:${name}>`, { source: "builtin" }),
-          },
-        ] as const,
+    ].filter((tool) => this.allowedToolNames.has(tool.definition.name));
+    this.toolDefinitions = new Map(allCustomTools.map((tool) => [tool.definition.name, tool]));
+    this.toolRegistry = new Map(
+      wrapRegisteredTools(allCustomTools, this.currentExtensionRunner).map((tool) => [
+        tool.name,
+        tool,
+      ]),
     );
-    const definitionRegistry = new Map(builtInTools.filter(([name]) => isAllowedTool(name)));
-    for (const tool of allCustomTools) {
-      definitionRegistry.set(tool.definition.name, {
-        definition: tool.definition,
-        sourceInfo: tool.sourceInfo,
-      });
-    }
-    this.toolDefinitions = definitionRegistry;
-    this.toolPromptSnippets = new Map();
-    this.toolPromptGuidelines = new Map();
-    for (const { definition } of definitionRegistry.values()) {
-      const snippet = this.normalizePromptSnippet(definition.promptSnippet);
-      if (snippet) {
-        this.toolPromptSnippets.set(definition.name, snippet);
-      }
-      const guidelines = this.normalizePromptGuidelines(definition.promptGuidelines);
-      if (guidelines.length > 0) {
-        this.toolPromptGuidelines.set(definition.name, guidelines);
-      }
-    }
-    const runner = this.currentExtensionRunner;
-    const wrappedExtensionTools = wrapRegisteredTools(allCustomTools, runner);
-    const wrappedBuiltInTools = wrapRegisteredTools(
-      builtInTools.map(([, tool]) => tool).filter((tool) => isAllowedTool(tool.definition.name)),
-      runner,
-    );
-
-    const toolRegistry = new Map(wrappedBuiltInTools.map((tool) => [tool.name, tool]));
-    for (const tool of wrappedExtensionTools) {
-      toolRegistry.set(tool.name, tool);
-    }
-    this.toolRegistry = toolRegistry;
-
-    const nextActiveToolNames = (options?.activeToolNames ?? previousActiveToolNames).filter(
-      (name) => isAllowedTool(name),
-    );
-
-    if (allowedToolNames) {
-      for (const toolName of this.toolRegistry.keys()) {
-        if (allowedToolNames.has(toolName)) {
-          nextActiveToolNames.push(toolName);
-        }
-      }
-    } else if (options?.includeAllExtensionTools) {
-      for (const tool of wrappedExtensionTools) {
-        nextActiveToolNames.push(tool.name);
-      }
-    } else if (!options?.activeToolNames) {
-      for (const toolName of this.toolRegistry.keys()) {
-        if (!previousRegistryNames.has(toolName)) {
-          nextActiveToolNames.push(toolName);
-        }
-      }
-    }
-
-    this.setActiveToolsByName([...new Set(nextActiveToolNames)]);
+    this.setActiveToolsByName([...new Set([...activeToolNames, ...this.toolRegistry.keys()])]);
   }
 
   protected buildRuntime(options: {
     activeToolNames?: string[];
     flagValues?: Map<string, boolean | string>;
-    includeAllExtensionTools?: boolean;
   }): void {
-    const autoResizeImages = this.settingsManager.getImageAutoResize();
-    const shellCommandPrefix = this.settingsManager.getShellCommandPrefix();
-    const shellPath = this.settingsManager.getShellPath();
-    const baseToolDefinitions = this.baseToolsOverride
-      ? Object.fromEntries(
-          Object.entries(this.baseToolsOverride).map(([name, tool]) => [
-            name,
-            createToolDefinitionFromAgentTool(tool),
-          ]),
-        )
-      : createAllToolDefinitions(this.cwd, {
-          read: { autoResizeImages },
-          bash: { commandPrefix: shellCommandPrefix, shellPath },
-        });
-
-    this.baseToolDefinitions = new Map(
-      Object.entries(baseToolDefinitions).map(([name, tool]) => [name, tool as ToolDefinition]),
-    );
-
     const extensionsResult = this.sessionResourceLoader.getExtensions();
     if (options.flagValues) {
       for (const [name, value] of options.flagValues) {
@@ -378,14 +277,7 @@ export abstract class AgentSessionExtensions extends AgentSessionCompaction {
     this.bindExtensionCore(this.currentExtensionRunner);
     this.applyExtensionBindings(this.currentExtensionRunner);
 
-    const defaultActiveToolNames = this.baseToolsOverride
-      ? Object.keys(this.baseToolsOverride)
-      : ["read", "bash", "edit", "write"];
-    const baseActiveToolNames = options.activeToolNames ?? defaultActiveToolNames;
-    this.refreshToolRegistry({
-      activeToolNames: baseActiveToolNames,
-      includeAllExtensionTools: options.includeAllExtensionTools,
-    });
+    this.refreshToolRegistry(options.activeToolNames);
   }
 
   async reload(): Promise<void> {
@@ -402,7 +294,6 @@ export abstract class AgentSessionExtensions extends AgentSessionCompaction {
     this.buildRuntime({
       activeToolNames: this.getActiveToolNames(),
       flagValues: previousFlagValues,
-      includeAllExtensionTools: true,
     });
 
     const hasBindings =

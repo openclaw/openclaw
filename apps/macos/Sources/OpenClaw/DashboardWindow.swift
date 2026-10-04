@@ -37,11 +37,6 @@ struct DashboardNativeNavigation: Equatable {
     let fallbackURL: URL
 }
 
-enum DashboardLinkTarget: String, Equatable {
-    case inline
-    case external
-}
-
 enum DashboardTargetlessNavigationAction: Equatable {
     case allow
     case openExternal
@@ -52,11 +47,6 @@ enum DashboardNewWindowAction: Equatable {
     case openTab(URL)
     case openExternal(URL)
     case ignore
-}
-
-struct DashboardLinkRequest: Equatable {
-    let url: URL
-    let target: DashboardLinkTarget
 }
 
 enum DashboardWindowAuth: Equatable {

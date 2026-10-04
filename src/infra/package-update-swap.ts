@@ -61,12 +61,6 @@ import {
 import { isFailedUpdateStep } from "./update-run-step.js";
 import type { UpdateStepResult } from "./update-step-result.js";
 
-export { PackageUpdateActivationError } from "./package-update-swap-contract.js";
-export type {
-  PackageUpdateTransaction,
-  StagedPackageInstall,
-} from "./package-update-swap-contract.js";
-
 export { removePackageUpdatePath } from "./package-update-filesystem.js";
 
 export async function swapStagedPackageInstall(
@@ -136,7 +130,9 @@ export async function swapStagedPackageInstall(
     const messages: string[] = [];
     try {
       if (activation) {
-        packageBackedUp = await activation.disarmRollback();
+        const previous = await activation.disarmRollback();
+        packageBackedUp = previous !== false;
+        previousRoot = previous ? { kind: "directory", tree: previous } : previousRoot;
       }
       if (!native && (packageBackedUp || (!hadPackage && rollback.length > 0))) {
         // Refuse known-bad recovery material before touching the candidate or
@@ -367,6 +363,7 @@ export async function swapStagedPackageInstall(
               warnings.push(message);
               params.activation?.onUnavailable?.(message);
             },
+            onWarning: results.activationWarning,
           },
           liveRoot: targetSwapRoot,
           stageRoot: stagedSwapRoot,
@@ -607,7 +604,11 @@ export async function swapStagedPackageInstall(
       params.onLiveMutation?.();
       liveMutationStarted = true;
       packageRollbackVerified = false;
-      await activation.publish(false, async () => {
+      await activation.publish(false, async (previous, copied) => {
+        if (copied) {
+          warnings.push("EXDEV during package backup rename; using a verified rollback copy.");
+        }
+        previousRoot = { kind: "directory", tree: previous };
         packageBackedUp = true;
         activePackageRoot = null;
         activation!.assertCurrent();

@@ -45,7 +45,7 @@ describe("prepared model runtime owner selection", () => {
     await withAgentDeletion(
       input.agentId,
       async (begin) => {
-        const deletion = begin({
+        const deletion = await begin({
           agentId: input.agentId,
           agentDir: input.agentDir,
           workspaceDir: fixture.state.workspaceDir,
@@ -64,7 +64,7 @@ describe("prepared model runtime owner selection", () => {
         expect(sharing.isCurrent()).toBe(true);
 
         replaceJournal.run(deletion.entry.operationId, input.agentId);
-        deletion.rollback();
+        await deletion.rollback();
         await expect(
           retireAgentDeleteRuntime(input.config, deletion, [input.agentDir]),
         ).rejects.toThrow("no longer owns");

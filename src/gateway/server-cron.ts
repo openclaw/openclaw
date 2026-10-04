@@ -7,6 +7,7 @@ import {
   resolveAgentEntry,
   tryResolveAmbientOwnerAgentId,
 } from "../agents/agent-scope-config.js";
+import { isEmbeddedAgentSessionHeldByOtherRun } from "../agents/embedded-agent-runner/runs.js";
 import { abortAndDrainEmbeddedAgentRun } from "../agents/embedded-agent.js";
 import { loadPreparedInboundPluginRegistry } from "../agents/prepared-model-runtime.inbound-registry.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
@@ -79,8 +80,8 @@ import {
   toAgentStoreSessionKey,
 } from "../routing/session-key.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
-import { runInDetachedAsyncContext } from "../shared/async-work-scope.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { truncateUtf16WithEllipsis } from "../shared/text-truncate.js";
 import { bumpSkillsSnapshotVersion } from "../skills/runtime/refresh-state.js";
 import { resolveSkillWorkshopConfig } from "../skills/workshop/config.js";
@@ -260,17 +261,12 @@ export function buildGatewayCronService(params: {
       requestedSessionKey && parseAgentSessionKey(requestedSessionKey)
         ? resolveAgentIdFromSessionKey(requestedSessionKey)
         : undefined;
-    const { agentId: resolvedAgentId, cfg: runtimeConfig } = resolveCronAgent(
-      requestedAgentId ?? derivedAgentId,
-    );
-    const agentId = resolvedAgentId || undefined;
-    const resolvedSessionKey = agentId
-      ? resolveCronSessionKey({
-          runtimeConfig,
-          agentId,
-          requestedSessionKey,
-        })
-      : undefined;
+    const { agentId, cfg: runtimeConfig } = resolveCronAgent(requestedAgentId ?? derivedAgentId);
+    const resolvedSessionKey = resolveCronSessionKey({
+      runtimeConfig,
+      agentId,
+      requestedSessionKey,
+    });
     const sessionKey =
       resolvedSessionKey && runtimeConfig.session?.scope === "global"
         ? resolveEventSessionKey(
@@ -715,6 +711,16 @@ export function buildGatewayCronService(params: {
     },
     cleanupTimedOutAgentRun: async ({ job, execution }) => {
       if (!execution?.sessionId) {
+        return;
+      }
+      if (
+        execution.runId &&
+        isEmbeddedAgentSessionHeldByOtherRun(execution.sessionId, execution.runId)
+      ) {
+        cronLogger.warn(
+          { jobId: job.id, sessionId: execution.sessionId, sessionKey: execution.sessionKey },
+          "cron: timed-out agent run already left its session; kept the current run",
+        );
         return;
       }
       const result = await abortAndDrainEmbeddedAgentRun({

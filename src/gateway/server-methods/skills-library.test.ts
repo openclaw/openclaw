@@ -326,7 +326,7 @@ describe("skill library retained support files", () => {
         details: { code: "SKILL_LIBRARY_NOT_FOUND" },
       }),
     ]);
-    mutateSkillLibrary(actor(alice.id), {
+    await mutateSkillLibrary(actor(alice.id), {
       skillId: saved.entry.skillId,
       expectedRevision: saved.entry.revision,
       action: "share",
@@ -351,7 +351,7 @@ describe("read-only session skill library projection", () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", root);
     const alice = ensureProfileForEmail("alice@example.test");
     const bob = ensureProfileForEmail("bob@example.test");
-    const cfg = { agents: { list: [{ id: "main", workspace: path.join(root, "workspace") }] } };
+    const cfg = { agents: { entries: { main: { workspace: path.join(root, "workspace") } } } };
     const actor = (profileId: string): SkillLibraryAuthority => ({
       profileId,
       scopes: ["operator.read", "operator.write"],
@@ -368,7 +368,7 @@ describe("read-only session skill library projection", () => {
       content,
       expectedRevision: null,
     });
-    const pins = seedSkillLibrarySelection(actor(alice.id));
+    const pins = await seedSkillLibrarySelection(actor(alice.id));
     const key = "agent:main:library-session";
     await upsertSessionEntryCore(
       { agentId: "main", sessionKey: key },

@@ -315,6 +315,12 @@ async function testPreflightCandidate(
   // A local rebase can change package metadata from the fetched base revision.
   await params.beforeCandidate(candidateSha);
   await params.referenceSource?.copyBuildInputs(params.worktreeDir);
+  if (
+    params.frozenLockfile &&
+    !parsePnpmPackageManagerVersion(await readPackageManagerSpec(params.worktreeDir))
+  ) {
+    return { status: "manager-unavailable", reason: "immutable-pnpm-pin-required" };
+  }
   const nodeRuntime = await prepareGitCandidateNodeRuntime(
     params.worktreeDir,
     params.defaultCommandEnv,
@@ -381,7 +387,7 @@ async function testPreflightCandidate(
           compatFallback: manager.fallback && manager.manager === "npm",
         });
     const installName = preferIgnoreScripts ? "deps-install-ignore-scripts" : "deps-install";
-    if (params.referenceSource) {
+    if (params.referenceSource || params.frozenLockfile) {
       installArgv.push("--frozen-lockfile");
     }
     const candidateCommand = await prepareCandidateCommandEnv(
@@ -485,6 +491,8 @@ export async function runGitCandidatePreflight(params: {
   };
   beforeRuntimeVerified: boolean;
   sourceRuntimePrepared?: boolean;
+  /** Immutable releases must build exactly the candidate's recorded dependency graph. */
+  frozenLockfile?: boolean;
   beforeGitStaging?: UpdateRunnerOptions["beforeGitStaging"];
   validateCandidate: UpdateRunnerOptions["validateCandidate"];
   prepareGitExposure?: UpdateRunnerOptions["prepareGitExposure"];

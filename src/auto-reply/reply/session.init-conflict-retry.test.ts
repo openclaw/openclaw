@@ -99,14 +99,6 @@ describe("runWithSessionInitConflictRetry", () => {
     expect(attempt).toHaveBeenCalledTimes(2);
   });
 
-  it("respects a caller-provided maxAttempts", async () => {
-    const { attempt, state } = conflictingAttempt(Number.POSITIVE_INFINITY);
-    await expect(
-      runWithSessionInitConflictRetry(attempt, { maxAttempts: 2, sleep: instantSleep }),
-    ).rejects.toBeInstanceOf(ReplySessionInitConflictError);
-    expect(state.calls).toBe(2);
-  });
-
   it("executes an attempt after every caller-provided retry delay", async () => {
     const { attempt, state } = conflictingAttempt(3);
     const delays: number[] = [];

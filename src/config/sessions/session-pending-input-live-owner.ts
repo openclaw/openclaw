@@ -1,4 +1,7 @@
-import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.js";
+import {
+  isSameOpenClawAgentDatabasePath,
+  resolveOpenClawAgentSqlitePath,
+} from "../../state/openclaw-agent-db.paths.js";
 import {
   toDatabaseOptions,
   type ResolvedTranscriptScope,
@@ -6,7 +9,7 @@ import {
 
 type LiveInputIdentity<Owner> = {
   promotedOwner?: Owner;
-  databasePath: string;
+  workerDatabasePath: string;
   sessionId: string;
   sessionKey: string;
   transcriptInputId: string;
@@ -28,7 +31,8 @@ export function collectForeignLiveSessionPendingInputEntries<
     const owner = source.promotedOwner ?? source;
     if (
       owner === params.currentOwner ||
-      owner.databasePath !== databasePath ||
+      (owner.workerDatabasePath !== databasePath &&
+        !isSameOpenClawAgentDatabasePath(owner.workerDatabasePath, databasePath)) ||
       owner.sessionId !== params.scope.sessionId ||
       owner.sessionKey !== params.scope.sessionKey
     ) {

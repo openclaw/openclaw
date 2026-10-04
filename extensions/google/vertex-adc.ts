@@ -28,11 +28,6 @@ type GoogleVertexAuthorizedUserToken = {
   refreshToken: string;
 };
 
-type GoogleVertexAdcToken = {
-  token: string;
-  expiresAtMs: number;
-};
-
 type GoogleOauthTokenResponsePayload = {
   access_token?: unknown;
   expires_in?: unknown;
@@ -48,19 +43,13 @@ const GOOGLE_VERTEX_ADC_TOKEN_REFRESH_TIMEOUT_MS = 30_000;
 // leaves the gateway.
 const GOOGLE_VERTEX_TOKEN_EXPIRY_BUFFER_MS = 60_000;
 const GOOGLE_VERTEX_DEFAULT_TOKEN_LIFETIME_SECONDS = 3600;
-const GOOGLE_VERTEX_AUTHLIB_TOKEN_CACHE_MS = 5 * 60_000;
 const GOOGLE_OAUTH_TOKEN_RESPONSE_MAX_BYTES = 1024 * 1024;
 const VERTEX_ADC_TEST_API_KEY = Symbol.for("openclaw.google.vertexAdcTestApi");
 
 let cachedGoogleVertexAuthorizedUserToken: GoogleVertexAuthorizedUserToken | undefined;
 let cachedGoogleAuthClient:
-  | {
-      promise: Promise<{
-        getAccessToken: () => Promise<string | null | undefined>;
-      }>;
-    }
+  | Promise<{ getAccessToken: () => Promise<string | null | undefined> }>
   | undefined;
-let cachedGoogleVertexAdcToken: GoogleVertexAdcToken | undefined;
 
 function isGoogleVertexTokenFresh(expiresAtMsRaw: number, nowRaw = Date.now()): boolean {
   const expiresAtMs = asDateTimestampMs(expiresAtMsRaw);
@@ -87,17 +76,9 @@ function resolveAuthorizedUserTokenExpiresAtMs(value: unknown, nowRaw: number): 
   return resolveExpiresAtMsFromDurationSeconds(lifetimeSeconds, { nowMs }) ?? nowMs;
 }
 
-function resolveGoogleAuthLibraryTokenExpiresAtMs(nowRaw = Date.now()): number | undefined {
-  const nowMs = asDateTimestampMs(nowRaw);
-  return nowMs === undefined
-    ? undefined
-    : resolveExpiresAtMsFromDurationMs(GOOGLE_VERTEX_AUTHLIB_TOKEN_CACHE_MS, { nowMs });
-}
-
 function resetGoogleVertexAuthorizedUserTokenCacheForTest(): void {
   cachedGoogleVertexAuthorizedUserToken = undefined;
   cachedGoogleAuthClient = undefined;
-  cachedGoogleVertexAdcToken = undefined;
 }
 
 if (process.env.VITEST) {
@@ -126,9 +107,11 @@ async function refreshGoogleVertexAuthorizedUserAccessToken(params: {
   credentials: GoogleAuthorizedUserCredentials;
   fetchImpl?: typeof fetch;
 }): Promise<string> {
-  const clientId = normalizeOptionalString(params.credentials.client_id);
-  const clientSecret = normalizeOptionalString(params.credentials.client_secret);
-  const refreshToken = normalizeOptionalString(params.credentials.refresh_token);
+  const {
+    client_id: clientId,
+    client_secret: clientSecret,
+    refresh_token: refreshToken,
+  } = params.credentials;
   if (!clientId || !clientSecret || !refreshToken) {
     throw new Error(
       "Google Vertex authorized_user ADC is missing client_id, client_secret, or refresh_token.",
@@ -258,33 +241,20 @@ async function resolveGoogleVertexAccessTokenViaGoogleAuth(
   // Lazy-import + cache so we don't pay the google-auth-library load cost on
   // gateway startup; only when we actually need a non-authorized_user token.
   if (!cachedGoogleAuthClient) {
-    cachedGoogleAuthClient = {
-      promise: import("google-auth-library").then(({ GoogleAuth }) => {
-        // GoogleAuth handles every ADC variant we care about for GKE:
-        // - external_account (Workload Identity Federation: STS exchange)
-        // - service_account (raw GSA key: JWT-bearer)
-        // - GKE Workload Identity (metadata server when no credentials file)
-        // - Compute Engine / Cloud Run / GAE metadata server fallback
-        // It also caches tokens internally and refreshes before expiry.
-        return new GoogleAuth({
+    cachedGoogleAuthClient = import("google-auth-library").then(
+      ({ GoogleAuth }) =>
+        new GoogleAuth({
           scopes: [GOOGLE_VERTEX_OAUTH_SCOPE],
           ...(adcConfig ? { credentials: adcConfig } : {}),
-          // Best-effort cancellation for clients that use the shared transporter.
-          // WIF STS and GCE metadata need the owner-level deadline below.
+          // WIF STS and GCE metadata also need the owner-level deadline below.
           clientOptions: {
             transporterOptions: { timeout: GOOGLE_VERTEX_ADC_TOKEN_REFRESH_TIMEOUT_MS },
           },
-        });
-      }),
-    };
+        }),
+    );
   }
   const authClient = cachedGoogleAuthClient;
-  const auth = await authClient.promise;
-
-  const cached = cachedGoogleVertexAdcToken;
-  if (cached && isGoogleVertexTokenFresh(cached.expiresAtMs)) {
-    return cached.token;
-  }
+  const auth = await authClient;
 
   // Some google-auth-library ADC implementations bypass the configured Gaxios
   // transporter, so this owner-level deadline also bounds STS and metadata paths.
@@ -312,17 +282,6 @@ async function resolveGoogleVertexAccessTokenViaGoogleAuth(
         "Verify the GKE Workload Identity binding (KSA \u2192 GSA), `GOOGLE_APPLICATION_CREDENTIALS`, " +
         "or other ADC source is reachable from this pod.",
     );
-  }
-  // google-auth-library doesn't expose token expiry on the simple
-  // `getAccessToken()` return type, so we cache for a conservative 5 minutes.
-  // The library itself already refreshes well before its own internal expiry,
-  // so this cache is mainly to avoid hot-loop calls into the auth client.
-  const expiresAtMs = resolveGoogleAuthLibraryTokenExpiresAtMs();
-  if (expiresAtMs !== undefined) {
-    cachedGoogleVertexAdcToken = {
-      token: normalized,
-      expiresAtMs,
-    };
   }
   return normalized;
 }

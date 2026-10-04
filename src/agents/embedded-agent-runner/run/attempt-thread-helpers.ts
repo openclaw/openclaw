@@ -99,23 +99,3 @@ export async function appendAttemptCacheTtlIfNeeded(params: {
   params.toolResultPromptProjectionState.lastWrittenSnapshotHash = hash;
   return true;
 }
-
-/**
- * Records completed bootstrap turns only after a clean, non-compaction attempt.
- * Failed, aborted, or compaction-mutated turns are not stable bootstrap history.
- */
-export function shouldPersistCompletedBootstrapTurn(params: {
-  shouldRecordCompletedBootstrapTurn: boolean;
-  promptError: unknown;
-  aborted: boolean;
-  timedOutDuringCompaction: boolean;
-  compactionOccurredThisAttempt: boolean;
-}): boolean {
-  if (!params.shouldRecordCompletedBootstrapTurn || params.promptError || params.aborted) {
-    return false;
-  }
-  if (params.timedOutDuringCompaction || params.compactionOccurredThisAttempt) {
-    return false;
-  }
-  return true;
-}

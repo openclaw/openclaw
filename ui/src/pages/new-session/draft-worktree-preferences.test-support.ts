@@ -9,6 +9,7 @@ export function identityPreferences(
   identified = true,
   modelCatalog?: NonNullable<Parameters<typeof createDraftFixture>[0]>["modelCatalog"],
   initialEntries?: Record<string, unknown>,
+  profileId = "person-a",
 ) {
   let entries: Record<string, unknown> = initialEntries ?? {
     "new-session.migration.v1": true,
@@ -40,7 +41,7 @@ export function identityPreferences(
   const beforeRead = vi.fn(async () => {});
   const options = {
     modelCatalog,
-    ...(identified ? { selfUser: { id: "person-a" } } : {}),
+    ...(identified ? { selfUser: { id: profileId } } : {}),
     scopes: ["operator.admin", "operator.read", "operator.write"],
     methods: ["sessions.create", "sessions.dispatch", "users.prefs.get", "users.prefs.set"],
     agents: [

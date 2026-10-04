@@ -10,6 +10,12 @@ import type {
   WorkspaceAttestation,
   WorkspaceAttestationInput,
 } from "../agents/workspace-state-store.kernel.js";
+import type {
+  WorkspaceStateGuard,
+  WorkspaceStateWorkerOperations,
+} from "../agents/workspace-state-store.worker-contract.js";
+import type { reserveWorktreeCapacityInWorker } from "../agents/worktrees/capacity.worker.js";
+import type { WorktreeTemplateWorkerOperations } from "../agents/worktrees/template-registry.worker.js";
 import type { ClawInstallSchemaVersionRow } from "../claws/provenance-runtime-read.kernel.js";
 import type { ConfigHealthPatch } from "../config/io.health-state.kernel.js";
 import type {
@@ -46,6 +52,7 @@ import type { PluginMetadataStateSelector } from "../plugins/installed-plugin-in
 import type { CaptureWorkerOperations } from "../proxy-capture/store.worker-contract.js";
 import type { SecretStoreConfigRefWrite } from "../secrets/store/secret-store-config-ref.kernel.js";
 import type { SecretStoreExpiryCutoffs } from "../secrets/store/secret-store-expiry.kernel.js";
+import type * as secretWrites from "../secrets/store/secret-store-write.js";
 import type { SessionStateWorkerOperations } from "../sessions/session-state-events.worker-contract.js";
 import type { SessionUpstreamLink } from "../sessions/session-upstream-links.kernel.js";
 import type { SessionUpstreamWorkerOperations } from "../sessions/session-upstream-links.worker-contract.js";
@@ -68,6 +75,8 @@ export type OpenClawStateWorkerOpenPreparation = { type: "deviceIdentity"; ident
 
 /** Commands share one physical shared-state actor; bindings belong to commands, not open input. */
 export type OpenClawStateWorkerOperations = RegisteredStateWorkerOperations &
+  WorktreeTemplateWorkerOperations &
+  WorkspaceStateWorkerOperations &
   UpdateRunReconciliationOperations &
   UpdateRunWriteOperations &
   CaptureWorkerOperations &
@@ -79,13 +88,17 @@ export type OpenClawStateWorkerOperations = RegisteredStateWorkerOperations &
   CronStateWorkerOperations &
   TranscriptReadOperations &
   OpenClawStateLeaseLifecycleOperations & {
+    "worktrees.reserveCapacity": {
+      input: Parameters<typeof reserveWorktreeCapacityInWorker>[0];
+      output: ReturnType<typeof reserveWorktreeCapacityInWorker>;
+    };
     "database.walMaintenance": { input: SqliteWalPeriodicRequest; output: SqliteWalPeriodicResult };
     "deviceIdentity.read": { input: { identityKey: string }; output: DeviceIdentity | null };
     "deviceIdentity.load": { input: { identityKey: string }; output: DeviceIdentity };
     "sandboxRegistry.insertIfMissing": { input: SandboxRegistryInsert; output: void };
     "sandboxRegistry.write": { input: SandboxRegistryWrite; output: void };
     "workspace.replaceAttestation": {
-      input: WorkspaceAttestationInput;
+      input: WorkspaceAttestationInput & Pick<WorkspaceStateGuard, "recoveryHoldPredicate">;
       output: WorkspaceAttestation;
     };
     "updateRuns.reconcileInterrupted": {
@@ -146,6 +159,24 @@ export type OpenClawStateWorkerOperations = RegisteredStateWorkerOperations &
       output: AgentProvenance[];
     };
     "agentProvenance.list": { input: undefined; output: AgentProvenance[] };
+    "secrets.write": {
+      input: Omit<secretWrites.SecretStoreBatchWriteParams, "database"> & {
+        capturePrevious: boolean;
+        now: number;
+      };
+      output: secretWrites.SecretStoreWriteResult[];
+    };
+    "secrets.rollback": {
+      input: Omit<
+        Parameters<typeof secretWrites.rollbackSecretStoreEntryWriteInDatabase>[0],
+        "database"
+      >;
+      output: boolean;
+    };
+    "secrets.delete": {
+      input: Omit<Parameters<typeof secretWrites.deleteSecretStoreEntryInDatabase>[0], "database">;
+      output: void;
+    };
     "secrets.purge": { input: SecretStoreExpiryCutoffs; output: number };
     "secrets.writeForConfigRef": {
       input: SecretStoreConfigRefWrite;
@@ -214,8 +245,10 @@ export type OpenClawStateWorkerRuntimeCommand = Exclude<
       | "database.inspectIdle"
       | "database.walMaintenance"
       | "agentDatabases.releaseExitedLease"
+      | "worktrees.reserveCapacity"
       | keyof CaptureWorkerOperations
       | keyof PluginStateWorkerOperations
+      | keyof WorktreeTemplateWorkerOperations
       | keyof OpenClawStateLeaseLifecycleOperations;
   }
 >;

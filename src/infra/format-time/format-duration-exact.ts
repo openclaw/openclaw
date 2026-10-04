@@ -1,5 +1,5 @@
 import { durationUnitMs } from "./duration-units.ts";
-import type { DurationPart } from "./format-duration-internal.js";
+import { formatDurationParts, type DurationPart } from "./format-duration-internal.ts";
 
 // Exact display stays outside startup formatting; health uses weeks, cron uses days.
 export function resolveExactDurationParts(ms?: number | null, showWeeks = false) {
@@ -19,9 +19,6 @@ export function resolveExactDurationParts(ms?: number | null, showWeeks = false)
 }
 
 export function formatExactDuration(ms: number, fallback = "n/a", showWeeks = false): string {
-  return (
-    resolveExactDurationParts(ms, showWeeks)
-      ?.map(({ value, unit }) => `${value}${unit === "millisecond" ? "ms" : unit[0]}`)
-      .join(" ") ?? fallback
-  );
+  const parts = resolveExactDurationParts(ms, showWeeks);
+  return parts ? formatDurationParts(parts) : fallback;
 }

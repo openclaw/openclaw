@@ -35,7 +35,10 @@ import {
   prepareSessionSystemPrompt,
 } from "../session-prompt-state.js";
 import { normalizeMessagesForLlmBoundary } from "./attempt-llm-boundary.js";
-import { buildRuntimeContextCustomMessage } from "./runtime-context-prompt.js";
+import {
+  attachSteeringRuntimeContext,
+  buildRuntimeContextCustomMessage,
+} from "./runtime-context-prompt.js";
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-99495-boundary-");
 const TS = 1717570800000;
@@ -396,6 +399,42 @@ describe("prompt-cache boundary regressions", () => {
         next,
       ).continuationStatus,
     ).toBe("history_changed");
+  });
+
+  it("keeps batched steering context with its owning user through Responses conversion", async () => {
+    const firstSteering = user("first steering user", TS + 60000);
+    attachSteeringRuntimeContext(firstSteering, {
+      text: "first steering context",
+      fragments: [{ kind: "conversation-data", text: "first steering context" }],
+    });
+    const secondSteering = user("second steering user", TS + 120000);
+    attachSteeringRuntimeContext(secondSteering, {
+      text: "second steering context",
+      fragments: [{ kind: "conversation-data", text: "second steering context" }],
+    });
+
+    const request = await capture("openai-responses", [
+      carrier("original context"),
+      user("original question"),
+      { ...answer, api: "openai-responses", provider: model.provider, model: model.id },
+      firstSteering,
+      secondSteering,
+    ]);
+    const input = JSON.stringify(request.input);
+    const orderedText = [
+      "original question",
+      "I understand.",
+      "first steering user",
+      "first steering context",
+      "second steering user",
+      "second steering context",
+    ];
+    let previousIndex = -1;
+    for (const text of orderedText) {
+      const index = input.indexOf(text);
+      expect(index, text).toBeGreaterThan(previousIndex);
+      previousIndex = index;
+    }
   });
 
   it("keeps persisted group sender bytes identical from the active array form to historical replay", () => {

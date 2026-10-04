@@ -20,7 +20,8 @@ Read only the references needed for the selected phase:
 - Validation selection or failed proof: [validation and confidence](references/validation.md), with `$release-openclaw-ci` for workflow execution and immutable manifests.
 - Interrupted publication or registry promotion: [publication recovery](references/publication-recovery.md).
 - Native assets: [platform publication](references/platform-publication.md), with `$release-openclaw-mac` for macOS operations.
-- Stable postpublish synchronization: [main closeout](references/stable-main-closeout.md).
+- Stable postpublish synchronization and the exact-SHA deployment handoff:
+  [main closeout](references/stable-main-closeout.md).
 - Release notes: `$openclaw-changelog-update`, including its separate approved post-release docs-mirror route. Initial release generation keeps its existing format; docs publication does not run automatically during release. Requested announcements: `$release-openclaw-announcement` for Discord, `$release-tweets` for X. Announcements never gate publication and require explicit posting authorization.
 - Published artifact verification: `$verify-release`. GHSA operations: `$openclaw-ghsa-maintainer` only with explicit security-workflow authorization.
 

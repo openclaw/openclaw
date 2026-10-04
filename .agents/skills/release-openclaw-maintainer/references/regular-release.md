@@ -233,7 +233,8 @@ Keep their exact run/attempt identities in the handoff's publication rows.
 For a complete regular beta or stable release, use `OpenClaw Release Prepare`
 before publication and `OpenClaw Release Button` when ready to publish. Both run
 from the same frozen `release-publish/<sha12>-<id>` tooling tag. The existing
-release tag, successful npm preflight, exact Full Release Validation attempt,
+release tag, exact Full Release Validation attempt with sealed core and plugin
+npm artifacts,
 reviewed SDK evidence, and any explicitly selected Windows source evidence
 must already be available. The publisher consumes sealed acknowledgement defaults;
 the candidate helper retains its explicit SDK acknowledgement argument. This does not create a version or release tag.
@@ -241,10 +242,11 @@ the candidate helper retains its explicit SDK acknowledgement argument. This doe
 Run `pnpm release:candidate` with `--publish-workflow-ref` set to that protected
 tag. Its evidence bundle and terminal output include a **prepare once** command
 for complete regular releases. After creating the frozen release tag, run that
-command. It dispatches the existing npm and ClawHub preflight workflows in
-parallel, builds and qualifies their final package bytes, and seals a readiness
-receipt only after every package can be downloaded and verified. Preparation
-does not publish packages or change public selectors.
+command. It adopts the plugin npm artifact qualified by Full Release Validation,
+dispatches the ClawHub preflight, and seals both immutable descriptors into a
+readiness receipt only after every package can be downloaded and verified.
+Preparation does not rebuild plugin npm tarballs, publish packages, or change
+public selectors.
 
 ClawHub packages needing publication or adoption must have the normal
 trusted-publisher binding. Use the existing ClawHub owner workflow to finish

@@ -552,7 +552,7 @@ export async function archiveLegacyMeetingTranscriptSnapshots(params: {
   expectedRelativeDirs: string[];
   canonicalRelativeDirs: string[];
   archiveRoot: string;
-}): Promise<string> {
+}): Promise<void> {
   await validateMeetingTranscriptRoot(params.sourceRoot);
   const currentRelativeDirs = await listLegacyMeetingTranscriptSessionDirs(params.sourceRoot);
   const expectedRelativeDirs = params.expectedRelativeDirs.toSorted((a, b) => a.localeCompare(b));
@@ -580,7 +580,6 @@ export async function archiveLegacyMeetingTranscriptSnapshots(params: {
   } catch (error) {
     throw new LegacyMeetingTranscriptArchiveMovedError(error);
   }
-  return params.archiveRoot;
 }
 
 export class LegacyMeetingTranscriptArchiveMovedError extends Error {
@@ -705,16 +704,4 @@ export async function restoreCanonicalMeetingTranscriptExports(params: {
     await fs.mkdir(path.dirname(destination), { recursive: true });
     await fs.rename(source, destination);
   }
-}
-
-export async function archiveDivergentMeetingTranscriptExport(params: {
-  sourceRoot: string;
-  relativeDir: string;
-  recoveryRoot: string;
-}): Promise<string> {
-  const source = path.join(params.sourceRoot, params.relativeDir);
-  const destination = path.join(params.recoveryRoot, params.relativeDir);
-  await fs.mkdir(path.dirname(destination), { recursive: true });
-  await fs.rename(source, destination);
-  return destination;
 }

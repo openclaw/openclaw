@@ -424,59 +424,39 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
     },
   );
 
-  it("blocks ack-only ClawSweeper evidence before intent", () => {
-    const f = fixture();
-    f.save({
-      ...f.state(),
-      issueComments: [
+  it.each(["ack-only", "removed", "unavailable"])(
+    "rejects %s ClawSweeper review evidence before intent",
+    (fault) => {
+      const f = fixture();
+      const comments = [
         {
-          id: 1,
+          id: fault === "ack-only" ? 1 : 2,
           body: "<!-- clawsweeper-pr-ack:opened item=123 -->",
           user: { id: 274271284, login: "clawsweeper[bot]", type: "Bot" },
         },
-      ],
-    });
-
-    const run = f.run();
-
-    expect(run.status, run.output).toBe(1);
-    expect(f.state().mutations).toBe(0);
-    expect(() => f.record()).toThrow();
-  });
-
-  it("revalidates removed review evidence immediately before intent", () => {
-    const f = fixture();
-    f.save({
-      ...f.state(),
-      issueCommentsAfterFirst: [
-        {
-          id: 2,
-          body: "<!-- clawsweeper-pr-ack:opened item=123 -->",
-          user: { id: 274271284, login: "clawsweeper[bot]", type: "Bot" },
-        },
-      ],
-    });
-
-    const run = f.run();
-
-    expect(run.status, run.output).toBe(1);
-    expect(run.output).toContain("ClawSweeper review gate failed: completed review is missing.");
-    expect(f.state().issueCommentReads).toBe(2);
-    expect(f.state().mutations).toBe(0);
-    expect(() => f.record()).toThrow();
-  });
-
-  it("fails closed when the final review comment read is unavailable", () => {
-    const f = fixture();
-    f.save({ ...f.state(), issueCommentsErrorAt: 2 });
-
-    const run = f.run();
-
-    expect(run.status, run.output).toBe(1);
-    expect(run.output).toContain("unable to read current issue comments");
-    expect(f.state().mutations).toBe(0);
-    expect(() => f.record()).toThrow();
-  });
+      ];
+      f.save({
+        ...f.state(),
+        ...(fault === "ack-only"
+          ? { issueComments: comments }
+          : fault === "removed"
+            ? { issueCommentsAfterFirst: comments }
+            : { issueCommentsErrorAt: 2 }),
+      });
+      const run = f.run();
+      expect(run.status, run.output).toBe(1);
+      if (fault === "removed") {
+        expect(run.output).toContain(
+          "ClawSweeper review gate failed: completed review is missing.",
+        );
+        expect(f.state().issueCommentReads).toBe(2);
+      } else if (fault === "unavailable") {
+        expect(run.output).toContain("unable to read current issue comments");
+      }
+      expect(f.state().mutations).toBe(0);
+      expect(() => f.record()).toThrow();
+    },
+  );
 
   it("retains the newest completion at final admission regardless of review age", () => {
     const f = fixture();

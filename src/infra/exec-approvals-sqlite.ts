@@ -7,6 +7,7 @@ import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-
 import { sha256Hex } from "./crypto-digest.js";
 import { formatErrorMessage } from "./errors.js";
 import {
+  createFailClosedExecApprovalsFallback,
   LEGACY_EXEC_APPROVALS_DIAGNOSTIC,
   normalizeExecApprovalsInternal,
   parsePersistedExecApprovals,
@@ -154,18 +155,7 @@ export function snapshotFromExecApprovalsRow(params: {
     path: params.path,
     exists: true,
     raw,
-    file:
-      parsed ??
-      normalizeExecApprovalsInternal({
-        version: 1,
-        defaults: {
-          security: "deny",
-          ask: "off",
-          askFallback: "deny",
-          autoAllowSkills: false,
-        },
-        agents: {},
-      }),
+    file: parsed ?? createFailClosedExecApprovalsFallback(),
     hash: hashExecApprovalsRaw(raw),
   };
 }
@@ -206,7 +196,6 @@ export function writeExecApprovalsConfigRow(params: {
       ? serializeExecApprovals(normalized)
       : authored);
   const values = {
-    config_key: EXEC_APPROVALS_CONFIG_KEY,
     raw_json: raw,
     ...projectionValues(normalized),
     updated_at_ms: params.now ?? Date.now(),
@@ -215,21 +204,8 @@ export function writeExecApprovalsConfigRow(params: {
     params.db,
     getNodeSqliteKysely<ExecApprovalsDatabase>(params.db)
       .insertInto("exec_approvals_config")
-      .values(values)
-      .onConflict((conflict) =>
-        conflict.column("config_key").doUpdateSet({
-          raw_json: values.raw_json,
-          socket_path: values.socket_path,
-          has_socket_token: values.has_socket_token,
-          default_security: values.default_security,
-          default_ask: values.default_ask,
-          default_ask_fallback: values.default_ask_fallback,
-          auto_allow_skills: values.auto_allow_skills,
-          agent_count: values.agent_count,
-          allowlist_count: values.allowlist_count,
-          updated_at_ms: values.updated_at_ms,
-        }),
-      ),
+      .values({ config_key: EXEC_APPROVALS_CONFIG_KEY, ...values })
+      .onConflict((conflict) => conflict.column("config_key").doUpdateSet(values)),
   );
   return raw;
 }

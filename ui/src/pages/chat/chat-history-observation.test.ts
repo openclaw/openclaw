@@ -399,7 +399,7 @@ describe("history descriptor observation order", () => {
       const joinedState = h.makeState();
       const joined = h.begin(joinedState, method === "chat.startup");
       expect(h.reads).toHaveLength(1);
-      await vi.advanceTimersByTimeAsync(249);
+      await vi.advanceTimersByTimeAsync(499);
       expect(h.reads).toHaveLength(1);
       await vi.advanceTimersByTimeAsync(1);
       expect(h.reads).toHaveLength(2);
@@ -521,7 +521,7 @@ describe("history descriptor observation order", () => {
         await vi.advanceTimersByTimeAsync(0);
         await h.refreshManaged({ ...initial, updatedAt: 5, label: "Between startup attempts" });
         expect(h.managedRow()?.label).toBe("Between startup attempts");
-        await vi.advanceTimersByTimeAsync(249);
+        await vi.advanceTimersByTimeAsync(499);
         expect(h.reads).toHaveLength(1);
         await vi.advanceTimersByTimeAsync(1);
         expect(h.reads).toHaveLength(2);

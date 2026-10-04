@@ -1,15 +1,18 @@
 import { randomUUID } from "node:crypto";
 import { realpathSync } from "node:fs";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { withWorktreeGitConfig } from "../../agents/worktrees/checkout-git-config.js";
+import type { SandboxConfig } from "../../agents/sandbox/types.js";
+import type { WorktreeAllocationGuard } from "../../agents/worktrees/allocation.js";
 import { requireGit } from "../../agents/worktrees/git.js";
 import {
   getRegistryWorktree,
   findLiveRegistryWorktreeByPath,
 } from "../../agents/worktrees/registry.js";
-import type { ManagedWorktreeRecord } from "../../agents/worktrees/types.js";
+import type {
+  ManagedWorktreeRecord,
+  WorktreeWorkerAuthority,
+} from "../../agents/worktrees/types.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import { resolveStateDir } from "../../config/state-dir.js";
@@ -17,6 +20,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { withOpenClawStateLease } from "../../state/openclaw-state-lease.js";
 import { localWorkspaceArchiveOperations } from "./local-workspace-archive.js";
+import { prepareLocalWorkspaceCheckout } from "./local-workspace-checkout.js";
 import {
   admitLocalWorkspaceSourcePaths,
   selectLocalWorkspaceCanonicalPaths,
@@ -24,7 +28,6 @@ import {
 import { localWorkspaceStore, type LocalWorkspaceProjection } from "./local-workspace-store.js";
 import type { LocalWorkspaceOwner } from "./local-workspace-types.js";
 import { AcceptedWorkspacePublicationIndeterminateError } from "./workspace-accepted-publication.js";
-import { prepareWorkerWorkspaceGitPack } from "./workspace-git-base.js";
 import { captureWorkspaceSnapshot } from "./workspace-manifest-worker.js";
 import {
   parseWorkerWorkspaceManifest,
@@ -44,7 +47,6 @@ import {
   withStagedWorkerWorkspaceResult,
   deleteStagedWorkerWorkspaceResult,
 } from "./workspace-result-staging.js";
-import { runWorkspaceInventoryCommandToFile } from "./workspace-sync-inventory.js";
 
 type Direction = "canonical" | "projection";
 
@@ -52,6 +54,7 @@ type LocalWorkspaceCustody = {
   prepareArchive: (snapshot: string) => Promise<void>;
   canonicalPaths: () => Promise<Set<string>>;
   assertCurrent: () => void;
+  workerAuthority: WorktreeWorkerAuthority;
 };
 
 /** Publication and lifecycle callers retain their own authority while joining local settlement. */
@@ -60,6 +63,7 @@ export async function withSettledLocalWorkspace<T>(
     worktree: ManagedWorktreeRecord;
     env?: NodeJS.ProcessEnv;
     assertCurrent?: () => void;
+    workerAuthority?: WorktreeWorkerAuthority;
     retireRuntime?: boolean;
     restoreSnapshot?: boolean;
     finishRestore?: boolean;
@@ -79,6 +83,22 @@ export async function withSettledLocalWorkspace<T>(
     sessionKey: row.session_key,
     sessionId: row.session_id,
     lifecycleRevision: row.lifecycle_revision,
+    workerAuthority: {
+      ...params.workerAuthority,
+      assertCurrent: params.workerAuthority
+        ? params.workerAuthority.assertCurrent
+        : params.assertCurrent,
+      predicates: [
+        ...(params.workerAuthority?.predicates ?? []),
+        {
+          kind: "projection",
+          id: worktree.id,
+          ownerId: row.session_key,
+          path: worktree.path,
+          repoRoot: worktree.repoRoot,
+        },
+      ],
+    },
     assertCurrent: () => {
       params.assertCurrent?.();
       const current = getRegistryWorktree(params.env ?? process.env, worktree.id);
@@ -115,6 +135,7 @@ export async function withSettledLocalWorkspace<T>(
             prepareArchive: state.prepareArchive,
             canonicalPaths: state.canonicalPaths,
             assertCurrent: state.current,
+            workerAuthority: state.workerAuthority,
           }
         : undefined,
     );
@@ -219,7 +240,22 @@ export async function withLocalWorkspaceProjection<T>(
           assertCurrent,
         );
       }
-      const operations = projectionOperations({ ...owner, assertCurrent }, lease.signal);
+      const operations = projectionOperations(
+        {
+          ...owner,
+          assertCurrent,
+          workerAuthority: {
+            ...owner.workerAuthority,
+            assertCurrent: () => {
+              lease.assertOwned();
+              (owner.workerAuthority
+                ? owner.workerAuthority.assertCurrent
+                : owner.assertCurrent)?.();
+            },
+          },
+        },
+        lease.signal,
+      );
       const { quiesceLocalWorkspace, parseLocalWorkspacePausedRuntimes } =
         await import("../../agents/sandbox/local-workspace-quiescence.js");
       const quiescence =
@@ -249,11 +285,11 @@ export async function withLocalWorkspaceProjection<T>(
 function projectionOperations(owner: LocalWorkspaceOwner, signal: AbortSignal) {
   const store = localWorkspaceStore(owner.env);
   let row = store.get(owner.worktree.id);
-  const current = () => {
+  const selectCurrent = (authority: LocalWorkspaceOwner) => {
     if (!row) {
       throw new Error("Local workspace binding is missing");
     }
-    assertBinding(row, owner);
+    assertBinding(row, authority);
     if (
       row.projection_path !== projectionPath(owner) ||
       store.revision(row.worktree_id) !== row.revision
@@ -261,6 +297,12 @@ function projectionOperations(owner: LocalWorkspaceOwner, signal: AbortSignal) {
       throw new Error("Local workspace binding changed");
     }
     return row;
+  };
+  const current = () => selectCurrent(owner);
+  const workerAuthority: WorktreeWorkerAuthority = {
+    ...owner.workerAuthority,
+    assertCurrent: () =>
+      selectCurrent({ ...owner, assertCurrent: () => owner.workerAuthority?.assertCurrent?.() }),
   };
   const update = (patch: Parameters<typeof store.update>[1]) => {
     row = store.update(current(), patch, current);
@@ -450,7 +492,10 @@ function projectionOperations(owner: LocalWorkspaceOwner, signal: AbortSignal) {
     update({ pending_ref: workerWorkspaceResultRef(randomUUID()), pending_target: target });
     await settle();
   };
-  const prepare = async () => {
+  const prepare = async (dependencies?: {
+    sandbox: SandboxConfig;
+    allocation: WorktreeAllocationGuard;
+  }) => {
     if (!row) {
       const baseCommit = await requireGit(
         owner.worktree.path,
@@ -496,75 +541,40 @@ function projectionOperations(owner: LocalWorkspaceOwner, signal: AbortSignal) {
       await fs.rm(selected.projection_path, { recursive: true, force: true });
       const temporary = await fs.mkdtemp(path.join(parent, ".prepare-"));
       try {
-        const pack = await withWorktreeGitConfig(
-          owner.worktree.path,
-          true,
-          {
-            signal,
-            beforeRun: current,
-          },
-          (git) =>
-            git.withContentEnvironment((baseEnv) =>
-              prepareWorkerWorkspaceGitPack({
-                root: owner.worktree.path,
-                baseCommit: selected.base_commit,
-                temporaryRoot: temporary,
-                signal,
-                baseEnv,
-              }),
-            ),
-        );
-        current();
         const repo = path.join(temporary, "workspace");
-        await fs.mkdir(repo, { mode: 0o700 });
-        const cleanEnv = {
-          PATH: process.env.PATH,
-          HOME: temporary,
-          GIT_CONFIG_NOSYSTEM: "1",
-          GIT_CONFIG_GLOBAL: os.devNull,
-          GIT_CONFIG_SYSTEM: os.devNull,
-          GIT_NO_REPLACE_OBJECTS: "1",
-          GIT_TERMINAL_PROMPT: "0",
-        };
-        const git = (args: string[], input?: Uint8Array) =>
-          requireGit(repo, args, {
-            baseEnv: cleanEnv,
-            env: cleanEnv,
-            input,
-            signal,
-            beforeRun: current,
-          });
-        await git([
-          "init",
-          "--quiet",
-          "--template=",
-          "--object-format=" + (selected.base_commit.length === 40 ? "sha1" : "sha256"),
-        ]);
-        current();
-        await runWorkspaceInventoryCommandToFile({
-          argv: [
-            "git",
-            "-c",
-            "core.hooksPath=" + os.devNull,
-            "-c",
-            "core.fsmonitor=false",
-            "-C",
-            repo,
-            "index-pack",
-            "--stdin",
-          ],
-          inputPath: pack,
-          outputPath: path.join(temporary, "index-pack-result"),
-          baseEnv: cleanEnv,
+        const checkout = {
+          source: owner.worktree.path,
+          destination: repo,
+          temporaryRoot: temporary,
+          baseCommit: selected.base_commit,
+          branch: owner.worktree.branch,
           signal,
-          timeoutMs: 300_000,
-          maxOutputBytes: 4096,
-        });
-        current();
-        await fs.writeFile(path.join(repo, ".git", "shallow"), selected.base_commit + "\n", {
-          mode: 0o600,
-        });
-        await git(["checkout", "--quiet", "-b", owner.worktree.branch, selected.base_commit]);
+          assertCurrent: current,
+        };
+        const cloned =
+          dependencies &&
+          (await (
+            await import("./local-workspace-template.js")
+          ).cloneLocalWorkspaceTemplate({
+            ...checkout,
+            repoRoot: owner.worktree.repoRoot,
+            templateRoot: path.dirname(parent),
+            env: owner.env ?? process.env,
+            sandbox: dependencies.sandbox,
+            guard: {
+              ...dependencies.allocation,
+              signal: dependencies.allocation.signal
+                ? AbortSignal.any([signal, dependencies.allocation.signal])
+                : signal,
+              commitGuard: () => {
+                dependencies.allocation.commitGuard();
+                current();
+              },
+            },
+          }));
+        if (!cloned) {
+          await prepareLocalWorkspaceCheckout(checkout);
+        }
         const initial = await captureWorkspaceSnapshot({
           root: repo,
           baseCommit: selected.base_commit,
@@ -584,8 +594,10 @@ function projectionOperations(owner: LocalWorkspaceOwner, signal: AbortSignal) {
   };
   return {
     current,
+    workerAuthority,
     canonicalPaths,
     prepare,
+    reuse: async () => (row?.baseline_ref ? await prepare() : undefined),
     synchronize,
     settle,
     recover,

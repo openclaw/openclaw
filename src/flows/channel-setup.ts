@@ -60,7 +60,7 @@ import {
   noteChannelPrimer,
   resolveCatalogChannelSelectionHint,
   resolveChannelSelectionNoteLines,
-  resolveChannelSetupSelectionContributions,
+  resolveChannelSetupSelectionOptions,
   resolveChannelSetupWorkspaceDir,
   resolveQuickstartDefault,
 } from "./channel-setup.status.js";
@@ -360,7 +360,7 @@ export async function setupChannels(
     return decorated;
   };
 
-  const resolveSelectionContributions = () =>
+  const resolveSelectionOptions = () =>
     withCommandPluginMetadata({ config: next, workspaceDir: resolveWorkspaceDir() }, async () => {
       const { entries, installableCatalogById: catalogById } = resolveVisibleChannelEntries();
       const disabledHints = new Map<ChannelChoice, string | undefined>();
@@ -369,7 +369,7 @@ export async function setupChannels(
           disabledHints.set(entry.id, await resolveDisabledHint(entry.id));
         }
       }
-      return resolveChannelSetupSelectionContributions({
+      return resolveChannelSetupSelectionOptions({
         entries,
         statusByChannel: buildStatusByChannelForSelection(catalogById),
         resolveDisabledHint: (channel) => disabledHints.get(channel),
@@ -855,7 +855,7 @@ export async function setupChannels(
     const skipValue = "__skip__" as const;
     const quickstartInitialValue = options?.initialSelection?.[0] ?? skipValue;
     while (true) {
-      const contributions = await resolveSelectionContributions();
+      const selectionOptions = await resolveSelectionOptions();
       const choice = await prompter.select({
         message: t("wizard.channels.selectQuickstart"),
         options: [
@@ -866,7 +866,7 @@ export async function setupChannels(
               command: formatCliCommand("openclaw channels add"),
             }),
           },
-          ...contributions.map((contribution) => contribution.option),
+          ...selectionOptions,
         ],
         initialValue: quickstartInitialValue,
         searchable: true,
@@ -882,11 +882,11 @@ export async function setupChannels(
     const doneValue = "__done__" as const;
     const initialValue = options?.initialSelection?.[0] ?? quickstartDefault;
     while (true) {
-      const contributions = await resolveSelectionContributions();
+      const selectionOptions = await resolveSelectionOptions();
       const choice = await prompter.select({
         message: t("wizard.channels.select"),
         options: [
-          ...contributions.map((contribution) => contribution.option),
+          ...selectionOptions,
           {
             value: doneValue,
             label: t("common.finished"),

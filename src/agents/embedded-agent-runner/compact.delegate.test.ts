@@ -175,7 +175,7 @@ async function createFixture(operation: "summary" | "endpoint", globalAlias = fa
       session: { store: configuredStore },
       agents: {
         ownership: "explicit",
-        list: [{ id: "main" }, { id: "marketing" }],
+        entries: { main: {}, marketing: {} },
         defaults: { compaction: { mode: "default", keepRecentTokens: 1, postIndexSync: "off" } },
       },
     },
@@ -455,12 +455,9 @@ describe("direct compactor through the context-engine delegate", () => {
     "keeps queued manual %s compaction countable when cancellation follows its commit during a post-compaction hook",
     async (operation) => {
       const fixture = await createFixture(operation);
-      const { markRuntimeCompactionDelegate } =
-        await import("../../context-engine/compaction-watchdog.js");
       const { incrementCompactionCount } =
         await import("../../auto-reply/reply/session-updates.js");
       const backend = vi.fn<ContextEngine["compact"]>(delegate);
-      markRuntimeCompactionDelegate(backend);
       resolveContextEngineMock.mockResolvedValueOnce({
         info: { ownsCompaction: false },
         compact: backend,

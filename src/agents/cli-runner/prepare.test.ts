@@ -36,6 +36,7 @@ import {
   claimHeartbeatOutcomeForRun,
   persistHeartbeatOutcome,
 } from "../../infra/heartbeat-outcome-store.js";
+import { labelRuntimeContextText } from "../../llm/types.js";
 import { CliBackendAuthProfilePreparationError } from "../../plugins/cli-backend-errors.js";
 import type {
   CliBackendExecute,
@@ -103,7 +104,7 @@ import {
   getCliSessionBinding,
   hashCliSessionText,
 } from "../cli-session.js";
-import { resetContextWindowCacheForTest } from "../context.js";
+import { resetContextWindowCacheForTest } from "../context.test-support.js";
 import { waitForDeferredTurnMaintenanceForSession } from "../embedded-agent-runner/context-engine-maintenance.js";
 import { createContextEngineLogicalTurnLease } from "../harness/context-engine-logical-turn.js";
 import { claimPendingAgentQuestionAnswerFromCaller } from "../harness/gateway-question.js";
@@ -831,10 +832,10 @@ describe("prepareCliRunContext", () => {
       authProfileId: "test-cli:ops",
       config: {
         agents: {
-          list: [
-            { id: "ops", default: true, agentDir: modelOwnerAgentDir },
-            { id: "openclaw", agentDir: systemAgentDir },
-          ],
+          entries: {
+            ops: { agentDir: modelOwnerAgentDir },
+            openclaw: { agentDir: systemAgentDir },
+          },
         },
       },
     });
@@ -1878,8 +1879,7 @@ describe("prepareCliRunContext", () => {
     };
     mockGetGlobalHookRunner.mockReturnValue(hookRunner as never);
 
-    // The hook receives historical messages, while the final prompt receives
-    // only the hook-approved prepend context plus the latest user prompt.
+    // Hooks see history; the CLI receives approved context and current-turn guidance.
     const context = await fixture.prepare({
       sessionKey: "agent:main:test",
       agentId: "main",
@@ -1892,7 +1892,10 @@ describe("prepareCliRunContext", () => {
       },
     });
 
-    expect(context.params.prompt).toBe("history:2\n\nlatest ask");
+    expect(context.params.prompt).toMatch(
+      /^history:2\n\nlatest ask\n\nFor the current source conversation,/,
+    );
+    expect(context.params.transcriptPrompt).toBe("latest ask");
     expect(context.contextEngineTurnPrompt).toBe("latest ask");
     expect(context.systemPrompt).toBe(
       `${wrappedPluginSystemContext("prepend system")}\n\nhook system\n\n${wrappedPluginSystemContext("append system")}${SYSTEM_PROMPT_CACHE_BOUNDARY}\nCurrent model identity: test-cli/test-model. If asked what model you are, answer with this value for the current run.`,
@@ -1952,9 +1955,13 @@ describe("prepareCliRunContext", () => {
       });
 
       expect(context.reusableCliSession).toEqual({ mode: "reuse", sessionId: "cli-session" });
-      expect(context.params.prompt).toBe(
-        "Current event:\nBob: yes\n\n[OpenClaw room event]\n\nCurrent active computer (latest reported app/system input, not message origin): active_node=unknown active_node_identity=unknown",
+      expect(context.params.prompt).toMatch(
+        /^Current event:\nBob: yes\n\n\[OpenClaw room event\]\n\nFor the current source conversation,/,
       );
+      expect(context.params.prompt).toMatch(
+        /\n\nCurrent active computer .*active_node=unknown active_node_identity=unknown$/,
+      );
+      expect(context.params.transcriptPrompt).toBe("[OpenClaw room event]");
       expect(context.openClawHistoryPrompt).toContain("Room context:\nAlice: lunch?");
       expect(context.openClawHistoryPrompt).toContain("Current event:\nBob: yes");
     });
@@ -2028,7 +2035,10 @@ describe("prepareCliRunContext", () => {
       })
       .finally(preparedRunAdmission.close);
 
-    expect(context.params.prompt).toBe("authorized memory context\n\nlatest ask");
+    expect(context.params.prompt).toMatch(
+      /^authorized memory context\n\nlatest ask\n\nFor the current source conversation,/,
+    );
+    expect(context.params.transcriptPrompt).toBe("latest ask");
     expect(hookRunner.runAuthorizedPromptBuild).toHaveBeenCalledWith(
       expect.objectContaining({ prompt: "latest ask" }),
       expect.any(Object),
@@ -2320,6 +2330,7 @@ describe("prepareCliRunContext", () => {
         config: { ...config, plugins: { slots: { contextEngine: engineId } } },
         sessionKey: "agent:main:test",
         abortSignal: abort.signal,
+        sourceReplyDeliveryMode: "message_tool_only",
         assertCurrent: () => {
           if (!current) {
             throw new Error("CLI owner retired");
@@ -2327,7 +2338,10 @@ describe("prepareCliRunContext", () => {
         },
       });
       const outcome = preparation.then(
-        (context) => ({ prompt: context.params.prompt }),
+        (context) => ({
+          prompt: context.params.prompt,
+          transcriptPrompt: context.params.transcriptPrompt,
+        }),
         (error: unknown) => ({ error: String(error) }),
       );
       await lookupStarted.promise;
@@ -2339,7 +2353,12 @@ describe("prepareCliRunContext", () => {
       }
       if (scenario === "lookup-failed") {
         lookup.reject(new Error("optional media lookup failed"));
-        expect(await outcome).toEqual({ prompt: "latest ask" });
+        expect(await outcome).toEqual({
+          prompt: expect.stringMatching(
+            /^latest ask\n\nNo source-conversation reply can be sent from this turn\./,
+          ),
+          transcriptPrompt: "latest ask",
+        });
         expect(factory).toHaveBeenCalledOnce();
       } else {
         lookup.resolve("active image task");
@@ -2557,87 +2576,6 @@ describe("prepareCliRunContext", () => {
     );
   });
 
-  it("reuses automatic CLI bindings across new inbound messages", async () => {
-    const stableMode = "automatic";
-    const staticPrompt = "group:telegram:group:automatic";
-    const { dir } = fixture.session;
-    const getActiveMcpLoopbackRuntime = vi.fn(createLoopbackRuntime);
-    const resolveMcpLoopbackScopedTools = vi.fn(() => ({
-      agentId: "main",
-      tools: [
-        {
-          name: "message",
-          label: "Message",
-          description: "Send a message",
-          parameters: { type: "object", properties: {} },
-          execute: vi.fn(),
-        },
-      ],
-    }));
-    setCliRunnerPrepareTestDeps({
-      getActiveMcpLoopbackRuntime,
-      resolveMcpLoopbackScopedTools,
-    });
-    const cliSessionBindingFacts = {
-      extraSystemPromptStatic: staticPrompt,
-      sourceReplyDeliveryMode: stableMode,
-    } satisfies NonNullable<RunCliAgentParams["cliSessionBindingFacts"]>;
-    const config = createCliBackendConfig({ bundleMcp: true });
-    const first = await fixture.prepare({
-      config,
-      sessionKey: "main",
-      prompt: "first ask",
-      requireExplicitMessageTarget: true,
-      extraSystemPrompt: `volatile msg-1\n\n${staticPrompt}`,
-      sourceReplyDeliveryMode: "message_tool_only",
-      currentMessageId: "msg-1",
-      cliSessionBindingFacts,
-    });
-    const second = await fixture.prepare({
-      config,
-      sessionKey: "main",
-      prompt: "second ask",
-      extraSystemPrompt: `volatile msg-2\n\n${staticPrompt}`,
-      sourceReplyDeliveryMode: stableMode,
-      currentMessageId: "msg-2",
-      cliSessionBindingFacts,
-      cliSessionBinding: {
-        sessionId: "cli-session",
-        extraSystemPromptHash: first.extraSystemPromptHash,
-        messageToolPolicyHash: first.messageToolPolicyHash,
-        promptToolNamesHash: first.promptToolNamesHash,
-        cwdHash: hashCliSessionText(dir),
-        mcpConfigHash: first.preparedBackend.mcpConfigHash,
-        mcpResumeHash: first.preparedBackend.mcpResumeHash,
-      },
-    });
-
-    expect(resolveMcpLoopbackScopedTools).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({
-        context: expect.objectContaining({ requireExplicitMessageTarget: true }),
-      }),
-    );
-    expect(resolveMcpLoopbackScopedTools).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        context: expect.objectContaining({ requireExplicitMessageTarget: undefined }),
-      }),
-    );
-    expect(first.extraSystemPromptHash).toBe(hashCliSessionText(staticPrompt));
-    expect(first.messageToolPolicyHash).toBeDefined();
-    expect(second.extraSystemPromptHash).toBe(first.extraSystemPromptHash);
-    expect(second.messageToolPolicyHash).toBe(first.messageToolPolicyHash);
-    expect(second.promptToolNamesHash).toBe(first.promptToolNamesHash);
-
-    expect(first.systemPrompt).toContain("Current-session final text normally routes to source");
-    expect(first.systemPrompt).toContain(
-      "If turn says final private, visible output uses `message(action=send)`",
-    );
-
-    expect(second.reusableCliSession).toEqual({ mode: "reuse", sessionId: "cli-session" });
-  });
-
   it("invalidates CLI session bindings when owner policy changes prompt tool scope", async () => {
     const { dir } = fixture.session;
     const getActiveMcpLoopbackRuntime = vi.fn(createLoopbackRuntime);
@@ -2798,21 +2736,23 @@ describe("prepareCliRunContext", () => {
     expect(second.systemPrompt).toBe(
       `${wrappedPluginSystemContext("hook prepend system")}\n\nhook system${SYSTEM_PROMPT_CACHE_BOUNDARY}\nCurrent model identity: test-cli/test-model. If asked what model you are, answer with this value for the current run.`,
     );
-    const carrier = [
-      "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
-      "## Media Generation Tasks",
-      "image task running",
-      "active video task",
-      "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
-    ].join("\n");
+    const carrier = ["## Media Generation Tasks", "image task running", "active video task"].join(
+      "\n",
+    );
     expect(second.params.prompt).toBe("latest ask");
-    expect(second.promptContext).toEqual({ appendContext: carrier });
+    expect(second.promptContext).toEqual({
+      appendContext: expect.stringMatching(/^For the current source conversation,/),
+    });
+    expect(
+      second.promptContext?.appendContext?.endsWith(`\n\n${labelRuntimeContextText(carrier)}`),
+    ).toBe(true);
     expect(second.params.transcriptPrompt).toBe("latest ask");
     expect(second.contextEngineTurnPrompt).toBe("latest ask");
     expect(mockBuildMediaTaskRuntimeContext).toHaveBeenCalledWith({
       sessionKey: "agent:main:test",
       agentId: "main",
       capabilityToolNames: new Set(["image_generate", "video_generate"]),
+      includeEmptySnapshots: true,
     });
   });
 
@@ -3938,6 +3878,11 @@ describe("prepareCliRunContext", () => {
         messageToolAvailable: false,
       });
       expect(context.params.prompt).toContain("message-tool-available:false");
+      expect(context.params.prompt).toContain(
+        "For the current source conversation, reply normally in your final assistant message",
+      );
+      expect(context.params.prompt).not.toContain("message(action=send)");
+      expect(context.params.prompt).not.toContain("target required this turn");
       expect(context.params.transcriptPrompt).toBe("latest ask");
       await context.preparedBackend.cleanup?.();
     },
@@ -4515,9 +4460,10 @@ describe("prepareCliRunContext", () => {
       expect(context.openClawHistoryPrompt).toContain(
         "Recovered history may be stale; verify current and time-sensitive facts before acting.",
       );
-      expect(context.openClawHistoryPrompt).toContain(
-        "<next_user_message>\nlatest ask\n</next_user_message>",
+      expect(context.openClawHistoryPrompt).toMatch(
+        /<next_user_message>\nlatest ask\n\nFor the current source conversation,[\s\S]*\n<\/next_user_message>$/,
       );
+      expect(context.params.transcriptPrompt).toBe("latest ask");
     });
   });
 

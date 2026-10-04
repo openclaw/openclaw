@@ -1,16 +1,36 @@
 import { describe, expect, it } from "vitest";
 import { classifyGatewayStorageFailure } from "../../infra/sqlite-error-diagnostics.js";
 import { formatUserFacingAssistantErrorText } from "../embedded-agent-helpers/error-text.js";
+import { isNonProviderRuntimeCoordinationError } from "../failover-error.js";
 import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
 import {
   renderAssistantRequestFailureCopy,
+  renderRecordedAssistantFailureCopy,
   renderRuntimeCoordinationFailureCopy,
 } from "./assistant-request-failure-copy.js";
+import { isAuthErrorMessage } from "./message-patterns.js";
 
 describe("renderAssistantRequestFailureCopy", () => {
   const target = { provider: "openai", model: "test-model" };
   const runFailure =
     "⚠️ OpenClaw couldn't finish this reply. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow` in your terminal.";
+
+  it.each(["", " | INVALID_REQUEST"])(
+    "preserves approval-expiry guidance in assistant history with suffix %j",
+    (suffix) => {
+      const message =
+        "Codex node execution approval expired before a decision. Retry the action and approve the new request.";
+      const errorMessage = message + suffix;
+      const assistant = makeAssistantMessageFixture({
+        ...target,
+        errorMessage,
+        errorCode: "INVALID_REQUEST",
+      });
+      expect(formatUserFacingAssistantErrorText(assistant)).toBe(`⚠️ ${message}`);
+      expect(renderRecordedAssistantFailureCopy(assistant)).toBe(`⚠️ ${message}`);
+      expect(isAuthErrorMessage(errorMessage)).toBe(false);
+    },
+  );
 
   it.each([
     [
@@ -91,7 +111,8 @@ describe("renderAssistantRequestFailureCopy", () => {
     ],
   ])("renders bounded guidance for typed runtime code %s", (name, code, expected) => {
     const error = Object.assign(new Error("private runtime diagnostic"), { name, code });
-    expect(renderRuntimeCoordinationFailureCopy(error, code)).toBe(expected);
+    const runtimeCode = isNonProviderRuntimeCoordinationError(error) ? code : undefined;
+    expect(renderRuntimeCoordinationFailureCopy(runtimeCode)).toBe(expected);
   });
 
   it("gives recovery guidance after a tool-result request is rejected", () => {
@@ -116,6 +137,87 @@ describe("renderAssistantRequestFailureCopy", () => {
     ).toBe(
       "The AI service couldn't accept this conversation. Start a new conversation with /new, or choose another model in the Control UI.",
     );
+  });
+
+  it.each([
+    { errorMessage: "Invalid service_tier argument", errorType: "invalid_request_error" },
+    {
+      errorMessage: "Invalid service_tier argument",
+      errorType: "invalid_request_error",
+      errorBody: "PRIVATE_NON_ERROR_BODY",
+    },
+    {
+      errorMessage:
+        '400 {"error":{"type":"invalid_request_error","message":"Invalid service_tier argument"}}',
+    },
+    {
+      errorMessage: "400 Bad Request",
+      errorBody:
+        '{"error":{"type":"invalid_request_error","message":"Invalid service_tier argument"}}',
+    },
+  ])("preserves the provider rejection across live and saved replies: %j", (error) => {
+    const assistant = makeAssistantMessageFixture({ ...target, ...error });
+    const expected = String.raw`LLM request rejected: Invalid service\_tier argument`;
+    expect(formatUserFacingAssistantErrorText(assistant)).toBe(expected);
+    expect(renderRecordedAssistantFailureCopy(assistant)).toBe(expected);
+  });
+
+  it.each([
+    "400 [messages.0] is required",
+    JSON.stringify({
+      error: { type: "invalid_request_error", message: "[messages.0] is required" },
+    }),
+  ])("retains a field-path diagnostic: %s", (errorMessage) => {
+    const assistant = makeAssistantMessageFixture({ ...target, errorMessage });
+    const expected = String.raw`LLM request rejected: \[messages\.0\] is required`;
+    expect(formatUserFacingAssistantErrorText(assistant)).toBe(expected);
+    expect(renderRecordedAssistantFailureCopy(assistant)).toBe(expected);
+  });
+
+  it.each([{ request: { input: "PRIVATE_PROMPT" } }, [{ input: "PRIVATE_PROMPT" }]])(
+    "does not display an envelope serialized inside error.message: %j",
+    (envelope) => {
+      const errorMessage = JSON.stringify({
+        error: { type: "invalid_request_error", message: JSON.stringify(envelope) },
+      });
+      const assistant = makeAssistantMessageFixture({ ...target, errorMessage });
+      expect(formatUserFacingAssistantErrorText(assistant)).not.toContain("PRIVATE");
+      expect(renderRecordedAssistantFailureCopy(assistant)).not.toContain("PRIVATE");
+    },
+  );
+
+  it.each(["", "400 Bad Request: ", "422 Unprocessable Entity: ", "422 Unprocessable Content: "])(
+    "unwraps direct and nested upstream rejections with status prefix %j",
+    (prefix) => {
+      const inner = JSON.stringify({
+        error: { type: "invalid_request_error", message: "Unsupported parameter" },
+        request: { input: "PRIVATE_PROMPT" },
+      });
+      for (const errorMessage of [
+        prefix + inner,
+        JSON.stringify({ error: { type: "invalid_request_error", message: prefix + inner } }),
+      ]) {
+        const assistant = makeAssistantMessageFixture({ ...target, errorMessage });
+        expect(formatUserFacingAssistantErrorText(assistant)).toBe(
+          "LLM request rejected: Unsupported parameter",
+        );
+        expect(renderRecordedAssistantFailureCopy(assistant)).toBe(
+          "LLM request rejected: Unsupported parameter",
+        );
+      }
+    },
+  );
+
+  it.each([
+    "400 Bad Request: { malformed PRIVATE_PROMPT",
+    "422 Unprocessable Content: <html>PRIVATE_PROMPT</html>",
+    '400 Bad Request: [{"input":"PRIVATE_PROMPT"}]',
+    '400 Bad Request: [{"input":"PRIVATE_PROMPT"}] trailing text',
+    '422 Unprocessable Entity: [{"input":"PRIVATE_PROMPT"',
+  ])("does not display a status-prefixed raw response body: %s", (errorMessage) => {
+    const assistant = makeAssistantMessageFixture({ ...target, errorMessage });
+    expect(formatUserFacingAssistantErrorText(assistant)).not.toContain("PRIVATE");
+    expect(renderRecordedAssistantFailureCopy(assistant)).not.toContain("PRIVATE");
   });
 
   it("keeps provider bodies containing SQLite text redacted", () => {

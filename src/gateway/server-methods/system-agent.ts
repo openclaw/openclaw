@@ -141,7 +141,6 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
       respond(true, { turns }, undefined);
     },
   ),
-  /** Structured onboarding: list reusable AI access on this host. */
   "openclaw.setup.detect": defineValidatedGatewayHandler(
     "openclaw.setup.detect",
     validateSystemAgentSetupDetectParams,
@@ -150,7 +149,6 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
       respond(true, await detectSetupInference({}, params.agentId), undefined);
     },
   ),
-  /** Re-run the exact current default-agent inference route without mutating setup. */
   "openclaw.setup.verify": defineValidatedGatewayHandler(
     "openclaw.setup.verify",
     validateSystemAgentSetupVerifyParams,
@@ -165,7 +163,6 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
       });
     },
   ),
-  /** Start one provider-owned OAuth/device-code login over the shared wizard transport. */
   "openclaw.setup.auth.start": defineValidatedGatewayHandler(
     "openclaw.setup.auth.start",
     validateSystemAgentSetupAuthStartParams,
@@ -184,7 +181,6 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
       });
     },
   ),
-  /** Activate a detected or manual route with server-owned capability review. */
   "openclaw.setup.activate.start": defineValidatedGatewayHandler(
     "openclaw.setup.activate.start",
     validateSystemAgentSetupActivateStartParams,
@@ -199,7 +195,6 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
       });
     },
   ),
-  /** Run one provider-owned prepare flow over the shared wizard transport. */
   "openclaw.setup.prepare.start": defineValidatedGatewayHandler(
     "openclaw.setup.prepare.start",
     validateSystemAgentSetupAuthStartParams,
@@ -296,21 +291,13 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
     validateSystemAgentSetupActivateParams,
     async ({ params, respond }) => {
       try {
-        const result = await runExclusiveSystemAgentSetupActivation(async () => {
-          return await activateGatewaySetupInference({
-            kind: params.kind,
-            ...(params.agentId ? { agentId: params.agentId } : {}),
-            ...(params.modelRef !== undefined ? { modelRef: params.modelRef } : {}),
-            ...(params.authChoice !== undefined ? { authChoice: params.authChoice } : {}),
-            ...(params.apiKey !== undefined ? { apiKey: params.apiKey } : {}),
-            ...(params.workspace !== undefined ? { workspace: params.workspace } : {}),
-            ...(params.nativeSessionCatalogsEnabled !== undefined
-              ? { nativeSessionCatalogsEnabled: params.nativeSessionCatalogsEnabled }
-              : {}),
+        const result = await runExclusiveSystemAgentSetupActivation(() =>
+          activateGatewaySetupInference({
+            ...params,
             surface: "gateway",
             runtime: createSystemAgentGatewayRuntime(),
-          });
-        });
+          }),
+        );
         respond(true, result, undefined);
       } catch (error) {
         if (!(error instanceof SetupAdmissionBusyError)) {
@@ -510,12 +497,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
         }
       }
       session.lastUsedAt = Date.now();
-      // Inline check (not `welcomeOnly`) so TS narrows params.message below.
-      if (
-        params.wizardAnswer === undefined &&
-        params.wizardCancel === undefined &&
-        (params.message === undefined || !params.message.trim())
-      ) {
+      if (welcomeOnly) {
         if (params.welcomeVariant === "new-agent") {
           const interaction = session.engine.decorateRejoinReply({ text: "", action: "none" });
           if (

@@ -400,12 +400,11 @@ describe("mention helpers", () => {
           groupChat: { mentionPatterns: ["\\bglobal\\b"] },
         },
         agents: {
-          list: [
-            {
-              id: "work",
+          entries: {
+            work: {
               groupChat: { mentionPatterns: ["\\bworkbot\\b"] },
             },
-          ],
+          },
         },
       },
       "work",

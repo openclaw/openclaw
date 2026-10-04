@@ -58,7 +58,6 @@ export {
 };
 export { parseBrowserHttpUrl as parseHttpUrl };
 
-/** Browser config after defaults, derived ports, and profile defaults are applied. */
 export type ResolvedBrowserConfig = Omit<ResolvedBrowserConfigContract, "profiles"> & {
   headlessSource?: "config" | "default";
   profiles: Record<string, BrowserProfileConfig>;
@@ -66,7 +65,6 @@ export type ResolvedBrowserConfig = Omit<ResolvedBrowserConfigContract, "profile
   extensionRelayDefaultPort: number;
   /** Assigned loopback relay port per extension-driver profile (no explicit cdpPort). */
   extensionRelayPorts: Record<string, number>;
-  /** Extension relay authentication compatibility policy. */
   extensionRelay: {
     allowLegacyAuth: boolean;
   };
@@ -86,15 +84,9 @@ export function getOwnBrowserProfile<T>(
 
 const DEFAULT_BROWSER_REMOTE_CDP_TIMEOUT_MS = 1_500;
 const DEFAULT_BROWSER_REMOTE_CDP_HANDSHAKE_TIMEOUT_MS = 3_000;
-/**
- * Default extension relay port offset from the browser control port. Sits just
- * below the CDP allocation range (controlPort+9..) so profile port allocation
- * can never hand this port to a managed profile.
- */
 const EXTENSION_RELAY_PORT_OFFSET = 8;
 /** Username half of the process-only internal relay credential. */
 const EXTENSION_RELAY_CDP_USER = "openclaw-internal";
-/** Environment variable that overrides managed Chrome headless mode. */
 const BROWSER_HEADLESS_ENV_KEY = "OPENCLAW_BROWSER_HEADLESS";
 
 type ManagedBrowserHeadlessMode = {
@@ -107,7 +99,6 @@ type ManagedBrowserMissingDisplayError = {
   headlessSource: Exclude<ManagedBrowserHeadlessSource, "linux-display-fallback">;
 };
 
-/** Inputs used to resolve managed Chrome headless mode. */
 export type ManagedBrowserHeadlessOptions = {
   headlessOverride?: boolean;
   env?: NodeJS.ProcessEnv;
@@ -134,10 +125,8 @@ function normalizeExistingSessionCdpUrl(
     return undefined;
   }
 
-  let parsed: URL;
-  try {
-    parsed = new URL(value);
-  } catch {
+  const parsed = URL.parse(value);
+  if (!parsed) {
     throw new Error(`browser.profiles.${profileName}.cdpUrl must be a valid URL.`);
   }
 
@@ -217,8 +206,8 @@ function resolveExtensionRelayPorts(
   // allocation so an extension relay cannot bind another profile's listener.
   const reservedPorts = new Set(
     Object.values(profiles)
-      .map((profile) => profile.cdpPort)
-      .filter((port): port is number => typeof port === "number"),
+      .flatMap((profile) => [profile.cdpPort, Number(URL.parse(profile.cdpUrl ?? "")?.port)])
+      .filter((port): port is number => typeof port === "number" && port > 0),
   );
   const ports: Record<string, number> = {};
   const minimumPort = defaultPort - EXTENSION_RELAY_PORT_OFFSET;
@@ -263,7 +252,6 @@ function assertDedicatedEngineEndpoints(profiles: Record<string, BrowserProfileC
   }
 }
 
-/** Resolve raw browser config into runtime browser defaults. */
 export function resolveBrowserConfig(
   cfg: BrowserConfig | undefined,
   rootConfig?: OpenClawConfig,
@@ -360,7 +348,6 @@ export function resolveFirstExtensionProfileName(
   )?.[0];
 }
 
-/** Resolve one configured browser profile by name. */
 export function resolveProfile(
   resolved: ResolvedBrowserConfig,
   profileName: string,
@@ -397,10 +384,6 @@ export function resolveProfile(
   };
 
   if (driver === "extension") {
-    // Each extension profile needs its own loopback relay port. Explicit
-    // profile.cdpPort wins; otherwise a distinct port is assigned per profile
-    // (see resolveExtensionRelayPorts) so multiple extension profiles never
-    // collide on the same port and silently fail to bind.
     const relayPort =
       profile.cdpPort ??
       resolved.extensionRelayPorts[profileName] ??
@@ -489,7 +472,6 @@ export function resolveProfile(
   };
 }
 
-/** Resolve effective headless mode for a managed browser profile. */
 export function resolveManagedBrowserHeadlessMode(
   resolved: ResolvedBrowserConfig,
   profile: ResolvedBrowserProfile,
@@ -522,7 +504,6 @@ export function resolveManagedBrowserHeadlessMode(
   return { headless: resolved.headless, source: "default" };
 }
 
-/** Return a Linux display error for headed managed Chrome when no display exists. */
 export function getManagedBrowserMissingDisplayError(
   resolved: ResolvedBrowserConfig,
   profile: ResolvedBrowserProfile,

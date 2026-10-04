@@ -78,7 +78,7 @@ describe("exec approvals allowlist JSON no-ops", () => {
         expect(callGatewayFromCli.mock.calls.map(([called]) => called)).toEqual(
           method ? [method] : [],
         );
-        expect(loggedOutput()).not.toContain("Writing local approvals.");
+        expect(loggedOutput()).not.toContain("Writing approvals for this state root.");
         expect(defaultRuntime.exit).not.toHaveBeenCalled();
         expect(runtimeErrors).toHaveLength(0);
       }

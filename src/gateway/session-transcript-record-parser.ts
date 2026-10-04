@@ -33,35 +33,25 @@ function isJsonObjectFieldToken(source: string, tokenIndex: number): boolean {
   return true;
 }
 
-function extractJsonStringFieldWindow(
-  source: string,
-  field: string,
-  startIndex = 0,
-  endIndex = source.length,
-): string | undefined {
+function extractJsonStringFieldSuffix(source: string, field: string): string | undefined {
   const fieldToken = JSON.stringify(field);
-  let searchIndex = startIndex;
-  while (searchIndex < endIndex) {
+  let searchIndex = Math.max(0, source.length - OVERSIZED_TRANSCRIPT_METADATA_SUFFIX_CHARS);
+  while (searchIndex < source.length) {
     const tokenIndex = source.indexOf(fieldToken, searchIndex);
-    if (tokenIndex < 0 || tokenIndex >= endIndex) {
+    if (tokenIndex < 0) {
       return undefined;
     }
     searchIndex = tokenIndex + fieldToken.length;
     if (!isJsonObjectFieldToken(source, tokenIndex)) {
       continue;
     }
-    const match = /^\s*:\s*"((?:\\.|[^"\\])*)"/.exec(source.slice(searchIndex, endIndex));
+    const match = /^\s*:\s*"((?:\\.|[^"\\])*)"/.exec(source.slice(searchIndex));
     if (!match) {
       continue;
     }
     return readNonBlankString(safeParseJson(`"${match[1]}"`));
   }
   return undefined;
-}
-
-function extractJsonStringFieldSuffix(source: string, field: string): string | undefined {
-  const startIndex = Math.max(0, source.length - OVERSIZED_TRANSCRIPT_METADATA_SUFFIX_CHARS);
-  return extractJsonStringFieldWindow(source, field, startIndex);
 }
 
 function recoverOversizedMultimodalTranscriptRecord(

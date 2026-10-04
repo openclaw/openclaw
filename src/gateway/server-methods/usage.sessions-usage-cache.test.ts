@@ -33,7 +33,11 @@ import { usageHandlers } from "./usage.js";
 
 let config: OpenClawConfig = {
   session: {},
-  agents: { list: [{ id: "main", default: true }, { id: "opus" }] },
+  agents: {
+    ownership: "explicit",
+    defaults: { systemAgent: { agentId: "main" } },
+    entries: { main: {}, opus: {} },
+  },
 };
 
 const baseParams = {

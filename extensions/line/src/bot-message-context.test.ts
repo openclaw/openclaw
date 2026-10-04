@@ -708,7 +708,7 @@ describe("buildLineMessageContext", () => {
     const bindingCfg: OpenClawConfig = {
       session: { store: storePath },
       agents: {
-        list: [{ id: "main" }, { id: "line-group-agent" }],
+        entries: { main: {}, "line-group-agent": {} },
       },
       bindings: [
         {
@@ -741,7 +741,7 @@ describe("buildLineMessageContext", () => {
     const bindingCfg: OpenClawConfig = {
       session: { store: storePath },
       agents: {
-        list: [{ id: "main" }, { id: "line-room-agent" }],
+        entries: { main: {}, "line-room-agent": {} },
       },
       bindings: [
         {
@@ -856,7 +856,7 @@ describe("buildLineMessageContext", () => {
   it("routes a runtime-bound LINE conversation when ordinary routing is ambiguous", async () => {
     cfg = {
       ...cfg,
-      agents: { list: [{ id: "main" }, { id: "codex" }] },
+      agents: { entries: { main: {}, codex: {} } },
       bindings: [],
     };
     const userId = "U1234567890abcdef1234567890abcdef";
@@ -884,7 +884,7 @@ describe("buildLineMessageContext", () => {
   it("keeps ambiguous LINE routing rejected without an active conversation binding", async () => {
     cfg = {
       ...cfg,
-      agents: { list: [{ id: "main" }, { id: "codex" }] },
+      agents: { entries: { main: {}, codex: {} } },
       bindings: [],
     };
 

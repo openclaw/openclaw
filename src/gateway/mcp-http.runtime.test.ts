@@ -296,31 +296,29 @@ describe("McpLoopbackToolCache", () => {
     expect(resolveGatewayScopedTools.mock.calls[0]?.[0]).not.toHaveProperty("signal");
   });
 
-  it("refreshes cached bound tools when node matching preferences change", async () => {
+  it("refreshes cached bound tools when node display names change", async () => {
     const cache = new McpLoopbackToolCache();
     const params = scopeParams({ nodeExecAllowed: true, execOverrides: { node: "shared-name" } });
     resolveGatewayScopedTools.mockImplementation(({ nodeExecAvailable, execOverrides }) =>
       scopedToolFixture(nodeExecAvailable(execOverrides.node) ? ["exec"] : []),
     );
-    for (const eligibleIsCurrent of [false, true, false]) {
+    for (const eligibleMatches of [false, true, false]) {
       listNodes.mockResolvedValue([
         {
           nodeId: "phone",
-          displayName: "shared-name",
+          displayName: eligibleMatches ? "other-name" : "shared-name",
           connected: true,
           commands: [],
-          clientId: eligibleIsCurrent ? "clawdbot-node" : "openclaw-node",
         },
         {
           nodeId: "worker",
-          displayName: "shared-name",
+          displayName: eligibleMatches ? "shared-name" : "other-name",
           connected: true,
           commands: ["system.run"],
-          clientId: eligibleIsCurrent ? "openclaw-node" : "clawdbot-node",
         },
       ]);
       const scoped = await cache.resolve(params);
-      expect(scoped.tools.map((tool) => tool.name)).toEqual(eligibleIsCurrent ? ["exec"] : []);
+      expect(scoped.tools.map((tool) => tool.name)).toEqual(eligibleMatches ? ["exec"] : []);
     }
   });
 

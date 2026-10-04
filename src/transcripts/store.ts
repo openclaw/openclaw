@@ -176,19 +176,6 @@ export class TranscriptsStore {
     }
   }
 
-  private async markPendingExports(
-    session: TranscriptSessionDescriptor,
-    fileNames: string[],
-    operation: TranscriptStoreOperation,
-    lease: OpenClawStateLeaseContext,
-  ): Promise<void> {
-    await operation.writeExport(
-      "transcripts.markPendingExports",
-      { session: { sessionId: session.sessionId, startedAt: session.startedAt }, fileNames },
-      lease,
-    );
-  }
-
   private async assertExportDestinationOwned(
     session: TranscriptSessionDescriptor,
     sessionDir = this.sessionDir(session),
@@ -597,7 +584,14 @@ export class TranscriptsStore {
       ...(includeTranscript ? ["transcript.jsonl"] : []),
       ...(includeSummary ? ["summary.json", "summary.md"] : []),
     ];
-    await this.markPendingExports(session, pendingFiles, operation, lease);
+    await operation.writeExport(
+      "transcripts.markPendingExports",
+      {
+        session: { sessionId: session.sessionId, startedAt: session.startedAt },
+        fileNames: pendingFiles,
+      },
+      lease,
+    );
     assertOwner();
     const ensured = await ensureAbsoluteDirectory(sessionDir, {
       mode: 0o700,

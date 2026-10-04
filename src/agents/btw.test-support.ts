@@ -202,7 +202,7 @@ function createSideQuestionParams(
   overrides: Partial<RunBtwSideQuestionParams> = {},
 ): RunBtwSideQuestionParams {
   return {
-    cfg: { agents: { entries: { main: { default: true } } } } as never,
+    cfg: { agents: { entries: { main: {} } } },
     agentId: "main",
     agentDir: DEFAULT_AGENT_DIR,
     provider: DEFAULT_PROVIDER,

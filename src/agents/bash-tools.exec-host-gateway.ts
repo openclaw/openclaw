@@ -5,11 +5,7 @@
  */
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
-import {
-  buildCronExecOperationBinding,
-  consumeCronStandingGrant,
-  validateCronStandingGrant,
-} from "../gateway/operator-approval-standing-grants.js";
+import { buildCronExecOperationBinding } from "../gateway/operator-approval-standing-grants.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { describeInterpreterInlineEval } from "../infra/command-analysis/inline-eval.js";
 import { detectInlineEvalInSegments } from "../infra/command-analysis/risks.js";
@@ -73,6 +69,7 @@ import {
   buildExecApprovalTurnSourceContext,
   registerExecApprovalRequestForHostOrThrow,
 } from "./bash-tools.exec-approval-request.js";
+import { prepareCronStandingGrantConsumption } from "./bash-tools.exec-cron-grant.js";
 import type {
   ProcessGatewayAllowlistParams,
   ProcessGatewayAllowlistResult,
@@ -787,13 +784,14 @@ export async function processGatewayAllowlist(
         env: params.requestedEnv,
       }),
     };
-    let grantCheck: ReturnType<typeof validateCronStandingGrant> | undefined;
+    let consumeGrant: ReturnType<typeof prepareCronStandingGrantConsumption>;
     try {
-      grantCheck = validateCronStandingGrant(grantLookup);
+      consumeGrant = prepareCronStandingGrantConsumption(grantLookup);
     } catch {
-      grantCheck = undefined;
+      consumeGrant = undefined;
     }
-    if (grantCheck?.outcome === "consumed") {
+    if (consumeGrant) {
+      const consume = consumeGrant;
       const emitGrantEvent = (approved: boolean, reason: string) =>
         emitApprovalEvent({
           action: approved ? "exec.approval.approved" : "exec.approval.denied",
@@ -804,28 +802,26 @@ export async function processGatewayAllowlist(
         });
       return {
         execCommandOverride: enforcedCommand,
-        // Durable authority is recorded only at the final effect: awaited
-        // pre-spawn work (script preflight) can outlive a revocation or job
-        // edit, so the grant is re-verified and consumed right before the
-        // process spawns and any failure denies instead of executing.
+        // Consumption settles under receipt custody; native initiation remains the exec owner's boundary.
         revalidateBeforeExecution: async () => {
-          let grantUse: ReturnType<typeof consumeCronStandingGrant> | undefined;
+          let grantUse: Awaited<ReturnType<typeof consume>> | undefined;
           try {
-            grantUse = consumeCronStandingGrant(grantLookup);
+            grantUse = await consume(params.signal);
           } catch {
             grantUse = undefined;
           }
-          if (grantUse?.outcome === "consumed") {
+          const grant = grantUse?.outcome === "consumed" ? grantUse.grant : undefined;
+          if (grant && (grant.expiresAtMs === null || grant.expiresAtMs > Date.now())) {
             emitGrantEvent(
               true,
-              `standing-grant grant=${grantUse.grant.grantId} approval=${grantUse.grant.mintedByApprovalId}`,
+              `standing-grant grant=${grant.grantId} approval=${grant.mintedByApprovalId}`,
             );
             return undefined;
           }
-          const invalidReason = grantUse?.outcome ?? "grant-store-unavailable";
-          emitGrantEvent(false, `standing-grant-invalidated ${invalidReason}`);
+          const reason = grant ? "expired" : (grantUse?.outcome ?? "grant-store-unavailable");
+          emitGrantEvent(false, `standing-grant-invalidated ${reason}`);
           return buildGatewayExecApprovalDeniedToolResult({
-            deniedReason: `standing grant no longer valid (${invalidReason}); the next occurrence will prompt for approval again`,
+            deniedReason: `standing grant no longer valid (${reason}); the next occurrence will prompt for approval again`,
             command: params.command,
             cwd: params.workdir,
           });

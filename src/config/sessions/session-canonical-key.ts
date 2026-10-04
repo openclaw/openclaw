@@ -1,6 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { registerNodeSqliteDisposeCallback } from "../../infra/kysely-sync-cache-state.js";
 import {
+  createSqliteQueryCache,
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
@@ -8,12 +9,16 @@ import {
   prepareSqliteQueryTakeFirstSync,
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
-import { readSqliteDataVersion } from "../../infra/node-sqlite.js";
 import {
   stageSqliteTransactionState,
   withSqlitePostCommitPublications,
 } from "../../infra/sqlite-post-commit.js";
-import { getAdmittedSqliteSchemaFacts } from "../../infra/sqlite-schema-facts.js";
+import {
+  getAdmittedSqliteSchemaFacts,
+  getSqliteReadOperationRevision,
+  readSqliteDataVersion,
+  type SqliteReadOperationRevision,
+} from "../../infra/sqlite-schema-facts.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import { readSqliteUserVersion } from "../../infra/sqlite-user-version.js";
 import {
@@ -61,7 +66,14 @@ type CanonicalSessionDatabase = Pick<
   | "session_windows"
   | "session_canonical_validation_pending"
 >;
-const mainKeyReaders = new WeakMap<DatabaseSync, () => { main_key: string } | undefined>();
+const mainKeyReader = createSqliteQueryCache((db) =>
+  prepareSqliteQueryTakeFirstSync<void, { main_key: string }>(db, () =>
+    getNodeSqliteKysely<CanonicalSessionDatabase>(db)
+      .selectFrom("session_key_contract")
+      .select("main_key")
+      .where("id", "=", 1),
+  ),
+);
 
 type ReaderAdmission = {
   mainKey: string;
@@ -70,6 +82,7 @@ type ReaderAdmission = {
 };
 type ReaderAdmissionCell = {
   proof?: ReaderAdmission;
+  policy?: SqliteReadOperationRevision & { mainKey: string };
   committed: boolean;
   continuations: Set<SharedArrayBuffer>;
 };
@@ -344,17 +357,22 @@ export function assertCanonicalSessionKeyWrite(sessionKey: string, expectedAgent
 }
 
 export function readCanonicalSessionMainKey(database: { db: DatabaseSync }): string {
-  let read = mainKeyReaders.get(database.db);
-  if (!read) {
-    read = prepareSqliteQueryTakeFirstSync<void, { main_key: string }>(database.db, () =>
-      getNodeSqliteKysely<CanonicalSessionDatabase>(database.db)
-        .selectFrom("session_key_contract")
-        .select("main_key")
-        .where("id", "=", 1),
-    );
-    mainKeyReaders.set(database.db, read);
+  const admission = readerAdmissions.get(database.db);
+  const revision = getSqliteReadOperationRevision(database.db);
+  const policy = admission?.policy;
+  if (
+    revision &&
+    policy?.schema === revision.schema &&
+    policy.dataVersion === revision.dataVersion &&
+    policy.mutationRevision === revision.mutationRevision
+  ) {
+    return policy.mainKey;
   }
-  return normalizeMainKey(read()?.main_key);
+  const mainKey = normalizeMainKey(mainKeyReader(database.db)()?.main_key);
+  if (admission && revision) {
+    admission.policy = { ...revision, mainKey };
+  }
+  return mainKey;
 }
 
 export function assertCanonicalSessionEntryLineageWrite(entry: SessionEntry): void {

@@ -5,20 +5,15 @@ import { getWorkboardState, invalidateWorkboardLoads } from "./lib/workboard/run
 import { WORKBOARD_CHANGED_EVENT, type WorkboardBoardSummary } from "./lib/workboard/types.ts";
 
 type WorkboardCatalogSnapshot = {
-  boards: readonly Pick<WorkboardBoardSummary, "id" | "name" | "icon" | "color">[];
+  boards: readonly Pick<WorkboardBoardSummary, "id" | "name" | "kind" | "icon" | "color">[];
   ready: boolean;
-};
-type WorkboardCatalogRuntime = {
-  sync(client: GatewayBrowserClient | null, connected: boolean): void;
-  handleGatewayEvent(event: string): void;
-  dispose(): void;
 };
 
 const RETRY_MS = 2_000;
 
 type CatalogLoad = { client: GatewayBrowserClient; promise: Promise<boolean> };
 
-class WorkboardCatalog implements WorkboardCatalogRuntime {
+export class WorkboardCatalog {
   private client: GatewayBrowserClient | null = null;
   private connected = false;
   private disposed = false;
@@ -173,9 +168,10 @@ class WorkboardCatalog implements WorkboardCatalogRuntime {
     this.host.setBoardsReady(ready);
     this.host.notify();
     const snapshot: WorkboardCatalogSnapshot = {
-      boards: boards.map(({ id, name, icon, color }) => ({
+      boards: boards.map(({ id, name, kind, icon, color }) => ({
         id,
         ...(name ? { name } : {}),
+        ...(kind ? { kind } : {}),
         ...(icon ? { icon } : {}),
         ...(color ? { color } : {}),
       })),
@@ -191,11 +187,4 @@ class WorkboardCatalog implements WorkboardCatalogRuntime {
       this.retryTimer = null;
     }
   }
-}
-
-export function createWorkboardCatalogRuntime(
-  onSnapshot: (snapshot: WorkboardCatalogSnapshot) => void,
-  host: WorkboardCapability,
-): WorkboardCatalogRuntime {
-  return new WorkboardCatalog(onSnapshot, host);
 }

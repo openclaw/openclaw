@@ -166,6 +166,7 @@ export function readyRecoveryHealth(
   ReturnType<typeof import("../daemon-cli/restart-health.js").waitForGatewayHealthyRestart>
 > {
   return {
+    outcome: "ready",
     healthy: true,
     staleGatewayPids: [],
     runtime: { status: running ? "running" : "stopped", pid: running ? 4242 : undefined },
@@ -184,7 +185,7 @@ export function serviceUpdateResult(
 export async function writeRecoveryConfig(configPath: string, version: string) {
   await fs.writeFile(
     configPath,
-    JSON.stringify(stampConfigWriteMetadata({ gateway: { port: 19001 } }, undefined, version)),
+    JSON.stringify(stampConfigWriteMetadata({ gateway: { port: 19001 } }, version)),
   );
   clearConfigCache();
   clearRuntimeConfigSnapshot();
@@ -299,11 +300,11 @@ export function registerRecoveryTests(params: {
         const run = params.run();
         expect(completeUpdateCommandRun(result, run)).toMatchObject({
           status: "skipped",
-          reason: "gateway-readiness-unverified",
+          reason: "still-starting",
         });
         expect(getUpdateRun(run.runId, { env: run.env })).toMatchObject({
           status: "skipped",
-          reason: "gateway-readiness-unverified",
+          reason: "still-starting",
           confirmedAtMs: null,
           verification: { serviceRunning: true, pid: 4242, readyz: false },
           steps: expect.arrayContaining([
@@ -324,7 +325,7 @@ export function registerRecoveryTests(params: {
               "recovery restart",
             ]
           : []),
-        pending ? "health: timeout" : "health: healthy",
+        pending ? "health: still-starting" : "health: healthy",
       ]);
       expect(mocks.restart).not.toHaveBeenCalled();
       if (startup === "unready" || startup === "slow") {
@@ -345,6 +346,7 @@ export function registerRecoveryTests(params: {
         jsonMode: true,
       });
       params.mocks.health.mockImplementation(async ({ port, expectedVersion }) => ({
+        outcome: outcome === "healthy" ? "ready" : outcome === "exited" ? "failed" : "starting",
         healthy: outcome === "healthy",
         staleGatewayPids: [],
         gatewayVersion: expectedVersion,

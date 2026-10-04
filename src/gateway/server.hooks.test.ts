@@ -77,7 +77,10 @@ function agentMapping(route: string, overrides: HookMappingConfig = {}): HookMap
 function setHookAgentRoster(explicitSole = false): void {
   testState.agentsConfig = explicitSole
     ? { ownership: "explicit", entries: { main: {} } }
-    : { entries: { main: { default: true }, hooks: {} } };
+    : { ownership: "explicit", entries: { main: {}, hooks: {} } };
+  if (!explicitSole) {
+    testState.agentConfig = { ...testState.agentConfig, systemAgent: { agentId: "main" } };
+  }
 }
 
 function mockIsolatedRunOk(once = false): void {

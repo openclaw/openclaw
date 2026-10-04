@@ -24,6 +24,8 @@ By default, `secret` entries are never injected into subprocess environments. Wh
 
 Names use the same uppercase grammar as env SecretRefs, and each UTF-8 value is limited to 64 KiB (65,536 bytes). The store preserves submitted whitespace and newlines. A `secret` entry must carry a value; empty secrets are rejected because they would surface only as a confusing downstream auth failure. `env` entries may be empty. This supports PEM keys and service-account JSON without inheriting the smaller limits of ordinary environment variables.
 
+Exec captures its snapshot through the shared-state read worker. The selected entries, names, and host metadata have a 32 MiB read budget; an oversized snapshot fails visibly instead of injecting a partial environment. Store-backed SecretRefs also read through that worker. Neither reader creates a missing store or table.
+
 Reference an entry from `openclaw.json` with the `store` source:
 
 ```json5

@@ -177,7 +177,9 @@ function runOpenClawStateCurrentReadConnection<T>(
     // The schema owner observes foreign commits. Ordinary lease heartbeats keep
     // these facts; schema changes revoke them before this reader re-admits.
     const facts =
-      previous && !previous.legacyAdmission ? getAdmittedSqliteSchemaFacts(db) : undefined;
+      previous && !previous.legacyAdmission
+        ? runSqliteReadOperationSync(db, () => getAdmittedSqliteSchemaFacts(db))
+        : undefined;
     if (
       !previous ||
       previous.admission !== openStateSchemaReadAdmission ||

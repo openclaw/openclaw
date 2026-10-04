@@ -1,6 +1,5 @@
 import os from "node:os";
 
-/** Raw `os.networkInterfaces()` snapshot used by gateway discovery helpers. */
 export type NetworkInterfacesSnapshot = ReturnType<typeof os.networkInterfaces>;
 type NetworkInterfaceFamily = "IPv4" | "IPv6";
 type ExternalNetworkInterfaceAddress = {
@@ -22,25 +21,17 @@ function normalizeNetworkInterfaceFamily(
   return undefined;
 }
 
-/** Reads the current network interface snapshot, allowing tests to inject a reader. */
-export function readNetworkInterfaces(
-  networkInterfaces: () => NetworkInterfacesSnapshot = os.networkInterfaces,
-): NetworkInterfacesSnapshot {
-  return networkInterfaces();
-}
-
 /** Best-effort interface read that returns undefined when OS inspection fails. */
 export function safeNetworkInterfaces(
   networkInterfaces: () => NetworkInterfacesSnapshot = os.networkInterfaces,
 ): NetworkInterfacesSnapshot | undefined {
   try {
-    return readNetworkInterfaces(networkInterfaces);
+    return networkInterfaces();
   } catch {
     return undefined;
   }
 }
 
-/** Lists non-internal interface addresses, optionally filtered by IP family. */
 export function listExternalInterfaceAddresses(
   snapshot: NetworkInterfacesSnapshot | undefined,
   family?: NetworkInterfaceFamily,

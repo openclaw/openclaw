@@ -47,7 +47,7 @@ describe("schema-only agent preflight", () => {
           return prepare(pathname, options);
         },
       );
-      const config = { agents: { list: [{ id: "worker", default: true }] } };
+      const config = { agents: { entries: { worker: {} } } };
       const ready = (operation: "doctor" | "gateway-restart" | "gateway-startup") =>
         assertOpenClawDatabasesReady({
           env,
@@ -187,6 +187,7 @@ it.each([
       const run = () =>
         preflightOpenClawDatabaseSchemas({
           env,
+          preserveSourceArtifacts: true,
           verifyCurrentSchemaShape: mode !== "header",
           requireStartupMigrationReadiness: mode === "startup",
           signal: controller.signal,

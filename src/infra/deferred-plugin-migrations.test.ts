@@ -92,13 +92,6 @@ describe("deferred configured-plugin migrations", () => {
     );
   }
 
-  it("reads absent migration state without creating a database", () => {
-    const { env, stateDir } = fixture();
-    expect(readDeferredPluginMigrations({ env })).toEqual([]);
-    expect(readDeferredPluginMigrationCompletions({ env })).toEqual([]);
-    expect(fs.existsSync(stateDir)).toBe(false);
-  });
-
   it.each(["transaction", "commit"] as const)(
     "rolls back deferred obligations when the requester is revoked at worker %s admission",
     async (stage) => {
@@ -152,6 +145,11 @@ describe("deferred configured-plugin migrations", () => {
     "publishes without changing %s state when no plugin migration is pending",
     (state) => {
       const { env, stateDir } = fixture();
+      if (state === "absent") {
+        expect(readDeferredPluginMigrations({ env })).toEqual([]);
+        expect(readDeferredPluginMigrationCompletions({ env })).toEqual([]);
+        expect(fs.existsSync(stateDir)).toBe(false);
+      }
       const databasePath = resolveOpenClawStateSqlitePath(env);
       if (state === "historical") {
         // Match the rollback rehearsal: publication does not own schema repair.
@@ -568,28 +566,31 @@ describe("deferred plugin migration repair guidance", () => {
     command: "openclaw update repair",
   };
 
-  it.each(["OPENCLAW_UPDATE_IN_PROGRESS", "OPENCLAW_UPDATE_POST_CORE_CONVERGENCE"])(
-    "waits for the owning update before suggesting another repair (%s)",
-    (marker) => {
-      const message = formatDeferredPluginMigration(pending, { [marker]: "1" });
+  it.each([
+    { marker: "OPENCLAW_UPDATE_IN_PROGRESS", command: pending.command },
+    { marker: "OPENCLAW_UPDATE_POST_CORE_CONVERGENCE", command: pending.command },
+    { marker: undefined, command: pending.command },
+    { marker: undefined, command: "openclaw doctor --fix" },
+  ])("formats repair guidance for $marker / $command", ({ marker, command }) => {
+    const message = formatDeferredPluginMigration(
+      { ...pending, command },
+      marker ? { [marker]: "1" } : {},
+    );
+    expect(message).toContain('Plugin "fixture-plugin" data/settings upgrade is unfinished:');
+    expect(message).toContain(pending.reason);
+    expect(message).toContain("Your existing data and settings have been kept.");
+    if (marker) {
       expect(message).toContain("Let the current update or repair finish.");
       expect(message).toContain('If this warning remains afterward, run "openclaw update repair"');
-    },
-  );
-
-  it("gives immediate recovery outside an update and avoids repeating Doctor", () => {
-    const repair = formatDeferredPluginMigration(pending, {});
-    expect(repair).toContain('Plugin "fixture-plugin" data/settings upgrade is unfinished:');
-    expect(repair).toContain(pending.reason);
-    expect(repair).toContain("Your existing data and settings have been kept.");
-    expect(repair).toContain(
-      'Run "openclaw update repair", then "openclaw doctor --fix" to retry the upgrade.',
-    );
-    const message = formatDeferredPluginMigration(
-      { ...pending, command: "openclaw doctor --fix" },
-      {},
-    );
-    expect(message.match(/openclaw doctor --fix/g)).toHaveLength(1);
-    expect(message).not.toContain("Let the current");
+    } else {
+      expect(message).not.toContain("Let the current");
+      if (command === pending.command) {
+        expect(message).toContain(
+          'Run "openclaw update repair", then "openclaw doctor --fix" to retry the upgrade.',
+        );
+      } else {
+        expect(message.match(/openclaw doctor --fix/g)).toHaveLength(1);
+      }
+    }
   });
 });

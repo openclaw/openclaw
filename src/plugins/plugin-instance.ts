@@ -1,8 +1,10 @@
+import { raceWithTimeout } from "../../packages/retry/src/index.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { AsyncWorkScope, trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { releasePluginCacheInstance, withPluginCache, type PluginCache } from "./plugin-cache.js";
+import { createPluginInstanceBindings } from "./plugin-instance-bindings.js";
 import { DisposalFailures, type DisposalCleanup } from "./plugin-instance-disposal.js";
 import {
   PluginInstanceDrainTimeoutError,
@@ -17,7 +19,6 @@ import {
   type PluginInstanceOwner,
 } from "./plugin-instance-scope.js";
 import { waitForPluginInstanceSettlement } from "./plugin-instance-settlement.js";
-import { createPluginValueView } from "./plugin-instance-value-views.js";
 import type {
   PluginInstanceCallLease,
   PluginInstanceConsumer,
@@ -66,7 +67,16 @@ export class PluginInstance {
   >();
   private readonly cleanups = new Map<() => void | Promise<void>, "plugin" | "module">();
   private readonly waiters = new Set<() => void>();
-  readonly wrap = this.createValueView(
+  private readonly bindings = createPluginInstanceBindings({
+    instance: this,
+    enter: (token, run) => this.enter(token, run),
+    invoke: (run) => this.invoke(run),
+    lease: () => this.lease(),
+    hasToken: (token) => this.hasToken(token),
+    isConsumerToken: (token) => this.consumers.has(token),
+  });
+  readonly admitFactory = this.bindings.admitFactory;
+  readonly wrap = this.bindings.create(
     <T>(run: () => T) => this.run(run),
     <T>(run: () => T) => this.runConsumer(run),
   );
@@ -189,7 +199,7 @@ export class PluginInstance {
   }
 
   createRegistryView(registry: PluginRegistry, invoke: <T>(run: () => T) => T): <T>(value: T) => T {
-    return this.createValueView(<T>(run: () => T) =>
+    return this.bindings.create(<T>(run: () => T) =>
       invoke(() => this.runInRegistry(registry, run)),
     );
   }
@@ -298,7 +308,7 @@ export class PluginInstance {
     };
     return {
       run,
-      wrap: this.createValueView(run, run),
+      wrap: this.bindings.create(run, run),
       close: (cleanup) => {
         if (!closing && this.consumers.has(token)) {
           // Close operation callbacks before entering a separate host teardown token.
@@ -392,7 +402,7 @@ export class PluginInstance {
   }
 
   private enter<T>(token: object, run: () => T): T {
-    pluginInvocationContext.getStore()?.assertCurrent?.(this);
+    pluginInvocationContext.getStore()?.lookup(this);
     const current = invocation.getStore();
     const call =
       current?.instance === this && current.token === token
@@ -430,12 +440,12 @@ export class PluginInstance {
       | { cleanup: true; hostCleanup?: boolean }
     ) = {},
   ): PluginInstanceCallLease {
-    const { registry } = options;
+    const current = this.activeCall();
+    const registry = options.registry ?? (current && this.calls.get(current.token)?.registry);
     const joinDisposal = !options.cleanup && options.joinDisposal !== false;
     // Nested callbacks and streams keep the consumer's exact token; ordinary
     // tokens could expire early or remain usable after that consumer closes.
-    const current = this.activeCall();
-    if (!registry && current && this.consumers.has(current.token)) {
+    if (!options.registry && current && this.consumers.has(current.token)) {
       return { token: current.token, release: () => undefined };
     }
     const token = new PluginCallToken(
@@ -466,22 +476,6 @@ export class PluginInstance {
           : undefined;
       },
     };
-  }
-
-  private createValueView(
-    admit: <T>(run: () => T) => T,
-    admitCallback: <T>(run: () => T) => T = (run) => admit(() => this.invoke(run)),
-  ): <T>(value: T) => T {
-    return createPluginValueView(
-      {
-        instance: this,
-        invoke: (run, lease) => this.invoke(run, lease),
-        lease: () => this.lease(),
-        hasToken: (token) => this.hasToken(token),
-      },
-      admit,
-      admitCallback,
-    );
   }
 
   bindModuleLoader(
@@ -607,11 +601,13 @@ export class PluginInstance {
       this.quiesce();
       const terminalFailures = (this.disposalFailures = new DisposalFailures(this));
       const work = new AsyncWorkScope(terminalFailures);
-      // Shared state owners still join real cleanup, independently of code-file custody.
-      const cleanup = trackAsyncWork(() =>
-        this.runDisposalCleanup(work, terminalFailures, beforeCleanup),
+      // Physical cleanup outlives the releasing caller's invocation scope.
+      const physical = pluginInvocationContext.exit(() =>
+        this.finishDisposal(
+          trackAsyncWork(() => this.runDisposalCleanup(work, terminalFailures, beforeCleanup)),
+          terminalFailures,
+        ),
       );
-      const physical = this.finishDisposal(cleanup, terminalFailures);
       const settled = physical.then(() => {
         if (terminalFailures.size) {
           throw new AggregateError(terminalFailures, `Plugin ${this.pluginId} cleanup failed`);
@@ -655,7 +651,9 @@ export class PluginInstance {
 
   private abortDisposal(work: AsyncWorkScope): void {
     if (!this.controller.signal.aborted) {
-      work.run(() => this.controller.abort(new Error(`Plugin ${this.pluginId} is retiring`)));
+      pluginInvocationContext.exit(() =>
+        work.run(() => this.controller.abort(new Error(`Plugin ${this.pluginId} is retiring`))),
+      );
     }
   }
 
@@ -711,21 +709,12 @@ export class PluginInstance {
         moduleCleanups.push(cleanup);
         continue;
       }
-      let timer: ReturnType<typeof setTimeout> | undefined;
       try {
-        await Promise.race([
-          runCleanup(cleanup),
-          new Promise<never>((_, reject) => {
-            timer = setTimeout(
-              () => reject(new Error(`Plugin ${this.pluginId} cleanup did not settle`)),
-              Math.max(0, deadline - Date.now()),
-            );
-          }),
-        ]);
+        await raceWithTimeout(runCleanup(cleanup), Math.max(0, deadline - Date.now()), () => {
+          throw new Error(`Plugin ${this.pluginId} cleanup did not settle`);
+        });
       } catch (error) {
         failures.push(error);
-      } finally {
-        clearTimeout(timer);
       }
     }
     await cleanupWork.drain();

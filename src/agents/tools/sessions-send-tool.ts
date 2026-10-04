@@ -42,7 +42,10 @@ import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readNonNegativeIntegerParam, readToolStringParam } from "./common.js";
 import { wrapGatewayPersonalToolExecution } from "./gateway-caller-context.js";
 import { callAgentToolGatewayRequest } from "./in-process-gateway.js";
-import { runWithScopedSessionAccess } from "./scoped-session-access.js";
+import {
+  resolveSessionToolTargetAgentId,
+  runWithScopedSessionAccess,
+} from "./scoped-session-access.js";
 import {
   createSessionVisibilityRowChecker,
   formatSessionToolAccessDenial,
@@ -68,6 +71,7 @@ import {
   notifySessionsSendSession,
   resolveConfiguredAgentMainSessionKey,
 } from "./sessions-send-tool.delivery.js";
+import { readSessionsSendMessage, readSessionsSendMode } from "./sessions-send-tool.input.js";
 import { SessionsSendToolSchema, SessionsSendOutputSchema } from "./sessions-send-tool.schema.js";
 import type { SessionsSendToolOptions } from "./sessions-send-tool.types.js";
 
@@ -91,20 +95,8 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
       const params = isRecord(args) ? args : {};
       const promptedAt = Date.now();
       const gatewayCall = opts?.callGateway ?? callAgentToolGatewayRequest;
-      const message = readToolStringParam(params, "message", { required: true, trim: false });
-      if (!message.trim()) {
-        throw new ToolInputError("message required");
-      }
-      const mode = readToolStringParam(params, "mode");
-      if (
-        mode !== undefined &&
-        mode !== "notify" &&
-        mode !== "steer" &&
-        mode !== "followup" &&
-        mode !== "resume"
-      ) {
-        throw new ToolInputError("mode must be notify, steer, followup, or resume");
-      }
+      const message = readSessionsSendMessage(params);
+      const mode = readSessionsSendMode(params);
       const resumeCaller =
         mode === undefined || mode === "resume" ? captureSessionsSendResumeCaller() : undefined;
       if (mode === "resume" && !resumeCaller) {
@@ -286,9 +278,12 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
       }
       const resolutionAccess = createSessionVisibilityRowChecker({
         action: "send",
-        defaultAgentId:
-          resolvedSession.agentId ??
-          resolveSessionAgentId({ config: cfg, sessionKey: resolvedSession.key }),
+        defaultAgentId: resolveSessionToolTargetAgentId({
+          cfg,
+          targetSessionKey: resolvedSession.key,
+          resolvedAgentId: resolvedSession.agentId,
+          requesterAgentId,
+        }),
         requesterAgentId,
         requesterSessionKey: effectiveRequesterKey,
         mainSessionKey,
@@ -690,14 +685,12 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
               notifyRequesterOnWaitFailure:
                 notifyRequesterOnWaitFailure && !isIsolatedCronRequester,
             });
-          if (timeoutSeconds === 0) {
-            await startReplyFlow(true);
-            return accepted();
-          }
-
-          const result = completion
-            ? await completion.take(timeoutMs)
-            : await waitForAgentRunReply({ runId, timeoutMs, callGateway: gatewayCall });
+          const result =
+            timeoutSeconds === 0
+              ? undefined
+              : completion
+                ? await completion.take(timeoutMs)
+                : await waitForAgentRunReply({ runId, timeoutMs, callGateway: gatewayCall });
           if (!result) {
             await startReplyFlow(true);
             return accepted();

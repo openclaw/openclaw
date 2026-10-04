@@ -609,7 +609,7 @@ describe("gateway server chat", () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-send-agent-"));
     testState.sessionStorePath = path.join(dir, "sessions.json");
     testState.agentsConfig = {
-      list: [{ id: "main", default: true }, { id: "orion" }],
+      entries: { main: {}, orion: {} },
     };
     try {
       await writeSessionStore({ entries: {} });

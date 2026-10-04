@@ -42,6 +42,7 @@ export type QaMockProviderDispatchResult = {
   failure?: QaMockProviderFailure;
   onResponseSent?: () => void;
   previewPauseMs?: number;
+  previewPause?: () => Promise<void>;
   responsePauseMs?: number;
 };
 
@@ -171,20 +172,6 @@ export type MockOpenAiRequestSnapshot = QaMockRequestSnapshot & {
 };
 
 export type MockOpenAiRequestSnapshotInput = Omit<MockOpenAiRequestSnapshot, "cursor">;
-
-/** Snapshot fields known before the mock decides an outcome or plans a tool. */
-export type MockOpenAiRequestSnapshotBase = Omit<
-  MockOpenAiRequestSnapshotInput,
-  | "outcome"
-  | "errorCode"
-  | "plannedToolCallId"
-  | "plannedToolItemId"
-  | "plannedToolName"
-  | "plannedWireToolName"
-  | "plannedToolArgs"
-  | "toolOutputCallId"
-  | "toolOutputStructuredError"
->;
 
 // Anthropic wire fields used by the shared Responses scenario dispatcher.
 export type AnthropicMessageContentBlock =
@@ -464,13 +451,14 @@ export async function writeSse(
   events: Array<StreamEvent | AnthropicStreamEvent>,
   protocol: "responses" | "anthropic",
   pauseMs?: number,
+  pause?: () => Promise<void>,
 ) {
   const frames = events.map(
     (event) =>
       `${protocol === "anthropic" ? `event: ${event.type}\n` : ""}data: ${JSON.stringify(event)}\n\n`,
   );
   const completionIndex =
-    pauseMs === undefined
+    pauseMs === undefined && pause === undefined
       ? -1
       : events.findIndex((event, index) => isPreviewCompletion(event, events[index - 1]));
   const body =
@@ -485,7 +473,11 @@ export async function writeSse(
   if (completionIndex >= 0) {
     // Flush preview deltas before delaying the final text and completion frames.
     res.write(frames.slice(0, completionIndex).join(""));
-    await sleep(pauseMs);
+    if (pause) {
+      await pause();
+    } else {
+      await sleep(pauseMs);
+    }
   }
   res.end(body);
 }
@@ -525,7 +517,8 @@ export function extractEmbeddingInputTexts(input: unknown): string[] {
   return [];
 }
 
-export function buildDeterministicEmbedding(text: string, dimensions = 16) {
+export function buildDeterministicEmbedding(text: string) {
+  const dimensions = 16;
   const values = Array.from({ length: dimensions }, () => 0);
   for (let index = 0; index < text.length; index += 1) {
     const embeddingIndex = index % dimensions;

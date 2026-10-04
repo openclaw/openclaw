@@ -80,25 +80,6 @@ async function runCommandSafe(argv: string[], signal?: AbortSignal): Promise<Com
   }
 }
 
-function parseLsofFieldOutput(output: string): PortListener[] {
-  const lines = output.split(/\r?\n/).filter(Boolean);
-  const listeners: PortListener[] = [];
-  let processFields: Pick<PortListener, "pid" | "command"> = {};
-  for (const line of lines) {
-    if (line.startsWith("p")) {
-      const pid = parseStrictPositiveInteger(line.slice(1));
-      processFields = pid !== undefined ? { pid } : {};
-    } else if (line.startsWith("c")) {
-      processFields.command = line.slice(1);
-    } else if (line.startsWith("n")) {
-      // TCP 127.0.0.1:18789 (LISTEN)
-      // TCP *:18789 (LISTEN)
-      listeners.push({ ...processFields, address: line.slice(1) });
-    }
-  }
-  return listeners;
-}
-
 function parseLsofTcpConnectionAddress(
   address: string | undefined,
 ): { local: { host: string; port: number }; remote: { host: string; port: number } } | null {
@@ -145,10 +126,19 @@ function resolveGatewayConnectionDirection(
 function parseLsofConnectionFieldOutput(output: string, port: number): PortConnection[] {
   const connections: PortConnection[] = [];
   const localAddresses = resolveLocalNetworkAddresses();
-  for (const entry of parseLsofFieldOutput(output)) {
-    const direction = resolveGatewayConnectionDirection(entry.address, port, localAddresses);
-    if (direction) {
-      connections.push({ ...entry, direction });
+  let processFields: Pick<PortListener, "pid" | "command"> = {};
+  for (const line of output.split(/\r?\n/)) {
+    if (line.startsWith("p")) {
+      const pid = parseStrictPositiveInteger(line.slice(1));
+      processFields = pid !== undefined ? { pid } : {};
+    } else if (line.startsWith("c")) {
+      processFields.command = line.slice(1);
+    } else if (line.startsWith("n")) {
+      const address = line.slice(1);
+      const direction = resolveGatewayConnectionDirection(address, port, localAddresses);
+      if (direction) {
+        connections.push({ ...processFields, address, direction });
+      }
     }
   }
   return connections;

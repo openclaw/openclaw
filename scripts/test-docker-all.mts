@@ -257,19 +257,6 @@ function parseBool(raw: string | undefined, fallback: boolean) {
   return !/^(?:0|false|no)$/i.test(raw);
 }
 
-function normalizeReleaseProfileEnv(raw: string | undefined) {
-  const profile = raw?.trim();
-  if (!profile) {
-    return normalizeReleaseProfile(undefined);
-  }
-  if (profile === "minimum" || profile === "beta" || profile === "stable" || profile === "full") {
-    return normalizeReleaseProfile(profile);
-  }
-  throw new Error(
-    `release profile must be one of: beta, stable, full. Got: ${JSON.stringify(raw)}`,
-  );
-}
-
 function resolveOptionalTimerTimeoutMs(valueMs: unknown) {
   return clampPositiveTimerTimeoutMs(Math.floor(Number(valueMs)));
 }
@@ -2085,7 +2072,7 @@ async function main() {
     cliOptions.planJson || parseBool(process.env.OPENCLAW_DOCKER_ALL_PLAN_JSON, false);
   const planReleaseAll = parseBool(process.env.OPENCLAW_DOCKER_ALL_PLAN_RELEASE_ALL, false);
   const profile = parseProfile(process.env.OPENCLAW_DOCKER_ALL_PROFILE);
-  const releaseProfile = normalizeReleaseProfileEnv(
+  const releaseProfile = normalizeReleaseProfile(
     process.env.OPENCLAW_DOCKER_ALL_RELEASE_PROFILE || process.env.OPENCLAW_RELEASE_PROFILE,
   );
   const releaseChunk = process.env.OPENCLAW_DOCKER_ALL_CHUNK || process.env.DOCKER_E2E_CHUNK || "";

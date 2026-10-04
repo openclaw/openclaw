@@ -85,6 +85,16 @@ A complete recovery point must cover these together:
   including databases at configured paths outside the default layout.
 - The workspaces, credentials, and retained originals needed by that installation.
 
+Restore that set from one backup generation. Do not combine a pre-update config
+or shared database with a post-update per-agent database, or the reverse. Model
+auth profiles and their state are authoritative in each
+`openclaw-agent.sqlite`. Files named
+`auth-profiles.json.sqlite-import.<id>.bak` or
+`auth-state.json.sqlite-import.<id>.bak` are preserved migration inputs or
+recovery artifacts, not the live credential store. Restoring those JSON files
+without the matching per-agent database does not restore that generation's auth
+state.
+
 Use `openclaw backup create --verify` for a verified, WAL-aware archive. Never copy only the
 main `.sqlite` file from a live WAL database: committed data can still be in
 `-wal`. Restore the verified consolidated database offline; do not mix it with
@@ -266,6 +276,16 @@ block even if the original updater has exited. Preserve the recovery snapshots
 and follow the reported process-inspection guidance before retrying repair.
 The installed updater owns this process supervision: a first update driven by
 2026.9.5 remains limited by that older parent's settlement checks.
+
+Before starting a preserved candidate, the updater checks shared and existing
+agent database schemas against the candidate's contract. If migrations remain
+pending after the failed Doctor has stopped, it runs the candidate Doctor again
+under Doctor's maintenance and backup safeguards, then checks completion before
+restarting the Gateway. A refused or incomplete repair stays in the update report
+with the reason and the commands `openclaw doctor --fix` followed by
+`openclaw gateway start`. Newer database schemas are never downgraded by this repair.
+The original update failure remains recorded even when recovery restores service.
+Its durable restart notice is delivered when the Gateway starts again.
 
 Automatic rollback restores code and captured config, and restores pre-migration
 database snapshots only when the Gateway was confirmed stopped during capture

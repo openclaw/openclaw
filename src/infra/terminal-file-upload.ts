@@ -23,6 +23,7 @@ import {
 import type { TerminalUploadResult as ProtocolTerminalUploadResult } from "../../packages/gateway-protocol/src/schema/terminal.js";
 import { logWarn } from "../logger.js";
 import { BoundedSerialQueue } from "../shared/bounded-serial-queue.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
 import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
 import { hasErrnoCode } from "./errno.js";
@@ -121,13 +122,15 @@ function scheduleCleanup(root: string, state: CleanupState, at: number): void {
     clearTimeout(state.timer);
   }
   state.nextAt = at;
-  state.timer = setTimeout(
-    () => {
-      state.timer = undefined;
-      state.nextAt = undefined;
-      void ensureTerminalUploadCleanup({ tempRoot: root, retentionMs: state.retentionMs });
-    },
-    Math.max(0, at - Date.now()),
+  state.timer = runInDetachedAsyncContext(() =>
+    setTimeout(
+      () => {
+        state.timer = undefined;
+        state.nextAt = undefined;
+        void ensureTerminalUploadCleanup({ tempRoot: root, retentionMs: state.retentionMs });
+      },
+      Math.max(0, at - Date.now()),
+    ),
   );
   state.timer.unref?.();
 }

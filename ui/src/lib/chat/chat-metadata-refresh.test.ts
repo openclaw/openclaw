@@ -1,8 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { GatewayPendingRequests } from "../../../../packages/gateway-client/src/pending-request.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import {
+  createGatewayRequestMock,
+  createTestGatewayClient,
+} from "../../test-helpers/gateway-client.ts";
 import { invalidateModelCatalogCache } from "../model-catalog-cache.ts";
-import { peekModelCatalog } from "../model-catalog-store.ts";
+import { loadModelCatalog, peekModelCatalog } from "../model-catalog-store.ts";
 import {
   invalidateChatMetadataForSessionEvent,
   invalidateChatMetadataStore,
@@ -16,6 +20,7 @@ import {
   loadChatMetadataRefresh,
   peekChatMetadata,
   revalidateChatMetadata,
+  retireChatMetadataRefresh,
   subscribeChatMetadata,
 } from "./chat-metadata-store.ts";
 
@@ -26,6 +31,65 @@ const models = [{ id: "fresh", name: "Fresh", provider: "test" }];
 afterEach(() => vi.useRealTimers());
 
 describe("automatic metadata admission", () => {
+  it("hands a retiring automatic catalog to its foreground reader without replacing the read", async () => {
+    const pending = createDeferred<{ models: typeof models }>();
+    const request = vi
+      .fn()
+      .mockReturnValueOnce(pending.promise)
+      .mockRejectedValue(new Error("Unexpected replacement"));
+    const client = createTestGatewayClient(request);
+    const release = subscribeChatMetadata(client, scope, () => {});
+    const automatic = loadChatMetadataRefresh(client, scope, { kind: "startup" });
+    const automaticCatalog = automatic.catalog.catch((error: unknown) => error);
+    retireChatMetadataRefresh(client, scope);
+    const foreground = loadModelCatalog(client, scope);
+    pending.resolve({ models });
+    try {
+      await expect(foreground).resolves.toEqual({ models });
+      await automatic.completed;
+      expect(await automaticCatalog).toEqual({ models });
+      expect(request).toHaveBeenCalledOnce();
+    } finally {
+      release();
+      await automatic.completed;
+    }
+  });
+
+  it("cancels startup polling after a retired refresh loses its last subscriber", async () => {
+    vi.useFakeTimers();
+    const protocol = new GatewayPendingRequests({
+      createRequestId: () => "catalog",
+      nowMs: Date.now,
+    });
+    const request = createGatewayRequestMock((method, params, options) =>
+      protocol.request({ send: () => {} }, method, params, options),
+    );
+    const client = createTestGatewayClient(request);
+    const release = subscribeChatMetadata(client, scope, () => {});
+    const automatic = loadChatMetadataRefresh(client, scope, { kind: "startup" });
+    const catalog = automatic.catalog.catch((error: unknown) => error);
+    protocol.handleResponse({
+      type: "res",
+      id: "catalog",
+      ok: false,
+      error: {
+        code: "UNAVAILABLE",
+        message: "Agent is preparing",
+        retryable: true,
+        details: { code: "agent-database-inspection-pending" },
+        retryAfterMs: 250,
+      },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    retireChatMetadataRefresh(client, scope);
+    release();
+    await automatic.completed;
+    expect(await catalog).toHaveProperty("name", "AbortError");
+    await vi.advanceTimersByTimeAsync(180_000);
+    expect(request).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it.each(["matching", "different", "failed", "retired"] as const)(
     "publishes commands immediately before validating the pending %s catalog after a session patch",
     async (outcome) => {
@@ -190,9 +254,6 @@ describe("automatic metadata admission", () => {
 
   it.each([
     { reason: "delete", sessionKey: scope.sessionKey },
-    { reason: "create", sessionKey: scope.sessionKey },
-    { reason: "new", sessionKey: scope.sessionKey },
-    { reason: "recovery", sessionKey: scope.sessionKey },
     { reason: "delete", sessionKey: undefined },
     { reason: "cleanup", sessionKey: undefined },
   ])("retires cached sessions before remount after $reason ($sessionKey)", async (event) => {

@@ -85,9 +85,9 @@ it.each(["activity", "work"] as const)(
     );
 
     const activity = container.querySelector<HTMLButtonElement>(".chat-activity-group__summary");
-    expect(activity?.textContent).toContain(kind === "work" ? "Worked for 1s" : "2 reads");
+    expect(activity?.textContent).toContain(kind === "work" ? "Worked for 1 second" : "2 reads");
     if (kind === "work") {
-      expect(activity?.textContent).toContain("2 tool calls");
+      expect(activity?.textContent).not.toContain("tool calls");
       expect(activity?.textContent).not.toContain("failed");
     }
     expect(activity?.querySelector("[title], [data-tooltip], openclaw-tooltip")).toBeNull();
@@ -131,10 +131,10 @@ it.each([
   const container = document.createElement("div");
   for (const expanded of [false, true]) {
     const summary = renderSummary([message], kind, { expanded, container });
-    expect(summary?.textContent).toContain(kind === "work" ? "Worked for 1s" : "1 read");
+    expect(summary?.textContent).toContain(kind === "work" ? "Worked for 1 second" : "1 read");
     expect(summary?.textContent?.match(/1 failed/gu)).toHaveLength(1);
     if (kind === "work") {
-      expect(summary?.textContent).toContain("1 tool call");
+      expect(summary?.textContent?.includes("1 tool call")).toBe(expanded);
     }
   }
 });
@@ -170,11 +170,10 @@ it.each(["activity", "work"] as const)("uses current prepared outcomes in %s sum
     },
   );
   const summary = renderSummary([message], kind);
-  expect(summary?.textContent).toContain(kind === "work" ? "Worked for 1s" : "1 read");
+  expect(summary?.textContent).toContain(kind === "work" ? "Worked for 1 second" : "1 read");
   expect(summary?.textContent).not.toContain("failed");
   if (kind === "work") {
-    expect(summary?.textContent).toContain("1 tool call");
-    expect(summary?.textContent).not.toContain("2 tool calls");
+    expect(summary?.textContent).not.toContain("tool call");
   }
   expect(summary?.querySelector(".chat-tool-failure")).toBeNull();
 });
@@ -197,8 +196,8 @@ it.each(["blocked", "skipped", undefined] as const)(
     const container = document.createElement("div");
     for (const expanded of [false, true]) {
       const summary = renderSummary([message], "work", { expanded, container });
-      expect(summary?.textContent).toContain("Worked for 1s");
-      expect(summary?.textContent).toContain("1 tool call");
+      expect(summary?.textContent).toContain("Worked for 1 second");
+      expect(summary?.textContent?.includes("1 tool call")).toBe(expanded);
       expect(summary?.textContent).toContain(`1 ${status ?? "unknown"}`);
       if (status === "skipped") {
         expect(summary?.textContent?.match(/1 skipped/g)).toHaveLength(1);
@@ -208,7 +207,7 @@ it.each(["blocked", "skipped", undefined] as const)(
   },
 );
 
-it.each([0, 10])("shows the total alongside failures without a duration (%i calls)", (total) => {
+it.each([0, 10])("keeps failures visible without a duration (%i calls)", (total) => {
   const groups = prepareHistoryGroups([
     createToolGroup("mixed", [
       createMessageEntry(
@@ -234,110 +233,111 @@ it.each([0, 10])("shows the total alongside failures without a duration (%i call
   );
   const summary = container.querySelector(".chat-activity-group__summary");
   const text = summary?.textContent?.replace(/\s+/gu, " ").trim();
-  expect(text).toBe(total ? "Worked · 10 tool calls · 2 failed" : "Worked");
+  expect(text).toBe(total ? "Worked · 2 failed" : "Worked");
 });
 
 function workSummaryText(messages: Record<string, unknown>[]) {
-  return renderSummary(messages, "work", { durationMs: null })
+  return renderSummary(messages, "work", { durationMs: null, expanded: true })
     ?.textContent?.replace(/\s+/gu, " ")
     .trim();
 }
 
-it("keeps anonymous calls and their failures distinct", () => {
-  const messages = [true, false].map((isError) => ({
-    role: "toolResult",
-    toolName: "exec",
-    content: isError ? "Command failed" : "Command completed",
-    isError,
-  }));
-  expect(workSummaryText(messages)).toBe("Worked · 2 tool calls · 1 failed");
-});
+function preparedOutcome(status = "completed") {
+  return {
+    itemId: "tool:prepared",
+    toolCallId: "prepared",
+    kind: "tool",
+    phase: "end",
+    name: "read",
+    title: "Read",
+    status,
+  };
+}
 
-it.each([false, true])("counts mixed prepared and raw history (reverse=%s)", (reverse) => {
-  const prepared = createToolResultMessage("prepared", "read", "Stale raw failure", {
-    isError: true,
-    activity: [
-      {
-        itemId: "tool:prepared",
-        toolCallId: "prepared",
-        kind: "tool",
-        phase: "end",
-        name: "read",
-        title: "Read",
-        status: "completed",
-      },
-    ],
-  });
-  const messages = [
-    createAssistantMessage([createToolCall("prepared", "read", {})]),
-    prepared,
-    createAssistantMessage([createToolCall("raw", "read", {})]),
-    createToolResultMessage("raw", "read", "Permission denied", { isError: true }),
-  ];
-  if (reverse) {
-    messages.splice(0, 2, prepared, messages[0]!);
-  }
-  expect(workSummaryText(messages)).toBe("Worked · 2 tool calls · 1 failed");
-});
-
-it.each(["empty", "hidden", "suppressed"] as const)(
-  "does not resurrect %s prepared calls from raw history",
-  (kind) => {
-    const activity =
-      kind === "empty"
-        ? []
-        : [
-            {
-              itemId: "tool:quiet",
-              toolCallId: "quiet",
-              kind: "tool",
-              phase: "end",
-              name: "read",
-              title: "Read",
-              status: "failed",
-              ...(kind === "hidden"
-                ? { hideFromChannelProgress: true }
-                : { suppressChannelProgress: true }),
-            },
-          ];
-    expect(
-      workSummaryText([
-        createAssistantMessage([createToolCall("quiet", "read", {})]),
-        createToolResultMessage("quiet", "read", "Hidden failure", { isError: true, activity }),
-        createToolResultMessage("visible", "read", "Visible failure", { isError: true }),
-      ]),
-    ).toBe("Worked · 1 tool call · 1 failed");
+it.each([
+  {
+    name: "anonymous calls stay distinct",
+    messages: [true, false].map((isError) => ({
+      role: "toolResult",
+      toolName: "exec",
+      content: isError ? "Command failed" : "Command completed",
+      isError,
+    })),
+    expected: "Worked · 2 tool calls · 1 failed",
   },
-);
-
-it.each(["raw", "blocked", "skipped"] as const)(
-  "keeps steering skips consistent with %s activity",
-  (kind) => {
-    const activity = [
-      {
-        itemId: "tool:skip",
-        toolCallId: "skip",
-        kind: "tool",
-        phase: "end",
-        name: "exec",
-        title: "Command",
-        status: kind === "blocked" ? "blocked" : "skipped",
-      },
-    ];
-    const message = createToolResultMessage("skip", "exec", "Skipped", {
-      details: { status: "skipped", deniedReason: "steering" },
-      ...(kind === "raw" ? {} : { activity }),
+  ...[false, true].map((reverse) => {
+    const prepared = createToolResultMessage("prepared", "read", "Stale raw failure", {
+      isError: true,
+      activity: [preparedOutcome()],
     });
-    const expected =
-      kind === "blocked" ? "Worked · 1 tool call · 1 blocked" : "Worked · 1 tool call · 1 skipped";
-    expect(workSummaryText([message])).toBe(expected);
-  },
-);
-
-it("keeps an unresolved anonymous raw call unknown", () => {
-  expect(
-    workSummaryText([
+    const messages = [
+      createAssistantMessage([createToolCall("prepared", "read", {})]),
+      prepared,
+      createAssistantMessage([createToolCall("raw", "read", {})]),
+      createToolResultMessage("raw", "read", "Permission denied", { isError: true }),
+    ];
+    if (reverse) {
+      messages.splice(0, 2, prepared, messages[0]!);
+    }
+    return {
+      name: `mixed history, reverse=${reverse}`,
+      messages,
+      expected: "Worked · 2 tool calls · 1 failed",
+    };
+  }),
+  ...["empty", "hidden", "suppressed"].map((kind) => ({
+    name: `${kind} prepared calls stay hidden`,
+    messages: [
+      createAssistantMessage([createToolCall("quiet", "read", {})]),
+      createToolResultMessage("quiet", "read", "Hidden failure", {
+        isError: true,
+        activity:
+          kind === "empty"
+            ? []
+            : [
+                {
+                  ...preparedOutcome("failed"),
+                  itemId: "tool:quiet",
+                  toolCallId: "quiet",
+                  ...(kind === "hidden"
+                    ? { hideFromChannelProgress: true }
+                    : { suppressChannelProgress: true }),
+                },
+              ],
+      }),
+      createToolResultMessage("visible", "read", "Visible failure", { isError: true }),
+    ],
+    expected: "Worked · 1 tool call · 1 failed",
+  })),
+  ...["raw", "blocked", "skipped"].map((kind) => ({
+    name: `${kind} steering skip`,
+    messages: [
+      createToolResultMessage("skip", "exec", "Skipped", {
+        details: { status: "skipped", deniedReason: "steering" },
+        ...(kind === "raw"
+          ? {}
+          : {
+              activity: [
+                {
+                  ...preparedOutcome(kind === "blocked" ? "blocked" : "skipped"),
+                  itemId: "tool:skip",
+                  toolCallId: "skip",
+                  name: "exec",
+                  title: "Command",
+                },
+              ],
+            }),
+      }),
+    ],
+    expected: `Worked · 1 tool call · 1 ${kind === "blocked" ? "blocked" : "skipped"}`,
+  })),
+  {
+    name: "unresolved anonymous raw call",
+    messages: [
       createAssistantMessage([{ type: "toolCall", name: "exec", arguments: { command: "pwd" } }]),
-    ]),
-  ).toBe("Worked · 1 tool call · 1 unknown");
+    ],
+    expected: "Worked · 1 tool call · 1 unknown",
+  },
+])("summarizes work outcomes: $name", ({ messages, expected }) => {
+  expect(workSummaryText(messages)).toBe(expected);
 });

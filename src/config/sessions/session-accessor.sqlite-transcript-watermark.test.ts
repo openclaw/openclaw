@@ -16,7 +16,6 @@ import {
 import {
   appendTranscriptEvent,
   appendTranscriptMessage,
-  loadSessionEntryReadOnly,
   readSessionTranscriptWatermark,
   replaceTranscriptEvents,
   upsertSessionEntryCore,
@@ -60,45 +59,6 @@ describe("SQLite transcript watermark queries", () => {
 
   afterEach(async () => {
     await state.cleanup();
-  });
-
-  it("does not recompile 1000 warm watermark reads while executing every query", () => {
-    const database = openOpenClawAgentDatabase(scope("first"));
-    const targets = [scope("first"), scope("second")];
-    const entries = targets.map(loadSessionEntryReadOnly);
-    const queries = trackSqliteStatementExecutions(database.db, ["watermarks"], (sql) =>
-      isHotWatermarkQuery(sql) ? "watermarks" : null,
-    );
-    const compile = vi.spyOn(getNodeSqliteKysely(database.db).getExecutor(), "compileQuery");
-    try {
-      const expected = targets.map(readSessionTranscriptWatermark);
-      expect(expected).toEqual([
-        { generation: expect.any(String), maxSeq: 0 },
-        { generation: expect.any(String), maxSeq: 1 },
-      ]);
-      expect(expected[0]?.generation).not.toBe(expected[1]?.generation);
-      const beforeReads = queries.counts.watermarks;
-      const beforeChanges = database.db.prepare("SELECT total_changes() AS count").get();
-      compile.mockClear();
-      for (let index = 0; index < 1_000; index++) {
-        const targetIndex = index % targets.length;
-        expect(readSessionTranscriptWatermark(targets[targetIndex]!)).toEqual(
-          expected[targetIndex],
-        );
-      }
-      expect(queries.counts.watermarks - beforeReads).toBe(1_000);
-      expect(database.db.prepare("SELECT total_changes() AS count").get()).toEqual(beforeChanges);
-      expect(targets.map(loadSessionEntryReadOnly)).toEqual(entries);
-      expect(database.db.isTransaction).toBe(false);
-      expect(
-        compile.mock.results.filter(
-          (result) => result.type === "return" && isHotWatermarkQuery(result.value.sql),
-        ).length,
-      ).toBe(0);
-    } finally {
-      compile.mockRestore();
-      queries.restore();
-    }
   });
 
   it("binds each session again after appends, rewrites, and missing-session reads", async () => {

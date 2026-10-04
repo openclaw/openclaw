@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { isIndexedSessionEntry } from "../agents/sessions/session-manager-codec.js";
@@ -57,31 +58,27 @@ function createCanonicalHeaderlessEventParser(sessionId: string) {
       } catch {
         return undefined;
       }
-      if (!event || typeof event !== "object" || Array.isArray(event)) {
-        return undefined;
-      }
-      const record = event as Record<string, unknown>;
-      if (record.type === "session") {
+      if (!isRecord(event) || event.type === "session") {
         return undefined;
       }
       // Opaque plugin rows remain uninterpreted. Known entries and leaf controls
       // must already satisfy the runtime schema before a replacement can be lossless.
-      if (isCanonicalSessionTranscriptEntry(record)) {
+      if (isCanonicalSessionTranscriptEntry(event)) {
         if (!isIndexedSessionEntry(event)) {
           return undefined;
         }
         indexedEntries += 1;
-      } else if (record.type === "leaf" && !isSessionTranscriptLeafControl(record)) {
+      } else if (event.type === "leaf" && !isSessionTranscriptLeafControl(event)) {
         return undefined;
       }
-      if (typeof record.id === "string") {
-        const eventId = record.id.trim();
+      if (typeof event.id === "string") {
+        const eventId = event.id.trim();
         if (!eventId || eventIds.has(eventId)) {
           return undefined;
         }
         eventIds.add(eventId);
       }
-      return record;
+      return event;
     },
   };
 }

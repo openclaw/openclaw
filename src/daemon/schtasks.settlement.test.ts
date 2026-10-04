@@ -114,6 +114,7 @@ describe("Scheduled Task settlement", () => {
         expect(events.indexOf("ready")).toBeLessThan(events.indexOf("run"));
         expect(Date.now()).toBeGreaterThanOrEqual(500);
         expect(events.includes("end")).toBe(end);
+        expect(spawnSync.mock.calls.some(([exe]) => exe.endsWith("taskkill.exe"))).toBe(native);
         expect(result).toEqual({
           outcome: "completed",
           taskSettlement: {

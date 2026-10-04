@@ -85,6 +85,61 @@ Idempotent retries and caller cancellation keep their existing behavior across
 host upgrades. Changing this contract requires an explicitly approved SDK
 migration.
 
+### Gateway placement and publication readers
+
+The Gateway context exposed by `GatewayRequestHandlerOptions` from `core` and
+`gateway-runtime`, and by `getPluginRuntimeGatewayRequestScope()` from
+`plugin-runtime`, retains these synchronous contracts shipped in OpenClaw
+2026.9.7:
+
+- `workerSessionPlacementService.listPendingWorkspaceResults(sessionId?)`
+  returns the pending result array.
+- `workerSessionPlacementService.getWorkspaceResultReconcilingSessionIds(sessionIds)`
+  returns a `ReadonlySet<string>`.
+- `githubPublicationService.deferOrphanedRequests()` returns `void` after
+  orphaned requests have been deferred.
+
+Migrate to the corresponding `Async`-suffixed methods and await their results.
+The placement readers use the SQLite worker. Internal callers use the awaited
+methods; the synchronous adapters remain solely for released plugin contracts.
+TypeScript marks those adapters deprecated. They retain their result shapes and
+completion timing until the next Plugin SDK major and an explicitly approved
+breaking release. No schema, retained data, or update migration changes.
+
+### Channel pairing allowlists
+
+`readChannelAllowFromStoreSync` from `openclaw/plugin-sdk/channel-pairing` is
+deprecated as of October 3, 2026. Await `readChannelAllowFromStore` from the same
+subpath with the same channel, environment, and optional account ID. Both APIs
+shipped in OpenClaw 2026.9.8; the synchronous API keeps its signature and native
+behavior until the next Plugin SDK major and explicit breaking-release approval.
+
+The async API and bundled channel callers read current allowlist rows in the
+shared-state worker. Account normalization, entry ordering, and ingress policy
+gates are unchanged. A missing store returns an empty allowlist without creating
+storage; boot and Doctor own initialization and migrations. Read failures
+propagate to the caller, and ingress retains its fail-closed handling. Prepared
+entries do not replace current message or channel authority. No schema, retention,
+or update migration is required, and no runtime warning is emitted.
+
+### Watched-session harness context
+
+`buildWatchedSessionsHarnessContext` from
+`openclaw/plugin-sdk/agent-harness-runtime` is deprecated as of October 3, 2026.
+Await `prepareWatchedSessionsHarnessContext` from the same subpath, passing the
+same prompt inputs and a required `assertCurrent` callback bound to the current
+host capability and attempt cancellation. The callback must throw when that
+authority is no longer current; preparation checks it before reads and again
+before disclosing the prepared context.
+
+The awaited helper reads watched-session and session-entry facts in the existing
+database workers. It preserves prompt bytes, ordering, limits, tool availability,
+and visibility gates, and never falls back to caller-thread database reads.
+Bundled harnesses use the awaited helper. The released synchronous helper keeps
+its `string | undefined` result and behavior until the next Plugin SDK major and
+explicit breaking-release approval. JSDoc and the compatibility registry record
+the deprecation; no runtime warning, schema migration, or update change is needed.
+
 ### Harness attempt result migration
 
 In OpenClaw 2026.8.1, `EmbeddedRunAttemptResult` from
@@ -100,6 +155,42 @@ canonical result, and the host lifecycle normalizes legacy results before
 core consumes them. New producers should construct `terminal`; consumers of
 the union must narrow the result before reading it. The current
 `EmbeddedRunAttemptResult` contract keeps `terminal` required.
+
+### Mention Inbox persistence
+
+The October 3, 2026 `mention-inbox-sync-persistence` record retains the
+synchronous `mentionInbox.list(client)`, `mentionInbox.dismiss(client, ids)`,
+`mentionInbox.recordCommittedInput(input)`, and `mentionInbox.invalidate(sessionKey)`
+contracts exposed through the Gateway Plugin SDK context. Their result shapes,
+exact-ID matching, and immediate completion remain supported until the next
+Plugin SDK major and explicit breaking-release approval. Recording persists
+synchronously; invalidation refreshes connected views before returning. Inside
+an enclosing transaction, notifications wait for that transaction to commit.
+
+Use `listAsync` and `dismissAsync` with their synchronous result-publication
+callbacks, and await `recordCommittedInputAsync` and `invalidateAsync`; see
+[awaited Mention Inbox operations](/plugins/sdk-migration/how-to-migrate#await-mention-inbox-operations).
+Core and bundled callers use these worker-backed methods. Legacy calls emit one
+`DEP_SESSION_PERSISTENCE` warning per plugin and method per process, with a
+once-per-method warning for unscoped calls. Schemas, retained data, and update
+behavior are unchanged.
+
+### Personal model-account control plane
+
+The October 3, 2026 `model-account-connect-sync-persistence` record retains the
+seven synchronous `modelAccountConnectService` methods shipped in 2026.9.8:
+`listLinks`, `link`, `unlink`, `list`, `select`, `status`, and `cancel`. They remain
+available through the Gateway Plugin SDK context with their existing arguments,
+return envelopes, and immediate completion until the next Plugin SDK major and
+explicit breaking-release approval. In particular, the released action shape
+`{ owner: string; assertCurrent: () => void }` remains source-compatible.
+
+Core and bundled callers use the corresponding `Async` methods; see
+[awaited personal model-account operations](/plugins/sdk-migration/how-to-migrate#await-personal-model-account-operations).
+Synchronous calls emit one `DEP_SESSION_PERSISTENCE` warning per plugin and
+method per process; unscoped callers warn once per method. The compatibility
+adapters retain native database access during this window. RPC schemas,
+credential storage, retention, and update behavior are unchanged.
 
 ### Awaited session persistence
 
@@ -117,6 +208,31 @@ types. Bundled code uses the awaited contracts. File-backed writes reuse the
 canonical worker writer; incognito retains its process-local owner until its
 separate cutover. Schemas, persisted bytes, and supported update paths are
 unchanged. Removal still requires explicit breaking-release approval.
+
+### Native session generation authority
+
+The production-private `agent-harness-session-runtime` subpath retains the
+contracts consumed by official harness packages released with OpenClaw 2026.9.8.
+`captureNativeSessionGenerationAuthority` still returns `state`,
+`previousSessionId`, `assertHostCurrent`, and `assertCurrent` synchronously.
+`resolveNativeSessionBinding` still returns `{ binding, assertCurrent }`, and
+`NativeSessionGenerationOperations` keeps its two-argument `adopt` and `reclaim`
+callbacks. Their supplied assertion continues to check durable session lineage
+after an awaited operation.
+
+Current harness code awaits `prepareNativeSessionGenerationAuthority`,
+`resolveNativeSessionBindingWithAuthority`, or
+`reclaimNativeSessionGenerationWithAuthority`. The resolver returns
+`{ binding, authority }`. `NativeSessionGenerationOperationsV2` requires each
+mutation callback to accept `(expectedPreviousSessionId, authority)` and carry
+that authority into binding storage. Use `authority.withCurrent` for synchronous
+native action admission; its ordinary `assertCurrent` checks lifecycle only.
+Durable lineage reads use the session worker.
+
+The old exports are deprecated without runtime warnings. They remain until the
+next Plugin SDK major, migration of supported published official harness readers,
+and explicit breaking-release approval. This preserves installed harnesses
+across host upgrades without extending the private subpath into a public SDK.
 
 ### Model-provider result compatibility
 
@@ -239,6 +355,17 @@ sources (`ENOENT`) and values the plugin parser rejects with `null`. Other read
 errors and invalid JSON reach Doctor's detection or migration warnings; the
 source remains untouched so the operator can fix it and retry.
 
+For a format outside the [supported upgrade window](/gateway/doctor/config-migrations#retention-policy),
+use `defineRetiredPluginStateMigration({ id, label, intermediateVersion, findSources })`
+from the same facade. The plugin supplies absolute candidate paths or immediate
+directory selections `{ directory, prefix?, suffix }`; the helper checks existence
+without parsing or changing source bytes. Missing paths are ignored; other read
+errors remain failures. Doctor reports a refusal naming the intermediate release
+and retained files. Supply `recoveryInstructions` when the bridge requires an
+owner-specific step beyond Doctor. Its `assertSupportedState(input, sources?)` operation applies
+the same check at runtime admission; a caller with an already selected file may
+pass that path explicitly. Keep account and workspace discovery with the plugin.
+
 Use `phase: "after-session-repair"` when a migration needs canonical session
 ownership evidence. Ordinary Doctor detects these migrations; `--fix` applies
 them after session repair under SQLite maintenance ownership. The context
@@ -319,6 +446,50 @@ while those migrations remain unverified; their original dates are unchanged.
 | `plugin-runtime-api-compat-aliases`               | Namespaced plugin APIs and focused runtime methods                | All enumerated flat API/runtime aliases have no readers.                                                             |
 | `plugin-provider-manifest-compat-aliases`         | Manifest-owned kind/setup metadata and model catalog registration | Providers no longer publish runtime kind or legacy catalog hooks.                                                    |
 | `agent-harness-credential-prompt-string-argument` | Options object `{ controlToolsAvailable }`                        | Deprecated and warnings start 2026-09-09; supported through 2026-11-30. Remove after that date once callers migrate. |
+
+The deprecated GitHub Copilot token-exchange exports have been removed from
+`provider-auth`: `DEFAULT_COPILOT_API_BASE_URL`, `deriveCopilotApiBaseUrlFromToken`,
+`resolveCopilotApiToken`, and `CachedCopilotToken`. The GitHub Copilot plugin owns
+authentication and account endpoint resolution; provider integrations should
+use their registered auth hooks instead of the retired `/v2/token` exchange.
+`normalizeGithubCopilotDomain` remains available.
+
+Update plugins that import the removed exports before updating the host. This
+removal does not rewrite credentials, delete existing cache entries, or change
+the current GitHub Copilot plugin's authentication flow.
+
+The deprecated `sourceVisibleReplies` delivery default remains supported for
+July 2026 `@openclaw/codex` plugins. Migrate to
+[`deliveryDefaults.visibleReplies`](/plugins/sdk-agent-harness/sessions-and-results#harness-delivery-defaults).
+Published-plugin checks must include supported older versions: updates can
+retain an older or linked plugin package.
+
+Eight deprecated stream and replay hook constants have been removed. Construct
+the same hooks with `buildProviderStreamFamilyHooks` from `provider-stream-family`
+or `buildProviderReplayFamilyHooks` from `provider-model-shared`:
+
+| Removed constant                   | Constructor argument               |
+| ---------------------------------- | ---------------------------------- |
+| `GOOGLE_THINKING_STREAM_HOOKS`     | `"google-thinking"`                |
+| `KILOCODE_THINKING_STREAM_HOOKS`   | `"kilocode-thinking"`              |
+| `MINIMAX_FAST_MODE_STREAM_HOOKS`   | `"minimax-fast-mode"`              |
+| `OPENAI_RESPONSES_STREAM_HOOKS`    | `"openai-responses-defaults"`      |
+| `OPENROUTER_THINKING_STREAM_HOOKS` | `"openrouter-thinking"`            |
+| `TOOL_STREAM_DEFAULT_ON_HOOKS`     | `"tool-stream-default-on"`         |
+| `ANTHROPIC_BY_MODEL_REPLAY_HOOKS`  | `{ family: "anthropic-by-model" }` |
+| `OPENAI_COMPATIBLE_REPLAY_HOOKS`   | `{ family: "openai-compatible" }`  |
+
+The stream constants are removed from both `provider-stream` and
+`provider-stream-family`. Update plugins that import them before updating the
+host. The constructors retain their existing behavior; this removal does not
+change stored config, credentials, or session data.
+
+`MOONSHOT_THINKING_STREAM_HOOKS` remains on both stream subpaths for published
+Moonshot providers. `NATIVE_ANTHROPIC_REPLAY_HOOKS` and
+`PASSTHROUGH_GEMINI_REPLAY_HOOKS` remain on `provider-model-shared` for published
+Anthropic Vertex and Kilocode providers. Their `2026.7.1` and `2026.7.33` through
+`2026.7.35` packages still import these names. The constructors are preferred
+for new code, but these aliases retain their reader-dependent removal condition.
 
 The unused private memory-host `loadConfig` re-exports have been removed.
 Memory implementations use `getRuntimeConfig` or caller-provided config;
@@ -406,6 +577,23 @@ displays either the date or named gate, counts local code/doc references, lists
 `removal-pending` records with their blockers and surface-token reader
 references, and summarizes the private memory-host SDK bridge. Those reader
 references are triage signals, not published-artifact proof.
+
+### TTS preference resolution
+
+Host reply dispatch now prepares the machine-owned TTS preference path through
+the shared-state reader and carries that fact through prompt and delivery work.
+The released `resolveTtsPrefsPath(config)` call in
+`openclaw/plugin-sdk/agent-runtime` and `openclaw/plugin-sdk/tts-runtime` still
+returns a `string` synchronously. `buildTtsSystemPromptHint(config, agentId,
+options)` also keeps its synchronous return value, and the existing asynchronous
+`maybeApplyTtsToPayload` call does not require prepared preferences.
+
+The `tts-preferences-sync-resolution` compatibility record retains the legacy
+synchronous resolution path. Removal requires a public preparation contract,
+migration of published plugin readers, and explicit approval for a breaking
+Plugin SDK release at the next major-version gate. No removal date or runtime
+warning is introduced. Existing plugins need no change for this host update;
+preference-file reads, stored data, and update behavior stay the same.
 
 ### Media legacy projection
 

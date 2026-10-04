@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import { MessagePort, Worker } from "node:worker_threads";
 import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { WorkerRetirementReason } from "@openclaw/worker-runtime";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { DiagnosticMemoryUsage } from "./diagnostic-process-types.js";
 import { normalizeDiagnosticWorkerScript } from "./worker-diagnostic-script.js";
@@ -32,14 +33,7 @@ type WorkerSource = {
   memoryUnavailable?: boolean;
 };
 
-export type WorkerRetirementReason =
-  | "idle_timeout"
-  | "memory_pressure"
-  | "closed"
-  | "rotation"
-  | "cancelled"
-  | "failure"
-  | "exit";
+export type { WorkerRetirementReason } from "@openclaw/worker-runtime";
 
 function workerScriptName(filename: string | URL, evalSource = false): string {
   // Never retain eval source, arbitrary filenames, or installation paths in diagnostics.

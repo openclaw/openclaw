@@ -4,13 +4,11 @@
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { format } from "node:util";
+import { disableExitUnsafeCompilers } from "./bootstrap/node-exit-safe-compilers.js";
 import { resolveCliArgvInvocation } from "./cli/argv-invocation.js";
 import { isRootHelpInvocation } from "./cli/argv.js";
 import { parseCliContainerArgs, resolveCliContainerTarget } from "./cli/container-target.js";
-import {
-  tryOutputPrecomputedCommandHelp,
-  type PrecomputedCommandHelpDeps,
-} from "./cli/precomputed-help.js";
+import { tryOutputPrecomputedCommandHelp } from "./cli/precomputed-help.js";
 import { applyCliProfileEnv, parseCliProfileArgs } from "./cli/profile.js";
 import type { RootHelpRenderOptions } from "./cli/program/root-help.js";
 import { isNativeHookRelayArgv } from "./cli/respawn-policy.js";
@@ -122,12 +120,14 @@ const gatewayEntryStartupTrace = createGatewayDispatchStartupTrace(process.argv,
 // is the actual entry point; without this guard the top-level code below
 // would call runCli a second time, starting a duplicate gateway that fails
 // on the lock / port and crashes the process.
-if (
-  !isMainModule({
-    currentFile: fileURLToPath(import.meta.url),
-    wrapperEntryPairs: [...ENTRY_WRAPPER_PAIRS],
-  })
-) {
+const isEntryMain = isMainModule({
+  currentFile: fileURLToPath(import.meta.url),
+  wrapperEntryPairs: [...ENTRY_WRAPPER_PAIRS],
+});
+if (isEntryMain) {
+  disableExitUnsafeCompilers();
+}
+if (!isEntryMain) {
   // Imported as a dependency — skip all entry-point side effects.
 } else if (isUpdateAdmissionInvocation(resolveCliArgvInvocation(process.argv))) {
   await tryRunUpdateAdmissionBeforeStartup(resolveCliArgvInvocation(process.argv));
@@ -316,17 +316,13 @@ export async function tryHandleRootHelpFastPath(
   }
 }
 
-export async function tryHandlePrecomputedCommandHelpFastPath(
-  argv: string[],
-  deps: PrecomputedCommandHelpDeps = {},
-): Promise<boolean> {
-  const env = deps.env ?? process.env;
-  if (resolveCliContainerTarget(argv, env)) {
+export async function tryHandlePrecomputedCommandHelpFastPath(argv: string[]): Promise<boolean> {
+  if (resolveCliContainerTarget(argv)) {
     return false;
   }
 
   try {
-    return await tryOutputPrecomputedCommandHelp(argv, { ...deps, env });
+    return await tryOutputPrecomputedCommandHelp(argv);
   } catch {
     return false;
   }

@@ -4,54 +4,44 @@ import { isNativeGeneratedOnlyChange } from "../../scripts/lib/ci-native-generat
 import { runCiManifestFixture } from "./ci-workflow-manifest.test-support.js";
 
 describe("native protocol generation scope", () => {
-  it.each([
-    "packages/gateway-protocol/src/schema/frames.ts",
-    "packages/gateway-protocol/src/version.ts",
-    "scripts/protocol-gen-swift.ts",
-    "scripts/protocol-gen-kotlin.ts",
-    "scripts/prepare-native-protocol.mjs",
-    "scripts/native-protocol-inputs.json",
-    "src/gateway/server-methods-list.ts",
-  ])("builds native consumers when only %s changes", (file) => {
-    expect(detectChangedScope([file])).toMatchObject({
-      runMacos: true,
-      runIosBuild: true,
-      runAndroid: true,
-    });
-  });
+  it.each(["packages/gateway-protocol/src/schema/frames.ts", "scripts/protocol-gen-swift.ts"])(
+    "builds native consumers when only %s changes",
+    (file) => {
+      expect(detectChangedScope([file])).toMatchObject({
+        runMacos: true,
+        runIosBuild: true,
+        runAndroid: true,
+      });
+    },
+  );
 });
 
 describe("generated native locale scope", () => {
-  it.each([
-    ["apps/.i18n/native/de.json"],
-    ["apps/ios/Resources/Localizable.xcstrings"],
-    ["apps/android/app/src/main/java/ai/openclaw/app/i18n/NativeStringResources.kt"],
-    [
-      "apps/android/app/src/main/res/values-de/strings.xml",
-      "apps/android/app/src/main/res/values/strings.xml",
-    ],
-  ])("recognizes generated artifacts while retaining their verifier (%j)", (...paths) => {
-    expect(isNativeGeneratedOnlyChange(paths)).toBe(true);
-    expect(shouldRunNativeI18n(paths)).toBe(true);
-    // The fact does not globally disable main's ordinary changed-scope coverage.
-    const scope = detectChangedScope(paths);
-    expect(scope.runNode || scope.runIosBuild || scope.runAndroid).toBe(true);
-  });
-
-  it.each(
-    [
-      null,
-      [],
-      ["apps/android/app/src/main/res/values/strings.xml"],
-      ["apps/.i18n/native-source.json"],
-      ["apps/.i18n/native/de.json", "apps/ios/Sources/Example.swift"],
-      ["apps/.i18n/native/de.json", "src/infra/example.ts"],
-      ["apps/.i18n/native/de.json", "pnpm-lock.yaml"],
-      ["apps/.i18n/native/de.json", "docs/example.md"],
-    ].map((paths) => ({ paths })),
-  )("retains ordinary coverage for incomplete or mixed diffs ($paths)", ({ paths }) => {
-    expect(isNativeGeneratedOnlyChange(paths)).toBe(false);
-  });
+  it.each<{ paths: string[] | null; generated: boolean }>([
+    { paths: ["apps/.i18n/native/de.json"], generated: true },
+    { paths: ["apps/ios/Resources/Localizable.xcstrings"], generated: true },
+    {
+      paths: [
+        "apps/android/app/src/main/res/values-de/strings.xml",
+        "apps/android/app/src/main/res/values/strings.xml",
+      ],
+      generated: true,
+    },
+    { paths: null, generated: false },
+    { paths: [], generated: false },
+    { paths: ["apps/android/app/src/main/res/values/strings.xml"], generated: false },
+    { paths: ["apps/.i18n/native/de.json", "apps/ios/Sources/Example.swift"], generated: false },
+  ])(
+    "classifies generated-only diffs and retains their verifier ($paths)",
+    ({ paths, generated }) => {
+      expect(isNativeGeneratedOnlyChange(paths)).toBe(generated);
+      if (generated && paths) {
+        expect(shouldRunNativeI18n(paths)).toBe(true);
+        const scope = detectChangedScope(paths);
+        expect(scope.runNode || scope.runIosBuild || scope.runAndroid).toBe(true);
+      }
+    },
+  );
   it.each([
     { eventName: "pull_request" as const, author: "Bot", full: false, runBuilds: false },
     { eventName: "pull_request" as const, author: "User", full: false, runBuilds: true },

@@ -10,8 +10,9 @@ type WorktreeRetirementOperations = Pick<
 export async function deferWorktreeCleanup(
   env: NodeJS.ProcessEnv,
   input: WorktreeRetirementOperations["worktrees.deferCleanup"]["input"],
+  assertCurrent?: () => void,
 ) {
-  return await mutateCleanupRecord(env, { type: "worktrees.deferCleanup", input });
+  return await mutateCleanupRecord(env, { type: "worktrees.deferCleanup", input }, assertCurrent);
 }
 
 export async function retireMissingRegistryWorktree(

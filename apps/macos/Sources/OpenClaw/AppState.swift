@@ -84,7 +84,7 @@ final class AppState {
     #endif
     private var configWatcher: ConfigFileWatcher?
     private var lastConfigFingerprint: Data?
-    private var lastObservedGatewayConfig: GatewayConfigSnapshot = .empty
+    private var lastObservedGatewayConfig: [GatewayConfigField: Data] = [:]
     private var lastObservedGatewayFingerprint: Data?
     private var dirtyGatewayConfigFields: Set<GatewayConfigField> = []
     private var conflictedGatewayConfigFields: Set<GatewayConfigField> = []
@@ -593,9 +593,6 @@ final class AppState {
 
         if !self.isPreview {
             self.activateVoice()
-        }
-
-        if !self.isPreview {
             self.reconcilePreferredGatewayRouteBinding()
         }
         self.isInitializing = false
@@ -624,15 +621,8 @@ final class AppState {
     }
 
     private static func remoteHost(from urlString: String?) -> String? {
-        guard let raw = urlString?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !raw.isEmpty,
-              let url = URL(string: raw),
-              let host = url.host?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !host.isEmpty
-        else {
-            return nil
-        }
-        return host
+        guard let raw = urlString?.trimmedNonEmpty else { return nil }
+        return URL(string: raw)?.host?.trimmedNonEmpty
     }
 
     private static func sshTunnelGatewayUrl(existingUrl: String?, expectedRemoteHost: String?) -> String {
@@ -783,26 +773,22 @@ extension AppState {
         return try? JSONSerialization.data(withJSONObject: comparableRoot, options: [.sortedKeys])
     }
 
-    private static func gatewayConfigSnapshot(_ root: [String: Any]) -> GatewayConfigSnapshot {
+    private static func gatewayConfigSnapshot(_ root: [String: Any]) -> [GatewayConfigField: Data] {
         let gateway = root["gateway"] as? [String: Any]
         let remote = gateway?["remote"] as? [String: Any]
-        var values: [GatewayConfigField: GatewayConfigValue] = [:]
+        var values: [GatewayConfigField: Data] = [:]
         for field in GatewayConfigField.allCases {
             let value = if let remoteKey = field.remoteKey {
                 remote?[remoteKey]
             } else {
                 gateway?["mode"]
             }
-            guard let value else {
-                values[field] = .missing
-                continue
-            }
-            let data = try? JSONSerialization.data(
+            guard let value else { continue }
+            values[field] = try? JSONSerialization.data(
                 withJSONObject: ["value": value],
                 options: [.sortedKeys])
-            values[field] = data.map(GatewayConfigValue.json) ?? .missing
         }
-        return GatewayConfigSnapshot(values: values)
+        return values
     }
 
     private func gatewayConfigDraft() -> GatewayConfigSyncDraft {
@@ -1112,10 +1098,7 @@ extension AppState {
 
     private static func loadChime(key: String, fallback: VoiceWakeChime) -> VoiceWakeChime {
         guard let data = AppDefaults.standard.data(forKey: key) else { return fallback }
-        if let decoded = try? JSONDecoder().decode(VoiceWakeChime.self, from: data) {
-            return decoded
-        }
-        return fallback
+        return (try? JSONDecoder().decode(VoiceWakeChime.self, from: data)) ?? fallback
     }
 
     private func storeChime(_ chime: VoiceWakeChime, key: String) {

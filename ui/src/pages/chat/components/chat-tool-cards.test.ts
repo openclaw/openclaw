@@ -19,6 +19,15 @@ import { createMessageEntry, createToolGroup } from "./chat-message.test-support
 import { renderToolCard } from "./chat-tool-cards.ts";
 import { renderToolPreview } from "./widget-card.ts";
 
+const pluginSurface = vi.hoisted(() => ({ props: [] as unknown[] }));
+vi.mock("../../../plugins/control-ui-view.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../plugins/control-ui-view.ts")>()),
+  renderPluginSurface: (_surface: string, props: unknown, defaultView: unknown) => {
+    pluginSurface.props.push(props);
+    return defaultView;
+  },
+}));
+
 const canvas = { kind: "canvas", surface: "assistant_message", render: "url" } as const;
 
 function textOf(container: ParentNode, selector: string) {
@@ -416,7 +425,9 @@ describe("tool-cards", () => {
       const container = mountCard(card, { ...options, expanded: false });
 
       const summary = container.querySelector("button.chat-tool-msg-summary");
-      expect(summary?.textContent).not.toContain("Message");
+      expect(textOf(container, ".chat-tool-msg-summary__label")).toBe(
+        shape === "serialized" ? "Message" : undefined,
+      );
       expect(
         summary?.querySelector(".chat-tool-msg-summary__icon")?.getAttribute("aria-label"),
       ).toBe("message");
@@ -517,13 +528,29 @@ describe("tool-cards", () => {
 });
 
 describe("tool-card outcomes", () => {
+  it.each(["start", "update"] as const)(
+    "keeps statusless %s activity running only while live",
+    (phase) => {
+      const card: ToolCard = {
+        id: "statusless-activity",
+        name: "subagents",
+        live: true,
+        activity: { itemId: "statusless-activity", kind: "tool", title: "Delegate task", phase },
+      };
+      const container = mountCard(card, { runActive: true });
+      expect(textOf(container, ".chat-tool-card__outcome")).toBe("Running");
+      mountCard(card, { runActive: false }, container);
+      expect(textOf(container, ".chat-tool-card__outcome")).toBe("Outcome unknown");
+    },
+  );
+
   it.each([
     { status: "failed", label: "failed" },
     { status: "blocked", label: "Blocked" },
     { status: "skipped", label: "Skipped" },
     { status: undefined, label: "Outcome unknown" },
   ] as const)(
-    "preserves prepared $status outcomes through live items and history attachment",
+    "reconciles prepared $status outcomes through live items and history attachment",
     ({ status, label }) => {
       const item = projectAgentActivityItem({
         itemId: "collaboration-call",
@@ -578,7 +605,7 @@ describe("tool-card outcomes", () => {
         const card = extractToolCardsCached(message)[0]!;
         expect(card.outputText).toBeUndefined();
         expect(card.isError).toBeUndefined();
-        expect(card.completed).not.toBe(true);
+        expect(card.completed === true).toBe(message === live);
       }
       expect(live).toMatchObject({ __openclawToolStreamResultReceived: false });
       expect(saved).not.toHaveProperty("activity");
@@ -618,6 +645,10 @@ describe("tool-card outcomes", () => {
   it.each([
     { name: "write", args: { path: "/workspace/operation.json", content: "{}" } },
     { name: "progress_card", args: { markdown: "Preparing release" } },
+    {
+      name: "tool_call",
+      args: { id: "web_search", args: { query: "OpenClaw release notes" } },
+    },
   ])("shows skipped $name calls without claiming failure or success", ({ name, args }) => {
     const container = document.createElement("div");
     const card: ToolCard = {
@@ -631,9 +662,80 @@ describe("tool-card outcomes", () => {
     };
     for (const expanded of [false, true]) {
       mountCard(card, { expanded }, container);
+      if (name === "tool_call") {
+        expect(textOf(container, ".chat-tool-msg-summary")).toContain("OpenClaw release notes");
+      }
       expect(container.textContent?.toLowerCase()).toContain("skipped");
       expect(container.textContent).not.toMatch(/failed|Completed|updated|Tool error/);
       expect(container.querySelector(".chat-tool-card--error")).toBeNull();
+    }
+  });
+
+  it.each([
+    {
+      name: "web_search",
+      args: { query: "OpenClaw release notes" },
+      text: "OpenClaw release notes",
+    },
+    { name: "read", args: { path: "/workspace/CHANGELOG.md" }, text: "CHANGELOG.md" },
+    {
+      name: "exec",
+      args: { command: "check-release", title: "Check the release" },
+      text: "Check the release",
+    },
+  ])(
+    "renders a Tool Search $name like a direct call and retains the sidebar identity",
+    ({ name, args, text }) => {
+      const input = { id: name, args };
+      const card: ToolCard = {
+        id: "search-release",
+        callId: "search-release",
+        name: "tool_call",
+        args: input,
+        inputText: JSON.stringify(input, null, 2),
+        outputText: "Found the release notes.",
+        completed: true,
+      };
+      const onOpenSidebar = vi.fn();
+      for (const expanded of [false, true]) {
+        const container = mountCard(card, { expanded, onOpenSidebar });
+        expect(textOf(container, ".chat-tool-msg-summary")).toContain(text);
+        const direct = mountCard(
+          { ...card, name, args, inputText: JSON.stringify(args, null, 2) },
+          { expanded, onOpenSidebar },
+        );
+        expect(container.innerHTML).toBe(direct.innerHTML);
+        if (expanded) {
+          container.querySelector<HTMLButtonElement>(".chat-tool-card__action-btn")?.click();
+          expect(onOpenSidebar.mock.calls[0]?.[0].card).toBe(card);
+        }
+      }
+      expect(card.name).toBe("tool_call");
+      expect(card.args).toEqual({ id: name, args });
+    },
+  );
+
+  it("passes the raw Tool Search invocation to tool-result plugin replacements", () => {
+    const input = { id: "web_search", args: { query: "OpenClaw release notes" } };
+    const card: ToolCard = {
+      id: "search-release",
+      callId: "search-release",
+      name: "tool_call",
+      args: input,
+      outputText: "Found the release notes.",
+      completed: true,
+    };
+    for (const expanded of [false, true]) {
+      pluginSurface.props.length = 0;
+      mountCard(card, { expanded });
+      expect(pluginSurface.props).toEqual([
+        expect.objectContaining({
+          toolName: "tool_call",
+          toolCallId: "search-release",
+          input,
+          output: expect.objectContaining({ text: "Found the release notes." }),
+        }),
+      ]);
     }
   });
 

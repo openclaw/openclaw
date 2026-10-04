@@ -15,7 +15,7 @@ import { hasErrnoCode, isErrno } from "../../infra/errno.js";
 import { ensureAbsoluteDirectory, root, walkDirectory } from "../../infra/fs-safe.js";
 import { retainMutationAuthority } from "../../infra/mutation-authority.js";
 import { parseSkillFrontmatter } from "../loading/frontmatter.js";
-import { SkillLibraryError } from "./errors.js";
+import { SkillLibraryError } from "../skill-library-error.js";
 
 export const SKILL_LIBRARY_MAX_PATH_COMPONENTS = 16;
 export const SKILL_LIBRARY_MAX_TREE_ENTRIES = SKILL_LIBRARY_MAX_FILES * 2;

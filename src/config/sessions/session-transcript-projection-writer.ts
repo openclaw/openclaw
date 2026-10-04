@@ -39,6 +39,9 @@ export type ActivePreparedProjection = {
   claimId: number;
   plan: PreparedSessionTranscriptProjectionMetadata;
 };
+type ProjectionRows = Parameters<
+  typeof appendPreparedSessionTranscriptProjectionChunkInTransaction
+>[1];
 export async function runProjectionWrite<T>(
   databaseOptions: ReconcileDatabaseOptions,
   operationLabel: Extract<SqliteSessionWriteOperation, `sessions.transcript-index.${string}`>,
@@ -86,24 +89,18 @@ export async function claimPreparedSessionTranscriptProjection(
 
   let deleteResult = { hasMore: true, owned: true };
   while (deleteResult.hasMore && deleteResult.owned) {
+    const input = {
+      maxRowsPerTable: PROJECTION_WRITE_CHUNK_ROWS,
+      sessionId: plan.sessionId,
+      claimId,
+    };
     deleteResult = publication
-      ? await publication.execute({
-          type: "deleteChunk",
-          input: {
-            maxRowsPerTable: PROJECTION_WRITE_CHUNK_ROWS,
-            sessionId: plan.sessionId,
-            claimId,
-          },
-        })
+      ? await publication.execute({ type: "deleteChunk", input })
       : await runProjectionWrite(
           databaseOptions,
           "sessions.transcript-index.delete-chunk",
           (database) =>
-            deletePreparedSessionTranscriptProjectionChunkInTransaction(database.db, {
-              maxRowsPerTable: PROJECTION_WRITE_CHUNK_ROWS,
-              sessionId: plan.sessionId,
-              claimId,
-            }),
+            deletePreparedSessionTranscriptProjectionChunkInTransaction(database.db, input),
           memorySource,
         );
     await yieldToGateway();
@@ -117,40 +114,20 @@ export async function claimPreparedSessionTranscriptProjection(
 export async function appendPreparedProjectionChunk(
   databaseOptions: ReconcileDatabaseOptions,
   active: ActivePreparedProjection,
-  rows:
-    | {
-        activeRows: Parameters<
-          typeof appendPreparedSessionTranscriptProjectionChunkInTransaction
-        >[1]["activeRows"];
-      }
-    | {
-        ftsRows: Parameters<
-          typeof appendPreparedSessionTranscriptProjectionChunkInTransaction
-        >[1]["ftsRows"];
-      },
+  rows: { activeRows: ProjectionRows["activeRows"] } | { ftsRows: ProjectionRows["ftsRows"] },
   memorySource?: MemoryTranscriptProjectionSource,
   publication?: ProjectionPublisher,
 ): Promise<boolean> {
+  const input = { ...rows, claimId: active.claimId, sessionId: active.plan.sessionId };
   const owned = publication
-    ? await publication.execute({
-        type: "appendChunk",
-        input: {
-          ...rows,
-          claimId: active.claimId,
-          sessionId: active.plan.sessionId,
-        },
-      })
+    ? await publication.execute({ type: "appendChunk", input })
     : await runProjectionWrite(
         databaseOptions,
         "activeRows" in rows
           ? "sessions.transcript-index.active-chunk"
           : "sessions.transcript-index.fts-chunk",
         (database) =>
-          appendPreparedSessionTranscriptProjectionChunkInTransaction(database.db, {
-            ...rows,
-            claimId: active.claimId,
-            sessionId: active.plan.sessionId,
-          }),
+          appendPreparedSessionTranscriptProjectionChunkInTransaction(database.db, input),
         memorySource,
       );
   await yieldToGateway();

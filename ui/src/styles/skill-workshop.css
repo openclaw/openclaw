@@ -1243,7 +1243,8 @@
 
   /* A stacked detail must size from its document and actions. The desktop
      height constraint otherwise clips the action bar below an unscrollable card. */
-  .sw-triage {
+  .sw-triage,
+  .sw-collection__panes {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: minmax(96px, 22vh) auto;
   }
@@ -1260,12 +1261,6 @@
 
   .sw-queue-resizer {
     display: none;
-  }
-
-  /* Stacked panes: cap the shelf so the skill document stays reachable. */
-  .sw-collection__panes {
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: minmax(96px, 22vh) auto;
   }
 
   .sw-collection__shelf {
@@ -1396,7 +1391,8 @@
   stroke-width: 1.6;
 }
 
-.sw-view {
+.sw-view,
+.sw-view__pane {
   flex: 1 1 auto;
   display: flex;
   flex-direction: column;
@@ -1404,10 +1400,6 @@
 }
 
 .sw-view__pane {
-  flex: 1 1 auto;
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
   animation: sw-pane-in 240ms cubic-bezier(0.32, 0.72, 0.32, 1) both;
 }
 

@@ -218,7 +218,7 @@ describe("chat send command authority", () => {
     "admission",
     "synthetic",
     "owner",
-  ] as const)("retires verified requester context after %s changes", (change) => {
+  ] as const)("retires verified requester context after %s changes", async (change) => {
     const lifetime = new AbortController();
     const client = createClient({
       authenticatedUserId: change === "owner" ? undefined : "ada@example.test",
@@ -227,7 +227,7 @@ describe("chat send command authority", () => {
     });
     let current = true;
     const { controller } = createUserTurnInputController("Change my theme");
-    const { ctx } = prepareChatSendUserTurn({
+    const { ctx } = await prepareChatSendUserTurn({
       request: {
         inboundMessage: "Change my theme",
         clientInfo: client.connect.client,

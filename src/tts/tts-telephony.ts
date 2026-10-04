@@ -38,14 +38,7 @@ export async function textToSpeechTelephony(params: {
           >;
           return {
             kind: "ready",
-            synthesize: ({ text, cfg: runtimeCfg, providerConfig, providerOverrides, timeoutMs }) =>
-              synthesizeTelephony({
-                text,
-                cfg: runtimeCfg,
-                providerConfig,
-                providerOverrides,
-                timeoutMs,
-              }),
+            synthesize: ({ target: _target, ...request }) => synthesizeTelephony(request),
           };
         },
         buildSuccess: ({ synthesis, ...metadata }) => ({

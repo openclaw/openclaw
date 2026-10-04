@@ -1,6 +1,6 @@
 // Global Commander pre-action hook: startup presentation, config guard, logging, and plugin preflight.
 import type { Command } from "commander";
-import type { ConfigFileSnapshot } from "../../config/types.js";
+import type { StartupConfigPreflightOptions } from "../../commands/startup-config-preflight.js";
 import { setVerbose } from "../../globals.js";
 import type { LogLevel } from "../../logging/levels.js";
 import { resolvePluginInstallInvalidConfigPolicy } from "../../plugins/install-config.js";
@@ -159,7 +159,7 @@ export function registerPreActionHooks(program: Command, programVersion: string)
       startupPolicy,
       version: programVersion,
     });
-    const verbose = getVerboseFlag(argv, { includeDebug: true });
+    const verbose = getVerboseFlag(argv);
     setVerbose(verbose);
     const cliLogLevel = getCliLogLevel(actionCommand);
     if (cliLogLevel) {
@@ -188,7 +188,7 @@ export function registerPreActionHooks(program: Command, programVersion: string)
       });
       return;
     }
-    let beforeStatePreparation: ((snapshot?: ConfigFileSnapshot) => Promise<boolean>) | undefined;
+    let beforeStatePreparation: StartupConfigPreflightOptions["beforeStatePreparation"];
     let allowInvalid = shouldAllowInvalidConfigForAction(actionCommand, commandPath);
     if (isGatewayRunAction(actionCommand)) {
       const { prepareGatewayRunBootstrap, recheckGatewayRunBootstrap } =

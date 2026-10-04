@@ -55,7 +55,7 @@
 .config-action-spinner svg {
   width: 14px;
   height: 14px;
-  animation: spin 0.7s linear infinite;
+  animation: btn-spinner-spin 0.7s linear infinite;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -773,13 +773,7 @@
   border: 2.5px solid var(--border);
   border-top-color: var(--accent);
   border-radius: var(--radius-full);
-  animation: spin 0.7s linear infinite;
-}
-
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
+  animation: btn-spinner-spin 0.7s linear infinite;
 }
 
 /* Inline validation/unsupported-node message inside a settings-row. */

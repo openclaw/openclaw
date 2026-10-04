@@ -34,7 +34,7 @@ export type CronListPageOptions = {
   agentId?: string;
 };
 
-/** Offset-page result returned by cron listPage callers. */
+/** Offset-page result. Rows are deeply frozen snapshots; clone before editing locally. */
 export type CronListPageResult<TJobs extends readonly CronJob[] = CronJob[]> = {
   jobs: TJobs;
   /** Opaque revision for the complete filtered, sorted result set. */

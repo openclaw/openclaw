@@ -135,7 +135,7 @@ describe("onboard (non-interactive): gateway auth token storage", () => {
 
       // A ref persisted without its value would leave the gateway unauthenticatable.
       const { readSecretStoreValue } = await import("../secrets/store/secret-store.js");
-      const stored = readSecretStoreValue({
+      const stored = await readSecretStoreValue({
         scope: { kind: "team" },
         name: "OPENCLAW_GATEWAY_TOKEN",
       });
@@ -174,7 +174,8 @@ describe("onboard (non-interactive): gateway auth token storage", () => {
       // A store copy would silently outlive a later rotation of the env var.
       const { readSecretStoreValue } = await import("../secrets/store/secret-store.js");
       expect(
-        readSecretStoreValue({ scope: { kind: "team" }, name: "OPENCLAW_GATEWAY_TOKEN" }).ok,
+        (await readSecretStoreValue({ scope: { kind: "team" }, name: "OPENCLAW_GATEWAY_TOKEN" }))
+          .ok,
       ).toBe(false);
     });
   }, 60_000);

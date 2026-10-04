@@ -334,45 +334,44 @@ function spawnControlledBunPty() {
   return { handle, callbacks, terminal, done };
 }
 
-it("replays queued chunks in order, honors a listener pause, and delivers exit last", async () => {
-  const { handle, callbacks, terminal, done } = spawnControlledBunPty();
-  const events: string[] = [];
-  handle.onExit(({ exitCode }) => events.push(`exit:${exitCode}`));
-  for (const chunk of ["early 🦞\r\n", "two\r\n", "three\r\n"]) {
-    callbacks.data(terminal, new TextEncoder().encode(chunk));
-  }
-  expect(events).toEqual([]);
-  handle.onData((chunk) => {
-    events.push(chunk);
-    if (events.length === 1) {
-      handle.pause();
+it.each([false, true])(
+  "settles queued output before exit with subscriber=%s",
+  async (subscribed) => {
+    const { handle, callbacks, terminal, done } = spawnControlledBunPty();
+    const events: string[] = [];
+    const chunks = subscribed ? ["early 🦞\r\n", "two\r\n", "three\r\n"] : ["unobserved\r\n"];
+    handle.onExit(({ exitCode }) => events.push(`exit:${exitCode}`));
+    for (const chunk of chunks) {
+      callbacks.data(terminal, new TextEncoder().encode(chunk));
     }
-  });
-  expect(events).toEqual(["early 🦞\r\n"]);
-  callbacks.exit(terminal);
-  done.resolve(7);
-  await done.promise;
-  expect(events).toEqual(["early 🦞\r\n"]);
-  expect(terminal.close).not.toHaveBeenCalled();
-  handle.resume();
-  expect(events).toEqual(["early 🦞\r\n", "two\r\n", "three\r\n", "exit:7"]);
-  expect(terminal.close).toHaveBeenCalledOnce();
-  handle.resume();
-  expect(events).toEqual(["early 🦞\r\n", "two\r\n", "three\r\n", "exit:7"]);
-});
-
-it("never delivers unsubscribed output after exit", async () => {
-  const { handle, callbacks, terminal, done } = spawnControlledBunPty();
-  const events: string[] = [];
-  handle.onExit(({ exitCode }) => events.push(`exit:${exitCode}`));
-  callbacks.data(terminal, new TextEncoder().encode("unobserved\r\n"));
-  callbacks.exit(terminal);
-  done.resolve(7);
-  await done.promise;
-  expect(events).toEqual(["exit:7"]);
-  handle.onData((chunk) => events.push(chunk));
-  expect(events).toEqual(["exit:7"]);
-});
+    expect(events).toEqual([]);
+    if (subscribed) {
+      handle.onData((chunk) => {
+        events.push(chunk);
+        if (events.length === 1) {
+          handle.pause();
+        }
+      });
+      expect(events).toEqual(["early 🦞\r\n"]);
+    }
+    callbacks.exit(terminal);
+    done.resolve(7);
+    await done.promise;
+    if (subscribed) {
+      expect(events).toEqual(["early 🦞\r\n"]);
+      expect(terminal.close).not.toHaveBeenCalled();
+      handle.resume();
+      expect(events).toEqual(["early 🦞\r\n", "two\r\n", "three\r\n", "exit:7"]);
+      expect(terminal.close).toHaveBeenCalledOnce();
+      handle.resume();
+      expect(events).toEqual(["early 🦞\r\n", "two\r\n", "three\r\n", "exit:7"]);
+    } else {
+      expect(events).toEqual(["exit:7"]);
+      handle.onData((chunk) => events.push(chunk));
+      expect(events).toEqual(["exit:7"]);
+    }
+  },
+);
 
 it.each([false, true])("routes Bun PTYs with Terminal.pause=%s", async (flowControl) => {
   vi.spyOn(process, "versions", "get").mockReturnValue({ ...process.versions, bun: "1.4.2" });

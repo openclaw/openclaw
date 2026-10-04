@@ -591,13 +591,8 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
       if (!runtime) {
         return { ok: false, reason: "invalid-context" };
       }
-      const surface = await runtime.getSurface(identity);
+      const { tools } = await runtime.getPromptProjection(identity);
       source.receiptAuthority();
-      const tools = surface.tools.map(({ definition: { name, description, parameters } }) => ({
-        name,
-        description,
-        parameters,
-      }));
       if (JSON.stringify(request.context.tools) !== JSON.stringify(tools)) {
         return { ok: false, reason: "invalid-context" };
       }
@@ -723,10 +718,6 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
     executeComputer,
     startInference,
     cancelInference,
-    cancelInferenceForSession: (params: { sessionId: string; runId?: string }): Promise<string[]> =>
-      inference.cancelSession(params.sessionId, params.runId),
-    hasInferenceForSession: (sessionId: string, runId?: string): boolean =>
-      inference.hasSession(sessionId, runId),
     clear: () => {
       observedAckCursors.clear();
       pendingTerminalTurnFences.clear();

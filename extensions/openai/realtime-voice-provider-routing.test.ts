@@ -215,7 +215,7 @@ describe("OpenAI realtime voice provider routing", () => {
     );
     const provider = buildOpenAIRealtimeVoiceProvider();
     const cfg = {
-      agents: { list: [{ id: "main" }, { id: "voice-agent" }] },
+      agents: { entries: { main: {}, "voice-agent": {} } },
     } as never;
 
     expect(
@@ -596,10 +596,10 @@ describe("OpenAI realtime voice provider routing", () => {
     });
     const cfg = {
       agents: {
-        list: [
-          { id: "helper", agentDir: "/tmp/openclaw-helper-agent" },
-          { id: "molty", agentDir: "/tmp/openclaw-molty-agent" },
-        ],
+        entries: {
+          helper: { agentDir: "/tmp/openclaw-helper-agent" },
+          molty: { agentDir: "/tmp/openclaw-molty-agent" },
+        },
       },
     } as never;
     const resolveCapabilities =

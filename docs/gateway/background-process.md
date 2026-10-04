@@ -41,6 +41,7 @@ Behavior:
 - For long-running work that starts now: start it once and rely on automatic completion wake (when enabled) once the command emits output or fails.
 - A completion wake lets the agent continue outstanding work; it does not require a new chat message. The agent is instructed to report requested results not yet delivered, meaningful outcome changes, or new actionable failures, and stay silent for routine, duplicate, superseded, or already-recovered results. This is a model instruction, not a deterministic notification filter, and it does not disable the completion turn.
 - A failed background command wakes its originating session even when other sessions or automations are busy. If that session is still running, the completion waits until it is free. This also applies when a watcher exits before the work it was watching finishes.
+- Timeouts also wake the session when the command produced no output. The completion includes retry-safety guidance: verify any external side effects before retrying.
 - Manually canceled commands do not trigger completion notifications, even when they produced output. Retained output remains available through `process poll` or `process log`. Cleanup failures still notify.
 - If automatic completion wake is unavailable, or you need quiet-success confirmation for a command that exits cleanly with no output, poll with `process`.
 - Background exec does not automatically wake subagent sessions. A subagent must collect its command result with `process poll` before yielding without another completion source. A requested stop also needs its terminal result collected.
@@ -108,6 +109,20 @@ its ownership record.
 Worker completion does not currently wake the Gateway session automatically;
 use `process poll` in a later turn to inspect the result. Closing a portal closes
 its proxy, not the development server: stop the server with `process kill`.
+
+## Control UI
+
+The chat side panel offers a separate **Processes** tab through its **+** menu
+and the chat header's **Panels** menu. **Subagents** remains its own tab.
+Processes shows the current conversation's background exec commands and retained
+finished records, including status, duration, exit information, and recent output.
+Reading the output does not drain pending agent output or acknowledge completion
+notifications. **Stop** requests termination of the exact observed process instance.
+
+The list is bounded, prioritizes running processes, and follows the existing
+in-memory retention limits. It refreshes while visible; disconnected or
+unavailable workers show an error rather than an empty list. It does not provide
+an interactive terminal or enumerate unrelated operating-system processes.
 
 ## Child process bridging
 

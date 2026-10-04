@@ -1,12 +1,14 @@
 import {
   buildSessionObserverPrompt,
   normalizeSessionObserverModelOutput,
+  sanitizeSessionObserverModelText,
   SESSION_OBSERVER_MODEL_MAX_TOKENS,
   SESSION_OBSERVER_SYSTEM_PROMPT,
 } from "./session-observer-model.js";
 import type { SessionObserverDeps, SessionObserverState } from "./session-observer-model.js";
 
 const MODEL_TIMEOUT_MS = 10_000;
+const REJECTED_OUTPUT_MAX_CHARS = 160;
 
 type PrepareModel = NonNullable<SessionObserverDeps["prepareModel"]>;
 type CompleteModel = NonNullable<SessionObserverDeps["completeModel"]>;
@@ -58,9 +60,7 @@ export function createSessionObserverCompletion(params: {
     try {
       const execute = async () => {
         const prepared = await ensurePrepared(state);
-        if (!params.isCurrent(state) || controller.signal.aborted) {
-          throw new Error("session observer state is no longer active");
-        }
+        let lastRejectedText = "";
         for (let attempt = 0; attempt < 2; attempt += 1) {
           if (!params.isCurrent(state) || controller.signal.aborted) {
             throw new Error("session observer state is no longer active");
@@ -81,8 +81,15 @@ export function createSessionObserverCompletion(params: {
           if (parsed) {
             return parsed;
           }
+          lastRejectedText = result.text;
         }
-        throw new Error("session observer returned invalid JSON twice");
+        const prefix = sanitizeSessionObserverModelText(
+          lastRejectedText,
+          REJECTED_OUTPUT_MAX_CHARS,
+        );
+        throw new Error(
+          `session observer returned invalid JSON twice; last rejected output: ${prefix}`,
+        );
       };
       return await Promise.race([execute(), aborted]);
     } finally {

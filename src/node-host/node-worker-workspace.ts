@@ -521,6 +521,7 @@ export class NodeWorkerWorkspaceRuntime {
     signal?: AbortSignal,
     gateway?: NodeWorkerTransferGateway,
   ): Promise<NodeWorkerWorkspaceExecResult> {
+    const assertProcessCurrent = this.processes.captureAdmission(input, input.generation);
     const environmentHash = hashPathComponent(input.environmentId, 16);
     const sessionHash = hashPathComponent(input.sessionId, 32);
     const registered = await this.prepared.store?.find(input.environmentId);
@@ -616,7 +617,6 @@ export class NodeWorkerWorkspaceRuntime {
           if (!gateway?.url) {
             throw new Error("INVALID_REQUEST: workspace transfer gateway is unavailable");
           }
-          const hashMemo = takeWorkspaceHashMemo(this.workspaceHashMemos, generationKey);
           const stdout = await runNodeWorkerWorkspaceTransfer({
             seedsRoot: this.seedsRoot,
             gatewayNamespace: input.gatewayNamespace,
@@ -630,7 +630,7 @@ export class NodeWorkerWorkspaceRuntime {
               ? { prepared: { row: prepared, store: this.prepared.store } }
               : {}),
             transfer: input.transfer,
-            hashMemo,
+            hashMemo: takeWorkspaceHashMemo(this.workspaceHashMemos, generationKey),
             signal,
           });
           // A snapshot sent before this transfer knows only the old base. Keep the latest
@@ -658,6 +658,9 @@ export class NodeWorkerWorkspaceRuntime {
           return projectWorkspaceOperationResult(workspaceDir, stdout, input.argv);
         }
         if (input.resetWorkspace) {
+          if (input.nativeProcessOwner || input.process) {
+            assertProcessCurrent();
+          }
           // Reset never accepts a caller path: only the identity-derived workspace can be removed.
           fs.rmSync(workspacePath, { recursive: true, force: true });
         }
@@ -698,26 +701,23 @@ export class NodeWorkerWorkspaceRuntime {
           });
           return projectWorkspaceOperationResult(workspaceDir, stdout, input.argv);
         }
-        if (input.process) {
-          return await this.processes.execute({
-            input,
-            workspaceDir,
-            env: commandEnv,
-            signal,
-            retainWorkspace: () =>
-              this.beginWorkspaceOperation(input.gatewayNamespace, generationKey),
-          });
-        }
-        const result = await this.processes.executeForeground({
+        const processContext = {
           input,
+          assertCurrent: assertProcessCurrent,
           workspaceDir,
           env: commandEnv,
           signal,
+          retainWorkspace: () =>
+            this.beginWorkspaceOperation(input.gatewayNamespace, generationKey),
+        };
+        if (input.process) {
+          return await this.processes.execute(processContext);
+        }
+        const result = await this.processes.executeForeground({
+          ...processContext,
           timeoutMs: input.timeoutMs ?? DEFAULT_TIMEOUT_MS,
           stdoutLimit: NODE_WORKER_WORKSPACE_STDOUT_MAX_BYTES,
           stderrLimit: NODE_WORKER_WORKSPACE_STDERR_MAX_BYTES,
-          retainWorkspace: () =>
-            this.beginWorkspaceOperation(input.gatewayNamespace, generationKey),
         });
         return projectNodeWorkerWorkspaceExecResult(workspaceDir, result);
       });

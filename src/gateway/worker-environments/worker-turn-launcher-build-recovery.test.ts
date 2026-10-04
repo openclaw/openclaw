@@ -142,7 +142,7 @@ async function createBuildRecoveryHarness(
     get: () => environment,
     acquireTurnCredential: async (claim) => {
       if (options.pendingResult) {
-        placements.markWorkspaceResultPending(claim);
+        await placements.markWorkspaceResultPending(claim);
       }
       return credential();
     },
@@ -194,7 +194,7 @@ async function createBuildRecoveryHarness(
     resolveMoveDestination: async () => undefined,
     runReclaimPreparation: async ({ run, authorize }) => await run(authorize),
     runReclaimBarrier: async ({ begin, reclaim }) =>
-      await reclaim({ kind: "local", path: root }, begin()),
+      await reclaim({ kind: "local", path: root }, await begin()),
     runFailedReclaimBarrier: async ({ reclaim }) => await reclaim(),
     workspaceOperations,
     ...createWorkerWorkspaceRecoveryFixture({
@@ -828,7 +828,7 @@ describe("worker turn launcher build recovery", () => {
     await expect(harness.execute()).rejects.toThrow(STALE_WORKER_BUILD_REASON);
     expect(harness.redispatchPlacement).not.toHaveBeenCalled();
     expect(harness.launchTurn).not.toHaveBeenCalled();
-    expect(placements.listPendingWorkspaceResults()).toEqual([
+    expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([
       expect.objectContaining({ sessionId: SESSION_ID, recoveryRequestedAtMs: expect.any(Number) }),
     ]);
     expect(placements.get(SESSION_ID)).toMatchObject({

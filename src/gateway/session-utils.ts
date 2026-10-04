@@ -19,5 +19,4 @@ export { resolveGatewaySessionStoreTargetWithStore } from "./session-utils-store
 export { resolveGatewaySessionStoreTarget } from "./session-utils-store-lookup.js";
 export { getSessionDefaults } from "./session-utils-model.js";
 export { resolveGatewayModelSupportsImages } from "./session-utils-model.js";
-export { buildGatewaySessionRow } from "./session-utils-row.js";
 export { listProjectedSessions } from "./session-utils-list.js";

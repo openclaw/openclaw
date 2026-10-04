@@ -8,7 +8,7 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { LocalSkillLoadDiagnostic } from "./local-loader.js";
 import type { PluginSkillRoot } from "./plugin-skill-root.js";
 import { compactSkillPath } from "./skill-paths.js";
-import { findContainingAllowedSkillSymlinkTarget, tryRealpath } from "./symlink-targets.js";
+import { tryRealpath } from "./symlink-targets.js";
 import type { ResolvedSkillDiscoveryLimits } from "./workspace-skill-sources.types.js";
 
 export type { ResolvedSkillDiscoveryLimits } from "./workspace-skill-sources.types.js";
@@ -235,25 +235,6 @@ export function isSymlinkPath(filePath: string): boolean {
   }
 }
 
-function buildEscapedSkillPathReason(params: { source: string; candidatePath: string }): {
-  reason: string;
-  consoleHint: string;
-} {
-  const candidateIsSymlink = isSymlinkPath(params.candidatePath);
-  const bundled = params.source === "openclaw-bundled";
-  const reason = bundled
-    ? candidateIsSymlink
-      ? "bundled-symlink-escape"
-      : "bundled-root-escape"
-    : candidateIsSymlink
-      ? "symlink-escape"
-      : "path-escape";
-  return {
-    reason,
-    consoleHint: `reason=${reason}${bundled ? " hint=likely-stray-local-symlink-or-checkout-mutation" : ""}`,
-  };
-}
-
 function warnEscapedSkillPath(params: {
   source: string;
   rootDir: string;
@@ -269,21 +250,27 @@ function warnEscapedSkillPath(params: {
     path.resolve(params.rootDir) === params.rootRealPath
       ? ""
       : ` rootResolved=${compactRootRealPath}`;
-  const escapeReason = buildEscapedSkillPathReason({
-    source: params.source,
-    candidatePath: params.candidatePath,
-  });
+  const candidateIsSymlink = isSymlinkPath(params.candidatePath);
+  const bundled = params.source === "openclaw-bundled";
+  const reason = bundled
+    ? candidateIsSymlink
+      ? "bundled-symlink-escape"
+      : "bundled-root-escape"
+    : candidateIsSymlink
+      ? "symlink-escape"
+      : "path-escape";
+  const consoleHint = `reason=${reason}${bundled ? " hint=likely-stray-local-symlink-or-checkout-mutation" : ""}`;
   skillsLogger.warn("Skipping escaped skill path outside its configured root.", {
     source: params.source,
     rootDir: params.rootDir,
     rootRealPath: params.rootRealPath,
     path: params.candidatePath,
     realPath: params.candidateRealPath,
-    reason: escapeReason.reason,
+    reason,
     consoleMessage:
       `Skipping escaped skill path outside its configured root: ` +
       `source=${params.source} root=${compactRootDir}${rootResolved} ` +
-      `${escapeReason.consoleHint} requested=${compactCandidatePath} ` +
+      `${consoleHint} requested=${compactCandidatePath} ` +
       `resolved=${compactCandidateRealPath}`,
   });
 }
@@ -307,10 +294,9 @@ function resolveContainedSkillPath(params: {
   }
   if (
     isPathInside(params.rootRealPath, candidateRealPath) ||
-    findContainingAllowedSkillSymlinkTarget(
-      params.allowedSymlinkTargetRealPaths ?? [],
-      candidateRealPath,
-    ) !== null
+    params.allowedSymlinkTargetRealPaths?.some((root) =>
+      isPathInside(path.resolve(root), path.resolve(candidateRealPath)),
+    )
   ) {
     return candidateRealPath;
   }
@@ -398,20 +384,18 @@ function resolveSkillFilePath(params: {
   source: string;
   skillDir: string;
   skillDirRealPath: string;
-  candidatePath: string;
   onDiagnostic?: SkillDiscoveryReporter;
 }): string | null {
+  const candidatePath = path.join(params.skillDir, "SKILL.md");
   const resolved = resolveContainedSkillPath({
     source: params.source,
     rootDir: params.skillDir,
     rootRealPath: params.skillDirRealPath,
-    candidatePath: params.candidatePath,
+    candidatePath,
     onDiagnostic: params.onDiagnostic,
   });
   // Let the root-scoped loader diagnose named paths that cannot be resolved.
-  return resolved || tryRealpath(params.candidatePath)
-    ? resolved
-    : path.resolve(params.candidatePath);
+  return resolved || tryRealpath(candidatePath) ? resolved : path.resolve(candidatePath);
 }
 
 export function discoverSkillCandidates(params: {
@@ -453,7 +437,6 @@ export function discoverSkillCandidates(params: {
       source: params.source,
       skillDir: baseDir,
       skillDirRealPath: baseDirRealPath,
-      candidatePath: path.join(baseDir, "SKILL.md"),
       onDiagnostic: params.onDiagnostic,
     });
     return {
@@ -525,7 +508,6 @@ export function discoverSkillCandidates(params: {
       source: params.source,
       skillDir: rootDir,
       skillDirRealPath: rootRealPath,
-      candidatePath: path.join(rootDir, "SKILL.md"),
       onDiagnostic: params.onDiagnostic,
     });
     if (configuredRootSkillRealPath) {
@@ -558,13 +540,11 @@ export function discoverSkillCandidates(params: {
       continue;
     }
 
-    const skillMd = path.join(candidate.skillDir, "SKILL.md");
     if (hasSkillFileCandidate(candidate.skillDir)) {
       const skillMdRealPath = resolveSkillFilePath({
         source: params.source,
         skillDir: candidate.skillDir,
         skillDirRealPath,
-        candidatePath: skillMd,
         onDiagnostic: params.onDiagnostic,
       });
       if (skillMdRealPath) {

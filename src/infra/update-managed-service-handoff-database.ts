@@ -9,6 +9,7 @@ import { requireDirectorySync, syncDirectorySync } from "./directory-durability.
 import { hasErrnoCode } from "./errno.js";
 import { acquireFileLockSyncWithRetry } from "./file-lock-sync.js";
 import {
+  createSqliteQueryCache,
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
@@ -101,7 +102,7 @@ function initializeLeaseSchema(db: HandoffDatabase): void {
 
 export type { ManagedUpdateLeaseDatabaseIdentity } from "./update-managed-service-handoff-identity.js";
 
-function assertPath(stat: BigIntStats, kind: "directory" | "file") {
+export function assertManagedHandoffPath(stat: BigIntStats, kind: "directory" | "file") {
   if (
     stat.isSymbolicLink() ||
     !(kind === "directory" ? stat.isDirectory() : stat.isFile()) ||
@@ -120,13 +121,13 @@ function assertPath(stat: BigIntStats, kind: "directory" | "file") {
  * invariant instead of refusing, which would otherwise lock the product out of its
  * own state for every install root until an operator deleted the file by hand.
  *
- * Excess bits here are defense in depth rather than a live exposure: assertPath
+ * Excess bits here are defense in depth rather than a live exposure: assertManagedHandoffPath
  * enforces a 0700 owned directory on every read and every write, and a single
  * link, so no other user could traverse to this inode or hold a descriptor on it
  * whatever the file's own mode said. Write bits are still refused rather than
  * repaired, because chmod cannot revoke a descriptor and integrity is the one
  * thing the directory guarantee would not restore. Ownership, type and link count
- * are likewise not ours to repair; all of those still refuse in assertPath.
+ * are likewise not ours to repair; all of those still refuse in assertManagedHandoffPath.
  */
 function repairPrivateFileMode(databasePath: string, stat: BigIntStats): BigIntStats {
   if (
@@ -144,12 +145,12 @@ function repairPrivateFileMode(databasePath: string, stat: BigIntStats): BigIntS
   return fs.lstatSync(databasePath, { bigint: true });
 }
 
-function assertSamePath(
+export function assertSameManagedHandoffPath(
   stat: BigIntStats,
   expected: BigIntStats,
   kind: "directory" | "file",
 ): void {
-  assertPath(stat, kind);
+  assertManagedHandoffPath(stat, kind);
   if (
     (process.platform === "win32" &&
       [stat.dev, stat.ino, expected.dev, expected.ino].includes(0n)) ||
@@ -199,8 +200,8 @@ function createMissingDatabaseFile(
         ? repairPrivateFileMode(databasePath, fs.lstatSync(databasePath, { bigint: true }))
         : fs.fstatSync(descriptor, { bigint: true });
     const currentIdentity = fs.lstatSync(databasePath, { bigint: true });
-    assertSamePath(currentIdentity, identity, "file");
-    assertSamePath(
+    assertSameManagedHandoffPath(currentIdentity, identity, "file");
+    assertSameManagedHandoffPath(
       fs.lstatSync(parentReceipt.path, { bigint: true }),
       parentReceipt.identity,
       "directory",
@@ -240,8 +241,8 @@ export function captureManagedUpdateLeaseDatabaseIdentity(
   const canonical = fs.realpathSync(databasePath);
   const file = fs.lstatSync(canonical, { bigint: true });
   const parent = fs.lstatSync(path.dirname(canonical), { bigint: true });
-  assertPath(file, "file");
-  assertPath(parent, "directory");
+  assertManagedHandoffPath(file, "file");
+  assertManagedHandoffPath(parent, "directory");
   // Accepted <=9.6 one-hop tradeoff: Number serialization can hide an inode collision.
   // Admit its shipped spelling once, then pin bigint identities for every later check.
   const matches = (stat: BigIntStats, expected: string) =>
@@ -277,20 +278,17 @@ export function createManagedHandoffLeaseDatabase(
     throw new Error("managed handoff lease database path changed");
   }
   const existingTransactions = new WeakMap<HandoffDatabase, ExistingSqliteTransaction>();
-  const validations = new WeakMap<HandoffDatabase, () => void>();
+  const validationQuery = createSqliteQueryCache((db) =>
+    prepareSqliteQuerySync<void, LeaseTable>(db, () =>
+      leaseQueries(db).selectFrom("managed_update_handoffs").selectAll().limit(0),
+    ),
+  );
   const existingOptions = existingIdentity
     ? {
         busyTimeoutMs: 5000,
         assertIdentity: () => assertManagedUpdateLeaseDatabaseIdentity(existingIdentity),
         validate: (db: HandoffDatabase) => {
-          let validate = validations.get(db);
-          if (!validate) {
-            validate = prepareSqliteQuerySync<void, LeaseTable>(db, () =>
-              leaseQueries(db).selectFrom("managed_update_handoffs").selectAll().limit(0),
-            );
-            validations.set(db, validate);
-          }
-          validate();
+          validationQuery(db)();
         },
       }
     : undefined;
@@ -384,7 +382,7 @@ export function createManagedHandoffLeaseDatabase(
     }
     recoverDirectoryMode(dir);
     const directoryIdentity = fs.lstatSync(dir, { bigint: true });
-    assertPath(directoryIdentity, "directory");
+    assertManagedHandoffPath(directoryIdentity, "directory");
     // syncDirectorySync verifies ordinary realpath spelling. Windows native
     // realpath can expand an 8.3 alias differently without changing the directory.
     recoverUnadoptableStore(databasePath, {
@@ -403,14 +401,22 @@ export function createManagedHandoffLeaseDatabase(
       databasePath,
       fs.lstatSync(databasePath, { bigint: true }),
     );
-    assertPath(databaseIdentity, "file");
+    assertManagedHandoffPath(databaseIdentity, "file");
     const db = openNodeSqliteDatabase(
       write ? resolveExistingSqliteFileUri(databasePath) : databasePath,
       { readOnly: !write },
     );
     try {
-      assertSamePath(fs.lstatSync(dir, { bigint: true }), directoryIdentity, "directory");
-      assertSamePath(fs.lstatSync(databasePath, { bigint: true }), databaseIdentity, "file");
+      assertSameManagedHandoffPath(
+        fs.lstatSync(dir, { bigint: true }),
+        directoryIdentity,
+        "directory",
+      );
+      assertSameManagedHandoffPath(
+        fs.lstatSync(databasePath, { bigint: true }),
+        databaseIdentity,
+        "file",
+      );
       setSqliteBusyTimeout(db, 5000);
       if (write) {
         initializeLeaseSchema(db);

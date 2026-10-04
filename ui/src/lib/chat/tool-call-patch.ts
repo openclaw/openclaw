@@ -99,12 +99,12 @@ function pushHunkLine(
   collector: PatchCollector,
   section: PatchSection,
   raw: string,
-  hunk: HunkState,
-): void {
+  hunk: HunkState | null,
+): HunkState | null {
   const kind: DiffLineKind = raw.startsWith("+") ? "add" : raw.startsWith("-") ? "del" : "ctx";
-  const lineNo = kind === "del" ? hunk.oldLine : hunk.newLine;
+  const lineNo = kind === "del" ? hunk?.oldLine : hunk?.newLine;
   // Context consumes both sides together; unnumbered patch hunks keep both absent.
-  if (kind !== "ctx" || (hunk.oldLine !== undefined && hunk.newLine !== undefined)) {
+  if (hunk && (kind !== "ctx" || (hunk.oldLine !== undefined && hunk.newLine !== undefined))) {
     if (kind !== "add" && hunk.oldLine !== undefined) {
       hunk.oldLine += 1;
       hunk.oldLeft = Math.max(0, (hunk.oldLeft ?? 0) - 1);
@@ -119,10 +119,7 @@ function pushHunkLine(
     ...(lineNo !== undefined ? { lineNo } : {}),
     text: raw === "" ? "" : raw.slice(1),
   });
-}
-
-function hunkComplete(hunk: HunkState): boolean {
-  return hunk.oldLeft === 0 && hunk.newLeft === 0;
+  return hunk?.oldLeft === 0 && hunk.newLeft === 0 ? null : hunk;
 }
 
 function sectionLabel(section: PatchSection): string {
@@ -237,11 +234,7 @@ function parseCodexPatch(text: string): PatchViewData | null {
       mode === "update" &&
       (raw === "" || raw.startsWith("+") || raw.startsWith("-") || raw.startsWith(" "))
     ) {
-      const activeHunk = hunk ?? {};
-      pushHunkLine(collector, current, raw, activeHunk);
-      if (hunk && hunkComplete(hunk)) {
-        hunk = null;
-      }
+      hunk = pushHunkLine(collector, current, raw, hunk);
     }
   }
   return finish(collector);
@@ -315,10 +308,7 @@ function parseUnifiedPatch(text: string): PatchViewData | null {
       continue;
     }
     if (current && hunk && (raw.startsWith("+") || raw.startsWith("-") || raw.startsWith(" "))) {
-      pushHunkLine(collector, current, raw, hunk);
-      if (hunkComplete(hunk)) {
-        hunk = null;
-      }
+      hunk = pushHunkLine(collector, current, raw, hunk);
     }
   }
   return finish(collector);
@@ -349,10 +339,7 @@ function appendStructuredUpdate(
       separateHunk(collector, section);
       hunk = parseHunkHeader(raw);
     } else if (hunk && (raw.startsWith("+") || raw.startsWith("-") || raw.startsWith(" "))) {
-      pushHunkLine(collector, section, raw, hunk);
-      if (hunkComplete(hunk)) {
-        hunk = null;
-      }
+      hunk = pushHunkLine(collector, section, raw, hunk);
     }
   }
 }

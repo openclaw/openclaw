@@ -9,20 +9,24 @@ describe("model endpoint display", () => {
     resetSecretRedactionRegistryForTest();
   });
 
-  it("does not disclose a registered credential after URL hostname normalization", () => {
-    registerSecretValueForRedaction("MixedCaseCredential");
-    expect(
-      formatModelEndpointUrl("https://route.MixedCaseCredential.example.test/v1/responses"),
-    ).toBeUndefined();
-    expect(formatModelEndpointUrl("https://safe.example.test/v1/responses")).toBe(
-      "https://safe.example.test/v1/responses",
-    );
-  });
-
-  it("does not disclose a sentinel in a selected endpoint hostname", () => {
-    const sentinel = sealSecretSentinel("short", { label: "endpoint-hostname" });
-    expect(formatModelEndpointUrl(`https://${sentinel}.example.test/v1`)).toBeUndefined();
-  });
+  it.each(["registered credential", "sentinel"])(
+    "does not disclose a %s after URL hostname normalization",
+    (kind) => {
+      const secret =
+        kind === "sentinel"
+          ? sealSecretSentinel("short", { label: "endpoint-hostname" })
+          : "MixedCaseCredential";
+      if (kind === "registered credential") {
+        registerSecretValueForRedaction(secret);
+      }
+      expect(
+        formatModelEndpointUrl(`https://route.${secret}.example.test/v1/responses`),
+      ).toBeUndefined();
+      expect(formatModelEndpointUrl("https://safe.example.test/v1/responses")).toBe(
+        "https://safe.example.test/v1/responses",
+      );
+    },
+  );
 
   it.each([
     [

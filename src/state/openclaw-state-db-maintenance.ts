@@ -76,17 +76,19 @@ function repairDanglingSkillWorkshopCollectionReviewIndex(database: DatabaseSync
   });
 }
 
-/** Admit the schema before Doctor begins its write transaction. */
-function admitStateDatabaseForSchemaRepair(
+/** Admit Doctor repair, then return the ownership-rechecked catalog repair operation. */
+export function prepareStateDatabaseSchemaRepair(
   database: DatabaseSync,
   pathname: string,
   env: NodeJS.ProcessEnv,
-): boolean {
+): () => string[] {
   const danglingWorkshopIndex = hasDanglingSkillWorkshopCollectionReviewIndex(database);
+  const assertWriteAllowed = () =>
+    assertOpenClawStateWriteAllowed({ database, databasePath: pathname, env });
   const admit = () => {
     assertSupportedStateSchemaVersion(database, pathname);
     if (danglingWorkshopIndex) {
-      assertOpenClawStateWriteAllowed({ database, databasePath: pathname, env });
+      assertWriteAllowed();
     }
   };
   if (danglingWorkshopIndex) {
@@ -95,34 +97,13 @@ function admitStateDatabaseForSchemaRepair(
   } else {
     admit();
   }
-  return danglingWorkshopIndex;
-}
-
-/** Recheck write ownership after BEGIN IMMEDIATE and before catalog mutation. */
-function assertStateDatabaseSchemaRepairWriteAllowed(
-  database: DatabaseSync,
-  pathname: string,
-  env: NodeJS.ProcessEnv,
-  danglingWorkshopIndex: boolean,
-): void {
-  const assertAllowed = () =>
-    assertOpenClawStateWriteAllowed({ database, databasePath: pathname, env });
-  if (danglingWorkshopIndex) {
-    withSqliteWritableSchema(database, assertAllowed);
-  } else {
-    assertAllowed();
-  }
-}
-
-/** Admit Doctor repair, then return the ownership-rechecked catalog repair operation. */
-export function prepareStateDatabaseSchemaRepair(
-  database: DatabaseSync,
-  pathname: string,
-  env: NodeJS.ProcessEnv,
-): () => string[] {
-  const danglingWorkshopIndex = admitStateDatabaseForSchemaRepair(database, pathname, env);
   return () => {
-    assertStateDatabaseSchemaRepairWriteAllowed(database, pathname, env, danglingWorkshopIndex);
+    // Recheck ownership after BEGIN IMMEDIATE and before catalog mutation.
+    if (danglingWorkshopIndex) {
+      withSqliteWritableSchema(database, assertWriteAllowed);
+    } else {
+      assertWriteAllowed();
+    }
     return repairDanglingSkillWorkshopCollectionReviewIndex(database)
       ? ["Removed dangling legacy Skill Workshop review index"]
       : [];

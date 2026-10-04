@@ -49,6 +49,17 @@ export type CodexPluginMigrationConfigEntry = {
   allowDestructiveActions?: "auto" | "ask";
 };
 
+function pluginConfigValue(entry: CodexPluginMigrationConfigEntry) {
+  return {
+    enabled: entry.enabled,
+    marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+    pluginName: entry.pluginName,
+    ...(entry.allowDestructiveActions
+      ? { allow_destructive_actions: entry.allowDestructiveActions }
+      : {}),
+  };
+}
+
 async function lstatIfExists(filePath: string) {
   try {
     return await fs.lstat(filePath);
@@ -247,12 +258,12 @@ function buildPluginItems(
         existingPluginEntries[configKey],
         plugin.pluginName,
       );
-      const plannedEntry = {
+      const plannedEntry = pluginConfigValue({
+        configKey,
         enabled: true,
-        marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
         pluginName: plugin.pluginName,
-        ...(allowDestructiveActions ? { allow_destructive_actions: allowDestructiveActions } : {}),
-      };
+        allowDestructiveActions,
+      });
       const conflict =
         !ctx.overwrite &&
         hasExistingCodexPluginEntry(
@@ -354,16 +365,6 @@ export function readCodexPluginMigrationConfigEntry(
   };
 }
 
-function readExistingAllowDestructiveActions(
-  config: MigrationProviderContext["config"],
-): boolean | "auto" | "ask" | undefined {
-  const value = readMigrationConfigPath(config as Record<string, unknown>, [
-    ...CODEX_PLUGIN_NATIVE_CONFIG_PATH,
-    "allow_destructive_actions",
-  ]);
-  return normalizeExistingAllowDestructiveActions(value);
-}
-
 function normalizeExistingAllowDestructiveActions(
   value: unknown,
 ): boolean | "auto" | "ask" | undefined {
@@ -399,17 +400,7 @@ export function buildCodexPluginsConfigValue(
     ...Object.fromEntries(
       entries
         .toSorted((a, b) => a.configKey.localeCompare(b.configKey))
-        .map((entry) => [
-          entry.configKey,
-          {
-            enabled: entry.enabled,
-            marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
-            pluginName: entry.pluginName,
-            ...(entry.allowDestructiveActions
-              ? { allow_destructive_actions: entry.allowDestructiveActions }
-              : {}),
-          },
-        ]),
+        .map((entry) => [entry.configKey, pluginConfigValue(entry)]),
     ),
   };
   return {
@@ -417,7 +408,13 @@ export function buildCodexPluginsConfigValue(
     config: {
       codexPlugins: {
         enabled: true,
-        allow_destructive_actions: readExistingAllowDestructiveActions(config) ?? true,
+        allow_destructive_actions:
+          normalizeExistingAllowDestructiveActions(
+            readMigrationConfigPath(config as Record<string, unknown>, [
+              ...CODEX_PLUGIN_NATIVE_CONFIG_PATH,
+              "allow_destructive_actions",
+            ]),
+          ) ?? true,
         plugins,
       },
     },

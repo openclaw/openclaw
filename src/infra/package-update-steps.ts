@@ -21,21 +21,20 @@ import {
   verifyUnchangedPackageUpdateRecovery,
 } from "./package-update-lifecycle.js";
 import {
-  checkGlobalPackageUpdatePermissions,
+  checkGlobalPackageUpdateAdmission,
   classifyPackageUpdatePermissionFailure,
   resolveCanonicalPath,
   runPnpmPreflightProbe,
   validatePnpmIsolatedUpdate,
 } from "./package-update-manager-preflight.js";
 import { prepareNpmGitSourceInstallSpec } from "./package-update-npm-pack.js";
-import type { PackageActivationOptions } from "./package-update-swap-contract.js";
 import {
   PackageUpdateActivationError,
-  removePackageUpdatePath,
-  swapStagedPackageInstall,
+  type PackageActivationOptions,
   type PackageUpdateTransaction,
   type StagedPackageInstall,
-} from "./package-update-swap.js";
+} from "./package-update-swap-contract.js";
+import { removePackageUpdatePath, swapStagedPackageInstall } from "./package-update-swap.js";
 import {
   createPackageVerificationFailureStep,
   type PackagePostInstallVerifier,
@@ -62,7 +61,6 @@ import { readPackageManagerProbeValue } from "./update-npm-prefix.js";
 import type { UpdateRecovery } from "./update-recovery.js";
 import { isFailedUpdateStep } from "./update-run-step.js";
 import type { UpdateStepResult } from "./update-step-result.js";
-export type { PackageUpdateTransaction } from "./package-update-swap.js";
 
 type PackageUpdateStepsResult = {
   localOverrides?: LocalPackageOverridesResult;
@@ -180,9 +178,13 @@ export async function runGlobalPackageUpdateSteps(params: {
   };
 
   try {
-    const permissions = await checkGlobalPackageUpdatePermissions(params.installTarget, params.env);
-    if (permissions) {
-      return await packageUpdateFailure(permissions);
+    const admission = await checkGlobalPackageUpdateAdmission(
+      params.installTarget,
+      params.packageName,
+      params.env,
+    );
+    if (admission) {
+      return await packageUpdateFailure(admission);
     }
     if (process.platform === "freebsd") {
       if (!params.installTarget.packageRoot) {
@@ -473,6 +475,17 @@ export async function runGlobalPackageUpdateSteps(params: {
     }
 
     const verificationPackageRoot = stagedInstall.packageRoot;
+    // Additional launcher names are known only after npm stages the candidate.
+    // Inspect those destinations before validation, never unrelated prefix files.
+    const publicationAdmission = await checkGlobalPackageUpdateAdmission(
+      params.installTarget,
+      params.packageName,
+      params.env,
+      stagedInstall.layout.binDir,
+    );
+    if (publicationAdmission) {
+      return await packageUpdateFailure(publicationAdmission, [...steps, publicationAdmission]);
+    }
     await params.beforeVerifyCandidate?.(verificationPackageRoot);
     if (packageRoot && params.beforeVerifyCandidate) {
       // Admission staging owns only its private prefix. Retire old backups only

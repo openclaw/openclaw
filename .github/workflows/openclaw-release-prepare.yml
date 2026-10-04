@@ -8,7 +8,7 @@ on:
         required: true
         type: string
       preparation_request:
-        description: Recovery only — retained request JSON with both explicitly identified child run IDs
+        description: Recovery only — retained request JSON with the explicitly identified ClawHub child run ID
         required: false
         type: string
 
@@ -21,7 +21,7 @@ env:
 
 jobs:
   prepare:
-    name: Start or recover exact npm and ClawHub preparation
+    name: Adopt FRV npm artifacts and start or recover ClawHub preparation
     if: github.repository == 'openclaw/openclaw'
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -69,7 +69,7 @@ jobs:
             {
               echo '## Preparation dispatch needs inspection'
               echo
-              echo 'A null child ID is unconfirmed, not proof that no run was created. Inspect Actions before another dispatch. Fill both exact child run IDs in this request and start OpenClaw Release Prepare with the same publish_inputs plus this preparation_request; recovery adopts those runs without dispatching builds.'
+              echo 'A null ClawHub child ID is unconfirmed, not proof that no run was created. Inspect Actions before another dispatch. Preserve npmArtifact exactly, fill the exact clawhubRunId in this request, and start OpenClaw Release Prepare with the same publish_inputs plus this preparation_request; recovery adopts that run without rebuilding or redispatching plugin npm.'
               echo
               echo '```json'
               cat "$RUNNER_TEMP/release-ready/request.json"

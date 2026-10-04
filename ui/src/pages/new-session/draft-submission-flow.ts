@@ -41,7 +41,6 @@ import {
   type InstantThreadHandoff,
   prepareInstantThreadHandoff,
 } from "./instant-thread-handoff.ts";
-import { NewSessionPermissionSelection } from "./permission-selection.ts";
 import {
   PendingSessionPlacementRecoveryState,
   type SubmissionOutcomeReason,
@@ -91,7 +90,7 @@ export class DraftSubmissionFlow {
   readonly pendingPlacement = new PendingSessionPlacementRecoveryState(() => this.read().context);
   readonly attachmentDraft: NewSessionAttachmentDraft;
   readonly composerTextarea = new NewSessionComposerTextareaController();
-  readonly permission = new NewSessionPermissionSelection(() => this.callbacks.requestUpdate());
+  permissionMode: SessionCreateParams["permissionMode"];
   readonly draftPersistence: NewSessionDraftPersistence;
   readonly capabilities: NewSessionCapabilityController;
 
@@ -101,9 +100,10 @@ export class DraftSubmissionFlow {
     private readonly read: () => DraftSubmissionSnapshot,
     private readonly callbacks: DraftSubmissionCallbacks,
   ) {
-    this.capabilities = new NewSessionCapabilityController(callbacks.requestUpdate);
-    this.capabilities.setMutationCallback(() => (this.startedSession.current = null));
-    this.permission.setMutationCallback(() => (this.startedSession.current = null));
+    this.capabilities = new NewSessionCapabilityController(
+      callbacks.requestUpdate,
+      () => (this.startedSession.current = null),
+    );
     this.sessionStartup = new DraftSessionStartup(gateway);
     this.draftPersistence = new NewSessionDraftPersistence(
       () => ({
@@ -214,9 +214,15 @@ export class DraftSubmissionFlow {
     this.visibilityValue = state.visibility;
     this.capabilities.restoreToolOverrides(state.toolOverrides);
     if ("permissionMode" in state) {
-      this.permission.restore(state.permissionMode);
+      this.permissionMode = state.permissionMode;
     }
     this.attachmentDraft.restore(state.attachments);
+  }
+
+  setPermissionMode(permissionMode: SessionCreateParams["permissionMode"]) {
+    this.permissionMode = permissionMode;
+    this.startedSession.current = null;
+    this.callbacks.requestUpdate();
   }
 
   setVisibility(visibility: NewSessionVisibility) {
@@ -296,7 +302,7 @@ export class DraftSubmissionFlow {
     }
     if (
       !catalog.isTarget(this.read().data) &&
-      this.attachmentDraft.pendingReads === 0 &&
+      this.attachmentDraft.reads.pendingReads === 0 &&
       this.startedSession.isCurrent(this.read().context, this.place.agentId)
     ) {
       return this.activeSubmission ? { gate: "submitting" } : undefined;
@@ -342,7 +348,7 @@ export class DraftSubmissionFlow {
       : null;
     this.visibilityValue = "normal";
     this.capabilities.reset();
-    this.permission.reset();
+    this.permissionMode = undefined;
     this.attachmentDraft.reset({ release: true });
     if (preservePendingPlacement) {
       if (!this.pendingPlacement.restored) {
@@ -433,7 +439,7 @@ export class DraftSubmissionFlow {
       this.startedSession.current = null;
       const placementTarget = startup
         ? null
-        : resolveDraftSessionPlacement(this.pendingPlacement, this.place).target;
+        : resolveDraftSessionPlacement(this.pendingPlacement, this.place);
       promptNewSessionNotifications(
         context,
         input.message,

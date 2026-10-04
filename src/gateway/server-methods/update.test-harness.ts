@@ -563,17 +563,17 @@ export async function captureUpdateRunPayload(
   return payload;
 }
 
-export function mockGlobalInstallSurface() {
+export function mockGlobalInstallSurface(root = "/tmp/openclaw-global") {
   resolveStartupInstallStatusMock.mockResolvedValueOnce({
-    root: "/tmp/openclaw-global",
-    status: { root: "/tmp/openclaw-global", installKind: "package", packageManager: "npm" },
+    root,
+    status: { root, installKind: "package", packageManager: "npm" },
     installReceipt: null,
   });
   resolveUpdateInstallSurfaceMock.mockResolvedValueOnce({
     kind: "global",
     mode: "npm",
-    root: "/tmp/openclaw-global",
-    packageRoot: "/tmp/openclaw-global",
+    root,
+    packageRoot: root,
   });
 }
 

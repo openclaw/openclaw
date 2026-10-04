@@ -162,14 +162,13 @@ export async function sendMcpAppNewConversation(
     if (!result) {
       return false;
     }
-    const navigation = new StartedSessionNavigation();
     await completeInitialSessionTurn({
       context,
       client,
       agentId,
       result,
       turn,
-      navigation,
+      navigation: new StartedSessionNavigation(),
       instant: undefined,
       isCurrent: current,
       clearDraft: async (release) => {

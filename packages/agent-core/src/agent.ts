@@ -9,7 +9,11 @@ import type {
 } from "@openclaw/llm-core";
 import { runAgentLoop, runAgentLoopContinue } from "./agent-loop.js";
 import { TranscriptNotContinuableError } from "./errors.js";
-import { attachInternalSyncSteeringGetter, getInternalBeforeToolBatch } from "./internal-hooks.js";
+import {
+  attachInternalSyncSteeringGetter,
+  getInternalBeforeToolBatch,
+  getInternalToolTurnCompletion,
+} from "./internal-hooks.js";
 import { isOpenClawSystemUpdateMessage } from "./operator-messages.js";
 import { resolveAgentReasoningOption } from "./reasoning.js";
 import { type AgentCoreStreamRuntimeDeps, resolveAgentCoreStreamFn } from "./runtime-deps.js";
@@ -128,7 +132,7 @@ export interface AgentOptions {
     context: PrepareNextTurnContext,
     signal?: AbortSignal,
   ) => Promise<AgentLoopTurnUpdate | undefined> | AgentLoopTurnUpdate | undefined;
-  /** Queue drain mode for steering messages applied before the next unstarted tool or model turn. */
+  /** Queue drain mode for steering messages applied at tool or model checkpoints. */
   steeringMode?: QueueMode;
   /** Queue drain mode for follow-up messages injected after the agent would otherwise stop. */
   followUpMode?: QueueMode;
@@ -393,8 +397,8 @@ export class Agent {
   }
 
   /**
-   * Queue a message for the active run. Running tools finish, while sequential
-   * tail calls or a parallel batch that has not launched yet are skipped.
+   * Queue a message for the active run. After its first tool starts, an assistant
+   * message's unstarted sequential tail can be skipped. Parallel batches always run.
    */
   steer(message: AgentMessage): void {
     this.steeringQueue.enqueue(message);
@@ -603,6 +607,7 @@ export class Agent {
       toolExecution: this.toolExecution,
       beforeToolCall: this.beforeToolCall,
       beforeToolBatch: getInternalBeforeToolBatch(this),
+      completesToolTurn: getInternalToolTurnCompletion(this),
       toolLoopRecoveryState: this.toolLoopRecoveryState,
       resolveDeferredTool: this.resolveDeferredTool,
       afterToolCall: this.afterToolCall,
@@ -682,6 +687,11 @@ export class Agent {
    * and `finishRun()` clears runtime-owned state.
    */
   private async processEvents(event: AgentEvent): Promise<void> {
+    let publishedToolResult =
+      event.type === "message_end" && event.message.role === "toolResult"
+        ? event.message
+        : undefined;
+    const messageIndex = this.mutableState.messages.length;
     switch (event.type) {
       case "agent_start":
       case "turn_start":
@@ -743,7 +753,21 @@ export class Agent {
       throw new Error("Agent listener invoked outside active run");
     }
     for (const listener of this.listeners) {
-      await listener(event, signal);
+      try {
+        await listener(event, signal);
+      } finally {
+        // A later redaction policy can replace a frozen, already committed tool result.
+        if (
+          publishedToolResult &&
+          event.type === "message_end" &&
+          event.message.role === "toolResult" &&
+          event.message !== publishedToolResult &&
+          this.mutableState.messages[messageIndex] === publishedToolResult
+        ) {
+          publishedToolResult = event.message;
+          this.mutableState.messages[messageIndex] = publishedToolResult;
+        }
+      }
     }
   }
 }

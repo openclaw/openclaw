@@ -273,28 +273,26 @@ describe("release:stable CLI", () => {
     );
   });
 
-  it("refuses a retained beta validation before observing or completing it", () => {
-    const release = fixture();
-    release.seed(phaseState("validate"));
-    const result = release.run([...validateSetup(), request(1, "beta")]);
-    expect(result.status, result.output).toBe(2);
-    expect(result.stderr).toContain("strict stable validation selection");
-    expect(release.readState().phases.validate.status).not.toBe("completed");
-  });
-
-  it("refuses an unobserved FRV request with the helper's reconciliation command", () => {
+  it.each(["beta", "unobserved"])("refuses an unqualified %s validation request", (mode) => {
     const release = fixture();
     release.seed(phaseState("validate"));
     const result = release.run([
       ...validateSetup(),
-      step("pnpm", ["ci:full-release"], "", { request: { phase: "dispatching" }, exit: 1 }),
+      mode === "beta"
+        ? request(1, "beta")
+        : step("pnpm", ["ci:full-release"], "", { request: { phase: "dispatching" }, exit: 1 }),
     ]);
-    expect(result.status).toBe(2);
-    expect(result.stderr).toContain("has no observed run");
-    expect(result.stderr).toContain(
-      `pnpm ci:full-release -- --reconcile-request ${join(release.stateDir, "frv-request.json")}`,
-    );
-    expect(release.readState().validate.runId).toBeUndefined();
+    expect(result.status, result.output).toBe(2);
+    expect(release.readState().phases.validate.status).not.toBe("completed");
+    if (mode === "beta") {
+      expect(result.stderr).toContain("strict stable validation selection");
+    } else {
+      expect(result.stderr).toContain("has no observed run");
+      expect(result.stderr).toContain(
+        `pnpm ci:full-release -- --reconcile-request ${join(release.stateDir, "frv-request.json")}`,
+      );
+      expect(release.readState().validate.runId).toBeUndefined();
+    }
   });
 
   it.each([0, 2])(
@@ -423,51 +421,41 @@ describe("release:stable CLI", () => {
     ]);
   });
 
-  it("refuses an existing unsigned local final tag", () => {
-    const release = fixture();
-    const state = publishState();
-    state.operator.publicationApproved = null;
-    release.seed(state);
-    release.candidate(CANDIDATE_COMMAND);
-    const result = release.run([
-      step("pnpm", ["release:candidate", "--", "--tag", `v${RELEASE}`]),
-      step("git", ["ls-remote", "--tags", "origin", `v${RELEASE}`, `v${RELEASE}^{}`]),
-      step("git", ["tag", "-s", `v${RELEASE}`, CUT_SHA, "-m", `OpenClaw ${RELEASE}`], "", {
-        exit: 1,
-      }),
-      step("git", ["rev-parse", `v${RELEASE}^{}`], CUT_SHA),
-      step("git", ["tag", "-s", "-f", `v${RELEASE}`, CUT_SHA, "-m", `OpenClaw ${RELEASE}`], "", {
-        exit: 1,
-      }),
-    ]);
-    expect(result.status, result.output).toBe(2);
-    expect(result.stderr).toContain(`Could not create signed final tag v${RELEASE}`);
-    expect(result.calls.some((call) => call.bin === "git" && call.args[0] === "push")).toBe(false);
-  });
-
-  it("re-signs an existing same-target local final tag before publishing", () => {
-    const release = fixture();
-    const state = publishState();
-    state.operator.publicationApproved = null;
-    release.seed(state);
-    release.candidate(CANDIDATE_COMMAND);
-    const result = release.run([
-      step("pnpm", ["release:candidate", "--", "--tag", `v${RELEASE}`]),
-      step("git", ["ls-remote", "--tags", "origin", `v${RELEASE}`, `v${RELEASE}^{}`]),
-      step("git", ["tag", "-s", `v${RELEASE}`, CUT_SHA, "-m", `OpenClaw ${RELEASE}`], "", {
-        exit: 1,
-      }),
-      step("git", ["rev-parse", `v${RELEASE}^{}`], CUT_SHA),
-      step("git", ["tag", "-s", "-f", `v${RELEASE}`, CUT_SHA, "-m", `OpenClaw ${RELEASE}`]),
-      step("git", ["push", "origin", `refs/tags/v${RELEASE}`]),
-    ]);
-
-    expect(result.stderr).not.toContain(`Could not create signed final tag v${RELEASE}`);
-    expect(result.calls).toContainEqual({
-      bin: "git",
-      args: ["push", "origin", `refs/tags/v${RELEASE}`],
-    });
-  });
+  it.each([false, true])(
+    "publishes an existing same-target local tag only after signing succeeds: %s",
+    (signed) => {
+      const release = fixture();
+      const state = publishState();
+      state.operator.publicationApproved = null;
+      release.seed(state);
+      release.candidate(CANDIDATE_COMMAND);
+      const result = release.run([
+        step("pnpm", ["release:candidate", "--", "--tag", `v${RELEASE}`]),
+        step("git", ["ls-remote", "--tags", "origin", `v${RELEASE}`, `v${RELEASE}^{}`]),
+        step("git", ["tag", "-s", `v${RELEASE}`, CUT_SHA, "-m", `OpenClaw ${RELEASE}`], "", {
+          exit: 1,
+        }),
+        step("git", ["rev-parse", `v${RELEASE}^{}`], CUT_SHA),
+        step("git", ["tag", "-s", "-f", `v${RELEASE}`, CUT_SHA, "-m", `OpenClaw ${RELEASE}`], "", {
+          exit: signed ? 0 : 1,
+        }),
+        ...(signed ? [step("git", ["push", "origin", `refs/tags/v${RELEASE}`])] : []),
+      ]);
+      if (signed) {
+        expect(result.stderr).not.toContain(`Could not create signed final tag v${RELEASE}`);
+        expect(result.calls).toContainEqual({
+          bin: "git",
+          args: ["push", "origin", `refs/tags/v${RELEASE}`],
+        });
+      } else {
+        expect(result.status, result.output).toBe(2);
+        expect(result.stderr).toContain(`Could not create signed final tag v${RELEASE}`);
+        expect(result.calls.some((call) => call.bin === "git" && call.args[0] === "push")).toBe(
+          false,
+        );
+      }
+    },
+  );
 
   it("prints child approval guidance, approves only parent gates, and resumes without redispatch", () => {
     const release = fixture();

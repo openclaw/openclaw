@@ -18,6 +18,7 @@ import { ABSOLUTE_DEADLINE_EXPIRED, awaitWithinDeadline } from "../utils/absolut
 import { resolveGatewayServiceProbeHosts } from "./gateway-service-probe-hosts.js";
 import { formatLine } from "./output.js";
 import { execSchtasks } from "./schtasks-exec.js";
+import { assertTaskInspectionDeadline } from "./schtasks-inspection-deadline.js";
 import {
   readScheduledTaskCommand,
   readStartupEntryCommand,
@@ -328,6 +329,10 @@ export async function resolveFallbackRuntime(
   mode: "observe" | "control" = "observe",
   deadlineMs?: number,
 ): Promise<GatewayServiceRuntime> {
+  const unknownRuntime = (detail: string): GatewayServiceRuntime => ({
+    status: "unknown",
+    detail: `Startup-folder login item installed; ${detail}`,
+  });
   if (deadlineMs !== undefined) {
     const observed = await readBoundedScheduledTaskProcess(env, deadlineMs, installedCommand);
     if (observed && performance.now() < deadlineMs) {
@@ -353,11 +358,9 @@ export async function resolveFallbackRuntime(
         };
       }
     }
-    return {
-      status: "unknown",
-      detail:
-        "Startup-folder login item installed; process ownership or port availability could not be verified within the inspection budget.",
-    };
+    return unknownRuntime(
+      "process ownership or port availability could not be verified within the inspection budget.",
+    );
   }
   const command =
     installedCommand === undefined
@@ -370,35 +373,24 @@ export async function resolveFallbackRuntime(
       : installedCommand;
   const port = resolveScheduledTaskCommandPort(env, command);
   if (!port) {
-    return {
-      status: "unknown",
-      detail: shouldManageGatewayListenerPort(env)
-        ? "Startup-folder login item installed; gateway port unknown."
-        : "Startup-folder login item installed; node gateway port unknown.",
-    };
+    return unknownRuntime(
+      shouldManageGatewayListenerPort(env) ? "gateway port unknown." : "node gateway port unknown.",
+    );
   }
   const installedArguments = command?.programArguments;
   if (!shouldManageGatewayListenerPort(env)) {
     const snapshot = readWindowsProcessSnapshot();
     if (!snapshot) {
-      return {
-        status: "unknown",
-        detail: `Startup-folder login item installed; could not inspect node host process for gateway port ${port}.`,
-      };
+      return unknownRuntime(`could not inspect node host process for gateway port ${port}.`);
     }
     const pid = installedArguments?.length
       ? findInstalledProcessPid(snapshot, port, installedArguments, isNodeHostArgv)
       : null;
-    return pid
-      ? {
-          status: "running",
-          pid,
-          detail: `Startup-folder login item installed; node host process detected for gateway port ${port}.`,
-        }
-      : {
-          status: "stopped",
-          detail: `Startup-folder login item installed; no node host process detected for gateway port ${port}.`,
-        };
+    return {
+      status: pid ? "running" : "stopped",
+      ...(pid ? { pid } : {}),
+      detail: `Startup-folder login item installed; ${pid ? "" : "no "}node host process detected for gateway port ${port}.`,
+    };
   }
 
   const shouldInspectProcess = process.platform === "win32" && Boolean(installedArguments?.length);
@@ -418,16 +410,10 @@ export async function resolveFallbackRuntime(
   const requireCommandOwnership = mode === "control" && process.platform === "win32";
   if (requireCommandOwnership) {
     if (!installedArguments?.length) {
-      return {
-        status: "unknown",
-        detail: `Startup-folder login item installed; persisted command unavailable for gateway port ${port}.`,
-      };
+      return unknownRuntime(`persisted command unavailable for gateway port ${port}.`);
     }
     if (!snapshot) {
-      return {
-        status: "unknown",
-        detail: `Startup-folder login item installed; could not verify the installed process for gateway port ${port}.`,
-      };
+      return unknownRuntime(`could not verify the installed process for gateway port ${port}.`);
     }
   }
   const probeHosts = await resolveGatewayServiceProbeHosts({ env, command });
@@ -438,10 +424,7 @@ export async function resolveFallbackRuntime(
     return null;
   });
   if (!diagnostics) {
-    return {
-      status: "unknown",
-      detail: `Startup-folder login item installed; could not inspect port ${port}.`,
-    };
+    return unknownRuntime(`could not inspect port ${port}.`);
   }
   if (diagnostics.status !== "busy") {
     const status =
@@ -462,20 +445,16 @@ export async function resolveFallbackRuntime(
   const ownedGatewayPids = matchedGatewayPids.length > 0 ? matchedGatewayPids : verifiedGatewayPids;
   if (ownedGatewayPids.length > 0) {
     return requireCommandOwnership
-      ? {
-          status: "unknown",
-          detail: `Startup-folder login item installed; gateway listener on port ${port} does not match the persisted command.`,
-        }
+      ? unknownRuntime(`gateway listener on port ${port} does not match the persisted command.`)
       : {
           status: "running",
           pid: ownedGatewayPids[0],
           detail: `Startup-folder login item installed; verified gateway listener detected on port ${port}.`,
         };
   }
-  return {
-    status: "unknown",
-    detail: `Startup-folder login item installed; port ${port} is busy, but the listener is not a verified gateway process.`,
-  };
+  return unknownRuntime(
+    `port ${port} is busy, but the listener is not a verified gateway process.`,
+  );
 }
 
 export function isScheduledTaskDefinitelyNotRunning(taskName: string): boolean {
@@ -610,14 +589,7 @@ export async function isScheduledTaskInstalled(args: GatewayServiceEnvArgs): Pro
   if (probe.status === "unknown") {
     throw new ScheduledTaskInspectionError(probe);
   }
-  if (performance.now() >= deadlineMs) {
-    throw new ScheduledTaskInspectionError({
-      status: "unknown",
-      detail: "Scheduled Task inspection deadline expired.",
-      timeoutMs: 0,
-      diagnostic: { kind: "timeout", timeoutMs: 0 },
-    });
-  }
+  assertTaskInspectionDeadline(deadlineMs);
   return (
     probe.status === "found" ||
     (await isStartupEntryInstalled(effectiveEnv, deadlineMs, args.requireEffective))

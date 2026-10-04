@@ -176,16 +176,13 @@ extension GatewayProcessManager {
         if let retainedServiceCLI {
             return try GatewayLaunchAgentManager.resumedServiceCLI(retainedServiceCLI)
         }
-        guard let stored = AppDefaults.standard.object(forKey: GatewayLaunchAgentManager.resumeCommandKey) else {
+        guard let cli = try self.retainedServiceIntent() else {
             guard !AppDefaults.standard.bool(forKey: pauseDefaultsKey),
                   try self.hasUnrecordedLegacyManagedService() else { return nil }
             return try GatewayLaunchAgentManager.legacyManagedNodeCLI(homeDirectory: LaunchAgentPlist.homeDirectoryURL)
         }
-        guard let data = stored as? Data else {
-            throw GatewayHostingError(message: "The retained Gateway command could not be read.")
-        }
-        return try GatewayLaunchAgentManager.resumeCLI(
-            from: data, stateDirectory: AppProfile.current.stateDirectoryURL())
+        return try GatewayLaunchAgentManager.resumedServiceCLI(
+            cli, stateDirectory: AppProfile.current.stateDirectoryURL())
     }
 
     func loadRetainedServiceForResume() throws {

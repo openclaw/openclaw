@@ -9,7 +9,7 @@ import {
   createScopedSqliteReadOnlyWorker,
 } from "./sqlite-readonly-worker.js";
 import { startSqliteReadOnlyLocationAsync } from "./sqlite-snapshot-source.js";
-import { allocateWorkerOwnedSqliteSnapshotDirectory } from "./sqlite-snapshot-staging-owner.js";
+import { allocateWorkerOwnedSqliteSnapshotDirectory } from "./sqlite-snapshot-staging-allocation.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 

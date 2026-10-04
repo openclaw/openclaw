@@ -260,7 +260,7 @@ describe("Slack live QA runtime helpers", () => {
 
   it("configures native approval forwarding and the guardian runtime", () => {
     const cfg = buildSlackConfigFixture(
-      { agents: { defaults: {}, list: [{ id: "qa", model: { primary: "openai/gpt-5.6-luna" } }] } },
+      { agents: { defaults: {}, entries: { qa: { model: { primary: "openai/gpt-5.6-luna" } } } } },
       {
         overrides: {
           approvals: { exec: true, plugin: true, target: "channel" },
@@ -340,7 +340,7 @@ describe("Slack live QA runtime helpers", () => {
         {
           agents: {
             defaults: { verboseDefault: "off" },
-            list: [{ id: "qa", identity: { name: "C-3PO QA" } }],
+            entries: { qa: { identity: { name: "C-3PO QA" } } },
           },
         },
         { overrides: findScenario([id])[0]?.configOverrides },
@@ -367,7 +367,7 @@ describe("Slack live QA runtime helpers", () => {
     expect(config("slack-progress-commentary-verbose-full").agents?.defaults?.verboseDefault).toBe(
       "full",
     );
-    expect(enabled.agents?.list?.[0]?.identity).toBeUndefined();
+    expect(enabled.agents?.entries?.qa?.identity).toBeUndefined();
     expect(config("slack-mpim-app-mention-dedupe").channels?.slack?.accounts?.sut).toMatchObject({
       dm: { enabled: true, groupEnabled: true },
       replyToMode: "all",

@@ -3,6 +3,7 @@ import type { DatabaseSync } from "node:sqlite";
 import type { Selectable } from "kysely";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
+  createSqliteQueryCache,
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
@@ -147,7 +148,7 @@ function createAuditRecordInsert(database: DatabaseSync) {
   );
 }
 
-const auditRecordInserts = new WeakMap<DatabaseSync, ReturnType<typeof createAuditRecordInsert>>();
+const auditRecordInsert = createSqliteQueryCache(createAuditRecordInsert);
 
 /** Connection-bound operations; mutation callers retain the complete transaction. */
 export function createSqliteAuditRecordKernel<T>(
@@ -157,12 +158,7 @@ export function createSqliteAuditRecordKernel<T>(
   const scope = options.scope;
   const maxEntries = options.maxEntries;
   function insertRecord(record: DiagnosticEventRow): void {
-    let insert = auditRecordInserts.get(database);
-    if (!insert) {
-      insert = createAuditRecordInsert(database);
-      auditRecordInserts.set(database, insert);
-    }
-    insert({ ...record, scope });
+    auditRecordInsert(database)({ ...record, scope });
   }
 
   function upsertPreparedRecord(record: PreparedSqliteAuditRecord): void {

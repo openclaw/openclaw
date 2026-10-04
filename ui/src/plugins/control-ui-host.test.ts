@@ -6,6 +6,8 @@ import type { AgentsListResult } from "../api/types.ts";
 import { createAgentSelectionCapability } from "../app/agent-selection.ts";
 import { AssistantDock, type AssistantDockOwner } from "../app/assistant-dock.ts";
 import type { ApplicationContext } from "../app/context.ts";
+import { PLUGIN_PANEL_TOGGLE_EVENT } from "../components/panel-toggle-contract.ts";
+import { takeSessionPanelToggle } from "../components/session-panel-toggle-buffer.ts";
 import { i18n } from "../i18n/index.ts";
 import { createAgentCapability } from "../lib/agents/index.ts";
 import {
@@ -24,10 +26,13 @@ function createRosterHost(request: GatewayBrowserClient["request"]) {
   const sessions = createTestSessionCapability(gateway);
   const context = { gateway, agents, sessions } as unknown as ApplicationContext;
   const abort = new AbortController();
-  const owner = { client, abort, descriptor: { pluginId: "review" }, disposers: new Set() } as Omit<
-    ControlUiPluginOwner,
-    "host"
-  >;
+  const owner = {
+    client,
+    abort,
+    descriptor: { pluginId: "review" },
+    disposers: new Set(),
+    contributions: { navigation: new Map() },
+  } as Omit<ControlUiPluginOwner, "host">;
   const runtime = new ControlUiPluginRuntime(() => context);
   runtime.start();
   return {
@@ -100,6 +105,8 @@ describe("native UI roster refresh", () => {
     expect(request.mock.calls[1]).toEqual([
       "sessions.list",
       {
+        rowMode: "compact",
+        source: "chat-pane",
         includeGlobal: true,
         includeUnknown: true,
         configuredAgentsOnly: false,
@@ -389,6 +396,47 @@ describe("native UI locale subscription", () => {
 });
 
 describe("native UI page navigation", () => {
+  it("pins only registered destinations once through sidebar preferences and retires pin handles", () => {
+    const fixture = createRosterHost(vi.fn());
+    onTestFinished(fixture.dispose);
+    let sidebarEntries = ["route:usage", "session:agent:main:existing"];
+    const update = vi.fn((patch: { sidebarEntries: string[] }) => {
+      sidebarEntries = patch.sidebarEntries;
+    });
+    Object.assign(fixture.context, {
+      navigation: {
+        get snapshot() {
+          return { sidebarEntries };
+        },
+        update,
+      },
+    });
+    const view = new AbortController();
+    const pin = scopeControlUiHost(fixture.host, view.signal).ui.pinNavigation;
+    pin("board");
+    expect(update).not.toHaveBeenCalled();
+    const unregister = fixture.host.ui.registerNavigation({
+      id: "board",
+      label: "Board",
+      page: { id: "board" },
+      defaultVisible: false,
+    });
+    pin("foreign/board");
+    pin("board");
+    pin("board");
+    expect(update).toHaveBeenCalledExactlyOnceWith({
+      sidebarEntries: ["route:usage", "session:agent:main:existing", "plugin:review/board"],
+    });
+    unregister();
+    sidebarEntries = ["route:usage"];
+    pin("board");
+    expect(update).toHaveBeenCalledOnce();
+    view.abort();
+    expect(() => pin("board")).toThrow("view has ended");
+    fixture.dispose();
+    expect(() => fixture.host.ui.pinNavigation("board")).toThrow("activation has ended");
+  });
+
   it("opens a queried global session with its owner before changing the selected key", async () => {
     const primary = sessionsResult(
       [{ key: "global", kind: "global", agentId: "main", boardFace: "dashboard" }],
@@ -515,6 +563,79 @@ describe("native UI page navigation", () => {
       }
     },
   );
+});
+
+describe("native UI plugin panels", () => {
+  it("opens only owned panels and retires retained view and activation handles", () => {
+    const navigate = vi.fn();
+    const context = {
+      basePath: "",
+      navigate,
+      gateway: { snapshot: { sessionKey: "agent:main:main", hello: null }, setSessionKey: vi.fn() },
+      agents: { state: { agentsList: null } },
+      agentSelection: { state: { selectedId: "main" }, set: vi.fn() },
+      sessions: { state: { result: null } },
+    } as unknown as ApplicationContext;
+    const abort = new AbortController();
+    const owner = {
+      abort,
+      descriptor: { pluginId: "review" },
+      disposers: new Set(),
+      contributions: { panels: new Map([["document", {}]]) },
+    } as Omit<ControlUiPluginOwner, "host">;
+    const runtime = {
+      isCurrent: () => !abort.signal.aborted,
+    } as unknown as ControlUiPluginRuntime;
+    const host = createControlUiPluginHost(() => context, runtime, owner);
+    const listener = vi.fn();
+    window.addEventListener(PLUGIN_PANEL_TOGGLE_EVENT, listener);
+    try {
+      expect(() => host.ui.openPanel("foreign/document")).toThrow("own registered panel");
+      const view = new AbortController();
+      const open = scopeControlUiHost(host, view.signal).ui.openPanel;
+      open("document", { sessionKey: "global", agentId: "writer" });
+      expect(navigate).toHaveBeenCalledWith(
+        "chat",
+        expect.objectContaining({ pathname: "/chat/writer" }),
+      );
+      expect(listener).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          detail: {
+            pluginId: "review",
+            panelId: "document",
+            sessionKey: "global",
+            agentId: "writer",
+            open: true,
+          },
+        }),
+      );
+      expect(takeSessionPanelToggle("plugin:review/document", "global", "writer")).not.toBeNull();
+      open("document", { sessionKey: "agent:writer:document" });
+      expect(navigate).toHaveBeenLastCalledWith(
+        "chat",
+        expect.objectContaining({ pathname: "/chat/writer/document" }),
+      );
+      expect(context.agentSelection.set).toHaveBeenLastCalledWith("writer");
+      expect(listener).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          detail: expect.objectContaining({
+            sessionKey: "agent:writer:document",
+            agentId: "writer",
+          }),
+        }),
+      );
+      expect(
+        takeSessionPanelToggle("plugin:review/document", "agent:writer:document", "writer"),
+      ).not.toBeNull();
+      view.abort();
+      expect(() => open("document")).toThrow("view has ended");
+      abort.abort();
+      expect(() => host.ui.openPanel("document")).toThrow("activation has ended");
+    } finally {
+      window.removeEventListener(PLUGIN_PANEL_TOGGLE_EVENT, listener);
+      abort.abort();
+    }
+  });
 });
 
 describe("native UI conversation dock", () => {

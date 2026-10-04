@@ -209,11 +209,6 @@ function createLegacyStateMigrationDetectionResult(params?: {
       hasLegacy: false,
     },
     worktrees: { hasLegacy: false, legacyIds: [], pathRewrites: [] },
-    deliveryQueues: {
-      outboundPath: "/tmp/state/delivery-queue",
-      sessionPath: "/tmp/state/session-delivery-queue",
-      hasLegacy: false,
-    },
     voiceWake: {
       triggersPath: "/tmp/state/settings/voicewake.json",
       routingPath: "/tmp/state/settings/voicewake-routing.json",
@@ -432,11 +427,6 @@ vi.mock("../flows/doctor-tool-schema-runtime.js", () => ({
 }));
 
 vi.mock("./doctor-browser.js", () => ({
-  detectLegacyClawdBrowserProfileResidue: vi.fn().mockResolvedValue(null),
-  maybeArchiveLegacyClawdBrowserProfileResidue: vi.fn().mockResolvedValue({
-    changes: [],
-    warnings: [],
-  }),
   maybeRepairOwnedChromeExtensionNativeHosts: vi.fn().mockResolvedValue({
     changes: [],
     warnings: [],
@@ -563,7 +553,8 @@ vi.mock("../infra/state-migrations.plugin-doctor.js", () => ({
   autoMigrateLegacyPluginDoctorState,
 }));
 
-vi.mock("../infra/state-migrations.state-dir.js", () => ({
+vi.mock("../infra/state-migrations.state-dir.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/state-migrations.state-dir.js")>()),
   autoMigrateLegacyStateDir,
   resolvePendingLegacyStateDirMigrationPaths: vi.fn().mockReturnValue(null),
   prepareLegacyStateDirMigration: vi.fn(),

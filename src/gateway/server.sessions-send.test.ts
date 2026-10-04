@@ -379,7 +379,12 @@ describe("sessions_send agent targeting", () => {
       const config: OpenClawConfig = {
         ...(tools ? { tools } : {}),
         agents: {
-          list: [{ id: "main", default: true }, { id: "orion" }],
+          ownership: "explicit",
+          defaults: {
+            systemAgent: { agentId: "main" },
+            sessionStore: { agentId: "main" },
+          },
+          entries: { main: {}, orion: {} },
         },
       };
 

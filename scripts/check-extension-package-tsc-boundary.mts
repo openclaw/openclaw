@@ -273,17 +273,6 @@ function collectOptInExtensionIds() {
   });
 }
 
-function collectCanaryExtensionIds(extensionIds: string[]) {
-  return [
-    ...new Map(
-      extensionIds.map((extensionId) => [
-        JSON.stringify(readExtensionTsconfig(extensionId)),
-        extensionId,
-      ]),
-    ).values(),
-  ];
-}
-
 /** One lifecycle adapter for preparation, compilers, and the negative canary. */
 function abortSiblingSteps(abortController?: AbortController) {
   if (abortController && !abortController.signal.aborted) {
@@ -714,10 +703,10 @@ async function runBoundaryCheck(argv: string[]) {
   const startedAt = Date.now();
   const mode = parseMode(argv);
   const optInExtensionIds = collectOptInExtensionIds();
-  const canaryExtensionIds = collectCanaryExtensionIds(optInExtensionIds);
-  const cleanupExtensionIds = optInExtensionIds;
+  // Opt-in already requires the same base config, so one package covers that boundary.
+  const canaryExtensionIds = optInExtensionIds.slice(-1);
   const shouldRunCanary = mode === "all" || mode === "canary";
-  const teardownCanaryCleanup = installCanaryArtifactCleanup(cleanupExtensionIds);
+  const teardownCanaryCleanup = installCanaryArtifactCleanup(optInExtensionIds);
   let prepElapsedMs: number | undefined;
   let compileCount = 0;
   let skippedCompileCount = 0;
@@ -726,7 +715,7 @@ async function runBoundaryCheck(argv: string[]) {
   let canaryElapsedMs: number | undefined;
 
   try {
-    cleanupCanaryArtifactsForExtensions(cleanupExtensionIds);
+    cleanupCanaryArtifactsForExtensions(optInExtensionIds);
     if (mode === "all" || mode === "compile") {
       const selection = resolveExtensionBoundarySelection(repoRoot, optInExtensionIds);
       const summary = formatBoundarySelection(selection);
@@ -761,8 +750,8 @@ async function runBoundaryCheck(argv: string[]) {
       }),
     );
   } finally {
-    teardownCanaryCleanup?.();
-    cleanupCanaryArtifactsForExtensions(cleanupExtensionIds);
+    teardownCanaryCleanup();
+    cleanupCanaryArtifactsForExtensions(optInExtensionIds);
   }
 }
 

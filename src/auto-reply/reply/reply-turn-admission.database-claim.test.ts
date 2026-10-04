@@ -332,12 +332,12 @@ it("cancels an in-flight admission read when its lifecycle owner interrupts ingr
     expect(signal.aborted).toBe(true);
     expect(upstream.signal.aborted).toBe(false);
     await interrupted.released;
-    await runExclusiveSessionLifecycleMutation({ ...target, run: async () => {} });
+    await runExclusiveSessionLifecycleMutation("patch", { ...target, run: async () => {} });
     expect(await pending).toMatchObject([{ status: "rejected", reason }]);
     expect(registry.replyRunRegistry.get(interruptedKey)).toBeUndefined();
   } finally {
     upstream.abort();
     await pending;
-    await runExclusiveSessionLifecycleMutation({ ...target, run: async () => {} });
+    await runExclusiveSessionLifecycleMutation("patch", { ...target, run: async () => {} });
   }
 });

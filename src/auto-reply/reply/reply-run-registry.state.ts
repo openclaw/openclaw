@@ -232,10 +232,10 @@ type ReplyOperationAfterClear = {
   barrier?: ReplyRunAdmissionBarrier;
 };
 const afterClearByOperation = new WeakMap<ReplyOperation, ReplyOperationAfterClear>();
-const successorBarrierStartsByOperation = new WeakMap<ReplyOperation, Set<() => void>>();
 type ReplyOperationSuccessorBarrierGroup = {
   registrationKey: string;
   sources: Map<string, ReplyRunAdmissionSource>;
+  start: () => void;
 };
 // Alias-keyed fences registered for one lane rotate together. Rekeyed command
 // operations retain prior-lane identities so source successors do not adopt
@@ -506,23 +506,15 @@ export function registerReplyOperationSuccessorBarrier(params: {
   const groups =
     successorBarrierGroupsByOperation.get(params.operation) ??
     new Set<ReplyOperationSuccessorBarrierGroup>();
-  groups.add({ registrationKey: params.operation.key, sources });
+  groups.add({ registrationKey: params.operation.key, sources, start });
   successorBarrierGroupsByOperation.set(params.operation, groups);
-  const starts = successorBarrierStartsByOperation.get(params.operation) ?? new Set<() => void>();
-  starts.add(start);
-  successorBarrierStartsByOperation.set(params.operation, starts);
 }
 
 export function startReplyOperationSuccessorBarriers(operation: ReplyOperation): void {
-  const starts = successorBarrierStartsByOperation.get(operation);
-  // These maps are operation-owned lifecycle metadata, not identity indexes.
-  // Clear drops both before handoff starts so adoption cannot retain stale groups.
-  successorBarrierStartsByOperation.delete(operation);
+  const groups = successorBarrierGroupsByOperation.get(operation);
+  // Drop operation-owned metadata before handoff so adoption cannot retain stale groups.
   successorBarrierGroupsByOperation.delete(operation);
-  if (!starts) {
-    return;
-  }
-  for (const start of starts) {
+  for (const { start } of groups ?? []) {
     start();
   }
 }
@@ -591,22 +583,15 @@ export function waitForReplyBarrierSettlement(
       );
       const checkOwnerActivity = () => {
         const remainingMs = maxTimeoutMs - (Date.now() - startedAt);
-        if (remainingMs <= 0) {
-          finish();
-          return;
-        }
-        let shouldExtend: boolean;
         try {
-          shouldExtend = timeout.shouldExtend();
+          if (remainingMs > 0 && timeout.shouldExtend()) {
+            schedule(Math.min(REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS, remainingMs), checkOwnerActivity);
+            return;
+          }
         } catch {
-          finish();
-          return;
+          // A failed owner probe cannot extend admission blocking.
         }
-        if (!shouldExtend) {
-          finish();
-          return;
-        }
-        schedule(Math.min(REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS, remainingMs), checkOwnerActivity);
+        finish();
       };
       schedule(Math.min(REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS, maxTimeoutMs), checkOwnerActivity);
     }

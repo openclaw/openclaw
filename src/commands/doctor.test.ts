@@ -151,7 +151,7 @@ describe("doctorCommand", () => {
       }),
     );
     mocks.clearSessionSqliteMigrationGithubIssueClaim.mockReturnValue(true);
-    mocks.detectBrowserOpenSupport.mockResolvedValue({ command: "open", ok: true });
+    mocks.detectBrowserOpenSupport.mockResolvedValue({ ok: true });
     mocks.readSourceConfigBestEffort.mockResolvedValue({});
     mocks.reconcileGithubIssue.mockResolvedValue({ status: "not-found" });
     mocks.withDoctorSqliteMaintenanceLock.mockImplementation(

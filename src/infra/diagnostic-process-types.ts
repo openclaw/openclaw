@@ -1,9 +1,12 @@
+import type { HeapSpaceInfo } from "node:v8";
+
 export type DiagnosticMemoryUsage = {
   rssBytes: number;
   heapTotalBytes: number;
   heapUsedBytes: number;
   externalBytes: number;
   arrayBuffersBytes: number;
+  heapSpaces?: HeapSpaceInfo[];
   workerCount?: number;
   workerHeapSampledCount?: number;
   workerHeapTotalBytes?: number;

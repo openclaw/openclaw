@@ -424,18 +424,9 @@ describe("update-cli", () => {
     },
   );
 
-  it.each(
-    [true].flatMap((restart) =>
-      (["outside", "unknown", "inside", "descendant", "foreign descendant"] as const).map(
-        (membership) => ({
-          restart,
-          membership,
-        }),
-      ),
-    ),
-  )(
-    "never stages or stops an unchanged managed gateway under auto admission (restart=$restart, membership=$membership)",
-    async ({ restart, membership }) => {
+  it.each(["outside", "unknown", "inside", "descendant", "foreign descendant"] as const)(
+    "never stages or stops an unchanged managed gateway under auto admission (membership=%s)",
+    async (membership) => {
       const root = await mockPackageInstallAtCaseDir("openclaw-current-package", VERSION);
       readPackageVersion.mockResolvedValue(VERSION);
       primeNpmChannelTag("latest", VERSION);
@@ -462,7 +453,7 @@ describe("update-cli", () => {
         );
       }
 
-      await updateCommand({ admission: "auto", yes: true, restart, json: true });
+      await updateCommand({ admission: "auto", yes: true, restart: true, json: true });
 
       expectNoSideEffects(serviceStop, serviceRestart, runDaemonRestart, candidateValidation);
       expect(managedUpdateHandoff.start).not.toHaveBeenCalled();
@@ -618,31 +609,27 @@ describe("update-cli", () => {
     expect((lastWriteJsonCall() as UpdateRunResult).reason).toBeUndefined();
   });
 
-  it("runs the package update when latest target lookup is unresolved", async () => {
+  it.each(["latest", "next"] as const)("handles an unresolved %s dist-tag lookup", async (tag) => {
     setTty(false);
     await mockPackageInstallAtCaseDir();
     readPackageVersion.mockResolvedValue("2026.4.22");
-    primeNpmChannelTag("latest", null);
+    if (tag === "latest") {
+      primeNpmChannelTag(tag, null);
+      await updateCommand({});
 
-    await updateCommand({});
-
-    expect(getErrorOutput()).not.toContain("Downgrade confirmation required.");
-    expect(defaultRuntime.exit).not.toHaveBeenCalled();
-    expectPackageInstallSpec("openclaw@latest");
-    expect(vi.mocked(runExec).mock.calls.filter(([, args]) => args[1] === "doctor")).toEqual([]);
-  });
-
-  it("blocks the package update when a non-latest dist-tag lookup is unresolved", async () => {
-    setTty(false);
-    await mockPackageInstallAtCaseDir();
-    readPackageVersion.mockResolvedValue("2026.4.22");
+      expect(getErrorOutput()).not.toContain("Downgrade confirmation required.");
+      expect(defaultRuntime.exit).not.toHaveBeenCalled();
+      expectPackageInstallSpec("openclaw@latest");
+      expect(vi.mocked(runExec).mock.calls.filter(([, args]) => args[1] === "doctor")).toEqual([]);
+      return;
+    }
     vi.mocked(fetchNpmTagVersion).mockResolvedValue({
-      tag: "next",
+      tag,
       version: null,
       error: "HTTP 404",
     });
 
-    await expect(updateCommand({ tag: "next" })).rejects.toEqual(new ExitError(1));
+    await expect(updateCommand({ tag })).rejects.toEqual(new ExitError(1));
 
     expect(getLogOutput()).toContain("OpenClaw update skipped: downgrade-confirmation-required.");
     expect(getLogOutput()).toContain(

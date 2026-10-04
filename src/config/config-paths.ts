@@ -59,7 +59,11 @@ export function setConfigValueAtPath(root: PathNode, path: string[], value: unkn
 }
 
 /** Removes a value at a config path and prunes empty parent objects created by setters. */
-export function unsetConfigValueAtPath(root: PathNode, path: string[]): boolean {
+export function unsetConfigValueAtPath(
+  root: PathNode,
+  path: string[],
+  preserveEmptyParentsFrom?: PathNode,
+): boolean {
   const leafKey = path.at(-1);
   if (leafKey === undefined) {
     return false;
@@ -85,8 +89,14 @@ export function unsetConfigValueAtPath(root: PathNode, path: string[]): boolean 
   // preserving any parent that still carries sibling config.
   for (const { node, key } of stack.toReversed()) {
     const child = node[key];
-    if (isPlainObject(child) && Object.keys(child).length === 0) {
+    if (
+      isPlainObject(child) &&
+      Object.keys(child).length === 0 &&
+      (!preserveEmptyParentsFrom ||
+        getConfigValueAtPath(preserveEmptyParentsFrom, path.slice(0, stack.length)) === undefined)
+    ) {
       delete node[key];
+      stack.pop();
     } else {
       break;
     }

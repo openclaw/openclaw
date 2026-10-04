@@ -109,6 +109,7 @@ export function registerSessionRuntimeWindowTests(harness: {
         }
         expect(
           projectSessionPatchResult({
+            preparedAcpMeta: null,
             cfg,
             canonicalKey: sessionKey,
             entry: stored,
@@ -165,6 +166,7 @@ export function registerSessionRuntimeWindowTests(harness: {
         expect(missing[0]).toBe(false);
         expect(missing[2]?.message).not.toContain("use 32k");
         const withoutNativeWindows = projectSessionPatchResult({
+          preparedAcpMeta: null,
           cfg,
           canonicalKey: sessionKey,
           entry: stored,

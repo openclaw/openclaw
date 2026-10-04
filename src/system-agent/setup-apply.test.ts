@@ -17,6 +17,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as configModule from "../config/config.js";
+import type { OpenClawConfigWithLegacyRoster } from "../config/legacy.roster.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
@@ -219,7 +220,7 @@ describe("applySystemAgentSetup transaction boundaries", () => {
     { label: "entries", agents: { entries: {} } },
     { label: "list", agents: { list: [] } },
   ])("treats an authored $label roster as bootstrap", async ({ agents }) => {
-    const authoredConfig: OpenClawConfig = {
+    const authoredConfig: OpenClawConfigWithLegacyRoster = {
       agents: {
         ...agents,
         defaults: { model: { primary: "openai/gpt-5.5" } },
@@ -227,8 +228,7 @@ describe("applySystemAgentSetup transaction boundaries", () => {
     };
     const emptyRosterRuntime: OpenClawConfig = {
       agents: {
-        ...authoredConfig.agents,
-        list: undefined,
+        defaults: authoredConfig.agents?.defaults,
         entries: { main: { agentDir: "/agents/main" } },
       },
     };
@@ -257,7 +257,7 @@ describe("applySystemAgentSetup transaction boundaries", () => {
       const stateDir = testTempDirs.make("openclaw-setup-state-");
       await fs.mkdir(path.join(stateDir, "agents", "main", "sessions"), { recursive: true });
       await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-        const sourceConfig: OpenClawConfig = {
+        const sourceConfig: OpenClawConfigWithLegacyRoster = {
           agents: {
             ...agents,
             defaults: {
@@ -268,8 +268,7 @@ describe("applySystemAgentSetup transaction boundaries", () => {
         };
         const runtimeConfig: OpenClawConfig = {
           agents: {
-            ...sourceConfig.agents,
-            list: undefined,
+            defaults: sourceConfig.agents?.defaults,
             entries: { main: { agentDir: "/agents/main" } },
           },
         };
@@ -851,11 +850,10 @@ describe("applySystemAgentSetup transaction boundaries", () => {
       sourceConfig,
     };
     const finalizeConfig = vi.fn((config: OpenClawConfig, source: OpenClawConfig) => {
-      const { list: _legacyList, ...agents } = config.agents ?? {};
       return {
         ...config,
         agents: {
-          ...agents,
+          ...config.agents,
           entries: { ops: { workspace: "/tmp/finalized-ops" } },
         },
         plugins: source.plugins,
@@ -991,7 +989,7 @@ describe("applySystemAgentSetup transaction boundaries", () => {
     {
       label: "plaintext password",
       auth: { mode: "password" as const, password: "plaintext-password" },
-      expectedCredential: "plaintext-password",
+      expectedAuth: { password: "plaintext-password" },
     },
     {
       label: "environment-backed password SecretRef",
@@ -999,36 +997,76 @@ describe("applySystemAgentSetup transaction boundaries", () => {
         mode: "password" as const,
         password: { source: "env" as const, provider: "default", id: "SETUP_TEST_PASSWORD" },
       },
-      expectedCredential: "resolved-password",
+      expectedAuth: { password: "resolved-password" },
     },
     {
       label: "token",
       auth: { mode: "token" as const, token: "gateway-token" },
-      expectedCredential: "gateway-token",
+      expectedAuth: { token: "gateway-token" },
+    },
+    {
+      label: "trusted-proxy plaintext password",
+      auth: {
+        mode: "trusted-proxy" as const,
+        trustedProxy: { userHeader: "x-forwarded-user" },
+        password: "plaintext-password",
+      },
+      expectedAuth: { password: "plaintext-password" },
+    },
+    {
+      label: "trusted-proxy password SecretRef",
+      auth: {
+        mode: "trusted-proxy" as const,
+        trustedProxy: { userHeader: "x-forwarded-user" },
+        password: { source: "env" as const, provider: "default", id: "SETUP_TEST_PASSWORD" },
+      },
+      expectedAuth: { password: "resolved-password" },
+    },
+    {
+      label: "trusted-proxy ambient password",
+      auth: {
+        mode: "trusted-proxy" as const,
+        trustedProxy: { userHeader: "x-forwarded-user" },
+      },
+      expectedAuth: { password: "ambient-password" },
     },
   ])("authenticates non-restarting Gateway recovery with its $label only", async (scenario) => {
-    const config: OpenClawConfig = { ...mainAgentModelConfig(), gateway: { auth: scenario.auth } };
+    const config: OpenClawConfig = {
+      ...mainAgentModelConfig(),
+      gateway: {
+        auth: scenario.auth,
+        ...(scenario.auth.mode === "trusted-proxy" ? { trustedProxies: ["10.0.0.5"] } : {}),
+      },
+    };
     setSetupCommitState(config, snapshot("probe", config));
     mocks.ensureGatewayService.mockResolvedValueOnce({
       gateway: { status: "ready", action: "reused" },
       containerWithoutUserSystemd: false,
     });
 
-    await withEnvAsync({ SETUP_TEST_PASSWORD: "resolved-password" }, async () => {
-      const result = await applySystemAgentSetup(baseParams({ surface: "cli", resume: true }));
+    await withEnvAsync(
+      {
+        SETUP_TEST_PASSWORD: "resolved-password",
+        OPENCLAW_GATEWAY_PASSWORD: "ambient-password",
+        OPENCLAW_GATEWAY_TOKEN: undefined,
+      },
+      async () => {
+        const result = await applySystemAgentSetup(baseParams({ surface: "cli", resume: true }));
 
-      expect(mocks.ensureGatewayService).toHaveBeenCalledWith(
-        expect.objectContaining({ loadedAction: "resume" }),
-      );
-      expect(mocks.waitForGatewayReachable).toHaveBeenCalledWith({
-        url: "ws://127.0.0.1:18789",
-        token: scenario.auth.mode === "token" ? scenario.expectedCredential : undefined,
-        password: scenario.auth.mode === "password" ? scenario.expectedCredential : undefined,
-        deadlineMs: 15_000,
-      });
-      expect(mocks.state.persistedConfig?.gateway?.auth).toEqual(scenario.auth);
-      expect(result.gateway).toEqual({ status: "ready", action: "reused" });
-      expect(result.workspaceReady).toBe(true);
-    });
+        expect(mocks.ensureGatewayService).toHaveBeenCalledWith(
+          expect.objectContaining({ loadedAction: "resume" }),
+        );
+        expect(mocks.waitForGatewayReachable).toHaveBeenCalledWith({
+          url: "ws://127.0.0.1:18789",
+          token: undefined,
+          password: undefined,
+          ...scenario.expectedAuth,
+          deadlineMs: 15_000,
+        });
+        expect(mocks.state.persistedConfig?.gateway?.auth).toEqual(scenario.auth);
+        expect(result.gateway).toEqual({ status: "ready", action: "reused" });
+        expect(result.workspaceReady).toBe(true);
+      },
+    );
   });
 });

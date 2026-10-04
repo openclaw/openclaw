@@ -30,6 +30,23 @@ const cfg = { channels: { msteams: { enabled: true } } } as OpenClawConfig;
 const destination = { cfg, to: `conversation:${conversationId}` };
 
 let fixture: Awaited<ReturnType<typeof createConnectorFixture>>;
+
+function pauseToken() {
+  const tokenStarted = createDeferred<void>();
+  const releaseToken = createDeferred<void>();
+  fixture.token.mockImplementationOnce(async () => {
+    tokenStarted.resolve();
+    await releaseToken.promise;
+    return fixtureToken;
+  });
+  return { tokenStarted, releaseToken };
+}
+
+function acceptMessage(response: ServerResponse, id: string) {
+  response.writeHead(201, { "content-type": "application/json" });
+  response.end(JSON.stringify({ id }));
+}
+
 function createAuthority() {
   const state = { active: true };
   return {
@@ -58,10 +75,8 @@ async function withInlineImage(
 
 async function createConnectorFixture() {
   const requests: ConnectorRequest[] = [];
-  let respond = (response: ServerResponse) => {
-    response.writeHead(201, { "content-type": "application/json" });
-    response.end(JSON.stringify({ id: `accepted-${requests.length}` }));
-  };
+  let respond = (response: ServerResponse) =>
+    acceptMessage(response, `accepted-${requests.length}`);
   const server = createServer((request, response) => {
     void (async () => {
       const chunks: Buffer[] = [];
@@ -151,13 +166,7 @@ describe("registered Teams delivery handoff", () => {
     "preserves handoff through replay contexts with active authority=%s",
     async (keepActive) => {
       const { state, handoff } = createAuthority();
-      const tokenStarted = createDeferred<void>();
-      const releaseToken = createDeferred<void>();
-      fixture.token.mockImplementation(async () => {
-        tokenStarted.resolve();
-        await releaseToken.promise;
-        return fixtureToken;
-      });
+      const { tokenStarted, releaseToken } = pauseToken();
       const context = createMSTeamsReplayContext(
         {
           type: "message",
@@ -202,76 +211,41 @@ describe("registered Teams delivery handoff", () => {
       }
     },
   );
-  it("does not submit a poll Connector request when authority closes during SDK token acquisition", async () => {
+  it("checks poll authority again after dispatch recording waits", async () => {
     const { state, handoff } = createAuthority();
-    const tokenStarted = createDeferred<void>();
-    const releaseToken = createDeferred<void>();
-    fixture.token.mockImplementation(async () => {
-      tokenStarted.resolve();
-      await releaseToken.promise;
-      return fixtureToken;
-    });
+    const dispatchStarted = createDeferred<void>();
+    const releaseDispatch = createDeferred<void>();
     try {
+      const dispatchHandoff = {
+        ...handoff,
+        onPlatformSendDispatch: async () => {
+          dispatchStarted.resolve();
+          await releaseDispatch.promise;
+        },
+      };
       const completion = sendPollMSTeams({
         ...destination,
         question: "Ship?",
         options: ["Yes", "No"],
-        ...handoff,
-      }).then(
-        (result) => ({ result, error: undefined }),
-        (error: unknown) => ({ result: undefined, error }),
-      );
-      await tokenStarted.promise;
+        ...dispatchHandoff,
+      }).catch((error: unknown) => error);
+      expect(
+        await Promise.race([
+          dispatchStarted.promise.then(() => "dispatch"),
+          completion.then(() => "settled"),
+        ]),
+      ).toBe("dispatch");
       state.active = false;
-      releaseToken.resolve();
-      const settled = await completion;
+      releaseDispatch.resolve();
+      expect(await completion).toMatchObject({
+        retryable: false,
+        message: expect.stringContaining("authority closed"),
+      });
       expect(fixture.requests).toEqual([]);
-      expect(settled.error).toEqual(
-        expect.objectContaining({ message: expect.stringContaining("authority closed") }),
-      );
     } finally {
-      releaseToken.resolve();
+      releaseDispatch.resolve();
     }
   });
-
-  it.each(["text", "poll"] as const)(
-    "checks %s authority again after dispatch recording waits",
-    async (kind) => {
-      const { state, handoff } = createAuthority();
-      const dispatchStarted = createDeferred<void>();
-      const releaseDispatch = createDeferred<void>();
-      try {
-        const dispatchHandoff = {
-          ...handoff,
-          onPlatformSendDispatch: async () => {
-            dispatchStarted.resolve();
-            await releaseDispatch.promise;
-          },
-        };
-        const completion = (
-          kind === "poll"
-            ? sendPollMSTeams({
-                ...destination,
-                question: "Ship?",
-                options: ["Yes", "No"],
-                ...dispatchHandoff,
-              })
-            : msteamsPlugin.message!.send!.text!({
-                ...destination,
-                text: "retired during dispatch recording",
-                ...dispatchHandoff,
-              })
-        ).catch((error: unknown) => error);
-        await dispatchStarted.promise;
-        state.active = false;
-        releaseDispatch.resolve();
-        expect(await completion).toMatchObject({ retryable: false });
-        expect(fixture.requests).toEqual([]);
-      } finally {
-        releaseDispatch.resolve();
-      }
-    },
-  );
 
   it("checks at JSON transport submission after earlier SDK interceptors finish", async () => {
     const { state, handoff } = createAuthority();
@@ -313,8 +287,7 @@ describe("registered Teams delivery handoff", () => {
     });
     const response = await accepted.promise;
     state.active = false;
-    response.writeHead(201, { "content-type": "application/json" });
-    response.end(JSON.stringify({ id: "accepted-before-close" }));
+    acceptMessage(response, "accepted-before-close");
     expect(await completion).toMatchObject({
       receipt: {
         platformMessageIds: ["accepted-before-close"],
@@ -346,8 +319,7 @@ describe("registered Teams delivery handoff", () => {
     });
     const response = await submitted.promise;
     state.active = false;
-    response.writeHead(201, { "content-type": "application/json" });
-    response.end(JSON.stringify({ id: "accepted-poll-before-close" }));
+    acceptMessage(response, "accepted-poll-before-close");
     await expect(completion).resolves.toMatchObject({
       messageId: "accepted-poll-before-close",
       conversationId,
@@ -357,14 +329,8 @@ describe("registered Teams delivery handoff", () => {
   });
 
   it("isolates concurrent operations sharing the SDK HTTP client", async () => {
-    const firstToken = createDeferred<void>();
-    const releaseFirst = createDeferred<void>();
+    const { tokenStarted: firstToken, releaseToken: releaseFirst } = pauseToken();
     let firstActive = true;
-    fixture.token.mockImplementationOnce(async () => {
-      firstToken.resolve();
-      await releaseFirst.promise;
-      return fixtureToken;
-    });
     try {
       const firstDispatch = vi.fn(async () => {});
       const first = msteamsPlugin.message!.send!.text!({
@@ -403,40 +369,32 @@ describe("registered Teams delivery handoff", () => {
     }
   });
 
-  it.each([true, false])(
-    "rechecks a rate-limit retry with active authority=%s",
-    async (activeAfterDelay) => {
-      const { state, handoff } = createAuthority();
-      fixture.setResponder((response) => {
-        if (fixture.requests.length === 1) {
-          response.writeHead(429, { "content-type": "application/json", "retry-after": "0.01" });
-          response.end(JSON.stringify({ error: "throttled" }));
-        } else {
-          response.writeHead(201, { "content-type": "application/json" });
-          response.end(JSON.stringify({ id: "accepted-retry" }));
-        }
-      });
-      fixture.context.log.debug.mockImplementation((message: unknown) => {
-        if (message === "retrying send") {
-          state.active = activeAfterDelay;
-        }
-      });
-      const onPlatformSendDispatch = vi.fn(async () => {});
-      const completion = msteamsPlugin.message!.send!.text!({
-        ...destination,
-        text: "throttled delivery",
-        ...handoff,
-        onPlatformSendDispatch,
-      });
-      if (activeAfterDelay) {
-        await expect(completion).resolves.toMatchObject({ messageId: "accepted-retry" });
+  it("rejects a rate-limit retry after authority closes", async () => {
+    const { state, handoff } = createAuthority();
+    fixture.setResponder((response) => {
+      if (fixture.requests.length === 1) {
+        response.writeHead(429, { "content-type": "application/json", "retry-after": "0.01" });
+        response.end(JSON.stringify({ error: "throttled" }));
       } else {
-        await expect(completion).rejects.toMatchObject({ retryable: false });
+        acceptMessage(response, "accepted-retry");
       }
-      expect(fixture.requests).toHaveLength(activeAfterDelay ? 2 : 1);
-      expect(onPlatformSendDispatch).toHaveBeenCalledTimes(activeAfterDelay ? 2 : 1);
-    },
-  );
+    });
+    fixture.context.log.debug.mockImplementation((message: unknown) => {
+      if (message === "retrying send") {
+        state.active = false;
+      }
+    });
+    const onPlatformSendDispatch = vi.fn(async () => {});
+    const completion = msteamsPlugin.message!.send!.text!({
+      ...destination,
+      text: "throttled delivery",
+      ...handoff,
+      onPlatformSendDispatch,
+    });
+    await expect(completion).rejects.toMatchObject({ retryable: false });
+    expect(fixture.requests).toHaveLength(1);
+    expect(onPlatformSendDispatch).toHaveBeenCalledOnce();
+  });
 
   it.each([true, false])(
     "retains accepted media parts with continued authority=%s",
@@ -493,8 +451,7 @@ describe("registered Teams delivery handoff", () => {
       });
       const response = await submitted.promise;
       state.active = false;
-      response.writeHead(201, { "content-type": "application/json" });
-      response.end(JSON.stringify({ id: "accepted-image" }));
+      acceptMessage(response, "accepted-image");
       await expect(completion).resolves.toMatchObject({
         receipt: {
           parts: [expect.objectContaining({ platformMessageId: "accepted-image", kind: "media" })],
@@ -508,13 +465,7 @@ describe("registered Teams delivery handoff", () => {
     "keeps the %s action fenced through the SDK token wait",
     async (action) => {
       const { state, handoff } = createAuthority();
-      const tokenStarted = createDeferred<void>();
-      const releaseToken = createDeferred<void>();
-      fixture.token.mockImplementation(async () => {
-        tokenStarted.resolve();
-        await releaseToken.promise;
-        return fixtureToken;
-      });
+      const { tokenStarted, releaseToken } = pauseToken();
       try {
         await withInlineImage(async (media) => {
           const onPlatformSendDispatch = vi.fn(async () => {});

@@ -3127,7 +3127,8 @@
                       "reference/session-management-compaction/maintenance",
                       "reference/session-management-compaction/schema",
                       "reference/session-management-compaction/compaction",
-                      "reference/session-management-compaction/housekeeping"
+                      "reference/session-management-compaction/housekeeping",
+                      "reference/session-management-compaction/resident-history"
                     ]
                   },
                   "reference/transcript-hygiene",
@@ -3175,6 +3176,7 @@
                 "group": "Release notes",
                 "pages": [
                   "releases/index",
+                  "releases/2026.9.8",
                   "releases/2026.9.7",
                   "releases/2026.9.6",
                   "releases/2026.9.5",

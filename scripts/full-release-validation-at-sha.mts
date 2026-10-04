@@ -659,13 +659,10 @@ function preflightTargetShaFetch(targetSha: string) {
   }
 }
 
-function targetVersionForTarget(
-  targetSha: string,
-  readPackageJson: (sha: string) => string = (sha) => run("git", ["show", `${sha}:package.json`]),
-): string {
+function targetVersionForTarget(targetSha: string): string {
   let version: unknown;
   try {
-    version = JSON.parse(readPackageJson(targetSha)).version;
+    version = JSON.parse(run("git", ["show", `${targetSha}:package.json`])).version;
   } catch {
     throw new Error(`Could not read package.json from target SHA ${targetSha}`);
   }
@@ -675,18 +672,11 @@ function targetVersionForTarget(
   return version;
 }
 
-function releaseProfileForVersion(version: string): "beta" | "stable" {
+export function releaseProfileForVersion(version: string): "beta" | "stable" {
   if (version.includes("-alpha.")) {
     throw new Error("Alpha releases are retired; use a beta prerelease instead.");
   }
   return /-beta\.[1-9][0-9]*$/u.test(version) ? "beta" : "stable";
-}
-
-export function releaseProfileForTarget(
-  targetSha: string,
-  readPackageJson: (sha: string) => string = (sha) => run("git", ["show", `${sha}:package.json`]),
-): "beta" | "stable" {
-  return releaseProfileForVersion(targetVersionForTarget(targetSha, readPackageJson));
 }
 
 export function verifyTrustedWorkflowRef(
@@ -1444,15 +1434,7 @@ export function validateReleaseDecisionPayload(
     workflowSha: string;
   },
 ) {
-  return validateReleaseStateArtifact(
-    payload,
-    {
-      parentRunAttempt: expected.parentRunAttempt,
-      parentRunId: expected.parentRunId,
-      workflowSha: expected.workflowSha,
-    },
-    "decision",
-  );
+  return validateReleaseStateArtifact(payload, expected, "decision");
 }
 
 export function releaseDecisionStopsForeground(state: unknown) {

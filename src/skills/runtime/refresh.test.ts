@@ -55,14 +55,15 @@ it.each([
   { mode: "false", interval: undefined, expectedInterval: 30_000, failure: undefined },
   {
     mode: "false",
-    interval: "100",
-    expectedInterval: 30_000,
+    interval: "40",
+    expectedInterval: 40,
     failure: { operation: "watch", code: "ENOTSUP", error: new Error("unsupported backend") },
   },
   { mode: "false", interval: "60000", expectedInterval: 60_000, failure: undefined },
-  { mode: "true", interval: "100", expectedInterval: 30_000, failure: undefined },
+  { mode: "true", interval: undefined, expectedInterval: 30_000, failure: undefined },
+  { mode: "true", interval: "40", expectedInterval: 40, failure: undefined },
 ] as const)(
-  "bounds skills polling and reports automatic fallback once ($mode, $interval)",
+  "honors skills polling intervals and reports automatic fallback once ($mode, $interval)",
   async ({ mode, interval, expectedInterval, failure }) => {
     vi.stubEnv("CHOKIDAR_USEPOLLING", mode);
     vi.stubEnv("CHOKIDAR_INTERVAL", interval);
@@ -70,6 +71,7 @@ it.each([
     await observer.readyAll();
     expect(observer.subscriptions.length).toBeGreaterThan(0);
     for (const observed of observer.subscriptions) {
+      expect(observed.options.mode).toBe(mode === "true" ? "poll" : "auto");
       expect(observed.options.pollIntervalMs).toBe(expectedInterval);
     }
     const observed = observer.forRoot(path.join(fixture.workspaceDir, "skills"));

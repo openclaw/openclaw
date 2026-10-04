@@ -59,7 +59,7 @@ const config: OpenClawConfig = {
       decisionModel: "fixture/default",
     },
     entries: {
-      main: { default: true },
+      main: {},
       alternate: { decisionModel: "fixture/override" },
       disabled: { decisionModel: "" },
     },
@@ -153,34 +153,24 @@ describe("core decision_evaluate registered flow", () => {
         batch,
         expect.objectContaining({ agentId: "main", model: "default" }),
       );
-      expect((await retained.execute("retained", batch)).details).toMatchObject({ status: "ok" });
+      const result = await retained.execute("retained", batch);
+      expect(result.details).toEqual({
+        ...answer,
+        provenance: {
+          providerId: "fixture",
+          rubricVersion: expect.stringMatching(/^decision-v1-[0-9a-f]{24}$/),
+          runtimeGeneration: expect.any(String),
+        },
+      });
+      expect(JSON.parse(result.content.find((entry) => entry.type === "text")!.text)).toEqual(
+        result.details,
+      );
       expect(evaluate).toHaveBeenLastCalledWith(
         batch,
         expect.objectContaining({ agentId: "alternate", model: "override" }),
       );
       expect(evaluate).toHaveBeenCalledTimes(2);
     }
-  });
-
-  it("preserves all answer values, structured evidence, trusted binding and provenance", async () => {
-    const evaluate = vi.fn<DecisionProviderV1["evaluate"]>(async () => answer);
-    fixture(evaluate);
-    const result = await requiredTool("alternate").execute("call", batch);
-    expect(result.details).toEqual({
-      ...answer,
-      provenance: {
-        providerId: "fixture",
-        rubricVersion: expect.stringMatching(/^decision-v1-[0-9a-f]{24}$/),
-        runtimeGeneration: expect.any(String),
-      },
-    });
-    expect(evaluate).toHaveBeenCalledWith(
-      batch,
-      expect.objectContaining({ agentId: "alternate", model: "override" }),
-    );
-    expect(JSON.parse(result.content.find((entry) => entry.type === "text")!.text)).toEqual(
-      result.details,
-    );
   });
 
   it("rechecks selection on a retained tool without mutating its definition", async () => {
@@ -230,34 +220,6 @@ describe("core decision_evaluate registered flow", () => {
   it("rejects resource bounds before rubric hashing or provider execution", async () => {
     const evaluate = vi.fn<DecisionProviderV1["evaluate"]>(async () => answer);
     fixture(evaluate);
-    const tool = requiredTool();
-    let nested: unknown = "private evidence";
-    for (let depth = 0; depth < 10000; depth++) {
-      nested = { child: nested };
-    }
-    for (const input of [
-      { state: null, questions: { q: { type: "boolean", instructions: nested } } },
-      { state: "x".repeat(1_048_577), questions: { q: { type: "boolean" } } },
-      {
-        state: null,
-        questions: Object.fromEntries(
-          Array.from({ length: 257 }, (_, index) => [String(index), { type: "boolean" }]),
-        ),
-      },
-    ]) {
-      const result = await tool.execute("bounded", input);
-      expect(result.details).toMatchObject({
-        status: "unavailable",
-        reason: "unsupported-input",
-        guidance: expect.stringContaining("Host bounds"),
-      });
-      expect(JSON.stringify(result)).not.toContain("private evidence");
-    }
-    expect(evaluate).not.toHaveBeenCalled();
-  });
-
-  it("does not report obsolete provider capabilities on host rejection", async () => {
-    setRuntimeConfigSnapshot(config);
     const snapshot = createPluginMetadataSnapshotFixture({
       plugins: [
         {
@@ -294,18 +256,31 @@ describe("core decision_evaluate registered flow", () => {
         },
       },
     });
-    const result = await tool.execute("call", {
-      state: "x".repeat(1_048_577),
-      questions: { q: { type: "boolean" } },
-    });
-    expect(result.details).toMatchObject({
-      status: "unavailable",
-      reason: "unsupported-input",
-      guidance: expect.stringContaining("Host bounds"),
-    });
-    expect(JSON.stringify(result)).not.toContain("at most 99 questions");
+    let nested: unknown = "private evidence";
+    for (let depth = 0; depth < 10000; depth++) {
+      nested = { child: nested };
+    }
+    for (const input of [
+      { state: null, questions: { q: { type: "boolean", instructions: nested } } },
+      { state: "x".repeat(1_048_577), questions: { q: { type: "boolean" } } },
+      {
+        state: null,
+        questions: Object.fromEntries(
+          Array.from({ length: 257 }, (_, index) => [String(index), { type: "boolean" }]),
+        ),
+      },
+    ]) {
+      const result = await tool.execute("bounded", input);
+      expect(result.details).toMatchObject({
+        status: "unavailable",
+        reason: "unsupported-input",
+        guidance: expect.stringContaining("Host bounds"),
+      });
+      expect(JSON.stringify(result)).not.toContain("private evidence");
+      expect(JSON.stringify(result)).not.toContain("at most 99 questions");
+    }
+    expect(evaluate).not.toHaveBeenCalled();
   });
-
   it.each([
     { ...batch, agentId: "disabled" },
     {

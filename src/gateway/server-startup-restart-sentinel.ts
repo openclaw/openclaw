@@ -5,16 +5,11 @@ import {
 } from "../infra/delivery-queue-state-context.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { hasRestartSentinel } from "../infra/restart-sentinel.js";
-import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import type { refreshLatestUpdateRestartSentinel } from "./server-restart-sentinel.js";
 import {
   scheduleGatewayGenerationTimer,
   type GatewayPostReadySidecarHandle,
 } from "./server-startup-sidecar-scheduler.js";
-
-const loadGatewayRestartSentinelModule = createLazyRuntimeModule(
-  () => import("./server-restart-sentinel.js"),
-);
 
 export function scheduleRestartSentinelWakeAfterReady(params: {
   scheduler: GatewayScheduler;
@@ -33,7 +28,7 @@ export function scheduleRestartSentinelWakeAfterReady(params: {
     origin: "restart-sentinel:wake",
     shouldRun: params.shouldRun,
     run: async (isStopped) => {
-      const { scheduleRestartSentinelWake } = await loadGatewayRestartSentinelModule();
+      const { scheduleRestartSentinelWake } = await import("./server-restart-sentinel.js");
       if (isStopped()) {
         return;
       }
@@ -69,5 +64,7 @@ export async function refreshLatestUpdateRestartSentinelIfPresent(
   if (!(await hasRestartSentinel(env))) {
     return null;
   }
-  return await (await loadGatewayRestartSentinelModule()).refreshLatestUpdateRestartSentinel(env);
+  return await (
+    await import("./server-restart-sentinel.js")
+  ).refreshLatestUpdateRestartSentinel(env);
 }

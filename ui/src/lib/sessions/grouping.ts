@@ -144,10 +144,6 @@ function createDateGroupResolver(now: number): (row: GatewaySessionRow) => strin
   };
 }
 
-function sessionRowChannel(row: GatewaySessionRow): string {
-  return row.channel ?? parseSessionKeyParts(row.key)?.channel ?? UNGROUPED_ID;
-}
-
 function resolveSessionGroupId(row: GatewaySessionRow, mode: SessionsGroupBy): string {
   switch (mode) {
     case "category":
@@ -155,7 +151,7 @@ function resolveSessionGroupId(row: GatewaySessionRow, mode: SessionsGroupBy): s
     case "person":
       return sessionActorGroupId(row.owner?.actor);
     case "channel":
-      return sessionRowChannel(row);
+      return row.channel ?? parseSessionKeyParts(row.key)?.channel ?? UNGROUPED_ID;
     case "kind":
       return resolveSessionDisplayKind(row);
     case "agent":

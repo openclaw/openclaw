@@ -7,22 +7,10 @@ import type { PairedDevice, PairedDevicePendingNodeSurface } from "./device-pair
 import { type NodeApprovalScope, resolveNodePairApprovalScopes } from "./node-pairing-authz.js";
 import { sameNodeApprovalSurfaceSet, sameNodePermissionSurface } from "./node-pairing-surface.js";
 
-type NodeDeclaredSurface = {
-  nodeId: string;
-  clientId?: string;
-  clientMode?: string;
-  displayName?: string;
-  platform?: string;
-  version?: string;
-  coreVersion?: string;
-  uiVersion?: string;
-  deviceFamily?: string;
-  modelIdentifier?: string;
-  caps?: string[];
-  commands?: string[];
-  permissions?: Record<string, boolean>;
-  remoteIp?: string;
-};
+type NodeDeclaredSurface = Omit<
+  PairedDevicePendingNodeSurface,
+  "requestId" | "revision" | "silent" | "ts"
+> & { nodeId: string };
 
 /** Node-declared pairing surface before approval. */
 export type NodePairingRequestInput = NodeDeclaredSurface & {

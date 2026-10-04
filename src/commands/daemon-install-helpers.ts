@@ -49,7 +49,6 @@ import { evaluateGatewayAuthSurfaceStates } from "../secrets/runtime-gateway-aut
 import { hasSecretRefCandidate } from "../secrets/runtime-secret-scan.js";
 import { createResolverContext } from "../secrets/runtime-shared.js";
 import { discoverConfigSecretTargets } from "../secrets/target-registry.js";
-import { createLazyPromise } from "../shared/lazy-runtime.js";
 import {
   resolveDaemonInstallRuntimeInputs,
   resolveDaemonServicePathDirs,
@@ -79,21 +78,6 @@ function isBlockedExecSecretRefPassEnvKey(key: string): boolean {
   return !EXEC_SECRET_REF_PASS_ENV_ALLOWED_OVERRIDE_ONLY_KEYS.has(key.toUpperCase());
 }
 
-const loadDaemonInstallAuthProfileSourceRuntime = createLazyPromise(
-  () => import("./daemon-install-auth-profiles-source.runtime.js"),
-  { cacheRejections: true },
-);
-
-const loadDaemonInstallAuthProfileStoreRuntime = createLazyPromise(
-  () => import("./daemon-install-auth-profiles-store.runtime.js"),
-  { cacheRejections: true },
-);
-
-const loadDaemonInstallProviderManifestRuntime = createLazyPromise(
-  () => import("../plugins/manifest-contract-eligibility.js"),
-  { cacheRejections: true },
-);
-
 async function resolveAuthProfileStoreForServiceEnv(
   authStore: AuthProfileStore | undefined,
 ): Promise<AuthProfileStore | undefined> {
@@ -101,12 +85,13 @@ async function resolveAuthProfileStoreForServiceEnv(
     return authStore;
   }
   // Keep the daemon install cold path cheap when there is no auth store to read.
-  const { hasAnyAuthProfileStoreSource } = await loadDaemonInstallAuthProfileSourceRuntime();
+  const { hasAnyAuthProfileStoreSource } =
+    await import("./daemon-install-auth-profiles-source.runtime.js");
   if (!hasAnyAuthProfileStoreSource()) {
     return undefined;
   }
   const { loadAuthProfileStoreForSecretsRuntime } =
-    await loadDaemonInstallAuthProfileStoreRuntime();
+    await import("./daemon-install-auth-profiles-store.runtime.js");
   return loadAuthProfileStoreForSecretsRuntime();
 }
 
@@ -203,7 +188,7 @@ async function collectAmbientProviderApiKeyServiceEnvVars(params: {
     return {};
   }
   const { isManifestPluginAvailableForControlPlane, loadManifestMetadataSnapshot } =
-    await loadDaemonInstallProviderManifestRuntime();
+    await import("../plugins/manifest-contract-eligibility.js");
   const config = params.config ?? {};
   const snapshot = loadManifestMetadataSnapshot({ config, env: params.env });
   return Object.fromEntries(

@@ -26,7 +26,7 @@ describe("plugin retirement session-store ownership", () => {
         const oldPath = state.path("old-custom", "sessions.json");
         const newPath = state.path("new-custom", "sessions.json");
         const cfg: OpenClawConfig = {
-          agents: { list: [{ id: "main", default: true }] },
+          agents: { entries: { main: {} } },
           session: { store: oldPath },
         };
         setRuntimeConfigSnapshot(cfg, cfg);

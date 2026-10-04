@@ -45,7 +45,7 @@ export function createToolAndSystemRecorders(runtime: DiagnosticsRecorderRuntime
     setSpanAttrs,
     addRunAttrs,
     paramsSummaryAttrs,
-    contentCapturePolicy,
+    captureContent,
     tracesEnabled,
   } = runtime;
 
@@ -149,7 +149,7 @@ export function createToolAndSystemRecorders(runtime: DiagnosticsRecorderRuntime
     if (evt.type === "tool.execution.error" && evt.errorCode) {
       spanAttrs["openclaw.errorCode"] = normalizeDiagnosticValue(evt.errorCode, "other");
     }
-    assignOtelToolContentAttributes(spanAttrs, toolContent, contentCapturePolicy);
+    assignOtelToolContentAttributes(spanAttrs, toolContent, captureContent);
     const span =
       takeTrackedTrustedSpan(evt, metadata) ??
       spanWithDuration("openclaw.tool.execution", spanAttrs, evt.durationMs, {

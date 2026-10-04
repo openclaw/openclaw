@@ -84,15 +84,12 @@ export function logPreparedSecretDegradations(
     }
     for (const providerFailure of owner.providerFailures) {
       const key = `${providerFailure.source}\0${providerFailure.provider}`;
-      const group = providerDegradations.get(key);
-      if (group) {
-        group.degradations.push({ ...degradation, reason: "secret provider failed" });
-      } else {
-        providerDegradations.set(key, {
-          providerFailure,
-          degradations: [{ ...degradation, reason: "secret provider failed" }],
-        });
+      let group = providerDegradations.get(key);
+      if (!group) {
+        group = { providerFailure, degradations: [] };
+        providerDegradations.set(key, group);
       }
+      group.degradations.push({ ...degradation, reason: "secret provider failed" });
     }
   }
   for (const group of providerDegradations.values()) {

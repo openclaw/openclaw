@@ -33,14 +33,16 @@ afterEach(async () => {
 });
 
 describe("Zalouser registered send handoff", () => {
-  it.each(["SDK cookie preparation", "dispatch notification"] as const)(
+  it.each(["SDK cookie preparation", "dispatch notification", "payload cancellation"] as const)(
     "stops a retired caller after %s",
     async (stage) => {
-      const wait = stage === "SDK cookie preparation" ? harness.holdCookie() : harness.gate();
+      const wait = stage === "dispatch notification" ? harness.gate() : harness.holdCookie();
+      const caller = new AbortController();
       let current = true;
-      const send = harness.send("message.text", {
+      const send = harness.send(stage === "payload cancellation" ? "sendPayload" : "message.text", {
+        ...(stage === "payload cancellation" ? { mediaUrl: imageUrl, signal: caller.signal } : {}),
         assertDirectAdapterHandoff: () => {
-          if (!current) {
+          if (stage !== "payload cancellation" && !current) {
             throw new Error("caller retired");
           }
         },
@@ -54,8 +56,11 @@ describe("Zalouser registered send handoff", () => {
       });
       await wait.entered.promise;
       current = false;
+      caller.abort(new Error("caller canceled"));
       wait.release.resolve();
-      await expect(send).rejects.toThrow("caller retired");
+      await expect(send).rejects.toThrow(
+        stage === "payload cancellation" ? "caller canceled" : "caller retired",
+      );
       expect(harness.requests).toEqual([]);
     },
   );
@@ -68,17 +73,6 @@ describe("Zalouser registered send handoff", () => {
       "/api/group/photo_original/send",
     ]);
     expect(harness.requests[1]?.params).toMatchObject({ grid: "300", desc: "hello" });
-  });
-
-  it("sendPayload stops before an upload after cancellation during SDK preparation", async () => {
-    const cookie = harness.holdCookie();
-    const caller = new AbortController();
-    const send = harness.send("sendPayload", { mediaUrl: imageUrl, signal: caller.signal });
-    await cookie.entered.promise;
-    caller.abort(new Error("caller canceled"));
-    cookie.release.resolve();
-    await expect(send).rejects.toThrow("caller canceled");
-    expect(harness.requests).toEqual([]);
   });
 
   it.each(["message.text", "sendPayload"] as const)(
@@ -270,60 +264,49 @@ describe("Zalouser registered send handoff", () => {
     expect(harness.requests.map(({ path }) => path)).toEqual(["/api/message/sms"]);
   });
 
-  it("reports accepted audio caption progress before a later upload error", async () => {
-    useAudioFixture();
-    const ids: Array<string | undefined> = [];
-    harness.response = (request) =>
-      request.path.endsWith("/upload")
-        ? new Response(null, { status: 503 })
-        : encryptResponse({ msgId: "accepted-caption" });
-    const send = harness.send("message.media", {
-      text: "caption",
-      onDeliveryResult: (result) => {
-        ids.push(result.messageId);
-      },
-    });
-    await expect(send).rejects.toThrow("503");
-    await expect(send).rejects.toMatchObject({
-      deliveryResult: {
-        messageIds: ["accepted-caption"],
-        visibleReplySent: true,
-        receipt: { platformMessageIds: ["accepted-caption"] },
-      },
-    });
-    expect(ids).toEqual(["accepted-caption"]);
-    expect(harness.requests.map(({ path }) => path)).toEqual([
-      "/api/message/sms",
-      "/api/message/asyncfile/upload",
-    ]);
-  });
-
-  it("does not turn an opaque SDK partial-media rejection into success", async () => {
-    vi.mocked(loadOutboundMediaFromUrl).mockResolvedValue({
-      buffer: Buffer.from("fixture-document"),
-      kind: "document",
-      contentType: "text/plain",
-      fileName: "document.txt",
-    });
-    const ids: Array<string | undefined> = [];
-    harness.response = (request) =>
-      request.path.endsWith("/upload")
-        ? new Response(null, { status: 503 })
-        : encryptResponse({ msgId: "sdk-private-caption" });
-    const send = harness.send("sendPayload", {
-      text: "caption",
-      mediaUrl: imageUrl,
-      onDeliveryResult: (result) => {
-        ids.push(result.messageId);
-      },
-    });
-    await expect(send).rejects.toThrow("503");
-    expect(ids).toEqual([]);
-    expect(harness.requests.map(({ path }) => path)).toEqual([
-      "/api/message/sms",
-      "/api/message/asyncfile/upload",
-    ]);
-  });
+  it.each(["audio", "document"] as const)(
+    "preserves %s caption visibility on upload failure",
+    async (kind) => {
+      if (kind === "audio") {
+        useAudioFixture();
+      } else {
+        vi.mocked(loadOutboundMediaFromUrl).mockResolvedValue({
+          buffer: Buffer.from("fixture-document"),
+          kind: "document",
+          contentType: "text/plain",
+          fileName: "document.txt",
+        });
+      }
+      const captionId = kind === "audio" ? "accepted-caption" : "sdk-private-caption";
+      const ids: Array<string | undefined> = [];
+      harness.response = (request) =>
+        request.path.endsWith("/upload")
+          ? new Response(null, { status: 503 })
+          : encryptResponse({ msgId: captionId });
+      const send = harness.send(kind === "audio" ? "message.media" : "sendPayload", {
+        text: "caption",
+        mediaUrl: imageUrl,
+        onDeliveryResult: (result) => {
+          ids.push(result.messageId);
+        },
+      });
+      await expect(send).rejects.toThrow("503");
+      if (kind === "audio") {
+        await expect(send).rejects.toMatchObject({
+          deliveryResult: {
+            messageIds: [captionId],
+            visibleReplySent: true,
+            receipt: { platformMessageIds: [captionId] },
+          },
+        });
+      }
+      expect(ids).toEqual(kind === "audio" ? [captionId] : []);
+      expect(harness.requests.map(({ path }) => path)).toEqual([
+        "/api/message/sms",
+        "/api/message/asyncfile/upload",
+      ]);
+    },
+  );
 
   it.each([false, true])(
     "the optional tool preserves cancellation=%s at the SDK wait",

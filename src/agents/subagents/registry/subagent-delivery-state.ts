@@ -61,7 +61,6 @@ export function projectSubagentRunForSessionList(entry: SubagentRunRecord): Suba
     ...(entry.collectorCompletion
       ? { collectorCompletion: { status: entry.collectorCompletion.status } }
       : {}),
-    ...(entry.childAgentId ? { childAgentId: entry.childAgentId } : {}),
     ...(entry.requesterAgentId ? { requesterAgentId: entry.requesterAgentId } : {}),
     ...(entry.model ? { model: entry.model } : {}),
     ...(entry.generation !== undefined ? { generation: entry.generation } : {}),

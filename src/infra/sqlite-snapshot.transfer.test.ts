@@ -66,17 +66,6 @@ afterEach(() => {
 
 type SnapshotOptions = Parameters<typeof createVerifiedSqliteSnapshot>[0];
 
-async function expectSnapshotSuccess(options: SnapshotOptions): Promise<void> {
-  const snapshot = await createVerifiedSqliteSnapshot(options);
-  const published = await fs.readFile(options.targetPath);
-  expect(snapshot).toEqual({
-    path: options.targetPath,
-    userVersion: 0,
-    sha256: createHash("sha256").update(published).digest("hex"),
-    sizeBytes: published.length,
-  });
-}
-
 async function expectSnapshotFailureWithoutTarget(
   options: SnapshotOptions,
   pattern: RegExp,
@@ -119,9 +108,14 @@ function mockExclusiveCopyTransfer() {
 }
 
 describe("owned SQLite snapshot transfer", () => {
-  it.each([false, true])(
-    "publishes its owned private image without duplicating it (isolated=%s)",
-    async (isolated) => {
+  it.each([
+    { isolated: false, copyFallback: false },
+    { isolated: true, copyFallback: false },
+    { isolated: false, copyFallback: true },
+  ])(
+    "publishes one owned private image (isolated=$isolated, copy fallback=$copyFallback)",
+    async ({ isolated, copyFallback }) => {
+      const copy = copyFallback ? mockExclusiveCopyTransfer() : undefined;
       const source = new sqlite.DatabaseSync(sourcePath);
       try {
         source.exec(
@@ -133,7 +127,7 @@ describe("owned SQLite snapshot transfer", () => {
       const original = await fs.readFile(sourcePath);
       let inspected = false;
       let preparedBytes: Buffer | undefined;
-      await createVerifiedSqliteSnapshot({
+      const receipt = await createVerifiedSqliteSnapshot({
         sourcePath,
         targetPath,
         preserveRowIds: true,
@@ -161,9 +155,21 @@ describe("owned SQLite snapshot transfer", () => {
         },
       });
       expect(inspected).toBe(true);
+      const published = await fs.readFile(targetPath);
+      expect(receipt).toEqual({
+        path: targetPath,
+        userVersion: 0,
+        sha256: createHash("sha256").update(published).digest("hex"),
+        sizeBytes: published.length,
+      });
+      if (copy) {
+        expect(copy).toHaveBeenCalledOnce();
+      }
+      expect((await fs.readdir(tempDir)).toSorted()).toEqual(["snapshot.sqlite", "source.sqlite"]);
       expect(await fs.readFile(targetPath)).toEqual(preparedBytes);
       expect(await fs.readFile(sourcePath)).toEqual(original);
       withReadOnlySnapshot(sqlite, targetPath, (snapshot) => {
+        expect(snapshot.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
         expect(
           snapshot.prepare("SELECT rowid,value,length(payload) AS bytes FROM records").all(),
         ).toEqual([{ rowid: 71, value: "retained", bytes: 131072 }]);
@@ -202,61 +208,48 @@ describe("owned SQLite snapshot transfer", () => {
     });
   });
 
-  it("accepts a copy fallback while transferring its private image", async () => {
-    const copy = mockExclusiveCopyTransfer();
-    await expectSnapshotSuccess({ sourcePath, targetPath, preserveRowIds: true });
-    expect(copy).toHaveBeenCalledOnce();
-    withReadOnlySnapshot(sqlite, targetPath, (snapshot) => {
-      expect(snapshot.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
-    });
-    expect((await fs.readdir(tempDir)).toSorted()).toEqual(["snapshot.sqlite", "source.sqlite"]);
-  });
-
-  it.each(["allocation", "durability"] as const)(
-    "cleans a failed private image transfer (%s) without changing its source",
+  it.each(["allocation", "durability", "dev", "ino"] as const)(
+    "refuses a failed private transfer (%s) without changing its source",
     async (failure) => {
       const original = await fs.readFile(sourcePath);
+      const identityFailure = failure === "dev" || failure === "ino";
+      let transferredSource: string | undefined;
       durabilityTestState.transfer = async (options, publish) => {
         if (failure === "allocation") {
           throw Object.assign(new Error("private image transfer out of space"), { code: "ENOSPC" });
         }
         const receipt = await publish(options);
-        return { ...receipt, directorySync: { status: "unsupported", code: "ENOTSUP" } };
-      };
-      await expectSnapshotFailureWithoutTarget(
-        { sourcePath, targetPath, preserveRowIds: true },
-        failure === "allocation" ? /out of space/ : /staging transfer directory/,
-      );
-      expect(await fs.readFile(sourcePath)).toEqual(original);
-      expect(await fs.readdir(tempDir)).toEqual(["source.sqlite"]);
-    },
-  );
-
-  it.each(["dev", "ino"] as const)(
-    "refuses an unknown source %s before retiring the transferred image",
-    async (field) => {
-      const original = await fs.readFile(sourcePath);
-      let transferredSource: string | undefined;
-      durabilityTestState.transfer = async (options, publish) => {
-        const receipt = await publish(options);
+        if (failure === "durability") {
+          return { ...receipt, directorySync: { status: "unsupported", code: "ENOTSUP" } };
+        }
         transferredSource = options.sourcePath;
         vi.spyOn(process, "platform", "get").mockReturnValue("win32");
         return receipt;
       };
-      const lstat = fsSync.lstatSync.bind(fsSync);
-      vi.spyOn(fsSync, "lstatSync").mockImplementation((...args) => {
-        const stat = lstat(...args);
-        if (stat && String(args[0]) === transferredSource && typeof stat.dev === "bigint") {
-          Object.defineProperty(stat, field, { value: 0n });
-        }
-        return stat;
-      });
+      if (identityFailure) {
+        const lstat = fsSync.lstatSync.bind(fsSync);
+        vi.spyOn(fsSync, "lstatSync").mockImplementation((...args) => {
+          const stat = lstat(...args);
+          if (stat && String(args[0]) === transferredSource && typeof stat.dev === "bigint") {
+            Object.defineProperty(stat, failure, { value: 0n });
+          }
+          return stat;
+        });
+      }
       await expectSnapshotFailureWithoutTarget(
         { sourcePath, targetPath, preserveRowIds: true },
-        /source changed during transfer/,
+        identityFailure
+          ? /source changed during transfer/
+          : failure === "allocation"
+            ? /out of space/
+            : /staging transfer directory/,
       );
-      expect(transferredSource).toBeDefined();
       expect(await fs.readFile(sourcePath)).toEqual(original);
+      if (identityFailure) {
+        expect(transferredSource).toBeDefined();
+      } else {
+        expect(await fs.readdir(tempDir)).toEqual(["source.sqlite"]);
+      }
     },
   );
 });

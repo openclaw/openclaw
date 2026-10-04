@@ -68,7 +68,7 @@ describe("skill collection backup and restore", () => {
     const agentDirA = state.agentDir("main");
     const agentDirB = state.path("other-agent");
     const seedAgentBackup = async (agentDir: string, original: string) => {
-      const config = { agents: { list: [{ id: "main", agentDir }] } };
+      const config = { agents: { entries: { main: { agentDir } } } };
       const root = resolveWorkshopSkillsDir(config, "main", state.env);
       const backups = resolveSkillCollectionBackupRoot(config, "main", state.env);
       const file = path.join(root, "procedure", "SKILL.md");
@@ -81,8 +81,8 @@ describe("skill collection backup and restore", () => {
     };
     const fileA = await seedAgentBackup(agentDirA, originalA);
     const fileB = await seedAgentBackup(agentDirB, originalB);
-    const agent = { id: "main", agentDir: agentDirA };
-    const config = { agents: { list: [agent] } };
+    const agent = { agentDir: agentDirA };
+    const config = { agents: { entries: { main: agent } } };
 
     const restoring = restoreLatestSkillCollectionBackup({
       workspaceDir: skillsRoot,

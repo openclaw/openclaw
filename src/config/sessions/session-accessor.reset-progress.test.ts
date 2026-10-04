@@ -75,7 +75,12 @@ it.each(
           });
         }
       });
-      const entry = { ...previous, lifecycleRevision: "after", updatedAt: 2 };
+      const entry = {
+        ...previous,
+        ...(rollback ? { parentSessionKey: "invalid-reset-parent" } : {}),
+        lifecycleRevision: "after",
+        updatedAt: 2,
+      };
       const resetBoundary = { context, reason: "reset" as const, cwd: state.workspaceDir };
       const reset = async () => {
         if (writer === "single") {
@@ -95,15 +100,11 @@ it.each(
           });
         }
       };
-      if (rollback) {
-        // Fail the entry write after the boundary/card mutation, not its admission guard.
-        database.db.exec(`CREATE TEMP TRIGGER reject_reset_entry
-          BEFORE UPDATE OF entry_json ON session_nodes
-          BEGIN SELECT RAISE(ABORT, 'injected reset entry failure'); END;`);
-      }
       try {
         if (rollback) {
-          await expect(reset()).rejects.toThrow("injected reset entry failure");
+          await expect(reset()).rejects.toThrow(
+            "refusing non-canonical session key write invalid-reset-parent",
+          );
           expect(loadSessionEntry(scope)).toEqual(entryBefore);
           expect(await loadTranscriptEvents(scope)).toEqual(historyBefore);
         } else {
@@ -111,9 +112,6 @@ it.each(
         }
       } finally {
         unsubscribe();
-        if (rollback) {
-          database.db.exec("DROP TRIGGER reject_reset_entry");
-        }
       }
       // A fresh read-only connection proves this is durable state, not client/cache invalidation.
       expect(readSessionProgressCard(database.path, sessionKey)).toEqual(

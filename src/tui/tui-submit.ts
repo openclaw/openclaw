@@ -46,7 +46,7 @@ export function createEditorSubmitHandler(params: {
     setText: (value: string) => void;
     addToHistory: (value: string) => void;
   };
-  handleCommand: (value: string) => Promise<void> | void;
+  handleCommand: (value: string, onBlockedChat?: () => void) => Promise<void> | void;
   sendMessage: (value: string) => Promise<void> | void;
   handleBangLine: (value: string) => Promise<void> | void;
   onSubmitError: (action: TuiSubmitAction, error: unknown) => void;
@@ -81,11 +81,17 @@ export function createEditorSubmitHandler(params: {
     if (action !== "message") {
       clearSubmittedEditor();
       const command = action === "local shell" ? raw : value;
-      const handle = action === "local shell" ? params.handleBangLine : params.handleCommand;
       if (!isBrowserSetupInput(command)) {
         params.editor.addToHistory(command);
       }
-      runSubmitAction(action, () => handle(command), params.onSubmitError);
+      runSubmitAction(
+        action,
+        () =>
+          action === "local shell"
+            ? params.handleBangLine(command)
+            : params.handleCommand(command, () => restoreBlockedEditor(command)),
+        params.onSubmitError,
+      );
       return;
     }
 

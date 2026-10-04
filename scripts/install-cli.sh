@@ -206,17 +206,6 @@ download_file() {
   wget -q --https-only --secure-protocol=TLSv1_2 --tries=3 --timeout="$UPDATE_NETWORK_TIMEOUT_SECONDS" -O "$output" "$url"
 }
 
-cleanup_legacy_submodules() {
-  local repo_dir="${1:-${OPENCLAW_GIT_DIR:-${OPENCLAW_EFFECTIVE_HOME}/openclaw}}"
-  local legacy_dir="${repo_dir}/Peekaboo"
-  if [[ -d "$legacy_dir" ]]; then
-    emit_json step name legacy-submodule status start path "$legacy_dir"
-    log "Removing legacy submodule checkout: ${legacy_dir}"
-    rm -rf "$legacy_dir"
-    emit_json step name legacy-submodule status ok path "$legacy_dir"
-  fi
-}
-
 sha256_file() {
   local file="$1"
   if command -v sha256sum >/dev/null 2>&1; then
@@ -627,62 +616,7 @@ linked_node_is_usable() {
     return 1
   fi
 
-  "$candidate_node" -e '
-    const { DatabaseSync } = require("node:sqlite");
-    const db = new DatabaseSync(":memory:");
-    try {
-      const value = db.prepare("SELECT sqlite_version() AS version").get()?.version;
-      const match = typeof value === "string" ? /^(\d+)\.(\d+)\.(\d+)$/.exec(value) : null;
-      const major = Number(match?.[1]);
-      const minor = Number(match?.[2]);
-      const patch = Number(match?.[3]);
-      const safe =
-        major > 3 ||
-        (major === 3 &&
-          (minor > 51 ||
-            (minor === 51 && patch >= 3) ||
-            (minor === 50 && patch >= 7) ||
-            (minor === 44 && patch >= 6)));
-      const text = "a\u0000b\u0000";
-      const bytes = Buffer.from(text, "utf8");
-      const json = JSON.stringify({ value: text });
-      db.exec("CREATE TABLE probe (text_value TEXT, blob_value BLOB, json_value TEXT)");
-      db.prepare("INSERT INTO probe VALUES (?, ?, ?)").run(text, bytes, json);
-      const row = db.prepare("SELECT text_value, blob_value, json_value FROM probe").get();
-      const textSafe = typeof row?.text_value === "string" && row.text_value.length === text.length && Buffer.from(row.text_value, "utf8").equals(bytes);
-      const blobSafe = row?.blob_value instanceof Uint8Array && Buffer.from(row.blob_value).equals(bytes);
-      const jsonSafe = row?.json_value === json && JSON.parse(row.json_value).value === text;
-      if (!textSafe) {
-        console.error("Node " + process.versions.node + ": node:sqlite truncates TEXT at embedded NUL (nodejs/node#61954); use 24.16+/26.1+ or a build with the fix");
-      } else if (!blobSafe || !jsonSafe) {
-        console.error("Node " + process.versions.node + ": node:sqlite NUL round-trip capability probe failed; use 24.16+/26.1+ or a build with the fix");
-      } else if (!safe) {
-        console.error("Node " + process.versions.node + ": SQLite " + value + " is not WAL-reset-safe");
-      }
-      if (!safe || !textSafe || !blobSafe || !jsonSafe) process.exitCode = 1;
-    } finally {
-      db.close();
-    }
-  ' --no-warnings >/dev/null
-}
-
-linked_node_sqlite_version() {
-  local candidate_node="${1-$(node_bin)}"
-  if [[ ! -x "$candidate_node" ]]; then
-    printf 'unavailable\n'
-    return
-  fi
-  local version
-  version="$("$candidate_node" -e '
-    const { DatabaseSync } = require("node:sqlite");
-    const db = new DatabaseSync(":memory:");
-    try {
-      process.stdout.write(String(db.prepare("SELECT sqlite_version() AS version").get()?.version ?? "unknown"));
-    } finally {
-      db.close();
-    }
-  ' 2>/dev/null || true)"
-  printf '%s\n' "${version:-unavailable}"
+  node_binary_has_safe_sqlite "$candidate_node"
 }
 
 semver_at_least() {
@@ -825,7 +759,7 @@ install_alpine_node() {
     if ! linked_node_is_usable "${APK_NODE_BIN_DIR}/node" "${APK_NODE_BIN_DIR}/npm"; then
       installed_version="$("${APK_NODE_BIN_DIR}/node" -v 2>/dev/null || echo unknown)"
       required_version="$(required_node_version)"
-      sqlite_version="$(linked_node_sqlite_version "${APK_NODE_BIN_DIR}/node")"
+      sqlite_version="$(node_binary_sqlite_version "${APK_NODE_BIN_DIR}/node")"
       fail "Alpine Node package must provide Node >= ${required_version} with WAL-reset-safe SQLite 3.51.3+, 3.50.7+ within 3.50.x, or 3.44.6+ within 3.44.x; found Node ${installed_version}, SQLite ${sqlite_version}."
     fi
     link_node_runtime_paths "${APK_NODE_BIN_DIR}/node" "${APK_NODE_BIN_DIR}/npm"
@@ -1122,7 +1056,7 @@ install_node() {
     local sqlite_version
     installed_version="$("$(node_bin)" -v 2>/dev/null || echo unknown)"
     required_version="$(required_node_version)"
-    sqlite_version="$(linked_node_sqlite_version)"
+    sqlite_version="$(node_binary_sqlite_version "$(node_bin)")"
     fail "Installed Node ${NODE_VERSION} must provide Node >= ${required_version} with WAL-reset-safe SQLite; found Node ${installed_version}, SQLite ${sqlite_version}. Re-run with --node-version 24.21.0 (or newer)"
   fi
   # Existing CLI wrappers use this alias; activate only a runtime that can start.
@@ -1404,7 +1338,6 @@ install_openclaw_from_git() {
     require_openclaw_version_compatible "$resolved_version"
   fi
 
-  cleanup_legacy_submodules "$repo_dir"
   ensure_pnpm_git_prepare_allowlist "$repo_dir"
   ensure_pnpm "$repo_dir"
 

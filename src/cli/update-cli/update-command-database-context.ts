@@ -197,7 +197,7 @@ export async function revalidateUpdateDatabaseContexts(
       "Database admission was not inspected.",
     );
   }
-  await inspectUpdateDatabaseContexts({
+  await inspectUpdateManagedServices({
     ...params,
     roots: [...admission.services.keys()],
     expectedServices: admission.services,

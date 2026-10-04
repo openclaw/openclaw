@@ -142,32 +142,32 @@ it("keeps admitted reads within the schema-query budget", () => {
   );
 });
 
-it("refuses a revoked cached admission without reading its schema again", () => {
-  const scope = { env: { OPENCLAW_STATE_DIR: sessionDirs.make() } };
-  const database = openOpenClawStateDatabase(scope);
-  expect(openClawStateDatabaseCache.getCachedOpenClawStateDatabase(database.path)).toBe(database);
-  const failure = new Error("synthetic revoked state admission");
-  recordOpenClawStateDatabaseOpenFailure(database.path, failure);
-  trace.execute.mockClear();
-  expect(() => openClawStateDatabaseCache.getCachedOpenClawStateDatabase(database.path)).toThrow(
-    failure,
-  );
-  expect(() => withExistingOpenClawStateDatabaseReadOnly(() => undefined, scope)).toThrow(failure);
-  expect(trace.execute).not.toHaveBeenCalled();
-});
-
-it("revalidates locally changed schema facts after a rollback", () => {
-  const scope = { env: { OPENCLAW_STATE_DIR: sessionDirs.make() } };
-  const database = openOpenClawStateDatabase(scope);
-  database.db.exec(`BEGIN; PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION - 1}`);
-  expect(openClawStateDatabaseCache.getCachedOpenClawStateDatabase(database.path)).toBe(database);
-  database.db.exec("ROLLBACK");
-  expect(openClawStateDatabaseCache.getCachedOpenClawStateDatabase(database.path)).toBe(database);
-  database.db.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1}`);
-  expect(() => openClawStateDatabaseCache.getCachedOpenClawStateDatabase(database.path)).toThrow(
-    /uses newer schema version/,
-  );
-});
+it.each(["revocation", "schema-change"] as const)(
+  "invalidates cached admission after %s",
+  (cause) => {
+    const scope = { env: { OPENCLAW_STATE_DIR: sessionDirs.make() } };
+    const database = openOpenClawStateDatabase(scope);
+    const cached = () => openClawStateDatabaseCache.getCachedOpenClawStateDatabase(database.path);
+    expect(cached()).toBe(database);
+    if (cause === "schema-change") {
+      database.db.exec(`BEGIN; PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION - 1}`);
+      expect(cached()).toBe(database);
+      database.db.exec("ROLLBACK");
+      expect(cached()).toBe(database);
+      database.db.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1}`);
+      expect(cached).toThrow(/uses newer schema version/);
+      return;
+    }
+    const failure = new Error("synthetic revoked state admission");
+    recordOpenClawStateDatabaseOpenFailure(database.path, failure);
+    trace.execute.mockClear();
+    expect(cached).toThrow(failure);
+    expect(() => withExistingOpenClawStateDatabaseReadOnly(() => undefined, scope)).toThrow(
+      failure,
+    );
+    expect(trace.execute).not.toHaveBeenCalled();
+  },
+);
 
 it("refuses schemas migrated by another process on the next read", () => {
   const scope = {

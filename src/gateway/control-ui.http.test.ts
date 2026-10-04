@@ -85,7 +85,7 @@ afterEach(() => {
 
 describe("handleControlUiHttpRequest", () => {
   function createAvatarConfig(workspace: string, avatar: string): OpenClawConfig {
-    return { agents: { list: [{ id: "main", workspace, identity: { avatar } }] } };
+    return { agents: { entries: { main: { workspace, identity: { avatar } } } } };
   }
 
   async function createControlUiRoot(indexHtml = "<html></html>\n") {
@@ -667,9 +667,9 @@ describe("handleControlUiHttpRequest", () => {
       config: {
         agents: {
           defaults: { workspace: tmp },
-          list: [
-            { id: "main", identity: { name: "</script><script>alert(1)//", avatar: "evil.png" } },
-          ],
+          entries: {
+            main: { identity: { name: "</script><script>alert(1)//", avatar: "evil.png" } },
+          },
         },
       },
     });
@@ -1132,7 +1132,7 @@ describe("handleControlUiHttpRequest", () => {
 
   it.each([
     ["", "/__openclaw__/control-ui-config.json"],
-    ["/openclaw", "/openclaw/__openclaw/control-ui-config.json"],
+    ["/openclaw", "/openclaw/control-ui-config.json"],
   ])("serves bootstrap with basePath=%s at %s", async (basePath, url) => {
     const tmp = await createControlUiRoot();
     const { res, end, handled } = await runControlUiRequest(tmp, url, {
@@ -1140,7 +1140,7 @@ describe("handleControlUiHttpRequest", () => {
       config: {
         agents: {
           defaults: { workspace: tmp },
-          list: [{ id: "main", identity: { name: "Ops", avatar: "ops.png" } }],
+          entries: { main: { identity: { name: "Ops", avatar: "ops.png" } } },
         },
       },
     });

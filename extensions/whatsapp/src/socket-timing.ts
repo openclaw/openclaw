@@ -9,6 +9,7 @@ import {
   parseStrictPositiveInteger,
   resolveTimerTimeoutMs,
 } from "openclaw/plugin-sdk/number-runtime";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 
 export type WhatsAppSocketTimingOptions = {
   keepAliveIntervalMs?: number;
@@ -96,23 +97,15 @@ export async function withWhatsAppSocketOperationTimeout<T>(
   onTimeout?: () => void,
 ): Promise<T> {
   const resolvedTimeoutMs = resolveWhatsAppSocketOperationTimeoutMs(timeoutMs);
-  let timeout: ReturnType<typeof setTimeout> | null = null;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<never>((_, reject) => {
-        timeout = setTimeout(() => {
-          onTimeout?.();
-          reject(new WhatsAppSocketOperationTimeoutError(operation, resolvedTimeoutMs));
-        }, resolvedTimeoutMs);
-        timeout.unref?.();
-      }),
-    ]);
-  } finally {
-    if (timeout) {
-      clearTimeout(timeout);
-    }
-  }
+  return await raceWithTimeout(
+    promise,
+    resolvedTimeoutMs,
+    () => {
+      onTimeout?.();
+      throw new WhatsAppSocketOperationTimeoutError(operation, resolvedTimeoutMs);
+    },
+    { ref: false },
+  );
 }
 
 export function createWhatsAppSocketOperationTimeoutAdapter(

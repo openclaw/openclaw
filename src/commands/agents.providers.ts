@@ -5,7 +5,7 @@ import { isChannelVisibleInConfiguredLists } from "../channels/plugins/exposure.
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { normalizeChannelId } from "../channels/plugins/index.js";
 import { listReadOnlyChannelPluginsForConfig } from "../channels/plugins/read-only.js";
-import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import {
   projectChannelAccountDisplayState,

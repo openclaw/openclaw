@@ -275,7 +275,7 @@ it.each(["end", "error"] as const)(
       },
       { from: "starting", to: "active", patch: { activeOwnerEpoch: 1 } },
     ] as const) {
-      placement = placementStore.transition({
+      placement = await placementStore.transition({
         sessionId,
         expectedGeneration: placement.generation,
         ...transition,

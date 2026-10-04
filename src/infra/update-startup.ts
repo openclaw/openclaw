@@ -44,7 +44,11 @@ import {
 } from "./update-check.js";
 import { devUpdateTargetFromGitTarget } from "./update-dev-target.js";
 import { resolveDevGitCommits } from "./update-git-metadata.js";
-import { resolveStartupInstallStatus, withUpdateInstallStatus } from "./update-install-status.js";
+import {
+  prepareStartupUpdateInstall,
+  resolveStartupInstallStatus,
+  withUpdateInstallStatus,
+} from "./update-install-status.js";
 import { runCampaignUpdate, type AutoUpdateRunner } from "./update-startup-auto-run.js";
 import { scheduleGatewayRemoteCatalogChecks } from "./update-startup-catalog.js";
 import {
@@ -156,22 +160,6 @@ function clearAvailabilityState(nextState: UpdateCheckState): void {
   delete nextState.lastAvailableTag;
 }
 
-function resolveStableJitterMs(params: {
-  installId: string;
-  version: string;
-  tag: string;
-  jitterWindowMs: number;
-}): number {
-  if (params.jitterWindowMs <= 0) {
-    return 0;
-  }
-  const hash = createHash("sha256")
-    .update(`${params.installId}:${params.version}:${params.tag}`)
-    .digest();
-  const bucket = hash.readUInt32BE(0);
-  return bucket % (Math.floor(params.jitterWindowMs) + 1);
-}
-
 function resolveUpdateCheckNowMs(valueMs: unknown): number {
   return asDateTimestampMs(valueMs) ?? asDateTimestampMs(Date.now()) ?? 0;
 }
@@ -185,28 +173,22 @@ function resolveUpdateCheckTimestamp(valueMs: unknown): string {
 }
 
 function resolveStableAutoApplyAtMs(params: {
-  state: UpdateCheckState;
   nextState: UpdateCheckState;
   nowMs: number;
   version: string;
   tag: string;
 }): number {
   if (!params.nextState.autoInstallId) {
-    params.nextState.autoInstallId = params.state.autoInstallId?.trim() || randomUUID();
+    params.nextState.autoInstallId = params.nextState.autoInstallId?.trim() || randomUUID();
   }
-  const installId = params.nextState.autoInstallId;
   const matchesExisting =
-    params.state.autoFirstSeenVersion === params.version &&
-    params.state.autoFirstSeenTag === params.tag;
+    params.nextState.autoFirstSeenVersion === params.version &&
+    params.nextState.autoFirstSeenTag === params.tag;
 
   if (!matchesExisting) {
     params.nextState.autoFirstSeenVersion = params.version;
     params.nextState.autoFirstSeenTag = params.tag;
     params.nextState.autoFirstSeenAt = resolveUpdateCheckTimestamp(params.nowMs);
-  } else {
-    params.nextState.autoFirstSeenVersion = params.state.autoFirstSeenVersion;
-    params.nextState.autoFirstSeenTag = params.state.autoFirstSeenTag;
-    params.nextState.autoFirstSeenAt = params.state.autoFirstSeenAt;
   }
 
   const parsedFirstSeenMs = params.nextState.autoFirstSeenAt
@@ -214,13 +196,11 @@ function resolveStableAutoApplyAtMs(params: {
     : params.nowMs;
   const firstSeenMs = Number.isFinite(parsedFirstSeenMs) ? parsedFirstSeenMs : params.nowMs;
   const baseDelayMs = AUTO_STABLE_DELAY_HOURS * ONE_HOUR_MS;
-  const jitterWindowMs = AUTO_STABLE_JITTER_HOURS * ONE_HOUR_MS;
-  const jitterMs = resolveStableJitterMs({
-    installId,
-    version: params.version,
-    tag: params.tag,
-    jitterWindowMs,
-  });
+  const bucket = createHash("sha256")
+    .update(`${params.nextState.autoInstallId}:${params.version}:${params.tag}`)
+    .digest()
+    .readUInt32BE(0);
+  const jitterMs = bucket % (AUTO_STABLE_JITTER_HOURS * ONE_HOUR_MS + 1);
 
   return firstSeenMs + baseDelayMs + jitterMs;
 }
@@ -308,34 +288,17 @@ async function runGatewayUpdateCheckOwned(
     return;
   }
   const autoDisabledByExternalSupervisor = isGatewayExternallySupervised();
-  const initializedInstallStatus = await lifecycle.initialize();
-  params.signal?.throwIfAborted();
-  if (initializedInstallStatus.status.error) {
-    throw new Error(initializedInstallStatus.status.error.message);
-  }
-  const potentialChannel = resolveEffectiveUpdateChannel({
-    configChannel,
-    currentVersion: VERSION,
-    installKind: initializedInstallStatus.status.installKind,
-    git: initializedInstallStatus.status.git,
-  }).channel;
-  if (initializedInstallStatus.status.installKind === "host") {
+  const {
+    installStatus,
+    channel: configuredChannel,
+    readOnlySchedule,
+  } = await prepareStartupUpdateInstall(lifecycle.initialize, configChannel, params.signal);
+  if (readOnlySchedule) {
     updateCampaign.clear();
     setAvailable(null);
-    setSchedule({ channel: potentialChannel, autoEnabled: false });
+    setSchedule(readOnlySchedule);
     return;
   }
-  let installStatus = initializedInstallStatus;
-  if (potentialChannel === "dev" && installStatus.status.installKind === "git") {
-    installStatus = await resolveStartupInstallStatus(true, params.signal);
-    params.signal?.throwIfAborted();
-  }
-  const configuredChannel = resolveEffectiveUpdateChannel({
-    configChannel,
-    currentVersion: VERSION,
-    installKind: installStatus.status.installKind,
-    git: installStatus.status.git,
-  }).channel;
   const autoDesired =
     (configuredChannel === "stable" ||
       configuredChannel === "beta" ||
@@ -675,7 +638,6 @@ async function runGatewayUpdateCheckOwned(
       let applyAfterMs: number | null = null;
       if (channel === "stable") {
         applyAfterMs = resolveStableAutoApplyAtMs({
-          state,
           nextState,
           nowMs: now,
           version: resolved.version,
@@ -749,4 +711,3 @@ export function createGatewayUpdateCheck(params: {
     },
   };
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

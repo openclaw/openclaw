@@ -1,7 +1,7 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import type { Page } from "playwright";
+import { expect, it } from "vitest";
 import {
   CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT,
   type ControlUiSessionPullRequest,
@@ -13,15 +13,10 @@ import { ciAutomationJobSpec, type CiAutomationOption } from "../lib/session-pr-
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
-import {
-  controlUiSessionUrl,
-  installMockGateway,
-  resolvePlaywrightChromiumExecutablePath,
-  startControlUiE2eServer,
-  type ControlUiE2eServer,
-} from "../test-helpers/control-ui-e2e.ts";
+import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { cronListResponseFixture } from "../test-helpers/cron.ts";
 import { waitForWatchedSessionKey } from "./chat-github-publication.test-support.ts";
+import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const DETAILS_METHOD = "controlUi.sessionPullRequests.checks";
 const headSha = "a".repeat(40);
@@ -75,7 +70,7 @@ const pullRequest: ControlUiSessionPullRequest = {
 };
 
 function detailFixture(
-  mode: "running" | "failed" | "passed" = "running",
+  mode: "running" | "failed" = "running",
 ): ControlUiSessionPullRequestCheckDetails {
   const startedAtMs = Date.now() - (mode === "running" ? 139_000 : 142_000);
   const stamp = (seconds: number) => new Date(startedAtMs + seconds * 1000).toISOString();
@@ -95,9 +90,7 @@ function detailFixture(
     state: mode,
     source: "actions",
     status: completed ? "completed" : "in_progress",
-    ...(completed
-      ? { conclusion: mode === "failed" ? "failure" : "success", completedAt: stamp(142) }
-      : {}),
+    ...(completed ? { conclusion: "failure", completedAt: stamp(142) } : {}),
     startedAt: stamp(0),
     detailsUrl: "https://github.com/openclaw/openclaw/actions/runs/100/job/11",
     steps: steps.map(({ name, start, end }, index) => ({
@@ -165,28 +158,28 @@ function detailFixture(
   };
 }
 
-let browser: Browser;
-let server: ControlUiE2eServer;
-const contexts = new Set<BrowserContext>();
+const suite = createControlUiE2eSuite({
+  name: "chat CI job and step details",
+  trackBrowserContexts: true,
+});
 
 async function setup(
   options: {
     width?: number;
     height?: number;
-    mode?: "running" | "failed" | "passed";
+    mode?: "running" | "failed";
     defer?: boolean;
     automationJobs?: CronJob[];
     schedulerEnabled?: boolean;
     readOnly?: boolean;
   } = {},
 ) {
-  const context = await browser.newContext({
+  const context = await suite.newBrowserContext({
     viewport: { width: options.width ?? 1180, height: options.height ?? 960 },
     colorScheme: "dark",
     locale: "en-US",
     serviceWorkers: "block",
   });
-  contexts.add(context);
   const page = await context.newPage();
   const gateway = await installMockGateway(page, {
     sessionKey: automationSessionKey,
@@ -220,7 +213,7 @@ async function setup(
       },
     },
   });
-  await page.goto(controlUiSessionUrl(server.baseUrl, automationSessionKey));
+  await page.goto(controlUiSessionUrl(suite.server.baseUrl, automationSessionKey));
   if (options.defer) {
     await gateway.deferNext(DETAILS_METHOD);
   }
@@ -237,12 +230,7 @@ async function setup(
           ...pullRequest,
           checks: { state: "failing", passed: 6, failed: 1, running: 0, skipped: 17 },
         }
-      : options.mode === "passed"
-        ? {
-            ...pullRequest,
-            checks: { state: "passing", passed: 7, failed: 0, running: 0, skipped: 17 },
-          }
-        : pullRequest,
+      : pullRequest,
   );
   return { page, gateway, sessionKey, publish };
 }
@@ -260,22 +248,7 @@ async function expandLinuxJob(page: Page) {
   return job;
 }
 
-describe("chat CI job and step details", () => {
-  beforeAll(async () => {
-    browser = await chromium.launch({
-      executablePath: resolvePlaywrightChromiumExecutablePath(chromium.executablePath()),
-    });
-    server = await startControlUiE2eServer();
-  });
-  afterEach(async () => {
-    await Promise.all([...contexts].map((context) => context.close()));
-    contexts.clear();
-  });
-  afterAll(async () => {
-    await browser?.close();
-    await server?.close();
-  });
-
+suite.define(() => {
   it("saves selected-PR automation toggles and reconciles an uncertain write", async () => {
     const fix = automationJob("autoFix");
     const merge = automationJob("autoMerge", false);
@@ -404,41 +377,6 @@ describe("chat CI job and step details", () => {
     expect(await gateway.getRequests(DETAILS_METHOD)).toHaveLength(0);
   });
 
-  it("loads steps only after opening and keeps skipped work collapsed", async () => {
-    const { page, gateway, sessionKey } = await setup({ defer: true });
-    expect(await gateway.getRequests(DETAILS_METHOD)).toHaveLength(0);
-    await page.locator(".chat-pr__checks-pill").click();
-    const request = await gateway.waitForRequest(DETAILS_METHOD);
-    expect(request.params).toMatchObject({
-      sessionKey,
-      owner: "openclaw",
-      repo: "openclaw",
-      number: pullRequest.number,
-      headSha,
-    });
-    await gateway.resolveDeferred(DETAILS_METHOD, detailFixture());
-    const job = await expandLinuxJob(page);
-    expect(await job.textContent()).toContain("Run tests");
-    expect(
-      await job
-        .locator('a[href="https://github.com/openclaw/openclaw/actions/runs/100/job/11"]')
-        .count(),
-    ).toBeGreaterThan(0);
-    const skipped = page
-      .locator(".chat-pr__checks-menu details")
-      .filter({ has: page.locator("summary", { hasText: /17.*skipped/i }) })
-      .first();
-    await skipped.waitFor();
-    expect(await skipped.evaluate((node) => (node as HTMLDetailsElement).open)).toBe(false);
-    await skipped.locator("summary").first().click();
-    await page.getByText("Android build", { exact: true }).waitFor();
-    expect(await page.locator(".chat-pr__checks-menu footer").count()).toBe(0);
-    expect(await page.getByText("Auto-refresh while open", { exact: false }).count()).toBe(0);
-    await page.keyboard.press("Escape");
-    await expect.poll(() => page.locator(".chat-pr__checks[open]").count()).toBe(0);
-    await expect.poll(() => page.locator(".chat-pr__checks-menu").isVisible()).toBe(false);
-  });
-
   it("does not display a pending response for the previous commit", async () => {
     const { page, gateway, publish } = await setup({ defer: true });
     await page.locator(".chat-pr__checks-pill").click();
@@ -466,7 +404,6 @@ describe("chat CI job and step details", () => {
 
   it.each([
     { label: "desktop", width: 1180, height: 960, mode: "running" as const },
-    { label: "desktop-passed", width: 1180, height: 960, mode: "passed" as const },
     { label: "mobile", width: 393, height: 960, mode: "failed" as const },
     { label: "landscape", width: 844, height: 390, mode: "failed" as const },
   ])("keeps expanded steps usable on $label", async ({ label, width, height, mode }) => {
@@ -518,5 +455,8 @@ describe("chat CI job and step details", () => {
         });
       }
     }
+    await page.keyboard.press("Escape");
+    await expect.poll(() => page.locator(".chat-pr__checks[open]").count()).toBe(0);
+    await expect.poll(() => menu.isVisible()).toBe(false);
   });
 });

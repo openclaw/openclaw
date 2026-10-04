@@ -188,6 +188,7 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
       currentMessageId: "msg-42",
       authProfileId: "openai:p1",
       workspaceDir: "/tmp/workspace",
+      bootstrapWorkspaceDir: "/tmp/agent-workspace",
       cwd: "/tmp/task-repo",
       requireWorkspaceOnly: true,
       requireWritableSandbox: true,

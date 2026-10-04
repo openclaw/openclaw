@@ -108,14 +108,63 @@ describe("addGatewayServiceCommands", () => {
         } else {
           registerDaemonCli(program);
         }
-        await program.parseAsync([parent, "install", "--runtime-path", pin, "--force"], {
-          from: "user",
-        });
+        const expectedRuntimePin = JSON.stringify({ revision: "observed-pin", definition: null });
+        await program.parseAsync(
+          [
+            parent,
+            "install",
+            "--runtime-path",
+            pin,
+            "--force",
+            "--expected-runtime-pin",
+            expectedRuntimePin,
+          ],
+          {
+            from: "user",
+          },
+        );
         expect(expectSingleDaemonCall(runDaemonInstall)).toMatchObject({
           runtimePath: pin,
+          expectedRuntimePin,
           force: true,
         });
       }
+    },
+  );
+
+  it.each(["gateway", "daemon"])(
+    "defers %s install startup until runtime custody is checked",
+    async (parent) => {
+      const program = new Command().name("openclaw");
+      addGatewayServiceCommands(program.command(parent));
+      registerPreActionHooks(program, "9.9.9-test");
+      const previousArgv = process.argv;
+      const previousTitle = process.title;
+      const previousVerbose = isVerbose();
+      const startupEnv = captureEnv(["NODE_NO_WARNINGS"]);
+      process.argv = [
+        "node",
+        "openclaw",
+        parent,
+        "install",
+        "--json",
+        "--expected-runtime-pin",
+        JSON.stringify({ revision: "observed-pin", definition: null }),
+      ];
+      try {
+        await withConsoleLogsRoutedToStderrForJson(
+          process.argv,
+          () => program.parseAsync(process.argv),
+          { restoreChanges: true },
+        );
+      } finally {
+        process.argv = previousArgv;
+        process.title = previousTitle;
+        setVerbose(previousVerbose);
+        startupEnv.restore();
+      }
+      expect(ensureConfigReady).not.toHaveBeenCalled();
+      expect(runDaemonInstall).toHaveBeenCalledOnce();
     },
   );
 

@@ -89,11 +89,7 @@ export function createGatewayStartupOutcomeRecorder(
     record: (outcome) => {
       outcomes.set(outcome.subsystem, outcome);
     },
-    snapshot: () =>
-      GATEWAY_STARTUP_SUBSYSTEMS.flatMap((subsystem) => {
-        const outcome = outcomes.get(subsystem);
-        return outcome ? [outcome] : [];
-      }),
+    snapshot: () => [...outcomes.values()],
   };
 }
 

@@ -20,6 +20,8 @@ operator steering. Do not preserve superseded scope.
 - Tooling SHA: `<trusted workflow full sha>`
 - Release SHA: `<same as Code SHA | notes-only descendant | exact extended-stable branch tip>`
 - tag: `v<version>`
+- main closeout SHA: `<exact merged closeout commit | pending>`
+- main closeout version: `<package.json version at that exact commit | pending>`
 - validation workflow ref: `<release-ci ref | canonical branch>`
 - publication tooling ref: `<release-publish/tooling-sha12-epoch | track-specific ref>`
 - tooling tag: `<tag verified via gh api git/ref/tags | created by hand after ruleset warning>`

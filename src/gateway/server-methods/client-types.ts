@@ -14,7 +14,7 @@ import type {
   GatewayWsBrowserOrigin,
   PreparedSessionProfile,
 } from "../server/client-identity-types.js";
-import type { TrustedSessionCreation } from "./session-creation-provenance.js";
+import type { TrustedSessionCreation } from "../session-creation-provenance.js";
 
 /** Trusted in-process spawn control plane that already owns this run's task row.
     Gateway CLI tracking only covers runs nobody else records, so a marked run

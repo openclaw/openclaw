@@ -563,7 +563,7 @@ describe("runMessageAction core send routing", () => {
     await runMessageAction({
       cfg: {
         channels: { slack: { enabled: true, responsePrefix: "[{identity.name}]" } },
-        agents: { list: [{ id: "main", identity: { name: "Nexus" } }] },
+        agents: { entries: { main: { identity: { name: "Nexus" } } } },
       } as OpenClawConfig,
       action: "send",
       params: {

@@ -8,6 +8,5 @@ export type AcpSessionEntryBinding = Pick<SessionEntry, "lifecycleRevision"> &
   Partial<Pick<SessionEntry, "sessionId" | "sessionStartedAt">>;
 export type AcpSessionReadInput = {
   keys: readonly string[];
-  legacyKey?: string;
   entry?: AcpSessionEntryBinding;
 };

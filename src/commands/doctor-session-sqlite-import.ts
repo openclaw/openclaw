@@ -8,6 +8,7 @@ import { prepareLegacyAcpMigrationSource } from "../infra/legacy-acp-migration-s
 import {
   readMigrationArtifactIdentity,
   sameMigrationArtifact,
+  statMigrationPath,
   type MigrationArtifactIdentity,
 } from "../infra/session-sqlite-migration-artifact.js";
 import {
@@ -140,7 +141,7 @@ function prepareRestoredSessionIndex(params: {
   }
   const storePath = canonicalMigrationFilePath(target.storePath);
   const sqlitePath = resolveTargetSqlitePath(target, params.env);
-  const receipts = new Map<string, MigrationArtifactIdentity>();
+  const evidence = new Map<string, MigrationArtifactIdentity>();
   let hasSelectedOwner = false;
   for (const refs of recoveryInventory.references.values()) {
     for (const ref of refs) {
@@ -157,12 +158,25 @@ function prepareRestoredSessionIndex(params: {
       }
       const artifact = ref.move.artifact;
       if (!artifact) {
-        throw new Error(`Restored session index has no recorded identity: ${storePath}`);
+        // Pre-artifact receipts identify paths, not the file now occupying them.
+        // A distinct surviving archive proves a new index; otherwise preserve current nodes.
+        assertSafeSessionSqliteMigrationMove(ref.move, ref.target);
+        if (statMigrationPath(ref.move.archivePath)) {
+          const archiveIdentity = readMigrationArtifactIdentity(ref.move.archivePath);
+          if (
+            archiveIdentity.size !== expectedIndexIdentity.size ||
+            archiveIdentity.sha256 !== expectedIndexIdentity.sha256
+          ) {
+            continue;
+          }
+          evidence.set(ref.move.archivePath, archiveIdentity);
+        }
       }
       // A newly created legacy index is a different source, even at the same path.
       if (
-        artifact.identity.dev !== expectedIndexIdentity.dev ||
-        artifact.identity.ino !== expectedIndexIdentity.ino
+        artifact &&
+        (artifact.identity.dev !== expectedIndexIdentity.dev ||
+          artifact.identity.ino !== expectedIndexIdentity.ino)
       ) {
         continue;
       }
@@ -172,11 +186,12 @@ function prepareRestoredSessionIndex(params: {
         { agentId: target.agentId, storePath, sqlitePath },
       ]).includes(ref.target);
       if (
-        !sameMigrationArtifact(artifact.identity, expectedIndexIdentity) ||
-        !ref.consumedByRestore ||
+        (artifact &&
+          (!sameMigrationArtifact(artifact.identity, expectedIndexIdentity) ||
+            !ref.consumedByRestore ||
+            artifact.disposal.state !== "retained")) ||
         ref.target.storePath !== storePath ||
-        (ref.target.agentId === target.agentId && !selectedOwner) ||
-        artifact.disposal.state !== "retained"
+        (ref.target.agentId === target.agentId && !selectedOwner)
       ) {
         throw new Error(`Restored session index evidence cannot be verified: ${storePath}`);
       }
@@ -189,11 +204,11 @@ function prepareRestoredSessionIndex(params: {
       ) {
         throw new Error(`Session restore receipt changed: ${ref.run.manifestPath}`);
       }
-      receipts.set(ref.run.manifestPath, identity);
+      evidence.set(ref.run.manifestPath, identity);
       hasSelectedOwner ||= selectedOwner;
     }
   }
-  if (receipts.size === 0) {
+  if (evidence.size === 0) {
     return undefined;
   }
   if (!hasSelectedOwner) {
@@ -202,12 +217,12 @@ function prepareRestoredSessionIndex(params: {
   // A per-file restore can succeed during a partial or failed run. It proves provenance,
   // not permission to replace the current node; the import transaction preserves that owner.
   const assertCurrent = () => {
-    for (const filePath of [storePath, sqlitePath, ...receipts.keys()]) {
+    for (const filePath of [storePath, sqlitePath, ...evidence.keys()]) {
       if (hasSymbolicLinkInDirectoryPath(path.dirname(filePath))) {
         throw new Error(`Session restore path changed: ${filePath}`);
       }
     }
-    for (const [filePath, identity] of [[storePath, expectedIndexIdentity] as const, ...receipts]) {
+    for (const [filePath, identity] of [[storePath, expectedIndexIdentity] as const, ...evidence]) {
       if (!sameMigrationArtifact(identity, readMigrationArtifactIdentity(filePath))) {
         throw new Error(`Session restore source or receipt changed: ${filePath}`);
       }

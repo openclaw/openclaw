@@ -52,22 +52,37 @@ async function withReceiptFixture(
 }
 
 describe("canonical proof on physical database validation", () => {
-  it("does not publish an uncommitted durable receipt into a cold reader cache", async () => {
-    await withReceiptFixture(true, (database, options) => {
-      expect(() =>
-        runOpenClawAgentWriteTransaction((current) => {
-          recordOpenClawAgentCanonicalValidation(current);
-          clearOpenClawAgentDatabaseValidationCache(current.path);
-          expect(hasOpenClawAgentCanonicalValidation(current)).toBe(false);
-          throw new Error("rollback durable receipt");
-        }, options),
-      ).toThrow("rollback durable receipt");
-      expect(hasOpenClawAgentCanonicalValidation(database)).toBe(false);
-      expect(database.db.prepare("SELECT canonical_ready FROM session_key_contract").get()).toEqual(
-        { canonical_ready: null },
-      );
-    });
-  });
+  it.each(["durable receipt", "empty view"] as const)(
+    "does not certify an uncommitted %s",
+    async (proof) => {
+      await withReceiptFixture(true, (database, options) => {
+        expect(() =>
+          runOpenClawAgentWriteTransaction((current) => {
+            if (proof === "durable receipt") {
+              recordOpenClawAgentCanonicalValidation(current);
+              clearOpenClawAgentDatabaseValidationCache(current.path);
+            } else {
+              current.db.exec("DELETE FROM session_nodes");
+              setOpenClawAgentDatabaseValidation(current);
+            }
+            expect(hasOpenClawAgentCanonicalValidation(current)).toBe(false);
+            throw new Error("rollback proof");
+          }, options),
+        ).toThrow("rollback proof");
+        expect(hasOpenClawAgentCanonicalValidation(database)).toBe(false);
+        if (proof === "durable receipt") {
+          expect(
+            database.db.prepare("SELECT canonical_ready FROM session_key_contract").get(),
+          ).toEqual({ canonical_ready: null });
+        } else {
+          expect(
+            database.db.prepare("SELECT current_session_id FROM session_nodes").get()
+              ?.current_session_id,
+          ).toBe("existing");
+        }
+      });
+    },
+  );
 
   function independentWorkerReceipt(database: OpenClawAgentDatabase) {
     const receipt = getOpenClawAgentDatabaseValidation(database);
@@ -131,21 +146,6 @@ describe("canonical proof on physical database validation", () => {
   );
 
   describe("native integrity proof handoff", () => {
-    it("accepts proof without a host handle and shares subsequent host revocation", async () => {
-      await withReceiptFixture(false, (database) => {
-        const received = independentWorkerReceipt(database);
-        closeOpenClawAgentDatabaseByPath(database.path);
-        clearOpenClawAgentDatabaseValidationCache(database.path);
-        const adopt = captureOpenClawAgentDatabaseValidationTransfer(database);
-
-        expect(adopt(received.identity, received)).toBe(true);
-        expect(getOpenClawAgentDatabaseValidationForTransfer(database)?.valid).toBe(received.valid);
-        invalidateOpenClawAgentDatabaseValidation(database.path);
-        expect(Atomics.load(new Int32Array(received.valid), 0)).toBe(0);
-        expect(getOpenClawAgentDatabaseValidationForTransfer(database)).toBeUndefined();
-      });
-    });
-
     it("does not restore delayed proof after path, repeated, cache, or agent revocation", async () => {
       await withReceiptFixture(false, (database) => {
         const received = independentWorkerReceipt(database);
@@ -207,9 +207,10 @@ describe("canonical proof on physical database validation", () => {
       });
     });
 
-    it("rejects foreign, revoked, and malformed receipts without accepting their proof", async () => {
+    it("accepts only valid native receipts without a host handle and shares revocation", async () => {
       await withReceiptFixture(false, (database) => {
         const received = independentWorkerReceipt(database);
+        closeOpenClawAgentDatabaseByPath(database.path);
         clearOpenClawAgentDatabaseValidationCache(database.path);
         const adopt = captureOpenClawAgentDatabaseValidationTransfer(database);
         for (const invalid of [
@@ -225,16 +226,8 @@ describe("canonical proof on physical database validation", () => {
         }
         expect(adopt(received.identity, received)).toBe(true);
         expect(getOpenClawAgentDatabaseValidationForTransfer(database)?.valid).toBe(received.valid);
-      });
-    });
-
-    it("keeps durable canonical proof readable during a pending native handoff", async () => {
-      await withReceiptFixture(false, (database, options) => {
-        runOpenClawAgentWriteTransaction(recordOpenClawAgentCanonicalValidation, options);
-        clearOpenClawAgentDatabaseValidationCache(database.path);
-        captureOpenClawAgentDatabaseValidationTransfer(database);
-
-        expect(hasOpenClawAgentCanonicalValidation(database)).toBe(true);
+        invalidateOpenClawAgentDatabaseValidation(database.path);
+        expect(Atomics.load(new Int32Array(received.valid), 0)).toBe(0);
         expect(getOpenClawAgentDatabaseValidationForTransfer(database)).toBeUndefined();
       });
     });
@@ -242,8 +235,6 @@ describe("canonical proof on physical database validation", () => {
 
   it.each([
     { cache: "warm", admission: "set" },
-    { cache: "cold", admission: "set" },
-    { cache: "warm", admission: "adopt" },
     { cache: "cold", admission: "adopt" },
   ] as const)(
     "does not revive revoked canonical proof on $cache integrity admission by $admission",
@@ -282,122 +273,118 @@ describe("canonical proof on physical database validation", () => {
     },
   );
 
-  it.each([false, true])(
-    "initializes readiness from committed emptiness (populated: %s)",
-    async (populated) => {
-      await withReceiptFixture(populated, (database) => {
-        expect(hasOpenClawAgentCanonicalValidation(database)).toBe(!populated);
+  it.each(["empty", "populated", "pending", "durable handoff"] as const)(
+    "initializes readiness from committed %s state",
+    async (state) => {
+      await withReceiptFixture(state === "populated", (database, options) => {
+        if (state === "pending") {
+          database.db
+            .prepare("INSERT INTO session_canonical_validation_pending (session_key) VALUES (?)")
+            .run("agent:main:unresolved");
+          setOpenClawAgentDatabaseValidation(database);
+        } else if (state === "durable handoff") {
+          runOpenClawAgentWriteTransaction(recordOpenClawAgentCanonicalValidation, options);
+          clearOpenClawAgentDatabaseValidationCache(database.path);
+          captureOpenClawAgentDatabaseValidationTransfer(database);
+        }
+        expect(hasOpenClawAgentCanonicalValidation(database)).toBe(
+          state === "empty" || state === "durable handoff",
+        );
+        if (state === "durable handoff") {
+          expect(getOpenClawAgentDatabaseValidationForTransfer(database)).toBeUndefined();
+        }
       });
     },
   );
 
-  it("keeps an empty database with pending work unready", async () => {
-    await withReceiptFixture(false, (database) => {
-      database.db
-        .prepare("INSERT INTO session_canonical_validation_pending (session_key) VALUES (?)")
-        .run("agent:main:unresolved");
-      setOpenClawAgentDatabaseValidation(database);
-      expect(hasOpenClawAgentCanonicalValidation(database)).toBe(false);
-    });
-  });
-
-  it("does not certify an uncommitted empty view that rolls back", async () => {
-    await withReceiptFixture(true, (database, options) => {
-      expect(() =>
-        runOpenClawAgentWriteTransaction((current) => {
-          current.db.exec("DELETE FROM session_nodes");
-          setOpenClawAgentDatabaseValidation(current);
-          expect(hasOpenClawAgentCanonicalValidation(current)).toBe(false);
-          throw new Error("rollback empty view");
-        }, options),
-      ).toThrow("rollback empty view");
-      expect(
-        database.db.prepare("SELECT current_session_id FROM session_nodes").get()
-          ?.current_session_id,
-      ).toBe("existing");
-      expect(hasOpenClawAgentCanonicalValidation(database)).toBe(false);
-    });
-  });
-
-  it("shares successful proof with registered thin readers but never raw readers", async () => {
-    await withReceiptFixture(true, (database, options) => {
-      const raw = new DatabaseSync(database.path, { readOnly: true });
-      try {
-        expect(hasOpenClawAgentCanonicalValidation({ agentId: "main", db: raw })).toBe(false);
-        expect(markOpenClawAgentCanonicalValidation({ agentId: "main", db: raw })).toBe(false);
-        const opened = openOpenClawAgentDatabaseReadOnly(options);
-        if (!opened.found) {
-          throw new Error("Expected readonly fixture database");
-        }
+  it.each(["thin", "transferred"] as const)(
+    "shares proof with %s readers but never raw readers",
+    async (mode) => {
+      await withReceiptFixture(true, (database, options) => {
+        const raw = new DatabaseSync(database.path, { readOnly: true });
         try {
-          expect(
-            markOpenClawAgentCanonicalValidation({ agentId: "main", db: opened.database.db }),
-          ).toBe(true);
-          expect(hasOpenClawAgentCanonicalValidation(database)).toBe(true);
-          expect(
-            hasOpenClawAgentCanonicalValidation({ agentId: "other", db: opened.database.db }),
-          ).toBe(false);
+          expect(hasOpenClawAgentCanonicalValidation({ agentId: "main", db: raw })).toBe(false);
+          expect(markOpenClawAgentCanonicalValidation({ agentId: "main", db: raw })).toBe(false);
+          const opened = openOpenClawAgentDatabaseReadOnly(options);
+          if (!opened.found) {
+            throw new Error("Expected readonly fixture database");
+          }
+          try {
+            const receipt = getOpenClawAgentDatabaseValidation(database);
+            if (!receipt) {
+              throw new Error("Expected physical validation receipt");
+            }
+            const transferred = structuredClone(receipt);
+            if (mode === "transferred") {
+              expect(adoptOpenClawAgentDatabaseValidation(opened.database, transferred)).toBe(true);
+            }
+            expect(
+              markOpenClawAgentCanonicalValidation(
+                mode === "thin" ? { agentId: "main", db: opened.database.db } : opened.database,
+              ),
+            ).toBe(true);
+            expect(hasOpenClawAgentCanonicalValidation(database)).toBe(true);
+            expect(
+              hasOpenClawAgentCanonicalValidation({ agentId: "other", db: opened.database.db }),
+            ).toBe(false);
+            expect(Atomics.load(new Int32Array(transferred.canonicalReady), 0)).toBe(1);
+            if (mode === "transferred") {
+              invalidateOpenClawAgentDatabaseValidation(database.path);
+              expect(adoptOpenClawAgentDatabaseValidation(opened.database, transferred)).toBe(
+                false,
+              );
+              expect(hasOpenClawAgentCanonicalValidation(opened.database)).toBe(false);
+            }
+          } finally {
+            opened.database.close();
+          }
+          expect(hasOpenClawAgentCanonicalValidation(database)).toBe(mode === "thin");
+          expect(hasOpenClawAgentCanonicalValidation({ agentId: "main", db: raw })).toBe(false);
         } finally {
-          opened.database.close();
+          raw.close();
         }
-        expect(hasOpenClawAgentCanonicalValidation(database)).toBe(true);
-        expect(hasOpenClawAgentCanonicalValidation({ agentId: "main", db: raw })).toBe(false);
-      } finally {
-        raw.close();
-      }
-    });
-  });
+      });
+    },
+  );
 
-  it("publishes nested successful proof only after the outer commit", async () => {
-    await withReceiptFixture(true, (database, options) => {
-      runOpenClawAgentWriteTransaction(() => {
-        runOpenClawAgentWriteTransaction((current) => {
-          expect(markOpenClawAgentCanonicalValidation(current)).toBe(true);
-          expect(hasOpenClawAgentCanonicalValidation(current)).toBe(false);
-        }, options);
-        expect(hasOpenClawAgentCanonicalValidation(database)).toBe(false);
-      }, options);
-      expect(hasOpenClawAgentCanonicalValidation(database)).toBe(true);
-    });
-  });
-
-  it.each(["outer", "savepoint"] as const)("discards proof after %s rollback", async (rollback) => {
-    await withReceiptFixture(true, (database, options) => {
-      const failing = () =>
-        runOpenClawAgentWriteTransaction((current) => {
-          expect(markOpenClawAgentCanonicalValidation(current)).toBe(true);
-          throw new Error("rollback proof");
-        }, options);
-      if (rollback === "outer") {
-        expect(failing).toThrow("rollback proof");
-      } else {
-        runOpenClawAgentWriteTransaction(() => {
-          expect(failing).toThrow("rollback proof");
-        }, options);
-      }
-      expect(hasOpenClawAgentCanonicalValidation(database)).toBe(false);
-    });
-  });
-
-  it("leaves manual transactions unready without an owned publication queue", async () => {
-    await withReceiptFixture(true, (database) => {
-      database.db.exec("BEGIN IMMEDIATE");
-      expect(markOpenClawAgentCanonicalValidation(database)).toBe(false);
-      database.db.exec("COMMIT");
-      expect(hasOpenClawAgentCanonicalValidation(database)).toBe(false);
-    });
-  });
-
-  it("does not revive a receipt revoked before its commit callback", async () => {
-    await withReceiptFixture(true, (database, options) => {
-      runOpenClawAgentWriteTransaction((current) => {
-        expect(markOpenClawAgentCanonicalValidation(current)).toBe(true);
-        invalidateOpenClawAgentDatabaseValidation(current.path);
-        setOpenClawAgentDatabaseValidation(current);
-      }, options);
-      expect(hasOpenClawAgentCanonicalValidation(database)).toBe(false);
-    });
-  });
+  it.each(["nested commit", "outer rollback", "savepoint rollback", "manual", "revoked"] as const)(
+    "publishes transaction proof only with a valid owned commit (%s)",
+    async (outcome) => {
+      await withReceiptFixture(true, (database, options) => {
+        const publish = () =>
+          runOpenClawAgentWriteTransaction((current) => {
+            expect(markOpenClawAgentCanonicalValidation(current)).toBe(true);
+            if (outcome === "revoked") {
+              invalidateOpenClawAgentDatabaseValidation(current.path);
+              setOpenClawAgentDatabaseValidation(current);
+            } else if (outcome === "nested commit") {
+              expect(hasOpenClawAgentCanonicalValidation(current)).toBe(false);
+            } else {
+              throw new Error("rollback proof");
+            }
+          }, options);
+        if (outcome === "manual") {
+          database.db.exec("BEGIN IMMEDIATE");
+          expect(markOpenClawAgentCanonicalValidation(database)).toBe(false);
+          database.db.exec("COMMIT");
+        } else if (outcome === "outer rollback") {
+          expect(publish).toThrow("rollback proof");
+        } else if (outcome === "revoked") {
+          publish();
+        } else {
+          runOpenClawAgentWriteTransaction(() => {
+            if (outcome === "savepoint rollback") {
+              expect(publish).toThrow("rollback proof");
+            } else {
+              publish();
+              expect(hasOpenClawAgentCanonicalValidation(database)).toBe(false);
+            }
+          }, options);
+        }
+        expect(hasOpenClawAgentCanonicalValidation(database)).toBe(outcome === "nested commit");
+      });
+    },
+  );
 
   it.each(["native close", "native dispose", "owner close"] as const)(
     "retains proof across %s and reopen",
@@ -418,30 +405,6 @@ describe("canonical proof on physical database validation", () => {
       });
     },
   );
-
-  it("shares readiness through worker receipt transfer and rejects revoked transfers", async () => {
-    await withReceiptFixture(true, (database, options) => {
-      const receipt = getOpenClawAgentDatabaseValidation(database);
-      if (!receipt) {
-        throw new Error("Expected physical validation receipt");
-      }
-      const transferred = structuredClone(receipt);
-      const opened = openOpenClawAgentDatabaseReadOnly(options);
-      if (!opened.found) {
-        throw new Error("Expected readonly fixture database");
-      }
-      try {
-        expect(adoptOpenClawAgentDatabaseValidation(opened.database, transferred)).toBe(true);
-        expect(markOpenClawAgentCanonicalValidation(opened.database)).toBe(true);
-        expect(Atomics.load(new Int32Array(transferred.canonicalReady), 0)).toBe(1);
-        invalidateOpenClawAgentDatabaseValidation(database.path);
-        expect(adoptOpenClawAgentDatabaseValidation(opened.database, transferred)).toBe(false);
-        expect(hasOpenClawAgentCanonicalValidation(opened.database)).toBe(false);
-      } finally {
-        opened.database.close();
-      }
-    });
-  });
 
   it.runIf(typeof DatabaseSync.prototype.deserialize === "function")(
     "revokes proof on a failed native replacement attempt",

@@ -92,14 +92,6 @@ const MatcherOutputSchema = z.object({
   ),
 });
 
-type RecommendationDeps = {
-  listPlugins?: typeof listOfficialExternalPluginCatalogEntries;
-  listChannels?: typeof listOfficialExternalChannelCatalogEntries;
-  listProviders?: typeof listOfficialExternalProviderCatalogEntries;
-  searchSkills?: typeof searchClawHubSkills;
-  complete?: (prompt: string) => Promise<{ ok: true; text: string } | { ok: false }>;
-};
-
 function compareInventory(left: SetupAppInventoryItem, right: SetupAppInventoryItem): number {
   return (
     left.label.localeCompare(right.label, "en", { sensitivity: "base" }) ||
@@ -199,14 +191,12 @@ function dedupeCandidates(candidates: SetupAppCandidate[]): SetupAppCandidate[] 
   });
 }
 
-async function gatherSetupAppCandidates(params: {
-  apps: SetupAppInventoryItem[];
-  deps?: RecommendationDeps;
-}): Promise<SetupAppCandidateGroup[]> {
-  const deps = params.deps ?? {};
-  const channels = deps.listChannels?.() ?? listOfficialExternalChannelCatalogEntries();
-  const providers = deps.listProviders?.() ?? listOfficialExternalProviderCatalogEntries();
-  const allEntries = deps.listPlugins?.() ?? listOfficialExternalPluginCatalogEntries();
+async function gatherSetupAppCandidates(
+  apps: SetupAppInventoryItem[],
+): Promise<SetupAppCandidateGroup[]> {
+  const channels = listOfficialExternalChannelCatalogEntries();
+  const providers = listOfficialExternalProviderCatalogEntries();
+  const allEntries = listOfficialExternalPluginCatalogEntries();
   // Catalog entries are package manifests without a stable top-level `id`;
   // key everything by the resolved plugin id or the map collapses to one
   // undefined-keyed entry and no official candidate is ever produced.
@@ -228,12 +218,11 @@ async function gatherSetupAppCandidates(params: {
         ? ("official-provider" as const)
         : ("official-plugin" as const),
   }));
-  const searchSkills = deps.searchSkills ?? searchClawHubSkills;
   const searchLimit = pLimit(CLAWHUB_SEARCH_CONCURRENCY);
   const searchDeadline = Date.now() + CLAWHUB_SEARCH_TOTAL_BUDGET_MS;
 
   return await Promise.all(
-    params.apps.map(async (app): Promise<SetupAppCandidateGroup> => {
+    apps.map(async (app): Promise<SetupAppCandidateGroup> => {
       const official = officialEntries.flatMap(({ entry, source }) => {
         if (!entryMatchesApp(entry, app.label)) {
           return [];
@@ -246,7 +235,7 @@ async function gatherSetupAppCandidates(params: {
           return [];
         }
         try {
-          const results = await searchSkills({
+          const results = await searchClawHubSkills({
             query: app.label.normalize("NFKC").trim(),
             limit: CLAWHUB_SEARCH_LIMIT,
             timeoutMs: CLAWHUB_SEARCH_TIMEOUT_MS,
@@ -295,7 +284,6 @@ export async function getSetupAppRecommendations(params: {
   inventorySource: () => Promise<InstalledAppsResult | SetupAppInventoryItem[]>;
   runtime: RuntimeEnv;
   onPhase?: (phase: SetupAppScanPhase) => void;
-  deps?: RecommendationDeps;
 }): Promise<SetupAppRecommendationsResult> {
   const inventory = await params.inventorySource();
   if (!Array.isArray(inventory) && inventory.status === "unsupported") {
@@ -314,20 +302,17 @@ export async function getSetupAppRecommendations(params: {
     appCount: apps.length,
     sampleLabels: apps.slice(0, 3).map((app) => app.label),
   });
-  const groups = await gatherSetupAppCandidates({ apps, deps: params.deps });
+  const groups = await gatherSetupAppCandidates(apps);
   if (groups.every((group) => group.candidates.length === 0)) {
     return { status: "skipped", reason: "no-candidates" };
   }
-  const complete =
-    params.deps?.complete ??
-    // Output is bounded by the resolved model's own maxTokens budget (the
-    // stream layer applies it when no explicit cap is passed), so a runaway
-    // completion cannot exceed what the model config already allows.
-    (async (prompt: string) => await completeSetupInference({ prompt, runtime: params.runtime }));
-  let completion: Awaited<ReturnType<typeof complete>>;
+  let completion: Awaited<ReturnType<typeof completeSetupInference>>;
   try {
     params.onPhase?.({ kind: "matching", appCount: apps.length });
-    completion = await complete(buildMatcherPrompt(groups));
+    completion = await completeSetupInference({
+      prompt: buildMatcherPrompt(groups),
+      runtime: params.runtime,
+    });
   } catch {
     return { status: "skipped", reason: "model-failed" };
   }

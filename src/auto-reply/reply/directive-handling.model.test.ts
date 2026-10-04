@@ -813,7 +813,7 @@ describe("/model chat UX", () => {
       allowedModelKeys: new Set(["anthropic/claude-opus-4-6"]),
       cfg: {
         agents: {
-          list: [{ id: "ops", modelPolicy: { allow: ["anthropic/*"] } }],
+          entries: { ops: { modelPolicy: { allow: ["anthropic/*"] } } },
         },
       },
       agentId: "ops",

@@ -287,7 +287,7 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
               ...state.hookState.inboundClaimEvent,
               senderIsOwner: bindingAuthorization.senderIsOwner,
             };
-            return await state.runWithDispatchLifecycleAdmission(
+            const claim = state.runWithDispatchLifecycleAdmission(
               async () =>
                 await hookRunner.runInboundClaimForPluginOutcome(
                   pluginOwnedBinding.pluginId,
@@ -298,6 +298,8 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
                   ),
                 ),
             );
+            state.trackDispatchLifecycleWork(claim);
+            return await claim;
           })()
         : (() => {
             const pluginLoaded =

@@ -7,16 +7,16 @@ import {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
 } from "../../config/model-input.js";
+import type { AgentModelConfig } from "../../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { AssistantMessage, Context } from "../../llm/types.js";
-import { providerSupportsNativePdfDocument } from "../../media-understanding/defaults.js";
 import { renderDocumentTruncationNotice } from "../../media/document-extraction-metadata.js";
 import type { PdfExtractedContent } from "../../media/pdf-extract.js";
 import { wrapExternalContent } from "../../security/external-content.js";
 import { extractEmbeddedAssistantText } from "../embedded-agent-utils.js";
 
 /** Normalized PDF model preference used by tool registration and execution. */
-type PdfModelConfig = { primary?: string; fallbacks?: string[] };
+type PdfModelConfig = Exclude<AgentModelConfig, string>;
 
 /** Reads `pdf` and `pdfs` tool arguments into a trimmed, de-duplicated PDF input list. */
 export function resolvePdfInputs(record: Record<string, unknown>): string[] {
@@ -28,11 +28,6 @@ export function resolvePdfInputs(record: Record<string, unknown>): string[] {
     throw new Error("pdf required: provide a path or URL to a PDF document");
   }
   return pdfInputs;
-}
-
-/** Checks whether a provider supports native PDF document input. */
-export function providerSupportsNativePdf(provider: string): boolean {
-  return providerSupportsNativePdfDocument({ providerId: provider });
 }
 
 function readPageNumber(value: string, errorLabel: string): number {

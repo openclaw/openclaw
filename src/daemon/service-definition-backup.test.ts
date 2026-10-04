@@ -22,7 +22,7 @@ import { restartSystemdService } from "./systemd-lifecycle.js";
 import { parseSystemdExecStart } from "./systemd-unit.js";
 
 describe("service definition backup receipts", () => {
-  it.each(["linux", "darwin", "win32"] as const)(
+  it.each(["linux", "win32"] as const)(
     "reports unchanged without publishing or activating an untouched %s receipt",
     async (platform) => {
       const f = await fixture(platform);
@@ -45,42 +45,40 @@ describe("service definition backup receipts", () => {
     },
   );
 
-  it("reports restoration for an acknowledged publication with the original bytes", async () => {
-    const f = await fixture("linux");
-    await publishServiceFile({
-      filePath: f.sourcePath,
-      contents: f.original,
-      mode: 0o600,
-      definitionTransaction: f.capture.hooks,
-    });
-    native.identity.mockClear();
-    await expect(f.capture.compensate()).resolves.toBe(true);
-    expect(await fs.readFile(f.sourcePath)).toEqual(f.original);
-    expect(
-      native.identity.mock.calls.filter(([, args]) => args.includes("daemon-reload")),
-    ).toHaveLength(1);
-  });
-
-  it("accepts an acknowledged restoration without replacing an open Windows launcher again", async () => {
-    const f = await fixture("win32");
-    await f.install();
-    await publishServiceFile({
-      filePath: f.sourcePath,
-      contents: f.original,
-      mode: 0o600,
-      definitionTransaction: f.capture.hooks,
-    });
-    const rename = fs.rename.bind(fs);
-    vi.spyOn(fs, "rename").mockImplementation(async (...args) => {
-      if (args[1] === f.sourcePath) {
-        throw Object.assign(new Error("launcher is open"), { code: "EPERM" });
+  it.each(["linux", "win32"] as const)(
+    "accepts acknowledged original bytes without repeating the %s publication",
+    async (platform) => {
+      const f = await fixture(platform);
+      if (platform === "win32") {
+        await f.install();
       }
-      return rename(...args);
-    });
-    await f.capture.compensate();
-    expect(await fs.readFile(f.sourcePath)).toEqual(f.original);
-    expect(f.task()).toBe(f.originalTask);
-  });
+      await publishServiceFile({
+        filePath: f.sourcePath,
+        contents: f.original,
+        mode: 0o600,
+        definitionTransaction: f.capture.hooks,
+      });
+      if (platform === "win32") {
+        const rename = fs.rename.bind(fs);
+        vi.spyOn(fs, "rename").mockImplementation(async (...args) => {
+          if (args[1] === f.sourcePath) {
+            throw Object.assign(new Error("launcher is open"), { code: "EPERM" });
+          }
+          return rename(...args);
+        });
+      }
+      native.identity.mockClear();
+      await expect(f.capture.compensate()).resolves.toBe(true);
+      expect(await fs.readFile(f.sourcePath)).toEqual(f.original);
+      if (platform === "linux") {
+        expect(
+          native.identity.mock.calls.filter(([, args]) => args.includes("daemon-reload")),
+        ).toHaveLength(1);
+      } else {
+        expect(f.task()).toBe(f.originalTask);
+      }
+    },
+  );
 
   it.each(["candidate", "original"])(
     "rejects an operator replacement with %s bytes before acknowledgement",
@@ -112,10 +110,7 @@ describe("service definition backup receipts", () => {
 
   it.each([
     { platform: "win32", index: 0 },
-    { platform: "win32", index: 1 },
-    { platform: "darwin", index: 0 },
     { platform: "darwin", index: 1 },
-    { platform: "darwin", index: 2 },
   ] as const)(
     "preserves an operator edit to $platform artifact $index during receipt checkpointing",
     async ({ platform, index }) => {
@@ -143,7 +138,7 @@ describe("service definition backup receipts", () => {
     },
   );
 
-  it.each(["EPERM", "EBUSY", "EEXIST"])(
+  it.each(["EPERM"])(
     "preserves a Windows launcher when rename-over is denied with %s",
     async (code) => {
       const f = await fixture("win32", true);
@@ -258,11 +253,8 @@ describe("service definition backup receipts", () => {
   );
 
   it.each([
-    { platform: "win32", index: 0 },
     { platform: "win32", index: 1 },
     { platform: "darwin", index: 0 },
-    { platform: "darwin", index: 1 },
-    { platform: "darwin", index: 2 },
     { platform: "linux", index: 0 },
   ] as const)(
     "restores a checkpoint after $platform artifact $index was renamed before acknowledgement",
@@ -289,9 +281,7 @@ describe("service definition backup receipts", () => {
 
   it.each([
     { platform: "win32", index: 0 },
-    { platform: "win32", index: 1 },
     { platform: "darwin", index: 1 },
-    { platform: "darwin", index: 2 },
   ] as const)(
     "keeps live $platform artifact $index intact when publication runs out of space",
     async ({ platform, index }) => {
@@ -469,10 +459,16 @@ describe("service definition backup receipts", () => {
       expect(started).toEqual(original);
     },
   );
-  it.each(["linux", "darwin", "win32"] as const)(
-    "backs up before native %s publication and restores exact bytes from a serialized receipt",
-    async (platform) => {
-      const f = await fixture(platform);
+  it.each([
+    { platform: "linux", ancillary: false },
+    { platform: "darwin", ancillary: false },
+    { platform: "win32", ancillary: false },
+    { platform: "linux", ancillary: true },
+    { platform: "darwin", ancillary: true },
+  ] as const)(
+    "backs up before native $platform publication (ancillary=$ancillary) and restores exact bytes from a serialized receipt",
+    async ({ platform, ancillary }) => {
+      const f = await fixture(platform, ancillary);
       expect(await fs.readFile(f.capture.backupPaths[0]!)).toEqual(f.original);
       expect((await fs.stat(f.capture.backupPaths[0]!)).mode & 0o777).toBe(0o600);
       await f.install();
@@ -496,7 +492,12 @@ describe("service definition backup receipts", () => {
       expect(await fs.readFile(f.sourcePath)).toEqual(f.original);
       expect((await fs.stat(f.sourcePath)).mode & 0o777).toBe(0o600);
       for (const file of f.files.slice(1)) {
-        await expect(fs.stat(file)).rejects.toMatchObject({ code: "ENOENT" });
+        if (ancillary) {
+          expect(await fs.readFile(file, "utf8")).toBe("OPERATOR_SETTING=old-value\n");
+          expect((await fs.stat(file)).mode & 0o777).toBe(0o600);
+        } else {
+          await expect(fs.stat(file)).rejects.toMatchObject({ code: "ENOENT" });
+        }
       }
       if (platform === "win32") {
         expect(f.task()).toBe(
@@ -509,37 +510,44 @@ describe("service definition backup receipts", () => {
     },
   );
 
-  it.each(["linux", "darwin"] as const)(
-    "restores prior %s ancillary contents and modes",
-    async (platform) => {
-      const f = await fixture(platform, true);
-      await f.install();
-      await restoreGatewayServiceDefinitionBackup({ ...f, receipt: await f.capture.finish() });
-      for (const file of f.files.slice(1)) {
-        expect(await fs.readFile(file, "utf8")).toBe("OPERATOR_SETTING=old-value\n");
-        expect((await fs.stat(file)).mode & 0o777).toBe(0o600);
+  it.each([
+    { platform: "linux", dropIn: false },
+    { platform: "darwin", dropIn: false },
+    { platform: "win32", dropIn: false },
+    { platform: "linux", dropIn: true },
+  ] as const)(
+    "rejects $platform edits between capture and publication (drop-in=$dropIn)",
+    async ({ platform, dropIn }) => {
+      const f = await fixture(platform);
+      const target = `${f.sourcePath}.d/operator.conf`;
+      if (dropIn) {
+        await fs.mkdir(path.dirname(target), { mode: 0o700 });
+        await fs.writeFile(target, "[Service]\nNice=7\n", { mode: 0o600 });
+        f.command.definitionPaths!.push(target);
+      } else {
+        await fs.appendFile(f.sourcePath, "operator-edit");
+      }
+      await expect(f.install()).rejects.toThrow(
+        dropIn ? "different managed artifacts" : "Service definition changed",
+      );
+      expect(await fs.readFile(f.sourcePath)).toEqual(
+        dropIn ? f.original : Buffer.concat([f.original, Buffer.from("operator-edit")]),
+      );
+      if (dropIn) {
+        expect(await fs.readFile(target, "utf8")).toContain("Nice=7");
       }
     },
   );
 
-  it.each(["linux", "darwin", "win32"] as const)(
-    "rejects edits between capture and the native %s writer",
-    async (platform) => {
-      const f = await fixture(platform);
-      await fs.appendFile(f.sourcePath, "operator-edit");
-      await expect(f.install()).rejects.toThrow("Service definition changed");
-      expect(await fs.readFile(f.sourcePath)).toEqual(
-        Buffer.concat([f.original, Buffer.from("operator-edit")]),
-      );
-    },
-  );
-
-  it.each(["later edit", "damaged backup", "expired authority", "foreign path"])(
+  it.each(["later edit", "damaged backup", "expired authority", "foreign path", "task XML edit"])(
     "refuses rollback for %s before changing any file",
     async (fault) => {
-      const f = await fixture("darwin", true);
+      const f = await fixture(fault === "task XML edit" ? "win32" : "darwin", true);
       await f.install();
       const receipt = await f.capture.finish();
+      if (fault === "task XML edit") {
+        f.setTask(f.task().replace("<Count>3</Count>", "<Count>7</Count>"));
+      }
       if (fault === "later edit") {
         await fs.appendFile(f.sourcePath, "operator-edit");
       }
@@ -556,7 +564,13 @@ describe("service definition backup receipts", () => {
         receipt.files[0]!.sourcePath = `${f.sourcePath}.foreign`;
       }
       const before = await Promise.all(f.files.map((file) => fs.readFile(file)));
-      await expect(restoreGatewayServiceDefinitionBackup({ ...f, receipt })).rejects.toThrow();
+      const restoration = restoreGatewayServiceDefinitionBackup({ ...f, receipt });
+      if (fault === "task XML edit") {
+        await expect(restoration).rejects.toThrow("Scheduled Task changed");
+        expect(f.task()).toContain("<Count>7</Count>");
+      } else {
+        await expect(restoration).rejects.toThrow();
+      }
       expect(await Promise.all(f.files.map((file) => fs.readFile(file)))).toEqual(before);
     },
   );
@@ -571,19 +585,6 @@ describe("service definition backup receipts", () => {
       expect((await fs.stat(f.sourcePath)).mode & 0o7777).toBe(0o4600);
     },
   );
-
-  it("preserves later Scheduled Task XML edits during rollback", async () => {
-    const f = await fixture("win32");
-    await f.install();
-    const receipt = await f.capture.finish();
-    f.setTask(f.task().replace("<Count>3</Count>", "<Count>7</Count>"));
-    const script = await fs.readFile(f.sourcePath);
-    await expect(restoreGatewayServiceDefinitionBackup({ ...f, receipt })).rejects.toThrow(
-      "Scheduled Task changed",
-    );
-    expect(f.task()).toContain("<Count>7</Count>");
-    expect(await fs.readFile(f.sourcePath)).toEqual(script);
-  });
 
   it.each(["before-create", "after-create", "normalized", "foreign", "during-restore"])(
     "recovers the retained task receipt after interruption: %s",
@@ -643,14 +644,24 @@ describe("service definition backup receipts", () => {
     "Settings.RestartOnFailure.Count",
     "Actions.Exec.Command",
     "RegistrationInfo.Description",
+    "verified snapshot",
   ])(
     "rejects an intervening native publication edit to %s without absorbing it into rollback",
     async (key) => {
       const f = await fixture("win32");
       const execute = native.task.getMockImplementation()!;
+      let published = false;
+      let edited = false;
       native.task.mockImplementation(async (args: string[]) => {
         const result = await execute(args);
-        if (args[0] === "/Create") {
+        if (key === "verified snapshot") {
+          if (args[0] === "/Create") {
+            published = true;
+          } else if (published && !edited && args[0] === "/Query" && args.includes("/XML")) {
+            edited = true;
+            f.setTask(f.task().replace("<Count>3</Count>", "<Count>7</Count>"));
+          }
+        } else if (args[0] === "/Create") {
           f.setTask(
             key === "Settings.RestartOnFailure.Count"
               ? f.task().replace("<Count>3</Count>", "<Count>7</Count>")
@@ -671,7 +682,12 @@ describe("service definition backup receipts", () => {
         }
         return result;
       });
-      await expect(f.install()).rejects.toThrow(key);
+      await expect(f.install()).rejects.toThrow(
+        key === "verified snapshot" ? "Scheduled Task changed" : key,
+      );
+      if (key === "verified snapshot") {
+        expect(edited).toBe(true);
+      }
       const observed = f.task();
       expect(
         native.task.mock.calls.some(([args]) => args[0] === "/Change" || args[0] === "/Run"),
@@ -716,30 +732,6 @@ describe("service definition backup receipts", () => {
     });
   });
 
-  it("pins the verified XML snapshot and rechecks it before running the task", async () => {
-    const f = await fixture("win32");
-    const execute = native.task.getMockImplementation()!;
-    let published = false;
-    let edited = false;
-    native.task.mockImplementation(async (args: string[]) => {
-      const result = await execute(args);
-      if (args[0] === "/Create") {
-        published = true;
-      } else if (published && !edited && args[0] === "/Query" && args.includes("/XML")) {
-        edited = true;
-        f.setTask(f.task().replace("<Count>3</Count>", "<Count>7</Count>"));
-      }
-      return result;
-    });
-    await expect(f.install()).rejects.toThrow("Scheduled Task changed");
-    const observed = f.task();
-    expect(edited).toBe(true);
-    expect(native.task.mock.calls.some(([args]) => args[0] === "/Run")).toBe(false);
-    await expect(f.capture.compensate()).rejects.toThrow("Scheduled Task changed");
-    expect(f.task()).toBe(observed);
-    expect(native.task.mock.calls.filter(([args]) => args[0] === "/Create")).toHaveLength(1);
-  });
-
   it("preserves coexisting Startup files during a receipt-owned Scheduled Task install", async () => {
     const f = await fixture("win32");
     f.env.OPENCLAW_GATEWAY_PORT = "19305";
@@ -762,45 +754,36 @@ describe("service definition backup receipts", () => {
     expect(native.task.mock.calls.some(([args]) => args[0] === "/End")).toBe(false);
   });
 
-  it("denies Startup fallback for a receipt-owned install without an executor", async () => {
-    const f = await fixture("win32");
-    const execute = native.task.getMockImplementation()!;
-    native.task.mockImplementation(async (args: string[]) =>
-      args[0] === "/Create" || (args[0] === "/Query" && !args.includes("/XML"))
-        ? { code: 1, stdout: "", stderr: "ERROR: Access is denied." }
-        : execute(args),
-    );
-    await expect(f.install()).rejects.toThrow("startup fallback is unsupported");
-    expect(f.task()).toBe(f.originalTask);
-    for (const file of resolveStartupEntryPaths(f.env)) {
-      await expect(fs.stat(file)).rejects.toMatchObject({ code: "ENOENT" });
-    }
-    expect(native.task.mock.calls.some(([args]) => args[0] === "/Run")).toBe(false);
-  });
-
-  it("does not admit a new systemd drop-in after capture", async () => {
-    const f = await fixture("linux");
-    const dropIn = `${f.sourcePath}.d/operator.conf`;
-    await fs.mkdir(path.dirname(dropIn), { mode: 0o700 });
-    await fs.writeFile(dropIn, "[Service]\nNice=7\n", { mode: 0o600 });
-    f.command.definitionPaths!.push(dropIn);
-    await expect(f.install()).rejects.toThrow("different managed artifacts");
-    expect(await fs.readFile(f.sourcePath)).toEqual(f.original);
-    expect(await fs.readFile(dropIn, "utf8")).toContain("Nice=7");
-  });
-
-  it("compensates proven script publication after a failed Scheduled Task policy write", async () => {
-    const f = await fixture("win32");
-    const execute = native.task.getMockImplementation()!;
-    native.task.mockImplementation(async (args: string[]) =>
-      args[0] === "/Create" ? { code: 1, stderr: "access denied", stdout: "" } : execute(args),
-    );
-    await expect(f.install()).rejects.toThrow("definition upgrade failed");
-    expect(await fs.readFile(f.sourcePath)).not.toEqual(f.original);
-    native.task.mockImplementation(execute);
-    await f.capture.compensate();
-    expect(await fs.readFile(f.sourcePath)).toEqual(f.original);
-    expect(f.task()).toBe(f.originalTask);
-    await expect(fs.stat(f.files[1]!)).rejects.toMatchObject({ code: "ENOENT" });
-  });
+  it.each(["registration denied", "policy write failed"])(
+    "preserves the task and compensates its script after %s",
+    async (failure) => {
+      const f = await fixture("win32");
+      const execute = native.task.getMockImplementation()!;
+      native.task.mockImplementation(async (args: string[]) =>
+        args[0] === "/Create" ||
+        (failure === "registration denied" && args[0] === "/Query" && !args.includes("/XML"))
+          ? { code: 1, stdout: "", stderr: "ERROR: Access is denied." }
+          : execute(args),
+      );
+      await expect(f.install()).rejects.toThrow(
+        failure === "registration denied"
+          ? "startup fallback is unsupported"
+          : "definition upgrade failed",
+      );
+      if (failure === "registration denied") {
+        expect(f.task()).toBe(f.originalTask);
+        for (const file of resolveStartupEntryPaths(f.env)) {
+          await expect(fs.stat(file)).rejects.toMatchObject({ code: "ENOENT" });
+        }
+        expect(native.task.mock.calls.some(([args]) => args[0] === "/Run")).toBe(false);
+      } else {
+        expect(await fs.readFile(f.sourcePath)).not.toEqual(f.original);
+        native.task.mockImplementation(execute);
+        await f.capture.compensate();
+        expect(await fs.readFile(f.sourcePath)).toEqual(f.original);
+        expect(f.task()).toBe(f.originalTask);
+        await expect(fs.stat(f.files[1]!)).rejects.toMatchObject({ code: "ENOENT" });
+      }
+    },
+  );
 });

@@ -65,6 +65,7 @@ import * as archiveWorker from "./session-accessor.sqlite-archive.js";
 import type { SqliteSessionReclamationDiagnostics } from "./session-accessor.sqlite-contract.js";
 import { loadSessionEntryReadOnly } from "./session-accessor.sqlite-entry.js";
 import { withWorkerSqliteIntegrityCounter } from "./session-accessor.sqlite-integrity-counter.test-support.js";
+import type { SqliteSessionReclamationPlan } from "./session-accessor.sqlite-lifecycle-types.js";
 import {
   createFixture,
   createNativeReclamationSource,
@@ -355,13 +356,14 @@ test.each(["directory discovery", "Gateway send", "durable completion"] as const
 test("retained reclamation operations share the first full scan until the Gateway owner invalidates it", async () => {
   const { options, database, scopes } = createFixture(["parent", "child"]);
   const databaseOptions = { ...options, path: database.path };
-  const plan = reclamation.createHistoryEvictionReclamationPlan({
-    databaseOptions,
+  const plan = {
+    kind: "history-eviction",
+    databaseOptions: reclamation.resolveSessionReclamationDatabaseOptions(databaseOptions),
     diskBudget: {},
     materializedPlans: [],
-    protectedSessionIds: new Set(scopes.map((scope) => scope.sessionId)),
+    protectedSessionIds: [...new Set(scopes.map((scope) => scope.sessionId))],
     sessionId: "already-removed-history",
-  });
+  } satisfies SqliteSessionReclamationPlan;
   for (const scope of scopes) {
     expect(appendTranscriptEventSync(scope, { type: "integrity-proof-survivor" })).toEqual({
       ok: true,

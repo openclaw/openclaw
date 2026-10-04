@@ -2,6 +2,7 @@ import fs from "node:fs";
 import type { Worker } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { sessionChanges, type SessionRowChange } from "../../sessions/session-row-changes.js";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -123,9 +124,21 @@ describe("session sharing store", () => {
         sessionKey: "agent:main:main",
       };
       await upsertSessionEntryCore(scope, { sessionId: "session-main", updatedAt: 1 });
-      await expect((await maintenance.promise).raw).resolves.toMatchObject({
-        kind: "maintenance-plan",
-      });
+      expect(isOpenClawAgentDatabaseOpen(resolveOpenClawAgentSqlitePath(scope))).toBe(false);
+      const sql = observeHostDataSql();
+      try {
+        await expect((await maintenance.promise).raw).resolves.toMatchObject({
+          kind: "maintenance-plan",
+        });
+        expect(
+          sql.queries.filter((query) =>
+            /session_nodes|session_entry_snapshots|\bCOMMIT\b|\bBEGIN IMMEDIATE\b/i.test(query),
+          ),
+        ).toEqual([]);
+      } finally {
+        sql.restore();
+      }
+      expect(isOpenClawAgentDatabaseOpen(resolveOpenClawAgentSqlitePath(scope))).toBe(false);
       await expect(
         reclamation.runSqliteSessionReclamation({
           forceInProcess: false,
@@ -228,6 +241,7 @@ describe("session sharing store", () => {
       addSessionMember(scope, { identityId: "guest", addedBy: "owner", addedAt: 2 });
       const databasePath = resolveOpenClawAgentSqlitePath({ agentId: scope.agentId, env });
       const missingPath = resolveOpenClawAgentSqlitePath({ agentId: missingScope.agentId, env });
+      await closeOpenClawAgentDatabasesAsync();
       closeOpenClawAgentDatabasesForTest();
 
       expect(listSessionMembers(scope)).toEqual([

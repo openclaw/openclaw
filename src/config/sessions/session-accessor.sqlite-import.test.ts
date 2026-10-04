@@ -190,7 +190,7 @@ it("refuses imports into archived history without replacing its owner or saved b
     await expect(
       runSessionColdStorageMaintenance({
         config: {
-          agents: { list: [{ id: "main" }] },
+          agents: { entries: { main: {} } },
           session: {
             store: database.path,
             maintenance: { coldStorage: { enabled: true, afterDays: 30 } },

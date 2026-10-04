@@ -562,9 +562,14 @@ describe("openclaw.chat", () => {
     },
   );
 
-  it.each(["success", "task error", "response error"])(
-    "keeps admitted setup on the gateway lane without relabeling %s as non-admission",
-    async (outcome) => {
+  it.each([
+    { outcome: "success", modelTarget: undefined },
+    { outcome: "task error", modelTarget: undefined },
+    { outcome: "response error", modelTarget: undefined },
+    { outcome: "success", modelTarget: "utility" as const },
+  ])(
+    "keeps admitted $modelTarget setup on the gateway lane without relabeling $outcome as non-admission",
+    async ({ outcome, modelTarget }) => {
       const failure = new Error("admitted operation failed");
       const started = createDeferred();
       const release = createDeferred();
@@ -589,6 +594,7 @@ describe("openclaw.chat", () => {
         params: {
           kind: "api-key",
           agentId: "research",
+          ...(modelTarget ? { modelTarget } : {}),
           modelRef: "openai/gpt-5.5",
           authChoice: "openai-api-key",
           apiKey: "test-key",
@@ -615,6 +621,7 @@ describe("openclaw.chat", () => {
       expect(setupInferenceMocks.activateSetupInference).toHaveBeenCalledWith({
         kind: "api-key",
         agentId: "research",
+        ...(modelTarget ? { modelTarget } : {}),
         modelRef: "openai/gpt-5.5",
         authChoice: "openai-api-key",
         apiKey: "test-key",

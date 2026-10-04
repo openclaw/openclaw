@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
+import { bindSessionEntryPublicationSource } from "./session-accessor.sqlite-entry-cache-publication.js";
 import { publishSessionEntryCacheInvalidation } from "./session-accessor.sqlite-entry-cache.js";
 import { assignSessionOwner } from "./session-accessor.sqlite-owner.js";
 import { runSessionCollaborationWrite } from "./session-sharing-store.async.js";
@@ -34,7 +35,9 @@ export function assignSessionOwnerInWorker(
             { sessionKey: location.sessionKey, facts: result.facts },
           );
         } else {
-          sessionChanges.emit({ ...location, factsInvalidated: true });
+          sessionChanges.emit(
+            bindSessionEntryPublicationSource({ ...location, factsInvalidated: true }, database),
+          );
         }
       }
       return result.value;

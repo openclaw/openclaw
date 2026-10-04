@@ -545,7 +545,7 @@ describe("abortChatRunById", () => {
   ]) {
     it(testCase.name, () => {
       const ops = createOps({ runId: testCase.runId, entry: testCase.createEntry() });
-      ops.getRuntimeConfig = () => ({ agents: { list: [{ id: "main", default: true }] } });
+      ops.getRuntimeConfig = () => ({ agents: { entries: { main: {} } } });
 
       const result = testCase.abort(ops, { runId: testCase.runId, sessionKey: "global" });
 
@@ -655,7 +655,7 @@ describe("abortChatRunsForProvider", () => {
       authProviderId: "openrouter",
     });
     const result = abortChatRunsForProvider(ops, {
-      cfg: { agents: { list: [{ id: "main" }, { id: "writer" }] } },
+      cfg: { agents: { entries: { main: {}, writer: {} } } },
       providerId: "openrouter",
       stopReason: "auth-revoked",
     });
@@ -683,7 +683,7 @@ describe("abortChatRunsForProvider", () => {
     ops.chatAbortControllers.set("run-main", mainEntry);
 
     const result = abortChatRunsForProvider(ops, {
-      cfg: { agents: { list: [{ id: "main" }, { id: "writer" }] } },
+      cfg: { agents: { entries: { main: {}, writer: {} } } },
       providerId: "openrouter",
       agentId: "writer",
       stopReason: "auth-revoked",

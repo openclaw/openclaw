@@ -53,7 +53,6 @@ export type {
   LegacyQueuedDeliveryPreparation,
   QueuedDelivery,
   QueuedReplyPayloadSendingHook,
-  QueuedRenderedMessageBatchPlan,
 } from "./delivery-queue-types.js";
 
 const queuedDeliveryPayloads = (entry: QueuedDelivery) =>

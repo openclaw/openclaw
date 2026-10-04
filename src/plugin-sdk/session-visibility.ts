@@ -127,23 +127,6 @@ async function resolveScopedSessionAccessAsync(
 /** Minimal session row metadata needed to evaluate ownership and cross-agent access. */
 export type SessionVisibilityRow = SessionVisibilityDecisionRow;
 
-/** Public compatibility wrapper; direct guards use the richer private result. */
-export async function listSpawnedSessionKeys(params: {
-  requesterSessionKey: string;
-  limit?: number;
-  callGateway?: GatewayCaller;
-}): Promise<Set<string>> {
-  const result = await listSpawnedSessionKeysWithResult(params);
-  if (!result.ok) {
-    logSessionOwnershipLookupFailure({
-      requesterSessionKey: params.requesterSessionKey,
-      failure: result.error,
-    });
-    return new Set();
-  }
-  return result.value;
-}
-
 /** Resolve configured session-tool visibility, defaulting invalid or missing values to all. */
 export function resolveSessionToolsVisibility(cfg: OpenClawConfig): SessionToolsVisibility {
   const value = normalizeLowercaseStringOrEmpty(cfg.tools?.sessions?.visibility);

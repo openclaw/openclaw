@@ -3,7 +3,10 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createAssistantMessageEventStream, type Context } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { installRuntimeContextMessageForPrompt } from "../../agents/embedded-agent-runner/run/attempt-llm-boundary.js";
+import {
+  installRuntimeContextMessageForPrompt,
+  normalizeMessagesForLlmBoundary,
+} from "../../agents/embedded-agent-runner/run/attempt-llm-boundary.js";
 import { steerActiveSessionWithOptionalDeliveryWait } from "../../agents/embedded-agent-runner/run/attempt-queue-message.js";
 import { buildRuntimeContextCustomMessage } from "../../agents/embedded-agent-runner/run/runtime-context-prompt.js";
 import type { CurrentInboundPromptContext } from "../../agents/internal-runtime-context.js";
@@ -321,6 +324,13 @@ describe("steering input custody", () => {
         );
         guardSessionManager(sessionManager, { ...fixture.scope, runId: "original-backing-run" });
         const { session } = await createTestSession({ sessionManager });
+        const convertToLlm = session.agent.convertToLlm.bind(session.agent);
+        session.agent.convertToLlm = (messages) =>
+          convertToLlm(
+            normalizeMessagesForLlmBoundary(messages, {
+              sessionVersion: sessionManager.getHeader()?.version,
+            }),
+          );
         const providerStarted = createDeferred();
         const provider = holdAssistantResponse("Original work");
         streamMocks.streamSimple
@@ -497,13 +507,17 @@ describe("steering input custody", () => {
           expect(streamMocks.streamSimple).toHaveBeenCalledTimes(2);
           if (acrossProfiles) {
             const modelContext = streamMocks.streamSimple.mock.calls[1]![1] as Context;
-            const steeredUser = modelContext.messages.findLast(
-              (message) => message.role === "user",
+            const steeredUserIndex = modelContext.messages.findLastIndex(
+              (message) => message.role === "user" && !Reflect.get(message, "runtimeContext"),
             );
+            const steeredUser = modelContext.messages[steeredUserIndex];
+            const runtimeContext = modelContext.messages[steeredUserIndex - 1];
             const userText = JSON.stringify(steeredUser?.content);
-            expect(userText).toContain("requester_profile");
-            expect(userText).toContain(incomingProfile.id);
-            expect(userText).not.toContain(profile.id);
+            const runtimeText = JSON.stringify(runtimeContext?.content);
+            expect(runtimeText).toContain("requester_profile");
+            expect(runtimeText).toContain(incomingProfile.id);
+            expect(runtimeText).not.toContain(profile.id);
+            expect(userText).not.toContain("requester_profile");
           }
         } else if (queued) {
           expect(input).toMatchObject({ message: { content: fixture.params.message } });

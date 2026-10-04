@@ -13,6 +13,7 @@ import {
 } from "../../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import { callGateway } from "../../../gateway/call.js";
+import type { ChatAbortControllerEntry } from "../../../gateway/chat-abort.types.js";
 import { getActiveGatewayRootWorkCount } from "../../../process/gateway-work-admission.js";
 import { closeOpenClawStateDatabaseAsync } from "../../../state/openclaw-state-db.js";
 import { createAgentsWaitTool } from "../../tools/agents-wait-tool.js";
@@ -138,7 +139,11 @@ describe("subagent registry persistence", () => {
     await resetSubagentRegistryForTests({ persist: false });
     await initSubagentRegistry();
     const recoveryRuntime = createSubagentPersistenceRuntime(callGateway);
-    const gateway = { recoveryRuntime, resolveGatewayContext: () => gateway as never };
+    const gateway = {
+      recoveryRuntime,
+      chatAbortControllers: new Map<string, ChatAbortControllerEntry>(),
+      resolveGatewayContext: () => gateway as never,
+    };
     await activateSubagentRegistry(() => gateway as never);
   };
 

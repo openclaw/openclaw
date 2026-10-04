@@ -78,7 +78,7 @@ export function loadSubagentSessionEntry(params: {
     agentId,
     storePath,
     sessionKey: key,
-    clone: false,
+    projection: "list",
   });
 }
 
@@ -206,7 +206,7 @@ async function withSubagentSessionEntry<T>(
   const cfg = params.cfg ?? getRuntimeConfig();
   const { agentId, storePath } = resolveSubagentChildSessionOwner(params, cfg);
   return withSessionEntryReadOnlyInWorker(
-    { agentId, storePath, sessionKey: params.childSessionKey },
+    { agentId, storePath, sessionKey: params.childSessionKey, projection: "list" },
     () => params.assertCurrent?.(),
     async (read) => {
       if (!read.ok) {
@@ -219,6 +219,7 @@ async function withSubagentSessionEntry<T>(
 
 export async function resolveSubagentSessionStartedAt(params: {
   childSessionKey: string;
+  childAgentId?: string;
   notBeforeMs?: number;
   cfg?: OpenClawConfig;
   assertCurrent?: () => void;

@@ -34,6 +34,10 @@ import {
 import { readActiveTranscriptEntryAnchorInTransaction } from "./session-accessor.sqlite-transcript-anchor.js";
 import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import { normalizeSessionContextEntryBoundaries } from "./session-entry-navigation.js";
+import type {
+  SessionModelContextLimits,
+  SessionTranscriptModelContext,
+} from "./session-history-read.types.js";
 import { projectModelContextEventSql } from "./session-model-context-projection.js";
 import {
   resolveSqliteSessionTranscriptReadFence,
@@ -53,12 +57,7 @@ import {
 } from "./transcript-tree.js";
 
 type ContextEntry = SessionTreeEntry & { seq: number };
-export type SessionModelContextLimits = {
-  maxBytes: number;
-  maxEvents: number;
-  /** Detached model views may omit result bodies; evidence and fork readers remain strict. */
-  toolResultOverflow?: "omit";
-};
+export type { SessionModelContextLimits } from "./session-history-read.types.js";
 type ModelContextRequest = {
   entry: ContextEntry;
   omitCheckpoint: boolean;
@@ -322,10 +321,7 @@ export function readSessionTranscriptModelContext(
   scope: SessionTranscriptReadScope,
   through?: TranscriptEntryAnchor,
   limits?: SessionModelContextLimits,
-): {
-  events: TranscriptEvent[];
-  version?: SessionTranscriptContextVersion;
-} {
+): SessionTranscriptModelContext {
   if (
     limits &&
     (!Number.isSafeInteger(limits.maxBytes) ||

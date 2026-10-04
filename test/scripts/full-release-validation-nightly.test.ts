@@ -60,7 +60,7 @@ describe("nightly Full Release Validation", () => {
     },
   );
 
-  it("routes through the SHA-pinned helper instead of raw-dispatching mutable main", () => {
+  it("pins candidate, tooling and qualification inputs through the SHA-pinned helper", () => {
     // Full Release Validation refuses child dispatch once its workflow ref moves; the
     // helper's immutable release-ci/* transport ref is the only supported route.
     const text = readTrackedText(nightlyPath);
@@ -80,9 +80,6 @@ describe("nightly Full Release Validation", () => {
       GH_TOKEN: "${{ github.token }}",
       VALIDATION_SHA: "${{ github.sha }}",
     });
-  });
-
-  it("pins one main SHA as candidate and tooling with declared main-qualification inputs", () => {
     const sha = "a".repeat(40);
     const args = parseArgs(helperArgv(sha));
     expect(args).toMatchObject({

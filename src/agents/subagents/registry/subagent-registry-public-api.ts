@@ -22,7 +22,7 @@ import {
 } from "./subagent-registry-queries.js";
 import type { PreparedSubagentRunsRead } from "./subagent-registry-read-snapshot.js";
 import { listUnsettledRequesterChildrenInRuns } from "./subagent-registry-requester-yield.js";
-import { markSubagentMessageWaitInRuns } from "./subagent-registry-run-pause.js";
+import { claimSubagentYieldInRuns } from "./subagent-registry-run-pause.js";
 import {
   getSubagentRunsSnapshotForRead,
   prepareSubagentRunsSnapshotForRunIds,
@@ -342,9 +342,12 @@ export function createSubagentRegistryPublicApi(config: {
   }
 
   return {
-    markSubagentMessageWait: async (params: {
+    claimSubagentYield: async (params: {
       runId: string;
       sessionKey: string;
+      agentId: string;
+      waitForMessage: boolean;
+      hasPendingWork: () => boolean;
       acknowledgment?: string;
     }) => {
       const stateContext = captureOpenClawStateWorkerContext();
@@ -355,7 +358,7 @@ export function createSubagentRegistryPublicApi(config: {
       };
       assertCurrent();
       await restoreOnce(stateContext);
-      return await markSubagentMessageWaitInRuns({
+      return await claimSubagentYieldInRuns({
         ...params,
         runs,
         context: stateContext,

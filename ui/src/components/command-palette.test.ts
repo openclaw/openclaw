@@ -820,6 +820,7 @@ describe("CommandPalette search", () => {
     await vi.advanceTimersByTimeAsync(200);
     await palette.updateComplete;
     expect(list).toHaveBeenCalledExactlyOnceWith({
+      source: "command-palette",
       search: "planning",
       limit: 10,
       includeGlobal: false,

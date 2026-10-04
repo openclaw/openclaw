@@ -1,5 +1,32 @@
 import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { AgentDefaultsConfig, AgentModelEntryConfig } from "./types.agent-defaults.js";
+import type { AgentConfig, AgentEntryConfig, AgentsConfig } from "./types.agents.js";
+import type { OpenClawConfig } from "./types.openclaw.js";
+
+/** Retired entry fields read only by Doctor, pre-admission migrations, and raw-input compatibility. */
+type RetiredAgentEntryFields = {
+  /** Doctor materializes explicit surface owners before removing this marker. */
+  default?: boolean;
+  /** Doctor requires an intermediate upgrade; current policy is per-model `models[ref].agentRuntime`. */
+  agentRuntime?: AgentModelEntryConfig["agentRuntime"];
+  /** Doctor repairs supported legacy selections; current shared policy is `agents.defaults.compaction`. */
+  compaction?: AgentDefaultsConfig["compaction"];
+};
+
+export type LegacyAgentListEntry = AgentConfig & RetiredAgentEntryFields;
+type LegacyAgentEntryConfig = AgentEntryConfig & RetiredAgentEntryFields;
+
+/**
+ * Persisted pre-Doctor config: canonical fields plus the retired `agents.list` roster and
+ * retired entry fields. Validation rejects them, so runtime config never has this shape.
+ */
+export type OpenClawConfigWithLegacyRoster = Omit<OpenClawConfig, "agents"> & {
+  agents?: Omit<AgentsConfig, "entries"> & {
+    entries?: Record<string, LegacyAgentEntryConfig>;
+    list?: LegacyAgentListEntry[];
+  };
+};
 
 /** Keeps Doctor's allocated identities tied to their original authored list positions. */
 export function projectLegacyAgentRosterEntries(list: unknown[]) {

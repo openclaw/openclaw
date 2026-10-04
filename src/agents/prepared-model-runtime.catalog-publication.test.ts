@@ -73,7 +73,7 @@ function catalog(entry: ModelCatalogEntry | undefined = model): ModelCatalogSnap
 async function setup(preparedMap = false, profile?: AuthProfileCredential) {
   const config: OpenClawConfig = {
     agents: {
-      list: [{ id: "default", default: true }],
+      entries: { default: {} },
       defaults: { model: "custom/synthetic-model" },
     },
   };

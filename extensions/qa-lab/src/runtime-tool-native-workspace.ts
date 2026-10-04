@@ -10,6 +10,7 @@ import {
   type QaNativeWorkspaceBehavior,
 } from "./native-workspace-behavior.js";
 import { isWorkspaceBoundaryFailureToolOutput } from "./runtime-tool-evidence.js";
+import type { runAgentPrompt } from "./suite-runtime-agent-process.js";
 import type { QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
 
 type NativeToolOutput = { hardFailure?: boolean; text: string };
@@ -26,16 +27,7 @@ type NativeWorkspaceFixtureParams = {
   required: boolean;
   happySessionKey: string;
   failureSessionKey: string;
-  runAgentPrompt: (
-    env: Pick<QaSuiteRuntimeEnv, "gateway" | "transport">,
-    params: {
-      sessionKey: string;
-      message: string;
-      timeoutMs?: number;
-      transcriptToolName?: string;
-      requireSuccessfulTranscriptToolResult?: boolean;
-    },
-  ) => Promise<unknown>;
+  runAgentPrompt: (...args: Parameters<typeof runAgentPrompt>) => Promise<unknown>;
   readEvidence: (sessionKey: string, toolName: string) => Promise<NativeToolEvidence>;
   fixtureError: (error: unknown) => Error;
   failFixture: (details: string) => never;

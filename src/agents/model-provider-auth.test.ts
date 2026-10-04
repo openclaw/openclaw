@@ -31,7 +31,6 @@ const modelAuthMocks = vi.hoisted(() => ({
       authEvidenceMap: {},
     },
     syntheticAuthProviderRefs: [],
-    syntheticAuthProviderRefsComplete: true,
   })),
   prepareRuntimeAvailableProviderAuth:
     vi.fn<typeof import("./model-auth-runtime.js").prepareRuntimeAvailableProviderAuth>(),
@@ -47,7 +46,6 @@ const modelAuthAvailabilityMocks = vi.hoisted(() => {
       evaluateModelAuth,
       evaluateRuntimeModelAuth: evaluateModelAuth,
       resolveProviderAuthAvailability: vi.fn(() => false),
-      hasSyntheticAuth: vi.fn(() => false),
     })),
   };
 });

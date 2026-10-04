@@ -148,7 +148,7 @@ it("holds an existing unconfigured database before importing legacy sessions wit
       { env: state.env },
     );
     const report = await runDoctorSessionSqlite({
-      cfg: { agents: { entries: { main: { default: true } } } },
+      cfg: { agents: { entries: { main: {} } } },
       env: state.env,
       agent: "retained",
       mode: "import",

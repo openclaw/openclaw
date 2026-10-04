@@ -7,6 +7,8 @@ import {
 import { AgentHarnessPreflightError } from "../../agents/harness/errors.js";
 import { resolveReplyCompletion } from "../../agents/reply-completion.js";
 import { WorkerTaskError } from "../../infra/worker-task-pool.js";
+import { SkillResourceDeliveryLimitError } from "../../skills/runtime/resource-delivery-error.js";
+import { SkillLibraryError } from "../../skills/skill-library-error.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import {
@@ -48,6 +50,41 @@ describe("buildEmptyInteractiveReplyPayload", () => {
 });
 
 describe("buildExternalRunFailureReply", () => {
+  it.each(["direct", "wrapped"])(
+    "keeps %s skill delivery-limit guidance visible without diagnostics",
+    (kind) => {
+      const limit = new SkillResourceDeliveryLimitError();
+      const error =
+        kind === "direct" ? limit : new Error("private-diagnostic-canary", { cause: limit });
+      const reply = buildExternalRunFailureReply({ message: error.message, error });
+      expect(reply).toEqual({
+        text: "⚠️ Selected skill resources exceed the 8 MiB delivery limit. Select fewer skills, then try again.",
+        isGenericRunnerFailure: false,
+      });
+      expect(
+        buildKnownAgentRunFailureReplyPayload({
+          err: error,
+          sessionCtx: { Provider: "webchat", Surface: "webchat", ChatType: "direct" },
+          resolvedVerboseLevel: "off",
+        }),
+      ).toMatchObject({ text: reply.text, isError: true });
+    },
+  );
+
+  it.each([
+    new Error(new SkillResourceDeliveryLimitError().message),
+    Object.assign(new Error("private-diagnostic-canary"), {
+      name: "SkillResourceDeliveryLimitError",
+    }),
+    new SkillLibraryError("LIMIT", "private-skill-path-canary"),
+    new SkillLibraryError("INVALID_BUNDLE", "private-skill-path-canary"),
+  ])("does not expose untyped or unrelated skill failures: %s", (error) => {
+    expect(buildExternalRunFailureReply({ message: error.message, error })).toEqual({
+      text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+      isGenericRunnerFailure: true,
+    });
+  });
+
   it("does not expose a foreign error's userMessage property", () => {
     const error = Object.assign(new Error("private-diagnostic-canary"), {
       userMessage: "untrusted-public-canary",
@@ -93,6 +130,18 @@ describe("buildExternalRunFailureReply", () => {
       });
     },
   );
+
+  it("retains the actual provider rejection when verbose output is off", () => {
+    const message = "The AI service could not accept this request";
+    const error = new FailoverError(message, {
+      reason: "format",
+      rawError: "Invalid service_tier argument",
+    });
+    expect(buildExternalRunFailureReply({ message, error })).toEqual({
+      text: String.raw`LLM request rejected: Invalid service\_tier argument`,
+      isGenericRunnerFailure: false,
+    });
+  });
 
   it("uses preserved format diagnostics without exposing raw details", () => {
     const message = "safe summary";

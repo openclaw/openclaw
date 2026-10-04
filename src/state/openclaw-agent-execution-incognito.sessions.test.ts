@@ -3,11 +3,15 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import { afterAll, beforeAll, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createSubagentControllerRead } from "../agents/subagents/registry/subagent-controller-read.js";
 import type { IncognitoSessionAuthority } from "../config/sessions/session-incognito-contract.js";
+import { createBoardWidgetApprovalResolver } from "../gateway/board-widget-approval.js";
+import * as execApprovalsStore from "../infra/exec-approvals-store.js";
 import type { SqliteWorkerOperations, SqliteWorkerStore } from "../infra/sqlite-worker-contract.js";
 import type { SqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import * as workerStore from "../infra/sqlite-worker-store.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { getOpenClawAgentDatabaseIfOpen } from "./openclaw-agent-db.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
 import type { IncognitoAgentDatabaseExecution } from "./openclaw-agent-execution-incognito.js";
@@ -17,6 +21,11 @@ const tempDirs = useAutoCleanupTempDirTracker(afterAll);
 const references = new Set<IncognitoAgentDatabaseExecution>();
 const authority: IncognitoSessionAuthority = { assertCurrent() {} };
 const DAY_MS = 24 * 60 * 60_000;
+const reviewWidget = vi.hoisted(() => vi.fn());
+// mock-isolation: Keep model/provider startup outside this SQLite ownership fixture.
+vi.mock("../agents/exec-auto-reviewer.js", () => ({
+  createModelExecAutoReviewer: () => reviewWidget,
+}));
 let env: NodeJS.ProcessEnv;
 let actor: IncognitoAgentDatabaseExecution;
 
@@ -166,6 +175,116 @@ it("withholds staged sharing from grants and publishes detached facts before its
   );
   created.claim.assertCurrent();
 });
+
+it("authorizes controller policy from transaction facts while its actor projection is pending", async () => {
+  const sessionKey = "agent:main:subagent:incognito-controller";
+  await actor.sessions.create(authority, {
+    sessionKey,
+    entry: { ...entry("controller"), spawnDepth: 1 },
+  });
+  const cfg = { agents: { entries: { main: {} }, defaults: { subagents: { maxSpawnDepth: 2 } } } };
+  const controller = createSubagentControllerRead({
+    config: () => cfg,
+    agentSessionKey: sessionKey,
+    agentId: "main",
+    assertCurrent() {},
+    incognito: () => actor,
+  });
+  const stages: string[] = [];
+  const sql = observeMainThreadSql();
+  try {
+    await controller.prepare();
+    expect(controller.read().controlScope).toBe("children");
+    await actor.sessions.sideData(
+      {
+        assertCurrent: controller.assertCurrent,
+        authorize(stage, facts) {
+          stages.push(stage);
+          expect(() => controller.read()).toThrow("pending or unavailable");
+          expect(controller.read([facts]).controlScope).toBe("children");
+          expect(() =>
+            controller.read([
+              { ...facts, identity: { ...facts.identity, incarnation: "foreign" } },
+            ]),
+          ).toThrow("Session access facts are unavailable");
+          cfg.agents.defaults.subagents.maxSpawnDepth = 1;
+          expect(controller.read([facts]).controlScope).toBe("none");
+          cfg.agents.defaults.subagents.maxSpawnDepth = 2;
+        },
+      },
+      {
+        type: "session.sharing.add",
+        input: { sessionKey, params: { identityId: "viewer", addedBy: "owner" } },
+      },
+    );
+    expect(stages).toEqual(["transaction", "commit"]);
+    expect(actor.sessions.readSharing(sessionKey)?.membership.has("viewer")).toBe(true);
+    controller.read();
+    sql.expectIdle();
+  } finally {
+    sql.restore();
+    controller.release();
+  }
+});
+
+it.each(["policy", "reviewer"] as const)(
+  "refuses a board assessment when actor facts change during its %s wait",
+  async (wait) => {
+    const sessionKey = key(`board-${wait}`);
+    const read = await actor.sessions.create(authority, {
+      sessionKey,
+      entry: { ...entry(`board-${wait}`), permissionMode: "workspace" },
+    });
+    const prepared = {
+      agentId: "main",
+      ...read,
+      snapshot: actor.sessions.captureSnapshot(sessionKey),
+    };
+    const entered = createDeferredCore();
+    const resume = createDeferredCore();
+    const policyRead = vi
+      .spyOn(execApprovalsStore, "readExecApprovalsPolicyReadOnlyAsync")
+      .mockImplementation(async () => {
+        if (wait === "policy") {
+          entered.resolve();
+          await resume.promise;
+        }
+        return { file: { version: 1 }, revision: "synthetic-policy" };
+      });
+    reviewWidget.mockImplementation(async () => {
+      entered.resolve();
+      await resume.promise;
+      return { decision: "allow-once", risk: "low", rationale: "synthetic widget" };
+    });
+    const sql = observeMainThreadSql();
+    try {
+      const result = createBoardWidgetApprovalResolver()({
+        cfg: { agents: { entries: { main: {} } }, tools: { exec: { mode: "auto" } } },
+        agentId: "main",
+        sessionKey,
+        name: "synthetic",
+        content: { kind: "html", html: "<p>synthetic</p>" },
+        declared: { tools: ["health"] },
+        incognitoSession: prepared,
+      });
+      const rejected = expect(result).rejects.toThrow("Incognito session snapshot changed");
+      await entered.promise;
+      await actor.sessions.sideData(authority, {
+        type: "session.sharing.add",
+        input: { sessionKey, params: { identityId: "viewer", addedBy: "owner" } },
+      });
+      prepared.claim.assertCurrent();
+      resume.resolve();
+      await rejected;
+      sql.expectIdle();
+    } finally {
+      resume.resolve();
+      sql.restore();
+      policyRead.mockRestore();
+      reviewWidget.mockReset();
+    }
+  },
+);
 
 it("serializes reads, creation, publication, and queued revocation in the actor FIFO", async () => {
   const borrower = await capture();

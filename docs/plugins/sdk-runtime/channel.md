@@ -55,6 +55,8 @@ Channel-specific runtime helpers, available when a channel plugin is loaded. Par
 
     Guarded fetch also accepts a synchronous `resolveDispatcherPolicy(url)` override, reevaluated for each redirect. An undefined result uses `dispatcherPolicy`, or direct routing when no default policy is supplied. Providers preserving operator-configured proxy routing can use `resolveEnvHttpProxyAgentOptions` and `matchesNoProxy` from `openclaw/plugin-sdk/fetch-runtime` to select each hop. The `trusted_explicit_proxy` mode permits HTTP, HTTPS, `socks:` and `socks5:` proxy URLs and delegates target DNS to the explicitly trusted proxy; proxy-host validation and target-host policy still apply. Direct hops keep DNS pinning. Strict mode rejects SOCKS proxies, and the separate trusted-env-proxy gate remains HTTP(S)-only.
 
+    When returning a guarded response for streaming, use `responseWithRelease(response, release)` from `openclaw/plugin-sdk/fetch-runtime` to retain request ownership until its body completes, fails, or is cancelled. Consume or cancel bodies explicitly for prompt release; garbage collection of abandoned wrappers provides only best-effort cleanup.
+
     `api.runtime.channel.mentions` is the shared inbound mention-policy surface for bundled channel plugins that use runtime injection:
 
     ```typescript

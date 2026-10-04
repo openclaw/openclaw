@@ -8,7 +8,6 @@ import {
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { hasProviderObservedTelegramThreadBinding } from "./message-cache-codec.js";
 import {
   resolveTelegramMessageCachePersistentScopeKey,
   type PersistedTelegramMessageCacheValue,
@@ -442,35 +441,23 @@ describe("telegram message cache", () => {
     expect(hydrated?.promptContextProjectionMarker).toBeUndefined();
   });
 
-  it("hydrates unversioned pre-projection rows without inferring provenance", async () => {
-    await store.register(key("9126"), {
-      sourceMessage: botMessage(9126, "Pre-projection state message"),
-      promptContextProjection: projection("must-not-be-inferred"),
-      threadBinding: { kind: "provider-observed-v1", threadId: "77" },
-      threadId: "77",
-    });
+  it.each([undefined, 2])(
+    "ignores unsupported cache version %s without rewriting it",
+    async (version) => {
+      const persisted = {
+        ...(version === undefined ? {} : { version }),
+        sourceMessage: botMessage(9126, "Pre-projection state message"),
+        promptContextProjection: projection("must-not-be-inferred"),
+        threadBinding: { kind: "provider-observed-v1", threadId: "77" },
+        threadId: "77",
+      };
+      await store.register(key("9126"), persisted);
 
-    resetCache();
-    const reloaded = await get(createTelegramMessageCache(), "9126");
-    expect(reloaded).toMatchObject({
-      body: "Pre-projection state message",
-      messageId: "9126",
-    });
-    expect(reloaded?.promptContextProjectionMarker).toBeUndefined();
-    expect(hasProviderObservedTelegramThreadBinding(reloaded, 77)).toBe(false);
-  });
-
-  it("rejects unknown future persisted cache versions", async () => {
-    await store.register(key("9127"), {
-      version: 2,
-      sourceMessage: message(9127, "Nora", {
-        text: "Future state message",
-      }),
-    });
-
-    const cache = createTelegramMessageCache();
-    expect(await get(cache, "9127")).toBeNull();
-  });
+      resetCache();
+      await expect(get(createTelegramMessageCache(), "9126")).resolves.toBeNull();
+      await expect(store.lookup(key("9126"))).resolves.toEqual(persisted);
+    },
+  );
 
   it("does not partially parse malformed persisted thread ids", async () => {
     const cache = createTelegramMessageCache();

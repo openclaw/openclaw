@@ -328,7 +328,7 @@ describe("Claw exec approvals removal", () => {
         expect(readAgentDeletionJournal("worker")).toMatchObject({ cleanupCompleted: false });
         const agentDir = join(home, ".openclaw", "agents", "worker", "agent");
         await withAgentDeletion("worker", async (begin) => {
-          const deletion = begin({
+          const deletion = await begin({
             agentId: "worker",
             agentDir,
             workspaceDir: join(home, "workspace-worker"),
@@ -347,7 +347,7 @@ describe("Claw exec approvals removal", () => {
             ).rejects.toThrow("database is still open in another process");
             expect(cleanup).not.toHaveBeenCalled();
           } finally {
-            deletion.rollback();
+            await deletion.rollback();
           }
         });
         await child.close();
@@ -377,7 +377,7 @@ describe("Claw exec approvals removal", () => {
       try {
         await child.ready;
         await withAgentDeletion("worker", async (begin) => {
-          const deletion = begin({
+          const deletion = await begin({
             agentId: "worker",
             agentDir,
             workspaceDir: join(home, "workspace-worker"),
@@ -391,7 +391,7 @@ describe("Claw exec approvals removal", () => {
           await child.close();
           const database = await deletion.runDatabaseCleanup(target, cleanup);
           expect(database.db.isOpen).toBe(false);
-          deletion.rollback();
+          await deletion.rollback();
         });
       } finally {
         await child.dispose();

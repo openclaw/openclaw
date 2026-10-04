@@ -178,7 +178,8 @@ async function prepareTriggerRuntime(
   params: Parameters<PrepareTriggerRuntime>[0],
   loadPluginRegistry: LoadTriggerPluginRegistry = loadAgentRuntimePluginRegistryHandle,
 ): Promise<PreparedTriggerRuntime> {
-  params.signal?.throwIfAborted();
+  const { signal: preparationSignal } = params;
+  preparationSignal?.throwIfAborted();
   const agentId = resolveTriggerAgentId(params.runtimeConfig, params.agentId);
   const selectedAgentConfig = resolveAgentConfig(params.runtimeConfig, agentId);
   const agentConfigOverride = params.agentId?.trim() ? selectedAgentConfig : undefined;
@@ -200,8 +201,9 @@ async function prepareTriggerRuntime(
     ensureBootstrapFiles: !agentDefaults.skipBootstrap,
     skipOptionalBootstrapFiles: agentDefaults.skipOptionalBootstrapFiles,
     provisioning: workspaceProvisioning,
+    guard: { assertHost: () => preparationSignal?.throwIfAborted() },
   });
-  params.signal?.throwIfAborted();
+  preparationSignal?.throwIfAborted();
   const workspaceDir = workspace.dir;
   const pluginRegistry = loadPluginRegistry({
     config,
@@ -222,7 +224,7 @@ async function prepareTriggerRuntime(
       sessionKey,
       workspaceDir,
     });
-    params.signal?.throwIfAborted();
+    preparationSignal?.throwIfAborted();
     const effectiveWorkspace =
       sandbox?.enabled && sandbox.workspaceAccess !== "rw" ? sandbox.workspaceDir : workspaceDir;
     const toolPlan = resolveEmbeddedAttemptToolConstructionPlan({

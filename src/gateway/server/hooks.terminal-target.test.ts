@@ -61,12 +61,14 @@ function payload(overrides: Partial<HookPayload> = {}): HookPayload {
   };
 }
 
-function globalConfig(defaultAgentId: "main" | "work", includeMain = true): OpenClawConfig {
+function globalConfig(systemAgentId: "main" | "work", includeMain = true): OpenClawConfig {
   return {
     agents: {
+      ownership: "explicit",
+      defaults: { systemAgent: { agentId: systemAgentId } },
       entries: {
-        ...(includeMain ? { main: { default: defaultAgentId === "main" } } : {}),
-        work: { default: defaultAgentId === "work" },
+        ...(includeMain ? { main: {} } : {}),
+        work: {},
       },
     },
     session: { scope: "global" },
@@ -137,7 +139,7 @@ describe("global hook terminal target resolution", () => {
     vi.restoreAllMocks();
   });
 
-  it("keeps the accepted agent when hooks are disabled and the default changes", async () => {
+  it("keeps the accepted agent when hooks are disabled and the system agent changes", async () => {
     const gate = await startGatedRun("success");
     loadConfigMock.mockReturnValue({
       ...globalConfig("work"),

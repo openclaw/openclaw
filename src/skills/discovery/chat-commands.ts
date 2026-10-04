@@ -129,18 +129,20 @@ export async function prepareBundledSkillCommandForWorkspace(
   );
 }
 
-function dedupeBySkillName(commands: SkillCommandSpec[]): SkillCommandSpec[] {
+function finalizeSkillCommands(commands: SkillCommandSpec[]): SkillCommandSpec[] {
   const seen = new Set<string>();
-  return commands.filter((cmd) => {
-    const key = normalizeOptionalLowercaseString(cmd.skillName);
-    if (key && seen.has(key)) {
-      return false;
-    }
-    if (key) {
-      seen.add(key);
-    }
-    return true;
-  });
+  return commands
+    .filter((cmd) => {
+      const key = normalizeOptionalLowercaseString(cmd.skillName);
+      if (key && seen.has(key)) {
+        return false;
+      }
+      if (key) {
+        seen.add(key);
+      }
+      return true;
+    })
+    .toSorted((left, right) => left.skillName.localeCompare(right.skillName, "en"));
 }
 
 type AgentSkillCommandParams = {
@@ -218,12 +220,6 @@ function appendSkillCommands(
     used.add(normalizeLowercaseStringOrEmpty(command.name));
     entries.push(command);
   }
-}
-
-function finalizeSkillCommands(entries: SkillCommandSpec[]) {
-  return dedupeBySkillName(entries).toSorted((left, right) =>
-    left.skillName.localeCompare(right.skillName, "en"),
-  );
 }
 
 /** Synchronous public SDK contract for native command consumers. */

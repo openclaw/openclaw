@@ -32,35 +32,26 @@ import { getUpdateRunAsync } from "./update-run-reader.js";
 import type { UpdateRunRecord } from "./update-run-record.js";
 
 type Authority = { assertOwned: () => void };
-const updateRecoveryBackupRefSchema = z
-  .object({
-    directory: z.string().min(1),
-    manifestPath: z.string().min(1),
-    manifestSha256: z.string().regex(/^[a-f0-9]{64}$/u),
-  })
-  .strict();
+const updateRecoveryBackupRefSchema = z.strictObject({
+  directory: z.string().min(1),
+  manifestPath: z.string().min(1),
+  manifestSha256: z.string().regex(/^[a-f0-9]{64}$/u),
+});
 
 type UpdateRecoveryBackupRef = z.infer<typeof updateRecoveryBackupRefSchema>;
 
-const sha256 = z.string().regex(/^[a-f0-9]{64}$/u);
-const updateRecoveryTerminalOutcomeSchema = z
-  .object({
-    status: z.enum(["restored", "committed"]),
-    error: z.string().max(4096).optional(),
-    manifestSha256: sha256,
-  })
-  .strict();
+const recordedOutcomeSchema = z.strictObject({
+  status: z.enum(["restored", "committed"]),
+  error: z.string().max(4096).optional(),
+  manifestSha256: z.string().regex(/^[a-f0-9]{64}$/u),
+});
 
 const updateRecoveryForwardResolutionSchema =
   updateRecoveryCaptureStateSchema.shape.forwardResolution.unwrap();
-const outcomeSchema = z
-  .object({
-    status: z.enum(["pending", "restored", "committed", "restore-failed"]),
-    error: z.string().optional(),
-  })
-  .strict();
-type Outcome = z.infer<typeof outcomeSchema>;
-const recordedOutcomeSchema = updateRecoveryTerminalOutcomeSchema;
+type Outcome = {
+  status: "pending" | "restored" | "committed" | "restore-failed";
+  error?: string;
+};
 
 async function statOrMissing(pathname: string) {
   try {
@@ -357,11 +348,7 @@ async function readBinding(ref: UpdateRecoveryBackupRef, authority: Authority) {
       ) {
         throw new Error("Forward recovery generation identity changed.");
       }
-      if (kind === "candidate") {
-        generations.candidateSha256 = sha256Hex(raw);
-      } else {
-        generations.preparedSha256 = sha256Hex(raw);
-      }
+      generations[`${kind}Sha256`] = sha256Hex(raw);
     }
     await pin.assertCurrent();
     authority.assertOwned();

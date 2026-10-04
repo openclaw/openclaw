@@ -13,6 +13,8 @@ final class RealtimeRelayDevice: @unchecked Sendable {
     let scheduled = RealtimeRelayTestSignal<Int>(timeoutSeconds: 5)
     let prepared = RealtimeRelayTestSignal<Void>(timeoutSeconds: 5)
     let stopped = RealtimeRelayTestSignal<Int>(timeoutSeconds: 5)
+    // Tests own gate release, with deferred cleanup on failure.
+    // A timeout would let the device resume before the stop under test.
     let prepareGate: DispatchSemaphore?
     let frameGate: DispatchSemaphore?
 
@@ -31,7 +33,7 @@ final class RealtimeRelayDevice: @unchecked Sendable {
 
     func prepare(_: Double) {
         self.prepared.send(())
-        if let prepareGate { _ = prepareGate.wait(timeout: .now() + 2) }
+        self.prepareGate?.wait()
     }
 
     func schedule(_ data: Data, _: Double, completion: @escaping @Sendable () -> Void) {
@@ -41,7 +43,7 @@ final class RealtimeRelayDevice: @unchecked Sendable {
             return self.storedFrames.count
         }
         self.scheduled.send(count)
-        if let frameGate { _ = frameGate.wait(timeout: .now() + 2) }
+        self.frameGate?.wait()
     }
 
     func stop() {

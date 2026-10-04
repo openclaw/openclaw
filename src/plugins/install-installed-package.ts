@@ -18,6 +18,7 @@ import {
   sourceFamilyForInstallPolicyKind,
   sourceFamilyForInstallPolicySource,
   validateOpenClawPackageInstallCompatibility,
+  type PluginInstallRuntime,
 } from "./install-shared.js";
 import {
   PLUGIN_INSTALL_ERROR_CODE,
@@ -43,7 +44,7 @@ type ValidatedPackagePlugin = {
 };
 
 export async function validatePackagePluginInstallSource(params: {
-  runtime: Awaited<ReturnType<typeof loadPluginInstallRuntime>>;
+  runtime: PluginInstallRuntime;
   packageDir: string;
   manifest?: PackageManifest;
   expectedPluginId?: string;
@@ -129,11 +130,7 @@ export async function validatePackagePluginInstallSource(params: {
     manifest,
   });
   if (!extensionsResult.ok) {
-    return {
-      ok: false,
-      error: extensionsResult.error,
-      code: extensionsResult.code,
-    };
+    return extensionsResult;
   }
   const extensions = extensionsResult.entries;
 
@@ -203,7 +200,7 @@ export async function validatePackagePluginInstallSource(params: {
 }
 
 export async function scanAndLinkInstalledPackage(params: {
-  runtime: Awaited<ReturnType<typeof loadPluginInstallRuntime>>;
+  runtime: PluginInstallRuntime;
   installedDir: string;
   additionalDependencyPackageDirs?: string[];
   dependencyScanRootDir?: string;
@@ -312,12 +309,8 @@ export async function installPluginFromInstalledPackageDir(
     return postInstallError;
   }
   const result = buildDirectoryInstallResult({
-    pluginId: validated.plugin.pluginId,
+    ...validated.plugin,
     targetDir: params.packageDir,
-    manifestName: validated.plugin.manifestName,
-    version: validated.plugin.version,
-    extensions: validated.plugin.extensions,
-    setup: validated.plugin.setup,
   });
   if (params.emitSuccessSecurityEvent !== false) {
     emitSuccessfulPluginInstallSecurityEvent(result, {

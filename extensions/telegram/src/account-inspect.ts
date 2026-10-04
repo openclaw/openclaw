@@ -62,9 +62,9 @@ function inspectTokenFile(
     };
   }
   return {
-    token: result.status === "available" ? result.value : "",
+    token: result.value,
     tokenSource: "tokenFile",
-    tokenStatus: result.status === "available" ? "available" : "configured_unavailable",
+    tokenStatus: "available",
   };
 }
 

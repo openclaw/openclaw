@@ -135,10 +135,10 @@ function mergeAdjacentStrings(inlines: StoryInline[]): StoryInline[] {
   return result;
 }
 
-export function createImageBlock(src: string, alt = "", height = 0, width = 0): StoryVerse {
+export function createImageBlock(src: string, alt = ""): StoryVerse {
   return {
     block: {
-      image: { src, height, width, alt },
+      image: { src, height: 0, width: 0, alt },
     },
   };
 }

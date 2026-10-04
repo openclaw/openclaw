@@ -224,7 +224,7 @@ export function hasAbortableSessionRun(host: SessionRunHost): boolean {
 }
 
 export function isChatStopCommand(text: string) {
-  return CHAT_STOP_COMMANDS.has(normalizeLowercaseStringOrEmpty(text.trim()));
+  return CHAT_STOP_COMMANDS.has(normalizeLowercaseStringOrEmpty(text));
 }
 
 type ChatAbortOptions = { preserveDraft?: boolean };
@@ -650,20 +650,10 @@ export function reconcileChatRunFromSessionRow(
   if (!host.chatRunId && host.chatStream == null) {
     return false;
   }
-  if (row.hasActiveRun === true) {
+  if (row.hasActiveRun === true || isSessionRunActive(row)) {
     return false;
   }
-  if (isSessionRunActive(row)) {
-    return false;
-  }
-  // Transcript snapshots can briefly lose the active-run projection while the
-  // persisted lifecycle is still running. Wait for a real terminal status so
-  // tool updates cannot flash an interrupted composer state mid-turn.
-  if (row.hasActiveRun !== false && row.status === "running") {
-    return false;
-  }
-  const terminalStatus = row.status !== undefined;
-  if (row.hasActiveRun !== false && !terminalStatus) {
+  if (row.hasActiveRun !== false && row.status === undefined) {
     return false;
   }
   const runId = host.chatRunId;

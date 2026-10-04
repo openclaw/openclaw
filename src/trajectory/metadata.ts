@@ -313,32 +313,10 @@ export function buildTrajectoryRunMetadata(
 export function buildTrajectoryArtifacts(
   params: BuildTrajectoryArtifactsParams,
 ): Record<string, unknown> {
+  const { status, ...artifacts } = params;
   return {
     capturedAt: new Date().toISOString(),
-    finalStatus: params.status,
-    aborted: params.aborted,
-    externalAbort: params.externalAbort,
-    timedOut: params.timedOut,
-    idleTimedOut: params.idleTimedOut,
-    timedOutDuringCompaction: params.timedOutDuringCompaction,
-    timedOutDuringToolExecution: params.timedOutDuringToolExecution,
-    timedOutByRunBudget: params.timedOutByRunBudget,
-    promptError: params.promptError,
-    promptErrorSource: params.promptErrorSource,
-    terminalError: params.terminalError,
-    usage: params.usage,
-    promptCache: params.promptCache,
-    compactionCount: params.compactionCount,
-    assistantTexts: params.assistantTexts,
-    stopReason: params.stopReason,
-    finalPromptText: params.finalPromptText,
-    itemLifecycle: params.itemLifecycle,
-    toolMetas: params.toolMetas,
-    didSendViaMessagingTool: params.didSendViaMessagingTool,
-    successfulCronAdds: params.successfulCronAdds,
-    messagingToolSentTexts: params.messagingToolSentTexts,
-    messagingToolSentMediaUrls: params.messagingToolSentMediaUrls,
-    messagingToolSentTargets: params.messagingToolSentTargets,
-    lastToolError: params.lastToolError,
+    finalStatus: status,
+    ...artifacts,
   };
 }

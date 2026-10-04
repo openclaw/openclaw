@@ -2,7 +2,6 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { replaceSessionWithBranchedTranscript } from "../../config/sessions/session-accessor.js";
 import type { SessionTranscriptContextVersion } from "../../config/sessions/session-accessor.sqlite-contract.js";
 import { publishCommittedSessionIdentity } from "../../config/sessions/session-accessor.sqlite-identity.js";
-import { prepareSessionTranscriptHydration } from "../../config/sessions/session-transcript-hydration.js";
 import { startSessionTranscriptIndexReconcile } from "../../config/sessions/session-transcript-reconcile.js";
 import { sameSessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
 import {
@@ -14,7 +13,9 @@ import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db
 import { recordModelFallbackStop } from "../model-fallback-stop.js";
 import { parseOpaqueLeafEntry, parseParentLinkedOpaqueEntry } from "./session-manager-codec.js";
 import { createManagedSessionId, generateSessionEntryId } from "./session-manager-id.js";
+import { prepareSessionManagerHydration } from "./session-manager-incognito.js";
 import { SessionManagerMetadata } from "./session-manager-metadata.js";
+import { receiveSessionManagerCommit } from "./session-manager-persistence-error.js";
 import type {
   LabelEntry,
   PreservedOpaqueFileEntry,
@@ -171,7 +172,11 @@ export class SessionManagerBranching extends SessionManagerMetadata {
         this.transcriptMutationAt = target ? version?.updatedAt : undefined;
         this.persistenceHeaderPending = false;
       };
-      if (persistenceTarget && admission && !isIncognitoSessionKey(persistenceTarget.sessionKey)) {
+      if (
+        persistenceTarget &&
+        admission &&
+        (!isIncognitoSessionKey(persistenceTarget.sessionKey) || !("db" in admission.database))
+      ) {
         const identity = { ...persistenceTarget };
         const version = this.transcriptVersion;
         const assertOwned = captureOwnedTranscriptWriteAssertion(identity);
@@ -180,6 +185,7 @@ export class SessionManagerBranching extends SessionManagerMetadata {
           sessionId: newSessionId,
         });
         const assertCurrent = () => {
+          admission.assertCurrent();
           this.assertTranscriptWriteActive();
           assertOwned();
           assertNavigation();
@@ -192,8 +198,10 @@ export class SessionManagerBranching extends SessionManagerMetadata {
         };
         const { restoreSessionColdTranscript } =
           await import("../../config/sessions/session-cold-storage.js");
-        await restoreSessionColdTranscript(persistenceTarget, assertCurrent);
-        const reader = prepareSessionTranscriptHydration(persistenceTarget);
+        if ("db" in admission.database) {
+          await restoreSessionColdTranscript(persistenceTarget, assertCurrent);
+        }
+        const reader = prepareSessionManagerHydration(persistenceTarget);
         const facts = await reader.readMaintenance({ operation: "version" });
         reader.assertCurrent();
         assertCurrent();
@@ -205,21 +213,24 @@ export class SessionManagerBranching extends SessionManagerMetadata {
           assertCurrent();
           assertDestinationOwned();
         };
-        const committed = await withSessionMetadataWorker(
-          admission.options,
-          admission.database,
-          assertBranchCurrent,
-          (worker) =>
-            worker.execute({
-              type: "session.transcript.branch",
-              input: {
-                scope: { ...scope, storePath: admission.database.path },
-                branch: { sessionId: newSessionId, events: branch.getPersistedFileEntries() },
-                expectedLifecycleRevision: facts.lifecycleRevision,
-              },
-            }),
+        const receipt = await receiveSessionManagerCommit("session.transcript.branch", () =>
+          withSessionMetadataWorker(
+            admission.options,
+            admission.database,
+            assertBranchCurrent,
+            (worker) =>
+              worker.execute({
+                type: "session.transcript.branch",
+                input: {
+                  scope: { ...scope, storePath: admission.database.path },
+                  branch: { sessionId: newSessionId, events: branch.getPersistedFileEntries() },
+                  expectedLifecycleRevision: facts.lifecycleRevision,
+                },
+              }),
+          ),
         );
-        if (committed.projectionNeedsReconcile) {
+        const committed = receipt.value;
+        if (committed.projectionNeedsReconcile && !receipt.failure) {
           startSessionTranscriptIndexReconcile({
             ...admission.options,
             preferredSessionId: newSessionId,
@@ -227,29 +238,33 @@ export class SessionManagerBranching extends SessionManagerMetadata {
         }
         let failure: { cause: unknown } | undefined;
         try {
+          if (receipt.failure) {
+            throw receipt.failure;
+          }
           assertCurrent();
           adoptBranch({ ...fencedTarget, sessionId: newSessionId }, committed.version);
         } catch (cause) {
           failure = { cause };
-        } finally {
-          try {
-            publishCommittedSessionIdentity(
-              scope.agentId,
-              readOpenClawAgentDatabaseIdentity(admission.database).identity,
-              committed.identity.previous,
-              committed.identity.current,
-            );
-          } catch (cause) {
-            failure = {
-              cause: failure
-                ? new AggregateError(
-                    [failure.cause, cause],
-                    "Branch adoption and identity publication failed",
-                    { cause: failure.cause },
-                  )
-                : cause,
-            };
-          }
+        }
+        try {
+          publishCommittedSessionIdentity(
+            scope.agentId,
+            "db" in admission.database
+              ? readOpenClawAgentDatabaseIdentity(admission.database).identity
+              : admission.database.identity.incarnation,
+            committed.identity.previous,
+            committed.identity.current,
+          );
+        } catch (cause) {
+          failure = {
+            cause: failure
+              ? new AggregateError(
+                  [failure.cause, cause],
+                  "Branch adoption and identity publication failed",
+                  { cause: failure.cause },
+                )
+              : cause,
+          };
         }
         if (failure) {
           const error = Object.assign(

@@ -784,7 +784,7 @@ suite.define(() => {
         .evaluate((label) => getComputedStyle(label).fontWeight);
       expect(activeWeight).toBe(inactiveWeight);
 
-      const filterAndSort = page.getByRole("button", { name: "Filter & sort" });
+      const filterAndSort = page.getByRole("button", { name: "Filter & sort", exact: true });
       await filterAndSort.click();
       await chooseSidebarMenuOption(page, "Sort by", "Last updated");
       await closeSidebarMenu(page);

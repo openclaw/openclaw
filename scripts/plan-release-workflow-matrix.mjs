@@ -36,15 +36,6 @@ const DOCKER_E2E_CHUNKS = [
     profiles: "beta minimum stable full",
   },
   {
-    chunk_id: "package-update-self-upgrade",
-    label: "package/update self-upgrade",
-    // Each lane runs multiple updates measured at 540-720s each; retain its 3500s budget.
-    // Six weight-2 lanes need three waves at npm limit 5. Budget the weight-3 survivor
-    // separately despite overlap: 3 x 3500s + 20m survivor + 10m setup/artifacts = 205m.
-    timeout_minutes: 210,
-    profiles: "beta minimum stable full",
-  },
-  {
     chunk_id: "plugins-runtime-plugins",
     label: "plugins/runtime plugins",
     timeout_minutes: 60,
@@ -450,7 +441,6 @@ export function createReleaseSourceSelection(options = {}) {
   const releaseProfile = options.releaseProfile ?? "stable";
   const includeOpenWebUI = isEnabled(options.includeOpenWebUI);
   const prepareOnly = isEnabled(options.prepareOnly);
-  const consumers = [];
   const codexSuites = [];
   const docker = [];
   const baseline = options.upgradeSurvivorBaseline ?? "";
@@ -505,14 +495,11 @@ export function createReleaseSourceSelection(options = {}) {
       if (row.suite_id.startsWith("live-codex-harness")) {
         codexSuites.push(row.suite_id);
       }
-      if (row.suite_id.startsWith("live-gateway-") || row.suite_id.startsWith("live-cli-")) {
-        consumers.push("live-cli-backend");
-      }
     }
   }
   return {
     docker,
-    consumers: [...new Set(consumers)],
+    consumers: [],
     codexSuites,
     fsSafeNative: prepareOnly || docker.length > 0,
     preparationLanes,

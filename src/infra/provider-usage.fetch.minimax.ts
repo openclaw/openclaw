@@ -131,10 +131,8 @@ const TOTAL_KEYS = [
   "promptsTotal",
   "total_prompts",
   "totalPrompts",
-  "current_interval_total_count",
-  "currentIntervalTotalCount",
-  "current_weekly_total_count",
-  "currentWeeklyTotalCount",
+  ...CURRENT_INTERVAL_TOTAL_KEYS,
+  ...CURRENT_WEEKLY_TOTAL_KEYS,
   "limit",
   "quota",
   "quota_limit",
@@ -174,10 +172,8 @@ const REMAINING_KEYS = [
   "left",
   // MiniMax usage endpoints misname these: values are remaining quota, not consumed.
   // See https://github.com/MiniMax-AI/MiniMax-M2/issues/99
-  "current_interval_usage_count",
-  "currentIntervalUsageCount",
-  "current_weekly_usage_count",
-  "currentWeeklyUsageCount",
+  ...CURRENT_INTERVAL_REMAINING_KEYS,
+  ...CURRENT_WEEKLY_REMAINING_KEYS,
 ] as const;
 
 const PLAN_KEYS = ["plan", "plan_name", "planName", "product", "tier"] as const;

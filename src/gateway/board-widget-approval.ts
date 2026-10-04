@@ -5,7 +5,9 @@ import { resolveExecDefaults } from "../agents/exec-defaults.js";
 import { resolveRuntimeConfigCacheKey } from "../config/runtime-snapshot.js";
 import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.entry.js";
 import { readSessionEntriesFromStoreInWorker } from "../config/sessions/session-entry-read-runtime.js";
+import type { IncognitoSessionClaim } from "../config/sessions/session-incognito-actor.js";
 import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readExecApprovalsPolicyReadOnlyAsync } from "../infra/exec-approvals-store.js";
 import { resolveExecAutoReviewDecision } from "../infra/exec-auto-review.js";
@@ -23,24 +25,47 @@ export function createBoardWidgetApprovalResolver() {
     name: string;
     content: BoardWidgetMaterializedPutParams["content"];
     declared: NonNullable<BoardWidgetMaterializedPutParams["declared"]>;
+    /** Captured before policy/reviewer waits; the caller retains its actor borrow. */
+    incognitoSession?: {
+      agentId: string;
+      entry: SessionEntry | undefined;
+      claim: IncognitoSessionClaim;
+      snapshot: { assertCurrent(): void };
+    };
   }): Promise<"granted" | "rejected" | undefined> => {
     const { cfg, agentId, sessionKey, name, content, declared } = params;
     const currentConfigRevision = resolveRuntimeConfigCacheKey(cfg);
     const scope = { sessionKey, agentId };
     const incognito = isIncognitoSessionKey(sessionKey);
+    const prepared = params.incognitoSession;
+    if (
+      prepared &&
+      (!incognito || prepared.agentId !== agentId || prepared.claim.sessionKey !== sessionKey)
+    ) {
+      throw new Error("Widget approval belongs to another incognito session");
+    }
+    const assertPrepared = () => {
+      prepared?.claim.assertCurrent();
+      prepared?.snapshot.assertCurrent();
+    };
+    assertPrepared();
+    const preparedEntry = prepared && structuredClone(prepared.entry);
     const [policy, sessionEntry] = await Promise.all([
       readExecApprovalsPolicyReadOnlyAsync(),
-      // Incognito state stays with its existing process-held SQLite owner.
-      incognito
-        ? loadSessionEntryReadOnly(scope)
-        : readSessionEntriesFromStoreInWorker({
-            agentId,
-            storePath: resolveSessionStorePathForScope(scope, cfg),
-            sessionKeys: [sessionKey],
-          }).then(
-            (sessions) => sessions.entries.find((entry) => entry.sessionKey === sessionKey)?.entry,
-          ),
+      prepared
+        ? preparedEntry
+        : incognito
+          ? loadSessionEntryReadOnly(scope)
+          : readSessionEntriesFromStoreInWorker({
+              agentId,
+              storePath: resolveSessionStorePathForScope(scope, cfg),
+              sessionKeys: [sessionKey],
+            }).then(
+              (sessions) =>
+                sessions.entries.find((entry) => entry.sessionKey === sessionKey)?.entry,
+            ),
     ]);
+    assertPrepared();
     if (configRevision !== currentConfigRevision || policyRevision !== policy.revision) {
       approved.clear();
       configRevision = currentConfigRevision;
@@ -70,6 +95,7 @@ export function createBoardWidgetApprovalResolver() {
       return "granted";
     }
     const { createModelExecAutoReviewer } = await import("../agents/exec-auto-reviewer.js");
+    assertPrepared();
     const review = await resolveExecAutoReviewDecision(
       createModelExecAutoReviewer({
         cfg,
@@ -79,6 +105,7 @@ export function createBoardWidgetApprovalResolver() {
       }),
       { kind: "board-widget", name, declared, agent: { id: agentId, sessionKey } },
     );
+    assertPrepared();
     switch (review.decision) {
       case "allow-once": {
         if (review.risk !== "low") {

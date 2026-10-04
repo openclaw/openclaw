@@ -105,6 +105,9 @@ def env_or_config(env_name, config, key, default=""):
 
 
 def load_config():
+    # TDLib creates its database under the process umask; retained-lease recovery
+    # refuses credential state that is readable beyond its owner.
+    os.umask(0o077)
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     STATE_DIR.chmod(stat.S_IRWXU)
     config = read_json(CONFIG_PATH)

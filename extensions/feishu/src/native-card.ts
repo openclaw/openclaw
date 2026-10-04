@@ -42,15 +42,8 @@ export function escapeFeishuCardPlainText(text: string): string {
 
 export function resolveSafeFeishuButtonUrl(url: unknown): string | undefined {
   const trimmed = typeof url === "string" ? url.trim() : "";
-  if (!trimmed) {
-    return undefined;
-  }
-  try {
-    const parsed = new URL(trimmed);
-    return parsed.protocol === "https:" || parsed.protocol === "http:" ? trimmed : undefined;
-  } catch {
-    return undefined;
-  }
+  const parsed = URL.parse(trimmed);
+  return parsed?.protocol === "https:" || parsed?.protocol === "http:" ? trimmed : undefined;
 }
 
 function sanitizeNativeFeishuButtonBehavior(

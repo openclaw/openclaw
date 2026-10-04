@@ -1,4 +1,5 @@
 import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
+import { registerListener } from "../../../../src/shared/listeners.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { AgentIdentityResult } from "../../api/types.ts";
 import type { ApplicationGatewayPhase } from "../../app/gateway.ts";
@@ -221,9 +222,6 @@ export function createAgentIdentityCapability(
         publish();
       }
     },
-    subscribe(listener) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
+    subscribe: (listener) => registerListener(listeners, listener),
   };
 }

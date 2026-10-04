@@ -1,14 +1,10 @@
 // Evaluates plugin config policy without activating plugin runtime code.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
-  resolvePluginActivationDecisionShared,
-  toPluginActivationState,
+  resolvePluginActivationStateShared,
   type PluginActivationStateLike as PluginActivationState,
 } from "./config-activation-shared.js";
-import {
-  resolveChannelConfigEnablement,
-  type NormalizedPluginsConfig,
-} from "./config-normalization-shared.js";
+import type { NormalizedPluginsConfig } from "./config-normalization-shared.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 
 export { normalizePluginsConfigWithResolverCore as normalizePluginsConfigWithResolver } from "./config-normalization-shared.js";
@@ -28,14 +24,11 @@ type PolicyEffectiveActivationParams = {
 export function resolvePolicyPluginActivationState(
   params: PolicyEffectiveActivationParams,
 ): PluginActivationState {
-  return toPluginActivationState(
-    resolvePluginActivationDecisionShared({
-      ...params,
-      activationSource: {
-        plugins: params.sourceConfig ?? params.config,
-        rootConfig: params.sourceRootConfig ?? params.rootConfig,
-      },
-      resolveChannelConfigEnablement,
-    }),
-  );
+  return resolvePluginActivationStateShared({
+    ...params,
+    activationSource: {
+      plugins: params.sourceConfig ?? params.config,
+      rootConfig: params.sourceRootConfig ?? params.rootConfig,
+    },
+  });
 }

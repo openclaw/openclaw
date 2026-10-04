@@ -250,9 +250,11 @@ These are intentionally guarded by the `ci-workflow-guards`,
   restore-only consumers on eligible self-hosted runners. Exact misses and
   hosted paths, including Mac Node jobs, use the ordinary pnpm-store cache.
 - Trusted canonical hybrid first attempts route `ci-gate` to the Blacksmith
-  4-class and both packed core-lint rows to the 16-class after hosted assignment
-  added 416 seconds to main's critical chain. Admitted qualifications use the
-  same route. The first packed lint row took 621s on the 8-class; retain four
+  4-class after hosted assignment added 416 seconds to main's critical chain.
+  Core lint uses the 16-class on canonical automatic first attempts with an
+  unset, `blacksmith`, or `hybrid` backend, including fork PRs. Admitted
+  qualifications retain their existing routes. The first packed lint row took
+  621s on the 8-class; retain four
   actual CPUs for that row. The second packed row later exceeded its existing
   15-minute limit on the 8-class, so it uses the same 16-class. This adds no
   jobs or registrations and keeps the deadline and complete stripe inventory. The gate has no checkout or dependency setup; retries, ordinary
@@ -278,18 +280,18 @@ These are intentionally guarded by the `ci-workflow-guards`,
   hybrid first attempts use the existing 4-class for the ratchet job, with its
   measured 91-second bound adding at most 6.07 class-vCPU-minutes and no jobs.
   Preserve the existing hosted fallbacks and deadline.
-  The existing `check-plan` prerequisite keeps the 4-class on same-repository
-  hybrid PR first attempts, automatic main runs, and admitted qualification dispatches. Its 165–209s hosted wall delayed narrowed type/lint consumers; use
-  the unchanged 209s as a conservative 13.93-vCPU-minute added-cost bound until
-  native proof measures it. This consumes one non-Node reserve slot and adds no
-  jobs. Exact dependency restoration still requires an actual self-hosted runner
-  and same-repository cache trust. Admitted qualification dispatches retain the
-  automatic first attempt's Blacksmith routes. Keep compiler inventory
-  completeness and the observer's exact count.
-  This measured control-job offload is hybrid-only; RunsOn keeps its existing
-  hosted standalone ratchet and check-plan routes, including qualification dispatches.
-  Fork PRs retain hosted hybrid check planning and standalone ratchets,
-  preserving the existing cache trust restrictions.
+  The existing `check-plan` prerequisite uses the 16-class for shared compiler
+  snapshot memory on canonical automatic first attempts with an unset,
+  `blacksmith`, or `hybrid` backend, including fork PRs. Fork core type stripes
+  with an unset or `blacksmith` backend also use the 16-class on those attempts;
+  hybrid health admission retains its existing placement rules. These routes
+  add paid assignments, not jobs. Preserve logical GitHub stripe coverage,
+  restore-only PR caches, and same-repository cache trust. The GitHub override,
+  retries, ordinary manual and frozen targets, RunsOn planners, and noncanonical
+  contexts retain hosted planning. Admitted qualification dispatches keep their
+  existing routes. Fork standalone ratchets stay hosted. See
+  `docs/ci/runners.md` for the current routing and `docs/ci/routing-costs.md`
+  for measured latency and cost; older 4-class planner estimates no longer apply.
   Optional compiler/check offloads reject observed hosted assignment waits at
   sixty seconds; the former three-minute cutoff exceeded the latency objective.
   API and job deadlines remain unchanged.
@@ -659,7 +661,9 @@ These are intentionally guarded by the `ci-workflow-guards`,
   routes configurable `ci.yml` jobs to their existing GitHub-hosted fallback
   labels. Unset or `blacksmith` preserves the normal Blacksmith-first route.
   Fork first attempts cannot honor an unavailable override; they use Blacksmith
-  Node runners and hosted check stripes. Fork retries use hosted runners.
+  Node runners, check planning, core type stripes, and core lint stripes where
+  the current routing permits. Their logical GitHub profile and cache trust stay
+  unchanged. Fork retries use hosted runners.
 - Vitest transform and Node compile caches are restore-only in CI and use
   immutable Actions caches; the main-push/daily/dispatch warmer is their sole
   writer. Build, QA and test orchestration consume its shared Node compile seed.

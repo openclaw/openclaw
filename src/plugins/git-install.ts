@@ -37,7 +37,7 @@ import {
   resolvePluginInstallTransactionRequest,
   type PluginInstallTransaction,
 } from "./install-transaction.js";
-import type { PluginInstallArtifactConsentHandler } from "./install-types.js";
+import type { PluginInstallArtifactConsentHandler, PluginInstallLogger } from "./install-types.js";
 import {
   installPluginFromInstalledPackageDir,
   PLUGIN_INSTALL_ERROR_CODE,
@@ -52,11 +52,6 @@ import {
 const GIT_SPEC_PREFIX = "git:";
 const DEFAULT_GIT_TIMEOUT_MS = 120_000;
 const FULL_GIT_COMMIT_PATTERN = /^[0-9a-f]{40}$/i;
-
-type PluginInstallLogger = {
-  info?: (message: string) => void;
-  warn?: (message: string) => void;
-};
 
 /** Resolved Git source metadata persisted into plugin install records. */
 type GitPluginResolution = {

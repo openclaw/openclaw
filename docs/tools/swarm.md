@@ -446,10 +446,13 @@ nested descendants. Collector mode changes result delivery, not cancellation
 scope. Successful cancellation prevents selected queued children from starting
 as running siblings stop. It does not cancel work from unrelated parent turns.
 
-If Stop reports incomplete descendant cancellation, inspect the remaining work
+Stop also waits for the selected children's execution and queued-launch cleanup.
+A child's task can show a terminal status while that cleanup is still settling.
+
+If Stop times out or reports incomplete descendant cancellation, inspect the remaining work
 with `subagents` using `action: "list"` and retry cancellation for
 those children. A stopped parent alone does not confirm that every child stopped,
-and a cancellation acknowledgment does not promise instantaneous runtime cleanup.
+and a failed request can leave cleanup pending.
 
 Already-accepted children remain independent when the parent completes normally,
 yields, or times out. If the parent is no longer active, cancel the child tasks

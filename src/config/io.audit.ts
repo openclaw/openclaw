@@ -129,16 +129,6 @@ function capArgv(argv: readonly string[] | undefined): string[] {
   return argv.slice(0, CONFIG_AUDIT_ARGV_CAP);
 }
 
-function snapshotConfigAuditProcessInfo(): ConfigAuditProcessInfo {
-  return {
-    pid: process.pid,
-    ppid: process.ppid,
-    cwd: process.cwd(),
-    argv: redactConfigAuditArgv(capArgv(process.argv)),
-    execArgv: redactConfigAuditArgv(capArgv(process.execArgv)),
-  };
-}
-
 export const CONFIG_AUDIT_SCOPE = "config-audit";
 export const CONFIG_AUDIT_MAX_ENTRIES = 50_000;
 export const CONFIG_AUDIT_STORE_LABEL =
@@ -182,7 +172,7 @@ export function createConfigObserveAuditRecord(params: {
     event: "config.observe" as const,
     phase: "read" as const,
     configPath: params.configPath,
-    ...snapshotConfigAuditProcessInfo(),
+    ...resolveConfigAuditProcessInfo(),
     exists: true,
     valid: params.valid,
     hash: current.hash,
@@ -254,14 +244,18 @@ type ConfigAuditProcessInfo = {
 function resolveConfigAuditProcessInfo(
   processInfo?: ConfigAuditProcessInfo,
 ): ConfigAuditProcessInfo {
-  if (processInfo) {
-    return {
-      ...processInfo,
-      argv: redactConfigAuditArgv(capArgv(processInfo.argv)),
-      execArgv: redactConfigAuditArgv(capArgv(processInfo.execArgv)),
-    };
-  }
-  return snapshotConfigAuditProcessInfo();
+  const snapshot = processInfo || {
+    pid: process.pid,
+    ppid: process.ppid,
+    cwd: process.cwd(),
+    argv: process.argv,
+    execArgv: process.execArgv,
+  };
+  return {
+    ...snapshot,
+    argv: redactConfigAuditArgv(capArgv(snapshot.argv)),
+    execArgv: redactConfigAuditArgv(capArgv(snapshot.execArgv)),
+  };
 }
 
 export function resolveLegacyConfigAuditLogPath(
@@ -401,16 +395,9 @@ export type ConfigAuditScrubResult = {
   aborted: boolean;
 };
 
-// Rewrites every record in `config-audit.jsonl` through `redactConfigAuditArgv`
-// so that historical argv/execArgv values written before the forward redactor
-// shipped are masked the same way new entries are. Idempotent — re-applying the
-// redactor to already-masked entries is a no-op because the redactor passes
-// `***` and `--flag=***` through unchanged, so subsequent doctor passes do not
-// rewrite the file unless a genuinely unredacted entry is still present.
-// Malformed lines (parse failures, non-object payloads) are preserved verbatim
-// and counted as `skipped` so the function never destroys forensic content it
-// cannot understand.
-// Stages redacted bytes at mode 0o600 before replacing the audit log.
+// Apply the current argv redactor to historical logs, preserving malformed lines
+// verbatim for forensic recovery. Stage changed bytes at mode 0o600 before replacing
+// the log, and leave already-redacted files untouched.
 export async function scrubConfigAuditLog(params: {
   env: NodeJS.ProcessEnv;
   homedir: () => string;

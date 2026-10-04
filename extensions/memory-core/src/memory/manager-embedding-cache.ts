@@ -106,7 +106,12 @@ export function pruneMemoryEmbeddingCache(database: DatabaseSync, maxEntries: nu
   if (excess <= 0) {
     return;
   }
+  deleteOldestMemoryEmbeddingCacheRows(database, Math.min(excess, 100));
+}
+
+function deleteOldestMemoryEmbeddingCacheRows(database: DatabaseSync, limit: number): void {
   const db = getNodeSqliteKysely<EmbeddingCacheDatabase>(database);
+  // SQLite performs eviction without materializing the full cache in JavaScript.
   executeSqliteQuerySync(
     database,
     db
@@ -118,7 +123,8 @@ export function pruneMemoryEmbeddingCache(database: DatabaseSync, maxEntries: nu
           .selectFrom("memory_embedding_cache")
           .select("rowid")
           .orderBy("updated_at", "asc")
-          .limit(Math.min(excess, 100)),
+          .orderBy("rowid", "asc")
+          .limit(limit),
       ),
   );
 }
@@ -249,21 +255,11 @@ function reserveMemoryEmbeddingCacheCapacity(params: {
         .where("hash", "in", params.hashes.slice(start, start + 400)),
     );
   }
-  // SQLite performs eviction without materializing the full cache in JavaScript.
-  executeSqliteQuerySync(
-    params.db,
-    db.deleteFrom("memory_embedding_cache").where(
-      "rowid",
-      "in",
-      db
-        .selectFrom("memory_embedding_cache")
-        .select("rowid")
-        .orderBy("updated_at", "desc")
-        .orderBy("rowid", "desc")
-        .limit(-1)
-        .offset(params.maxEntries - params.hashes.length),
-    ),
-  );
+  const retainedCapacity = params.maxEntries - params.hashes.length;
+  const excess = countMemoryEmbeddingCache(params.db) - retainedCapacity;
+  if (excess > 0) {
+    deleteOldestMemoryEmbeddingCacheRows(params.db, excess);
+  }
 }
 
 export function collectMemoryCachedEmbeddings<T extends Pick<MemoryChunk, "hash">>(params: {

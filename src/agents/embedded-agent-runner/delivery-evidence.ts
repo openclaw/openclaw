@@ -123,10 +123,6 @@ export function hasCompletedMessagingToolDeliveryEvidence(
   );
 }
 
-function hasNonEmptyArray(value: unknown): boolean {
-  return Array.isArray(value) && value.length > 0;
-}
-
 function hasAcceptedSessionSpawnEvidence(value: unknown): boolean {
   return Array.isArray(value)
     ? value.some((entry) => {
@@ -389,7 +385,7 @@ export function hasCommittedMessagingToolDeliveryEvidence(
   return (
     hasNonEmptyStringArray(result.messagingToolSentTexts) ||
     hasNonEmptyStringArray(result.messagingToolSentMediaUrls) ||
-    hasNonEmptyArray(result.messagingToolSentTargets)
+    (Array.isArray(result.messagingToolSentTargets) && result.messagingToolSentTargets.length > 0)
   );
 }
 

@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
+import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { withSystemEventOwner } from "../../infra/system-event-ownership.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.read.js";
@@ -245,7 +245,7 @@ export async function completeReplyAgentRun(input: {
       });
       // A reset can rebind the key while the model runs; its replacement must
       // never inherit the old run's final or advertise an uncommitted intent.
-      const persistedPendingFinalDelivery = await updateSessionEntry(
+      const persistedPendingFinalDelivery = await patchSessionEntryCore(
         { agentId: followupRun.run.agentId, storePath, sessionKey },
         (entry) =>
           entry.sessionId === expectedSessionId
@@ -265,6 +265,7 @@ export async function completeReplyAgentRun(input: {
         {
           skipMaintenance: true,
           takeCacheOwnership: true,
+          workerGuard: {},
         },
       );
       if (

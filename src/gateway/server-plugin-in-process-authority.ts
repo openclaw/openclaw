@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   captureGatewayToolCallerAssertion,
   getGatewayToolCallerIdentity,
@@ -350,10 +351,7 @@ export function resolveInProcessGatewayDispatch(
     );
   }
 
-  const pluginRuntimeOwnerId =
-    typeof options?.pluginRuntimeOwnerId === "string" && options.pluginRuntimeOwnerId.trim()
-      ? options.pluginRuntimeOwnerId.trim()
-      : undefined;
+  const pluginRuntimeOwnerId = normalizeOptionalString(options?.pluginRuntimeOwnerId);
   const pluginRecord = pluginRuntimeOwnerId
     ? getActivePluginRegistry()?.plugins.find((entry) => entry.id === pluginRuntimeOwnerId)
     : undefined;
@@ -419,9 +417,6 @@ export function resolveInProcessGatewayDispatch(
     agentRunTracking: options?.agentRunTracking,
     ...(operatorRoleActor ? { operatorRoleActor } : {}),
     ...(operatorRunAuthority ? { operatorRunAuthority } : {}),
-    cronRunContinuation: options?.allowSyntheticCronRunContinuation === true,
-    internalDeliveryMediaUrls: options?.internalDeliveryMediaUrls,
-    internalDeliverySuppressText: options?.internalDeliverySuppressText,
     ...(pluginRuntimeOwnerId ? { pluginRuntimeOwnerId } : {}),
     ...(nodeInvokeApprovalSessionKey ? { nodeInvokeApprovalSessionKey } : {}),
     pluginSubagentRequester: options?.pluginSubagentRequester,

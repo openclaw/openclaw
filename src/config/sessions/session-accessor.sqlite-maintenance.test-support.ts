@@ -28,11 +28,12 @@ import {
 import { loadSessionEntry, replaceSessionEntrySync } from "./session-accessor.js";
 import { runExclusiveSqliteTranscriptArchiveWorker } from "./session-accessor.sqlite-archive.js";
 import type { SqliteSessionReclamationDiagnostics } from "./session-accessor.sqlite-contract.js";
+import type { SqliteSessionReclamationPlan } from "./session-accessor.sqlite-lifecycle-types.js";
 import * as maintenance from "./session-accessor.sqlite-maintenance.js";
 import { runSqliteSessionReclamation } from "./session-accessor.sqlite-reclamation-run.js";
 import {
-  createSessionMaintenancePlanningOperation,
   createSessionMaintenanceStatisticsOperation,
+  resolveSessionReclamationDatabaseOptions,
 } from "./session-accessor.sqlite-reclamation.js";
 import { applySessionEntryExactReplacements } from "./session-accessor.sqlite-replacement-projection.js";
 import { resolveMaintenanceConfigFromInput } from "./store-maintenance.js";
@@ -173,8 +174,10 @@ function maintenancePreparationFixture(state: OpenClawTestState) {
   replaceSessionEntrySync(stale, { sessionId: "stale", updatedAt: 1 });
   const databaseOptions = { agentId: "main", env: state.env };
   const database = openOpenClawAgentDatabase(databaseOptions);
-  const plan = createSessionMaintenancePlanningOperation({
-    databaseOptions,
+  const plan = {
+    kind: "maintenance-plan",
+    databaseOptions: resolveSessionReclamationDatabaseOptions(databaseOptions),
+    materializedPlans: [],
     input: {
       activeSessionKey: active.sessionKey,
       archiveDirectory: state.sessionsDir(),
@@ -186,7 +189,7 @@ function maintenancePreparationFixture(state: OpenClawTestState) {
       preservation: { providerKeys: [], workIdentities: [], lifecycleIdentities: [] },
       storePath,
     },
-  });
+  } satisfies SqliteSessionReclamationPlan;
   return { active, stale, database, plan };
 }
 

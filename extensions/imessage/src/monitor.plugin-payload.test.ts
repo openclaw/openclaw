@@ -3,17 +3,25 @@ import path from "node:path";
 import * as channelInbound from "openclaw/plugin-sdk/channel-inbound";
 import {
   addTestHook,
-  createEmptyPluginRegistry,
   createTestInboundDebounceFlush,
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
+  createTestRegistry,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+  withPluginRuntimeRegistryScope,
 } from "openclaw/plugin-sdk/channel-test-helpers";
 import { recordInboundSession } from "openclaw/plugin-sdk/conversation-runtime";
-import type { dispatchReplyWithBufferedBlockDispatcher } from "openclaw/plugin-sdk/reply-runtime";
+import { getPluginRuntimeGatewayRequestScope } from "openclaw/plugin-sdk/plugin-runtime";
+import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
+import { createPluginRegistryOwner } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { dispatchReplyWithBufferedBlockDispatcher } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import type { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { imessagePlugin } from "./channel.js";
 import type { createIMessageRpcClient } from "./client.js";
+import { createIMessageConversationBindingManager } from "./conversation-bindings.js";
 import { monitorIMessageProvider } from "./monitor.js";
 import { setCachedIMessagePrivateApiStatus } from "./private-api-status.js";
 import { getIMessageRuntime } from "./runtime.js";
@@ -24,7 +32,10 @@ const waitForTransportReadyMock = vi.hoisted(() =>
 );
 const createIMessageRpcClientMock = vi.hoisted(() => vi.fn<typeof createIMessageRpcClient>());
 const shouldDebounceTextInboundMock = vi.hoisted(() => vi.fn(() => false));
-const directDeliveryProof = vi.hoisted(() => ({ flush: false }));
+const directDeliveryProof = vi.hoisted(() => ({
+  flush: false,
+  onFlushed: undefined as (() => void) | undefined,
+}));
 
 vi.mock("openclaw/plugin-sdk/transport-ready-runtime", () => ({
   waitForTransportReady: waitForTransportReadyMock,
@@ -46,7 +57,11 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
           enqueue: async (entry: unknown) => {
             opts.shouldDebounce(entry);
             if (directDeliveryProof.flush) {
-              await opts.onFlush([entry], createTestInboundDebounceFlush).completion;
+              try {
+                await opts.onFlush([entry], createTestInboundDebounceFlush).completion;
+              } finally {
+                directDeliveryProof.onFlushed?.();
+              }
             }
           },
         },
@@ -71,10 +86,12 @@ describe("iMessage plugin payload attachments", () => {
     createIMessageRpcClientMock.mockReset();
     shouldDebounceTextInboundMock.mockReset().mockReturnValue(false);
     directDeliveryProof.flush = false;
+    directDeliveryProof.onFlushed = undefined;
   });
 
   afterEach(() => {
     resetGlobalHookRunner();
+    resetPluginRuntimeStateForTest();
     vi.restoreAllMocks();
   });
 
@@ -120,6 +137,7 @@ describe("iMessage plugin payload attachments", () => {
     });
 
     await monitorIMessageProvider({
+      scheduler: createTestPluginServiceScheduler(),
       config: {
         channels: { imessage: { includeAttachments: true, dmPolicy: "open" } },
         session: { mainKey: "main" },
@@ -135,6 +153,7 @@ describe("iMessage plugin payload attachments", () => {
   });
 
   it.each([
+    { kind: "final", text: "provider-visible ordinary final", visible: true },
     { kind: "tool", text: "provider-visible tool result", visible: true },
     { kind: "block", text: "provider-visible streamed block", visible: true },
     { kind: "tool", text: "<thinking>private reasoning</thinking>", visible: false },
@@ -142,8 +161,16 @@ describe("iMessage plugin payload attachments", () => {
     "settles direct $kind delivery through actual provider, hooks, and SQLite ($visible)",
     async ({ kind, text, visible }) => {
       directDeliveryProof.flush = true;
+      const flushed = Promise.withResolvers<void>();
+      directDeliveryProof.onFlushed = flushed.resolve;
+      const errors = vi.fn();
       const messageSent = vi.fn();
-      const registry = createEmptyPluginRegistry();
+      const registry = createTestRegistry([
+        { pluginId: "imessage", source: "test", plugin: imessagePlugin },
+      ]);
+      setActivePluginRegistry(registry);
+      const owner = createPluginRegistryOwner(registry);
+      const bindings = createIMessageConversationBindingManager({ cfg: {} });
       addTestHook({
         registry,
         pluginId: "imessage-monitor-proof",
@@ -159,6 +186,19 @@ describe("iMessage plugin payload attachments", () => {
       });
 
       const dispatch = vi.fn<typeof dispatchReplyWithBufferedBlockDispatcher>(async (params) => {
+        if (kind === "final") {
+          // Only model output is injected: preparation, final dispatch, durable sending,
+          // native RPC, receipts, message_sent, and echo persistence stay production-owned.
+          return await dispatchReplyWithBufferedBlockDispatcher({
+            ...params,
+            replyResolver: async () => {
+              const prepared = getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
+              expect(prepared).toBeDefined();
+              expect(prepared).not.toBe(registry);
+              return { text };
+            },
+          });
+        }
         const settled = await params.dispatcherOptions.deliver({ text }, { kind });
         expect(settled).toMatchObject(
           visible
@@ -185,6 +225,10 @@ describe("iMessage plugin payload attachments", () => {
               const turn = await params.adapter.resolveTurn(input, eventClass, preflight);
               if (!("route" in turn) || !("delivery" in turn)) {
                 throw new Error("expected assembled iMessage delivery turn");
+              }
+              if (kind === "final") {
+                expect(turn.delivery.durable).toMatchObject({ to: expect.any(String) });
+                expect(turn.delivery.durable).not.toHaveProperty("prepareRuntimeHandoff");
               }
               const { route, ...resolvedTurn } = turn;
               return {
@@ -228,8 +272,7 @@ describe("iMessage plugin payload attachments", () => {
               },
             },
           });
-          await Promise.resolve();
-          await Promise.resolve();
+          await flushed.promise;
         }),
         stop: vi.fn(async () => {}),
       };
@@ -241,29 +284,43 @@ describe("iMessage plugin payload attachments", () => {
         return nativeClient as never;
       });
 
-      await monitorIMessageProvider({
-        config: {
-          channels: {
-            imessage: {
-              dmPolicy: "allowlist",
-              allowFrom: ["+15550001111"],
-              sendReadReceipts: false,
-            },
-          },
-          messages: { inbound: { debounceMs: 0 } },
-          session: { mainKey: "main" },
-        } as never,
-        runtime: { error: vi.fn(), exit: vi.fn(), log: vi.fn() },
-      });
+      try {
+        await withPluginRuntimeRegistryScope(registry, () =>
+          monitorIMessageProvider({
+            scheduler: createTestPluginServiceScheduler(),
+            config: {
+              plugins: { slots: { memory: "none" } },
+              channels: {
+                imessage: {
+                  dmPolicy: "allowlist",
+                  allowFrom: ["+15550001111"],
+                  sendReadReceipts: false,
+                },
+              },
+              messages: { inbound: { debounceMs: 0 } },
+              session: { mainKey: "main" },
+            } as never,
+            runtime: { error: errors, exit: vi.fn(), log: vi.fn() },
+          }),
+        );
+      } finally {
+        bindings.stop();
+        await owner.close();
+      }
 
+      expect(errors.mock.calls).toEqual([]);
       if (!visible) {
         expect(nativeClient.request).not.toHaveBeenCalled();
         expect(messageSent).not.toHaveBeenCalled();
         return;
       }
-      await vi.waitFor(() => {
-        expect(messageSent).toHaveBeenCalledOnce();
-      });
+      expect(dispatch).toHaveBeenCalledOnce();
+      expect(nativeClient.request).toHaveBeenCalledExactlyOnceWith(
+        "send",
+        expect.objectContaining({ text }),
+        expect.any(Object),
+      );
+      expect(messageSent).toHaveBeenCalledOnce();
       expect(messageSent).toHaveBeenCalledWith(
         expect.objectContaining({ content: text, success: true, messageId: `native-${kind}-guid` }),
         expect.objectContaining({ channelId: "imessage" }),

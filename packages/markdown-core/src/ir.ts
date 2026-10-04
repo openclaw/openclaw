@@ -30,14 +30,12 @@ import {
 import { sliceMarkdownIR, sliceMarkdownIRRanges } from "./ir-slice.js";
 import { computeNextMappedBlockStarts, sourceBlockNewlineCount } from "./ir-source-spacing.js";
 import {
-  clampAnnotationSpans,
-  clampLinkSpans,
-  clampStyleSpans,
   copyMarkdownLinkSpan,
   createMarkdownLinkSpan,
   createStyleSpan,
-  mergeAnnotationSpans,
-  mergeStyleSpans,
+  sliceAnnotationSpans,
+  sliceLinkSpans,
+  sliceStyleSpans,
   type MarkdownAnnotationSpan,
   type MarkdownLinkSpan,
   type MarkdownStyle,
@@ -1389,7 +1387,7 @@ export function markdownToIRWithMeta(
   const finalLength = Math.max(trimmedLength, codeEnd);
   const finalText =
     finalLength === state.text.length ? state.text : state.text.slice(0, finalLength);
-  const annotations = mergeAnnotationSpans(clampAnnotationSpans(state.annotations, finalLength));
+  const annotations = sliceAnnotationSpans(state.annotations, 0, finalLength);
   const listItems = state.listItems.flatMap((item) => {
     const listMarker = item.listMarker
       ? sliceListMarker(item.listMarker, 0, finalLength)
@@ -1431,8 +1429,8 @@ export function markdownToIRWithMeta(
 
   const ir: MarkdownIR = {
     text: finalText,
-    styles: mergeStyleSpans(clampStyleSpans(state.styles, finalLength)),
-    links: clampLinkSpans(state.links, finalLength),
+    styles: sliceStyleSpans(state.styles, 0, finalLength),
+    links: sliceLinkSpans(state.links, 0, finalLength),
     ...(annotations.length > 0 ? { annotations } : {}),
     ...(listItems.length > 0 ? { listItems } : {}),
   };

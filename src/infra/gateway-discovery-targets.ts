@@ -1,3 +1,4 @@
+import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   resolveGatewayDiscoveryEndpoint,
@@ -16,18 +17,12 @@ type GatewayDiscoveryTarget = {
   sshTarget: string | null;
 };
 
-function pickSshPort(beacon: GatewayBonjourBeacon): number | null {
-  return typeof beacon.sshPort === "number" && Number.isFinite(beacon.sshPort) && beacon.sshPort > 0
-    ? beacon.sshPort
-    : null;
-}
-
 export function buildGatewayDiscoveryTarget(
   beacon: GatewayBonjourBeacon,
   opts?: { sshUser?: string | null },
 ): GatewayDiscoveryTarget {
   const endpoint = resolveGatewayDiscoveryEndpoint(beacon);
-  const sshPort = pickSshPort(beacon);
+  const sshPort = asPositiveFiniteNumber(beacon.sshPort) ?? null;
   const sshUser = normalizeOptionalString(opts?.sshUser) ?? "";
   const baseSshTarget = endpoint ? (sshUser ? `${sshUser}@${endpoint.host}` : endpoint.host) : null;
   const sshTarget =

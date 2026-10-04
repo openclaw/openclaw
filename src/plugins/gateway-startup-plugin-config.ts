@@ -41,6 +41,7 @@ import type {
   InstalledPluginIndexScopeLookup,
 } from "./installed-plugin-index-types.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
+import { normalizePluginPolicyId } from "./plugin-policy-id.js";
 
 export function readStartupBundledDiscoveryMode(
   config: OpenClawConfig,
@@ -114,11 +115,12 @@ export function blocksPluginStartup(params: {
   pluginsConfig: NormalizedPluginsConfig;
   activationSourcePlugins: NormalizedPluginsConfig;
 }): boolean {
+  const policyId = normalizePluginPolicyId(params.pluginId);
   return (
-    params.pluginsConfig.deny.includes(params.pluginId) ||
-    params.activationSourcePlugins.deny.includes(params.pluginId) ||
-    params.pluginsConfig.entries[params.pluginId]?.enabled === false ||
-    params.activationSourcePlugins.entries[params.pluginId]?.enabled === false
+    params.pluginsConfig.deny.includes(policyId) ||
+    params.activationSourcePlugins.deny.includes(policyId) ||
+    params.pluginsConfig.entries[policyId]?.enabled === false ||
+    params.activationSourcePlugins.entries[policyId]?.enabled === false
   );
 }
 
@@ -279,10 +281,11 @@ export function addConfiguredActivationPathPluginIds(
 export function addPluginConfigEntryIds(
   target: Set<string>,
   plugins: NormalizedPluginsConfig,
+  normalizePluginId: (pluginId: string) => string,
 ): void {
   for (const [pluginId, entry] of Object.entries(plugins.entries)) {
     if (entry?.enabled !== false) {
-      target.add(pluginId);
+      target.add(normalizePluginId(pluginId));
     }
   }
 }

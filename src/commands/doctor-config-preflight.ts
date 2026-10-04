@@ -1,9 +1,11 @@
 /** Config preflight for Doctor: legacy migration, recovery, and snapshot loading. */
 import { note } from "../../packages/terminal-core/src/note.js";
+import { readCurrentConfigForResolution } from "../config/io.runtime.js";
 import { tryGetLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { throwIfDoctorStateMigrationRefused } from "../infra/state-migrations.messages.js";
+import { assertNoRetiredStateFiles } from "../infra/state-migrations.retired-files.js";
 import type {
   LegacyStateMigrationStepReceipt,
   MigrationMessages,
@@ -16,6 +18,10 @@ import {
   readConfigPreflightSnapshot,
   type ConfigPreflightSnapshotRead,
 } from "./config-preflight-snapshot.js";
+import {
+  assertNoRetiredOAuthSidecarsBeforeConfigRecovery,
+  listLegacyOAuthSidecarPaths,
+} from "./doctor-auth-legacy-paths.js";
 import { noteDoctorConfigPreflightIssues } from "./doctor-config-analysis.js";
 import {
   createDoctorConfigRepairPlanner,
@@ -33,7 +39,6 @@ import {
   shouldSkipPluginValidationForDoctorConfigPreflight,
 } from "./doctor-config-preflight-plugin-index.js";
 import { createDoctorPluginMigrationPreparation } from "./doctor-config-preflight-plugin-migrations.js";
-import { withDoctorConfigPreflightWorkerScope } from "./doctor-config-preflight-worker-scope.js";
 import * as cronMigration from "./doctor-config-preflight.cron.js";
 import { noteStaleUpdateRuns } from "./doctor-update-run.js";
 import type { CronCodexRuntimePolicyTarget } from "./doctor/cron/store-migration.js";
@@ -53,12 +58,23 @@ const loadCronRepair = createLazyRuntimeModule(() => import("./doctor/cron/legac
 export async function runDoctorConfigPreflight(
   options: DoctorConfigPreflightOptions = {},
 ): Promise<DoctorConfigPreflightResult> {
-  return await withDoctorConfigPreflightWorkerScope(options, runDoctorConfigPreflightOperation);
+  // Reuse child imports for this state operation; every read still acquires fresh admission.
+  if (options.migrateState !== false && options.doctorOnlyStateMigrations === true) {
+    const { withSqliteReadOnlyWorkerScope } = await import("../infra/sqlite-readonly-worker.js");
+    return await withSqliteReadOnlyWorkerScope(() => runDoctorConfigPreflightOperation(options));
+  }
+  return await runDoctorConfigPreflightOperation(options);
 }
 
 async function runDoctorConfigPreflightOperation(
   options: DoctorConfigPreflightOptions,
 ): Promise<DoctorConfigPreflightResult> {
+  assertNoRetiredOAuthSidecarsBeforeConfigRecovery({ env: process.env });
+  const { env: inspectionEnv } = readCurrentConfigForResolution();
+  assertNoRetiredStateFiles(
+    "OAuth credential sidecars",
+    listLegacyOAuthSidecarPaths(inspectionEnv),
+  );
   const stateMigrationsRequested = options.migrateState !== false;
   const skipLegacyParentConfigWrite = shouldSkipLegacyUpdateDoctorConfigWrite(process.env);
   const measurePreflightStep = <T>(name: string, run: () => T | Promise<T>) =>

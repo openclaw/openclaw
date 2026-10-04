@@ -74,7 +74,24 @@ export async function withCliCommandCleanup<T>(
     registries: new Set(),
     pluginResources,
   };
-  return sdkResourceHost.run(() => scope.run(cleanup, () => run(cleanup)));
+  return sdkResourceHost.run(() =>
+    scope.run(cleanup, async () => {
+      try {
+        return await run(cleanup);
+      } finally {
+        const { runCliDisposerAfterPending } = await import("./runtime-cleanup.js");
+        // Owned shutdown runs before this drain; expired disposers keep their recorded outcome.
+        await runCliDisposerAfterPending("shared-state", async () => {
+          const { closeOpenClawStateDatabaseAsync } =
+            await import("../state/openclaw-state-db-cache.js");
+          await closeOpenClawStateDatabaseAsync();
+          const { closeDefaultRetainedNativeWorkerSource } =
+            await import("../infra/worker-native-lifecycle.js");
+          await closeDefaultRetainedNativeWorkerSource();
+        });
+      }
+    }),
+  );
 }
 
 export function retainCliRegistryHarnesses(

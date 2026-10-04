@@ -256,8 +256,7 @@ actor TalkModeRuntime {
         self.realtimeSession = nil
         self.audioInputObserver?.stop()
         self.audioInputObserver = nil
-        self.silenceTask?.cancel()
-        self.silenceTask = nil
+        SimpleTaskSupport.stop(task: &self.silenceTask)
         self.lastTranscript = ""
         self.lastHeard = nil
         self.lastSpeechEnergyAt = nil
@@ -414,8 +413,7 @@ actor TalkModeRuntime {
         self.audioEngine?.stop()
         self.audioEngine = nil
         self.activeInputResolution = nil
-        self.rmsTask?.cancel()
-        self.rmsTask = nil
+        SimpleTaskSupport.stop(task: &self.rmsTask)
     }
 
     private func startRMSTicker(meter: LockIsolated<Double>) {

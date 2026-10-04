@@ -4,6 +4,7 @@ import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import {
   createEmptyPluginRegistry,
   setActivePluginRegistry,
@@ -178,13 +179,13 @@ describe("monitorDiscordProvider", () => {
   const getConstructedClientOptions = (): {
     clientId?: string;
     eventQueue?: { listenerTimeout?: number; slowListenerThreshold?: number };
-    requestOptions?: { timeout?: number; maxQueueSize?: number };
+    requestOptions?: { timeout?: number };
   } => {
     expect(clientConstructorOptionsMock).toHaveBeenCalledTimes(1);
     return firstMockArg(clientConstructorOptionsMock, "Discord client constructor") as {
       clientId?: string;
       eventQueue?: { listenerTimeout?: number; slowListenerThreshold?: number };
-      requestOptions?: { timeout?: number; maxQueueSize?: number };
+      requestOptions?: { timeout?: number };
     };
   };
 
@@ -295,8 +296,7 @@ describe("monitorDiscordProvider", () => {
           patch: vi.fn(async () => undefined),
           delete: vi.fn(async () => undefined),
         },
-        deployCommands: async (deployOptions?: { mode?: string }) =>
-          await clientDeployCommandsMock(deployOptions),
+        deployCommands: async () => await clientDeployCommandsMock(),
         fetchUser: async (target: string) => await clientFetchUserMock(target),
         getPlugin: (name: string) =>
           clientGetPluginMock(name) ?? pluginRegistry.find((plugin) => plugin.id === name),
@@ -323,7 +323,12 @@ describe("monitorDiscordProvider", () => {
   });
 
   function runProvider(overrides: Partial<Parameters<typeof monitorDiscordProvider>[0]> = {}) {
-    return monitorDiscordProvider({ config: baseConfig(), runtime: baseRuntime(), ...overrides });
+    return monitorDiscordProvider({
+      scheduler: createTestPluginServiceScheduler(),
+      config: baseConfig(),
+      runtime: baseRuntime(),
+      ...overrides,
+    });
   }
 
   it("awaits restored thread bindings before reconciliation and provider startup", async () => {
@@ -334,7 +339,11 @@ describe("monitorDiscordProvider", () => {
       entered.resolve();
       return ready.promise;
     });
-    const monitor = monitorDiscordProvider({ config: baseConfig(), runtime: baseRuntime() });
+    const monitor = monitorDiscordProvider({
+      scheduler: createTestPluginServiceScheduler(),
+      config: baseConfig(),
+      runtime: baseRuntime(),
+    });
     try {
       await entered.promise;
       expect(reconcileAcpThreadBindingsOnStartupMock).not.toHaveBeenCalled();
@@ -366,6 +375,7 @@ describe("monitorDiscordProvider", () => {
 
       await expect(
         monitorDiscordProvider({
+          scheduler: createTestPluginServiceScheduler(),
           config: baseConfig(),
           runtime: baseRuntime(),
         }),
@@ -399,6 +409,7 @@ describe("monitorDiscordProvider", () => {
         });
       }
       const monitor = monitorDiscordProvider({
+        scheduler: createTestPluginServiceScheduler(),
         config: baseConfig(),
         runtime: baseRuntime(),
         abortSignal: controller.signal,
@@ -506,6 +517,7 @@ describe("monitorDiscordProvider", () => {
     });
 
     await monitorDiscordProvider({
+      scheduler: createTestPluginServiceScheduler(),
       config: cfg,
       runtime: baseRuntime(),
       channelRuntime,
@@ -701,7 +713,6 @@ describe("monitorDiscordProvider", () => {
     await runProvider({ runtime });
 
     await vi.waitFor(() => expect(clientDeployCommandsMock).toHaveBeenCalledTimes(1));
-    expect(clientDeployCommandsMock).toHaveBeenCalledWith({ mode: "reconcile" });
     expect(clientFetchUserMock).toHaveBeenCalledWith("@me");
     expect(monitorLifecycleMock).toHaveBeenCalledTimes(1);
   });

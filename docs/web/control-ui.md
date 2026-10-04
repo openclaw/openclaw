@@ -22,6 +22,8 @@ For unmatched HTTP paths, the app-shell fallback respects the request's `Accept`
 
 It speaks **directly to the Gateway WebSocket** on the same port.
 
+After a Gateway restart, an agent may need a few minutes to prepare its database. The chat view shows "Starting up" and the sidebar stays quiet while preparation is pending. Both reload automatically when the agent is ready; an actual preparation failure still shows its diagnostic and repair instructions.
+
 If the Gateway's request queue is full, automatic sidebar session discovery keeps the current rows and retries up to three times, respecting the server's retry delay. A persistent failure shows "The server is busy. Please try again in a moment." Other actions can show this message immediately; wait briefly, then retry the action.
 
 While the initial connection or a route loads, shimmer placeholders reserve the chat layout. Home and System busyness open directly in their destination panels, with working headers and Close controls while the content loads. Brief loads do not flash placeholders; slower loads show placeholders inside the panel, and load errors offer Retry in the same place. The rest of the page stays usable. Drag the System busyness title bar to move the panel; its position is remembered in this browser. You can also focus the title bar and use the arrow keys (Shift moves farther). Compact/expanded transitions animate briefly, respect reduced motion, and keep the panel inside the window. Loading indicators respect your theme and reduced-motion preference; Gateway startup progress remains visible when available.
@@ -32,13 +34,15 @@ Session details share concurrent reads across the sidebar, chat, and resource pa
 
 Sidebar pull-request indicators reuse the last known snapshot. Opening a session, its progress card, or its Git activity requests current checkout facts; sidebar rows alone do not poll Git. Active panels detect branch and staged changes from Git metadata. Tool completion refreshes working-tree stats, with a five-minute fallback for edits made outside OpenClaw.
 
-The sidebar’s **Online** list shows compact person rows with avatar presence indicators: solid green means active, amber means idle, and a hollow green ring means connected with activity unavailable. Names stay on one line and fade at the edge when space is tight. The indicators, hovercard, and accessible description preserve the activity distinctions. A compact group at the end of each row shows a theme-accent spinner and running count, then a small message-circle icon and muted open count. Each icon-number pair keeps its natural width, with a wider gap between running and open groups. The group rests at the right edge; names and counts share a text baseline, without fixed digit columns. Counts have no pill background at rest, with explanatory tooltips; hovering or keyboard-focusing the row reveals a subtle grouping pill without shifting the content. Reduced motion keeps the spinner still. Known zero counts are omitted. Open counts each person’s owned, unarchived conversations that you can access across configured agents, excluding hidden subagents, automation, system, and global/unknown sessions. Running counts those conversations actively executing an agent turn, not queued work or activity in descendant sessions. Counts cover the matching sessions before pagination and do not change with your session-list filters. All connected people remain visible, ordered Active, Idle, then Online with activity unavailable. Unavailable counts show no placeholder; the row tooltip and accessible description identify them as unavailable rather than zero. A failed refresh keeps the last counts with a retry notice.
+The sidebar’s **Online** list shows compact person rows with avatar presence indicators: solid green means active, amber means idle, and a hollow green ring means connected with activity unavailable. Names stay on one line and fade at the edge when space is tight. The indicators, hovercard, and accessible description preserve the activity distinctions. A compact group at the end of each row shows a theme-accent spinner and running count, then a small message-circle icon and muted open count. Each icon-number pair uses tabular digits and keeps its natural width, with a wider gap between running and open groups. The group rests at the right edge; names and counts share a text baseline, without fixed digit columns. Counts have no pill background at rest, with explanatory tooltips; hovering or keyboard-focusing the row reveals a subtle grouping pill without shifting the content. Reduced motion keeps the spinner still. Known zero counts are omitted. Open counts each person’s owned, unarchived conversations that you can access across configured agents, excluding hidden subagents, automation, system, and global/unknown sessions. Running counts those conversations actively executing an agent turn, not queued work or activity in descendant sessions. Counts cover the matching sessions before pagination and do not change with your session-list filters. By default, all connected people remain visible, ordered Active, Idle, then Online with activity unavailable. Hover the **Online** block or focus it with the keyboard to reveal **Filter & sort**; the action stays available on touch devices. Its compact menu uses the existing dropdown controls: choose **All** or **Running**, and sort by **Active people first**, **Running sessions**, **Total sessions**, or **Name**. Mouse hover opens the choice submenus; selecting an option dismisses the menu. Count sorts put larger values first and unavailable counts last; **Total sessions** uses the open count above, not lifetime history. **Reset to defaults** appears only after a setting changes, below a single separator, and restores the default view. These controls only filter or order people; they do not change session-list queries or hide either counter. Unavailable counts show no placeholder; the row tooltip and accessible description identify them as unavailable rather than zero. A failed refresh keeps the last counts with a retry notice.
 
 Person hovercards keep their **Recent sessions** selection and order stable while open, so background activity does not move links under the pointer or keyboard focus. Reopening the card selects the latest sessions. Timestamps stay live, and sessions that leave the visible, eligible roster disappear without replacing them with other sessions. **Viewing now** continues to follow presence.
 
 Sidebar live narration pauses while the browser tab is hidden and resumes from current activity when you return. The selected chat and pending outbox keep their separately owned subscriptions.
 
 The sidebar’s **Unsent draft** pencil covers saved text, attachments, replies, and goals, including drafts saved in another tab or before a reload, without reopening the conversation. A newer edit or clear always replaces an older saved draft. Incognito conversations never show a saved-draft pencil. Outbox attention badges also count queued messages with attachments that need review once the connection finishes restoring.
+
+If this browser has saved drafts or messages that could not be restored to a chat, a **saved drafts** or **saved messages to review** notice shows their content and attachment names. Empty records are not counted. The original chat is named only when it can be identified from your available conversations. Choose **Review in this chat** in a non-Incognito chat with an empty message box and no pending messages; confirmation restores the saved copy without sending it. Messages with unconfirmed delivery stay paused—check the original chat before retrying. **Delete saved copy** asks for confirmation and removes only the saved draft, messages, and attachments shown together, not messages already sent to a chat.
 
 With sidebar previews enabled, running sessions show a small, static tool icon beside the progress text on the second row beneath the session name. The title row stays unchanged, and the tool name is available only in the icon’s tooltip and accessible label rather than repeated as visible text. The compact one-row sidebar and team roster add no tool icon or tool text, so tool changes do not shift the list. Tool progress uses only explicitly public progress text from the Gateway, never argument-derived metadata or raw command output. If a call’s progress becomes hidden, its displayed progress is withdrawn. Pending questions and other critical status keep their existing priority. The existing session indicator remains the only activity animation, and tool state clears when its live subscription ends.
 
@@ -72,11 +76,12 @@ a separate status for execution, startup, or approval. **Keep commentary** in
 the chat view menu controls whether commentary stays visible after the run,
 not whether the active run’s narration survives a history refresh. Completed
 dashboard turns collapse their narration and tool activity under **Worked for …**
-above the answer. Expanding it restores the sequence with the existing tool-call
-groups. When no run duration is available, the heading reads **Worked**.
-The heading includes the total tool-call count followed by any failures, such as
-**Worked · 200 tool calls · 20 failed**. Calls without failures still show the
-total; turns without tool calls omit it.
+above the answer, with durations such as **Worked for 2 minutes, 3 seconds**.
+Expanding it restores the sequence with the existing tool-call groups and shows
+the total tool-call count. When no run duration is available, the heading reads
+**Worked** rather than estimating from message timestamps. Failures and other
+non-success outcomes remain visible even when collapsed, such as
+**Worked for 2 minutes, 3 seconds · 2 failed**.
 
 Consecutive tool activity shares one expandable log, including when background
 work resumes in a new run. Visible messages, media, and conversation markers
@@ -94,14 +99,22 @@ When an incoming message causes an unstarted tool call to be skipped, its card
 and work summary show **Skipped**, including after reloading the conversation.
 Approval blocks and tool failures keep their separate outcomes.
 
-Subagent runs appear in their session transcripts, outside sidebar navigation.
-Inspect them from the parent conversation with `/subagents list`,
-`/subagents info <id|#>`, and `/subagents log <id|#>`. Opening a child transcript
-is view-only; continue the conversation in its parent session.
+Open the parent conversation's side panel and select **Subagents** from its **+**
+menu to inspect ordinary child runs. The panel groups running and finished work,
+shows elapsed time and available tool activity, and opens each child's existing
+view-only transcript beside the parent. It does not add rows to the left sidebar;
+Swarm members remain in their parallel-tasks view. A directly opened child page
+offers **Open parent session**. The `/subagents list`, `/subagents info <id|#>`,
+and `/subagents log <id|#>` commands remain available.
 
-The **running tasks** indicator previews only active background tasks (running or
-queued). Its tooltip shows up to five tasks, with an overflow count for additional
-active tasks. Select the indicator to open the full task list, including finished tasks.
+Open **Processes** from the chat header's **Panels** menu or the side-panel **+**
+menu to inspect the conversation's background exec commands. It is separate from
+**Subagents**. Running and retained finished processes show status and elapsed
+time. **Finished** starts collapsed; click its heading to expand or collapse the
+list. Selecting a process opens its recent output. **Stop** targets that exact
+process, not the parent conversation or another command with the same name.
+Hidden panels stop refreshing. Output follows the process owner's temporary
+retention limits; viewing it does not drain output waiting for the agent.
 
 Select a session's title in the chat header to rename it. Enter saves the name;
 Escape cancels the edit. While an input method is composing text, Enter and

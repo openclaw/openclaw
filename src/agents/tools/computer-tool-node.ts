@@ -194,19 +194,12 @@ export class ComputerToolSession {
     }
   }
 
-  private setComputerState(next: ComputerState): void {
-    this.computerState = next;
-    if (!this.options.contextEpoch) {
-      return;
-    }
-    if (next.kind !== "frame") {
+  setTarget(target: ComputerTarget): void {
+    this.computerState = { kind: "target", target };
+    if (this.options.contextEpoch) {
       delete this.options.contextEpoch.frameToolCallId;
       delete this.options.contextEpoch.frameImageIdentity;
     }
-  }
-
-  setTarget(target: ComputerTarget): void {
-    this.setComputerState({ kind: "target", target });
   }
 
   private prepareScreenshotTarget(target: ComputerTarget): void {

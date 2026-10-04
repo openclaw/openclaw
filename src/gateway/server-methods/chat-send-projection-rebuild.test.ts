@@ -223,7 +223,22 @@ describe("registered chat.send during SQLite projection rebuild", () => {
           summary: "aborted",
         });
         const retry = await fixture.send();
-        expect(retry.mock.calls[0]?.[1]).toMatchObject({ status: "timeout", summary: "aborted" });
+        expect(retry).toHaveBeenCalledExactlyOnceWith(
+          true,
+          expect.objectContaining({ status: "timeout", summary: "aborted" }),
+          undefined,
+          { cached: true },
+        );
+        fixture.params.message = "A different input must not reuse the aborted request.";
+        const conflict = await fixture.send();
+        expect(conflict).toHaveBeenCalledExactlyOnceWith(
+          false,
+          undefined,
+          expect.objectContaining({
+            code: "INVALID_REQUEST",
+            details: { reason: "chat-request-conflict" },
+          }),
+        );
         await fixture.assertNoDispatch();
       } finally {
         release.resolve();

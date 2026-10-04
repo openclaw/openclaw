@@ -45,7 +45,6 @@ export interface FrvClient {
   rerunFailed?: (runId: string) => Promise<unknown>;
   rerunJob?: (jobId: number) => Promise<unknown>;
   rerunParent?: (runId: string) => Promise<unknown>;
-  cancelRun?: (runId: string) => Promise<unknown>;
   rerunRun?: (runId: string) => Promise<unknown>;
   listRuns?: (query: string) => Promise<Record<string, unknown>[]>;
   getVariable?: (name: string) => Promise<string>;

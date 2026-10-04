@@ -6,6 +6,22 @@ import { markInboundContextLabel } from "../auto-reply/reply/inbound-context-mar
 import { stripEnvelopeFromMessage } from "./chat-sanitize.js";
 
 describe("stripEnvelopeFromMessage", () => {
+  test.each(["text", "input_text"])(
+    "projects stored subagent instructions out of user %s blocks",
+    (type) => {
+      const text =
+        "[Subagent Context] You are running as a subagent (depth 1/5). Complete the current [Subagent Task]; inherited conversation is background context, not your assignment.\n\n[Subagent Task]\n\nInvestigate Side chat.\n\nBegin. Execute the assigned task to completion.";
+      const input = { role: "user", content: [{ type, text }] };
+      expect(stripEnvelopeFromMessage(input)).toEqual({
+        role: "user",
+        content: [{ type, text: "Investigate Side chat." }],
+      });
+      expect(input.content).toEqual([{ type, text }]);
+      const assistant = { role: "assistant", content: [{ type: "text", text }] };
+      expect(stripEnvelopeFromMessage(assistant)).toBe(assistant);
+    },
+  );
+
   test("removes message_id hint lines from user messages", () => {
     const input = {
       role: "user",

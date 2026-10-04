@@ -1,8 +1,8 @@
 import type { DatabaseSync } from "node:sqlite";
 import {
-  executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
+  iterateSqliteQuerySync,
 } from "../infra/kysely-sync.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import type {
@@ -136,8 +136,7 @@ export function readSharedGitHubPublicationRequestInDatabase(
       )
       .select(["lifecycle.request_id as lifecycle_request_id", "lifecycle.lifecycle_revision"])
       .orderBy("created_at_ms", "desc")
-      .orderBy("github_publication_requests.request_id", "desc")
-      .limit(64);
+      .orderBy("github_publication_requests.request_id", "desc");
     // Completed receipts can predate lifecycle bindings. They are unqualified history,
     // not current workspace evidence; pending receipts still fail closed when unbound.
     const candidate = hasLifecycle
@@ -170,35 +169,16 @@ export function readSharedGitHubPublicationRequestInDatabase(
       checkSharedWorktreeReceipt(candidate);
       return candidate;
     }
-    let cursor: GitHubPublicationRow | undefined;
-    for (;;) {
-      const after = cursor;
-      const page = after
-        ? ordered.where((eb) =>
-            eb.or([
-              eb("created_at_ms", "<", after.created_at_ms),
-              eb.and([
-                eb("created_at_ms", "=", after.created_at_ms),
-                eb("github_publication_requests.request_id", "<", after.request_id),
-              ]),
-            ]),
-          )
-        : ordered;
-      const rows = executeSqliteQuerySync(db, page).rows;
-      for (const row of rows) {
-        checkSharedWorktreeReceipt(row);
-        if (row.lifecycle_request_id === null) {
-          throw new Error("GitHub publication session binding is unavailable.");
-        }
-        if (matchesWorkspace(row)) {
-          return row;
-        }
+    for (const row of iterateSqliteQuerySync(db, ordered)) {
+      checkSharedWorktreeReceipt(row);
+      if (row.lifecycle_request_id === null) {
+        throw new Error("GitHub publication session binding is unavailable.");
       }
-      if (rows.length < 64) {
-        return undefined;
+      if (matchesWorkspace(row)) {
+        return row;
       }
-      cursor = rows[rows.length - 1]!;
     }
+    return undefined;
   });
 }
 
@@ -245,42 +225,20 @@ export function readSharedRepositoryGitHubPublicationInDatabase(
       return undefined;
     }
     const revision = entry.lifecycleRevision ?? null;
-    const ordered = selection
-      .orderBy("created_at_ms", "desc")
-      .orderBy("request_id", "desc")
-      .limit(64);
-    let cursor: RepositoryGitHubPublicationRow | undefined;
-    for (;;) {
-      const after = cursor;
-      const page = after
-        ? ordered.where((eb) =>
-            eb.or([
-              eb("created_at_ms", "<", after.created_at_ms),
-              eb.and([
-                eb("created_at_ms", "=", after.created_at_ms),
-                eb("request_id", "<", after.request_id),
-              ]),
-            ]),
-          )
-        : ordered;
-      const rows = executeSqliteQuerySync(db, page).rows;
-      for (const row of rows) {
-        // Validate before scope filtering: a corrupted binding is not evidence of absence.
-        checked(row);
-        assertReadableSharedGitHubPublication(row);
-        if (
-          row.session_id === session.sessionId &&
-          row.session_lifecycle_revision === revision &&
-          row.workspace_id === workspace.workspaceId &&
-          row.branch === workspace.branch
-        ) {
-          return row;
-        }
+    const ordered = selection.orderBy("created_at_ms", "desc").orderBy("request_id", "desc");
+    for (const row of iterateSqliteQuerySync(db, ordered)) {
+      // Validate before scope filtering: a corrupted binding is not evidence of absence.
+      checked(row);
+      assertReadableSharedGitHubPublication(row);
+      if (
+        row.session_id === session.sessionId &&
+        row.session_lifecycle_revision === revision &&
+        row.workspace_id === workspace.workspaceId &&
+        row.branch === workspace.branch
+      ) {
+        return row;
       }
-      if (rows.length < 64) {
-        return undefined;
-      }
-      cursor = rows[rows.length - 1]!;
     }
+    return undefined;
   });
 }

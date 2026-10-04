@@ -2,6 +2,7 @@ import { importSandboxRegistryRow } from "../agents/sandbox/registry-import.work
 import { writeSandboxRegistry } from "../agents/sandbox/registry-write.worker.js";
 import { persistSubagentRunChangesInWorker } from "../agents/subagents/registry/subagent-registry.store.worker.js";
 import { replaceWorkspaceAttestationInDatabase } from "../agents/workspace-state-store.kernel.js";
+import { executeWorkspaceStateCommand } from "../agents/workspace-state-store.worker.js";
 import { readClawInstallSchemaVersionRows } from "../claws/provenance-runtime-read.kernel.js";
 import {
   patchConfigHealthEntryInDatabase,
@@ -26,11 +27,17 @@ import { recordUpdateRunMutationInWorker } from "../infra/update-run-mutation.wo
 import { reconcileUpdateRunCandidatesInWorker } from "../infra/update-run-reconciliation.worker.js";
 import { writeSecretStoreEntryForConfigRefInDatabase } from "../secrets/store/secret-store-config-ref.kernel.js";
 import { purgeExpiredSecretStoreEntriesInDatabase } from "../secrets/store/secret-store-expiry.kernel.js";
+import {
+  writeSecretStoreEntriesInDatabase,
+  rollbackSecretStoreEntryWriteInDatabase,
+  deleteSecretStoreEntryInDatabase,
+} from "../secrets/store/secret-store-write.js";
 import { executeSessionStateCommand } from "../sessions/session-state-events.worker.js";
 import { listWatchedSessionUpstreamLinksInDatabase } from "../sessions/session-upstream-links.kernel.js";
 import { executeSessionUpstreamCommand } from "../sessions/session-upstream-links.worker.js";
 import { executeTranscriptRead } from "../transcripts/store-worker-read.js";
 import { clearRetiredTuiPointers } from "../tui/tui-last-session.kernel.js";
+import { assertAgentDeletionRecoveryHoldPredicate } from "./agent-deletion-journal-recovery.kernel.js";
 import {
   listAgentProvenanceInDatabase,
   readAgentProvenanceBatchInDatabase,
@@ -204,11 +211,33 @@ export function executeSharedStateCommand(
       requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
       const result = replaceWorkspaceAttestationInDatabase(writer, command.input);
       requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
+      assertAgentDeletionRecoveryHoldPredicate(writer, command.input.recoveryHoldPredicate);
       return result;
     }, writeOptions);
   }
+  if (
+    command.type === "workspace.snapshotAndRegister" ||
+    command.type === "workspace.mergeSetup" ||
+    command.type === "workspace.expire"
+  ) {
+    return executeWorkspaceStateCommand(command, database, writeOptions);
+  }
   if (command.type === "sandboxRegistry.write") {
     return writeSandboxRegistry(command.input, writeOptions);
+  }
+  if (command.type === "secrets.write") {
+    return writeSecretStoreEntriesInDatabase(
+      { ...command.input, database: writeOptions },
+      command.input.capturePrevious,
+      (stage) => requestSqliteWorkerOperationAdmission({ stage, facts: undefined }),
+    );
+  }
+  if (command.type === "secrets.rollback" || command.type === "secrets.delete") {
+    const admit = (stage: "transaction" | "commit") =>
+      requestSqliteWorkerOperationAdmission({ stage, facts: undefined });
+    return command.type === "secrets.rollback"
+      ? rollbackSecretStoreEntryWriteInDatabase({ ...command.input, database: writeOptions }, admit)
+      : deleteSecretStoreEntryInDatabase({ ...command.input, database: writeOptions }, admit);
   }
   if (command.type === "secrets.purge") {
     return purgeExpiredSecretStoreEntriesInDatabase(command.input, writeOptions);

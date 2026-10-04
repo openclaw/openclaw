@@ -23,11 +23,6 @@ type ChannelDoctorEntry = {
   doctor: ChannelDoctorAdapter;
 };
 
-type ChannelDoctorPluginCandidate = {
-  id: string;
-  doctor?: ChannelDoctorAdapter;
-};
-
 type ChannelDoctorLookupContext = {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -99,22 +94,20 @@ function safelyResolveChannelPlugin<T>(id: string, resolve: (id: string) => T): 
   }
 }
 
-function safeListReadOnlyChannelPlugins(context: ChannelDoctorLookupContext) {
-  try {
-    return resolveReadOnlyChannelPluginsForConfig(context.cfg, {
-      ...(context.env ? { env: context.env } : {}),
-      includePersistedAuthState: false,
-      includeSetupFallbackPlugins: true,
-    }).plugins;
-  } catch {
-    return [];
-  }
-}
-
-function listReadOnlyChannelPluginsById(
+function listReadOnlyChannelDoctorsById(
   context: ChannelDoctorLookupContext,
-): Map<string, ChannelDoctorPluginCandidate> {
-  return new Map(safeListReadOnlyChannelPlugins(context).map((plugin) => [plugin.id, plugin]));
+): Map<string, ChannelDoctorAdapter | undefined> {
+  try {
+    return new Map(
+      resolveReadOnlyChannelPluginsForConfig(context.cfg, {
+        ...(context.env ? { env: context.env } : {}),
+        includePersistedAuthState: false,
+        includeSetupFallbackPlugins: true,
+      }).plugins.map(({ id, doctor }) => [id, doctor]),
+    );
+  } catch {
+    return new Map();
+  }
 }
 
 function mergeDoctorAdapters(
@@ -160,9 +153,7 @@ function isValidChannelDoctorAdapterValue(
 function listChannelDoctorEntries(
   channelIds: readonly string[],
   context: ChannelDoctorLookupContext,
-  options: {
-    readOnlyPluginsById?: ReadonlyMap<string, ChannelDoctorPluginCandidate>;
-  } = {},
+  readOnlyDoctorsById?: ReadonlyMap<string, ChannelDoctorAdapter | undefined>,
 ): ChannelDoctorEntry[] {
   const selectedIds = new Set(
     channelIds.filter((id) => !isChannelDoctorBlockedByConfig(id, context.cfg)),
@@ -170,13 +161,12 @@ function listChannelDoctorEntries(
   if (selectedIds.size === 0) {
     return [];
   }
-  const readOnlyPluginsById =
-    options.readOnlyPluginsById ?? listReadOnlyChannelPluginsById(context);
+  const doctors = readOnlyDoctorsById ?? listReadOnlyChannelDoctorsById(context);
 
   const entries: ChannelDoctorEntry[] = [];
   for (const id of selectedIds) {
     const doctor = mergeDoctorAdapters([
-      readOnlyPluginsById.get(id)?.doctor,
+      doctors.get(id),
       safelyResolveChannelPlugin(id, getLoadedChannelPlugin)?.doctor,
       safelyResolveChannelPlugin(id, getBundledChannelSetupPlugin)?.doctor,
       safelyResolveChannelPlugin(id, getBundledChannelPlugin)?.doctor,
@@ -237,14 +227,14 @@ function preserveUnavailableChannelConfig(
 export function createChannelDoctorEmptyAllowlistPolicyHooks(
   context: ChannelDoctorLookupContext,
 ): ChannelDoctorEmptyAllowlistPolicyHooks {
-  const readOnlyPluginsById = listReadOnlyChannelPluginsById(context);
+  const readOnlyDoctorsById = listReadOnlyChannelDoctorsById(context);
   const entriesByChannel = new Map<string, ChannelDoctorEntry[]>();
   const entriesForChannel = (channelName: string) => {
     const existing = entriesByChannel.get(channelName);
     if (existing) {
       return existing;
     }
-    const entries = listChannelDoctorEntries([channelName], context, { readOnlyPluginsById });
+    const entries = listChannelDoctorEntries([channelName], context, readOnlyDoctorsById);
     entriesByChannel.set(channelName, entries);
     return entries;
   };

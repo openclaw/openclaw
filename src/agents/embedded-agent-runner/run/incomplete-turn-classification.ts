@@ -2,6 +2,7 @@ import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { getReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
 import { parseReplyDirectives } from "../../../auto-reply/reply/reply-directives.js";
+import type { AssistantMessage } from "../../../llm/types.js";
 import { resolveRawAssistantAnswerText } from "../../../shared/assistant-answer-text.js";
 import { extractEmbeddedAssistantText } from "../../embedded-agent-utils.js";
 import {
@@ -130,15 +131,8 @@ export function countSettledTurnDeliveryPayloads(params: {
   }).length;
 }
 
-export function hasPositiveOutputTokenUsage(message: AgentMessage | null): boolean {
-  if (!message || typeof message !== "object") {
-    return false;
-  }
-  const usage = (message as { usage?: unknown }).usage;
-  if (!usage || typeof usage !== "object") {
-    return false;
-  }
-  const output = asFiniteNumber((usage as { output?: unknown }).output);
+export function hasPositiveOutputTokenUsage(message: AssistantMessage | null): boolean {
+  const output = asFiniteNumber(message?.usage?.output);
   return output !== undefined && output > 0;
 }
 

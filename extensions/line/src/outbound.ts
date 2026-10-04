@@ -158,29 +158,22 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
       );
     };
 
-    const processed = payload.text
-      ? outboundRuntime.processLineMessage(payload.text)
-      : { text: "", flexMessages: [] };
+    const processed = payload.text ? outboundRuntime.processLineMessage(payload.text) : [];
 
     const chunkLimit =
       runtime.channel.text.resolveTextChunkLimit?.(cfg, "line", accountId ?? undefined, {
         fallbackLimit: 5000,
       }) ?? 5000;
 
-    const orderedMessages = processed.segments?.flatMap<
-      messagingApi.FlexMessage | messagingApi.TextMessage
-    >((segment) =>
-      segment.type === "flex"
-        ? [segment.message]
-        : runtime.channel.text
-            .chunkMarkdownText(segment.text, chunkLimit)
-            .map((text) => ({ type: "text" as const, text })),
+    const orderedMessages = processed.flatMap<messagingApi.FlexMessage | messagingApi.TextMessage>(
+      (segment) =>
+        segment.type === "flex"
+          ? [segment.message]
+          : runtime.channel.text
+              .chunkMarkdownText(segment.text, chunkLimit)
+              .map((text) => ({ type: "text" as const, text })),
     );
-    const chunks = orderedMessages
-      ? orderedMessages.flatMap((message) => (message.type === "text" ? [message.text] : []))
-      : processed.text
-        ? runtime.channel.text.chunkMarkdownText(processed.text, chunkLimit)
-        : [];
+    const hasText = orderedMessages.some((message) => message.type === "text");
     const mediaUrls = resolveOutboundMediaUrls(payload);
     const mediaOptions = {
       mediaKind: lineData.mediaKind,
@@ -188,7 +181,7 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
       durationMs: lineData.durationMs,
       trackingId: lineData.trackingId,
     };
-    const shouldSendQuickRepliesInline = chunks.length === 0 && hasQuickReplies;
+    const shouldSendQuickRepliesInline = !hasText && hasQuickReplies;
     const sendMediaMessages = async () => {
       for (const url of mediaUrls) {
         const trimmed = url?.trim();
@@ -226,22 +219,16 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
       if (location) {
         await recordResult(sendLocation(to, location, sendOptions));
       }
-
-      if (!orderedMessages) {
-        for (const flexMsg of processed.flexMessages) {
-          await recordResult(sendFlex(to, flexMsg.altText, flexMsg.contents, sendOptions));
-        }
-      }
     }
 
-    const sendMediaAfterText = !(hasQuickReplies && chunks.length > 0);
+    const sendMediaAfterText = !(hasQuickReplies && hasText);
     if (mediaUrls.length > 0 && !shouldSendQuickRepliesInline && !sendMediaAfterText) {
       await sendMediaMessages();
     }
 
-    if (orderedMessages && !shouldSendQuickRepliesInline) {
+    if (!shouldSendQuickRepliesInline) {
       const quotedIndex = orderedMessages.findIndex(canCarryLineQuoteToken);
-      if (replyQuoteToken && quotedIndex < 0) {
+      if (replyQuoteToken && orderedMessages.length > 0 && quotedIndex < 0) {
         reportLineQuoteCarrierMissing(to);
       }
       for (const [index, message] of orderedMessages.entries()) {
@@ -261,17 +248,7 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
           );
         }
       }
-    } else if (chunks.length > 0) {
-      for (const [i, chunk] of chunks.entries()) {
-        const isLast = i === chunks.length - 1;
-        const quoteToken = i === 0 ? replyQuoteToken : undefined;
-        if (isLast && hasQuickReplies) {
-          await sendTextWithQuickReply(chunk, quoteToken);
-        } else {
-          await recordResult(sendText(to, chunk, { ...sendOptions, ...quotedOption(quoteToken) }));
-        }
-      }
-    } else if (shouldSendQuickRepliesInline) {
+    } else {
       const quickReplyMessages: messagingApi.Message[] = [];
       if (lineData.flexMessage) {
         quickReplyMessages.push(
@@ -294,11 +271,7 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
       if (locationMessage) {
         quickReplyMessages.push(locationMessage);
       }
-      for (const flexMsg of processed.flexMessages) {
-        quickReplyMessages.push(
-          outboundRuntime.createFlexMessage(flexMsg.altText, flexMsg.contents),
-        );
-      }
+      quickReplyMessages.push(...orderedMessages);
       for (const url of mediaUrls) {
         const trimmed = url?.trim();
         if (!trimmed) {

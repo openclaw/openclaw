@@ -112,16 +112,11 @@ function splitStyledText(
     return [{ text, styles: undefined }];
   }
 
-  const chunks: StyledTextChunk[] = [];
-  for (const range of chunkTextRanges(text, {
+  return chunkTextRanges(text, {
     limit,
     mode: mode === "newline" ? "preferred" : "hard",
-  })) {
-    const { start, end } = range;
-    chunks.push({
-      text: text.slice(start, end),
-      styles: sliceTextStyles(styles, start, end),
-    });
-  }
-  return chunks;
+  }).map(({ start, end }) => ({
+    text: text.slice(start, end),
+    styles: sliceTextStyles(styles, start, end),
+  }));
 }

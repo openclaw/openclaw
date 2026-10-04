@@ -15,6 +15,10 @@ import type { CodeModeNamespaceRuntime } from "./code-mode-namespaces.js";
 import type { CodeModeReplyLease } from "./code-mode-program-data.js";
 import type { CodeModeResultsAccess } from "./code-mode-results.js";
 import { CODE_MODE_EXEC_YIELD_MARGIN_MS, type PendingBridgeRequest } from "./code-mode-runtime.js";
+import {
+  isCodeModeSessionStoreRequest,
+  type CodeModeSessionStoreAccess,
+} from "./code-mode-session-store.js";
 import { createCodeModeToolApiFile } from "./code-mode-tool-api.js";
 import { consumeMcpCodeModeGuestResult } from "./mcp-content.js";
 import type { AgentToolUpdateCallback } from "./runtime/index.js";
@@ -34,15 +38,7 @@ const loadSwarmHandlers = createLazyRuntimeNamedExport(
 
 export const CODE_MODE_NODES_TOOL_ID = "openclaw:core:nodes";
 
-type CodeModeNode = {
-  id: string;
-  name: string;
-  platform?: string;
-  connected: boolean;
-  commands: string[];
-};
-
-function projectCodeModeNode(node: NodeListNode): CodeModeNode {
+function projectCodeModeNode(node: NodeListNode) {
   return {
     id: node.nodeId,
     name: node.displayName?.trim() || node.nodeId,
@@ -54,36 +50,6 @@ function projectCodeModeNode(node: NodeListNode): CodeModeNode {
   };
 }
 
-async function callNodesTool(params: {
-  runtime: ToolSearchRuntime;
-  parentToolCallId: string;
-  signal?: AbortSignal;
-  onUpdate?: AgentToolUpdateCallback;
-  input: Record<string, unknown>;
-}): Promise<unknown> {
-  return await params.runtime.callValue(CODE_MODE_NODES_TOOL_ID, params.input, {
-    includeMcp: false,
-    parentToolCallId: params.parentToolCallId,
-    signal: params.signal,
-    onUpdate: params.onUpdate,
-    recoverySurface: "catalog",
-  });
-}
-
-async function listCodeModeNodes(params: {
-  runtime: ToolSearchRuntime;
-  parentToolCallId: string;
-  signal?: AbortSignal;
-  onUpdate?: AgentToolUpdateCallback;
-}): Promise<NodeListNode[]> {
-  return parseNodeList(
-    await callNodesTool({
-      ...params,
-      input: { action: "status" },
-    }),
-  );
-}
-
 async function runNodesBridge(params: {
   runtime: ToolSearchRuntime;
   parentToolCallId: string;
@@ -91,10 +57,18 @@ async function runNodesBridge(params: {
   signal?: AbortSignal;
   onUpdate?: AgentToolUpdateCallback;
 }): Promise<unknown> {
+  const call = (input: Record<string, unknown>) =>
+    params.runtime.callValue(CODE_MODE_NODES_TOOL_ID, input, {
+      includeMcp: false,
+      parentToolCallId: params.parentToolCallId,
+      signal: params.signal,
+      onUpdate: params.onUpdate,
+      recoverySurface: "catalog",
+    });
   const values = params.request.args;
   const action = values[0];
   if (action === "list") {
-    return (await listCodeModeNodes(params))
+    return parseNodeList(await call({ action: "status" }))
       .filter((node) => node.paired === true)
       .map(projectCodeModeNode);
   }
@@ -104,7 +78,7 @@ async function runNodesBridge(params: {
       throw new ToolInputError("nodes.get id or name must be a non-empty string.");
     }
     const node = resolveEligibleNodeFromList(
-      await listCodeModeNodes(params),
+      parseNodeList(await call({ action: "status" })),
       query,
       (candidate) => candidate.paired === true,
       {
@@ -137,14 +111,11 @@ async function runNodesBridge(params: {
     if (typeof command !== "string" || !command.trim()) {
       throw new ToolInputError("nodes.invoke command must be a non-empty string.");
     }
-    return await callNodesTool({
-      ...params,
-      input: {
-        action: "invoke",
-        node,
-        invokeCommand: command,
-        invokeParamsJson: JSON.stringify(values[3] ?? {}),
-      },
+    return await call({
+      action: "invoke",
+      node,
+      invokeCommand: command,
+      invokeParamsJson: JSON.stringify(values[3] ?? {}),
     });
   }
   throw new ToolInputError("unsupported nodes bridge action.");
@@ -235,6 +206,7 @@ export async function runBridgeRequest(params: {
   codeModeRunId: string;
   reply: CodeModeReplyLease;
   results: CodeModeResultsAccess;
+  sessionStore?: CodeModeSessionStoreAccess;
   remainingMs: number;
   completionRequired?: boolean;
   ctx: ToolSearchToolContext;
@@ -243,6 +215,7 @@ export async function runBridgeRequest(params: {
   onUpdate?: AgentToolUpdateCallback;
 }): Promise<void> {
   const catalogProjection = params.catalogProjection;
+  const sessionStoreRequest = isCodeModeSessionStoreRequest(params.request);
   try {
     params.signal?.throwIfAborted();
     const values = Array.isArray(params.request.args) ? params.request.args : [];
@@ -251,7 +224,29 @@ export async function runBridgeRequest(params: {
       case "resultSave":
       case "resultLoad":
       case "resultDelete": {
-        if (params.request.method === "resultSave") {
+        if (sessionStoreRequest) {
+          if (!params.sessionStore) {
+            throw new ToolInputError(
+              "Code Mode store/load is unavailable in headless execution; use an interactive session-bound cell.",
+            );
+          }
+          if (params.request.method === "resultSave") {
+            await params.sessionStore.save(
+              values[2],
+              values[0],
+              params.runtime.hasNetworkContent(),
+            );
+          } else if (params.request.method === "resultLoad") {
+            const loaded = await params.sessionStore.load(values[0]);
+            if (loaded.networkContent) {
+              params.runtime.observeNetworkContent(params.parentToolCallId);
+            }
+            // An envelope preserves missing/undefined across the JSON bridge.
+            value = loaded.value === undefined ? {} : { value: loaded.value };
+          } else {
+            await params.sessionStore.delete(values[0]);
+          }
+        } else if (params.request.method === "resultSave") {
           value = params.results.save(values[0], params.runtime.hasNetworkContent());
         } else if (params.request.method === "resultLoad") {
           const loaded = params.results.load(values[0]);
@@ -515,8 +510,12 @@ export async function runBridgeRequest(params: {
     params.reply.settle(false, {
       message: redactCodeModeCatalogIds(formatErrorMessage(error), catalogProjection.bindings),
       code:
-        getToolContractFailureCode(classified) ??
-        (isTrustedToolInputError(classified) ? "invalid_input" : "tool_error"),
+        sessionStoreRequest && error instanceof RangeError
+          ? "store_range"
+          : sessionStoreRequest && error instanceof TypeError
+            ? "store_type"
+            : (getToolContractFailureCode(classified) ??
+              (isTrustedToolInputError(classified) ? "invalid_input" : "tool_error")),
       effectStatus: "unknown",
     });
   }

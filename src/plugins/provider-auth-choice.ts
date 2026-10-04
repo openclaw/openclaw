@@ -6,7 +6,6 @@ import {
 } from "../agents/agent-scope.js";
 import { loadAuthProfileStoreWithoutExternalProfiles } from "../agents/auth-profiles/store-runtime.js";
 import { formatLiteralProviderPrefixedModelRef } from "../agents/model-ref-shared.js";
-import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace.js";
 import { normalizeAgentModelRefForConfig } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
@@ -117,35 +116,6 @@ function resolveConfiguredDefaultModelPrimary(cfg: OpenClawConfig): string | und
   return undefined;
 }
 
-async function noteDefaultModelResult(params: {
-  previousPrimary: string | undefined;
-  selectedModel: string;
-  selectedModelDisplay?: string;
-  preserveExistingDefaultModel: boolean | undefined;
-  prompter: WizardPrompter;
-}): Promise<void> {
-  const selectedModelDisplay = params.selectedModelDisplay ?? params.selectedModel;
-  if (
-    params.preserveExistingDefaultModel === true &&
-    params.previousPrimary &&
-    params.previousPrimary !== params.selectedModel
-  ) {
-    await params.prompter.note(
-      t("wizard.model.keptExistingDefault", {
-        current: params.previousPrimary,
-        selected: selectedModelDisplay,
-      }),
-      t("wizard.model.configuredTitle"),
-    );
-    return;
-  }
-
-  await params.prompter.note(
-    t("wizard.model.defaultSet", { model: selectedModelDisplay }),
-    t("wizard.model.configuredTitle"),
-  );
-}
-
 async function applyDefaultModelFromAuthChoice(params: {
   config: OpenClawConfig;
   entryConfig: OpenClawConfig;
@@ -163,10 +133,9 @@ async function applyDefaultModelFromAuthChoice(params: {
     params.preserveExistingDefaultModel === true &&
     previousPrimary !== undefined &&
     previousPrimary !== params.selectedModel;
-  const defaultModelBaseConfig = params.entryConfig;
   const defaultModelConfig =
     params.preserveExistingDefaultModel === true
-      ? restoreConfiguredPrimaryModel(params.config, defaultModelBaseConfig)
+      ? restoreConfiguredPrimaryModel(params.config, params.entryConfig)
       : params.config;
   let nextConfig = applyPrimaryModel(defaultModelConfig, params.selectedModel, {
     preserveExistingPrimary: params.preserveExistingDefaultModel === true,
@@ -204,13 +173,16 @@ async function applyDefaultModelFromAuthChoice(params: {
       nextConfig = migrationResult.config;
     }
   }
-  await noteDefaultModelResult({
-    previousPrimary,
-    selectedModel: params.selectedModel,
-    selectedModelDisplay: params.selectedModelDisplay,
-    preserveExistingDefaultModel: params.preserveExistingDefaultModel,
-    prompter: params.prompter,
-  });
+  const selectedModelDisplay = params.selectedModelDisplay ?? params.selectedModel;
+  await params.prompter.note(
+    preservesDifferentPrimary && previousPrimary
+      ? t("wizard.model.keptExistingDefault", {
+          current: previousPrimary,
+          selected: selectedModelDisplay,
+        })
+      : t("wizard.model.defaultSet", { model: selectedModelDisplay }),
+    t("wizard.model.configuredTitle"),
+  );
   return nextConfig;
 }
 
@@ -283,10 +255,7 @@ async function prepareProviderPluginAuthMethod(
 }> {
   const agentId = params.agentId ?? resolveDefaultAgentId(params.config);
   const agentDir = params.agentDir ?? resolveAgentDir(params.config, agentId);
-  const workspaceDir =
-    params.workspaceDir ??
-    resolveAgentWorkspaceDir(params.config, agentId) ??
-    resolveDefaultAgentWorkspaceDir();
+  const workspaceDir = params.workspaceDir ?? resolveAgentWorkspaceDir(params.config, agentId);
   const store = loadAuthProfileStoreWithoutExternalProfiles(agentDir);
   const existingProfiles = Object.entries(store.profiles)
     .filter(([, credential]) => credential.provider === params.providerId)
@@ -356,10 +325,7 @@ export async function prepareAuthChoiceLoadedPluginProvider<T>(
   let cache = initialCache;
   const entryConfig = params.config;
   const agentId = params.agentId ?? resolveDefaultAgentId(params.config);
-  const workspaceDir =
-    params.workspaceDir ??
-    resolveAgentWorkspaceDir(params.config, agentId) ??
-    resolveDefaultAgentWorkspaceDir();
+  const workspaceDir = params.workspaceDir ?? resolveAgentWorkspaceDir(params.config, agentId);
   const {
     resolvePluginProviders,
     resolvePluginSetupProvider,

@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import {
   convertMcpCallToolResult,
   type Tool as SdkTool,
@@ -212,13 +213,16 @@ export async function createCopilotToolBridge(
     throw new Error(`[copilot-tool-bridge] duplicate tool names: ${duplicateNames.join(", ")}`);
   }
 
+  // The pooled SDK client dispatches handlers in the context of the turn that
+  // opened it, whose async work scope is closed by a later turn.
+  const runInAttemptContext = AsyncLocalStorage.snapshot();
   let sequentialBarrier = Promise.resolve();
   const pendingCalls = new Set<Promise<void>>();
   const scheduleToolExecution: ScheduleToolExecution = (executionMode, execute) => {
     // SDK handlers arrive independently. An exclusive call waits for earlier
     // work across the attempt and blocks later calls, regardless of tool name.
     const ready = executionMode === "sequential" ? Promise.all(pendingCalls) : sequentialBarrier;
-    const run = ready.then(execute);
+    const run = ready.then(() => runInAttemptContext(execute));
     const settled = run.then(
       () => undefined,
       () => undefined,

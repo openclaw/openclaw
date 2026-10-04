@@ -336,11 +336,7 @@ class GatewayDiscovery(
     key: String,
   ): String? {
     val bytes = info.attributes[key] ?: return null
-    return try {
-      String(bytes, Charsets.UTF_8).trim().ifEmpty { null }
-    } catch (_: Throwable) {
-      null
-    }
+    return String(bytes, Charsets.UTF_8).trim().ifEmpty { null }
   }
 
   private fun parseTxtBool(value: String?): Boolean {

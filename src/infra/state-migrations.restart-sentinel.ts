@@ -211,26 +211,19 @@ async function recoverInterruptedClaim(params: {
   await params.source.remove({ skipSourceCheck: true });
 }
 
-function decisionChange(decision: MigrationDecision): string {
-  switch (decision) {
-    case "legacy-imported":
-      return "Imported the legacy restart sentinel into shared SQLite state.";
-    case "legacy-update-finalized":
-      return "Imported the final outcome of the pending legacy update.";
-    case "canonical-advanced":
-      return "Preserved newer canonical restart state instead of replaying legacy JSON.";
-    case "invalid-canonical-repaired":
-      return "Replaced an invalid SQLite restart sentinel with validated legacy state.";
-    case "canonical-preserved":
-      return "Preserved the canonical SQLite restart sentinel and discarded conflicting legacy JSON.";
-    case "malformed-legacy-discarded":
-      return "Discarded malformed retired restart sentinel JSON without importing it.";
-    case "receipt-authoritative":
-      return "Discarded recreated retired restart sentinel JSON using its migration receipt.";
-  }
-  const unreachable: never = decision;
-  return unreachable;
-}
+const DECISION_CHANGES: Record<MigrationDecision, string> = {
+  "legacy-imported": "Imported the legacy restart sentinel into shared SQLite state.",
+  "legacy-update-finalized": "Imported the final outcome of the pending legacy update.",
+  "canonical-advanced": "Preserved newer canonical restart state instead of replaying legacy JSON.",
+  "invalid-canonical-repaired":
+    "Replaced an invalid SQLite restart sentinel with validated legacy state.",
+  "canonical-preserved":
+    "Preserved the canonical SQLite restart sentinel and discarded conflicting legacy JSON.",
+  "malformed-legacy-discarded":
+    "Discarded malformed retired restart sentinel JSON without importing it.",
+  "receipt-authoritative":
+    "Discarded recreated retired restart sentinel JSON using its migration receipt.",
+};
 
 export async function migrateLegacyRestartSentinelWithCustody(params: {
   detected: LegacyRestartSentinelDetection;
@@ -363,7 +356,7 @@ export async function migrateLegacyRestartSentinelWithCustody(params: {
       `Legacy restart sentinel was removed, but its receipt could not be finalized: ${String(error)}`,
     );
   }
-  changes.push(decisionChange(result.decision));
+  changes.push(DECISION_CHANGES[result.decision]);
   notices.push("Removed retired restart-sentinel.json after recording its migration decision.");
   return { changes, warnings, notices, importedRevision: result.importedRevision };
 }

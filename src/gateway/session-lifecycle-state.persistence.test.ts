@@ -30,7 +30,10 @@ import {
 } from "../infra/agent-run-registry.js";
 import type { SubsystemLogger } from "../logging/subsystem.js";
 import { startSessionWorkAdmissionInterruption } from "../sessions/session-lifecycle-admission.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../state/openclaw-agent-db.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
@@ -112,7 +115,8 @@ it.each([
           data: { phase: "error", aborted: true, stopReason, timeoutPhase, endedAt: 2_000 },
         },
       });
-      closeOpenClawAgentDatabasesForTest();
+      await closeOpenClawAgentDatabasesAsync(path.dirname(target.storePath));
+      closeOpenClawAgentDatabasesForTest(path.dirname(target.storePath));
       const restored = loadSessionEntry({ ...target, readConsistency: "latest" });
       expect(restored?.status).toBe(status);
       if (recovery === "recoverable") {
@@ -131,7 +135,8 @@ it.each([
       expect(observed).toMatchObject({ kind: "observed", view: { status: recovery } });
     } finally {
       routing.loadSessionEntry.mockReset();
-      closeOpenClawAgentDatabasesForTest();
+      await closeOpenClawAgentDatabasesAsync(path.dirname(target.storePath));
+      closeOpenClawAgentDatabasesForTest(path.dirname(target.storePath));
     }
   },
 );
@@ -210,7 +215,8 @@ it("persists current-run timing after pre-start failure and clears it on the nex
     now += 11_192;
     recovered.emit("end", { meta: {} });
     await persistence;
-    closeOpenClawAgentDatabasesForTest();
+    await closeOpenClawAgentDatabasesAsync(path.dirname(target.storePath));
+    closeOpenClawAgentDatabasesForTest(path.dirname(target.storePath));
     expect(loadSessionEntry(target)).toMatchObject({
       status: "done",
       startedAt: 3_600_000,
@@ -223,7 +229,8 @@ it("persists current-run timing after pre-start failure and clears it on the nex
     await persistence;
     clock.mockRestore();
     routing.loadSessionEntry.mockReset();
-    closeOpenClawAgentDatabasesForTest();
+    await closeOpenClawAgentDatabasesAsync(path.dirname(target.storePath));
+    closeOpenClawAgentDatabasesForTest(path.dirname(target.storePath));
   }
 });
 
@@ -469,7 +476,8 @@ it.each(["success", "failed-write"])(
         new Set(["session-observer"]),
         { dropIfSlow: true, prepareSessionProjection: expect.any(Function) },
       );
-      closeOpenClawAgentDatabasesForTest();
+      await closeOpenClawAgentDatabasesAsync(state.root);
+      closeOpenClawAgentDatabasesForTest(state.root);
       const restored = loadSessionEntry({ ...target, readConsistency: "latest" });
       expect(restored).toMatchObject({
         status: "killed",
@@ -644,7 +652,8 @@ it.for([
         subscriptions?.lifecycleUnsub();
         releaseAgentRunContext(runId, claimId);
         routing.loadSessionEntry.mockReset();
-        closeOpenClawAgentDatabasesForTest();
+        await closeOpenClawAgentDatabasesAsync(path.dirname(target.storePath));
+        closeOpenClawAgentDatabasesForTest(path.dirname(target.storePath));
       }
     }),
 );

@@ -28,7 +28,6 @@ export function projectBundleMcpCatalogTools({
       (entry) => [entry, true, deniedToolNames.has(entry.name)] as const,
     ),
   ]) {
-    const toolName = tool.name;
     const { _meta: metadata } = tool;
     const uiMeta = asOptionalRecord(metadata?.ui);
     const rawResourceUri = uiMeta?.resourceUri ?? metadata?.["ui/resourceUri"];
@@ -40,7 +39,7 @@ export function projectBundleMcpCatalogTools({
     const entry: McpCatalogTool = {
       serverName,
       safeServerName,
-      toolName,
+      toolName: tool.name,
       title: tool.title ?? tool.annotations?.title,
       appExtensions: readMcpAppToolExtensions(tool),
       description: sanitizeMcpMetadataText(tool.description),

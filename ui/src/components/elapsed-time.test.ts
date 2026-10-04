@@ -35,38 +35,26 @@ describe("openclaw-elapsed-time", () => {
   });
 
   it.each([
-    { minimumUnit: "minute", singleUnit: false, elapsedMs: 65_000, unchangedMs: 54_000 },
-    { minimumUnit: "second", singleUnit: true, elapsedMs: 61_000, unchangedMs: 28_000 },
+    ["minute", false, 65_000, 54_000, "1m", "1m", "2m", 0],
+    ["second", true, 61_000, 28_000, "1m", "1m", "2m", 0],
+    ["second", false, 3_600_000, 1_000, "1h", "1h 1s", "1h 2s", 1],
   ] as const)(
-    "skips unchanged $minimumUnit labels (single unit: $singleUnit) and preserves rounding",
-    async ({ minimumUnit, singleUnit, elapsedMs, unchangedMs }) => {
+    "updates %s labels only when their displayed duration changes (single unit: %s, elapsed: %i)",
+    async (minimumUnit, singleUnit, elapsedMs, advanceMs, initial, first, second, renders) => {
       element.minimumUnit = minimumUnit;
       element.singleUnit = singleUnit;
       element.startMs = NOW - elapsedMs;
       await element.updateComplete;
-      expect(element.textContent?.trim()).toBe("1m");
+      expect(element.textContent?.trim()).toBe(initial);
       const render = vi.spyOn(element, "render");
-
-      await vi.advanceTimersByTimeAsync(unchangedMs);
-      expect(render).not.toHaveBeenCalled();
-      expect(element.textContent?.trim()).toBe("1m");
-
+      await vi.advanceTimersByTimeAsync(advanceMs);
+      expect(render).toHaveBeenCalledTimes(renders);
+      expect(element.textContent?.trim()).toBe(first);
       await vi.advanceTimersByTimeAsync(1_000);
-      expect(render).toHaveBeenCalledOnce();
-      expect(element.textContent?.trim()).toBe("2m");
+      expect(render).toHaveBeenCalledTimes(renders + 1);
+      expect(element.textContent?.trim()).toBe(second);
     },
   );
-
-  it("continues showing seconds when compact formatting skips an empty minute", async () => {
-    element.startMs = NOW - 3_600_000;
-    await element.updateComplete;
-    expect(element.textContent?.trim()).toBe("1h");
-
-    await vi.advanceTimersByTimeAsync(1_000);
-    expect(element.textContent?.trim()).toBe("1h 1s");
-    await vi.advanceTimersByTimeAsync(1_000);
-    expect(element.textContent?.trim()).toBe("1h 2s");
-  });
 
   it("applies timing and format property changes even when the current label is unchanged", async () => {
     element.minimumUnit = "minute";

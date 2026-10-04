@@ -1,7 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { expect, it, vi } from "vitest";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { getRuntimeConfig } from "../../config/config.js";
@@ -15,12 +16,14 @@ import {
   replaceSessionEntrySync,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { historyLane } from "../../config/sessions/session-transcript-worker-resources.js";
 import type { SessionSystemPromptReport } from "../../config/sessions/types.js";
 import { createPersistCronSessionEntry } from "../../cron/isolated-agent/run-session-state.js";
 import { prepareCronSession } from "../../cron/isolated-agent/session.js";
 import { discoverAllSessions, loadSessionCostSummary } from "../../infra/session-cost-usage.js";
 import type { AssistantMessage } from "../../llm/types.js";
 import type { SessionsUsageResult } from "../../shared/usage-types.js";
+import { unregisterOpenClawAgentDatabase } from "../../state/openclaw-agent-db-registry.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { SYSTEM_AGENT_ID } from "../../system-agent/agent-id.js";
@@ -68,8 +71,8 @@ async function requestUsage(params: Record<string, unknown>, method = "sessions.
 }
 
 async function readUsage(params: Record<string, unknown>) {
-  const [ok, payload] = await requestUsage(params);
-  expect(ok).toBe(true);
+  const [ok, payload, error] = await requestUsage(params);
+  expect(ok, JSON.stringify({ params, error })).toBe(true);
   return payload as SessionsUsageResult;
 }
 
@@ -309,6 +312,29 @@ it("reads selected reports from the physical owner of shared-store sentinels and
     });
     const config = getRuntimeConfig();
     openOpenClawAgentDatabase({ agentId: "main", path: storePath });
+    const unrelated = openOpenClawAgentDatabase({ agentId: "unrelated", env: state.env });
+    let changeRegistryAfterInventory = false;
+    let registryChanges = 0;
+    const run = historyLane.pool.run.bind(historyLane.pool);
+    const inventory = vi.spyOn(historyLane.pool, "run").mockImplementation(async (...args) => {
+      const reply = await run(...args);
+      if (
+        changeRegistryAfterInventory &&
+        reply.ok &&
+        isRecord(reply.value) &&
+        reply.value.kind === "session-target-inventory"
+      ) {
+        changeRegistryAfterInventory = false;
+        registryChanges++;
+        unregisterOpenClawAgentDatabase({
+          agentId: unrelated.agentId,
+          path: unrelated.path,
+          env: state.env,
+        });
+      }
+      return reply;
+    });
+    onTestFinished(() => inventory.mockRestore());
     for (const [agentId, key] of [
       ["ops", "global"],
       ["worker", "agent:worker:usage"],
@@ -325,12 +351,14 @@ it("reads selected reports from the physical owner of shared-store sentinels and
       expect(target?.storeTarget).toEqual({ agentId: "main", storePath });
       const params = { range: "all", key, includeContextWeight: true };
       for (const requestedAgent of [undefined, agentId]) {
+        changeRegistryAfterInventory = agentId === "worker" && requestedAgent === undefined;
         const payload = await readUsage({ ...params, agentId: requestedAgent });
         expect(payload).toMatchObject({
           sessions: [{ key, agentId, hasContextWeight: true, contextWeight }],
         });
       }
     }
+    expect(registryChanges).toBe(1);
   });
 });
 

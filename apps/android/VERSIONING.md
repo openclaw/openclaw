@@ -57,6 +57,18 @@ tracked defaults unchanged.
 5. The upload lane validates auth, signing, version metadata, and generated notes; captures phone and Wear screenshots; and builds the signed phone AAB, Wear AAB, and third-party APK. It rechecks the public baselines before uploading both AABs, metadata, and screenshots in one Google Play edit. A changed baseline stops the upload.
 6. Before the first new-format upload, the lane records the immutable legacy-code cutover marker. The phone and Wear bundles go to `internal` and `wear:internal`. Production promotion remains manual in Google Play Console. A successful upload records the unchanged source SHA and planned identity in its immutable release ref.
 
+Both release operations omit `changesNotSentForReview` when the selected Play
+track is `internal`, and disable Fastlane's review-setting fallback. Play handles
+review automatically on these tracks; setting the parameter to `false` still
+sends it and is rejected. Local uploads to other tracks retain their configured
+review settings. Store releases still include listing metadata and screenshots.
+
+Google Play can also submit changes already staged in Play Console when an API
+edit commits. Resolve unrelated pending store changes before either release
+operation or enabling the daily schedule; skipping listing uploads does not
+isolate those staged changes. See Google's
+[concurrency guidance](https://developers.google.com/android-publisher/concurrency-considerations).
+
 `pnpm android:release:upload` runs the same planning, note generation, and upload
 flow from a clean local `main` matching `origin/main`, with no
 required arguments.
@@ -80,16 +92,7 @@ and Wear notes, signing, artifact validation, atomic upload, and immutable
 source-ref recording. They publish to `internal` and `wear:internal`, then upload
 the exact same signed phone and Wear AABs to Firebase App Distribution. They skip
 screenshot capture and its emulator/image tooling, and leave the store listing
-metadata and images unchanged. Internal distributions omit
-`changesNotSentForReview` so Play handles review automatically, and disable
-Fastlane's review-setting fallback. Ordinary store releases retain their
-configured review settings; production promotion remains manual.
-
-Google Play can also submit changes already staged in Play Console when an API
-edit commits. Resolve unrelated pending store changes before running an internal
-distribution or enabling its daily schedule; skipping listing uploads does not
-isolate those staged changes. See Google's
-[concurrency guidance](https://developers.google.com/android-publisher/concurrency-considerations).
+metadata and images unchanged. Production promotion remains manual.
 
 To configure unattended runs:
 
@@ -250,6 +253,13 @@ it only after the atomic phone and Wear Play edit commits. Both kinds of ref
 point to existing source commits; they create no commits or PRs. Existing refs
 are immutable: the same ref at the same SHA is accepted, while a different SHA
 fails. `GOOGLE_PLAY_VALIDATE_ONLY=1` does not record an uploaded-build ref.
+
+Source-ref reads and writes tolerate recognized transient Git failures, including
+GitHub's workflow-check timeout, with up to four attempts and waits of 5, 10, and
+20 seconds. Every push is reconciled against the remote ref before another
+attempt; an unreadable remote never authorizes another push. Authentication
+failures and conflicting source SHAs stop the release. These retries do not
+repeat the build or upload.
 
 For release-note generation, each public phone or Wear code resolves through its
 v2 ref. Legacy Wear codes resolve to their paired phone ref by subtracting `50`.

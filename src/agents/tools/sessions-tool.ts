@@ -522,9 +522,7 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
       if (typeof archived === "boolean" && !expectedSessionId) {
         throw new ToolInputError("Session lifecycle action requires a durable session identity");
       }
-      const lifecycleIdentity:
-        | { expectedSessionId: string; expectedLifecycleRevision?: string }
-        | undefined = expectedSessionId ? { expectedSessionId } : undefined;
+      const lifecycleIdentity = expectedSessionId ? { expectedSessionId } : undefined;
       const patch = { key, ...lifecycleIdentity, ...values };
       let selectedLifecycleRevision: string | null | undefined;
       const controlTarget = () => ({
@@ -579,7 +577,6 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
             const {
               archived: _archived,
               expectedSessionId: _expectedSessionId,
-              expectedLifecycleRevision: _expectedLifecycleRevision,
               ...immediatePatch
             } = patch;
             let immediateResult: SessionsPatchResult | undefined;
@@ -609,12 +606,7 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
 
                 while (true) {
                   const latestEntry = loadSessionEntry({ agentId, sessionKey: key, storePath });
-                  if (
-                    latestEntry?.sessionId !== expectedSessionIdentity.expectedSessionId ||
-                    (expectedSessionIdentity.expectedLifecycleRevision !== undefined &&
-                      latestEntry.lifecycleRevision !==
-                        expectedSessionIdentity.expectedLifecycleRevision)
-                  ) {
+                  if (latestEntry?.sessionId !== expectedSessionIdentity.expectedSessionId) {
                     return;
                   }
 

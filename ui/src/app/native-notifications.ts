@@ -1,3 +1,4 @@
+import { registerListener } from "../../../src/shared/listeners.js";
 import { webKitHostWindow } from "./native-webkit-bridge.ts";
 
 export type NativeNotificationsPermission = "granted" | "denied" | "notDetermined";
@@ -102,10 +103,7 @@ export function createNativeNotificationsCapability(): NativeNotificationsCapabi
     get snapshot() {
       return snapshot;
     },
-    subscribe(listener) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
+    subscribe: (listener) => registerListener(listeners, listener),
     requestPermission() {
       postMessage({ type: "request-permission" });
     },

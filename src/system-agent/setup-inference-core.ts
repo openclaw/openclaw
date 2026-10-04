@@ -19,6 +19,7 @@ import type {
 import { normalizeAgentModelRefForConfig } from "../config/model-input.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { enablePluginInConfig } from "../plugins/enable.js";
 import type {
@@ -240,26 +241,11 @@ export async function waitForProviderAuth<T>(
   promise: Promise<T>,
   signal?: AbortSignal,
 ): Promise<T> {
-  if (!signal) {
-    return await promise;
-  }
-  if (signal.aborted) {
-    // The provider can cancel synchronously while constructing this already-started promise.
-    // Retain its rejection handler even though cancellation wins immediately.
-    void promise.catch(() => {});
-    throw new SetupInferenceCancelledError();
-  }
-  let rejectAborted: ((reason: unknown) => void) | undefined;
-  const aborted = new Promise<never>((_resolve, reject) => {
-    rejectAborted = reject;
-  });
-  const onAbort = () => rejectAborted?.(new SetupInferenceCancelledError());
-  signal.addEventListener("abort", onAbort, { once: true });
-  try {
-    return await Promise.race([promise, aborted]);
-  } finally {
-    signal.removeEventListener("abort", onAbort);
-  }
+  return await racePromiseWithAbortSignal(
+    promise,
+    signal,
+    () => new SetupInferenceCancelledError(),
+  );
 }
 
 export type ActivateSetupInferenceDeps = {

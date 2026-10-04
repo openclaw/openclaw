@@ -288,14 +288,16 @@ describe("nodeHandlers node.runnerInventory.update", () => {
     await publish(availableHost);
     await publish(fullHost);
 
-    const [proof] = await transport.listCurrentNodes();
-    expect(proof?.workerHost).toEqual({
+    const proof = expectDefined(await transport.getCurrentNode("node-1"), "current runner proof");
+    expect(proof.workerHost).toEqual({
       enabled: true,
       capacity: FULL_CAPACITY,
       bundlePrewarm: 1,
     });
-    expect(proof && transport.isCurrent(proof)).toBe(true);
-    expect(proof && transport.isCurrent(proof, true)).toBe(false);
+    proof.workerHost.capacity.available = 2;
+    expect(transport.isCurrent(proof)).toBe(true);
+    expect(transport.isCurrent(proof, true)).toBe(false);
+    expect((await transport.getCurrentNode("node-1"))?.workerHost.capacity).toEqual(FULL_CAPACITY);
     runtime.nodeRegistry.unregister("conn-1");
   });
 

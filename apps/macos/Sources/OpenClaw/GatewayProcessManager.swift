@@ -638,7 +638,8 @@ final class GatewayProcessManager {
         self.launchAgentEnablePendingRequest = nil
         let enableTask = self.launchAgentEnableTask
         self.status = .stopped
-        self.logger.info("gateway stop requested")
+        self.logger.info(
+            "gateway stop requested (profile \(AppProfile.current.name ?? "default"), \(hosting.rawValue) hosting)")
         let priorDisableTask = self.launchAgentDisableTask
         let disableTask = Task { @MainActor in
             _ = await priorDisableTask?.value

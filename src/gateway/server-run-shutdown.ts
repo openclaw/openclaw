@@ -1,4 +1,5 @@
 import { setTimeout as sleep } from "node:timers/promises";
+import { raceWithTimeout } from "../../packages/retry/src/index.js";
 import { createAgentRunRestartAbortError } from "../agents/run-termination.js";
 import { captureGatewayReplyRunRestartAbort } from "../auto-reply/reply/reply-run-registry.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -16,7 +17,7 @@ import {
   type ChatRunState,
 } from "./server-chat-state.js";
 import type { GatewayContextResolver } from "./server-methods/types.js";
-import { createGatewayShutdownTimeout, recordGatewayShutdownWarning } from "./server-shutdown.js";
+import { recordGatewayShutdownWarning } from "./server-shutdown.js";
 
 const shutdownLog = createSubsystemLogger("gateway/shutdown");
 const RESTART_REPLY_DRAIN_POLL_MS = 100;
@@ -202,15 +203,12 @@ async function settleTerminalSessionPersistenceForRestart(
   if (pending.length === 0) {
     return;
   }
-  const timeout = createGatewayShutdownTimeout(
+  const results = await raceWithTimeout(
+    () => Promise.allSettled(pending.map(({ persistence }) => persistence)),
     RESTART_TERMINAL_PERSISTENCE_WAIT_TIMEOUT_MS,
     () => null,
+    { ref: false },
   );
-  const results = await Promise.race([
-    Promise.allSettled(pending.map(({ persistence }) => persistence)),
-    timeout.promise,
-  ]);
-  timeout.clear();
   if (!results) {
     shutdownLog.warn(
       `terminal session persistence did not settle within ${RESTART_TERMINAL_PERSISTENCE_WAIT_TIMEOUT_MS}ms; preserving restart recovery`,
@@ -245,48 +243,43 @@ async function markActiveRunsForRestartRecovery(
   const recoveryCandidates = new Map(params.restartRecoveryCandidates);
   const abortReplyRuns = captureGatewayReplyRunRestartAbort(params.resolveGatewayContext);
   try {
-    const markerTimeout = createGatewayShutdownTimeout(
+    let markerOutcome: Promise<void>;
+    const timedOut = await raceWithTimeout(
+      () => {
+        markerOutcome = Promise.resolve(
+          params.markMainSessionsAbortedForRestart!({
+            resolveGatewayContext: params.resolveGatewayContext,
+            activeRuns,
+            reason: params.reason,
+            isActiveRun: (run) => {
+              const entry = params.chatAbortControllers.get(run.runId);
+              const candidate = params.restartRecoveryCandidates?.get(run.runId);
+              return (
+                (entry &&
+                  entry === activeEntries.get(run.runId) &&
+                  !entry.controller.signal.aborted &&
+                  (entry.registrationCleanupRequested !== true ||
+                    entry.projectSessionTerminalPersisted !== true) &&
+                  entry.lifecycleGeneration === run.lifecycleGeneration) ||
+                (candidate !== undefined &&
+                  candidate === recoveryCandidates.get(run.runId) &&
+                  candidate.lifecycleGeneration === run.lifecycleGeneration)
+              );
+            },
+          }),
+        );
+        return markerOutcome.then(() => false);
+      },
       RESTART_MARKER_SLOW_WARNING_MS,
-      () => "timeout" as const,
+      () => true,
+      { ref: false },
     );
-    const markerOutcome = Promise.resolve(
-      params.markMainSessionsAbortedForRestart({
-        resolveGatewayContext: params.resolveGatewayContext,
-        activeRuns,
-        reason: params.reason,
-        isActiveRun: (run) => {
-          const entry = params.chatAbortControllers.get(run.runId);
-          const candidate = params.restartRecoveryCandidates?.get(run.runId);
-          return (
-            (entry &&
-              entry === activeEntries.get(run.runId) &&
-              !entry.controller.signal.aborted &&
-              (entry.registrationCleanupRequested !== true ||
-                entry.projectSessionTerminalPersisted !== true) &&
-              entry.lifecycleGeneration === run.lifecycleGeneration) ||
-            (candidate !== undefined &&
-              candidate === recoveryCandidates.get(run.runId) &&
-              candidate.lifecycleGeneration === run.lifecycleGeneration)
-          );
-        },
-      }),
-    ).then(
-      () => ({ status: "completed" as const }),
-      (error: unknown) => ({ status: "failed" as const, error }),
-    );
-    const firstOutcome = await Promise.race([markerOutcome, markerTimeout.promise]);
-    markerTimeout.clear();
-    if (firstOutcome === "timeout") {
+    if (timedOut) {
       shutdownLog.warn(
         `restart session marker did not settle within ${RESTART_MARKER_SLOW_WARNING_MS}ms; waiting before shutdown`,
       );
       recordGatewayShutdownWarning(params.warnings, "restart-main-session-marker");
-      const delayedOutcome = await markerOutcome;
-      if (delayedOutcome.status === "failed") {
-        throw delayedOutcome.error;
-      }
-    } else if (firstOutcome.status === "failed") {
-      throw firstOutcome.error;
+      await markerOutcome!;
     }
     for (const run of activeRuns) {
       if (params.restartRecoveryCandidates?.get(run.runId) === recoveryCandidates.get(run.runId)) {

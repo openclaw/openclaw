@@ -1,6 +1,12 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { loadOrCreateProcessDeviceIdentity } from "../infra/device-identity.js";
+import {
+  ApnsRegistrationPairingChangedError,
+  registerApnsRegistration,
+} from "../infra/push-apns.js";
 import type { NodeEventContext } from "./server-node-events-types.js";
+import { formatForLog } from "./ws-log.js";
 
 export type NodeApnsRegistrationAuthority = {
   resolveApnsRegistrationGeneration?: () => string | null | Promise<string | null>;
@@ -12,19 +18,7 @@ export async function registerNodeApnsEvent(
   nodeId: string,
   obj: Record<string, unknown>,
   authority: NodeApnsRegistrationAuthority | undefined,
-  dependencies: {
-    ApnsRegistrationPairingChangedError: typeof import("../infra/push-apns-store.errors.js").ApnsRegistrationPairingChangedError;
-    registerApnsRegistration: typeof import("../infra/push-apns-store.js").registerApnsRegistration;
-    loadOrCreateProcessDeviceIdentity: () => { deviceId: string };
-    formatForLog: (value: unknown) => string;
-  },
 ): Promise<"pairing-changed" | undefined> {
-  const {
-    ApnsRegistrationPairingChangedError,
-    registerApnsRegistration,
-    loadOrCreateProcessDeviceIdentity,
-    formatForLog,
-  } = dependencies;
   const transport = normalizeLowercaseStringOrEmpty(obj.transport) || "direct";
   const topic = typeof obj.topic === "string" ? obj.topic : "";
   const environment = obj.environment;

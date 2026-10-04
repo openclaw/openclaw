@@ -1,4 +1,3 @@
-// Outbound media helpers normalize plugin media attachments before channel delivery.
 import { randomBytes } from "node:crypto";
 import { createAsyncLock, sanitizeUntrustedFileName } from "@openclaw/fs-safe/advanced";
 import { normalizeMimeType } from "@openclaw/media-core/mime";
@@ -234,7 +233,6 @@ export function createHostedOutboundMediaStore(
   const withCapacityMutation = createAsyncLock();
   const activeReaders = new Map<string, number>();
   const deferredDeletes = new Set<string>();
-  const deletingEntries = new Set<string>();
 
   async function deleteEntry(id: string): Promise<boolean> {
     // Deletion revokes the bearer capability immediately, even when an admitted
@@ -243,14 +241,9 @@ export function createHostedOutboundMediaStore(
     if ((activeReaders.get(id) ?? 0) > 0) {
       return false;
     }
-    deletingEntries.add(id);
-    try {
-      await deleteHostedOutboundMediaRows(id, options.metadataStore, options.chunkStore);
-      deferredDeletes.delete(id);
-      return true;
-    } finally {
-      deletingEntries.delete(id);
-    }
+    await deleteHostedOutboundMediaRows(id, options.metadataStore, options.chunkStore);
+    deferredDeletes.delete(id);
+    return true;
   }
 
   async function readMetadataRecord(
@@ -324,7 +317,7 @@ export function createHostedOutboundMediaStore(
         await withCapacityMutation(async () => await deleteEntry(id));
       }
     };
-    if (deferredDeletes.has(id) || deletingEntries.has(id)) {
+    if (deferredDeletes.has(id)) {
       await close();
       return null;
     }
@@ -375,13 +368,12 @@ export function createHostedOutboundMediaStore(
     let entryCount = orderedRows.length;
     let chunkCount = orderedRows.reduce((total, row) => total + row.value.chunkCount, 0);
     let totalBytes = orderedRows.reduce((total, row) => total + row.value.byteLength, 0);
-    if (
-      overflowPolicy === "reject-new" &&
-      (entryCount >= maxEntries ||
-        chunkCount + incomingChunkCount > maxChunkRows ||
-        (options.maxTotalBytes !== undefined &&
-          totalBytes + incomingByteLength > options.maxTotalBytes))
-    ) {
+    const exceedsCapacity = () =>
+      entryCount >= maxEntries ||
+      chunkCount + incomingChunkCount > maxChunkRows ||
+      (options.maxTotalBytes !== undefined &&
+        totalBytes + incomingByteLength > options.maxTotalBytes);
+    if (overflowPolicy === "reject-new" && exceedsCapacity()) {
       throw new Error(
         `hosted outbound media capacity is full (${entryCount}/${maxEntries} entries, ${
           chunkCount + incomingChunkCount
@@ -411,12 +403,7 @@ export function createHostedOutboundMediaStore(
         totalBytes -= row.value.byteLength;
       }
     }
-    if (
-      entryCount >= maxEntries ||
-      chunkCount + incomingChunkCount > maxChunkRows ||
-      (options.maxTotalBytes !== undefined &&
-        totalBytes + incomingByteLength > options.maxTotalBytes)
-    ) {
+    if (exceedsCapacity()) {
       throw new Error("hosted outbound media capacity is full while active readers retain entries");
     }
   }
@@ -491,9 +478,7 @@ export function createHostedOutboundMediaStore(
         return null;
       }
       try {
-        return deferredDeletes.has(id) || deletingEntries.has(id)
-          ? null
-          : createHostedOutboundMediaMetadata(reader.meta);
+        return deferredDeletes.has(id) ? null : createHostedOutboundMediaMetadata(reader.meta);
       } finally {
         await reader.close();
       }

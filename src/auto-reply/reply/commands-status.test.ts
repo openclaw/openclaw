@@ -2079,13 +2079,12 @@ describe("buildStatusReply", () => {
         defaults: {
           model: "openai/gpt-5.4",
         },
-        list: [
-          {
-            id: "kira",
+        entries: {
+          kira: {
             model: "openai/gpt-5.4",
             thinkingDefault: "xhigh",
           },
-        ],
+        },
       },
       channels: {
         whatsapp: { allowFrom: ["*"] },
@@ -2107,15 +2106,14 @@ describe("buildStatusReply", () => {
             fallbacks: ["anthropic/claude-sonnet-4-6"],
           },
         },
-        list: [
-          {
-            id: "kira",
+        entries: {
+          kira: {
             model: {
               primary: "openai/gpt-5.4",
               fallbacks: ["google/gemini-2.5-flash"],
             },
           },
-        ],
+        },
       },
       channels: {
         whatsapp: { allowFrom: ["*"] },
@@ -2138,11 +2136,7 @@ describe("buildStatusReply", () => {
             fallbacks: ["anthropic/claude-sonnet-4-6"],
           },
         },
-        list: [
-          {
-            id: "kira",
-          },
-        ],
+        entries: { kira: {} },
       },
       channels: {
         whatsapp: { allowFrom: ["*"] },
@@ -2164,14 +2158,13 @@ describe("buildStatusReply", () => {
             fallbacks: ["anthropic/claude-sonnet-4-6"],
           },
         },
-        list: [
-          {
-            id: "kira",
+        entries: {
+          kira: {
             model: {
               primary: "openai/gpt-5.4",
             },
           },
-        ],
+        },
       },
       channels: {
         whatsapp: { allowFrom: ["*"] },
@@ -2193,15 +2186,14 @@ describe("buildStatusReply", () => {
             fallbacks: ["anthropic/claude-sonnet-4-6"],
           },
         },
-        list: [
-          {
-            id: "kira",
+        entries: {
+          kira: {
             model: {
               primary: "openai/gpt-5.4",
               fallbacks: [],
             },
           },
-        ],
+        },
       },
       channels: {
         whatsapp: { allowFrom: ["*"] },

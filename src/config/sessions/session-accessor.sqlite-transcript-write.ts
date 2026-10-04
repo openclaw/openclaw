@@ -13,6 +13,9 @@ import type {
   SessionTranscriptWriteScope,
   TranscriptAppendRefusal,
   TranscriptEvent,
+  TranscriptEventAppendResult,
+  TranscriptMessageWriteSnapshot,
+  TranscriptWriteSnapshot,
   TranscriptEventAppendOptions,
   TranscriptMessageAppendOptions,
   TranscriptMessageAppendResult,
@@ -65,7 +68,6 @@ import {
 import {
   runTranscriptWriteSnapshotSync,
   SqliteTranscriptMutationConflictError,
-  type TranscriptWriteSnapshot,
   type TranscriptWriteViewGuard,
 } from "./session-accessor.sqlite-transcript-write-snapshot.js";
 import type {
@@ -81,18 +83,6 @@ import {
   SessionTranscriptWriterClaimReboundError,
   withOwnedSessionTranscriptWriterFence,
 } from "./transcript-write-context.js";
-
-export type { TranscriptWriteSnapshot } from "./session-accessor.sqlite-transcript-write-snapshot.js";
-
-export type TranscriptMessageWriteSnapshot<TMessage> = TranscriptWriteSnapshot<
-  TranscriptMessageAppendResult<TMessage> | undefined
-> & {
-  visibleTail: { entryId: string | null; generation: string | null };
-};
-
-export type TranscriptEventAppendResult =
-  | { appended: false }
-  | { appended: true; effectiveParentId?: string | null };
 
 type SqliteTranscriptSnapshotState =
   | { kind: "current"; rows: SqliteTranscriptSnapshotRow[] }
@@ -268,16 +258,15 @@ export function replaceTranscriptEventsSync(
   // Every sync replacement inherits and enforces the admitted writer claim.
   const fencedScope = withOwnedSessionTranscriptWriterFence(scope);
   const resolved = resolveSqliteTranscriptScope(fencedScope);
-  let replaced = false;
-  runOpenClawAgentWriteTransaction(
+  const replaced = runOpenClawAgentWriteTransaction(
     (database) => {
       assertOwnedTranscriptWriteCommit(fencedScope);
       const fresh = readSessionEntryRow(database, resolved.sessionKey);
       if (!transcriptWriteScopeIsCurrent(fresh?.entry, resolved.sessionId, fencedScope)) {
-        return;
+        return false;
       }
       replaceSqliteTranscriptEventsInTransaction(database, resolved, events);
-      replaced = true;
+      return true;
     },
     toDatabaseOptions(resolved),
     { operationLabel: "session.transcript.replace" },
@@ -414,7 +403,11 @@ export function appendTranscriptEventSnapshotSync(
   scope: SessionTranscriptWriteScope,
   event: TranscriptEvent,
   options: TranscriptEventAppendOptions = {},
-  projection?: { scheduleProjectionReconcile: false; onProjectionReconcileNeeded: () => void },
+  projection?: {
+    scheduleProjectionReconcile: false;
+    onProjectionReconcileNeeded: () => void;
+    eventJson?: string;
+  },
   view?: TranscriptWriteViewGuard,
 ): Result<TranscriptWriteSnapshot<TranscriptEventAppendResult>, TranscriptAppendRefusal> {
   assertNonMessageTranscriptEvent(event);
@@ -428,14 +421,15 @@ export function appendTranscriptEventSnapshotSync(
         options,
       );
       if (
-        appendTranscriptEventInTransaction(database, resolved, resolvedEvent, projection) === false
+        appendTranscriptEventInTransaction(database, resolved, resolvedEvent, {
+          ...projection,
+          eventJson: resolvedEvent === event ? projection?.eventJson : undefined,
+        }) === false
       ) {
         return { appended: false };
       }
       if (
-        resolvedEvent &&
-        typeof resolvedEvent === "object" &&
-        !Array.isArray(resolvedEvent) &&
+        isRecord(resolvedEvent) &&
         "parentId" in resolvedEvent &&
         (resolvedEvent.parentId === null || typeof resolvedEvent.parentId === "string")
       ) {

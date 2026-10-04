@@ -41,19 +41,6 @@ type FinishUpdateOptions = {
   completed: boolean;
 };
 
-type TelegramUpdateTrackerState = {
-  highestAcceptedUpdateId: number | null;
-  highestPersistedAcceptedUpdateId: number | null;
-  highestCompletedUpdateId: number | null;
-  safeCompletedUpdateId: number | null;
-  pendingUpdateIds: number[];
-  failedUpdateIds: number[];
-};
-
-function sortedIds(ids: Set<number>): number[] {
-  return [...ids].toSorted((a, b) => a - b);
-}
-
 // Bound for per-id numeric dedupe when the persisted Bot API offset does not
 // advance (no onAcceptedUpdateId) or lags. Only the realistic in-process
 // redelivery window needs numeric retention; semantic keys + spool tombstones
@@ -303,19 +290,9 @@ export function createTelegramUpdateTracker(options: TelegramUpdateTrackerOption
     return skipped;
   };
 
-  const getState = (): TelegramUpdateTrackerState => ({
-    highestAcceptedUpdateId,
-    highestPersistedAcceptedUpdateId,
-    highestCompletedUpdateId,
-    safeCompletedUpdateId: resolveSafeCompletedUpdateId(),
-    pendingUpdateIds: sortedIds(pendingUpdateIds),
-    failedUpdateIds: sortedIds(failedUpdateIds),
-  });
-
   return {
     beginUpdate,
     finishUpdate,
-    getState,
     shouldSkipHandlerDispatch,
   };
 }

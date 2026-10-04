@@ -158,7 +158,7 @@ export async function reconcileDurableSubagentKillIntent(params: {
     if (!ownsSessionIncarnation()) {
       return await completeKill(true);
     }
-    return await runExclusiveSessionLifecycleMutation({
+    return await runExclusiveSessionLifecycleMutation("subagent-kill-sweep", {
       scope: session.storePath,
       identities,
       run: async () => {

@@ -176,58 +176,61 @@ async function withWebchatTool(
 }
 
 describe("WebChat automation creation through the tool and Gateway", () => {
-  it("persists default current-session announce", async () => {
+  it.each([
+    { name: "default current session", delivery: undefined, storedContext: undefined },
+    {
+      name: "ignores stale external route",
+      delivery: { mode: "announce" },
+      storedContext: { channel: "discord", to: "channel:stored" },
+    },
+    {
+      name: "explicit external override",
+      delivery: { mode: "announce", channel: "telegram", to: "recipient" },
+      storedContext: undefined,
+    },
+  ] satisfies Array<{
+    name: string;
+    delivery: CronDelivery | undefined;
+    storedContext: DeliveryContext | undefined;
+  }>)("persists $name delivery", async ({ delivery, storedContext }) => {
     await withWebchatTool(async ({ add, cron }) => {
-      await add();
-      expect(await cron.list({ includeDisabled: true })).toEqual([
+      await add(delivery);
+      const jobs = await cron.list({ includeDisabled: true });
+      expect(jobs).toEqual([
         expect.objectContaining({
           sessionTarget: "current",
           sessionKey,
           enabled: false,
-          delivery: { mode: "announce" },
+          delivery: delivery ?? { mode: "announce" },
           payload: expect.objectContaining({ kind: "agentTurn", toolsAllow: ["read"] }),
           trigger: { script: "return { fire: false };", once: true },
         }),
       ]);
-    });
+      expect(jobs[0]?.delivery).toEqual(delivery ?? { mode: "announce" });
+    }, storedContext);
   });
 
-  it("does not pin an older stored external route onto a live WebChat job", async () => {
-    await withWebchatTool(
-      async ({ add, cron }) => {
-        await add({ mode: "announce" });
-        const [job] = await cron.list({ includeDisabled: true });
-        expect(job?.delivery).toEqual({ mode: "announce" });
-      },
-      { channel: "discord", to: "channel:stored" },
-    );
-  });
-
-  it("rejects an explicit webchat channel before persistence", async () => {
-    await withWebchatTool(async ({ add, cron }) => {
-      await expect(add({ mode: "announce", channel: "webchat" })).rejects.toThrow(
-        "delivery.channel must be one of: discord, telegram",
-      );
-      expect(await cron.list({ includeDisabled: true })).toEqual([]);
-    });
-  });
-
-  it("preserves an explicit configured external delivery override", async () => {
-    await withWebchatTool(async ({ add, cron }) => {
-      const delivery: CronDelivery = { mode: "announce", channel: "telegram", to: "recipient" };
-      await add(delivery);
-      const [job] = await cron.list({ includeDisabled: true });
-      expect(job?.delivery).toEqual(delivery);
-    });
-  });
-
-  it("does not persist a route-less announce after creator authority is revoked", async () => {
-    await withWebchatTool(async ({ add, cron, revoke }) => {
-      revoke();
-      await expect(add({ mode: "announce" })).rejects.toThrow(
-        "agent runtime authority is no longer active",
-      );
-      expect(await cron.list({ includeDisabled: true })).toEqual([]);
-    });
-  });
+  it.each([
+    {
+      revoked: false,
+      delivery: { mode: "announce", channel: "webchat" },
+      error: "delivery.channel must be one of: discord, telegram",
+    },
+    {
+      revoked: true,
+      delivery: { mode: "announce" },
+      error: "agent runtime authority is no longer active",
+    },
+  ] satisfies Array<{ revoked: boolean; delivery: CronDelivery; error: string }>)(
+    "rejects invalid delivery or revoked authority before persistence: $revoked",
+    async ({ revoked, delivery, error }) => {
+      await withWebchatTool(async ({ add, cron, revoke }) => {
+        if (revoked) {
+          revoke();
+        }
+        await expect(add(delivery)).rejects.toThrow(error);
+        expect(await cron.list({ includeDisabled: true })).toEqual([]);
+      });
+    },
+  );
 });

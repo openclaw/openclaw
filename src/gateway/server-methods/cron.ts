@@ -49,6 +49,7 @@ import {
 } from "../cron-creator-authority-grant.js";
 import { authorizeGatewaySessionCreation } from "../operator-role-policy.js";
 import { getGatewayProcessInstanceId } from "../process-instance.js";
+import { resolveOperatorSessionCreation } from "../session-creation-provenance.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
 import { assertActiveAgentRuntimeAuthority } from "./agent-runtime-authority.js";
@@ -94,7 +95,6 @@ import {
   cronJobIsVisible,
   cronJobVisibilityTarget,
 } from "./cron-visibility.js";
-import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 

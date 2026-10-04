@@ -857,6 +857,56 @@ describe("message action media helpers", () => {
   });
 });
 
+describe("message action send buffer honors the non-positive channel cap rule", () => {
+  it.each([
+    { mediaMaxMb: 0, label: "zero" },
+    { mediaMaxMb: -5, label: "negative" },
+  ])(
+    "attaches a small buffer instead of a 0-byte cap for a $label channels.line.mediaMaxMb",
+    async ({ mediaMaxMb }) => {
+      await withTempOpenClawStateDir(async () => {
+        const args: Record<string, unknown> = {
+          buffer: "SGVsbG8=",
+          filename: "preview.txt",
+          mimeType: "text/plain",
+        };
+
+        await hydrateAttachmentParamsForAction({
+          cfg: { channels: { line: { mediaMaxMb } } },
+          channel: "line",
+          args,
+          action: "send",
+          dryRun: true,
+          mediaPolicy: { mode: "host" },
+        });
+
+        expect(args.media).toBe("buffer://message-send/attachment");
+      });
+    },
+  );
+
+  it("keeps capping send buffers at a positive channels.line.mediaMaxMb", async () => {
+    await withTempOpenClawStateDir(async () => {
+      const args: Record<string, unknown> = {
+        buffer: "SGVsbG8h",
+        filename: "preview.txt",
+        mimeType: "text/plain",
+      };
+
+      await expect(
+        hydrateAttachmentParamsForAction({
+          cfg: { channels: { line: { mediaMaxMb: 5 / (1024 * 1024) } } },
+          channel: "line",
+          args,
+          action: "send",
+          dryRun: true,
+          mediaPolicy: { mode: "host" },
+        }),
+      ).rejects.toThrow("Media too large: 6 bytes (limit: 5 bytes)");
+    });
+  });
+});
+
 describe("message action sandbox media hydration", () => {
   maybeIt("rejects symlink retarget escapes after sandbox media normalization", async () => {
     const sandboxRoot = await fs.mkdtemp(path.join(os.tmpdir(), "msg-params-sandbox-"));

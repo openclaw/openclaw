@@ -134,7 +134,7 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
     }
     const persistedInitialEntry = persistence.entry;
     if (creatingSession) {
-      recordSessionCreated(params.cfg, {
+      await recordSessionCreated(params.cfg, {
         sessionKey: sessionState.sessionKey,
         agentId: params.agentId,
         entry: persistedInitialEntry,
@@ -367,38 +367,16 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
   const continuationTriggerBodyNormalized = command.rawBodyNormalized;
 
   const directiveResult = await resolveReplyDirectives({
-    ctx: params.ctx,
-    cfg: params.cfg,
-    agentId: params.agentId,
-    agentDir: params.agentDir,
-    workspaceDir: params.workspaceDir,
-    agentCfg: params.agentCfg,
-    sessionCtx: sessionState.sessionCtx,
-    sessionEntry: sessionState.sessionEntry,
-    sessionStore: sessionState.sessionStore,
-    sessionKey: sessionState.sessionKey,
-    storePath: sessionState.storePath,
-    sessionScope: sessionState.sessionScope,
+    ...params,
+    ...sessionState,
     conversation: prepareReplyConversation({
       ctx: sessionState.sessionCtx,
       sessionEntry: sessionState.sessionStore[sessionState.sessionKey] ?? sessionState.sessionEntry,
       groupResolution: sessionState.groupResolution,
     }),
-    isGroup: sessionState.isGroup,
     triggerBodyNormalized: continuationTriggerBodyNormalized,
     resetTriggered: false,
-    commandAuthorized: params.commandAuthorized,
-    defaultProvider: params.defaultProvider,
-    defaultModel: params.defaultModel,
-    aliasIndex: params.aliasIndex,
-    provider: params.provider,
-    model: params.model,
     hasResolvedHeartbeatModelOverride: false,
-    // Native selections reuse the admitted catalog just like ordinary turns.
-    preparedModelCatalog: params.preparedModelCatalog,
-    typing: params.typing,
-    opts: params.opts,
-    skillFilter: params.skillFilter,
   });
   if (directiveResult.kind === "reply") {
     // The canonical directive owner already finalizes typing for every terminal reply.

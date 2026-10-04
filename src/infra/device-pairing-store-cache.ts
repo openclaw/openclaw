@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { DevicePairingStoreState, PairedDevice } from "./device-pairing.types.js";
-import { readSqliteDataVersion } from "./node-sqlite.js";
+import { readSqliteDataVersion } from "./sqlite-schema-facts.js";
 import { runSqliteDeferredTransactionSync } from "./sqlite-transaction.js";
 
 type DevicePairingStoreCache = {

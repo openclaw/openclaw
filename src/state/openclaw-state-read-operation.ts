@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
-import type { RetainedOperation, RetainedOutcome } from "../infra/retained-operation.js";
+import type { RetainedOperation, RetainedOutcome } from "@openclaw/worker-runtime/lifecycle";
 import { throwSqliteLifecycleErrors } from "../infra/sqlite-lifecycle-errors.js";
 import { retainSnapshotTempDirectory } from "../infra/sqlite-readonly-location-cleanup.js";
 import { prepareSqliteReadOnlyLocationFromOwnedDatabase } from "../infra/sqlite-readonly-location.js";
@@ -22,12 +22,12 @@ import {
 } from "./openclaw-state-db-cache.js";
 import { canReadWarmNativeSourceIndependently } from "./openclaw-state-db-readonly-reuse.js";
 import { existingPathOrUndefined } from "./openclaw-state-db.paths.js";
-import { observeReadOutcome, type OpenClawStateReadReceipt } from "./openclaw-state-read-error.js";
 import { captureOpenClawStateReadSource } from "./openclaw-state-read-worker.js";
 import type {
   OpenClawStateReadAuthority,
   OpenClawStateReadCommand,
   OpenClawStateReadOptions,
+  OpenClawStateReadReceipt,
   OpenClawStateReadReply,
   ReadResource,
   RetainedReadScope,
@@ -409,11 +409,17 @@ export function startOpenClawStateReadOperation(
         authority,
       ),
       (readOutcome) => {
-        observeReadOutcome(receipt, readOutcome);
         const admitted =
           "error" in readOutcome
             ? readOutcome.sourceAdmitted
-            : readOutcome.value.type !== "admit" && readOutcome.value.sourceAdmitted;
+            : readOutcome.value.type === "admit"
+              ? undefined
+              : readOutcome.value.sourceAdmitted;
+        if (admitted === true) {
+          receipt.phase = "read";
+        } else if (admitted === false && receipt.phase !== "read") {
+          receipt.phase = "before-read";
+        }
         try {
           authority.assertCurrent();
           if (admitted) {

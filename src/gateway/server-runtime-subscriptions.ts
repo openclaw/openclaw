@@ -56,8 +56,8 @@ import type {
   ChatRunState,
   SessionEventSubscriberRegistry,
   SessionMessageSubscriberRegistry,
-  ToolEventRecipientRegistry,
 } from "./server-chat-state.js";
+import type { ToolEventRecipientRegistry } from "./server-chat-tool-recipients.js";
 import { resolveVisibleActiveSessionRunState } from "./server-methods/session-active-runs.js";
 import { createSessionActivitySummaries } from "./session-activity-summaries.js";
 import { broadcastSessionActivitySummary } from "./session-activity-summary-events.js";

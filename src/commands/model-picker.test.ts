@@ -205,7 +205,7 @@ const resolvePluginProviders = vi.hoisted(() => vi.fn(() => []));
 const runProviderPluginAuthMethod = vi.hoisted(() => vi.fn());
 vi.mock("../commands/model-picker.runtime.js", () => ({
   modelPickerRuntime: {
-    resolveProviderModelPickerContributions: providerModelPickerContributionRuntime.resolve,
+    resolveProviderModelPickerEntries: providerModelPickerContributionRuntime.resolve,
     resolveProviderPluginChoice,
     runProviderModelSelectedHook,
     resolvePluginProviders,
@@ -234,7 +234,6 @@ function createSelectAllMultiselect() {
 function promptDefaultPicker(params: Parameters<typeof promptDefaultModel>[0]) {
   return promptDefaultModel({
     allowKeep: false,
-    includeManual: false,
     ignoreAllowlist: true,
     ...params,
   });
@@ -422,7 +421,10 @@ describe("promptDefaultModel", () => {
     expect(option.hint).toContain("ChatGPT GPT-5.5");
     expect(option.hint).toContain("ctx 400k");
     expect(option.hint).not.toContain("reasoning");
-    expect(optionValues(pickerOptions(select as MockCallSource))).toEqual(["openai/gpt-5.5"]);
+    expect(optionValues(pickerOptions(select as MockCallSource))).toEqual([
+      "__manual__",
+      "openai/gpt-5.5",
+    ]);
   });
 
   it("hides unauthenticated catalog entries from default model choices", async () => {
@@ -440,7 +442,7 @@ describe("promptDefaultModel", () => {
     });
 
     const values = optionValues(pickerOptions(select as MockCallSource));
-    expect(values).toEqual(["anthropic/claude-sonnet-4-6"]);
+    expect(values).toEqual(["__manual__", "anthropic/claude-sonnet-4-6"]);
   });
 
   it("shows AWS SDK models but hides unresolved non-OpenAI SecretRefs", async () => {
@@ -474,6 +476,7 @@ describe("promptDefaultModel", () => {
     });
 
     expect(optionValues(pickerOptions(select as MockCallSource))).toEqual([
+      "__manual__",
       "amazon-bedrock/us.anthropic.claude-sonnet-4-5",
     ]);
   });
@@ -494,7 +497,12 @@ describe("promptDefaultModel", () => {
       preferredProvider: "byteplus",
     });
 
-    expect(optionValues(pickerOptions(select))[1]).toBe("byteplus-plan/ark-code-latest");
+    expect(optionValues(pickerOptions(select))).toEqual([
+      "__keep__",
+      "__manual__",
+      "byteplus-plan/ark-code-latest",
+      "openai/gpt-5.5",
+    ]);
     expect(result.model).toBe("byteplus-plan/ark-code-latest");
   });
 
@@ -529,7 +537,6 @@ describe("promptDefaultModel", () => {
       config: agentConfig({ model: "nvidia/native" }),
       prompter: makePrompter({ select }),
       allowKeep: true,
-      includeManual: true,
       preferredProvider: "nvidia",
       browseCatalogOnDemand: true,
     });
@@ -566,7 +573,6 @@ describe("promptDefaultModel", () => {
       config,
       prompter: makePrompter({ select }),
       allowKeep: true,
-      includeManual: true,
       browseCatalogOnDemand: true,
     });
 
@@ -586,10 +592,8 @@ describe("promptDefaultModel", () => {
     );
     providerModelPickerContributionRuntime.resolve.mockReturnValue([
       {
-        option: {
-          value: "provider-plugin:nvidia:api-key",
-          label: "NVIDIA (custom)",
-        },
+        value: "provider-plugin:nvidia:api-key",
+        label: "NVIDIA (custom)",
       },
     ] as never);
     cliBackendsTesting.setDepsForTest({
@@ -604,7 +608,6 @@ describe("promptDefaultModel", () => {
       config,
       prompter: makePrompter({ select }),
       allowKeep: true,
-      includeManual: true,
       includeProviderPluginSetups: true,
       preferredProvider: "ollama",
       browseCatalogOnDemand: true,
@@ -645,6 +648,7 @@ describe("promptDefaultModel", () => {
     expect(result.model).toBe("nvidia/z-ai/glm-5.1");
     expect(pickerParams(select as MockCallSource).initialValue).toBe("nvidia/z-ai/glm-5.1");
     expect(optionValues(pickerOptions(select as MockCallSource))).toEqual([
+      "__manual__",
       "nvidia/z-ai/glm-5.1",
       "nvidia/native",
       "nvidia/current",
@@ -660,10 +664,9 @@ describe("promptDefaultModel", () => {
     ]);
     providerModelPickerContributionRuntime.resolve.mockReturnValue([
       {
-        id: "provider:model-picker:vllm",
-        kind: "provider",
-        surface: "model-picker",
-        option: { value: "vllm", label: "vLLM (custom)", hint: "Enter vLLM URL + API key + model" },
+        value: "vllm",
+        label: "vLLM (custom)",
+        hint: "Enter vLLM URL + API key + model",
       },
     ] as never);
     resolvePluginProviders.mockReturnValue([{ id: "vllm" }] as never);
@@ -719,7 +722,6 @@ describe("promptDefaultModel", () => {
       config,
       prompter: makePrompter({ select }),
       allowKeep: true,
-      includeManual: true,
       includeProviderPluginSetups: true,
       loadCatalog: false,
       agentDir: "/tmp/openclaw-agent",
@@ -1018,7 +1020,11 @@ describe("router model filtering", () => {
   it("filters internal router models in both default and allowlist prompts", async () => {
     loadModelCatalog.mockResolvedValue(OPENROUTER_CATALOG);
 
-    const select = vi.fn(async (params) => params.options[0]?.value ?? "");
+    const select = vi.fn(
+      async (params) =>
+        params.options.find((option: { value: string }) => option.value.startsWith("openrouter/"))
+          ?.value ?? "",
+    );
     const multiselect = createSelectAllMultiselect();
     const config = agentConfig();
 
@@ -1099,7 +1105,7 @@ describe("applyModelAllowlist", () => {
     });
 
     const applied = applyModelAllowlist(config, []);
-    const next = stampConfigWriteMetadata(applied, undefined, undefined, config);
+    const next = stampConfigWriteMetadata(applied, undefined, config);
     expect(next.agents?.defaults?.models).toEqual({
       "openai/gpt-5.5": { alias: "gpt" },
     });
@@ -1215,7 +1221,7 @@ it.each(agentCases)(
     const config = {
       agents: {
         defaults: { model: "openai/global-model" },
-        entries: { ops: { default: true, ...(model !== undefined ? { model } : {}) } },
+        entries: { ops: model !== undefined ? { model } : {} },
       },
     } satisfies OpenClawConfig;
     const before = structuredClone(config);

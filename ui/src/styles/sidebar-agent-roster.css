@@ -88,11 +88,6 @@ openclaw-sidebar-agent-roster {
   font-size: 12px;
 }
 
-.sidebar-agent-roster__link svg {
-  width: 14px;
-  height: 14px;
-}
-
 .sidebar-agent-roster__row {
   flex: 1;
 }
@@ -117,6 +112,7 @@ openclaw-sidebar-agent-roster {
   background: var(--bg-hover);
 }
 
+.sidebar-agent-roster__link svg,
 .sidebar-agent-roster__action svg,
 .sidebar-agent-roster__chevron svg {
   width: 14px;

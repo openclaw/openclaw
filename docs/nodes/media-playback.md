@@ -69,6 +69,17 @@ that Gateway maintenance enforces at startup and hourly, independently of
 
 ## Managed attachments and access
 
+To attach a local file in an assistant reply, put `MEDIA:/absolute/path/movie.mp4`
+on its own line. The session's existing media access policy must allow the path.
+The Control UI stages allowed local audio and video with bounded streaming and
+plays them through the Gateway's authenticated, seekable media route. Use a
+portal for an app or development server; use `MEDIA:<path>` for files.
+
+Remote `MEDIA:` references must be public HTTPS URLs without credentials.
+Rejected references produce a visible attachment failure with instructions to
+use an allowed URL or local path; they do not appear as raw directive links.
+Inline prose and fenced code examples mentioning `MEDIA:` remain text.
+
 Agent-produced audio and video are stored as managed media artifacts. Images
 keep their separate managed-image artifact family. Native clients resolve the
 artifact through `artifacts.download`, which returns inline base64 bytes when
@@ -120,15 +131,19 @@ attachments; their optional playback metadata can remain absent. Outgoing reply
 creation uses immediate inspection admission and does not wait behind queued
 viewer requests.
 
-Gateway-managed assistant attachments use these per-file caps:
+Control UI managed assistant attachments use these per-file caps:
 
-| Kind  | Maximum size |
-| ----- | -----------: |
-| Image |       12 MiB |
-| Audio |       16 MiB |
-| Video |       16 MiB |
+| Kind        | Maximum size |
+| ----------- | -----------: |
+| Image       |       12 MiB |
+| Local audio |        4 GiB |
+| Local video |        4 GiB |
 
 These are playback/storage caps, not the separate media-understanding limits.
+The larger local-file limit does not change channel outbound limits, remote or
+data URL ingestion limits, or the limits of buffer-based remote workspace readers.
+It also does not raise the transcoding budget; large native MP4 files can play
+directly without conversion.
 For transcription and description limits, see
 [Image and media support](/nodes/images#limits-and-errors).
 

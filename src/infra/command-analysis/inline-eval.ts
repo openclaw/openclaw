@@ -48,8 +48,6 @@ type PositionalInterpreterSpec = {
   fileFlags?: ReadonlySet<string>;
   fileFlagPrefixes?: readonly string[];
   exactValueFlags?: ReadonlySet<string>;
-  exactOptionalValueFlags?: ReadonlySet<string>;
-  prefixValueFlags?: readonly string[];
   flag: "<command>" | "<program>";
 };
 
@@ -296,7 +294,6 @@ const POSITIONAL_INTERPRETER_INLINE_EVAL_SPECS: readonly PositionalInterpreterSp
       "--load",
       "-W",
     ]),
-    prefixValueFlags: ["-F", "--field-separator=", "-v", "--assign=", "--include=", "--load="],
     flag: "<program>",
   },
   {
@@ -317,27 +314,6 @@ const POSITIONAL_INTERPRETER_INLINE_EVAL_SPECS: readonly PositionalInterpreterSp
       "-s",
       "--max-chars",
     ]),
-    exactOptionalValueFlags: new Set(["--eof", "--replace"]),
-    prefixValueFlags: [
-      "-a",
-      "--arg-file=",
-      "-d",
-      "--delimiter=",
-      "-E",
-      "--eof=",
-      "-I",
-      "--replace=",
-      "-i",
-      "-L",
-      "--max-lines=",
-      "-l",
-      "-n",
-      "--max-args=",
-      "-P",
-      "--max-procs=",
-      "-s",
-      "--max-chars=",
-    ],
     flag: "<command>",
   },
   {
@@ -345,8 +321,6 @@ const POSITIONAL_INTERPRETER_INLINE_EVAL_SPECS: readonly PositionalInterpreterSp
     fileFlags: new Set(["-f", "--file"]),
     fileFlagPrefixes: ["-f", "--file="],
     exactValueFlags: new Set(["-f", "--file", "-l", "--line-length"]),
-    exactOptionalValueFlags: new Set(["-i", "--in-place"]),
-    prefixValueFlags: ["-f", "--file=", "--in-place=", "--line-length="],
     flag: "<program>",
   },
 ];
@@ -357,42 +331,11 @@ const INTERPRETER_ALLOWLIST_NAMES = new Set(
   ),
 );
 
-function stripInterpreterVersionSuffix(value: string): string {
-  const stripped = value.replace(VERSION_SUFFIX_PATTERN, "");
-  return stripped.length > 0 ? stripped : value;
-}
-
 function interpreterNameVariants(value: string): readonly string[] {
-  const stripped = stripInterpreterVersionSuffix(value);
+  const stripped = value.replace(VERSION_SUFFIX_PATTERN, "");
   // Do not synthesize one-letter interpreter names: commands like r2 can use
   // their own eval flags and must not be mistaken for R inline execution.
   return stripped === value || stripped.length < 2 ? [value] : [value, stripped];
-}
-
-function specNamesInclude(names: readonly string[], normalizedExecutable: string): boolean {
-  return interpreterNameVariants(normalizedExecutable).some((candidate) =>
-    names.includes(candidate),
-  );
-}
-
-function findInterpreterSpec(executable: string): InterpreterFlagSpec | null {
-  const normalized = normalizeExecutableToken(executable);
-  for (const spec of FLAG_INTERPRETER_INLINE_EVAL_SPECS) {
-    if (specNamesInclude(spec.names, normalized)) {
-      return spec;
-    }
-  }
-  return null;
-}
-
-function findPositionalInterpreterSpec(executable: string): PositionalInterpreterSpec | null {
-  const normalized = normalizeExecutableToken(executable);
-  for (const spec of POSITIONAL_INTERPRETER_INLINE_EVAL_SPECS) {
-    if (specNamesInclude(spec.names, normalized)) {
-      return spec;
-    }
-  }
-  return null;
 }
 
 function createInlineEvalHit(
@@ -507,7 +450,10 @@ export function detectInterpreterInlineEvalArgv(
   if (!executable) {
     return null;
   }
-  const spec = findInterpreterSpec(executable);
+  const names = interpreterNameVariants(normalizeExecutableToken(executable));
+  const spec = FLAG_INTERPRETER_INLINE_EVAL_SPECS.find((entry) =>
+    names.some((name) => entry.names.includes(name)),
+  );
   if (spec) {
     for (let idx = 1; idx < argv.length; idx += 1) {
       const token = argv[idx]?.trim();
@@ -544,7 +490,9 @@ export function detectInterpreterInlineEvalArgv(
     }
   }
 
-  const positionalSpec = findPositionalInterpreterSpec(executable);
+  const positionalSpec = POSITIONAL_INTERPRETER_INLINE_EVAL_SPECS.find((entry) =>
+    names.some((name) => entry.names.includes(name)),
+  );
   if (!positionalSpec) {
     return null;
   }
@@ -574,16 +522,6 @@ export function detectInterpreterInlineEvalArgv(
     }
     if (positionalSpec.exactValueFlags?.has(token)) {
       idx += 1;
-      continue;
-    }
-    if (positionalSpec.exactOptionalValueFlags?.has(token)) {
-      continue;
-    }
-    if (
-      positionalSpec.prefixValueFlags?.some(
-        (prefix) => token.startsWith(prefix) && token.length > prefix.length,
-      )
-    ) {
       continue;
     }
     if (token.startsWith("-")) {

@@ -69,7 +69,7 @@ export async function prepareCodexMcpAppSession(params: {
     });
     const assertCurrent = () => {
       assertSourceCurrent();
-      admitted.assertCurrent();
+      admitted.authority.assertLegacyCurrent();
     };
     assertCurrent();
     const prepareThread = async () => {

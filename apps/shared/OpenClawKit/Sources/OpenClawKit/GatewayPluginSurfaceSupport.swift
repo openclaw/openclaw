@@ -3,8 +3,7 @@ import Foundation
 public enum GatewayPluginSurfaceURL {
     /// Callers validate their relative target namespace before attaching its encoded path.
     public static func appendingTarget(_ target: URLComponents, toCapabilitySurface rawSurfaceURL: String?) -> URL? {
-        let raw = rawSurfaceURL?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !raw.isEmpty,
+        guard let raw = rawSurfaceURL?.trimmedNonEmpty,
               var surface = URLComponents(string: raw),
               let scheme = surface.scheme?.lowercased(), scheme == "http" || scheme == "https",
               surface.host?.isEmpty == false,
@@ -37,8 +36,7 @@ public enum GatewayPluginSurfaceURL {
         against activeGatewayURL: URL?,
         relativeToGatewayContext: Bool = false) -> URL?
     {
-        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
+        guard let trimmed = raw.trimmedNonEmpty else { return nil }
         if let absolute = URL(string: trimmed),
            let scheme = absolute.scheme?.lowercased()
         {
@@ -71,8 +69,7 @@ public enum GatewayPluginSurfaceURL {
     }
 
     public static func canonicalize(raw: String?, against activeGatewayURL: URL?) -> String? {
-        let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !trimmed.isEmpty else { return nil }
+        guard let trimmed = raw?.trimmedNonEmpty else { return nil }
         guard var parsed = URLComponents(string: trimmed) else { return trimmed }
 
         let parsedHost = parsed.host?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""

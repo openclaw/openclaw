@@ -296,62 +296,6 @@ describe("createTelegramDraftStream", () => {
     });
   });
 
-  it("disables link previews on the streamed send and on every edit", async () => {
-    const api = createMockDraftApi();
-    const stream = createDraftStream(api, {
-      linkPreview: false,
-      thread: { id: 42, scope: "dm" },
-      replyToMessageId: 411,
-      replyToMode: "all",
-    });
-
-    stream.update("see https://example.com");
-    await stream.flush();
-
-    expect(api.sendMessage).toHaveBeenCalledWith(123, "see https://example.com", {
-      message_thread_id: 42,
-      reply_parameters: {
-        message_id: 411,
-        allow_sending_without_reply: true,
-      },
-      link_preview_options: { is_disabled: true },
-    });
-
-    // The edit matters as much as the send: Telegram re-enables the preview on
-    // any edit that omits the field, and finalization skips the edit when the
-    // streamed draft already equals the final text.
-    stream.update("see https://example.com now");
-    await stream.flush();
-
-    expect(api.editMessageText).toHaveBeenCalledWith(123, 17, "see https://example.com now", {
-      link_preview_options: { is_disabled: true },
-    });
-  });
-
-  it("keeps parse_mode alongside disabled link previews on the HTML transport", async () => {
-    const api = createMockDraftApi();
-    const stream = createDraftStream(api, {
-      linkPreview: false,
-      renderText: (text) => ({ text: `<i>${text}</i>`, parseMode: "HTML" }),
-    });
-
-    stream.update("https://example.com");
-    await stream.flush();
-
-    expect(api.sendMessage).toHaveBeenCalledWith(123, "<i>https://example.com</i>", {
-      parse_mode: "HTML",
-      link_preview_options: { is_disabled: true },
-    });
-
-    stream.update("https://example.com/two");
-    await stream.flush();
-
-    expect(api.editMessageText).toHaveBeenCalledWith(123, 17, "<i>https://example.com/two</i>", {
-      parse_mode: "HTML",
-      link_preview_options: { is_disabled: true },
-    });
-  });
-
   it.each(["send", "edit"] as const)(
     "does not recover a retired preview after a delayed %s receipt",
     async (operation) => {
@@ -521,6 +465,34 @@ describe("createTelegramDraftStream", () => {
     }
   });
 
+  it("clears a rotated preview accepted while clear waits for its in-flight send", async () => {
+    vi.useFakeTimers();
+    try {
+      let resolveSend!: (message: MockSentMessage) => void;
+      const send = new Promise<MockSentMessage>((resolve) => {
+        resolveSend = resolve;
+      });
+      const api = createMockDraftApi();
+      api.sendMessage.mockReturnValueOnce(send);
+      const stream = createDraftStream(api);
+
+      stream.update("Temporary preview");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(api.sendMessage).toHaveBeenCalledTimes(1);
+      stream.rotateToNewMessageDeferringDelete();
+      const clearPromise = stream.clear();
+      resolveSend({ message_id: 17 });
+      await clearPromise;
+
+      await vi.advanceTimersByTimeAsync(3_999);
+      expect(api.deleteMessage).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(api.deleteMessage).toHaveBeenCalledExactlyOnceWith(123, 17);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it.each(["first", "batched"] as const)(
     "keeps an in-flight %s reply target owned when reposition cleanup fails",
     async (replyToMode) => {
@@ -584,6 +556,63 @@ describe("createTelegramDraftStream", () => {
       expect(api.deleteMessage).not.toHaveBeenCalled();
       // At the dwell boundary (~4s after first appearing) the detached delete runs.
       await vi.advanceTimersByTimeAsync(1_000);
+      expect(api.deleteMessage).toHaveBeenCalledWith(123, 17);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps a rotated preview until Telegram accepts its replacement", async () => {
+    vi.useFakeTimers();
+    try {
+      let resolveReplacement!: (message: MockSentMessage) => void;
+      const replacement = new Promise<MockSentMessage>((resolve) => {
+        resolveReplacement = resolve;
+      });
+      const api = createMockDraftApi();
+      api.sendMessage.mockResolvedValueOnce({ message_id: 17 }).mockReturnValueOnce(replacement);
+      const stream = createDraftStream(api);
+
+      stream.update("Answer preview");
+      await stream.flush();
+      stream.rotateToNewMessageDeferringDelete();
+      stream.update("Replacement");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(api.sendMessage).toHaveBeenCalledTimes(2);
+
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(api.deleteMessage).not.toHaveBeenCalled();
+
+      resolveReplacement({ message_id: 42 });
+      await vi.advanceTimersByTimeAsync(1_500);
+      expect(api.deleteMessage).toHaveBeenCalledWith(123, 17);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps a rotated preview visible when its replacement send fails", async () => {
+    vi.useFakeTimers();
+    try {
+      const api = createMockDraftApi();
+      api.sendMessage
+        .mockResolvedValueOnce({ message_id: 17 })
+        .mockRejectedValueOnce(new Error("replacement rejected"));
+      const stream = createDraftStream(api, { warn: vi.fn() });
+
+      stream.update("Answer preview");
+      await stream.flush();
+      stream.rotateToNewMessageDeferringDelete();
+      stream.update("Replacement");
+      await stream.flush();
+      await stream.stop();
+
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(api.sendMessage).toHaveBeenCalledTimes(2);
+      expect(api.deleteMessage).not.toHaveBeenCalled();
+
+      await stream.clear();
+      await vi.advanceTimersByTimeAsync(1_500);
       expect(api.deleteMessage).toHaveBeenCalledWith(123, 17);
     } finally {
       vi.useRealTimers();

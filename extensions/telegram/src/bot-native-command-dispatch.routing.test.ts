@@ -62,7 +62,7 @@ describe("registered native command routing through the message pipeline", () =>
       }
       const cfg: OpenClawConfig = {
         commands: { native: true, nativeSkills: true },
-        agents: { entries: { main: { default: true, workspace, skills: ["export-session"] } } },
+        agents: { entries: { main: { workspace, skills: ["export-session"] } } },
         channels: {
           telegram: {
             commands: { native: true, nativeSkills: true },
@@ -130,7 +130,8 @@ describe("registered native command routing through the message pipeline", () =>
     async (text) => {
       const cfg: OpenClawConfig = {
         commands: { native: true },
-        agents: { list: [{ id: "main", default: true }, { id: "topic-agent" }] },
+        agents: { entries: { main: {}, "topic-agent": {} } },
+        bindings: [{ agentId: "main", match: { channel: "telegram", accountId: "default" } }],
         channels: {
           telegram: {
             groupPolicy: "open",
@@ -172,7 +173,8 @@ describe("registered native command routing through the message pipeline", () =>
     async ({ threadId, conversationId }) => {
       const bot = await createBot(true, true, {
         commands: { native: true },
-        agents: { list: [{ id: "main", default: true }, { id: "bound-agent" }] },
+        agents: { entries: { main: {}, "bound-agent": {} } },
+        bindings: [{ agentId: "main", match: { channel: "telegram", accountId: "default" } }],
         channels: {
           telegram: {
             groupPolicy: "open",
@@ -429,8 +431,10 @@ describe("registered native command routing through the message pipeline", () =>
       const cfg: OpenClawConfig = {
         commands: { native: true, nativeSkills: true },
         agents: {
+          ownership: "explicit",
+          defaults: { systemAgent: { agentId: "alpha" } },
           entries: {
-            alpha: { default: true, workspace, skills: ["alpha-skill"] },
+            alpha: { workspace, skills: ["alpha-skill"] },
             beta: { workspace, skills: ["beta-skill"] },
           },
         },

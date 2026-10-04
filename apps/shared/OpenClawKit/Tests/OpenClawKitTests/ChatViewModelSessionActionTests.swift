@@ -171,9 +171,9 @@ private struct SessionActionCompletionGate: Sendable {
         _ = await iterator.next()
     }
 
-    func waitUntilStarted() async -> Bool {
+    func waitUntilStarted() async {
         var iterator = self.startedStream.makeAsyncIterator()
-        return await iterator.next() != nil
+        _ = await iterator.next()
     }
 
     func release() {
@@ -634,12 +634,7 @@ struct ChatViewModelSessionActionTests {
         let firstCreate = Task {
             await viewModel.startNewSession(agentID: "", worktree: false, worktreeBaseRef: nil, using: lease)
         }
-        guard await self.waitForForkStart(createGate) else {
-            createGate.release()
-            firstCreate.cancel()
-            Issue.record("timed out waiting for session creation start signal")
-            return
-        }
+        await createGate.waitUntilStarted()
 
         let duplicateCreated = await viewModel.startNewSession(
             agentID: "",
@@ -669,12 +664,7 @@ struct ChatViewModelSessionActionTests {
         let create = Task {
             await viewModel.startNewSession(agentID: "", worktree: false, worktreeBaseRef: nil, using: lease)
         }
-        guard await self.waitForForkStart(createGate) else {
-            createGate.release()
-            create.cancel()
-            Issue.record("timed out waiting for session creation start signal")
-            return
-        }
+        await createGate.waitUntilStarted()
         viewModel.switchSession(to: "other")
         let newerSession = viewModel.currentSessionSnapshot()
         let newerHistoryGeneration = viewModel.lastIssuedHistoryRequestID
@@ -704,7 +694,7 @@ struct ChatViewModelSessionActionTests {
         let create = Task {
             await viewModel.startNewSession(agentID: "", worktree: false, worktreeBaseRef: nil, using: lease)
         }
-        #expect(await self.waitForForkStart(createGate))
+        await createGate.waitUntilStarted()
         viewModel.beginAttachmentStaging()
         defer { viewModel.endAttachmentStaging() }
 
@@ -732,12 +722,7 @@ struct ChatViewModelSessionActionTests {
         let create = Task {
             await viewModel.startNewSession(agentID: "", worktree: false, worktreeBaseRef: nil, using: lease)
         }
-        guard await self.waitForForkStart(resetGate) else {
-            resetGate.release()
-            create.cancel()
-            Issue.record("timed out waiting for fallback reset start signal")
-            return
-        }
+        await resetGate.waitUntilStarted()
         viewModel.switchSession(to: "other")
         let newerSession = viewModel.currentSessionSnapshot()
         let newerHistoryGeneration = viewModel.lastIssuedHistoryRequestID
@@ -924,12 +909,7 @@ struct ChatViewModelSessionActionTests {
         let rewind = Task {
             await viewModel.rewindToMessage(self.userMessage(entryID: "message-42"))
         }
-        guard await self.waitForForkStart(rewindGate) else {
-            rewindGate.release()
-            rewind.cancel()
-            Issue.record("timed out waiting for rewind start signal")
-            return
-        }
+        await rewindGate.waitUntilStarted()
         #expect(await siblingStore.enqueueCommand(sessionActionOutboxCommand(
             id: "racing-rewind",
             text: "belongs to the old transcript")))
@@ -1057,12 +1037,7 @@ struct ChatViewModelSessionActionTests {
         let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
 
         let firstRefresh = Task { await viewModel.refreshSessionBranches() }
-        guard await self.waitForForkStart(firstGate) else {
-            firstGate.release()
-            firstRefresh.cancel()
-            Issue.record("timed out waiting for branch list start signal")
-            return
-        }
+        await firstGate.waitUntilStarted()
         await viewModel.refreshSessionBranches()
 
         #expect(viewModel.sessionBranches == newBranches)
@@ -1114,16 +1089,14 @@ struct ChatViewModelSessionActionTests {
             viewModel.handleTransportEvent(.sessionsChanged(.init(
                 sessionKey: "main",
                 reason: "branch-switch")))
-            _ = await self.waitForForkStart(remoteConfirmationGate)
+            await remoteConfirmationGate.waitUntilStarted()
             remoteConfirmationGate.release()
         } else {
             await viewModel.switchToBranch("leaf-new")
         }
 
-        let historyReloadStarted = await self.waitForForkStart(historyReloadGate)
-        let branchesReloadStarted = await self.waitForForkStart(branchesReloadGate)
-        #expect(historyReloadStarted)
-        #expect(branchesReloadStarted)
+        await historyReloadGate.waitUntilStarted()
+        await branchesReloadGate.waitUntilStarted()
         #expect(await transport.historySessionKeys() == ["main", "main", "main"])
         #expect(await transport.branchListSessionKeys() == (remoteEvent ? ["main", "main"] : ["main"]))
         #expect(viewModel.messages.isEmpty)
@@ -1133,8 +1106,9 @@ struct ChatViewModelSessionActionTests {
 
         historyReloadGate.release()
         branchesReloadGate.release()
-        let reloaded = await self.waitForBranchReload(viewModel, branches: freshBranches)
-        #expect(reloaded)
+        await viewModel.bootstrapTask?.value
+        #expect(viewModel.sessionBranches == freshBranches)
+        #expect(viewModel.isLoading == false)
         #expect(viewModel.sessionBranches.first(where: \.active)?.leafEntryId == "leaf-new")
     }
 
@@ -1160,12 +1134,7 @@ struct ChatViewModelSessionActionTests {
         viewModel.sessionBranches = branches
 
         let firstSwitch = Task { await viewModel.switchToBranch("leaf-new") }
-        guard await self.waitForForkStart(gate) else {
-            gate.release()
-            firstSwitch.cancel()
-            Issue.record("timed out waiting for branch switch start signal")
-            return
-        }
+        await gate.waitUntilStarted()
         await viewModel.switchToBranch("leaf-new")
 
         #expect(await transport.switchedBranches().count == 1)
@@ -1182,12 +1151,7 @@ struct ChatViewModelSessionActionTests {
         viewModel.input = "new message"
 
         let branchSwitch = Task { await viewModel.switchToBranch("leaf-new") }
-        guard await self.waitForForkStart(gate) else {
-            gate.release()
-            branchSwitch.cancel()
-            Issue.record("timed out waiting for branch switch start signal")
-            return
-        }
+        await gate.waitUntilStarted()
 
         #expect(viewModel.hasBlockingRunActivity)
         #expect(viewModel.canSend == false)
@@ -1217,12 +1181,7 @@ struct ChatViewModelSessionActionTests {
         viewModel.sessionBranches = branches
 
         let branchSwitch = Task { await viewModel.switchToBranch("leaf-new") }
-        guard await self.waitForForkStart(gate) else {
-            gate.release()
-            branchSwitch.cancel()
-            Issue.record("timed out waiting for branch switch start signal")
-            return
-        }
+        await gate.waitUntilStarted()
         viewModel.switchSession(to: "other")
         gate.release()
         await branchSwitch.value
@@ -1243,12 +1202,7 @@ struct ChatViewModelSessionActionTests {
         viewModel.sessionBranches = branches
 
         let branchSwitch = Task { await viewModel.switchToBranch("leaf-new") }
-        guard await self.waitForForkStart(gate) else {
-            gate.release()
-            branchSwitch.cancel()
-            Issue.record("timed out waiting for branch switch start signal")
-            return
-        }
+        await gate.waitUntilStarted()
 
         viewModel.switchSession(to: "other")
         viewModel.input = "new session message"
@@ -1291,12 +1245,7 @@ struct ChatViewModelSessionActionTests {
         let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
 
         let fork = Task { await viewModel.forkAtMessage(self.userMessage(entryID: "message-42")) }
-        guard await self.waitForForkStart(forkGate) else {
-            forkGate.release()
-            fork.cancel()
-            Issue.record("timed out waiting for fork start signal")
-            return
-        }
+        await forkGate.waitUntilStarted()
         viewModel.switchSession(to: "other")
         forkGate.release()
         await fork.value
@@ -1306,20 +1255,17 @@ struct ChatViewModelSessionActionTests {
         #expect(await transport.forkedMessages().map { [$0.sessionKey, $0.entryID] } == [["main", "message-42"]])
     }
 
-    @Test func `remote rewind refreshes current transcript only`() async throws {
+    @Test func `remote rewind refreshes current transcript only`() async {
         let transport = SessionActionTransport()
         let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
 
-        viewModel.handleTransportEvent(.sessionsChanged(.init(sessionKey: "other", reason: "rewind")))
-        viewModel.handleTransportEvent(.sessionsChanged(.init(sessionKey: "main", reason: "rewind")))
+        #expect(viewModel.handleTransportEvent(.sessionsChanged(.init(sessionKey: "other", reason: "rewind"))) == nil)
+        await viewModel.handleTransportEvent(.sessionsChanged(.init(sessionKey: "main", reason: "rewind")))?.value
 
-        try await waitUntil("remote rewind history request") {
-            await transport.historySessionKeys().isEmpty == false
-        }
         #expect(await transport.historySessionKeys() == ["main"])
     }
 
-    @Test func `remote branch switch refreshes current transcript and branches only`() async throws {
+    @Test func `remote branch switch refreshes current transcript and branches only`() async {
         let transport = SessionActionTransport(branches: self.branches())
         let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
         viewModel.setReplyTarget(messageID: UUID(), text: "old branch", senderLabel: "User")
@@ -1328,15 +1274,12 @@ struct ChatViewModelSessionActionTests {
         viewModel.handleTransportEvent(.sessionsChanged(.init(sessionKey: "other", reason: "branch-switch")))
         #expect(viewModel.replyTarget != nil)
         #expect(viewModel.canSend)
-        viewModel.handleTransportEvent(.sessionsChanged(.init(sessionKey: "main", reason: "branch-switch")))
+        let reconcile = viewModel.handleTransportEvent(.sessionsChanged(.init(sessionKey: "main", reason: "branch-switch")))
         #expect(viewModel.hasBlockingRunActivity)
         #expect(viewModel.canSend == false)
 
-        try await waitUntil("remote branch switch branch list request") {
-            await transport.branchListSessionKeys().isEmpty == false
-        }
-        let unlocked = await self.waitForBranchSwitchActivityToClear(viewModel)
-        #expect(unlocked)
+        await reconcile?.value
+        #expect(viewModel.hasBlockingRunActivity == false)
         #expect(viewModel.replyTarget == nil)
         #expect(await transport.historySessionKeys() == ["main"])
         #expect(await transport.branchListSessionKeys() == ["main"])
@@ -1389,12 +1332,7 @@ struct ChatViewModelSessionActionTests {
         let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
 
         let fork = Task { await viewModel.forkSession(key: "main") }
-        guard await self.waitForForkStart(forkGate) else {
-            forkGate.release()
-            fork.cancel()
-            Issue.record("timed out waiting for fork start signal")
-            return
-        }
+        await forkGate.waitUntilStarted()
         viewModel.switchSession(to: "other")
         forkGate.release()
         await fork.value
@@ -1405,38 +1343,6 @@ struct ChatViewModelSessionActionTests {
 }
 
 extension ChatViewModelSessionActionTests {
-    private func waitForForkStart(
-        _ gate: SessionActionCompletionGate,
-        timeout: Duration = .seconds(15)) async -> Bool
-    {
-        // The stream controls ordering; this deadline only bounds a broken fake or call path.
-        await withTaskGroup(of: Bool.self) { group in
-            group.addTask { await gate.waitUntilStarted() }
-            group.addTask {
-                try? await Task.sleep(for: timeout)
-                return false
-            }
-            let started = await group.next() ?? false
-            group.cancelAll()
-            return started
-        }
-    }
-
-    private func waitForBranchSwitchActivityToClear(
-        _ viewModel: OpenClawChatViewModel,
-        timeout: Duration = .seconds(15)) async -> Bool
-    {
-        let clock = ContinuousClock()
-        let deadline = clock.now + timeout
-        while clock.now < deadline {
-            if viewModel.hasBlockingRunActivity == false {
-                return true
-            }
-            await Task.yield()
-        }
-        return false
-    }
-
     private func waitForOutboxRestore(
         _ viewModel: OpenClawChatViewModel,
         timeout: Duration = .seconds(15)) async -> Bool
@@ -1462,22 +1368,6 @@ extension ChatViewModelSessionActionTests {
         let deadline = clock.now + timeout
         while clock.now < deadline {
             if await transport.sentSessionKeys().isEmpty == false {
-                return true
-            }
-            await Task.yield()
-        }
-        return false
-    }
-
-    private func waitForBranchReload(
-        _ viewModel: OpenClawChatViewModel,
-        branches: [OpenClawChatSessionBranch],
-        timeout: Duration = .seconds(15)) async -> Bool
-    {
-        let clock = ContinuousClock()
-        let deadline = clock.now + timeout
-        while clock.now < deadline {
-            if viewModel.sessionBranches == branches, !viewModel.isLoading {
                 return true
             }
             await Task.yield()

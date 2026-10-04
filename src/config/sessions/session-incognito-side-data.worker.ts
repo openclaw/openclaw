@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { mutateAcpSessionEntryInWorker } from "../../acp/runtime/session-meta-entry.worker.js";
 import type { HeartbeatOutcomeWorkerOperations } from "../../infra/heartbeat-outcome-store.worker.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
@@ -11,6 +12,7 @@ import { createAgentDatabaseDomainOwner } from "../../state/openclaw-agent-execu
 import { loadAgentReactionOperations } from "../../state/openclaw-agent-execution-operations.js";
 import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-operation-context.js";
 import { createWorkerOperationRegistry } from "../../state/worker-operation-registry.js";
+import { readLegacyAcpMigrationContextInDatabase } from "./session-accessor.sqlite-acp-provenance.js";
 import { participantRecordsBySessionKey } from "./session-accessor.sqlite-participant-projection.js";
 import { readSessionGroupCategoryKeys } from "./session-group-categories.read.js";
 import type { IncognitoSideDataOperations } from "./session-incognito-side-data-contract.js";
@@ -103,6 +105,18 @@ export function createIncognitoSideDataWorker(
         }
         const value = withSqlitePostCommitPublications(database.db, () => {
           switch (command.type) {
+            case "session.acp.source":
+              return readLegacyAcpMigrationContextInDatabase(database, command.input.sessionKey);
+            case "session.acp.entry": {
+              const { entry } = mutateAcpSessionEntryInWorker(
+                database,
+                { agentId: database.agentId, path: database.path, env },
+                command.input,
+                (stage) => admit(stage, keys),
+                false,
+              );
+              return { entry };
+            }
             case "session.sharing.add":
               return executeDomain({
                 type: "add",

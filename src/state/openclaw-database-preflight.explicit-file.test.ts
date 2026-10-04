@@ -58,107 +58,140 @@ describe("explicit copied shared-state preflight", () => {
     return databasePath;
   }
 
-  it("reports an exact current schema for one explicit copied database", async () => {
-    const stateDir = tempDirs.make("openclaw-runtime-state-preflight-");
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    const opened = openOpenClawStateDatabase({ env });
-    const databasePath = opened.path;
-    expect(
-      opened.db
-        .prepare(
-          "SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'execution_identity_contexts'",
-        )
-        .get(),
-    ).toBeUndefined();
-    closeOpenClawStateDatabaseForTest();
-
-    await expect(preflightOpenClawStateDatabasePath(databasePath)).resolves.toEqual({
-      schema: "openclaw.state-schema-preflight.v1",
-      databasePath,
-      targetVersion: OPENCLAW_STATE_SCHEMA_VERSION,
-      foundVersion: OPENCLAW_STATE_SCHEMA_VERSION,
-      ownership: null,
-      issues: [],
-      status: "exact",
-      requiresWrite: false,
-    });
-  });
-
-  it("defers retired cron history in an explicit copied database without repair", async () => {
-    const databasePath = createExplicitStateDatabase();
-    execDatabase(
-      databasePath,
-      `
-        CREATE TABLE cron_run_logs (
-          store_key TEXT NOT NULL, job_id TEXT NOT NULL,
-          seq INTEGER NOT NULL, ts INTEGER NOT NULL,
-          entry_json TEXT NOT NULL, created_at INTEGER NOT NULL,
-          PRIMARY KEY (store_key, job_id, seq)
+  it.each([
+    {
+      name: "runtime schema",
+      create: () => {
+        const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-runtime-state-preflight-") };
+        const opened = openOpenClawStateDatabase({ env });
+        expect(
+          opened.db
+            .prepare(
+              "SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'execution_identity_contexts'",
+            )
+            .get(),
+        ).toBeUndefined();
+        closeOpenClawStateDatabaseForTest();
+        return opened.path;
+      },
+      expected: {},
+    },
+    {
+      name: "retired cron history",
+      create: () => {
+        const databasePath = createExplicitStateDatabase();
+        execDatabase(
+          databasePath,
+          `
+          CREATE TABLE cron_run_logs (
+            store_key TEXT NOT NULL, job_id TEXT NOT NULL,
+            seq INTEGER NOT NULL, ts INTEGER NOT NULL,
+            entry_json TEXT NOT NULL, created_at INTEGER NOT NULL,
+            PRIMARY KEY (store_key, job_id, seq)
+          );
+          INSERT INTO cron_run_logs VALUES
+            ('store', 'retained-job', 1, 1000,
+             '{"ts":1000,"jobId":"retained-job","action":"finished","status":"ok"}', 1000);
+        `,
         );
-        INSERT INTO cron_run_logs VALUES
-          ('store', 'retained-job', 1, 1000,
-           '{"ts":1000,"jobId":"retained-job","action":"finished","status":"ok"}', 1000);
-    `,
-    );
+        return databasePath;
+      },
+      expected: {
+        status: "indeterminate",
+        reason: expect.stringMatching(/legacy-cron-run-logs.*doctor --fix/),
+      },
+    },
+    {
+      name: "copied schema with a future nullable column",
+      create: () => {
+        const source = createExplicitStateDatabase();
+        const databasePath = path.join(
+          tempDirs.make("openclaw-copied-state-preflight-"),
+          "candidate.sqlite",
+        );
+        fs.copyFileSync(source, databasePath);
+        execDatabase(databasePath, "ALTER TABLE worktrees ADD COLUMN future_note TEXT;");
+        return databasePath;
+      },
+      expected: {},
+    },
+    {
+      name: "drifted canonical index",
+      create: () => {
+        const databasePath = createExplicitStateDatabase();
+        execDatabase(
+          databasePath,
+          "DROP INDEX idx_task_runs_status; CREATE INDEX idx_task_runs_status ON task_runs(task_id);",
+        );
+        return databasePath;
+      },
+      expected: {
+        status: "startup-repairable",
+        requiresWrite: true,
+        issues: [
+          {
+            code: "missing-or-drifted-index",
+            message: "missing or drifted index idx_task_runs_status",
+            objectName: "idx_task_runs_status",
+          },
+        ],
+      },
+    },
+    {
+      name: "first-use session group columns",
+      create: () =>
+        createExplicitStateDatabase(
+          OPENCLAW_STATE_SCHEMA_SQL.replace(
+            "  created_at INTEGER NOT NULL,\n  cwd TEXT,\n  worktree INTEGER\n",
+            "  created_at INTEGER NOT NULL\n",
+          ),
+        ),
+      expected: {},
+    },
+    {
+      name: "unreadable file",
+      create: () => {
+        const databasePath = path.join(
+          tempDirs.make("openclaw-explicit-unreadable-preflight-"),
+          "not-sqlite.db",
+        );
+        fs.writeFileSync(databasePath, "not a sqlite database");
+        return databasePath;
+      },
+      expected: {
+        foundVersion: null,
+        status: "indeterminate",
+        reason: expect.stringMatching(/database|file/iu),
+      },
+    },
+    {
+      name: "negative schema metadata",
+      create: () => {
+        const databasePath = createExplicitStateDatabase();
+        execDatabase(databasePath, "PRAGMA user_version = -1;");
+        return databasePath;
+      },
+      expected: {
+        foundVersion: -1,
+        status: "indeterminate",
+        reason: expect.stringContaining("invalid schema version metadata"),
+      },
+    },
+  ])("classifies $name without changing the source", async ({ create, expected }) => {
+    const databasePath = create();
     const before = snapshotSourceFamily(databasePath);
-
-    await expect(preflightOpenClawStateDatabasePath(databasePath)).resolves.toMatchObject({
-      foundVersion: OPENCLAW_STATE_SCHEMA_VERSION,
-      status: "indeterminate",
-      reason: expect.stringMatching(/legacy-cron-run-logs.*doctor --fix/),
-    });
-    deepStrictEqual(snapshotSourceFamily(databasePath), before);
-  });
-
-  it("accepts a copied current schema with a future bare nullable column without touching it", async () => {
-    const sourcePath = createExplicitStateDatabase();
-    const databasePath = path.join(
-      tempDirs.make("openclaw-copied-state-preflight-"),
-      "candidate.sqlite",
-    );
-    fs.copyFileSync(sourcePath, databasePath);
-    execDatabase(databasePath, "ALTER TABLE worktrees ADD COLUMN future_note TEXT;");
-    const before = snapshotSourceFamily(databasePath);
-
     await expect(preflightOpenClawStateDatabasePath(databasePath)).resolves.toEqual({
       schema: "openclaw.state-schema-preflight.v1",
       databasePath,
       targetVersion: OPENCLAW_STATE_SCHEMA_VERSION,
       foundVersion: OPENCLAW_STATE_SCHEMA_VERSION,
       ownership: null,
+      issues: [],
       status: "exact",
       requiresWrite: false,
-      issues: [],
+      ...expected,
     });
     deepStrictEqual(snapshotSourceFamily(databasePath), before);
-  });
-
-  it("classifies a drifted canonical named index as startup-repairable", async () => {
-    const databasePath = createExplicitStateDatabase();
-    execDatabase(
-      databasePath,
-      `
-        DROP INDEX idx_task_runs_status;
-        CREATE INDEX idx_task_runs_status ON task_runs(task_id);
-    `,
-    );
-
-    await expect(preflightOpenClawStateDatabasePath(databasePath)).resolves.toEqual({
-      schema: "openclaw.state-schema-preflight.v1",
-      databasePath,
-      targetVersion: OPENCLAW_STATE_SCHEMA_VERSION,
-      foundVersion: OPENCLAW_STATE_SCHEMA_VERSION,
-      ownership: null,
-      status: "startup-repairable",
-      requiresWrite: true,
-      issues: [
-        {
-          code: "missing-or-drifted-index",
-          message: "missing or drifted index idx_task_runs_status",
-          objectName: "idx_task_runs_status",
-        },
-      ],
-    });
   });
 
   it.each([false, true])(
@@ -246,21 +279,6 @@ describe("explicit copied shared-state preflight", () => {
     },
   );
 
-  it("accepts first-use session group columns without requiring a startup write", async () => {
-    const databasePath = createExplicitStateDatabase(
-      OPENCLAW_STATE_SCHEMA_SQL.replace(
-        "  created_at INTEGER NOT NULL,\n  cwd TEXT,\n  worktree INTEGER\n",
-        "  created_at INTEGER NOT NULL\n",
-      ),
-    );
-
-    await expect(preflightOpenClawStateDatabasePath(databasePath)).resolves.toMatchObject({
-      status: "exact",
-      requiresWrite: false,
-      issues: [],
-    });
-  });
-
   it("rejects an explicit preflight path with sidecars without touching it", async () => {
     const databasePath = createExplicitStateDatabase();
     const sqlite = requireNodeSqlite();
@@ -284,30 +302,5 @@ describe("explicit copied shared-state preflight", () => {
     } finally {
       writer.close();
     }
-  });
-
-  it("reports an explicit unreadable path as indeterminate", async () => {
-    const stateDir = tempDirs.make("openclaw-explicit-unreadable-preflight-");
-    const databasePath = path.join(stateDir, "not-sqlite.db");
-    fs.writeFileSync(databasePath, "not a sqlite database");
-
-    await expect(preflightOpenClawStateDatabasePath(databasePath)).resolves.toMatchObject({
-      databasePath,
-      foundVersion: null,
-      status: "indeterminate",
-      requiresWrite: false,
-      reason: expect.stringMatching(/database|file/iu),
-    });
-  });
-
-  it("reports invalid negative schema metadata as indeterminate", async () => {
-    const databasePath = createExplicitStateDatabase();
-    execDatabase(databasePath, "PRAGMA user_version = -1;");
-
-    await expect(preflightOpenClawStateDatabasePath(databasePath)).resolves.toMatchObject({
-      foundVersion: -1,
-      status: "indeterminate",
-      reason: expect.stringContaining("invalid schema version metadata"),
-    });
   });
 });

@@ -45,12 +45,7 @@ import { boundedWorkerError } from "./worker-error.js";
 export function nodeWorkerSpawnResultFromReceipt(
   receipt: NodeWorkerSupervisorReceipt,
 ): SpawnResult {
-  if (
-    receipt.state === "completed" ||
-    receipt.state === "failed" ||
-    receipt.state === "interrupted" ||
-    receipt.state === "cancelled"
-  ) {
+  if (isTerminalReceipt(receipt)) {
     return {
       stdout: receipt.state === "completed" ? receipt.resultJson : "",
       stderr: receipt.state === "completed" ? "" : receipt.errorText,

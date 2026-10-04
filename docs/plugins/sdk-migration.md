@@ -110,6 +110,7 @@ The anchors from the single-page version still resolve here.
 
 [How to migrate a plugin](/plugins/sdk-migration/how-to-migrate) — the ordered migration steps.
 
+- [Await personal model-account operations](/plugins/sdk-migration/how-to-migrate#await-personal-model-account-operations)
 - [Await session transcript persistence](/plugins/sdk-migration/how-to-migrate#await-session-transcript-persistence)
 - [Await extension session changes](/plugins/sdk-migration/how-to-migrate#await-extension-session-changes)
 - [Await provider replay metadata](/plugins/sdk-migration/how-to-migrate#await-provider-replay-metadata)

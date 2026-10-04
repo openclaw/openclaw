@@ -127,7 +127,6 @@ export function renderDesktopPresentation(view: DesktopPresentation) {
     connection: {
       controlling: view.controlling,
       desktopApps: view.desktopApps,
-      environmentSelected: focus.source !== null,
       launchingApp: view.launchingApp,
       showApps:
         focus.source !== null &&

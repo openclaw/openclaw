@@ -190,7 +190,6 @@ export function createMusicGenerateTool(options?: MediaGenerateToolOptions): Any
                   providers ?? listRuntimeMusicGenerationProviders({ config: effectiveCfg }),
                 modelConfig: musicGenerationModelConfig,
                 modelOverride: model,
-                parseModelRef: parseMusicGenerationModelRef,
               })
             : undefined;
           const selectedProviderId = selectedProvider?.id ?? selectedModelRef?.provider;

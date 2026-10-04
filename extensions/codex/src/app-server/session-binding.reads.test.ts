@@ -1,7 +1,16 @@
+import path from "node:path";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { patchSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createLazyCodexAppServerBindingStore } from "./session-binding-store.js";
-import { bindingStoreKey } from "./session-binding.js";
+import {
+  bindingStoreKey,
+  createCodexAppServerBindingStore,
+  resolveCodexSessionBinding,
+} from "./session-binding.js";
+import { createCodexSqliteTestBindingStateStore } from "./session-binding.sqlite.test-helpers.js";
 import { createCodexTestBindingStateStore } from "./session-binding.test-helpers.js";
 
 afterEach(() => {
@@ -18,6 +27,143 @@ async function collect<T>(values: AsyncIterable<T>): Promise<T[]> {
 }
 
 describe("Codex app-server binding reads", () => {
+  it.each([
+    {
+      changed: "thread",
+      threadId: "thread-new",
+      clientId: "client-old",
+      initialClientId: "client-old",
+    },
+    {
+      changed: "physical client",
+      threadId: "thread-old",
+      clientId: "client-new",
+      initialClientId: "client-old",
+    },
+    {
+      changed: "previously absent client",
+      threadId: "thread-old",
+      clientId: "client-new",
+      initialClientId: undefined,
+    },
+  ])("keeps a replacement $changed when stale mutations complete later", async (successorOwner) => {
+    const state = createCodexTestBindingStateStore();
+    const store = createCodexAppServerBindingStore(state);
+    const identity = { kind: "session" as const, agentId: "main", sessionId: "session-1" };
+    const original = {
+      threadId: "thread-old",
+      clientId: successorOwner.initialClientId,
+      cwd: "/repo",
+    };
+    const successor = {
+      threadId: successorOwner.threadId,
+      clientId: successorOwner.clientId,
+      cwd: "/repo",
+    };
+    await store.mutate(identity, {
+      kind: "set",
+      binding: original,
+    });
+    await expect(
+      store.mutate(identity, {
+        kind: "patch",
+        threadId: original.threadId,
+        clientId: original.clientId,
+        patch: { cwd: original.cwd },
+      }),
+    ).resolves.toBe(true);
+    await store.mutate(identity, {
+      kind: "set",
+      binding: successor,
+    });
+
+    const stalePatch = {
+      kind: "patch" as const,
+      threadId: original.threadId,
+      clientId: original.clientId,
+      patch: { model: "must-not-publish" },
+    };
+    const staleClear = {
+      kind: "clear" as const,
+      threadId: original.threadId,
+      clientId: original.clientId,
+    };
+    await expect(store.mutate(identity, stalePatch)).resolves.toBe(false);
+    await expect(store.mutate(identity, staleClear)).resolves.toBe(false);
+    expect(store.read(identity)).toEqual(successor);
+    const currentClear = {
+      kind: "clear" as const,
+      threadId: successor.threadId,
+      clientId: successor.clientId,
+    };
+    await expect(store.mutate(identity, currentClear)).resolves.toBe(true);
+    expect(store.read(identity)).toBeUndefined();
+  });
+
+  it("rechecks physical ownership after a worker comparison loses to a same-thread successor", async () => {
+    const fixture = await createOpenClawTestState({
+      prefix: "codex-client-cas-",
+      layout: "state-only",
+      applyEnv: false,
+    });
+    const options = {
+      namespace: "physical-owner-cas",
+      maxEntries: 10,
+      env: { ...process.env, OPENCLAW_STATE_DIR: fixture.stateDir },
+    };
+    const state = createCodexSqliteTestBindingStateStore(options);
+    const store = createCodexAppServerBindingStore(state);
+    const peer = createCodexAppServerBindingStore(createCodexSqliteTestBindingStateStore(options));
+    const identity = {
+      kind: "session" as const,
+      agentId: "main",
+      sessionId: "same-session",
+      sessionKey: "agent:main:client-cas",
+    };
+    const original = { threadId: "same-thread", clientId: "client-a", cwd: "/repo" };
+    const successor = { ...original, clientId: "client-b" };
+    try {
+      await store.mutate(identity, { kind: "set", binding: original });
+      const withCurrent = state.withCurrent.bind(state);
+      let replaced = false;
+      const outcomes: string[] = [];
+      state.withCurrent = (authority) => {
+        const view = withCurrent(authority);
+        return {
+          ...view,
+          async compareAndApply(...args) {
+            if (!replaced) {
+              replaced = true;
+              await peer.mutate(identity, { kind: "set", binding: successor });
+            }
+            const outcome = await view.compareAndApply(...args);
+            outcomes.push(outcome.status);
+            return outcome;
+          },
+        };
+      };
+      const staleClear = {
+        kind: "clear" as const,
+        threadId: original.threadId,
+        clientId: original.clientId,
+      };
+      await expect(store.mutate(identity, staleClear)).resolves.toBe(false);
+      expect(outcomes).toContain("conflict");
+      expect(await collect(peer.readMany([identity]))).toEqual([successor]);
+      const currentClear = {
+        kind: "clear" as const,
+        threadId: successor.threadId,
+        clientId: successor.clientId,
+      };
+      await expect(peer.mutate(identity, currentClear)).resolves.toBe(true);
+      expect(await collect(peer.readMany([identity]))).toEqual([undefined]);
+    } finally {
+      await closeOpenClawStateDatabaseAsync();
+      resetPluginStateStoreForTests();
+      await fixture.cleanup();
+    }
+  });
+
   it("keeps ordered failures without synchronous reads or retrying failed bulk acquisition", async () => {
     const state = createCodexTestBindingStateStore();
     const readValue = state.lookup.bind(state);
@@ -85,5 +231,81 @@ describe("Codex app-server binding reads", () => {
     expect(result.at(-1)).toEqual(binding);
     expect(lookupMany.mock.calls.map(([keys]) => keys.length)).toEqual([10_000, 1]);
     expect(syncLookup).not.toHaveBeenCalled();
+  });
+  it("combines lease and mutation lineage and refuses a same-id predecessor change", async () => {
+    const fixture = await createOpenClawTestState({
+      prefix: "codex-combined-authority-",
+      layout: "state-only",
+      applyEnv: false,
+    });
+    const storePath = path.join(fixture.stateDir, "sessions.json");
+    const store = createCodexAppServerBindingStore(createCodexTestBindingStateStore());
+    const identity = {
+      kind: "session" as const,
+      agentId: "main",
+      sessionId: "current",
+      sessionKey: "agent:main:lease",
+    };
+    const source = { ...identity, sessionKey: "agent:main:mutation" };
+    const binding = { threadId: "native-thread", cwd: "/repo" };
+    try {
+      for (const target of [identity, source]) {
+        await upsertSessionEntry({
+          agentId: target.agentId,
+          sessionKey: target.sessionKey,
+          storePath,
+          entry: { sessionId: target.sessionId, previousSessionId: "previous", updatedAt: 1 },
+        });
+      }
+      await store.mutate(identity, { kind: "set", binding });
+      const lease = await resolveCodexSessionBinding({ bindingStore: store, identity, storePath });
+      const mutation = await resolveCodexSessionBinding({
+        bindingStore: store,
+        identity: source,
+        storePath,
+      });
+      await store.withLease(
+        identity,
+        async () => {
+          await expect(
+            store.mutate(
+              identity,
+              {
+                kind: "patch",
+                threadId: binding.threadId,
+                patch: { model: "first" },
+              },
+              mutation.authority.assertCurrent,
+              mutation.authority,
+            ),
+          ).resolves.toBe(true);
+          await patchSessionEntry({
+            agentId: source.agentId,
+            sessionKey: source.sessionKey,
+            storePath,
+            update: () => ({ previousSessionId: "changed-without-new-session-id" }),
+          });
+          // Pure caller liveness remains valid. Only the fresh composed source
+          // validation can refuse this mutation, even though its lease is current.
+          mutation.authority.assertCurrent();
+          await expect(
+            store.mutate(
+              identity,
+              {
+                kind: "patch",
+                threadId: binding.threadId,
+                patch: { model: "must-not-publish" },
+              },
+              mutation.authority.assertCurrent,
+              mutation.authority,
+            ),
+          ).rejects.toThrow("Codex session generation is no longer current");
+          expect(store.read(identity)?.model).toBe("first");
+        },
+        { authority: lease.authority, assertCurrent: lease.authority.assertCurrent },
+      );
+    } finally {
+      await fixture.cleanup();
+    }
   });
 });

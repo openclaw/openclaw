@@ -5,6 +5,7 @@ import {
   type OperationalRunInstanceRef,
 } from "../agents/admitted-run-context.js";
 import type { CommandLaneTaskMarker } from "../process/command-queue.js";
+import type { PreparedEffectUse } from "../shared/effect-authority.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
 type CronActiveJobState = {
@@ -12,7 +13,7 @@ type CronActiveJobState = {
   selfRemovalOwners: WeakMap<() => void, () => CronActiveJobMarker | undefined>;
   admittedJobRuns: WeakMap<
     CronActiveJobMarker,
-    { context: AdmittedRunContext; assertActive: () => void }
+    { context: AdmittedRunContext; assertActive: () => void; signal: AbortSignal }
   >;
   generation: number;
   nextToken: number;
@@ -28,7 +29,7 @@ export function bindCronJobAdmittedRun(
 ): void {
   const assertActive = resolveAdmittedRunActiveAssertion(context, signal);
   if (marker && assertActive && isCronActiveJobMarkerCurrent(marker)) {
-    getCronActiveJobState().admittedJobRuns.set(marker, { context, assertActive });
+    getCronActiveJobState().admittedJobRuns.set(marker, { context, assertActive, signal });
   }
 }
 
@@ -39,7 +40,9 @@ function captureCronJobMessageAuthority(
     operationalRunInstance: OperationalRunInstanceRef;
   },
   sourceSensitive: boolean,
-): (() => void) | undefined {
+):
+  | ((() => void) & { prepareUse?: (assertCurrent?: () => void) => Promise<PreparedEffectUse> })
+  | undefined {
   const { jobId } = params;
   const marker = getCurrentCronActiveJobMarker(jobId);
   const isAuthorityCurrent = sourceSensitive
@@ -58,7 +61,7 @@ function captureCronJobMessageAuthority(
     !marker.jobRemoved &&
     marker.cancellation?.kind !== "requested";
   const inactive = () => new Error("cron message action authority is no longer active");
-  return () => {
+  const assertLocal = () => {
     const admitted = admittedJobRuns.get(marker);
     if (
       !isMarkerCurrent() ||
@@ -71,6 +74,9 @@ function captureCronJobMessageAuthority(
     }
     owner ??= admitted;
     owner.assertActive();
+  };
+  const assertCurrent = () => {
+    assertLocal();
     if (!isAuthorityCurrent()) {
       if (sourceSensitive) {
         marker.messageSourceAuthorityRevoked = true;
@@ -79,24 +85,40 @@ function captureCronJobMessageAuthority(
       }
       throw inactive();
     }
-    owner.assertActive();
-    if (!isMarkerCurrent() || admittedJobRuns.get(marker) !== owner) {
-      throw inactive();
-    }
+    assertLocal();
   };
+  const prepare = marker.prepareMessageUse;
+  return Object.assign(
+    assertCurrent,
+    prepare
+      ? {
+          prepareUse: (assertCallerCurrent?: () => void) => {
+            assertLocal();
+            return prepare(
+              sourceSensitive,
+              () => {
+                assertLocal();
+                assertCallerCurrent?.();
+              },
+              owner?.signal,
+            );
+          },
+        }
+      : {},
+  );
 }
 
 export function captureCronJobMessageActionAuthority(params: {
   jobId: string;
   operationalRunInstance: OperationalRunInstanceRef;
-}): (() => void) | undefined {
+}) {
   return captureCronJobMessageAuthority(params, false);
 }
 
 export function captureCronJobMessageSourceAuthority(params: {
   jobId: string;
   operationalRunInstance: OperationalRunInstanceRef;
-}): (() => void) | undefined {
+}) {
   return captureCronJobMessageAuthority(params, true);
 }
 
@@ -146,6 +168,11 @@ export type CronActiveJobMarker = {
   triggerMutated?: true;
   isMessageActionAuthorityCurrent?: () => boolean;
   isMessageSourceAuthorityCurrent?: () => boolean;
+  prepareMessageUse?: (
+    sourceSensitive: boolean,
+    assertCurrent: () => void,
+    signal?: AbortSignal,
+  ) => Promise<PreparedEffectUse>;
   messageActionAuthorityRevoked?: true;
   messageSourceAuthorityRevoked?: true;
   jobRemoved?: true;
@@ -233,6 +260,7 @@ export function markCronJobActive(
     preserveAcrossGenerationAdvance?: boolean;
     isMessageActionAuthorityCurrent?: () => boolean;
     isMessageSourceAuthorityCurrent?: () => boolean;
+    prepareMessageUse?: CronActiveJobMarker["prepareMessageUse"];
   },
 ): CronActiveJobMarker | undefined {
   if (!jobId) {
@@ -252,6 +280,7 @@ export function markCronJobActive(
     ...(opts?.isMessageSourceAuthorityCurrent
       ? { isMessageSourceAuthorityCurrent: opts.isMessageSourceAuthorityCurrent }
       : {}),
+    ...(opts?.prepareMessageUse ? { prepareMessageUse: opts.prepareMessageUse } : {}),
     generation: state.generation,
     token,
     ...(opts?.preserveAcrossGenerationAdvance ? { preserveAcrossGenerationAdvance: true } : {}),
