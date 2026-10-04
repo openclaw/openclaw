@@ -120,15 +120,15 @@ export function mergeProviderModels(
   const explicitModels = Array.isArray(explicit.models) ? explicit.models : [];
   const implicitHeaders = isRecord(implicit.headers) ? implicit.headers : undefined;
   const explicitHeaders = isRecord(explicit.headers) ? explicit.headers : undefined;
-  const mergeProviderFields = () => ({
+  const mergedProvider = {
     ...implicit,
     ...explicit,
     ...(implicitHeaders || explicitHeaders
       ? { headers: { ...implicitHeaders, ...explicitHeaders } }
       : {}),
-  });
+  };
   if (implicitModels.length === 0) {
-    return mergeProviderFields();
+    return mergedProvider;
   }
 
   const getModelId = (model: { id: string }) =>
@@ -236,7 +236,7 @@ export function mergeProviderModels(
   }
 
   return {
-    ...mergeProviderFields(),
+    ...mergedProvider,
     models: mergedModels,
   };
 }
@@ -258,10 +258,6 @@ export function mergeProviders(params: {
       : explicit;
   }
   return out;
-}
-
-function resolveProviderApi(entry: { api?: unknown } | undefined): string | undefined {
-  return normalizeOptionalString(entry?.api);
 }
 
 function resolveModelApiSurface(entry: { models?: unknown } | undefined): string | undefined {
@@ -286,7 +282,7 @@ function resolveModelApiSurface(entry: { models?: unknown } | undefined): string
 function resolveProviderApiSurface(
   entry: ExistingProviderConfig | ProviderConfig | undefined,
 ): string | undefined {
-  return resolveProviderApi(entry) ?? resolveModelApiSurface(entry);
+  return normalizeOptionalString(entry?.api) ?? resolveModelApiSurface(entry);
 }
 
 function shouldPreserveExistingApiKey(params: {

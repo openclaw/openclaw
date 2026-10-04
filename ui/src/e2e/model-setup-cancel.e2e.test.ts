@@ -306,6 +306,8 @@ suite.define(() => {
         await page.goBack();
         await expect.poll(() => page.locator("openclaw-model-setup-page").count()).toBe(0);
 
+        const previousReceipt = await page.evaluate((key) => localStorage.getItem(key), receiptKey);
+
         const replacement = await context.newPage();
         const nextGateway = await installMockGateway(replacement, {
           ...gatewayOptions,
@@ -326,26 +328,11 @@ suite.define(() => {
           .locator("openclaw-modal-dialog")
           .getByRole("button", { name: "Close", exact: true })
           .click();
-        const previousReceipt = await replacement.evaluate(
-          (key) => localStorage.getItem(key),
-          receiptKey,
-        );
         expect(
           (await nextGateway.getRequests("wizard.next")).map((request) => request.params),
         ).toEqual([{ sessionId: JSON.parse(previousReceipt!).wizard.sessionId }]);
         expect(await nextGateway.getRequests("openclaw.setup.auth.start")).toHaveLength(0);
         expect(await nextGateway.getRequests("wizard.cancel")).toHaveLength(0);
-        const deadlineMs = await replacement.evaluate(
-          (key) => JSON.parse(localStorage.getItem(key)!).deadlineMs as number,
-          receiptKey,
-        );
-        // A missing wizard retains the guard until expiry and explicit retry.
-        // A running wizard resumes its input instead of showing this recovery action.
-        await replacement.clock.setFixedTime(new Date(deadlineMs + 1));
-        await replacement
-          .locator(".model-setup__recovery")
-          .getByRole("button", { name: "Check again", exact: true })
-          .click();
         await expect
           .poll(() => replacement.evaluate((key) => localStorage.getItem(key), receiptKey))
           .toBeNull();

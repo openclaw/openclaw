@@ -59,6 +59,10 @@ host and view types). The contract and Control UI subpaths are browser safe;
 | `plugin-sdk/health`                 | Doctor health-check registration, detection, repair, selection, severity, and finding types for bundled health consumers                                                                                |
 | `plugin-sdk/channel-entry-contract` | Bundled channel entry and setup-entry contracts, feature declarations, and lazy module-loading helpers                                                                                                  |
 
+Navigation items registered with `host.ui.registerNavigation` can set `parent`
+to another navigation ID in the same plugin; `host.ui.pinNavigation(id)` pins an
+already registered item once using the user's existing sidebar preferences.
+
 ### Control UI conversation dock
 
 `ControlUiHost` from `openclaw/plugin-sdk/control-ui` has this optional member:

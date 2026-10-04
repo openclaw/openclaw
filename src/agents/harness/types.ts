@@ -615,6 +615,17 @@ type AgentHarnessContract<
     params: AgentHarnessModelCatalogParams,
   ): Promise<AgentHarnessModelCatalogResult>;
   /**
+   * Narrows resolved picker tiers for this runtime. Synchronous, no I/O or discovery;
+   * return a subset without mutating inputs. This does not grant execution authority.
+   */
+  filterModelServiceTiers?(params: {
+    config: OpenClawConfig;
+    agentId?: string;
+    provider: string;
+    modelId: string;
+    serviceTiers: readonly string[];
+  }): readonly string[];
+  /**
    * Reads current, secret-free native account evidence for this exact catalog scope/model.
    * No I/O or discovery here. Missing/stale/disposed evidence returns undefined; this is
    * picker metadata only, never execution authorization or a host-route credential.

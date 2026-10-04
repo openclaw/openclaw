@@ -181,17 +181,15 @@ function sanitizeExecFailureParamsForLog(value: unknown): unknown {
   return sanitized;
 }
 
-function sanitizeToolFailureParamsForLog(toolName: string, value: unknown): unknown {
-  return toolName === "exec" ? sanitizeExecFailureParamsForLog(value) : value;
-}
-
 function describeToolFailureInputs(params: {
   toolName: string;
   rawParams: unknown;
   effectiveParams: unknown;
 }): string {
-  const rawParams = sanitizeToolFailureParamsForLog(params.toolName, params.rawParams);
-  const effectiveParams = sanitizeToolFailureParamsForLog(params.toolName, params.effectiveParams);
+  const sanitize = (value: unknown) =>
+    params.toolName === "exec" ? sanitizeExecFailureParamsForLog(value) : value;
+  const rawParams = sanitize(params.rawParams);
+  const effectiveParams = sanitize(params.effectiveParams);
   const rawSerialized = serializeToolParams(rawParams);
   const parts = [formatToolParamPreview("raw_params", rawSerialized)];
   const effectiveSerialized = serializeToolParams(effectiveParams);
@@ -212,12 +210,11 @@ function normalizeToolExecutionResult(params: {
       return result as AgentToolResult<unknown>;
     }
     logDebug(`tools: ${toolName} returned non-standard result (missing content[]); coercing`);
-    const details = "details" in record ? record.details : record;
-    const safeDetails = details ?? { status: "ok", tool: toolName };
-    return payloadTextResult(safeDetails);
+    return payloadTextResult(
+      ("details" in record ? record.details : record) ?? { status: "ok", tool: toolName },
+    );
   }
-  const safeDetails = result ?? { status: "ok", tool: toolName };
-  return payloadTextResult(safeDetails);
+  return payloadTextResult(result ?? { status: "ok", tool: toolName });
 }
 
 function buildToolExecutionErrorResult(params: {

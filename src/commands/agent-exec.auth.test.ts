@@ -1,3 +1,4 @@
+import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -24,6 +25,7 @@ import {
 import type { AuthProfileRowRead } from "../agents/auth-profiles/types.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { resolveSqliteScope } from "../config/sessions/session-accessor.sqlite-scope.js";
+import * as embeddedStateLock from "../infra/embedded-state-lock.js";
 import {
   sanitizeHostExecEnv,
   withHostExecInheritedEnvOmitted,
@@ -32,7 +34,8 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { agentExecCommand } from "./agent-exec.js";
+import type { agentExecCommand } from "./agent-exec.js";
+import { runAgentExecWithMock, type AgentExecRunnerFixture } from "./agent-exec.test-helpers.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -41,9 +44,9 @@ const storedProfile = { type: "api_key", provider: "openai", key: "test-key" } a
 const stored = { version: 1, profiles: { "openai:stored": storedProfile } };
 const noExternal = { externalCli: { mode: "none" }, syncExternalCli: false } as const;
 const run = (
-  deps: Parameters<typeof agentExecCommand>[3],
+  deps: { runAgent: AgentExecRunnerFixture },
   opts: Parameters<typeof agentExecCommand>[1] = {},
-) => agentExecCommand("inspect", opts, createTestRuntime(), deps);
+) => runAgentExecWithMock("inspect", opts, createTestRuntime(), deps.runAgent);
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -51,10 +54,11 @@ afterEach(() => {
 });
 
 describe("agent exec stored auth", () => {
-  it("does not start a canceled agent after shared auth preparation settles", async () => {
+  it("does not start a canceled retained-state agent after shared auth preparation settles", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       writeConfigMachineState("auth.sharedStore", { location: "state-db" });
       writePersistedAuthProfileStoreRaw({ version: 1, profiles: {} });
+      const stateDir = tempDirs.make("openclaw-agent-exec-canceled-auth-");
       const started = createDeferredCore();
       const pendingRows = createDeferredCore<AuthProfileRowRead>();
       const emptyRows: AuthProfileRowRead = {
@@ -62,15 +66,18 @@ describe("agent exec stored auth", () => {
         state: { status: "missing", reason: "row" },
         cacheable: true,
       };
-      let temporaryStateDir = "";
       vi.spyOn(sqliteRead, "readSharedAuthProfileRows").mockImplementation(() => {
-        temporaryStateDir = process.env.OPENCLAW_STATE_DIR!;
         started.resolve();
         return pendingRows.promise;
       });
-      const controller = new AbortController();
+      const signals = new EventEmitter();
+      const createSignalBridge = embeddedStateLock.createEmbeddedStateSignalBridge;
+      vi.spyOn(embeddedStateLock, "createEmbeddedStateSignalBridge").mockImplementation(() =>
+        createSignalBridge(signals),
+      );
       const runAgent = vi.fn(async () => success());
-      const executing = run({ abortSignal: controller.signal, runAgent });
+      const runtime = createTestRuntime();
+      const executing = runAgentExecWithMock("inspect", { stateDir }, runtime, runAgent);
       try {
         await Promise.race([
           started.promise,
@@ -78,13 +85,13 @@ describe("agent exec stored auth", () => {
             throw new Error("Agent exec completed before shared auth preparation");
           }),
         ]);
-        controller.abort(new Error("fixture operator canceled preparation"));
+        signals.emit("SIGTERM");
         pendingRows.resolve(emptyRows);
         const result = await executing;
         expect(result.exitCode).toBe(1);
-        expect(result.envelope.error?.message).toContain("fixture operator canceled preparation");
+        expect(runtime.exit).toHaveBeenCalledWith(143, { resetStream: process.stderr });
         expect(runAgent).not.toHaveBeenCalled();
-        await expect(fs.stat(temporaryStateDir)).rejects.toMatchObject({ code: "ENOENT" });
+        expect((await fs.stat(stateDir)).isDirectory()).toBe(true);
       } finally {
         pendingRows.resolve(emptyRows);
         await executing;

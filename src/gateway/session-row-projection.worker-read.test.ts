@@ -5,11 +5,9 @@ import {
   observeHostDataSql,
   observeSqliteReadSql,
 } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { seedCanonicalAcpSessionMeta } from "../acp/runtime/session-meta-fixture.test-support.js";
 import { readAcpSessionMetaForEntries } from "../acp/runtime/session-meta-readonly.js";
-import {
-  upsertAcpSessionMeta,
-  writeAcpSessionMetaForMigration,
-} from "../acp/runtime/session-meta.js";
+import { upsertAcpSessionMeta } from "../acp/runtime/session-meta.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import { persistRegistryFixture } from "../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
@@ -51,7 +49,6 @@ import {
 } from "./server-methods/sessions-read-cache.test-support.js";
 import { prepareGatewaySessionAccessAuthority } from "./session-access-authority.js";
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
-import { readSessionRowModelFacts } from "./session-row-model-facts.js";
 import { withReadySessionRows } from "./session-row-prepared-read.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import * as records from "./session-row-projection-record.js";
@@ -809,16 +806,11 @@ it("keeps the stored main address and ACP runtime after mainKey changes", async 
     let projection: SessionRowProjection | undefined;
     try {
       projection = await createSessionRowProjection({ cfg: cfgAfter, modelCatalog: [] });
-      const facts = readSessionRowModelFacts({
-        cfg: cfgAfter,
-        key: target.sessionKey,
-        agentId: target.agentId,
-        entry: stored,
-        source: { entry: stored, readSourceEntry: () => undefined },
-        rowContext: projection.state.rowContext,
-        modelCatalog: [],
-      });
-      expect(facts.thinkingProjection.acpMeta).toEqual(meta);
+      await projection.ensureMaterialized();
+      expect(
+        projection.describe({ agentId: target.agentId, key: target.sessionKey })?.materialized
+          .source.thinkingProjection.acpMeta,
+      ).toEqual(meta);
       const result = await listProjectedSessions({ projection, opts: { agentId: "main" } });
       expect(result.sessions).toEqual([
         expect.objectContaining({
@@ -850,8 +842,8 @@ it("refreshes prepared ACP metadata on publication and fences replacement lifecy
       await projection.ensureMaterialized();
       expect(projection.snapshot({ agentId: "main", key }).row?.runtimeSelectionLocked).toBe(false);
       for (const backend of ["acpx", "replacement-acp-backend"]) {
-        // Released free-runtime aliases are case-insensitive and read-only compatible.
-        writeAcpSessionMetaForMigration({
+        // Canonical publication invalidates prepared metadata without host SQL.
+        seedCanonicalAcpSessionMeta({
           sessionKey: key.toUpperCase(),
           lifecycleRevision: "first",
           meta: {

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { tryOutputPrecomputedCommandHelp } from "./precomputed-help.js";
+import { runWithPrecomputedHelpMocks } from "./precomputed-help.test-helpers.js";
 
 describe("tryOutputPrecomputedCommandHelp", () => {
   it.each([
@@ -12,7 +13,7 @@ describe("tryOutputPrecomputedCommandHelp", () => {
   ])("renders unambiguous help $args", async ({ args, renderer, called }) => {
     const output = vi.fn(() => true);
     await expect(
-      tryOutputPrecomputedCommandHelp(["node", "openclaw", ...args], {
+      runWithPrecomputedHelpMocks(tryOutputPrecomputedCommandHelp, ["node", "openclaw", ...args], {
         [renderer]: output,
         env: {},
       }),
@@ -38,7 +39,7 @@ describe("tryOutputPrecomputedCommandHelp", () => {
   ])("defers unsupported or ambiguous help $args", async ({ args, renderer }) => {
     const output = vi.fn(() => true);
     await expect(
-      tryOutputPrecomputedCommandHelp(["node", "openclaw", ...args], {
+      runWithPrecomputedHelpMocks(tryOutputPrecomputedCommandHelp, ["node", "openclaw", ...args], {
         [renderer]: output,
         env: {},
       }),

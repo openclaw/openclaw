@@ -5,6 +5,8 @@ import { describe, expect, it, vi } from "vitest";
 import type { GatewayClientInfo } from "../../../packages/gateway-protocol/src/client-info.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { seedCanonicalAcpSessionMeta } from "../../acp/runtime/session-meta-fixture.test-support.js";
+import * as acpReads from "../../acp/runtime/session-meta-readonly.js";
 import { buildAgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
 import { registerAgentSessionLoopTestLifecycle } from "../../agents/sessions/agent-session-loop-correctness.test-support.js";
 import type { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
@@ -428,42 +430,89 @@ describe("ordinary chat input admission", () => {
     }
   });
 
-  it("commits an existing idle session input before ACK through restart-safe admission", async () => {
-    const fixture = await createBrowserFollowupFixture({ active: false });
-    const clone = vi.spyOn(globalThis, "structuredClone");
-    let transcriptAtAck: ReturnType<typeof loadTranscriptEventsSync> | undefined;
-    const respond = vi.fn<RespondFn>((ok) => {
-      if (ok) {
-        transcriptAtAck = loadTranscriptEventsSync(fixture.scope);
+  it.each([{ acp: false }, { acp: true }, { acp: true, restart: true }])(
+    "keeps idle input custody with its runtime (%j)",
+    async ({ acp, restart }) => {
+      const fixture = await createBrowserFollowupFixture({ active: false });
+      if (acp) {
+        seedCanonicalAcpSessionMeta({
+          sessionKey: fixture.scope.sessionKey,
+          sessionId: fixture.scope.sessionId,
+          meta: {
+            backend: "acpx",
+            agent: "main",
+            runtimeSessionName: "idle-custody",
+            mode: "persistent",
+            state: "idle",
+            lastActivityAt: 1,
+          },
+        });
       }
-    });
-    try {
-      await fixture.send(respond);
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({ status: "started", messageSeq: 2 }),
-        undefined,
-        expect.anything(),
-      );
-      expect(transcriptAtAck).toHaveLength(fixture.activeTranscript.length + 1);
-      expect(transcriptAtAck?.at(-1)).toMatchObject({
-        message: {
-          role: "user",
-          content: fixture.params.message,
-          idempotencyKey: `${fixture.params.idempotencyKey}:user`,
-        },
+      const clone = vi.spyOn(globalThis, "structuredClone");
+      const read = acpReads.readAcpSessionMetaForEntries;
+      const restarting = restart
+        ? vi
+            .spyOn(acpReads, "readAcpSessionMetaForEntries")
+            .mockImplementationOnce(async (...args) => {
+              const result = await read(...args);
+              rotateAgentEventLifecycleGeneration();
+              return result;
+            })
+        : undefined;
+      let transcriptAtAck: ReturnType<typeof loadTranscriptEventsSync> | undefined;
+      const respond = vi.fn<RespondFn>((ok) => {
+        if (ok) {
+          transcriptAtAck = loadTranscriptEventsSync(fixture.scope);
+        }
       });
-      expect(await listSessionPendingInputs(fixture.scope)).toEqual({ items: [], total: 0 });
-      expect(
-        clone.mock.calls.filter(
-          ([entry]) => isRecord(entry) && entry.sessionId === "unrelated-browser-session",
-        ).length,
-      ).toBeLessThanOrEqual(1);
-    } finally {
-      clone.mockRestore();
-      await fixture.cleanup();
-    }
-  });
+      try {
+        await fixture.send(respond);
+        if (restart) {
+          expect(respond).toHaveBeenCalledOnce();
+          expect(respond).not.toHaveBeenCalledWith(
+            true,
+            expect.objectContaining({ status: "started" }),
+            undefined,
+            expect.anything(),
+          );
+          expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+          expect(await listSessionPendingInputs(fixture.scope)).toEqual({ items: [], total: 0 });
+          expect(loadTranscriptEventsSync(fixture.scope)).toEqual(fixture.activeTranscript);
+          return;
+        }
+        expect(respond).toHaveBeenCalledWith(
+          true,
+          expect.objectContaining({ status: "started", ...(acp ? {} : { messageSeq: 2 }) }),
+          undefined,
+          expect.anything(),
+        );
+        if (acp) {
+          expect(transcriptAtAck).toEqual(fixture.activeTranscript);
+          expect(await listSessionPendingInputs(fixture.scope)).toMatchObject({ total: 1 });
+          expect(loadSessionEntry(fixture.scope)).not.toHaveProperty("acp");
+        } else {
+          expect(transcriptAtAck).toHaveLength(fixture.activeTranscript.length + 1);
+          expect(transcriptAtAck?.at(-1)).toMatchObject({
+            message: {
+              role: "user",
+              content: fixture.params.message,
+              idempotencyKey: `${fixture.params.idempotencyKey}:user`,
+            },
+          });
+          expect(await listSessionPendingInputs(fixture.scope)).toEqual({ items: [], total: 0 });
+        }
+        expect(
+          clone.mock.calls.filter(
+            ([entry]) => isRecord(entry) && entry.sessionId === "unrelated-browser-session",
+          ).length,
+        ).toBeLessThanOrEqual(1);
+      } finally {
+        restarting?.mockRestore();
+        clone.mockRestore();
+        await fixture.cleanup();
+      }
+    },
+  );
 
   it.each(["worker-turn", "remote-exec"] as const)(
     "holds an idle %s browser input in custody while its workspace is syncing",

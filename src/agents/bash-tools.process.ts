@@ -4,13 +4,14 @@
  * and removes background exec sessions.
  */
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { Static } from "typebox";
 import { getAgentToolExecutionContext } from "../../packages/agent-core/src/tool-execution-context.js";
 import { createAbortError as createNamedAbortError } from "../infra/abort-signal.js";
 import { formatDurationCompact } from "../infra/format-time/format-duration.ts";
 import { getDiagnosticSessionState } from "../logging/diagnostic-session-state.js";
 import type { ManagedRunStdin } from "../process/supervisor/types.js";
 import { captureAgentToolSourceExecutionGuard } from "./agent-tool-source-execution-guard.js";
-import { cancelBackgroundExecSession } from "./bash-process-control.js";
+import { cancelBackgroundExecSession, isConfirmedRequestedStop } from "./bash-process-control.js";
 import {
   acknowledgeNotifyOnExit,
   type ProcessSession,
@@ -157,14 +158,6 @@ function resetPollRetrySuggestion(sessionId: string): void {
   } catch {
     // Ignore diagnostics state failures for process tool behavior.
   }
-}
-
-function isConfirmedRequestedStop(session: ProcessSession): boolean {
-  return (
-    session.cancellationRequested === true &&
-    session.exitReason === "manual-cancel" &&
-    session.finalizationFailed !== true
-  );
 }
 
 function finishedSessionDetails(sessionId: string, finished: ProcessSession) {
@@ -325,18 +318,7 @@ export function createProcessTool(
           `Invalid process action. Expected one of: ${PROCESS_TOOL_ACTIONS.join(", ")}`,
         );
       }
-      const params = args as {
-        action: ProcessToolAction;
-        sessionId?: string;
-        data?: string;
-        keys?: string[];
-        hex?: string[];
-        literal?: string;
-        text?: string;
-        bracketed?: boolean;
-        eof?: boolean;
-        offset?: number;
-        limit?: number;
+      const params = args as Omit<Static<typeof processSchema>, "timeout"> & {
         timeout?: unknown;
       };
 

@@ -17,6 +17,7 @@ import {
   type AssistantErrorTranscript,
 } from "../assistant-error-transcript.js";
 import { resolveModelFallbackError } from "../failover-error.js";
+import { isFallbackCandidateSkipped } from "../fallback-skip-cache.js";
 import {
   createContextEngineLogicalTurnLease,
   type ContextEngineLogicalTurnLease,
@@ -38,16 +39,15 @@ import type {
   ModelFallbackRouteResolution,
 } from "../model-fallback.types.js";
 import type { ModelManifestNormalizationContext } from "../model-ref-shared.js";
+import { modelKey } from "../model-ref-shared.js";
 import { settleFailedRequesterRun, settleRequesterRun } from "../requester-run-settlement.js";
 import { resolveAgentRunAbortLifecycleFields } from "../run-termination.js";
 import { resolveSessionPlacementRuntimeOverride } from "../session-placement-admission.js";
 import {
   didEmbeddedCyberFailoverTargetCommitWork,
   EMBEDDED_CYBER_FAILOVER_TRIGGER_CODE,
-  isEmbeddedCyberFailoverTargetSkipped,
   isEmbeddedCyberFailoverTargetUsable,
   isEmbeddedModelSelectionStrict,
-  isSameEmbeddedCyberFailoverTarget,
   recordEmbeddedCyberFailoverTargetUnavailable,
   resolveEmbeddedCyberFailoverConfig,
   resolveEmbeddedCyberFailoverTarget,
@@ -482,10 +482,12 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
       target &&
       (!operatorAuthority?.modelPolicy || operatorAuthority.modelPolicy.allows(target)) &&
       !isEmbeddedModelSelectionStrict(params.selection) &&
-      !isSameEmbeddedCyberFailoverTarget(capturedCyberRefusal, target) &&
-      !isEmbeddedCyberFailoverTargetSkipped({
+      modelKey(capturedCyberRefusal.provider, capturedCyberRefusal.model) !==
+        modelKey(target.provider, target.model) &&
+      !isFallbackCandidateSkipped({
         sessionId: params.identity.sessionId,
-        target,
+        provider: target.provider,
+        model: target.model,
         authScope,
       })
     ) {

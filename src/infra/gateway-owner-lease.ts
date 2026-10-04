@@ -4,12 +4,17 @@ import type { DatabaseSync } from "node:sqlite";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
 import type { OpenClawStateSchemaReadAdmission } from "../state/openclaw-state-db-contract.js";
+import { openDoctorStateSchemaReadAdmission } from "../state/openclaw-state-db-doctor-schema.js";
+import { openOpenClawStateReadConnection } from "../state/openclaw-state-db-read-connection.js";
 import {
   withExistingOpenClawStateDatabaseCurrentReadOnly,
   withExistingOpenClawStateDatabaseReadOnly,
 } from "../state/openclaw-state-db-readonly.js";
 import { withOpenClawStateStartupMigrationCheckpointDatabase } from "../state/openclaw-state-db.js";
-import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import {
+  existingPathOrUndefined,
+  resolveOpenClawStateSqlitePath,
+} from "../state/openclaw-state-db.paths.js";
 import { startOpenClawStateLeaseHeartbeat } from "../state/openclaw-state-lease-heartbeat.js";
 import {
   acquireOpenClawStateLeaseInTransaction,
@@ -27,8 +32,10 @@ import type {
   GatewayOwnerLeaseIdentity,
   GatewayOwnerSupervisor,
 } from "./gateway-owner-lease.types.js";
-import { captureGatewayStateOwner } from "./gateway-state-owner.js";
+import { captureGatewayStateOwner, type StateDatabaseSchemaLease } from "./gateway-state-owner.js";
 import { resolveDiagnosticProcessEnv } from "./process-env.js";
+import { runWithSqliteCleanup } from "./sqlite-lifecycle-errors.js";
+import { prepareSqliteReadOnlyLocationSync } from "./sqlite-snapshot-source.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 import { STARTUP_MIGRATION_LEASE_TTL_MS } from "./startup-migration-checkpoint.js";
 
@@ -67,14 +74,44 @@ function readStoppedGatewayOwnerLease(db: DatabaseSync) {
 /** Physical custody alone must not bypass a fresh, unverifiable lease during maintenance. */
 export function assertGatewayOwnerLeaseStopped(
   env: NodeJS.ProcessEnv,
-  openStateSchemaReadAdmission?: OpenClawStateSchemaReadAdmission,
+  maintenanceOwner?: StateDatabaseSchemaLease,
 ): void {
+  if (maintenanceOwner) {
+    const pathname = resolveOpenClawStateSqlitePath(env);
+    maintenanceOwner.assertDatabaseAccess(pathname);
+    if (existingPathOrUndefined(pathname) === undefined) {
+      return;
+    }
+    // Lease admission precedes Doctor's schema guard, including newer or quarantined state.
+    const snapshot = prepareSqliteReadOnlyLocationSync(pathname);
+    const connection = openOpenClawStateReadConnection(pathname, snapshot.location);
+    runWithSqliteCleanup(
+      {
+        release: () => {
+          connection.close();
+          // Only after native close: the snapshot owner warns and retries disposable cleanup.
+          snapshot.cleanup();
+        },
+      },
+      "Gateway owner lease inspection",
+      () => {
+        maintenanceOwner.assertDatabaseAccess(pathname);
+        const db = connection.database.db;
+        const closeAdmission = openDoctorStateSchemaReadAdmission(db);
+        runWithSqliteCleanup(
+          { release: () => closeAdmission?.() },
+          "Gateway owner lease schema read admission",
+          () => readStoppedGatewayOwnerLease(db),
+        );
+      },
+    );
+    return;
+  }
   withExistingOpenClawStateDatabaseCurrentReadOnly(
     ({ db }) => {
       readStoppedGatewayOwnerLease(db);
     },
     { env },
-    openStateSchemaReadAdmission,
   );
 }
 

@@ -363,6 +363,13 @@ describe("chat sidebar region", () => {
       };
       const params: NonNullable<Parameters<typeof sidebarPanelDefinitions>[0]> = {
         state,
+        paneId: "fixture",
+        panePresentationId: "fixture-main",
+        subagentsInputRegion: "page",
+        subagentsPresented: false,
+        subagentsAvailable: false,
+        onRefreshSubagents: vi.fn(),
+        onSubagentSessionSelect: vi.fn(),
         themeMode: "dark",
         agentId: "main",
         browserPresented: false,

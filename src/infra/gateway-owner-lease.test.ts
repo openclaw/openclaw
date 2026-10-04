@@ -5,6 +5,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withDoctorSqliteMaintenanceLock } from "../commands/doctor-sqlite-maintenance-lock.js";
 import * as pidAlive from "../shared/pid-alive.js";
+import { recordOpenClawDatabaseQuarantine } from "../state/openclaw-quarantine-store.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -284,20 +286,47 @@ describe("Gateway owner lease", () => {
     },
   );
 
-  it("Doctor refuses a fresh foreign lease and names the heartbeat wait", async () => {
-    let env: NodeJS.ProcessEnv;
-    {
-      await using owner = fixture();
-      env = owner.env;
-      seedOwner(env, { host: "previous-container" });
-    }
-    const run = vi.fn();
-    await expect(
-      withDoctorSqliteMaintenanceLock({ env, operation: "state repair", run }),
-    ).rejects.toThrow("wait up to 90 seconds");
-    expect(run).not.toHaveBeenCalled();
-    expect(readGatewayOwnerLease({ env })?.owner).toBe("previous-generation");
-  });
+  it.each(["current", "quarantined", "newer"] as const)(
+    "Doctor refuses a fresh foreign lease with %s state",
+    async (condition) => {
+      let env: NodeJS.ProcessEnv;
+      {
+        await using owner = fixture();
+        env = owner.env;
+        seedOwner(env, { host: "previous-container" });
+        if (condition === "newer") {
+          withOpenClawStateStartupMigrationCheckpointDatabase(
+            (db) => db.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1};`),
+            { env },
+          );
+        }
+      }
+      await closeOpenClawStateDatabaseAsync();
+      const databasePath = resolveOpenClawStateSqlitePath(env);
+      const before = fs.readFileSync(databasePath);
+      if (condition === "quarantined") {
+        expect(
+          recordOpenClawDatabaseQuarantine({
+            env,
+            kind: "state",
+            path: resolveOpenClawStateSqlitePath(env),
+            reason: "synthetic index damage",
+          }),
+        ).toBe(true);
+      }
+      const run = vi.fn();
+      await expect(
+        withDoctorSqliteMaintenanceLock({ env, operation: "state repair", run }),
+      ).rejects.toThrow("wait up to 90 seconds");
+      expect(run).not.toHaveBeenCalled();
+      expect(fs.readFileSync(databasePath)).toEqual(before);
+      if (condition === "quarantined") {
+        expect(() => readGatewayOwnerLease({ env })).toThrow("synthetic index damage");
+      } else if (condition === "current") {
+        expect(readGatewayOwnerLease({ env })?.owner).toBe("previous-generation");
+      }
+    },
+  );
 
   it.each([false, true])(
     "startup waits at most 95 seconds for an unverifiable lease (renewing=%s)",

@@ -15,6 +15,7 @@ import {
   resolvePackageActivationJournalPath,
   isPackageActivationComplete,
   resolvePackageActivationAnchor,
+  packageActivationIdentity,
 } from "./package-update-activation-journal.js";
 import {
   preparePackageActivationJournal,
@@ -64,6 +65,9 @@ function readPackageActivationContinuation(installKey: string) {
     throw new Error("Package publication is incomplete; its original continuation cannot run.");
   }
   assertManagedUpdateLeaseDatabaseIdentity(record.descriptor.authority);
+  if (record.phase === "superseded") {
+    throw new Error("Package recovery settlement is incomplete; run openclaw update repair.");
+  }
   if (record.phase !== "publication-complete") {
     throw new Error(
       `Package publication is incomplete; its original continuation cannot run. With the recorded external runtime, run ${recoveryCommand(record)} status, then repair or retire; keep other package managers stopped.`,
@@ -153,9 +157,52 @@ export function readPackageActivationReceipt(installKey: string):
   const record = openPackageActivationJournal(anchor).read();
   assertManagedUpdateLeaseDatabaseIdentity(record.descriptor.authority);
   const receipt = status(record);
-  return receipt.phase === "complete"
+  return receipt.phase === "complete" || record.phase === "superseded"
     ? receipt
     : { ...receipt, recoveryCommand: `${recoveryCommand(record)} status` };
+}
+
+/** A manual install supersedes old package custody, never pending database restoration. */
+export async function supersedePackageActivationAfterManualInstall(installKey: string) {
+  const anchor = resolvePackageActivationAnchor(installKey);
+  if (!fs.existsSync(resolvePackageActivationJournalPath(anchor))) {
+    return undefined;
+  }
+  const journal = openPackageActivationJournal(anchor);
+  const admission = await journal.readForRecovery();
+  const initial = admission.record;
+  if (isPackageActivationComplete(anchor, initial)) {
+    return undefined;
+  }
+  const replacementIdentity = packageActivationIdentity(installKey, true);
+  if (
+    [initial.descriptor.previous.identity, initial.descriptor.candidate.identity].includes(
+      replacementIdentity,
+    )
+  ) {
+    assertNoPendingPackageActivation(installKey);
+    return undefined;
+  }
+  return withUpdateCommandExecutor(
+    randomUUID(),
+    async (executor) => {
+      const fence = await executor.enter(installKey);
+      assertManagedUpdateLeaseDatabaseIdentity(initial.descriptor.authority);
+      admission.admit(fence.assertCurrent);
+      journal.assertCurrent(initial);
+      if (packageActivationIdentity(installKey, true) !== replacementIdentity) {
+        throw new Error("The manually installed package changed before recovery settlement.");
+      }
+      const retained = await createPublicationOwner(
+        anchor,
+        journal,
+        fence.assertCurrent,
+        initial,
+      ).supersede();
+      return { operationId: initial.descriptor.operationId, retained };
+    },
+    { existingAuthority: initial.descriptor.authority },
+  );
 }
 export async function readPackageActivationStatus(
   anchor: string,

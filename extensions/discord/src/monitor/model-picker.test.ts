@@ -288,7 +288,7 @@ describe("provider paging", () => {
     expect(secondBucket.hasPrev).toBe(false);
   });
 
-  it("caps custom provider page size at Discord-safe max", () => {
+  it("uses Discord-safe provider pages with and without buckets", () => {
     const compactData = createModelsProviderData({
       anthropic: ["claude-sonnet-4-5"],
       openai: ["gpt-4o"],
@@ -297,7 +297,6 @@ describe("provider paging", () => {
     const compactPage = getDiscordModelPickerProviderPage({
       data: compactData,
       page: 1,
-      pageSize: 999,
     });
     expect(compactPage.pageSize).toBe(DISCORD_MODEL_PICKER_PROVIDER_SINGLE_PAGE_MAX);
     expect(compactPage.buckets).toHaveLength(1);
@@ -313,7 +312,6 @@ describe("provider paging", () => {
     const pagedPage = getDiscordModelPickerProviderPage({
       data: pagedData,
       page: 1,
-      pageSize: 999,
     });
     expect(pagedPage.buckets.length).toBeGreaterThan(1);
     expect(pagedPage.items.length).toBeLessThanOrEqual(
@@ -356,10 +354,10 @@ describe("model paging", () => {
     expect(secondBucket.items).toHaveLength(9);
   });
 
-  it("caps custom model page size at Discord select-option max", () => {
+  it("uses Discord select-option max for model pages", () => {
     const data = createModelsProviderData({ openai: ["gpt-4o", "gpt-4.1"] });
     const page = requireValue(
-      getDiscordModelPickerModelPage({ data, provider: "openai", pageSize: 999 }),
+      getDiscordModelPickerModelPage({ data, provider: "openai" }),
       "expected model page when provider exists",
     );
     expect(page.pageSize).toBe(DISCORD_MODEL_PICKER_MODEL_PAGE_SIZE);

@@ -6,6 +6,7 @@ import { mergePersistedAuthProfileState } from "./persisted.js";
 import { inspectAuthProfileJsonCell, writeAuthProfileJsonCell } from "./sqlite-json.js";
 import { prepareAuthProfileStateMutation } from "./store-mutation.js";
 import { AuthProfileStoreUnreadableError } from "./store-unreadable-error.js";
+import type { AuthProfileUsageInput, AuthProfileUsageResult } from "./store.worker-contract.js";
 import type { AuthProfileFailureReason, AuthProfileStore, ProfileUsageStats } from "./types.js";
 import { computeNextProfileUsageStats } from "./usage-failure-state.js";
 import { resolveInlineProviderApiKeyUsageId } from "./usage-state.js";
@@ -42,6 +43,7 @@ export type InlineAuthFailureOperations = {
     output: import("./types.js").AuthProfileRowRead;
   };
   "authProfiles.inlineFailure": { input: InlineAuthFailureInput; output: InlineAuthFailureResult };
+  "authProfiles.usage": { input: AuthProfileUsageInput; output: AuthProfileUsageResult };
 };
 
 /** The admitted agent transaction owns the fresh read, health reduction, and durable cells. */

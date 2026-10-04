@@ -1,7 +1,11 @@
 import { createDeferredCore } from "../../../../src/shared/deferred.js";
 import type { SessionsListResult } from "../../api/types.ts";
 import { formatUiError } from "../format-error.ts";
-import { isAwaitingGatewayFailure } from "../gateway-availability.ts";
+import {
+  isAgentDatabaseInspectionPendingError,
+  isAwaitingGatewayFailure,
+  resolveGatewayReadRetryDelayMs,
+} from "../gateway-availability.ts";
 import { appendSessionResults, reconcileRosterPresentationMetadata } from "./reconcile.ts";
 import type {
   SessionConnectionOwner,
@@ -174,6 +178,7 @@ export function createSessionManagedListRefresh(
             false,
           );
           entry.connectionEpoch = scope.epoch;
+          entry.startupRetryAttempt = 0;
           const snapshot: SessionListSnapshot = {
             result: decorated,
             agentId: agentId ?? null,
@@ -203,12 +208,21 @@ export function createSessionManagedListRefresh(
             return;
           }
           const awaitingGateway = isAwaitingGatewayFailure(error, host.snapshot());
+          const startupPending = isAgentDatabaseInspectionPendingError(error);
+          if (startupPending) {
+            entry.coordinator.scheduleRetry(
+              resolveGatewayReadRetryDelayMs(error, entry.startupRetryAttempt++),
+            );
+          } else {
+            entry.startupRetryAttempt = 0;
+          }
           publishManagedList(
             entry,
             {
               ...entry.snapshot,
               loading: false,
               error: awaitingGateway ? null : formatUiError(error),
+              startupPending,
             },
             isCurrent,
           );

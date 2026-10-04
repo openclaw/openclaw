@@ -1,9 +1,11 @@
 import type { ModelsListResult } from "../../../packages/gateway-protocol/src/schema/model-catalog.js";
+import { readAcpSessionMetaForEntries } from "../../acp/runtime/session-meta-readonly.js";
 import { getPreparedRuntimeAuthProfileStoreSnapshot } from "../../agents/auth-profiles.js";
 import { getRuntimeAuthProfileStoreMetadataRevision } from "../../agents/auth-profiles/runtime-snapshots.js";
 import { getPublishedPreparedModelCatalogOwnerSnapshot } from "../../agents/prepared-model-catalog.js";
 import { PreparedModelRuntimePublicationSupersededError } from "../../agents/prepared-model-runtime.errors.js";
 import { resolveSwarmConfig } from "../../agents/subagents/swarm/swarm-config.js";
+import type { SessionAcpMeta } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
@@ -79,6 +81,7 @@ function readPreparedChatMetadata(
   projection: PreparedChatMetadataProjection,
   readParams: ChatMetadataReadParams,
   config: OpenClawConfig,
+  acpMeta: SessionAcpMeta | null,
 ): ChatMetadataResult {
   readParams.draftAccountSelection?.assertCurrent();
   const { agent } = projection;
@@ -95,7 +98,24 @@ function readPreparedChatMetadata(
       }),
     },
     config,
+    acpMeta,
   );
+}
+
+async function prepareSessionAcpMeta(
+  params: Pick<ChatMetadataReadParams, "agentId" | "sessionKey" | "sessionEntry">,
+  cfg: OpenClawConfig,
+): Promise<SessionAcpMeta | null> {
+  if (!params.sessionKey) {
+    return null;
+  }
+  const [meta] = await readAcpSessionMetaForEntries({
+    cfg,
+    entries: [
+      { agentId: params.agentId, sessionKey: params.sessionKey, entry: params.sessionEntry },
+    ],
+  });
+  return meta ?? null;
 }
 
 export function createGatewayChatMetadataRuntime(params: {
@@ -553,6 +573,11 @@ export function createGatewayChatMetadataRuntime(params: {
         // Existing sessions use their saved selection, never a viewer's newer default.
         !readParams.sessionKey && !readParams.sessionEntry,
       );
+      const acpMeta = await prepareSessionAcpMeta(
+        { ...readParams, sessionEntry },
+        deps.getConfig(),
+      );
+      readParams.assertCurrent?.();
       return {
         isCurrent: projection.isCurrent,
         read: () =>
@@ -564,6 +589,7 @@ export function createGatewayChatMetadataRuntime(params: {
               requesterProfileId: draft?.owner ?? readParams.requesterProfileId,
             },
             deps.getConfig(),
+            acpMeta,
           ),
       };
     });
@@ -582,6 +608,7 @@ export function createGatewayChatMetadataRuntime(params: {
     const assemble = (
       neutral: PreparedChatMetadataProjection,
       session: PreparedChatMetadataProjection,
+      acpMeta: SessionAcpMeta | null,
     ): ChatStartupProjectionResult => ({
       // History consumes stable catalogs only; live readiness stays inside the current-read fence.
       ...(readParams.readPolicy === "ready"
@@ -594,6 +621,7 @@ export function createGatewayChatMetadataRuntime(params: {
                 requesterProfileId: readParams.readRequesterProfileId?.(),
               },
               deps.getConfig(),
+              acpMeta,
             ),
           }),
       sessionModelCatalog: session.modelCatalog,
@@ -618,9 +646,10 @@ export function createGatewayChatMetadataRuntime(params: {
             readParams.readRequesterProfileId?.(),
           )
         : readNeutral;
+      const acpMeta = await prepareSessionAcpMeta(readParams, deps.getConfig());
       return {
         isCurrent: () => readNeutral.isCurrent() && readSession.isCurrent(),
-        read: () => assemble(readNeutral, readSession),
+        read: () => assemble(readNeutral, readSession, acpMeta),
       };
     };
     if (readParams.readPolicy !== "ready" && hasSessionContext) {
@@ -657,7 +686,20 @@ export function createGatewayChatMetadataRuntime(params: {
     ) {
       return undefined;
     }
-    return assemble(neutral.projection, session.projection);
+    if (readParams.readPolicy === "ready") {
+      return assemble(neutral.projection, session.projection, null);
+    }
+    const acpMeta = await prepareSessionAcpMeta(readParams, deps.getConfig());
+    if (
+      replacement ||
+      pending ||
+      !isCurrentGeneration(generation) ||
+      !neutral.projection.isCurrent() ||
+      !session.projection.isCurrent()
+    ) {
+      return undefined;
+    }
+    return assemble(neutral.projection, session.projection, acpMeta);
   };
 
   const invalidate = (retainNotifiedFacts = false) => {

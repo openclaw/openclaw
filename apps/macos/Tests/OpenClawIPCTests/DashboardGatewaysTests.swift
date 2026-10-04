@@ -61,7 +61,8 @@ struct DashboardGatewayCatalogTests {
             profiles: hasProfiles ? [.init(
                 profile: .init(id: "studio", name: "Studio", url: url),
                 canPromote: true)] : [],
-            primaryHealth: .unknown)
+            primaryHealth: .unknown,
+            retainedProfileIDs: ["studio"])
 
         #expect(entries.map(\.id) == (hasProfiles ? ["profile:studio"] : []))
         #expect(!entries.contains { $0.isPrimary })
@@ -71,8 +72,11 @@ struct DashboardGatewayCatalogTests {
         }
     }
 
-    @Test(arguments: [false, true])
-    func `catalog keeps browser authority separate from the primary route`(usesBrowserIdentity: Bool) throws {
+    @Test(arguments: [false, true], [false, true])
+    func `catalog preserves browser authority and open saved targets matching primary`(
+        usesBrowserIdentity: Bool,
+        retained: Bool) throws
+    {
         let primaryURL = try #require(URL(string: "wss://studio.example/control"))
         let duplicate = MacGatewayCatalogProfile(
             profile: MacGatewayProfile(id: "studio", name: "My Studio", url: primaryURL),
@@ -91,16 +95,25 @@ struct DashboardGatewayCatalogTests {
             resolvedRemoteURL: nil,
             resolvedRemoteHostLabel: "studio.example:443",
             profiles: [duplicate, other],
-            primaryHealth: .ok)
+            primaryHealth: .ok,
+            retainedProfileIDs: retained ? ["studio", "backup"] : ["backup"])
 
-        #expect(entries.map(\.id) == (usesBrowserIdentity
+        #expect(entries.map(\.id) == (usesBrowserIdentity || retained
                 ? ["primary", "profile:studio", "profile:backup"] : ["primary", "profile:backup"]))
         #expect(entries[0].name == (usesBrowserIdentity ? "studio.example:443" : "My Studio"))
         #expect(entries[0].kind == "remote")
         #expect(entries[0].health == .ok)
         #expect(!entries[0].canPromote)
-        #expect(!entries[1].canPromote)
-        #expect(entries[1].health == .unknown)
+        #expect(entries.last?.canPromote == false)
+        #expect(entries.last?.health == .unknown)
+        let current = DashboardGatewayMenuModel.items(from: entries).first { $0.target == .profile("studio") }
+        if usesBrowserIdentity || retained {
+            #expect(current?.name == "My Studio")
+            #expect(current?.isPrimary == false)
+            #expect(current?.canPromote == !usesBrowserIdentity)
+        } else {
+            #expect(current == nil)
+        }
     }
 
     @Test func `catalog deduplicates profile matching resolved SSH endpoint`() throws {

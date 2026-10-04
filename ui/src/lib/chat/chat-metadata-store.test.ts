@@ -646,6 +646,64 @@ describe("chat metadata store", () => {
     expect(peekChatMetadata(client, scope)).toEqual(fresh);
   });
 
+  it.each([false, true])(
+    "retires queued startup demand at last unsubscribe (remount=%s)",
+    async (remount) => {
+      vi.useFakeTimers();
+      const older = deferred<ChatMetadataResult>();
+      const fresh = metadata("fresh");
+      const request = vi
+        .fn()
+        .mockReturnValueOnce(older.promise)
+        .mockRejectedValue(
+          new GatewayRequestError({
+            code: "UNAVAILABLE",
+            message: "Agent is preparing",
+            retryable: true,
+            details: { code: "agent-database-inspection-pending" },
+            retryAfterMs: 250,
+          }),
+        );
+      const client = clientWith(request);
+      const scope = { agentId: "main", sessionKey: "agent:main:queued-startup" };
+      const release = subscribeChatMetadata(client, scope, () => {});
+      const oldRead = loadChatMetadata(client, scope);
+      const queued = revalidateChatMetadata(client, scope).catch((error: unknown) => error);
+      release();
+      const listener = vi.fn();
+      const releaseRemount = remount ? subscribeChatMetadata(client, scope, listener) : undefined;
+      const remounted = remount ? loadChatMetadata(client, scope) : undefined;
+      try {
+        older.resolve(metadata("obsolete"));
+        await oldRead;
+        await vi.advanceTimersByTimeAsync(0);
+        if (remount) {
+          expect(request).toHaveBeenCalledTimes(2);
+          await vi.advanceTimersByTimeAsync(500);
+          expect(request).toHaveBeenCalledTimes(3);
+          request.mockResolvedValue(fresh);
+          await vi.advanceTimersByTimeAsync(1_000);
+          expect(await queued).toEqual(fresh);
+          expect(await remounted).toEqual(fresh);
+          expect(listener.mock.calls.filter(([update]) => update.type === "result")).toEqual([
+            [{ type: "result", result: fresh }],
+          ]);
+        } else {
+          expect(request).toHaveBeenCalledOnce();
+          expect(await queued).toHaveProperty("name", "AbortError");
+          await vi.advanceTimersByTimeAsync(180_000);
+          expect(request).toHaveBeenCalledOnce();
+        }
+      } finally {
+        request.mockResolvedValue(fresh);
+        older.resolve(metadata("obsolete"));
+        releaseRemount?.();
+        await vi.advanceTimersByTimeAsync(5_000);
+        await Promise.allSettled([oldRead, queued, remounted]);
+      }
+    },
+  );
+
   it("keeps newer startup publication authoritative while active and queued reads settle", async () => {
     const older = deferred<ChatMetadataResult>();
     const newer = deferred<ChatMetadataResult>();
@@ -703,4 +761,42 @@ describe("chat metadata store", () => {
     );
     expect(request).toHaveBeenCalledOnce();
   });
+
+  it.each(["ready", "released"] as const)(
+    "keeps agent startup metadata pending for minutes until %s",
+    async (outcome) => {
+      vi.useFakeTimers();
+      const starting = new GatewayRequestError({
+        code: "UNAVAILABLE",
+        message: "Agent main is still preparing its database.",
+        details: { code: "agent-database-inspection-pending", agentId: "main" },
+        retryable: true,
+        retryAfterMs: 250,
+      });
+      const request = vi.fn().mockRejectedValue(starting);
+      const client = clientWith(request);
+      const scope = { agentId: "main" };
+      const updates: string[] = [];
+      const release = subscribeChatMetadata(client, scope, (update) => updates.push(update.type));
+      const result = revalidateChatMetadata(client, scope).catch((error: unknown) => error);
+      try {
+        await vi.advanceTimersByTimeAsync(182_499);
+        expect(request).toHaveBeenCalledTimes(39);
+        expect(updates).not.toContain("error");
+        if (outcome === "ready") {
+          request.mockResolvedValue(metadata("ready"));
+          await vi.advanceTimersByTimeAsync(1);
+          expect(await result).toEqual(metadata("ready"));
+          expect(peekChatMetadata(client, scope)).toEqual(metadata("ready"));
+        } else {
+          release();
+          expect(await result).toHaveProperty("name", "AbortError");
+        }
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        release();
+        await result;
+      }
+    },
+  );
 });

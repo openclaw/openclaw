@@ -205,7 +205,7 @@ extensions/device-pair/index.ts	6
 extensions/device-pair/notify.ts	1
 extensions/diagnostics-otel/src/service-content-normalization.ts	1
 extensions/diagnostics-otel/src/service-exporter.ts	1
-extensions/diagnostics-otel/src/service-logs.ts	10
+extensions/diagnostics-otel/src/service-logs.ts	8
 extensions/diagnostics-otel/src/service-propagation.ts	2
 extensions/diagnostics-otel/src/service-trace-context.ts	1
 extensions/diagnostics-otel/src/service.ts	1
@@ -407,7 +407,6 @@ extensions/googlechat/src/monitor-event.ts	2
 extensions/groq/index.ts	2
 extensions/huggingface/index.ts	1
 extensions/huggingface/models.ts	2
-extensions/imessage/src/accounts.ts	4
 extensions/imessage/src/actions-contract.ts	1
 extensions/imessage/src/actions.runtime.ts	2
 extensions/imessage/src/actions.ts	1
@@ -418,7 +417,6 @@ extensions/imessage/src/approval-reactions.ts	2
 extensions/imessage/src/approval-target-keys.ts	1
 extensions/imessage/src/channel.runtime.ts	1
 extensions/imessage/src/channel.ts	2
-extensions/imessage/src/chat.ts	1
 extensions/imessage/src/client.ts	3
 extensions/imessage/src/monitor/catchup-bridge.ts	1
 extensions/imessage/src/monitor/catchup.ts	2
@@ -464,7 +462,6 @@ extensions/matrix/src/approval-handler.runtime.ts	7
 extensions/matrix/src/approval-native.ts	6
 extensions/matrix/src/approval-reactions.ts	1
 extensions/matrix/src/auth-precedence.ts	1
-extensions/matrix/src/channel-account-paths.ts	1
 extensions/matrix/src/channel.ts	4
 extensions/matrix/src/cli-account.ts	1
 extensions/matrix/src/cli-direct.ts	2
@@ -558,7 +555,6 @@ extensions/memory-core/src/dreaming.ts	1
 extensions/memory-core/src/memory/hybrid.ts	1
 extensions/memory-core/src/memory/manager-db.ts	2
 extensions/memory-core/src/memory/manager-embedding-errors.ts	2
-extensions/memory-core/src/memory/manager-embedding-ops.ts	1
 extensions/memory-core/src/memory/manager-search.ts	5
 extensions/memory-core/src/memory/manager-sync-base.ts	1
 extensions/memory-core/src/memory/manager-vector-rebuild-state.ts	1
@@ -623,7 +619,6 @@ extensions/msteams/src/feedback-invoke.ts	2
 extensions/msteams/src/file-consent.ts	1
 extensions/msteams/src/graph.ts	2
 extensions/msteams/src/inbound.ts	1
-extensions/msteams/src/messenger.ts	1
 extensions/msteams/src/monitor-handler/inbound-dispatch.ts	1
 extensions/msteams/src/monitor-handler/inbound-facts.ts	1
 extensions/msteams/src/monitor.ts	5
@@ -992,15 +987,13 @@ extensions/twitch/src/token.ts	3
 extensions/twitch/src/twitch-ingress.ts	4
 extensions/venice/models.ts	1
 extensions/vllm/stream.ts	1
-extensions/voice-call/doctor-contract-api.ts	1
 extensions/voice-call/index.ts	2
 extensions/voice-call/setup-api.ts	1
 extensions/voice-call/src/config.ts	2
 extensions/voice-call/src/manager/outbound.ts	2
 extensions/voice-call/src/media-stream.ts	1
 extensions/voice-call/src/providers/shared/guarded-json-api.ts	2
-extensions/voice-call/src/providers/shared/response-body.ts	1
-extensions/voice-call/src/response-generator.ts	3
+extensions/voice-call/src/response-generator.ts	2
 extensions/voice-call/src/runtime.ts	1
 extensions/voice-call/src/webhook.ts	7
 extensions/voyage/embedding-batch.ts	1
@@ -1036,15 +1029,13 @@ extensions/workboard/browser/lib/workboard/metadata-contract-normalization.ts	1
 extensions/workboard/browser/lib/workboard/normalization.ts	5
 extensions/workboard/browser/pages/workboard/view-card-actions.ts	2
 extensions/workboard/browser/pages/workboard/view-card-modal.ts	1
-extensions/workboard/src/cli.ts	2
+extensions/workboard/src/cli.ts	1
 extensions/workboard/src/command.ts	1
 extensions/workboard/src/store-automation.ts	1
 extensions/workboard/src/store-core.ts	2
 extensions/workboard/src/store-normalizers.ts	8
-extensions/workboard/src/store-workflow.ts	2
 extensions/workboard/src/store.ts	1
 extensions/workboard/src/tools.ts	8
-extensions/workboard/src/workspace-access.ts	1
 extensions/xai/code-execution.ts	2
 extensions/xai/image-generation-provider.ts	1
 extensions/xai/index.ts	6
@@ -1273,7 +1264,7 @@ src/agents/auth-profiles/usage.ts	1
 src/agents/bash-process-registry.ts	1
 src/agents/bash-tools.exec-approval-followup.ts	5
 src/agents/bash-tools.exec-approval-request.ts	2
-src/agents/bash-tools.exec-host-node-phases.ts	3
+src/agents/bash-tools.exec-host-node-phases.ts	1
 src/agents/bash-tools.exec-host-node.ts	2
 src/agents/bash-tools.exec-request-preparation.ts	6
 src/agents/bash-tools.exec-run.ts	1
@@ -1284,8 +1275,6 @@ src/agents/bootstrap-hooks.ts	1
 src/agents/btw-transcript.ts	5
 src/agents/btw.ts	6
 src/agents/cache-trace.ts	3
-src/agents/cli-auth-epoch.ts	1
-src/agents/cli-backends.ts	1
 src/agents/cli-credentials.ts	7
 src/agents/cli-executable-identity.ts	3
 src/agents/cli-output-records.ts	1
@@ -1300,7 +1289,7 @@ src/agents/cli-runner/cli-run-transcript.ts	1
 src/agents/cli-runner/delivery-evidence.ts	2
 src/agents/cli-runner/execute-node-claude.ts	5
 src/agents/cli-runner/execute.ts	2
-src/agents/cli-runner/prepare.ts	3
+src/agents/cli-runner/prepare.ts	1
 src/agents/cli-runner/session-history.ts	3
 src/agents/code-mode-runtime.ts	2
 src/agents/code-mode-script-syntax.ts	1
@@ -1856,12 +1845,11 @@ src/commands/doctor-plugin-registry.ts	1
 src/commands/doctor-post-upgrade.ts	1
 src/commands/doctor-prompter.ts	1
 src/commands/doctor-retired-phone-control.ts	1
-src/commands/doctor-sandbox-legacy-registry.ts	7
 src/commands/doctor-sandbox.ts	4
 src/commands/doctor-security.ts	3
 src/commands/doctor-session-canonical-keys.ts	1
 src/commands/doctor-session-incognito-key-repair-state.ts	8
-src/commands/doctor-session-snapshots.ts	4
+src/commands/doctor-session-snapshots.ts	3
 src/commands/doctor-session-sqlite-compact.ts	1
 src/commands/doctor-session-sqlite-recover-report.ts	1
 src/commands/doctor-session-state-providers.ts	3
@@ -1901,7 +1889,6 @@ src/commands/doctor/shared/legacy-config-migrations.runtime.models.codex.ts	4
 src/commands/doctor/shared/legacy-config-migrations.runtime.models.refs.ts	1
 src/commands/doctor/shared/legacy-config-state-migration-input.ts	2
 src/commands/doctor/shared/legacy-talk-config-normalizer.ts	1
-src/commands/doctor/shared/legacy-web-tools-migrate.ts	1
 src/commands/doctor/shared/open-policy-allowfrom.ts	2
 src/commands/doctor/shared/plugin-runtime-symlinks.ts	1
 src/commands/doctor/shared/plugin-tool-allowlist-warnings.ts	1
@@ -2372,12 +2359,11 @@ src/infra/state-migrations.shared-auth-store.ts	1
 src/infra/state-migrations.state-dir.ts	1
 src/infra/state-migrations.tui-last-session.ts	2
 src/infra/state-migrations.update-check.ts	2
-src/infra/state-migrations.workspace-setup-store.ts	2
+src/infra/state-migrations.workspace-setup-store.ts	1
 src/infra/state-migrations.workspace-setup.ts	1
 src/infra/system-presence.ts	1
 src/infra/tailscale.ts	4
 src/infra/tmp-openclaw-dir.ts	3
-src/infra/unhandled-rejections.ts	2
 src/infra/update-check-package-target.ts	2
 src/infra/update-global.ts	3
 src/infra/update-package-manager.ts	1
@@ -2451,7 +2437,6 @@ src/meeting-bot/voice-call-gateway.ts	1
 src/memory-host-sdk/event-store.ts	2
 src/memory-host-sdk/events.ts	1
 src/model-catalog/bundled-catalog-stamp.ts	1
-src/model-catalog/remote-overlay.ts	1
 src/model-picker/apply-session-model-selection.ts	1
 src/node-host/config.ts	1
 src/node-host/invoke-agent-cli-claude-params.ts	1
@@ -2543,7 +2528,7 @@ src/plugins/dev-source-root.ts	1
 src/plugins/discovery.ts	1
 src/plugins/doctor-contract-module.ts	3
 src/plugins/doctor-contract-registry-loader-state.ts	1
-src/plugins/doctor-contract-registry.ts	2
+src/plugins/doctor-contract-registry.ts	1
 src/plugins/gateway-events.ts	1
 src/plugins/gateway-startup-plugin-activation.ts	1
 src/plugins/gateway-startup-plugin-config.ts	1

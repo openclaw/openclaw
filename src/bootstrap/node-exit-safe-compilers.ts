@@ -11,6 +11,17 @@ const EXIT_UNSAFE_COMPILERS = [
   { disable: "--no-concurrent-sparkplug", enable: "--concurrent-sparkplug" },
 ] as const;
 
+const EXIT_COMPILER_FLAGS = new Set<string>(
+  EXIT_UNSAFE_COMPILERS.flatMap(({ disable, enable }) => [disable, enable]),
+);
+
+/** Preserve explicit compiler policy in OpenClaw-owned Node child processes. */
+export function resolveForwardedExitCompilerArgs(
+  execArgv: readonly string[] = process.execArgv,
+): string[] {
+  return execArgv.filter((arg) => EXIT_COMPILER_FLAGS.has(arg.replaceAll("_", "-")));
+}
+
 /** Keeps V8 compile jobs that can deadlock process.exit() off background threads. */
 export function disableExitUnsafeCompilers(): void {
   if (process.versions.bun) {

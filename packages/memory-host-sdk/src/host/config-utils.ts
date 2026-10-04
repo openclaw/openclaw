@@ -184,7 +184,8 @@ export function resolveMemoryHostAgentContextLimits(
   if (!cfg || !agentId) {
     return defaults;
   }
-  return resolveAgentConfig(cfg, agentId)?.contextLimits ?? defaults;
+  const overrides = resolveAgentConfig(cfg, agentId)?.contextLimits;
+  return overrides ? { ...defaults, ...overrides } : defaults;
 }
 
 /** Resolve enabled memory search config plus deduplicated extra paths for an agent. */

@@ -57,7 +57,7 @@ describeOnWindows("MXC SDK wire contract", () => {
   test("readiness accepts the pinned wxc-exec host probe", () => {
     const executablePath = resolveMxcBinaryPath();
 
-    expect(() => assertMxcReadiness({ executablePath, platform: "win32" })).not.toThrow();
+    expect(() => assertMxcReadiness({ executablePath })).not.toThrow();
   });
 
   test.each([

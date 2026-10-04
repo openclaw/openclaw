@@ -178,14 +178,6 @@ export function tokenizeIntentText(text: string): string[] {
   return text.toLowerCase().match(/[\p{L}\p{N}_-]+/gu) ?? [];
 }
 
-function buildFtsQuery(promptTokens: ReadonlySet<string>): string | null {
-  const unique = [...promptTokens];
-  if (unique.length === 0) {
-    return null;
-  }
-  return unique.map((token) => `"${token.replaceAll('"', '""')}"`).join(" OR ");
-}
-
 export type StandingIntentMatchInput = {
   promptTokens: string[];
   ftsQuery: string;
@@ -202,9 +194,8 @@ export function prepareStandingIntentMatch(params: {
   senderId?: string;
   nowMs?: number;
 }): StandingIntentMatchInput | undefined {
-  const promptTokens = new Set(tokenizeIntentText(params.prompt));
-  const ftsQuery = buildFtsQuery(promptTokens);
-  if (!ftsQuery) {
+  const promptTokens = [...new Set(tokenizeIntentText(params.prompt))];
+  if (promptTokens.length === 0) {
     return undefined;
   }
   const channel = params.channel?.trim() || undefined;
@@ -239,8 +230,8 @@ export function prepareStandingIntentMatch(params: {
         })
       : undefined;
   return {
-    promptTokens: [...promptTokens],
-    ftsQuery,
+    promptTokens,
+    ftsQuery: promptTokens.map((token) => `"${token.replaceAll('"', '""')}"`).join(" OR "),
     channelScopes: [...channelScopes],
     senderScope: storedSenderScope,
     nowMs: params.nowMs,

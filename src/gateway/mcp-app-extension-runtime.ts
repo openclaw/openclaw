@@ -373,7 +373,8 @@ export async function prepareMcpAppExtensionRuntime(options: GatewayRequestHandl
           assertTool(tool, false, retained.assertCurrent);
         };
         assertCurrent();
-        if (assertTool(tool, true, retained.assertCurrent)) {
+        const approvalRequired = assertTool(tool, true, retained.assertCurrent);
+        if (approvalRequired) {
           await requestMcpAppToolApproval({
             options: request.options,
             agentId,
@@ -381,13 +382,22 @@ export async function prepareMcpAppExtensionRuntime(options: GatewayRequestHandl
             serverName: tool.serverName,
             toolName: tool.toolName,
             input: request.input,
+            view: request.view,
+            requesterId: resolveMcpAppRequesterId(request.options.client),
             assertCurrent,
             signal: request.signal
               ? AbortSignal.any([retained.signal, request.signal])
               : retained.signal,
           });
         }
-        assertCurrent();
+        const assertExecutionCurrent = () => {
+          assertCurrent();
+          if (assertTool(tool, true, retained.assertCurrent) && !approvalRequired) {
+            throw new Error("MCP App approval policy changed before execution");
+          }
+        };
+        assertExecutionCurrent();
+        return assertExecutionCurrent;
       };
       return {
         ...retained,

@@ -107,34 +107,29 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
         (typeof import("./reply-media-paths.runtime.js"))["createReplyMediaPathNormalizer"]
       >
     | undefined;
-  const getNormalizeReplyMediaPaths = async () => {
-    if (normalizeReplyMediaPaths) {
-      return normalizeReplyMediaPaths;
-    }
-    const { createReplyMediaPathNormalizer } = await loadReplyMediaPathsRuntime();
-    normalizeReplyMediaPaths = createReplyMediaPathNormalizer({
-      cfg,
-      agentId: state.sessionAgentId,
-      sessionKey: state.acpDispatchSessionKey,
-      workspaceDir: state.workspaceDir,
-      messageProvider: deliveryChannel,
-      accountId: replyContextAccountId,
-      groupId,
-      groupChannel: ctx.GroupChannel,
-      groupSpace: ctx.GroupSpace,
-      requesterSenderId: ctx.SenderId,
-      requesterSenderName: ctx.SenderName,
-      requesterSenderUsername: ctx.SenderUsername,
-      requesterSenderE164: ctx.SenderE164,
-    });
-    return normalizeReplyMediaPaths;
-  };
   const normalizeReplyMediaPayload = async (payload: ReplyPayload): Promise<ReplyPayload> => {
     if (isInternalWebchatTurn || !resolveSendableOutboundReplyParts(payload).hasMedia) {
       return payload;
     }
-    const normalizeReplyMediaPayloadPaths = await getNormalizeReplyMediaPaths();
-    return await normalizeReplyMediaPayloadPaths(payload);
+    if (!normalizeReplyMediaPaths) {
+      const { createReplyMediaPathNormalizer } = await loadReplyMediaPathsRuntime();
+      normalizeReplyMediaPaths = createReplyMediaPathNormalizer({
+        cfg,
+        agentId: state.sessionAgentId,
+        sessionKey: state.acpDispatchSessionKey,
+        workspaceDir: state.workspaceDir,
+        messageProvider: deliveryChannel,
+        accountId: replyContextAccountId,
+        groupId,
+        groupChannel: ctx.GroupChannel,
+        groupSpace: ctx.GroupSpace,
+        requesterSenderId: ctx.SenderId,
+        requesterSenderName: ctx.SenderName,
+        requesterSenderUsername: ctx.SenderUsername,
+        requesterSenderE164: ctx.SenderE164,
+      });
+    }
+    return await normalizeReplyMediaPaths(payload);
   };
 
   const routeReplyOperationToOriginating = async (

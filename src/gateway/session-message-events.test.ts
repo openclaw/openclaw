@@ -1493,7 +1493,7 @@ describe("session.message websocket events", () => {
               expect(payload).not.toHaveProperty(privateField);
             }
             expect(JSON.stringify(payload)).not.toContain(storePath);
-            expect(JSON.stringify(payload)).not.toContain(lifecycleRevision);
+            expect(payload).toHaveProperty("session.lifecycleRevision", lifecycleRevision);
           }
           await expect(Promise.all(unexpectedFrames)).resolves.toEqual([false, false, false]);
           expect(observedInvalidations.map((frames) => frames.length)).toEqual([1, 1, 1]);

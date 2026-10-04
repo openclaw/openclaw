@@ -6,7 +6,7 @@ import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
-import { createLazyPromise, createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import { createLazyPromise } from "../shared/lazy-runtime.js";
 import { resolveRepoBundledPluginEnv } from "./repo-bundled-plugin-env.js";
 import type { ConfigSchemaResponse } from "./schema.js";
 import {
@@ -111,8 +111,6 @@ function resolveRepoRoot(): string {
   }
   return path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 }
-
-const loadDocBaselineRuntime = createLazyRuntimeModule(() => import("./doc-baseline.runtime.js"));
 
 function normalizeBaselinePath(rawPath: string): string {
   return rawPath
@@ -302,7 +300,7 @@ function resolveEntryKind(configPath: string): ConfigDocBaselineKind {
 
 async function loadBundledConfigSchemaResponse(): Promise<ConfigSchemaResponse> {
   const repoRoot = resolveRepoRoot();
-  const runtime = await loadDocBaselineRuntime();
+  const runtime = await import("./doc-baseline.runtime.js");
   const env = resolveRepoBundledPluginEnv(path.join(repoRoot, "extensions"));
 
   const manifestRegistry = runtime.loadPluginManifestRegistry({

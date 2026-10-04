@@ -26,24 +26,12 @@ afterEach(async () => {
 it.each([
   {
     databaseKey: buildAcpDatabaseSessionKey("global", "ops"),
-    targets: [
-      { agentId: "ops", sessionKey: "global" },
-      { sessionKey: buildAcpDatabaseSessionKey("global", "ops") },
-    ],
+    targets: [{ agentId: "ops", sessionKey: "global" }],
   },
-  {
-    databaseKey: "@agent:ops:global",
-    targets: [{ agentId: "ops", sessionKey: "global" }, { sessionKey: "@agent:ops:global" }],
-  },
-  {
-    databaseKey: "agent:main:acp:project",
-    targets: [{ sessionKey: "agent:main:acp:project" }],
-  },
-  {
-    databaseKey: "agent:MAIN:acp:PROJECT",
-    targets: [{ sessionKey: "agent:MAIN:acp:PROJECT" }, { sessionKey: "agent:main:acp:project" }],
-  },
-])("publishes only ACP migration candidates after commit for $databaseKey", async (fixture) => {
+  { databaseKey: "@agent:ops:global", targets: [] },
+  { databaseKey: "agent:main:acp:project", targets: [] },
+  { databaseKey: "agent:MAIN:acp:PROJECT", targets: [] },
+])("publishes only canonical ACP identities after commit for $databaseKey", async (fixture) => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     const { db } = openOpenClawStateDatabase({ env });
     const observed: Array<{ change: SessionRowChange; transaction: boolean; row: unknown }> = [];

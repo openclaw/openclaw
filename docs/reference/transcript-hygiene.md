@@ -55,6 +55,13 @@ prompt body for Gateway replies, queued followups, ACP, CLI, and embedded
 OpenClaw runs. Stored visible user turns use that transcript body instead of
 the runtime-enriched prompt.
 
+Compaction and saved CLI session notes exclude the reserved
+`openclaw.runtime-context` custom message type, including older entries without
+carrier metadata and entries that opt out of provider replay. Provider carrier
+metadata controls replay authority; it does not make private context eligible
+for summaries or saved notes. Existing transcripts receive this filtering when
+read, without rewriting stored history.
+
 For legacy sessions that already persisted runtime wrappers, Gateway history
 surfaces apply a display projection before returning messages to WebChat,
 TUI, REST, or SSE clients.

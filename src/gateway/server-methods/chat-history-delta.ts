@@ -11,10 +11,7 @@ import {
 import { jsonUtf8BytesOrInfinity } from "../../infra/json-utf8-bytes.js";
 import { isIncognitoSessionKey } from "../../shared/incognito-session-key.js";
 import { isOpenClawDeliveryMirrorAssistantMessage } from "../../shared/transcript-only-openclaw-assistant.js";
-import {
-  prepareForwardedMessageCronJobNameResolver,
-  type SubagentCoordinationDisplayResolver,
-} from "../chat-display-projection.history.js";
+import { prepareForwardedMessageCronJobNameResolver } from "../chat-display-projection.history.js";
 import {
   createCurrentUserProfileMessageProjector,
   isAssistantTtsSupplementMessage,
@@ -30,6 +27,7 @@ import {
   projectSessionMessagePayload,
   type SessionMessageProjectionState,
 } from "../session-transcript-message.js";
+import type { SubagentCoordinationDisplayResolver } from "../session-transcript-read.types.js";
 import {
   chatHistoryActivityBytes,
   createChatHistoryActivityProjection,

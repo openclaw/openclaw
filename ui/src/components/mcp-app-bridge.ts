@@ -95,20 +95,26 @@ export function bindMcpAppResourceHandlers(owner: {
   bridge.setListToolsHandler(async (params) =>
     requireMcpResult(
       specTypeSchemas.ListToolsResult,
-      await request("mcp.app.listTools", params?.cursor ? { cursor: params.cursor } : {}),
+      await request(
+        "mcp.app.listTools",
+        params?.cursor !== undefined ? { cursor: params.cursor } : {},
+      ),
     ),
   );
   bridge.onlistresources = async (params) =>
     requireMcpResult(
       specTypeSchemas.ListResourcesResult,
-      await request("mcp.app.listResources", params?.cursor ? { cursor: params.cursor } : {}),
+      await request(
+        "mcp.app.listResources",
+        params?.cursor !== undefined ? { cursor: params.cursor } : {},
+      ),
     );
   bridge.onlistresourcetemplates = async (params) =>
     requireMcpResult(
       specTypeSchemas.ListResourceTemplatesResult,
       await request(
         "mcp.app.listResourceTemplates",
-        params?.cursor ? { cursor: params.cursor } : {},
+        params?.cursor !== undefined ? { cursor: params.cursor } : {},
       ),
     );
   bridge.onreadresource = async (params, extra) =>

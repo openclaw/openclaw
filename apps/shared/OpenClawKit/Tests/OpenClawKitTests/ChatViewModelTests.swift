@@ -2045,8 +2045,9 @@ struct ChatViewModelTests {
         vm.applyProgressCard(progressCard(sessionKey: "agent:research:global", revision: 1, markdown: "Retained"))
         vm.load()
         await modelsGate.waitUntilBlocked()
-        try await waitUntil("unsupported progress request completes before bootstrap") { await calls.current() == 1 }
-        await Task { @MainActor in }.value
+        try await waitUntil("unsupported progress request publishes its upgrade hint") {
+            await MainActor.run { vm.errorText == OpenClawChatTransportUpgradeMessage.progressCardAgentScope }
+        }
         await modelsGate.release()
         try await waitUntil("bootstrap completes after unsupported progress") { await MainActor.run { !vm.isLoading } }
         #expect(vm.progressCard?.markdown == "Retained")

@@ -343,6 +343,8 @@ describe("CI changed Node test plan", () => {
       "src/agents/live-model-filter.test.ts",
       "src/agents/live-target-matcher.test.ts",
       "src/agents/model-compat.test.ts",
+      // Missing history retains this cross-area consumer's closed module mock.
+      "src/gateway/gateway-models.profiles.live.test-helpers.test.ts",
     ];
     expectProtectedOwnerExpansion(
       shards,
