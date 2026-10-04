@@ -291,11 +291,68 @@ describe("native device settings wire contract", () => {
     ...(
       [
         ["contract", { contract: 2 }],
+        ["negative revision", { revision: -1 }],
+        ["fractional revision", { revision: 1.5 }],
+        ["non-numeric revision", { revision: "2" }],
+        ["device", { device: { platform: "macos" } }],
+        ["app", { app: { ...createNativeDeviceSettingsSnapshot().app, showDockIcon: "yes" } }],
+        ["absent family encoded as null", { app: null }],
+        ["appearance", { app: { appearance: "sepia" } }],
+        ["notifications", { app: { notificationsEnabled: "true" } }],
+        ["native experience", { app: { nativeExperienceEnabled: "true" } }],
+        ["Gateway hosting", { app: { keepGatewayRunning: "true" } }],
+        ["Gateway hosting availability", { app: { keepGatewayRunningAvailable: "true" } }],
+        ["iOS capability", { capabilities: { healthSummaryEnabled: "true" } }],
         ["unattended desktop toggle", { capabilities: { unattendedDesktopEnabled: "true" } }],
         ["desktop sharing toggle", { capabilities: { desktopSharingEnabled: "true" } }],
         ...[null, {}, { state: "available" }, { state: true }].map(
           (desktopAvailability) => ["desktop availability", { desktopAvailability }] as const,
         ),
+        ...[
+          null,
+          { selectedId: 1, available: [] },
+          { selectedId: "paper", available: [{ id: "paper" }] },
+        ].map(
+          (iconStyle) =>
+            [
+              "Dock icon",
+              { app: { ...createNativeDeviceSettingsSnapshot().app, iconStyle } },
+            ] as const,
+        ),
+        [
+          "capabilities",
+          {
+            capabilities: {
+              ...createNativeDeviceSettingsSnapshot().capabilities,
+              computerControlProvider: "other",
+            },
+          },
+        ],
+        [
+          "browser",
+          {
+            browser: {
+              importAvailable: true,
+              cookieSync: {
+                ...createNativeDeviceSettingsSnapshot().browser.cookieSync,
+                domains: [42],
+              },
+            },
+          },
+        ],
+        [
+          "permissions",
+          { permissions: { ...createNativeDeviceSettingsSnapshot().permissions, entries: null } },
+        ],
+        [
+          "unknown permission id",
+          {
+            permissions: {
+              ...createNativeDeviceSettingsSnapshot().permissions,
+              entries: [{ id: "unknown", status: "granted" }],
+            },
+          },
+        ],
         [
           "duplicate permission id",
           {
@@ -308,6 +365,37 @@ describe("native device settings wire contract", () => {
             },
           },
         ],
+        [
+          "precise editability",
+          {
+            permissions: {
+              ...createIosNativeDeviceSettingsSnapshot().permissions,
+              location: { mode: "whileUsing", precise: true, preciseEditable: "false" },
+            },
+          },
+        ],
+        ["missing voice wakeEnabled", { voice: { supported: true } }],
+        ["missing voice supported", { voice: { wakeEnabled: false } }],
+        ["Talk toggle", { voice: { supported: true, wakeEnabled: false, talkEnabled: "true" } }],
+        [
+          "location",
+          {
+            permissions: {
+              ...createNativeDeviceSettingsSnapshot().permissions,
+              location: { mode: ["off"], precise: false },
+            },
+          },
+        ],
+        [
+          "voice",
+          {
+            voice: {
+              ...createNativeDeviceSettingsSnapshot().voice,
+              microphone: { selectedId: null, devices: [{ id: "mic" }] },
+            },
+          },
+        ],
+        ["updates", { updates: { available: true, automatic: true } }],
       ] as const
     ).map(([name, change]) => ({ name: `malformed ${name}`, change, accepted: false })),
   ])("admits $name snapshots only when valid", ({ change, accepted }) => {

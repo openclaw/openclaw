@@ -984,6 +984,28 @@ syncBuiltinESMExports();`,
 });
 
 describe("parseReleaseVerifyBetaArgs", () => {
+  it("defaults beta verification to the matching tag and repo", () => {
+    expect(parseReleaseVerifyBetaArgs(["2026.5.10-beta.3"])).toEqual({
+      version: "2026.5.10-beta.3",
+      tag: "v2026.5.10-beta.3",
+      distTag: "beta",
+      repo: "openclaw/openclaw",
+      registry: "https://clawhub.ai",
+      releaseSha: undefined,
+      workflowRef: undefined,
+      clawHubWorkflowRef: undefined,
+      pluginSelection: [],
+      clawHubBootstrapPlugins: [],
+      evidenceOut: undefined,
+      postpublishVerifier: undefined,
+      skipPostpublish: false,
+      skipGitHubRelease: false,
+      skipClawHub: false,
+      rerunFailedClawHub: false,
+      workflowRuns: {},
+    });
+  });
+
   it("parses child run IDs and repair flags", () => {
     expect(
       parseReleaseVerifyBetaArgs([

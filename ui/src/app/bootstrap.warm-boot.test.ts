@@ -52,63 +52,66 @@ describe("warm boot profile validation", () => {
     vi.unstubAllGlobals();
   });
 
-  it("admits a previously signed-in account before server connection", async () => {
-    const previousUrl = window.location.href;
-    window.history.replaceState({}, "", "/chat/main");
-    persistSessionToken(loadSettings().gatewayUrl, "");
-    seedBootRecord({
-      authMethod: "trusted-proxy",
-      credential: "",
-      recoveryScope: "account-a",
-      agents: {
-        defaultId: "main",
-        mainKey: "workspace",
-        scope: "per-sender",
-        agents: [{ id: "main" }],
-      },
-    });
-    const runtime = bootstrapApplication();
-    try {
-      expect(runtime.warmBoot).toBe(true);
-      expect(runtime.context.gateway.snapshot.phase).toBe("stopped");
-      expect(runtime.context.gateway.snapshot.hello).toBeNull();
-      const client = new GatewayBrowserClient({
-        url: loadSettings().gatewayUrl,
-        offlineRecoveryScope: "account-a",
+  it.each(["trusted-proxy", "tailscale", "password"] as const)(
+    "admits a previously signed-in %s account before server connection",
+    async (authMethod) => {
+      const previousUrl = window.location.href;
+      window.history.replaceState({}, "", "/chat/main");
+      persistSessionToken(loadSettings().gatewayUrl, "");
+      seedBootRecord({
+        authMethod,
+        credential: "",
+        recoveryScope: "account-a",
+        agents: {
+          defaultId: "main",
+          mainKey: "workspace",
+          scope: "per-sender",
+          agents: [{ id: "main" }],
+        },
       });
-      const request = vi.spyOn(client, "request");
-      runtime.context.gateway.snapshot.client = client;
-      expect(runtime.context.agents.state.agentsList).toBeNull();
-      expect(runtime.context.offlineSessionDefaults).toEqual({
-        mainKey: "workspace",
-        scope: "per-sender",
-      });
-      await expect(
-        loadChatRoute(
-          runtime.context,
-          { pathname: "/chat/main", search: "", hash: "" },
-          "chat",
-          new AbortController().signal,
-        ),
-      ).resolves.toMatchObject({ kind: "session", sessionKey: "agent:main:workspace" });
-      expect(request).not.toHaveBeenCalled();
-      expect(runtime.context.agents.state.agentsList).toBeNull();
-      runtime.context.gateway.snapshot.phase = "connected";
-      expect(runtime.context.offlineSessionDefaults).toBeNull();
-      runtime.context.gateway.snapshot.phase = "reconnecting";
-      runtime.context.gateway.snapshot.client = new GatewayBrowserClient({
-        url: loadSettings().gatewayUrl,
-        offlineRecoveryScope: "another-account",
-      });
-      expect(runtime.context.offlineSessionDefaults).toBeNull();
-      runtime.context.gateway.snapshot.client = client;
-      client.retireOfflineRecoveryScope();
-      expect(runtime.context.offlineSessionDefaults).toBeNull();
-    } finally {
-      runtime.stop();
-      window.history.replaceState({}, "", previousUrl);
-    }
-  });
+      const runtime = bootstrapApplication();
+      try {
+        expect(runtime.warmBoot).toBe(true);
+        expect(runtime.context.gateway.snapshot.phase).toBe("stopped");
+        expect(runtime.context.gateway.snapshot.hello).toBeNull();
+        const client = new GatewayBrowserClient({
+          url: loadSettings().gatewayUrl,
+          offlineRecoveryScope: "account-a",
+        });
+        const request = vi.spyOn(client, "request");
+        runtime.context.gateway.snapshot.client = client;
+        expect(runtime.context.agents.state.agentsList).toBeNull();
+        expect(runtime.context.offlineSessionDefaults).toEqual({
+          mainKey: "workspace",
+          scope: "per-sender",
+        });
+        await expect(
+          loadChatRoute(
+            runtime.context,
+            { pathname: "/chat/main", search: "", hash: "" },
+            "chat",
+            new AbortController().signal,
+          ),
+        ).resolves.toMatchObject({ kind: "session", sessionKey: "agent:main:workspace" });
+        expect(request).not.toHaveBeenCalled();
+        expect(runtime.context.agents.state.agentsList).toBeNull();
+        runtime.context.gateway.snapshot.phase = "connected";
+        expect(runtime.context.offlineSessionDefaults).toBeNull();
+        runtime.context.gateway.snapshot.phase = "reconnecting";
+        runtime.context.gateway.snapshot.client = new GatewayBrowserClient({
+          url: loadSettings().gatewayUrl,
+          offlineRecoveryScope: "another-account",
+        });
+        expect(runtime.context.offlineSessionDefaults).toBeNull();
+        runtime.context.gateway.snapshot.client = client;
+        client.retireOfflineRecoveryScope();
+        expect(runtime.context.offlineSessionDefaults).toBeNull();
+      } finally {
+        runtime.stop();
+        window.history.replaceState({}, "", previousUrl);
+      }
+    },
+  );
 
   it("does not revive warm admission after pairing rejection followed by network loss", () => {
     const previousUrl = window.location.href;
@@ -229,7 +232,10 @@ describe("warm boot profile validation", () => {
   it.each([
     ...[
       { cachedProfileId: "profile-a", profileId: "profile-b", clears: 1 },
+      { cachedProfileId: "profile-a", profileId: null, clears: 1 },
+      { cachedProfileId: null, profileId: "profile-b", clears: 1 },
       { cachedProfileId: "profile-a", profileId: "profile-a", clears: 0 },
+      { cachedProfileId: null, profileId: null, clears: 0 },
       { cachedProfileId: "profile-a", profileId: "profile-b", clears: 0, credentialsChanged: true },
     ].map((entry) => Object.assign(entry, { pathname: "/chat", warmBoot: true })),
     ...["/focus/terminal", "/approve/exec%3A1"].map((pathname) => ({

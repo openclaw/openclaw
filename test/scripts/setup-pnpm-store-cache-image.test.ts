@@ -63,8 +63,8 @@ function fixture(platform = "linux", version = "12.3.4") {
     image,
     runnerTemp,
     spec,
-    run() {
-      return spawnSync(process.execPath, [scriptPath, spec], {
+    run(packageManager = spec) {
+      return spawnSync(process.execPath, [scriptPath, packageManager], {
         encoding: "utf8",
         env: {
           ...process.env,
@@ -133,6 +133,21 @@ describe("pnpm image archive consumer", () => {
         createHash("sha512").update("bad archive").digest("hex"),
       );
       const result = f.run();
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toBe("");
+      expect(readdirSync(f.runnerTemp)).toEqual([]);
+    },
+  );
+
+  it.each(["different-version", "different-hash"])(
+    "leaves Corepack preparation in control for %s despite valid cached archives",
+    (kind) => {
+      const f = fixture();
+      const requested =
+        kind === "different-version"
+          ? f.spec.replace("12.3.4", "12.3.5")
+          : f.spec.replace(/.$/u, "z");
+      const result = f.run(requested);
       expect(result.status, result.stderr).toBe(0);
       expect(result.stdout).toBe("");
       expect(readdirSync(f.runnerTemp)).toEqual([]);

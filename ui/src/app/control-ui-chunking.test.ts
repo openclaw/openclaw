@@ -68,6 +68,11 @@ describe("Control UI build chunking", () => {
   });
 
   it("groups stable runtime dependencies into bounded chunks", () => {
+    expect(controlUiCodeSplitting.includeDependenciesRecursively).toBe(false);
+    expect(controlUiCodeSplitting.groups[1]).toMatchObject({
+      tags: ["$initial"],
+      maxSize: 1024 * 1024,
+    });
     for (const [id, expected] of [
       ["/repo/ui/node_modules/lit/index.js", "lit-runtime"],
       ["/repo/ui/node_modules/lit-html/directives/repeat.js", "lit-runtime"],

@@ -125,11 +125,13 @@ describe.skipIf(process.platform === "win32")("survivor loaded stop policy", () 
     { policy: "", value: "90000", display: "90s" },
     { policy: "TimeoutStopSec=0", value: "Infinity", display: "infinity" },
     { policy: "TimeoutStopSec=infinity", value: "Infinity", display: "infinity" },
-    ...["bogus", "2147484", "9".repeat(400), "30\nTimeoutStopSec=330"].map((policy) => ({
-      policy: "TimeoutStopSec=" + policy,
-      value: "",
-      display: "",
-    })),
+    ...["-1", "bogus", "1ms", "2147484", "9".repeat(400), "30\nTimeoutStopSec=330"].map(
+      (policy) => ({
+        policy: "TimeoutStopSec=" + policy,
+        value: "",
+        display: "",
+      }),
+    ),
   ])("admits only supported generated stop policy $policy", ({ policy, value, display }) => {
     const { unit, systemctl, manager } = fixture();
     writeFileSync(unit, "[Service]\nExecStart=/usr/bin/true\n" + policy + "\n");

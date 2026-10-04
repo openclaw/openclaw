@@ -3,6 +3,7 @@ import { globSync } from "node:fs";
 import path from "node:path";
 import { afterEach, assert, describe, expect, it } from "vitest";
 import { resolveConfig } from "vitest/node";
+import { resolveExtensionTestConfig } from "../scripts/lib/extension-test-plan.mts";
 import { buildVitestRunPlans } from "../scripts/test-projects.test-support.mts";
 import { withEnv } from "../src/test-utils/env.js";
 import { spawnNodeEvalSync } from "../src/test-utils/node-process.js";
@@ -466,6 +467,30 @@ describe("projects vitest config", () => {
     expect(testConfig.pool).toBe("forks");
     expect(testConfig.maxWorkers).toBe(1);
   });
+
+  it.each(["logbook", "memory-core", "team-reports", "workboard"])(
+    "runs %s database owners in main-thread hosts across focused and full suites",
+    (pluginId) => {
+      const project = "test/vitest/vitest.extension-database-workers.config.ts";
+      const testConfig = requireTestConfig(createExtensionDatabaseWorkersVitestConfig({}));
+      expect(resolveExtensionTestConfig(`extensions/${pluginId}`)).toBe(project);
+      expect(
+        buildVitestRunPlans([`extensions/${pluginId}/src/store.test.ts`]).map(
+          (plan) => plan.config,
+        ),
+      ).toEqual([project]);
+      expect(rootVitestProjects).toContain(project);
+      expect(
+        fullSuiteVitestShards.find((shard) => shard.name === "extensions")?.projects,
+      ).toContain(project);
+      expect(testConfig.pool).toBe(diagnosticForksPool);
+      expect(testConfig.isolate).toBe(true);
+      expect(testConfig.include).toContain(`${pluginId}/**/*.test.ts`);
+      expect(requireTestConfig(createExtensionsVitestConfig({})).exclude).toContain(
+        `${pluginId}/**`,
+      );
+    },
+  );
 
   it.each(["extensions/agentsapi/agentsapi-attempt.test.ts"])(
     "routes real extension database consumer %s to its fork owner",
