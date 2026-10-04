@@ -55,6 +55,11 @@ enum AppNavigationActions {
         }
     }
 
+    static func openSelectedWebRoute(_ path: String, search: String? = nil) {
+        let target = self.selectedGatewayTarget ?? MacGatewaySelectionPreferences.shared.target
+        Task { await DashboardManager.shared.show(atPath: path, search: search, target: target) }
+    }
+
     /// Gateway-owned onboarding has no native equivalent.
     static func openDashboardOnboarding() {
         self.openPrimaryWebRoute(
@@ -113,8 +118,7 @@ enum AppNavigationActions {
     }
 
     static func openSettings() {
-        let target = self.selectedGatewayTarget ?? MacGatewaySelectionPreferences.shared.target
-        Task { await DashboardManager.shared.show(atPath: DashboardRouteMap.appearanceSettingsPath, target: target) }
+        self.openSelectedWebRoute(DashboardRouteMap.appearanceSettingsPath)
     }
 
     static func openConnection(tab: ConnectionTab = .connection) {

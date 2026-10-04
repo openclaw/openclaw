@@ -94,6 +94,9 @@ cookie sync, and permissions. Device voice controls appear under
 **Settings → Updates → This Mac**. These device controls appear only in the
 macOS app's embedded Dashboard, not in an ordinary browser.
 
+Choose **Navigate → Systems** to open the embedded Dashboard's machine inventory,
+including desktops and active workers.
+
 **This Mac → Capabilities → Desktop sharing** is enabled by default. It exposes
 this Mac's existing Screen Sharing service in **Systems**, independently of
 **Computer Control** and **Keep computer awake**. Enable Screen Sharing in
