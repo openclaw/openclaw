@@ -26,7 +26,6 @@ import {
   runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
-import type { IncognitoAgentDatabaseExecution } from "../../state/openclaw-agent-execution-incognito.js";
 import {
   captureOpenClawAgentDatabaseExecution,
   supportsOpenClawAgentDatabaseExecution,
@@ -38,6 +37,11 @@ import {
   findSessionRepositoryWorkspaces,
 } from "../../state/session-repository-workspaces.js";
 import { resolveSessionStorePathCore } from "./paths.js";
+import {
+  pinSqliteSessionReceiptDeletionDatabase,
+  prepareSqliteSessionReceiptDeletions,
+  type IncognitoDeletionSource,
+} from "./session-accessor.sqlite-deletion-receipts.js";
 import { readSessionEntryRow } from "./session-accessor.sqlite-entry-read.js";
 import {
   runExclusiveSqliteSessionWrite,
@@ -53,12 +57,6 @@ import type {
 import type { SessionEntry } from "./types.js";
 
 type DeletionEntry = { sessionKey: string; entry: SessionEntry };
-type IncognitoDeletionSource = Pick<
-  IncognitoAgentDatabaseExecution,
-  "agentId" | "path" | "assertCurrent"
-> & {
-  sessions: Pick<IncognitoAgentDatabaseExecution["sessions"], "captureSnapshot" | "readSharing">;
-};
 type SessionMutationRun<T> = (
   assertCurrent: () => void,
   captureSettlement: (
@@ -307,6 +305,10 @@ async function withSqliteSessionMutations<T>(
     ? captureOpenClawStateWorkerContext({ path: repositories.path, env: scope.env })
     : undefined;
   const databaseOptions = toDatabaseOptions(scope);
+  const receiptSource =
+    !options.contextReset && !options.callerSettlesReceipts && targets.length > 0
+      ? pinSqliteSessionReceiptDeletionDatabase(databaseOptions, actor)
+      : undefined;
   const execution =
     repositories && supportsOpenClawAgentDatabaseExecution(databaseOptions)
       ? captureOpenClawAgentDatabaseExecution(databaseOptions)
@@ -440,27 +442,14 @@ async function withSqliteSessionMutations<T>(
           }),
         );
       }
-      const receiptOnlyDeletions = new Map<
-        string,
-        Awaited<ReturnType<typeof preparePersonalGitHubSessionReceiptDeletion>>
-      >();
-      for (const target of receiptOnlyTargets) {
-        receiptOnlyDeletions.set(
-          target.sessionKey,
-          await preparePersonalGitHubSessionReceiptDeletion({
-            agentId: target.agentId,
+      const settleReceiptOnlyDeletions = receiptSource
+        ? await prepareSqliteSessionReceiptDeletions(receiptSource, receiptOnlyTargets, {
             env: scope.env,
-            generations: [
-              {
-                sessionKey: target.sessionKey,
-                sessionId: target.sessionId,
-                lifecycleRevision: target.lifecycleRevision ?? null,
-              },
-            ],
             assertCurrent,
-          }),
-        );
-      }
+            assertRepositoryCurrent: () => repositorySource?.admission.assertCurrent(),
+            workerBacked: execution !== undefined,
+          })
+        : undefined;
       return await deletions.run(
         new Map(
           targets.map((target) => [
@@ -546,44 +535,7 @@ async function withSqliteSessionMutations<T>(
                 assertCurrent: assertSessionAbsent,
               });
             }
-            // Receipt selection is generation-precise; unlike workspaces, it needs no source binding
-            // or transaction-held session absence admission after the post-run presence check.
-            for (const target of receiptOnlyTargets) {
-              const assertSourceCurrent = () => repositorySource?.admission.assertCurrent();
-              assertSourceCurrent();
-              let present: boolean;
-              if (execution) {
-                const { withSessionEntryReadOnlyInWorker } =
-                  await import("./session-entry-read-runtime.js");
-                // Read the database this deletion wrote; legacy rows can carry another agent's key.
-                const readScope = {
-                  agentId: databaseOptions.agentId,
-                  defaultAgentId: databaseOptions.agentId,
-                  storePath: scope.ownerStorePath ?? scope.path ?? ownerStorePath,
-                  sessionKey: target.sessionKey,
-                  env: scope.env,
-                };
-                present = await withSessionEntryReadOnlyInWorker(
-                  readScope,
-                  assertSourceCurrent,
-                  async (read) => {
-                    if (!read.ok) {
-                      throw read.error;
-                    }
-                    return read.value !== undefined;
-                  },
-                );
-              } else {
-                present =
-                  readSessionEntryRow(
-                    openOpenClawAgentDatabase(toDatabaseOptions(scope)),
-                    target.sessionKey,
-                  ) !== undefined;
-              }
-              if (!present) {
-                await receiptOnlyDeletions.get(target.sessionKey)!();
-              }
-            }
+            await settleReceiptOnlyDeletions?.();
           }
         },
       );

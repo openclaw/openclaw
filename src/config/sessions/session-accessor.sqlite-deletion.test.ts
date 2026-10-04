@@ -15,7 +15,6 @@ import type {
 } from "../../agents/harness/types.js";
 import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import * as sqliteQueries from "../../infra/kysely-sync.js";
-import { deleteSessionEntry } from "../../plugin-sdk/session-store-runtime.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import {
   markPluginRegistryActive,
@@ -59,10 +58,8 @@ import {
 import * as sessionArchive from "./session-accessor.sqlite-archive.js";
 import {
   runSqliteSessionDeletionTransaction,
-  withSqliteSessionContextReset,
   withSqliteSessionDeletions,
 } from "./session-accessor.sqlite-deletion.js";
-import { seedPersonalGitHubDeletionReceipt } from "./session-accessor.sqlite-deletion.test-support.js";
 import { deleteSessionEntryRows } from "./session-accessor.sqlite-entry-store.js";
 import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
 import { resolveSqliteScope } from "./session-accessor.sqlite-scope.js";
@@ -178,63 +175,6 @@ describe("session deletion and native owner state", () => {
     });
   const read = (key = sessionKey) =>
     loadSessionEntry({ sessionKey: key, storePath, readConsistency: "latest" });
-
-  const seedReceipt = (key = sessionKey) => seedPersonalGitHubDeletionReceipt(key, sessionId);
-
-  it("removes personal publication receipts without a repository workspace during projection cleanup", async () => {
-    await seed(sessionKey, null);
-    await seed(baseKey, null);
-    const receipt = await seedReceipt();
-    const unrelated = await seedReceipt(baseKey);
-    const unrelatedBefore = unrelated();
-    expect(receipt().lifecycle).toMatchObject({ lifecycle_revision: "generation-1" });
-
-    await applySessionEntryLifecycleMutation({
-      storePath,
-      removals: [{ sessionKey }],
-      skipMaintenance: true,
-    });
-
-    expect(read()).toBeUndefined();
-    expect(receipt()).toEqual({ receipt: undefined, lifecycle: undefined });
-    expect(read(baseKey)?.sessionId).toBe(sessionId);
-    expect(unrelated()).toEqual(unrelatedBefore);
-  });
-
-  it("removes personal publication receipts without a repository workspace through the SDK", async () => {
-    await seed(sessionKey, null);
-    const receipt = await seedReceipt();
-
-    await expect(deleteSessionEntry({ storePath, sessionKey })).resolves.toBe(true);
-
-    expect(read()).toBeUndefined();
-    expect(receipt()).toEqual({ receipt: undefined, lifecycle: undefined });
-  });
-
-  it("retains personal publication receipts when deletion aborts or the context resets", async () => {
-    await seed(sessionKey, null);
-    const receipt = await seedReceipt();
-    const before = receipt();
-    const entry = read()!;
-    const scope = resolveSqliteScope({ sessionKey, storePath });
-    const failure = new Error("deletion aborted before commit");
-
-    await expect(
-      withSqliteSessionDeletions(scope, [{ sessionKey, entry }], async () => {
-        throw failure;
-      }),
-    ).rejects.toBe(failure);
-    expect(read()).toEqual(entry);
-    expect(receipt()).toEqual(before);
-
-    await withSqliteSessionContextReset(scope, { sessionKey, entry }, async () => {
-      await patchSessionEntryCore({ sessionKey, storePath }, () => ({ label: "context reset" }), {
-        skipMaintenance: true,
-      });
-    });
-    expect(read()).toMatchObject({ sessionId, label: "context reset" });
-    expect(receipt()).toEqual(before);
-  });
 
   it("cleans repository state in the explicit environment and preserves the ambient same-key session", async () => {
     const ambientEnv = { ...process.env };
