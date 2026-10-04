@@ -174,14 +174,14 @@ fails rather than retrying unsandboxed. Handoff filtering controls only the
 explicit `boundedLaunch.handoff` payload; it is not a security boundary for the
 original task, workspace, memory, or tool visibility.
 
-See [Swarm bounded launches](/tools/swarm-dynamics) for the exact contract and
+See [Swarm bounded launches](/tools/swarm-bounded-launches) for the exact contract and
 ownership boundaries.
 
-When `boundedLaunch.candidate` is present, OpenClaw validates the complete
-candidate/source/recipe/policy manifest, computes a stable candidate identity,
+When `boundedLaunch.candidateBinding` is present, OpenClaw validates the complete
+candidate/source/recipe/policy binding, computes a stable candidate identity,
 and binds both manifest and identity into the native launch bytes before the
 existing replay fingerprint is computed. A conflicting
-`handoff.candidateDigest` is rejected. This identity proves which exact
+`handoff.candidateDigest` is rejected. This binding proves which exact
 candidate a verifier received; it does not prove that verification succeeded
 or that two verifier runs were independent.
 

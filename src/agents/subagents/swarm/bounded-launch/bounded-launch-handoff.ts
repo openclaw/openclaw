@@ -1,4 +1,4 @@
-import type { HandoffManifest, BoundedLaunchBoundary } from "./dynamics-types.js";
+import type { BoundedLaunchBoundary, HandoffManifest } from "./bounded-launch-types.js";
 
 export type HandoffPayload = {
   candidateDigest?: string;
@@ -8,8 +8,8 @@ export type HandoffPayload = {
 };
 
 export function buildHandoffManifest(params: {
-  sourceReplicaId: string;
-  targetReplicaId: string;
+  sourceRunId: string;
+  targetLaunchId: string;
   boundary: BoundedLaunchBoundary;
   payload: HandoffPayload;
 }): HandoffManifest {
@@ -20,8 +20,8 @@ export function buildHandoffManifest(params: {
     case "isolated":
       return {
         version: 1,
-        sourceReplicaId: params.sourceReplicaId,
-        targetReplicaId: params.targetReplicaId,
+        sourceRunId: params.sourceRunId,
+        targetLaunchId: params.targetLaunchId,
         boundary: params.boundary,
         artifactRefs: [],
         evidenceRefs: [],
@@ -29,8 +29,8 @@ export function buildHandoffManifest(params: {
     case "artifact-only":
       return {
         version: 1,
-        sourceReplicaId: params.sourceReplicaId,
-        targetReplicaId: params.targetReplicaId,
+        sourceRunId: params.sourceRunId,
+        targetLaunchId: params.targetLaunchId,
         boundary: params.boundary,
         candidateDigest: params.payload.candidateDigest,
         artifactRefs,
@@ -39,8 +39,8 @@ export function buildHandoffManifest(params: {
     case "evidence-only":
       return {
         version: 1,
-        sourceReplicaId: params.sourceReplicaId,
-        targetReplicaId: params.targetReplicaId,
+        sourceRunId: params.sourceRunId,
+        targetLaunchId: params.targetLaunchId,
         boundary: params.boundary,
         candidateDigest: params.payload.candidateDigest,
         artifactRefs: [],
@@ -49,8 +49,8 @@ export function buildHandoffManifest(params: {
     case "summary-only":
       return {
         version: 1,
-        sourceReplicaId: params.sourceReplicaId,
-        targetReplicaId: params.targetReplicaId,
+        sourceRunId: params.sourceRunId,
+        targetLaunchId: params.targetLaunchId,
         boundary: params.boundary,
         artifactRefs: [],
         evidenceRefs: [],

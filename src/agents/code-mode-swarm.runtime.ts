@@ -13,7 +13,7 @@ import {
   initSubagentRegistry,
 } from "./subagents/registry/subagent-registry.js";
 import type { SubagentRunRecord } from "./subagents/registry/subagent-registry.types.js";
-import { prepareBoundedLaunch } from "./subagents/swarm/dynamics/dynamics-spawn.js";
+import { prepareBoundedLaunch } from "./subagents/swarm/bounded-launch/bounded-launch.js";
 import {
   SWARM_CODE_MODE_IDEMPOTENCY_KEY,
   SWARM_CODE_MODE_REQUEST_FINGERPRINT,

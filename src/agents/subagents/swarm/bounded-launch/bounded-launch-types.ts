@@ -1,4 +1,8 @@
-export type BoundedLaunchBoundary = "isolated" | "artifact-only" | "evidence-only" | "summary-only";
+export type BoundedLaunchBoundary =
+  | "isolated"
+  | "artifact-only"
+  | "evidence-only"
+  | "summary-only";
 
 export type BoundedLaunchRequirement = "optional" | "required";
 
@@ -10,8 +14,8 @@ export type BoundedLaunchRequirements = {
 
 export type HandoffManifest = {
   version: 1;
-  sourceReplicaId: string;
-  targetReplicaId: string;
+  sourceRunId: string;
+  targetLaunchId: string;
   boundary: BoundedLaunchBoundary;
   candidateDigest?: string;
   artifactRefs: readonly string[];

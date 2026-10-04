@@ -26,7 +26,7 @@ import { restoreSubagentRunsFromDisk } from "./subagents/registry/subagent-regis
 import { resetSubagentRegistryForTests } from "./subagents/registry/subagent-registry.test-helpers.js";
 import { spawnSubagentDirect } from "./subagents/spawn/subagent-spawn.js";
 import { testing as subagentSpawnTesting } from "./subagents/spawn/subagent-spawn.test-support.js";
-import { prepareBoundedLaunch } from "./subagents/swarm/dynamics/dynamics-spawn.js";
+import { prepareBoundedLaunch } from "./subagents/swarm/bounded-launch/bounded-launch.js";
 import { testing as swarmSchedulerTesting } from "./subagents/swarm/swarm-scheduler.test-support.js";
 import { createToolSearchCatalogRef } from "./tool-search-catalog.js";
 import type { ToolSearchRuntime } from "./tool-search-runtime.js";
@@ -58,17 +58,20 @@ type DispatchGatewayMethodInProcess = NonNullable<
 
 let stateDir = "";
 
-function candidate(policyDigest = "sha256:policy-a") {
+function candidateBinding() {
   return {
     version: 1 as const,
     candidateDigest: "sha256:candidate",
     sourceDigest: "sha256:source",
     recipeDigest: "sha256:recipe",
-    policyDigest,
+    policyDigest: "sha256:policy-a",
   };
 }
 
-function boundedLaunch(policyDigest = "sha256:policy-a") {
+type CandidateBindingField = keyof Omit<ReturnType<typeof candidateBinding>, "version">;
+
+function boundedLaunch() {
+  const binding = candidateBinding();
   return {
     boundary: "artifact-only",
     requirements: {
@@ -77,11 +80,20 @@ function boundedLaunch(policyDigest = "sha256:policy-a") {
       artifactRefs: "required",
     },
     handoff: {
-      candidateDigest: "sha256:candidate",
+      candidateDigest: binding.candidateDigest,
       artifactRefs: ["artifact://candidate"],
     },
-    candidate: candidate(policyDigest),
+    candidateBinding: binding,
   };
+}
+
+function boundedLaunchWithChangedBinding(field: CandidateBindingField) {
+  const next = boundedLaunch();
+  next.candidateBinding[field] = `sha256:${field}-b`;
+  if (field === "candidateDigest") {
+    next.handoff.candidateDigest = next.candidateBinding.candidateDigest;
+  }
+  return next;
 }
 
 function preparedInput(boundedLaunchInput: ReturnType<typeof boundedLaunch>) {
@@ -89,8 +101,8 @@ function preparedInput(boundedLaunchInput: ReturnType<typeof boundedLaunch>) {
     ...prepareBoundedLaunch({
       task,
       boundedLaunch: boundedLaunchInput,
-      sourceReplicaId: groupId,
-      targetReplicaId: replayKey,
+      sourceRunId: groupId,
+      targetLaunchId: replayKey,
     }),
     collect: true,
     groupId,
@@ -154,7 +166,7 @@ describe("Code Mode bounded launch native replay", () => {
     // owner in-process so the suite never depends on a host SQLite broker.
     configureInMemoryTaskStoresForTests();
     installInProcessRegistryPersistenceForTests();
-    stateDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-dynamics-replay-"));
+    stateDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-bounded-launch-replay-"));
     setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
     setTestEnvValue("OPENCLAW_CONFIG_PATH", path.join(stateDir, "openclaw.json"));
     vi.mocked(loadAgentRuntimePluginRegistryHandle).mockReturnValue(createTestRegistry([]));
@@ -186,7 +198,7 @@ describe("Code Mode bounded launch native replay", () => {
     ) => {
       requests.push({ method, params });
       // SAFETY: this fixture supplies the accepted Gateway response shape for the generic T.
-      return { runId: "native-replay-run", status: "accepted" } as T;
+      return { runId: "native-bounded-launch-replay-run", status: "accepted" } as T;
     };
     subagentSpawnTesting.setDepsForTest({
       hasInProcessGatewayContext: () => true,
@@ -264,18 +276,25 @@ describe("Code Mode bounded launch native replay", () => {
     expect(callExactId).not.toHaveBeenCalled();
     expect(requests).toHaveLength(1);
 
-    await expect(
-      codeModeSwarmHandlers.agentSpawn({
-        runtime,
-        parentToolCallId: "parent-call",
-        request: {
-          ...request,
-          args: [task, { boundedLaunch: boundedLaunch("sha256:policy-b") }],
-        },
-        codeModeRunId,
-        ctx,
-      }),
-    ).rejects.toThrow("replay request does not match the persisted collector");
+    for (const field of [
+      "candidateDigest",
+      "sourceDigest",
+      "recipeDigest",
+      "policyDigest",
+    ] as const) {
+      await expect(
+        codeModeSwarmHandlers.agentSpawn({
+          runtime,
+          parentToolCallId: "parent-call",
+          request: {
+            ...request,
+            args: [task, { boundedLaunch: boundedLaunchWithChangedBinding(field) }],
+          },
+          codeModeRunId,
+          ctx,
+        }),
+      ).rejects.toThrow("replay request does not match the persisted collector");
+    }
     expect(callExactId).not.toHaveBeenCalled();
     expect(requests).toHaveLength(1);
   });

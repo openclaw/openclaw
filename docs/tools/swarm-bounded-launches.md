@@ -14,7 +14,7 @@ Use it when a verification lane must:
 
 - receive only an explicit bounded handoff;
 - require the existing sandbox admission path; and/or
-- bind an exact candidate identity into the existing replay fingerprint.
+- bind an exact candidate binding into the existing replay fingerprint.
 
 Calls without `boundedLaunch` use the existing launch path unchanged.
 
@@ -36,7 +36,7 @@ type BoundedLaunchOptions = {
     evidenceRefs?: string[];
     summary?: string;
   };
-  candidate?: {
+  candidateBinding?: {
     version: 1;
     candidateDigest: string;
     sourceDigest: string;
@@ -53,8 +53,8 @@ publication, merge, or deployment authority.
 ## Handoff boundaries
 
 - `isolated` drops every explicit handoff field.
-- `artifact-only` may carry candidate identity and artifact references.
-- `evidence-only` may carry candidate identity and evidence references.
+- `artifact-only` may carry candidate binding and artifact references.
+- `evidence-only` may carry candidate binding and evidence references.
 - `summary-only` carries only a bounded summary.
 
 OpenClaw rejects requirements that the selected boundary cannot preserve.
@@ -74,7 +74,7 @@ await agents.run("Verify this exact candidate.", {
       candidateDigest: "required",
       artifactRefs: "required",
     },
-    candidate: {
+    candidateBinding: {
       version: 1,
       candidateDigest: "candidate:sha256:...",
       sourceDigest: "source:sha256:...",
@@ -92,21 +92,21 @@ A bounded launch uses `context: "isolated"`. When `sandbox: "require"` is
 requested, the existing native spawn owner must admit that sandbox or reject the
 launch. The bridge does not retry unsandboxed.
 
-The complete candidate/source/recipe/policy manifest is canonically hashed and
+The complete candidate/source/recipe/policy binding is canonically hashed and
 included in the prepared launch before OpenClaw computes its existing replay
 fingerprint. Replaying the same request is deterministic; changing governing
-candidate identity rejects reuse of a persisted collector.
+candidate binding rejects reuse of a persisted collector.
 
-Candidate identity proves which object was handed to verification. It does not
+Candidate binding proves which object was handed to verification. It does not
 prove that verification ran, that the verifier was independent, or that the
 candidate is correct.
 
 ## Architecture boundary
 
-`boundedLaunch` is the crystallization/measurement seam, not a population
+`boundedLaunch` is the freeze/seal measurement seam, not a population
 controller:
 
-`explore -> select -> freeze exact candidate -> bounded launch -> verify`
+`explore -> select -> freeze/seal exact candidate -> bounded launch -> verify`
 
 Caller or plugin policy may adapt model, thinking level, fast mode, search width,
 or verification intensity from novelty, disagreement, correlation, and resource
@@ -125,4 +125,7 @@ Existing OpenClaw owners remain authoritative:
 
 This feature is intentionally only the generic bounded-launch primitive.
 Adaptive population/search policy is a separate concern and is not part of this
-contract.
+contract. In statistical-physics terms, search may stay high-entropy while policy
+changes compute budget or sampling temperature; this contract begins only after
+one candidate is frozen/sealed for measurement. Those control variables remain
+caller/plugin policy, not launch authority.

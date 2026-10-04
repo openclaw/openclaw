@@ -1,10 +1,13 @@
-import { candidateIdentity, type CandidateManifest } from "./candidate-evidence.js";
-import { buildHandoffManifest, type HandoffPayload } from "./dynamics-handoffs.js";
+import {
+  candidateBindingIdentity,
+  type BoundedLaunchCandidateBinding,
+} from "./candidate-binding.js";
+import { buildHandoffManifest, type HandoffPayload } from "./bounded-launch-handoff.js";
 import type {
+  BoundedLaunchBoundary,
   BoundedLaunchRequirement,
   BoundedLaunchRequirements,
-  BoundedLaunchBoundary,
-} from "./dynamics-types.js";
+} from "./bounded-launch-types.js";
 
 export type PreparedBoundedLaunch = {
   task: string;
@@ -22,7 +25,6 @@ function readRecord(value: unknown, name: string): Record<string, unknown> {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     throw new Error(`${name} must be an object`);
   }
-  // SAFETY: the guards above exclude null, arrays, and all non-object values.
   return value as Record<string, unknown>;
 }
 
@@ -109,11 +111,11 @@ function validateContract(
   }
 }
 
-function readCandidateManifest(value: unknown): CandidateManifest | undefined {
+function readCandidateBinding(value: unknown): BoundedLaunchCandidateBinding | undefined {
   if (value === undefined) {
     return undefined;
   }
-  const record = readRecord(value, "boundedLaunch.candidate");
+  const record = readRecord(value, "boundedLaunch.candidateBinding");
   if (
     Object.keys(record).some(
       (key) =>
@@ -122,10 +124,10 @@ function readCandidateManifest(value: unknown): CandidateManifest | undefined {
         ),
     )
   ) {
-    throw new Error("unsupported bounded launch candidate field");
+    throw new Error("unsupported bounded launch candidate binding field");
   }
   if (record.version !== 1) {
-    throw new Error("boundedLaunch.candidate.version must be 1");
+    throw new Error("boundedLaunch.candidateBinding.version must be 1");
   }
   return {
     version: 1,
@@ -139,28 +141,35 @@ function readCandidateManifest(value: unknown): CandidateManifest | undefined {
 export function prepareBoundedLaunch(params: {
   task: string;
   boundedLaunch: unknown;
-  sourceReplicaId: string;
-  targetReplicaId: string;
+  sourceRunId: string;
+  targetLaunchId: string;
 }): PreparedBoundedLaunch {
   if (params.boundedLaunch === undefined) {
     return { task: params.task };
   }
+
   const options = readRecord(params.boundedLaunch, "boundedLaunch");
   if (
     Object.keys(options).some(
       (key) =>
-        key !== "boundary" && key !== "requirements" && key !== "handoff" && key !== "candidate",
+        key !== "boundary" &&
+        key !== "requirements" &&
+        key !== "handoff" &&
+        key !== "candidateBinding",
     )
   ) {
-    throw new Error("boundedLaunch accepts only boundary, requirements, handoff, and candidate");
+    throw new Error(
+      "boundedLaunch accepts only boundary, requirements, handoff, and candidateBinding",
+    );
   }
 
   const boundary = readBoundary(options.boundary);
   const requirements = readRequirements(options.requirements);
   validateContract(boundary, requirements);
-  const candidate = readCandidateManifest(options.candidate);
+  const candidateBinding = readCandidateBinding(options.candidateBinding);
 
-  const raw = options.handoff === undefined ? {} : readRecord(options.handoff, "boundedLaunch.handoff");
+  const raw =
+    options.handoff === undefined ? {} : readRecord(options.handoff, "boundedLaunch.handoff");
   if (
     Object.keys(raw).some(
       (key) => !["candidateDigest", "artifactRefs", "evidenceRefs", "summary"].includes(key),
@@ -168,32 +177,35 @@ export function prepareBoundedLaunch(params: {
   ) {
     throw new Error("unsupported bounded launch handoff field");
   }
+
   const explicitCandidateDigest =
     raw.candidateDigest === undefined
       ? undefined
       : readText(raw.candidateDigest, "candidateDigest", 256);
   if (
-    candidate &&
+    candidateBinding &&
     explicitCandidateDigest !== undefined &&
-    explicitCandidateDigest !== candidate.candidateDigest
+    explicitCandidateDigest !== candidateBinding.candidateDigest
   ) {
-    throw new Error("boundedLaunch handoff candidate digest does not match candidate manifest");
+    throw new Error("boundedLaunch handoff candidate digest does not match candidate binding");
   }
 
   const payload: HandoffPayload = {
     artifactRefs: readRefs(raw.artifactRefs, "artifactRefs"),
     evidenceRefs: readRefs(raw.evidenceRefs, "evidenceRefs"),
-    ...(candidate || explicitCandidateDigest
-      ? { candidateDigest: candidate?.candidateDigest ?? explicitCandidateDigest }
+    ...(candidateBinding || explicitCandidateDigest
+      ? { candidateDigest: candidateBinding?.candidateDigest ?? explicitCandidateDigest }
       : {}),
     ...(raw.summary !== undefined ? { summary: readText(raw.summary, "summary", 4096) } : {}),
   };
+
   const handoff = buildHandoffManifest({
-    sourceReplicaId: readText(params.sourceReplicaId, "source replica", 1024),
-    targetReplicaId: readText(params.targetReplicaId, "target replica", 1024),
+    sourceRunId: readText(params.sourceRunId, "source run", 1024),
+    targetLaunchId: readText(params.targetLaunchId, "target launch", 1024),
     boundary,
     payload,
   });
+
   const missingRequirements = [
     ...(requirements.candidateDigest === "required" && !handoff.candidateDigest
       ? ["candidate digest"]
@@ -207,8 +219,8 @@ export function prepareBoundedLaunch(params: {
   }
 
   const contract = { version: 1 as const, boundary, requirements };
-  const exactCandidate = candidate
-    ? { manifest: candidate, identity: candidateIdentity(candidate) }
+  const exactCandidate = candidateBinding
+    ? { binding: candidateBinding, identity: candidateBindingIdentity(candidateBinding) }
     : undefined;
   const task = [
     "OpenClaw bounded launch contract (experimental):",
@@ -225,6 +237,7 @@ export function prepareBoundedLaunch(params: {
     "Task:",
     params.task,
   ].join("\n");
+
   return {
     task,
     context: "isolated",

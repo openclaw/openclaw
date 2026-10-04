@@ -19,7 +19,7 @@ import { loadAgentRuntimePluginRegistryHandle } from "../../runtime-plugins.js";
 import { SubagentRegistryWriteError } from "../registry/subagent-registry-persistence.js";
 import * as registryState from "../registry/subagent-registry-state.js";
 import { resetSubagentRegistryForTests } from "../registry/subagent-registry.test-helpers.js";
-import { prepareBoundedLaunch } from "../swarm/dynamics/dynamics-spawn.js";
+import { prepareBoundedLaunch } from "../swarm/bounded-launch/bounded-launch.js";
 import { testing as swarmSchedulerTesting } from "../swarm/swarm-scheduler.test-support.js";
 import { spawnSubagentDirect } from "./subagent-spawn.js";
 import { testing as subagentSpawnTesting } from "./subagent-spawn.test-support.js";
@@ -70,7 +70,7 @@ function preparedVerifier() {
         evidenceRefs: ["evidence://builder-private-notes"],
         summary: "builder-private-rationale",
       },
-      candidate: {
+      candidateBinding: {
         version: 1,
         candidateDigest: "sha256:candidate",
         sourceDigest: "sha256:source",
@@ -78,8 +78,8 @@ function preparedVerifier() {
         policyDigest: "sha256:policy",
       },
     },
-    sourceReplicaId: "swarm:agent:main:main:parent-run",
-    targetReplicaId: "code-run:bridge:1",
+    sourceRunId: "swarm:agent:main:main:parent-run",
+    targetLaunchId: "code-run:bridge:1",
   });
 }
 
@@ -133,7 +133,7 @@ describe("native bounded launch spawn boundary", () => {
     // owner in-process so the suite never depends on a host SQLite broker.
     configureInMemoryTaskStoresForTests();
     installInProcessRegistryPersistenceForTests();
-    stateDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-dynamics-native-"));
+    stateDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-bounded-launch-native-"));
     setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
     setTestEnvValue("OPENCLAW_CONFIG_PATH", path.join(stateDir, "openclaw.json"));
     vi.mocked(loadAgentRuntimePluginRegistryHandle).mockReturnValue(createTestRegistry([]));
@@ -168,7 +168,7 @@ describe("native bounded launch spawn boundary", () => {
       ) => {
         requests.push({ method, params });
         // SAFETY: this fixture supplies the accepted Gateway response shape for the generic T.
-        return { runId: "native-dynamics-run", status: "accepted" } as T;
+        return { runId: "native-bounded-launch-run", status: "accepted" } as T;
       },
     });
 

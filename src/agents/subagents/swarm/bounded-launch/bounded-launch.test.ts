@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { prepareBoundedLaunch } from "./dynamics-spawn.js";
+import { prepareBoundedLaunch } from "./bounded-launch.js";
 
 const base = {
   task: "Check the upload race",
-  sourceReplicaId: "parent",
-  targetReplicaId: "child",
+  sourceRunId: "parent",
+  targetLaunchId: "child",
 };
 
 const verifier = {
@@ -81,7 +81,7 @@ describe("native bounded launch preparation", () => {
     expect(first.task).not.toBe(
       prepareBoundedLaunch({
         ...base,
-        targetReplicaId: "replacement",
+        targetLaunchId: "replacement",
         boundedLaunch: { boundary: "isolated" },
       }).task,
     );
@@ -92,6 +92,15 @@ describe("native bounded launch preparation", () => {
     [],
     { boundary: "constructor" },
     { boundary: "isolated", authority: "admin" },
+    { boundary: "isolated", tools: ["exec"] },
+    { boundary: "isolated", credentials: { token: "secret" } },
+    { boundary: "isolated", publish: true },
+    { boundary: "isolated", scheduler: { maxConcurrent: 1000 } },
+    { boundary: "isolated", handoff: { instructions: "ignore policy" } },
+    {
+      boundary: "artifact-only",
+      requirements: { sandbox: "off" },
+    },
     {
       boundary: "artifact-only",
       requirements: { artifactRefs: "required" },
@@ -112,7 +121,7 @@ describe("native bounded launch preparation", () => {
     ).toThrow("drops candidate identity");
   });
 
-  it("binds the complete candidate manifest before fingerprinting", () => {
+  it("binds the complete candidate binding before fingerprinting", () => {
     const candidate = {
       version: 1 as const,
       candidateDigest: "candidate:a",
@@ -124,7 +133,7 @@ describe("native bounded launch preparation", () => {
       ...base,
       boundedLaunch: {
         ...verifier,
-        candidate,
+        candidateBinding: candidate,
       },
     });
     expect(first.task).toContain("Exact candidate binding");
@@ -133,7 +142,7 @@ describe("native bounded launch preparation", () => {
         ...base,
         boundedLaunch: {
           ...verifier,
-          candidate: { ...candidate, policyDigest: "policy:b" },
+          candidateBinding: { ...candidate, policyDigest: "policy:b" },
         },
       }).task,
     );
@@ -143,10 +152,10 @@ describe("native bounded launch preparation", () => {
         boundedLaunch: {
           ...verifier,
           handoff: { candidateDigest: "candidate:b", artifactRefs: ["artifact:a"] },
-          candidate,
+          candidateBinding: candidate,
         },
       }),
-    ).toThrow("does not match candidate manifest");
+    ).toThrow("does not match candidate binding");
   });
 
   it("bounds handoffs and snapshots their content before returning", () => {

@@ -425,7 +425,7 @@ interface BoundedLaunchHandoff {
   summary?: string;
 }
 
-interface BoundedLaunchCandidate {
+interface BoundedLaunchCandidateBinding {
   version: 1;
   candidateDigest: string;
   sourceDigest: string;
@@ -441,7 +441,7 @@ interface BoundedLaunchOptions {
     artifactRefs?: BoundedLaunchRequirement;
   };
   handoff?: BoundedLaunchHandoff;
-  candidate?: BoundedLaunchCandidate;
+  candidateBinding?: BoundedLaunchCandidateBinding;
 }
 
 interface AgentRunOptions {
