@@ -271,7 +271,7 @@ export async function admitAlbum(
 
 export type TelegramIngressResources = Awaited<ReturnType<typeof createIngressMonitor>>;
 
-export async function stopIngressResources(
+export async function releaseIngressCase(
   activeResources: TelegramIngressResources[],
   activeTurns: Set<Promise<void>>,
   stateDir: string,

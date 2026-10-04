@@ -141,7 +141,7 @@ const {
   interceptReplayGuard,
   resetTelegramIngressRuntime,
   runtimeErrors,
-  stopIngressResources,
+  releaseIngressCase,
   useIngressTimers,
 } = await import("./telegram-ingress-coalescing-fixture.test-support.js");
 const {
@@ -171,7 +171,7 @@ describe("Telegram durable ingress coalescing", () => {
   });
 
   async function releaseCaseState() {
-    await stopIngressResources(activeResources, inboundTurns.active, stateDir);
+    await releaseIngressCase(activeResources, inboundTurns.active, stateDir);
   }
 
   afterEach(async () => {
