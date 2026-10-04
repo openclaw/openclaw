@@ -204,6 +204,7 @@ async function getApiClientForReference(
 type TeamsGetById = (teamId: string) => Promise<{ aadGroupId?: string }>;
 
 function getStructuralApiClient(app: MSTeamsApp): MSTeamsApiClient {
+  // SAFETY: the SDK app exposes its structural API client on `api`; lookup only reads teams.getById.
   return app.api as MSTeamsApiClient;
 }
 
