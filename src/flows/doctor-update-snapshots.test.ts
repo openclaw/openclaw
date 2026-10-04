@@ -148,6 +148,9 @@ it.each([
   await snapshot("1-100", 1024);
   const ctx = createDoctorHealthFlowContext({ env: { [marker]: "1" } });
   await contribution()?.run(ctx);
-  expect(ctx.runtime.log).not.toHaveBeenCalled();
+  expect(ctx.runtime.log).toHaveBeenCalledWith("Doctor: core/doctor/update-snapshots started");
+  expect(ctx.runtime.log).toHaveBeenCalledWith(
+    expect.stringMatching(/^Doctor: core\/doctor\/update-snapshots completed \(\d+ms\)$/),
+  );
   expect(ctx.runtime.error).not.toHaveBeenCalled();
 });

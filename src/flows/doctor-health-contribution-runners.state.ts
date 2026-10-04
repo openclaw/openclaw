@@ -124,8 +124,7 @@ export async function runStateIntegrityHealth(ctx: DoctorHealthFlowContext): Pro
     shouldRepair: ctx.prompter.shouldRepair,
   });
   if (warnings.length > 0) {
-    ctx.updateWarnings ??= [];
-    ctx.updateWarnings.push(...warnings);
+    recordDoctorHealthWarnings(ctx, [], warnings);
   }
   const { noteStateIntegrity } = await loadDoctorStateIntegrityModule();
   await noteStateIntegrity(ctx.cfg, ctx.prompter, ctx.configPath, {

@@ -16,6 +16,8 @@ interface DoctorRepairRunOptions {
   readonly checks?: readonly DoctorHealthCheck[];
   readonly dryRun?: boolean;
   readonly diff?: boolean;
+  /** Emit human-readable per-check lifecycle lines for the Doctor CLI. */
+  readonly progress?: boolean;
 }
 
 interface DoctorRepairRunResult {
@@ -41,7 +43,20 @@ export async function runDoctorHealthRepairs(
   const result = createRepairRunResult(ctx.cfg, checks.length);
 
   for (const check of checks) {
-    await runHealthCheck(check, { ...ctx, cfg: result.config }, opts, result);
+    const startedAt = performance.now();
+    const warningsBefore = result.warnings.length;
+    if (opts.progress === true) {
+      ctx.runtime.log(`Doctor: ${check.id} started`);
+    }
+    try {
+      await runHealthCheck(check, { ...ctx, cfg: result.config }, opts, result);
+    } finally {
+      if (opts.progress === true) {
+        const durationMs = Math.max(0, Math.round(performance.now() - startedAt));
+        const outcome = result.warnings.length > warningsBefore ? "warning" : "completed";
+        ctx.runtime.log(`Doctor: ${check.id} ${outcome} (${durationMs}ms)`);
+      }
+    }
   }
 
   return result;
