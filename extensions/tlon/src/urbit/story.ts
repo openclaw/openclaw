@@ -87,8 +87,10 @@ const INLINE_MARKDOWN_RULES: ReadonlyArray<{
     }),
   },
   {
-    // A URL never ends in sentence punctuation or a closing paren in running prose.
-    pattern: /^(https?:\/\/[^\s<>"\]]*[^\s<>"\].,;:!?)])/,
+    // In running prose a URL never ends in sentence punctuation, and keeps a closing paren
+    // only when it balances one inside the URL, as in .../wiki/Function_(mathematics).
+    pattern:
+      /^(https?:\/\/(?:[^\s<>"\]().,;:!?]|\([^\s<>"\]()]*\)|[.,;:!?]+(?=[^\s<>"\]().,;:!?]|\()|\((?![^\s<>"\]()]*\))(?=[^\s<>"\]().,;:!?]))+)/,
     render: (match) => {
       const url = expectDefined(match[1], "plain URL capture");
       return { link: { href: url, content: url } };

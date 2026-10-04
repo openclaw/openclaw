@@ -127,6 +127,14 @@ describe("markdownToStory inline formatting", () => {
     ]);
   });
 
+  it("keeps balanced parentheses inside a bare URL", () => {
+    const url = "https://en.wikipedia.org/wiki/Function_(mathematics)";
+    const link = { link: { href: url, content: url } };
+    expect(markdownToStory(`see ${url}. Or (${url})!`)).toEqual([
+      { inline: ["see ", link, ". Or (", link, ")!"] },
+    ]);
+  });
+
   const chart = {
     block: { image: { src: "https://example.com/chart.png", alt: "chart", height: 0, width: 0 } },
   };
