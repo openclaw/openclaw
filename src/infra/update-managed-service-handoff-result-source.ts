@@ -19,7 +19,6 @@ async function finishManagedUpdateRun() {
     ...(closedUpdateResult ? { reason: closedUpdateResult.reason ?? runOutcome.reason, after: closedUpdateResult.after } : {}),
     diagnostics: {
       steps: closedUpdateResult?.steps,
-      recovery: closedUpdateResult?.recovery,
       ...(handoffFailure && runOutcome.status === "failed" ? { failure: { step: "managed-service-handoff", detail: handoffFailure, exitCode: 1 } } : {}),
     },
     ...(serviceDowntimeMs !== undefined ? { downtimeMs: serviceDowntimeMs } : {}),
