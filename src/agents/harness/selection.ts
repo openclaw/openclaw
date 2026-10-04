@@ -53,6 +53,7 @@ import {
   runAgentHarnessLifecycleAttempt,
   runAgentHarnessLifecycleFinalization,
 } from "./lifecycle.js";
+import { preparePluginHarnessRuntimeContext } from "./prompt-context.js";
 import {
   buildAgentHarnessSelectionDecision,
   resolveAgentHarnessSelectionDecision,
@@ -641,10 +642,11 @@ function preparePluginHarnessParams(
     ? unwrapSecretSentinelsForProviderEgress(params.resolvedApiKey, boundary)
     : params.resolvedApiKey;
   const model = unwrapModelHeaderSentinelsForProviderEgress(params.model, boundary);
-  const preparedParams =
+  const preparedParams = preparePluginHarnessRuntimeContext(
     model === params.model && resolvedApiKey === params.resolvedApiKey
       ? params
-      : { ...params, model, resolvedApiKey };
+      : { ...params, model, resolvedApiKey },
+  );
   const policies = resolvePluginHarnessToolPolicies(
     preparedParams,
     harness.conversationToolPolicySupport === "exact"

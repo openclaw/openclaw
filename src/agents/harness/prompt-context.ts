@@ -2,7 +2,33 @@ import path from "node:path";
 import type { SessionModelContextLimits } from "../../config/sessions/session-accessor.sqlite-model-context.js";
 import type { OpenClawConfig } from "../../config/types.js";
 import { resolveAgentWorkspaceDir } from "../agent-scope-config.js";
+import { appendCurrentInboundContext } from "../embedded-agent-runner/run/runtime-context-prompt.js";
+import { buildAgentInternalEventContext } from "../internal-events.js";
+import { projectRuntimeContextFragments } from "../internal-runtime-context.js";
 import type { AgentHarnessAttemptParamsV2 } from "./types.js";
+
+/** Native plugins consume turn context; the built-in harness owns its own event projection. */
+export function preparePluginHarnessRuntimeContext(
+  params: AgentHarnessAttemptParamsV2,
+): AgentHarnessAttemptParamsV2 {
+  const fragments = buildAgentInternalEventContext(
+    params.internalEvents,
+    params.runtimeContextFragments,
+  );
+  if (!fragments.length) {
+    return params;
+  }
+  return {
+    ...params,
+    internalEvents: undefined,
+    runtimeContextFragments: undefined,
+    currentInboundContext: appendCurrentInboundContext(
+      params.currentInboundContext,
+      fragments,
+      projectRuntimeContextFragments(fragments),
+    ),
+  };
+}
 
 /** Bound transcript reads to the model budget while preserving complete messages. */
 export function resolveAgentHarnessHistoryLimits(

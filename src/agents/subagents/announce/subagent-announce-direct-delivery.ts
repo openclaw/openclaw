@@ -18,6 +18,7 @@ import {
   isGatewayMessageChannel,
   normalizeMessageChannel,
 } from "../../../utils/message-channel.js";
+import { assertHarnessCompletionSourceAdmission } from "../../agent-harness-completion-scope.js";
 import {
   buildAgentRunTerminalOutcomeFromWaitResult,
   classifyAgentRunTerminalOutcome,
@@ -430,6 +431,22 @@ export async function sendSubagentAnnounceDirectly(
     }
     const classifyResponse = createDirectAnnounceResponseClassifier({
       params,
+      assertHarnessCompletionSourceCurrent:
+        sourceToolId === "agent_harness_completion" &&
+        !parentOnly &&
+        !params.requesterIsSubagent &&
+        requesterAgentId &&
+        requesterSessionId &&
+        params.sourceSessionKey
+          ? assertHarnessCompletionSourceAdmission({
+              requesterSessionKey: canonicalRequesterSessionKey,
+              requesterAgentId,
+              requesterSessionId,
+              requesterLifecycleRevision,
+              sourceSessionKey: params.sourceSessionKey,
+              sourceRunId: params.directIdempotencyKey,
+            })
+          : undefined,
       parentOnly,
       requesterSessionBound,
       deliveryTarget,
