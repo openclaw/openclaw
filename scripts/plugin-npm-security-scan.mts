@@ -58,7 +58,7 @@ const REVIEWED_CRITICAL_FINDING_LIMITS = new Map<string, number>([
   ["source:@openclaw/mxc-sandbox:dangerous-exec:src/readiness.ts", 2],
   ["setup:@openclaw/onnx:dangerous-exec:dist/.setup/worker-client-<hash>.mjs", 1],
   ["source:@openclaw/onnx:dangerous-exec:src/worker-client.ts", 1],
-  ["setup:@openclaw/raft:dangerous-exec:dist/channel-plugin-api.js", 1],
+  ["dist:@openclaw/raft:dangerous-exec:dist/channel-plugin-api.js", 1],
   ["source:@openclaw/raft:dangerous-exec:src/gateway.ts", 1],
   ["setup:@openclaw/signal:dangerous-exec:dist/.setup/monitor-<hash>.mjs", 1],
   ["source:@openclaw/signal:dangerous-exec:src/daemon.ts", 1],

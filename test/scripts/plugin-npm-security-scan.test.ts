@@ -167,4 +167,16 @@ describe("plugin npm artifact security scan", () => {
     });
     expect(result.criticalFindingCount).toBe(1);
   });
+
+  it("keeps the reviewed Raft dist finding reachable in a mixed-layout artifact", () => {
+    const result = scanPluginNpmArtifactSecurity({
+      packageName: "@openclaw/raft",
+      packageVersion: "1.0.0",
+      tarball: packageTarball("@openclaw/raft", {
+        "dist/.setup/chunk.mjs": "export const value = 1;\n",
+        "dist/channel-plugin-api.js": SPAWN_SOURCE,
+      }),
+    });
+    expect(result.criticalFindingCount).toBe(1);
+  });
 });

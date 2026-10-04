@@ -224,18 +224,24 @@ function collectChildProcessBindings(source: string): ChildProcessBindings {
   const methodAliases = new Set<string>();
   const namespaceAliases = new Set<string>();
 
-  // ESM named imports: import { spawn as launch, execFile } from "child_process"
-  const esmNamed = /\bimport\s*\{([^}]*)\}\s*from\s*["'](?:node:)?child_process["']/g;
-  // ESM default namespace: import cp from "child_process"
-  const esmDefault = /\bimport\s+(\w+)\s+from\s*["'](?:node:)?child_process["']/g;
-  // ESM namespace import: import * as proc from "child_process"
-  const esmNamespace = /\bimport\s*\*\s*as\s+(\w+)\s+from\s*["'](?:node:)?child_process["']/g;
+  // ESM named imports, optionally after a default import.
+  const esmNamed =
+    /\bimport\s+(?:\w+\s*,\s*)?\{([^}]*)\}\s*from\s*["'](?:node:)?child_process["']/g;
+  // ESM default namespace, alone or before named/namespace imports.
+  const esmDefault =
+    /\bimport\s+(\w+)(?:\s*,\s*(?:\{[^}]*\}|\*\s*as\s+\w+))?\s+from\s*["'](?:node:)?child_process["']/g;
+  // ESM namespace import, optionally after a default import.
+  const esmNamespace =
+    /\bimport\s+(?:\w+\s*,\s*)?\*\s*as\s+(\w+)\s+from\s*["'](?:node:)?child_process["']/g;
   // CJS destructured: const { exec: run, spawn } = require("child_process")
   const cjsDestructured =
     /\b(?:const|let|var)\s*\{([^}]*)\}\s*=\s*require\s*\(\s*["'](?:node:)?child_process["']\s*\)/g;
   // Dynamic ESM destructured: const { spawn } = await import("child_process")
   const dynamicEsmDestructured =
     /\b(?:const|let|var)\s*\{([^}]*)\}\s*=\s*(?:await\s+)?import\s*\(\s*["'](?:node:)?child_process["']\s*\)/g;
+  // Dynamic ESM namespace: const proc = await import("child_process")
+  const dynamicEsmNamespace =
+    /\b(?:const|let|var)\s+(\w+)\s*=\s*(?:await\s+)?import\s*\(\s*["'](?:node:)?child_process["']\s*\)/g;
   // CJS namespace: const proc = require("child_process")
   const cjsNamespace =
     /\b(?:const|let|var)\s+(\w+)\s*=\s*require\s*\(\s*["'](?:node:)?child_process["']\s*\)/g;
@@ -262,7 +268,7 @@ function collectChildProcessBindings(source: string): ChildProcessBindings {
       collectSpecifiers(expectDefined(match[1], "child_process import specifiers"));
     }
   }
-  for (const pattern of [esmDefault, esmNamespace, cjsNamespace]) {
+  for (const pattern of [esmDefault, esmNamespace, cjsNamespace, dynamicEsmNamespace]) {
     for (const match of source.matchAll(pattern)) {
       namespaceAliases.add(expectDefined(match[1], "child_process namespace"));
     }
