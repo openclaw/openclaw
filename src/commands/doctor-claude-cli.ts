@@ -18,6 +18,7 @@ import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { resolveExecutablePath } from "../infra/executable-path.js";
+import { resolveBootstrappedPathEnv } from "../infra/path-env.js";
 import { shortenHomePath } from "../utils.js";
 
 const CLAUDE_CLI_PROVIDER = "claude-cli";
@@ -155,6 +156,18 @@ export function noteClaudeCliHealth(
   },
 ) {
   const env = deps?.env ?? process.env;
+  // The Gateway runtime bootstraps its PATH (package-manager dirs, ~/.local/bin,
+  // ...), so the claude-cli runtime resolves binaries that the bare doctor
+  // process PATH hides. Probe through the same bootstrap to avoid false
+  // "not found on PATH" reports while the runtime works.
+  const probeEnv: NodeJS.ProcessEnv = { ...env };
+  const bootstrappedPath = resolveBootstrappedPathEnv({
+    pathEnv: env.PATH ?? env.Path,
+    homeDir: deps?.homeDir,
+  });
+  if (bootstrappedPath) {
+    probeEnv.PATH = bootstrappedPath;
+  }
   const workspaceTargets = resolveClaudeCliWorkspaceTargets({
     cfg,
     env,
@@ -171,7 +184,7 @@ export function noteClaudeCliHealth(
     deps?.resolveCommandPath ??
     ((rawCommand: string, nextEnv?: NodeJS.ProcessEnv) =>
       resolveExecutablePath(rawCommand, { env: nextEnv }));
-  const commandPath = resolveCommandPath(command, env);
+  const commandPath = resolveCommandPath(command, probeEnv);
   const authEnv = { ...env };
   for (const envName of backend?.config.clearEnv ?? []) {
     delete authEnv[envName];

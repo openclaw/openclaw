@@ -260,6 +260,33 @@ describe("noteClaudeCliHealth", () => {
     });
   });
 
+  it("resolves the native-installer binary through the runtime PATH bootstrap", async () => {
+    await withTempHome(({ homeDir, workspaceDir }) => {
+      const localBin = path.join(homeDir, ".local", "bin");
+      fs.mkdirSync(localBin, { recursive: true });
+      const stubPath = path.join(localBin, process.platform === "win32" ? "claude.cmd" : "claude");
+      fs.writeFileSync(stubPath, process.platform === "win32" ? "@echo off\r\n" : "#!/bin/sh\n");
+      if (process.platform !== "win32") {
+        fs.chmodSync(stubPath, 0o755);
+      }
+      const projectDir = resolveClaudeCliProjectDirForWorkspace({ workspaceDir, homeDir });
+      fs.mkdirSync(projectDir, { recursive: true });
+
+      const noteFn = vi.fn();
+      noteClaudeCliHealth(defaultClaudeConfig, {
+        env: { PATH: "/usr/bin:/bin" },
+        homeDir,
+        workspaceDir,
+        noteFn,
+        isAuthenticated: () => true,
+      });
+
+      // The claude-cli runtime resolves ~/.local/bin through the PATH bootstrap;
+      // Doctor must not report that installation as missing.
+      expect(noteFn).not.toHaveBeenCalled();
+    });
+  });
+
   it("lists Claude CLI agents only when a problem is reported", async () => {
     await withTempHome(({ homeDir, workspaceDir }) => {
       resolveModelAgentRuntimeMetadataMock.mockReturnValue({

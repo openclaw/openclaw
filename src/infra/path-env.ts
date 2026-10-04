@@ -215,6 +215,26 @@ function candidateBinDirs(
 }
 
 /**
+ * Computes the bootstrapped PATH value without mutating `process.env`. Callers
+ * that only need to resolve executables the way the bootstrapped runtime would
+ * (Gateway launches call `ensureOpenClawCliOnPath`) can merge this into their
+ * own probe environment.
+ */
+export function resolveBootstrappedPathEnv(opts: EnsureOpenClawPathOpts = {}): string {
+  const existing = opts.pathEnv ?? process.env.PATH ?? "";
+  const existingPathParts = new Set(normalizeStringEntries(existing.split(path.delimiter)));
+  const { prepend, append } = candidateBinDirs(opts, existingPathParts);
+  if (prepend.length === 0 && append.length === 0) {
+    return existing;
+  }
+  return normalizeUniqueStringEntries([
+    ...prepend,
+    ...existing.split(path.delimiter),
+    ...append,
+  ]).join(path.delimiter);
+}
+
+/**
  * Best-effort PATH bootstrap so skills that require the `openclaw` CLI can run
  * under launchd/minimal environments (and inside the macOS app bundle).
  */
@@ -226,18 +246,7 @@ export function ensureOpenClawCliOnPath(opts: EnsureOpenClawPathOpts = {}) {
   // not keep reshuffling PATH.
   process.env.OPENCLAW_PATH_BOOTSTRAPPED = "1";
 
-  const existing = opts.pathEnv ?? process.env.PATH ?? "";
-  const existingPathParts = new Set(normalizeStringEntries(existing.split(path.delimiter)));
-  const { prepend, append } = candidateBinDirs(opts, existingPathParts);
-  if (prepend.length === 0 && append.length === 0) {
-    return;
-  }
-
-  const merged = normalizeUniqueStringEntries([
-    ...prepend,
-    ...existing.split(path.delimiter),
-    ...append,
-  ]).join(path.delimiter);
+  const merged = resolveBootstrappedPathEnv(opts);
   if (merged) {
     process.env.PATH = merged;
   }
