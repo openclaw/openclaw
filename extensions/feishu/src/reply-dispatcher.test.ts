@@ -4770,9 +4770,15 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       const updatesAtFinal = session.update.mock.calls.length;
 
       await result.replyOptions.onToolStart?.({ name: "bash", phase: "start" });
-      await new Promise((resolve) => {
-        setTimeout(resolve, 20);
-      });
+      // Deterministic settlement: advancing fake timers flushes any delayed
+      // render work the late callback could have armed, without a wall-clock
+      // sleep (repo test policy).
+      vi.useFakeTimers();
+      try {
+        await vi.advanceTimersByTimeAsync(1_000);
+      } finally {
+        vi.useRealTimers();
+      }
       expect(streamingInstances).toHaveLength(1);
       expect(session.update.mock.calls.length).toBe(updatesAtFinal);
     });
