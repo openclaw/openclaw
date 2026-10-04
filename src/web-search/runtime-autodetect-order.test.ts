@@ -4,6 +4,7 @@ import {
   clearRuntimeAuthProfileStoreSnapshots,
   replaceRuntimeAuthProfileStoreSnapshots,
 } from "../agents/auth-profiles/runtime-snapshots.js";
+import * as authSource from "../agents/auth-profiles/source-check.js";
 import type { PluginWebSearchProviderEntry } from "../plugins/web-provider-types.js";
 import type { RuntimeWebSearchMetadata } from "../secrets/runtime-web-tools.types.js";
 import { createWebSearchTestProvider } from "../test-utils/web-provider-runtime.test-helpers.js";
@@ -27,6 +28,31 @@ describe("web search OAuth and environment auto-detection", () => {
     vi.unstubAllEnvs();
     resolveProviders.mockReset();
     clearRuntimeAuthProfileStoreSnapshots();
+  });
+
+  it("executes explicitly selected plugins without opening their auth sources", async () => {
+    using sourceProbe = vi
+      .spyOn(authSource, "hasAnyAuthProfileStoreSourceAsync")
+      .mockRejectedValue(new Error("auth source unavailable"));
+    resolveProviders.mockReturnValue([
+      createWebSearchTestProvider({
+        pluginId: "custom-search",
+        id: "custom",
+        credentialPath: "tools.web.search.custom.apiKey",
+        authProviderId: "custom-auth",
+      }),
+    ]);
+
+    await expect(
+      runWebSearch({
+        config: { tools: { web: { search: { provider: "custom" } } } },
+        args: { query: "hello" },
+      }),
+    ).resolves.toEqual({
+      provider: "custom",
+      result: { query: "hello", provider: "custom" },
+    });
+    expect(sourceProbe).not.toHaveBeenCalled();
   });
 
   it.each([

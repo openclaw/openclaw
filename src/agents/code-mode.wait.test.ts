@@ -74,7 +74,7 @@ describe("Code Mode wait, scope, and suspended runs", () => {
     let settled = false;
     const execution = fixture.exec
       .execute("required-budget", {
-        required: true,
+        awaitResults: true,
         code: "const a = await required_step({}); const b = await required_step({}); return [a,b];",
       })
       .then((result) => {
@@ -130,7 +130,7 @@ describe("Code Mode wait, scope, and suspended runs", () => {
       const result = fixture.exec.execute(
         "required-lifetime",
         {
-          required: true,
+          awaitResults: true,
           code: "await required_pending({}); return await after_required({});",
         },
         abort.signal,
@@ -177,7 +177,7 @@ describe("Code Mode wait, scope, and suspended runs", () => {
       });
     const fixture = harness([], { codeMode: { timeoutMs: 1_000 } });
     const result = fixture.exec.execute("required-timer", {
-      required: true,
+      awaitResults: true,
       code: "await new Promise(resolve => setTimeout(resolve, 60_000)); return 1;",
     });
     try {
@@ -196,7 +196,7 @@ describe("Code Mode wait, scope, and suspended runs", () => {
     expect(
       resultDetails(
         await fixture.exec.execute("required-yield", {
-          required: true,
+          awaitResults: true,
           code: "await yield_control(); return 1;",
         }),
       ),

@@ -779,7 +779,7 @@ describe("Code Mode swarm host bridge", () => {
 
     const result = await runSwarmCode(harness, 'return await agents.run("Research");');
 
-    expect(result).toMatchObject({ status: "failed", code: "internal_error" });
+    expect(result).toMatchObject({ status: "failed", code: "invalid_input" });
     expect(String(result.error)).toContain("does not match the persisted collector");
     expect(harness.spawnTool.execute).not.toHaveBeenCalled();
   });
@@ -795,7 +795,7 @@ describe("Code Mode swarm host bridge", () => {
 
     const result = await runSwarmCode(harness, 'return await agents.run("Research");');
 
-    expect(result).toMatchObject({ status: "failed", code: "internal_error" });
+    expect(result).toMatchObject({ status: "failed", code: "invalid_input" });
     expect(String(result.error)).toContain("launch reservation cannot be recovered");
     expect(swarmMocks.initSubagentRegistry).not.toHaveBeenCalled();
     expect(harness.spawnTool.execute).not.toHaveBeenCalled();

@@ -1,5 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { resetProcessRegistryForTests } from "../agents/bash-process-registry.test-support.js";
+import { createExecTool } from "../agents/bash-tools.exec-run.js";
+import { buildPayloads } from "../agents/embedded-agent-runner/run/payloads.test-helpers.js";
+import { resolveEmbeddedRunTerminal } from "../agents/embedded-agent-runner/run/terminal-resolution.js";
+import { makeTerminalInput } from "../agents/embedded-agent-runner/run/terminal-resolution.test-support.js";
+import { GENERIC_EXTERNAL_RUN_FAILURE_TEXT } from "../agents/failover/user-copy.js";
+import {
+  buildEmbeddedRunnerAssistant,
+  makeEmbeddedRunnerAttempt,
+} from "../agents/test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import type { InternalGetReplyOptions } from "../auto-reply/reply/get-reply.types.js";
 import { drainFormattedSystemEvents } from "../auto-reply/reply/session-system-events.js";
 import { getReplySystemEventContext } from "../auto-reply/reply/system-event-session-key.js";
@@ -20,10 +30,12 @@ import { enqueueCommandInLane, type CommandLaneTaskMarker } from "../process/com
 import { CommandLane } from "../process/lanes.js";
 import { racePromiseWithAbortSignal } from "./abort-signal.js";
 import type { HeartbeatConfig } from "./heartbeat-config.js";
+import type { HeartbeatRunOptions } from "./heartbeat-runner-execution.js";
 import { runHeartbeatOnce, startHeartbeatRunner } from "./heartbeat-runner.js";
 import {
   type HeartbeatReplySpy,
   type HeartbeatReplyContext,
+  setHeartbeatAgentTurnStatus,
   heartbeatTestConfig,
   getFirstReplyContext,
   mockCallAt,
@@ -33,11 +45,13 @@ import {
   setupTelegramHeartbeatPluginRuntimeForTests,
   withTempHeartbeatSandbox,
 } from "./heartbeat-runner.test-utils.js";
+import type { HeartbeatRunResult } from "./heartbeat-wake-contracts.js";
 import {
   HEARTBEAT_SKIP_CRON_IN_PROGRESS,
   requestHeartbeatAndWait,
   setHeartbeatWakeHandler,
 } from "./heartbeat-wake.js";
+import { resolveSystemEventQueueKey } from "./system-event-ownership.js";
 import {
   consumeSelectedSystemEventEntries,
   enqueueSystemEvent,
@@ -527,6 +541,340 @@ describe("Heartbeat event routing", () => {
         expect(sendTelegram).not.toHaveBeenCalled();
       }
     }, false);
+  });
+
+  it.each([
+    { name: "isolated", isolatedSession: true, trigger: "user", reply: "printed", sends: true },
+    { name: "shared", isolatedSession: false, trigger: "user", reply: "printed", sends: true },
+    {
+      name: "quiet outcome",
+      isolatedSession: true,
+      trigger: "user",
+      reply: "NO_REPLY",
+      sends: false,
+    },
+    {
+      name: "heartbeat-started command",
+      isolatedSession: false,
+      trigger: "heartbeat",
+      reply: "printed",
+      sends: false,
+    },
+    {
+      name: "global session",
+      isolatedSession: true,
+      trigger: "user",
+      reply: "printed",
+      sends: true,
+    },
+    {
+      name: "heartbeat alerts off",
+      isolatedSession: true,
+      trigger: "user",
+      reply: "printed",
+      sends: true,
+    },
+    {
+      name: "conversation moved to another topic",
+      isolatedSession: true,
+      trigger: "user",
+      reply: "printed",
+      sends: false,
+      stored: { lastTo: "telegram:-100155462274:topic:43", lastThreadId: 43 },
+    },
+    {
+      name: "command started on another account",
+      isolatedSession: true,
+      trigger: "user",
+      reply: "printed",
+      sends: false,
+      stored: { lastAccountId: "default" },
+      accountId: "work",
+    },
+    // A continuation authorizes the model's reply; host-generated notices keep the heartbeat
+    // target, isolation and alert toggle that governed them on main (#153573).
+    { name: "failed turn", isolatedSession: true, trigger: "user", reply: "failed", sends: false },
+    {
+      name: "failed turn, heartbeat alerts off",
+      isolatedSession: true,
+      trigger: "user",
+      reply: "failed",
+      sends: false,
+      target: "last",
+    },
+    {
+      name: "failed turn, isolated owner target without an owner",
+      isolatedSession: true,
+      trigger: "user",
+      reply: "failed",
+      sends: false,
+      target: "owner",
+    },
+    {
+      name: "failed turn, visible heartbeat",
+      isolatedSession: true,
+      trigger: "user",
+      reply: "failed",
+      sends: true,
+      target: "last",
+    },
+    {
+      name: "failed tool, no final text",
+      isolatedSession: true,
+      trigger: "user",
+      reply: "tool warning",
+      sends: false,
+    },
+    {
+      name: "failed tool, no final text, visible heartbeat",
+      isolatedSession: true,
+      trigger: "user",
+      reply: "tool warning",
+      sends: true,
+      target: "last",
+    },
+    {
+      name: "answer with a trailing status notice",
+      isolatedSession: true,
+      trigger: "user",
+      reply: "printed with status",
+      sends: true,
+    },
+    {
+      name: "answer cut off by the output limit",
+      isolatedSession: true,
+      trigger: "user",
+      reply: "truncated",
+      sends: true,
+    },
+  ])(
+    "answers a forum topic's own background command under quiet heartbeats ($name)",
+    async ({ name, isolatedSession, trigger, reply, sends, stored, accountId, target }) => {
+      await withRouting(
+        async ({ cfg, storePath, replySpy, sendTelegram }) => {
+          const sessionKey =
+            name === "global session"
+              ? "global"
+              : "agent:main:telegram:group:-100155462274:topic:42";
+          if (name === "global session") {
+            cfg.session = { ...cfg.session, scope: "global" };
+          }
+          const topic = "telegram:-100155462274:topic:42";
+          await writeTelegramSessionStore(storePath, sessionKey, {
+            sessionId: "topic-conversation",
+            lastTo: topic,
+            lastThreadId: 42,
+            chatType: "group",
+            ...stored,
+          });
+          cfg.channels!.telegram = {
+            allowFrom: ["*"],
+            heartbeatVisibility: name.endsWith("heartbeat alerts off")
+              ? { showOk: false, showAlerts: false, useIndicator: false }
+              : { showOk: true },
+          };
+          const toolError = { toolName: "exec", error: "Command exited with code 1" };
+          if (reply === "failed") {
+            replySpy.mockImplementation(async (_ctx, options) => {
+              setHeartbeatAgentTurnStatus(options, "failed");
+              return { text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT, isError: true };
+            });
+          } else if (reply === "tool warning") {
+            // The real payload builder, as the embedded runner calls it for this turn.
+            replySpy.mockImplementation(async (_ctx, options) =>
+              buildPayloads({
+                isHeartbeatTrigger: options?.isHeartbeat === true && !options.continuesConversation,
+                lastToolError: toolError,
+              }),
+            );
+          } else if (reply === "printed with status") {
+            // Reply completion appends verbose plugin diagnostics after the answer.
+            replySpy.mockResolvedValue([
+              { text: "The job printed RESULT-7F3A." },
+              { text: "🧩 Active Memory: status=policy-disabled", isStatusNotice: true },
+            ]);
+          } else if (reply === "truncated") {
+            // Real terminal resolution of a length stop: the partial answer, then the host's label.
+            const assistant = buildEmbeddedRunnerAssistant({
+              stopReason: "length",
+              content: [{ type: "text", text: "The job printed RESULT-7F3A." }],
+            });
+            const resolved = await resolveEmbeddedRunTerminal(
+              makeTerminalInput({
+                attempt: makeEmbeddedRunnerAttempt({
+                  assistantTexts: ["The job printed RESULT-7F3A."],
+                  lastAssistant: assistant,
+                  currentAttemptAssistant: assistant,
+                  currentAttemptReplayMetadata: {
+                    hadPotentialSideEffects: false,
+                    replaySafe: true,
+                  },
+                }),
+                attemptAssistant: assistant,
+                payloadsWithToolMedia: [{ text: "The job printed RESULT-7F3A." }],
+              }),
+            );
+            expect(resolved.action).toBe("complete");
+            replySpy.mockResolvedValue(
+              resolved.action === "complete" ? resolved.result.payloads : undefined,
+            );
+          } else {
+            replySpy.mockResolvedValue({
+              text: reply === "printed" ? "The job printed RESULT-7F3A." : reply,
+            });
+          }
+          const completionRun = createDeferred<Awaited<ReturnType<typeof runHeartbeatOnce>>>();
+          const runner = startHeartbeatRunner({
+            cfg,
+            runOnce: (opts) => {
+              const run = runHeartbeatOnce({
+                ...opts,
+                cfg,
+                deps: { getReplyFromConfig: replySpy, telegram: sendTelegram },
+              });
+              completionRun.resolve(run);
+              return run;
+            },
+          });
+          onTestFinished(() => {
+            runner.stop();
+            resetProcessRegistryForTests();
+          });
+          const exec = createExecTool({
+            host: "gateway",
+            security: "full",
+            ask: "off",
+            allowBackground: true,
+            timeoutSec: 10,
+            agentId: "main",
+            trigger,
+            sessionKey,
+            messageProvider: "telegram",
+            currentChannelId: topic,
+            currentThreadTs: "42",
+            accountId,
+          });
+          // An empty success still wakes Telegram turns; the model's NO_REPLY must stay silent.
+          const command = reply === "NO_REPLY" ? "true" : "echo RESULT-7F3A";
+          await exec.execute("call-background", { command, background: true });
+          await expect(completionRun.promise).resolves.toMatchObject({
+            status: reply === "failed" ? "failed" : "ran",
+          });
+
+          const ctx = getFirstReplyContext(replySpy);
+          const options = mockCallAt(replySpy, 0, "completion turn")[1] as InternalGetReplyOptions;
+          if (trigger !== "user" || stored) {
+            // Heartbeat-owned work, or a route that is no longer this session's conversation,
+            // keeps the heartbeat's own silent delivery.
+            expect(ctx.Body).not.toContain("RESULT-7F3A");
+            expect(sendTelegram).not.toHaveBeenCalled();
+            return;
+          }
+          expect(ctx).toMatchObject({ SessionKey: sessionKey, InternalTurnSource: "exec" });
+          expect(ctx.Body?.includes("RESULT-7F3A")).toBe(reply !== "NO_REPLY");
+          expect(options.bootstrapContextMode).toBeUndefined();
+          const sent =
+            reply === "failed"
+              ? GENERIC_EXTERNAL_RUN_FAILURE_TEXT
+              : reply === "tool warning"
+                ? buildPayloads({ lastToolError: toolError })[0]?.text
+                : "The job printed RESULT-7F3A.";
+          expect(sendTelegram.mock.calls.map((call) => call.slice(0, 2))).toEqual(
+            sends ? [[topic, sent]] : [],
+          );
+          if (reply !== "failed") {
+            expect(peekSystemEvents(resolveSystemEventQueueKey(sessionKey, "main"))).toEqual([]);
+          }
+        },
+        isolatedSession,
+        {
+          target: target ?? "none",
+          lightContext: true,
+          activeHours: { start: "00:00", end: "00:01", timezone: "UTC" },
+        },
+      );
+    },
+  );
+
+  it("answers a background command started by the topic's own completion turn", async () => {
+    await withRouting(
+      async ({ cfg, storePath, replySpy, sendTelegram }) => {
+        const sessionKey = "agent:main:telegram:group:-100155462274:topic:42";
+        const topic = "telegram:-100155462274:topic:42";
+        await writeTelegramSessionStore(storePath, sessionKey, {
+          sessionId: "topic-conversation",
+          lastTo: topic,
+          lastThreadId: 42,
+          chatType: "group",
+        });
+        cfg.channels!.telegram = { allowFrom: ["*"] };
+        const runs: HeartbeatRunOptions[] = [];
+        const firstRun = createDeferred<HeartbeatRunResult>();
+        const runner = startHeartbeatRunner({
+          cfg,
+          runOnce: (opts) => {
+            runs.push(opts);
+            const run = runHeartbeatOnce({
+              ...opts,
+              cfg,
+              deps: { getReplyFromConfig: replySpy, telegram: sendTelegram },
+            });
+            firstRun.resolve(run);
+            return run;
+          },
+        });
+        onTestFinished(() => {
+          runner.stop();
+          resetProcessRegistryForTests();
+        });
+        const execFor = (defaults: { trigger: string; continuesConversation?: boolean }) =>
+          createExecTool({
+            host: "gateway",
+            security: "full",
+            ask: "off",
+            allowBackground: true,
+            timeoutSec: 10,
+            agentId: "main",
+            sessionKey,
+            messageProvider: "telegram",
+            currentChannelId: topic,
+            currentThreadTs: "42",
+            ...defaults,
+          });
+        replySpy.mockImplementationOnce(async (_ctx, options) => {
+          // The completion turn runs as a heartbeat and starts the next command.
+          await execFor({
+            trigger: "heartbeat",
+            continuesConversation: options?.continuesConversation,
+          }).execute("call-second", { command: "echo RESULT-2B4C", background: true });
+          return { text: "First printed RESULT-7F3A; started the next one." };
+        });
+        replySpy.mockResolvedValue({ text: "Second printed RESULT-2B4C." });
+
+        await execFor({ trigger: "user" }).execute("call-first", {
+          command: "echo RESULT-7F3A",
+          background: true,
+        });
+        await expect(firstRun.promise).resolves.toMatchObject({ status: "ran" });
+        await vi.waitFor(() => expect(peekSystemEvents(sessionKey)).toHaveLength(1));
+        // The scheduler spaces event turns by 30s; run the retried wake directly.
+        await expect(
+          runHeartbeatOnce({
+            ...runs[0],
+            cfg,
+            deps: { getReplyFromConfig: replySpy, telegram: sendTelegram },
+          }),
+        ).resolves.toMatchObject({ status: "ran" });
+
+        expect(replySpy.mock.calls[1]?.[0].Body).toContain("RESULT-2B4C");
+        expect(sendTelegram.mock.calls.map((call) => call.slice(0, 2))).toEqual([
+          [topic, "First printed RESULT-7F3A; started the next one."],
+          [topic, "Second printed RESULT-2B4C."],
+        ]);
+      },
+      true,
+      { target: "none", lightContext: true },
+    );
   });
 });
 

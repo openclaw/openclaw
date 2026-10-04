@@ -10,6 +10,7 @@ import type { ExecPolicyOverrides } from "../../agents/exec-defaults.js";
 import { resolveReplyCompletion } from "../../agents/reply-completion.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import type { SessionMemoryTranscript } from "../../hooks/bundled/session-memory/capture.js";
@@ -349,6 +350,12 @@ export async function handleInlineActions(params: {
       const rawArgs = (skillInvocation.args ?? "").trim();
       const { resolveSkillDispatchTools } = await skillToolDispatchRuntimeLoader.load();
       const dependencies = await import("../../agents/openclaw-tools.js");
+      const { hasAnyAuthProfileStoreSourceAsync } =
+        await import("../../agents/auth-profiles/source-check.js");
+      const authSourceAgentDir = agentDir?.trim();
+      const authProfileStoreSource = authSourceAgentDir
+        ? await hasAnyAuthProfileStoreSourceAsync(authSourceAgentDir)
+        : false;
       const authorizedTools = resolveSkillDispatchTools(
         {
           message: {
@@ -368,6 +375,7 @@ export async function handleInlineActions(params: {
           cfg,
           agentId,
           agentDir,
+          authProfileStoreSource,
           sessionEntry: targetSessionEntry,
           sessionKey,
           workspaceDir,
@@ -406,11 +414,32 @@ export async function handleInlineActions(params: {
         };
         opts?.abortSignal?.throwIfAborted();
         if (opts?.runId) {
+          const transcriptStart =
+            opts.onAgentRunStart && params.sessionEntry?.sessionId
+              ? await (
+                  await import("../../config/sessions/session-transcript-watermark.js")
+                ).readSessionTranscriptStartAsync({
+                  agentId: params.agentId,
+                  sessionId: params.sessionEntry.sessionId,
+                  sessionKey: params.sessionKey,
+                  storePath:
+                    params.storePath ??
+                    resolveSessionStorePathCore(params.cfg.session?.store, {
+                      agentId: params.agentId,
+                    }),
+                })
+              : null;
+          opts.abortSignal?.throwIfAborted();
           // Tool commands leave transcript persistence with ordinary reply dispatch.
-          opts.onAgentRunStart?.(opts.runId, undefined, {
-            completionSource: "reply-dispatch",
-            getResult: () => ({}),
-          });
+          opts.onAgentRunStart?.(
+            opts.runId,
+            undefined,
+            {
+              completionSource: "reply-dispatch",
+              getResult: () => ({}),
+            },
+            transcriptStart,
+          );
         }
         // The execution owner can observe revocation while arming cancellation.
         opts?.abortSignal?.throwIfAborted();

@@ -153,6 +153,7 @@ export function createExecTool(
     notifySessionKey,
     resolveSubagentSession,
     notifyDeliveryContext,
+    notifyFromConversationTurn,
   } = resolveExecNotificationDefaults(defaults);
   const backgroundFollowUp =
     notifyOnExit && notifyOnExitEmptySuccess
@@ -226,7 +227,7 @@ export function createExecTool(
       let params = requestPreparation.normalizeParams(args);
       // A required command remains an owned tool call until its terminal result is collected.
       // Explicit detached services retain their existing independent process lifetime.
-      const allowBackground = backgroundAvailable && params.required !== true;
+      const allowBackground = backgroundAvailable && params.awaitResults !== true;
       const resolveExecEnvPrepared = requestPreparation.isResolveExecEnvPrepared(
         args as ExecToolArgs,
       );
@@ -612,6 +613,7 @@ export function createExecTool(
           agentId,
           eventRouting: defaults?.eventRouting,
           notifyDeliveryContext,
+          notifyFromConversationTurn,
           timeoutSec: effectiveTimeout,
           processContinuationAvailable: allowBackground,
           startupSignal: signal,

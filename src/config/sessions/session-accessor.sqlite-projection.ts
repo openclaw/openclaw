@@ -25,6 +25,7 @@ import type {
   SessionEntryLifecycleMutationResult,
 } from "./session-accessor.sqlite-contract.js";
 import {
+  captureNativeSessionWorkerDeletion,
   hasPreparedNativeSessionDeletion,
   runPreparedSqliteSessionWrite,
   runSqliteSessionDeletionTransaction as runOpenClawAgentWriteTransaction,
@@ -73,7 +74,10 @@ import {
   toDatabaseOptions,
   withSqliteSessionDatabase,
 } from "./session-accessor.sqlite-scope.js";
-import { commitSessionLifecycleProjectionInWorker } from "./session-lifecycle-projection.js";
+import {
+  commitSessionLifecycleProjectionInWorker,
+  projectSessionEntryLifecycleMutationInWorker,
+} from "./session-lifecycle-projection.js";
 import { prepareSessionMaintenancePreservation } from "./store-maintenance-preserve.js";
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 import { normalizeResolvedMaintenanceConfigInput } from "./store-maintenance.js";
@@ -84,20 +88,21 @@ export { applySessionEntryExactReplacements as applySessionEntryReplacements } f
 /** Applies exact lifecycle removals/upserts using SQLite session rows. */
 export async function applySessionEntryLifecycleMutation(
   params: SessionEntryLifecycleMutationParams,
-): Promise<SessionEntryLifecycleMutationResult> {
-  const resolved = captureLifecycleDatabaseScope(
+  resolved = captureLifecycleDatabaseScope(
     resolveSqliteScope({
       ...(params.agentId ? { agentId: params.agentId } : {}),
       env: params.env,
       sessionKey: "",
       storePath: params.storePath,
     }),
-  );
+  ),
+): Promise<SessionEntryLifecycleMutationResult> {
   const removals = [...(params.removals ?? [])];
   const upserts = [...(params.upserts ?? [])];
   const databaseOptions = toDatabaseOptions(resolved);
   const useWorker =
     isMainThread &&
+    !params.allowCanonicalRepair &&
     !params.afterUpsertsInTransaction &&
     !params.afterFreshUpsertsInTransaction &&
     !params.beforeCommitInTransaction &&
@@ -136,21 +141,13 @@ export async function applySessionEntryLifecycleMutation(
             execution,
           );
         }
-        if (reclamationOptions && upserts.length === 0) {
-          const result = await runSqliteSessionReclamation({
-            forceInProcess: false,
-            assertCommitAllowed: () => execution?.assertCurrent(),
-            plan: {
-              kind: "lifecycle-projection-plan",
-              databaseOptions: reclamationOptions,
-              materializedPlans: [],
-              input: projectionInput,
-            },
+        if (reclamationOptions && execution) {
+          projected = await projectSessionEntryLifecycleMutationInWorker({
+            database: reclamationOptions,
+            execution,
+            input: projectionInput,
+            upserts,
           });
-          if (result.kind !== "lifecycle-projection-plan") {
-            throw new Error("SQLite lifecycle projection returned an unexpected planning result");
-          }
-          projected = result.value;
         } else {
           projected = await projectSessionEntryLifecycleMutation(databaseOptions, {
             ...projectionInput,
@@ -196,7 +193,11 @@ export async function applySessionEntryLifecycleMutation(
               }
             : {}),
           commit: async (assertSourceCurrent?: () => void) => {
-            if (reclamationOptions && !hasPreparedNativeSessionDeletion()) {
+            if (
+              reclamationOptions &&
+              (!hasPreparedNativeSessionDeletion() ||
+                captureNativeSessionWorkerDeletion(deletedOwners))
+            ) {
               const preparedPreservation = params.skipMaintenance
                 ? undefined
                 : await prepareSessionMaintenancePreservation(params.storePath);
@@ -230,7 +231,7 @@ export async function applySessionEntryLifecycleMutation(
                     );
                   }
                 };
-                if (upserts.length > 0 && execution) {
+                if (upserts.length > 0 && execution && !hasPreparedNativeSessionDeletion()) {
                   return withArchivePublication(
                     await commitSessionLifecycleProjectionInWorker({
                       database: reclamationOptions,

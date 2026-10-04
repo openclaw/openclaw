@@ -122,7 +122,7 @@ const initializeScript = new Script(
       const stringify = JSON.stringify;
       const string = String;
       const encodeError = (error) => {
-        const bridgeError = __openclawIsBridgeError(error);
+        const bridgeCode = __openclawBridgeFailureCode(error) ?? null;
         const diagnostic = (read, fallback) => {
           try { return read(); } catch { return fallback; }
         };
@@ -131,7 +131,7 @@ const initializeScript = new Script(
         // Provenance records contain primitives and never inherit guest toJSON hooks.
         return stringify({
           __proto__: null,
-          bridgeError,
+          bridgeCode,
           name: diagnostic(() => string(error?.name ?? "Error"), "Error"),
           message: diagnostic(() => string(error?.message ?? error), "Error"),
           stack: typeof stack === "string" ? stack : "",
@@ -148,7 +148,7 @@ const initializeScript = new Script(
   { filename: "openclaw-code-mode:controller.js" },
 );
 const settleScript = new Script(
-  "for (const reply of JSON.parse(__openclawNodeReplies)) __openclawSettleBridge(reply.id, reply.ok, reply.json); delete globalThis.__openclawNodeReplies;",
+  "__openclawSettleBridgeBatch(__openclawNodeReplies); delete globalThis.__openclawNodeReplies;",
   { filename: "openclaw-code-mode:controller.js" },
 );
 const drainScript = new Script(
@@ -329,18 +329,18 @@ function formatGuestFailure(
     name: string;
     message: string;
     stack: string;
-    bridgeError: boolean;
+    bridgeCode: "invalid_input" | "internal_error" | null;
   };
   if (
-    !value.bridgeError &&
+    value.bridgeCode === null &&
     value.name === "ReferenceError" &&
     /^(?:require|module|process) is not defined$/u.test(value.message)
   ) {
     return { code: "invalid_input", error: "code mode module access is disabled." };
   }
   return {
-    code: "internal_error",
-    ...(value.bridgeError ? { failurePhase: "bridge" as const } : {}),
+    code: value.bridgeCode ?? "internal_error",
+    ...(value.bridgeCode === null ? {} : { failurePhase: "bridge" as const }),
     error: [`${value.name}: ${value.message}`, ...sourceFrames(value.stack, current.location)].join(
       "\n",
     ),

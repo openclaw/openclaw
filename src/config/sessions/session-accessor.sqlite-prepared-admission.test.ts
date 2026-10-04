@@ -5,6 +5,7 @@ import type { WorkerOptions } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { AgentHarness } from "../../agents/harness/types.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
@@ -461,9 +462,11 @@ it("reacquires post-builder references before planning lifecycle transcript dele
   const survivor = { ...f.input, sessionKey: "agent:main:surviving-reference" };
   replaceSessionEntrySync(survivor, { sessionId: "survivor", updatedAt: Date.now() });
   const probe = observeAdmission(f.databasePath);
+  let sql: ReturnType<typeof observeHostDataSql> | undefined;
   const builder = vi.fn(
     ({ currentEntry }: { currentEntry?: import("./types.js").SessionEntry }) => {
       evictCachedHandleForIntegrityAdmission(f);
+      sql = observeHostDataSql();
       return { ...currentEntry!, usageFamilySessionIds: ["original"] };
     },
   );
@@ -475,10 +478,11 @@ it("reacquires post-builder references before planning lifecycle transcript dele
         removals: [{ sessionKey: f.input.sessionKey, archiveRemovedTranscript: true }],
         upserts: [{ sessionKey: survivor.sessionKey, buildEntry: builder }],
       }),
-    ),
+    ).finally(() => sql?.restore()),
   ).resolves.toMatchObject({ removedEntries: 1, archivedTranscriptDirectories: [] });
   expect(builder).toHaveBeenCalledOnce();
-  probe.expectHealthy(1);
+  probe.expectHealthy(0);
+  expect(sql?.queries, "post-builder reference planning stays off the caller thread").toEqual([]);
   expect(loadSessionEntryReadOnly(f.input)).toBeUndefined();
   expect(loadSessionEntryReadOnly(survivor)?.usageFamilySessionIds).toEqual(["original"]);
   expect(loadTranscriptEventsSync(transcript.scope)).toEqual(transcript.events);

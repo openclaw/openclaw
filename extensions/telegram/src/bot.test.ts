@@ -1964,7 +1964,7 @@ describe("createTelegramBot", () => {
         historyLimit: 0,
         groups: { "*": { requireMention: true } },
       },
-      { agents: { defaults: { envelopeTimezone: "utc" } } },
+      { agents: { defaults: { userTimezone: "UTC" } } },
     );
 
     const handler = await createMessageHandler();
@@ -2570,7 +2570,7 @@ describe("createTelegramBot", () => {
     mockTelegramConfig(
       { dmPolicy: "open", allowFrom: ["*"] },
       {
-        agents: { defaults: { envelopeTimezone: "utc" } },
+        agents: { defaults: { userTimezone: "UTC" } },
         messages: { inbound: { debounceMs: DEBOUNCE_MS } },
       },
     );

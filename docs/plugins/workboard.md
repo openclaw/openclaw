@@ -76,7 +76,12 @@ Sessions boards, with the open board highlighted. Select a nested board to open 
 Sidebar labels use the board name; boards with the same name include their kind
 in parentheses, such as **Planning (cards)** and **Planning (sessions)**.
 Boards you create in the Control UI are pinned in the sidebar immediately.
-Use **Customize** to pin any other board or remove a pin; removed pins stay removed.
+Right-click a board, or focus its link and press **Shift+F10** or the context-menu
+key, to **Pin to sidebar**, **Unpin from sidebar**, or **Delete board…**.
+Deleting asks for confirmation naming the board and requires write access.
+The default board and boards that still contain cards cannot be deleted.
+Deleting the open board returns to the Workboard root page. You can also use
+**Customize** to manage pins; removed pins stay removed.
 Pinned boards remain available as top-level entries when you leave Workboard,
 and you can drag them to reorder them.
 

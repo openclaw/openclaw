@@ -14,6 +14,7 @@ import { createBundleLspToolRuntime } from "../agent-bundle-lsp-runtime.js";
 import { createBundleMcpToolRuntime } from "../agent-bundle-mcp-tools.js";
 import { createOpenClawCodingToolsInternal } from "../agent-tools.js";
 import { createSkillInstructionDeliveryCache } from "../agent-tools.read.js";
+import { hasAnyAuthProfileStoreSourceAsync } from "../auth-profiles/source-check.js";
 import { listActiveProcessSessionReferences } from "../bash-process-references.js";
 import { resolveProcessToolScopeKey } from "../bash-process-scope.js";
 import {
@@ -297,11 +298,15 @@ export async function buildPreparedCompactionRuntime(
       pluginMetadataSnapshot: params.preparedModelRuntime.metadataSnapshot,
     });
     const toolsEnabled = supportsModelTools(effectiveModel);
+    const authProfileStoreSource =
+      toolsEnabled && (await hasAnyAuthProfileStoreSourceAsync(agentDir));
+    params.abortSignal?.throwIfAborted();
     const skillInstructionDeliveryCache = createSkillInstructionDeliveryCache();
     const toolsRaw = toolsEnabled
       ? createOpenClawCodingToolsInternal(
           {
             ...conversationContext,
+            authProfileStoreSource,
             agentId: sessionAgentId,
             exec: {
               ...execOverrides,

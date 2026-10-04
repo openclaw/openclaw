@@ -1,12 +1,17 @@
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import {
+  readDatabasePathIdentitySync,
+  type DatabasePathIdentity,
+} from "../../infra/sqlite-worker-identity.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
+import { supportsOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import type { ConversationRouteContext } from "./conversation-route-context.js";
 import {
   cloneSessionEntries,
   createReplySessionInitializationRevision,
 } from "./session-accessor.entry-mutation.js";
-import { loadSessionEntry, resolveSessionEntryFromStore } from "./session-accessor.entry.js";
+import { resolveSessionEntryFromStore } from "./session-accessor.entry.js";
 import {
   SessionEntryLifecycleUpsertConflictError,
   type SessionEntryLifecycleUpsert,
@@ -14,7 +19,11 @@ import {
 } from "./session-accessor.lifecycle-types.js";
 import { applySessionEntryLifecycleMutation } from "./session-accessor.lifecycle.js";
 import { readExactSessionEntryRow } from "./session-accessor.sqlite-entry-store.js";
-import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
+import {
+  captureLifecycleDatabaseScope,
+  resolveSqliteScope,
+  toDatabaseOptions,
+} from "./session-accessor.sqlite-scope.js";
 import type {
   ReplySessionInitializationSnapshot,
   ReplySessionInitializationCommitContext,
@@ -24,6 +33,7 @@ import { assertCanonicalSqliteSessionKeysCurrent } from "./session-canonical-key
 import { resolveReplySessionInitializationUpserts } from "./session-reset-entry.js";
 import type { ReplySessionInitializationUpsertDescriptor } from "./session-reset.types.js";
 import { resolveSessionStorePathForScope } from "./session-store-path.js";
+import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
 import type { ResolvedSessionMaintenanceConfig } from "./store-maintenance.js";
 import type { SessionEntry } from "./types.js";
@@ -95,6 +105,43 @@ function loadReplySessionInitializationEntries(
   return result.found ? result.value : {};
 }
 
+async function loadReplySessionInitializationEntriesAsync(
+  params: ReplySessionInitializationSelection,
+  database: ReturnType<typeof toDatabaseOptions>,
+  source?: DatabasePathIdentity,
+): Promise<Record<string, SessionEntry>> {
+  assertSessionInitializationAgentScope(params.agentId, params.sessionKey);
+  if (!supportsOpenClawAgentDatabaseExecution(database)) {
+    return loadReplySessionInitializationEntries(params);
+  }
+  return withSessionHistoryWorkerDatabase(database, async (reader) => {
+    const currentKey = normalizeStoreSessionKey(params.sessionKey);
+    const snapshot = await reader.readExactEntries({
+      projection: "full",
+      includeAuthorization: true,
+      sessionKeys: [
+        ...new Set([
+          currentKey,
+          ...(params.relatedSessionKeys ?? []).map(normalizeStoreSessionKey),
+        ]),
+      ],
+      replyInitializationSessionKey: currentKey,
+      env: { ...(database.env ?? process.env) },
+    });
+    reader.assertCurrent();
+    if (
+      source &&
+      (snapshot.databaseIdentity
+        ? `file:${snapshot.databaseIdentity.identity}` !== source.key ||
+          snapshot.databaseIdentity.birthtime !== source.birthtime
+        : source.key.startsWith("file:"))
+    ) {
+      throw new Error("Reply initialization database changed after its snapshot");
+    }
+    return Object.fromEntries(snapshot.entries.map(({ sessionKey, entry }) => [sessionKey, entry]));
+  });
+}
+
 /** Loads the declared reply-session rows without exposing a mutable store. */
 export function loadReplySessionInitializationSnapshot(
   params: ReplySessionInitializationSelection,
@@ -154,7 +201,30 @@ export async function commitReplySessionInitialization(params: {
     sessionKey: params.sessionKey,
     storePath: params.storePath,
   });
-  const store = loadReplySessionInitializationEntries({ ...params, storePath });
+  const captured = captureLifecycleDatabaseScope(resolveSqliteScope({ ...params, storePath }));
+  const source = supportsOpenClawAgentDatabaseExecution(toDatabaseOptions(captured))
+    ? readDatabasePathIdentitySync(captured.path)
+    : undefined;
+  const database = { ...toDatabaseOptions(captured), path: source?.canonicalPath ?? captured.path };
+  const assertSourceCurrent = (creating = false) => {
+    if (!source) {
+      return;
+    }
+    const current = readDatabasePathIdentitySync(captured.path);
+    if (
+      current.canonicalPath !== source.canonicalPath ||
+      ((!creating || source.key.startsWith("file:")) &&
+        (current.key !== source.key || current.birthtime !== source.birthtime))
+    ) {
+      throw new Error("Reply initialization database changed after its snapshot");
+    }
+  };
+  const store = await loadReplySessionInitializationEntriesAsync(
+    { ...params, storePath },
+    database,
+    source,
+  );
+  assertSourceCurrent();
   const resolved = resolveSessionEntryFromStore({ store, sessionKey: params.sessionKey });
   const currentEntry = resolved.existing ? { ...resolved.existing } : undefined;
   const revision = createReplySessionInitializationRevision(currentEntry);
@@ -216,14 +286,19 @@ export async function commitReplySessionInitialization(params: {
     });
   }
   try {
-    await applySessionEntryLifecycleMutation({
+    assertSourceCurrent();
+    const mutation = {
       activeSessionKey: params.activeSessionKey,
       agentId: params.agentId,
       maintenanceOverride: params.maintenanceConfig,
       storePath,
       upserts,
-      commitGuard: params.commitGuard,
-    });
+      commitGuard: () => {
+        assertSourceCurrent(true);
+        params.commitGuard?.();
+      },
+    };
+    await applySessionEntryLifecycleMutation(mutation, { ...captured, path: database.path });
   } catch (error) {
     if (
       !(error instanceof SessionEntryLifecycleUpsertConflictError) ||
@@ -231,14 +306,17 @@ export async function commitReplySessionInitialization(params: {
     ) {
       throw error;
     }
-    return createStaleReplySessionInitializationResult(
-      loadSessionEntry({
+    const current = await loadReplySessionInitializationEntriesAsync(
+      {
         agentId: params.agentId,
-        readConsistency: "latest",
         sessionKey: error.sessionKey,
         storePath,
-      }),
+      },
+      database,
+      source?.key.startsWith("file:") ? source : undefined,
     );
+    assertSourceCurrent(true);
+    return createStaleReplySessionInitializationResult(current[error.sessionKey]);
   }
   if (staleCommit !== undefined) {
     return createStaleReplySessionInitializationResult(staleCommit ?? undefined);

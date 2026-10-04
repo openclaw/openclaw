@@ -53,6 +53,12 @@ export function createSessionHistoryWorkerReaders(
       );
   }
   return {
+    readMessagePresence: reader(
+      "transcript-message-presence",
+      "message presence",
+      (input) => ({ kind: "transcript-message-presence", ...input }),
+      (value) => value.present,
+    ),
     readAnchors: reader(
       "transcript-anchors",
       "transcript anchors",

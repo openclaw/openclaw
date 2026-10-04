@@ -1,5 +1,7 @@
 // These consumers need the host-owned SQLite broker, which runs in forked processes.
 export const databaseWorkerCoreTestFiles = [
+  "src/model-catalog/remote-refresh.test.ts",
+  "src/model-catalog/remote-store.test.ts",
   "src/agents/subagents/spawn/acp-parent-stream-store.sqlite.test.ts",
   "src/state/openclaw-agent-execution-incognito.compute.test.ts",
   "src/state/openclaw-agent-execution-incognito.lifecycle.test.ts",
@@ -542,6 +544,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/cli/plugins-cli.uninstall.test.ts",
   "src/cli/plugins-cli.update.test.ts",
   "src/cli/plugins-update-command.authority.integration.test.ts",
+  "src/cli/plugins-update-command.generation.integration.test.ts",
   "src/cli/plugins-update-command.migrations.integration.test.ts",
   "src/cli/devices-cli.gateway.test.ts",
   "src/cli/update-cli/update-command-post-update.test.ts",

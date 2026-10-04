@@ -640,6 +640,7 @@ describe("AgentSession compaction", () => {
     expect(compactionEvents[0]).toEqual({
       stream: "compaction",
       data: { phase: "start", itemId: expect.any(String) },
+      transcriptStart: null,
     });
     expect(compactionEvents.at(-1)).toEqual({
       stream: "compaction",

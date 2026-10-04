@@ -26,7 +26,10 @@ export function scheduleGatewayRemoteCatalogChecks(params: {
       nextCheckInMs =
         result.status === "fresh" ? result.nextCheckInMs : REMOTE_MODEL_CATALOG_TTL_MS;
       if (result.status === "error") {
-        params.log.info("remote model catalog refresh failed", { error: result.error });
+        params.log.info(
+          "remote model catalog refresh failed; next check in 6 hours, or run openclaw models refresh",
+          { error: result.error },
+        );
       } else if (result.status !== "disabled") {
         const state = await params.applyRemoteCatalogUpdate(lifecycle.signal);
         if (state === "published") {

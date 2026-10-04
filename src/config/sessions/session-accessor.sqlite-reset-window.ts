@@ -31,7 +31,6 @@ import {
 } from "./session-accessor.sqlite-projection-read.js";
 import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
 import {
-  transcriptEventJsonSql,
   transcriptEventModelNavigationSql,
   transcriptEventNavigationSql,
   transcriptEventResetNavigationSql,
@@ -626,35 +625,6 @@ export function hasOversizedVisibleMessages(
           .limit(1),
       ) !== undefined,
   );
-}
-
-/** Validate the whole selected history without materializing ordinary payloads in JavaScript. */
-export function assertVisibleMessageRangeJson(
-  projection: CurrentTranscriptProjection,
-  start: number,
-  endExclusive: number,
-): void {
-  for (const range of selectVisibleMessageRanges(projection, start, endExclusive)) {
-    for (const row of iterateSqliteQuerySync(
-      projection.database.db,
-      selectMessagePayload(
-        projection.database,
-        selectMessageRows(projection.database, projection.resolved.sessionId, range),
-      ).where((eb) => {
-        // The raw check rejects extra values; the enclosing array cannot end at a NUL.
-        const event = transcriptEventJsonSql(projection.database.db, "event");
-        const enclosed = eb(eb.val("["), "||", eb(event, "||", eb.val("]")));
-        return eb.or([
-          eb(eb.fn<number>("json_valid", [event]), "=", 0),
-          eb(eb.fn<number>("json_valid", [enclosed]), "=", 0),
-        ]);
-      }),
-    )) {
-      // SQLite's nesting limit is stricter than JSON.parse. Keep readable deep
-      // rows and let the existing parser own actual malformed-row failures.
-      parseActiveTranscriptMessageRow(row);
-    }
-  }
 }
 
 /** Byte-bounded tails can stop sizing at their first excluded predecessor. */

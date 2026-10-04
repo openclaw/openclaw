@@ -452,7 +452,7 @@ describe("doctor preview warnings", () => {
             },
           },
         },
-      },
+      } satisfies OpenClawConfigWithLegacyRoster,
       doctorFixCommand: "openclaw doctor --fix",
       env: { CODEX_HOME: codexHome, HOME: root },
     });

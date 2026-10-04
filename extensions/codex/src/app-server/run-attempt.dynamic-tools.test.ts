@@ -65,7 +65,7 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
       let collected = false;
       response = callTool(harness, "sandbox_exec", "required-command", {
         command: "verify-required",
-        required: true,
+        awaitResults: true,
       }).then((value) => {
         collected = true;
         return value;

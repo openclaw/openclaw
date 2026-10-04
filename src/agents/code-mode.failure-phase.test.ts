@@ -1,4 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
+import { Type } from "typebox";
 import { afterEach, describe, expect, it } from "vitest";
 import { applyCodeModeCatalog } from "./code-mode.js";
 import {
@@ -8,7 +9,7 @@ import {
   resultDetails,
   testing,
 } from "./code-mode.test-support.js";
-import { jsonResult } from "./tools/common.js";
+import { jsonResult, ToolInputError } from "./tools/common.js";
 
 afterEach(resetCodeModeTestState);
 
@@ -158,5 +159,81 @@ describe.each(["node", "quickjs"] as const)("Code Mode %s failure origin", (exec
     });
     expect(target.execute).toHaveBeenCalledOnce();
     expect(testing.activeRuns.size).toBe(0);
+  });
+});
+
+describe.each(["node", "quickjs"] as const)("Code Mode %s bridge input failures", (executor) => {
+  function runWithSpawnFixture(code: string, execute: () => Promise<unknown> = async () => ({})) {
+    const { ctx, config, tools } = createCodeModeHarness({ codeMode: { executor } });
+    const target = pluginToolWithExecute("spawn_fixture", "Spawn-shaped fixture", async () =>
+      jsonResult(await execute()),
+    );
+    target.parameters = Type.Object(
+      { label: Type.String(), mode: Type.String(), task: Type.String() },
+      { additionalProperties: false },
+    );
+    applyCodeModeCatalog({ ...ctx, config, tools: [...tools, target] });
+    const exec = expectDefined(tools[0], "exec");
+    return { target, run: async () => resultDetails(await exec.execute("bridge-input", { code })) };
+  }
+
+  it("reports uncaught schema rejections as invalid_input naming the bad fields", async () => {
+    const { target, run } = runWithSpawnFixture(
+      'await spawn_fixture({ label: "x", mode: "run", prompt: "do it" });',
+    );
+    const details = await run();
+    expect(details).toMatchObject({
+      status: "failed",
+      code: "invalid_input",
+      failurePhase: "bridge",
+      bridgeDispatchStarted: true,
+      replaySafe: false,
+    });
+    expect(details.error).toMatch(/task/);
+    expect(details.error).toMatch(/prompt/);
+    expect(target.execute).not.toHaveBeenCalled();
+  });
+
+  it("reports tool-raised ToolInputError rethrown by the guest as invalid_input", async () => {
+    const { target, run } = runWithSpawnFixture(
+      'try { await spawn_fixture({ label: "x", mode: "run", task: "t" }); } catch (error) { error.code = "tool_error"; throw error; }',
+      async () => {
+        throw new ToolInputError("task must not be empty");
+      },
+    );
+    expect(await run()).toMatchObject({
+      status: "failed",
+      code: "invalid_input",
+      failurePhase: "bridge",
+    });
+    expect(target.execute).toHaveBeenCalledOnce();
+  });
+
+  it("ignores guest String and JSON.parse replacements that rewrite bridge codes", async () => {
+    const { run } = runWithSpawnFixture(
+      'const forge = (text) => typeof text === "string" ? text.replaceAll("tool_error", "invalid_input") : text; const toString = String; globalThis.String = (value) => forge(toString(value)); const parse = JSON.parse; JSON.parse = (text, reviver) => { const value = parse(forge(text), reviver); if (value && value.code === "tool_error") value.code = "invalid_input"; return value; }; await spawn_fixture({ label: "x", mode: "run", task: "t" });',
+      async () => {
+        throw new Error("tool failure");
+      },
+    );
+    expect(await run()).toMatchObject({
+      status: "failed",
+      code: "internal_error",
+      failurePhase: "bridge",
+    });
+  });
+
+  it("ignores guest-forged input codes on ordinary tool failures", async () => {
+    const { run } = runWithSpawnFixture(
+      'try { await spawn_fixture({ label: "x", mode: "run", task: "t" }); } catch (error) { error.code = "input_contract"; throw error; }',
+      async () => {
+        throw new Error("tool failure");
+      },
+    );
+    expect(await run()).toMatchObject({
+      status: "failed",
+      code: "internal_error",
+      failurePhase: "bridge",
+    });
   });
 });
