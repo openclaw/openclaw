@@ -1392,15 +1392,12 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     // Real host watchdog, runtime delegate, native watchdog, session and summarizer;
     // only the provider stream is scripted: one text delta every 20 s.
     async function compactWhileStreaming(deltas: number, end: "done" | "silent" | "keepalive") {
-      const [
-        { createAgentSessionForEmbeddedRunner },
-        { guardSessionManager },
-        { resolveEmbeddedAgentStream },
-      ] = await Promise.all([
-        import("../sessions/sdk.js"),
-        import("../session-tool-result-guard-wrapper.js"),
-        import("./stream-resolution.js"),
-      ]);
+      const [{ createAgentSession }, { guardSessionManager }, { resolveEmbeddedAgentStream }] =
+        await Promise.all([
+          import("../sessions/sdk.js"),
+          import("../session-tool-result-guard-wrapper.js"),
+          import("./stream-resolution.js"),
+        ]);
       const sessionManager = SessionManager.inMemory(TEST_WORKSPACE_DIR);
       for (const content of ["Review the checklist.", "Compare options.", "Keep the notes."]) {
         sessionManager.appendMessage({ role: "user", content, timestamp: 1 });
@@ -1446,7 +1443,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
         streamFn: stream,
         strategy: "session-custom",
       });
-      vi.mocked(createAgentSessionForEmbeddedRunner).mockImplementation(async ({ model }) => {
+      vi.mocked(createAgentSession).mockImplementation(async ({ model }) => {
         if (!model) {
           throw new Error("Expected the prepared compaction model");
         }
