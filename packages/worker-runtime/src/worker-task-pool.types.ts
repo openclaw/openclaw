@@ -110,7 +110,8 @@ export type Task<Input, Output> = Omit<PromiseWithResolvers<Output>, "resolve"> 
   read(): RetainedOutcome<Output>;
   id: number;
   runInContext: ReturnType<typeof AsyncLocalStorage.snapshot>;
-  controller: AbortController;
+  /** Allocated when a host request exposes the task's lifetime signal. */
+  controller?: AbortController;
   exchange?: WorkerHostExchange;
   inputConsumed: boolean;
   executionNotified: boolean;
