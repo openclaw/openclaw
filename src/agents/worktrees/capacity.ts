@@ -6,12 +6,10 @@ import { getFileLockProcessStartTime } from "../../shared/pid-alive.js";
 import { releaseOpenClawStateLeaseBestEffort } from "../../state/openclaw-state-lease-storage.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
-import type { WorktreeAllocationGuard } from "./allocation.js";
 import { WORKTREE_CAPACITY_RESERVATION_SCOPE } from "./capacity-contract.js";
 import { reserveWorktreeCapacity, releaseWorktreeCapacity } from "./capacity-store.js";
 import type { GitWorktreeOperations } from "./git-worktree-operations.js";
 import { captureWorktreeRunEndContext } from "./run-end-lifecycle.js";
-import type { ResolvedRepository } from "./service-preparation.js";
 import type { WorktreeLeaseSet, WorktreeWorkerAuthority } from "./types.js";
 
 export { WORKTREE_CAPACITY_RESERVATION_SCOPE } from "./capacity-contract.js";
@@ -55,10 +53,10 @@ export class WorktreeCapacityContentionError extends Error {
 }
 
 export async function requireAllocationSpace(
-  guard: Pick<WorktreeAllocationGuard, "requireDiskSpace">,
+  guard: Pick<ReturnType<typeof createWorktreeDiskAdmission>, "requireDiskSpace">,
   env: NodeJS.ProcessEnv,
   target: string,
-  repository: Pick<ResolvedRepository, "commonDir" | "sourceRoot">,
+  repository: { commonDir: string; sourceRoot: string },
   bytes = 0,
 ) {
   await guard.requireDiskSpace(
