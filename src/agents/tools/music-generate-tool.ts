@@ -126,6 +126,7 @@ export function createMusicGenerateTool(options?: MediaGenerateToolOptions): Any
           workspaceDir: options?.workspaceDir,
           agentDir: options?.agentDir,
           authStore: options?.authProfileStore,
+          authProfileStoreSource: options?.authProfileStoreSource,
         });
       }
 

@@ -11,7 +11,7 @@ import {
 } from "./admitted-run-context.js";
 import { externalCliDiscoveryScoped } from "./auth-profiles/external-cli-discovery.js";
 import { resolveSubscriptionAuthModeForProfiles } from "./auth-profiles/profile-list.js";
-import { hasAnyAuthProfileStoreSource } from "./auth-profiles/source-check.js";
+import { hasAnyAuthProfileStoreSourceAsync } from "./auth-profiles/source-check.js";
 import {
   FailoverError,
   buildProviderReauthCommand,
@@ -181,7 +181,7 @@ async function runWithModelFallbackInternal<T>(
   const authRuntime =
     !params.skipAuthProfileRuntime &&
     params.cfg &&
-    (userLockedAuthProfileId || hasAnyAuthProfileStoreSource(params.agentDir))
+    (userLockedAuthProfileId || (await hasAnyAuthProfileStoreSourceAsync(params.agentDir)))
       ? await modelFallbackAuthRuntimeLoader.load()
       : null;
   const authStore = authRuntime

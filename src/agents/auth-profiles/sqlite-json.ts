@@ -171,8 +171,16 @@ export function readAuthProfileRows(
   databaseKind: "agent" | "shared-state",
 ): AuthProfileRowRead {
   const canCache = prepareSqliteReadCache(database, databasePath);
-  const store = inspectAuthProfileJsonCell(database, "store", databaseKind);
-  const state = inspectAuthProfileJsonCell(database, "state", databaseKind);
+  const inspect = (target: "store" | "state"): PersistedAuthProfileStoreInspection => {
+    try {
+      return inspectAuthProfileJsonCell(database, target, databaseKind);
+    } catch {
+      // A broken state table must not turn an absent credential row into a present source.
+      return { status: "unreadable" };
+    }
+  };
+  const store = inspect("store");
+  const state = inspect("state");
   return {
     store,
     state,

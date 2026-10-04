@@ -85,6 +85,7 @@ export function hasAuthForProvider(params: {
   workspaceDir?: string;
   agentDir?: string;
   authStore?: AuthProfileStore;
+  authProfileStoreSource?: boolean;
   runtimeLookup?: RuntimeProviderAuthLookup;
   capability?: string;
 }): boolean {
@@ -111,6 +112,7 @@ export function hasAuthForProvider(params: {
     provider: params.provider,
     agentDir: params.agentDir,
     authStore: params.authStore,
+    authProfileStoreSource: params.authProfileStoreSource,
     includeExternalCli: true,
     capability: params.capability,
   });
@@ -120,6 +122,7 @@ export function hasAuthProfileForProvider(params: {
   provider: string;
   agentDir?: string;
   authStore?: AuthProfileStore;
+  authProfileStoreSource?: boolean;
   includeExternalCli?: boolean;
   type?: AuthProfileCredential["type"];
   capability?: string;
@@ -127,7 +130,8 @@ export function hasAuthProfileForProvider(params: {
   let store = params.authStore;
   if (!store) {
     const agentDir = params.agentDir?.trim();
-    if (!agentDir || !hasAnyAuthProfileStoreSource(agentDir)) {
+    // Runtime callers carry the source fact; CLI setup retains synchronous discovery.
+    if (!agentDir || !(params.authProfileStoreSource ?? hasAnyAuthProfileStoreSource(agentDir))) {
       return false;
     }
     store = loadAuthStoreForProvider({ ...params, agentDir });
@@ -420,6 +424,7 @@ export function buildToolModelConfigFromCandidates(params: {
   workspaceDir?: string;
   agentDir?: string;
   authStore?: AuthProfileStore;
+  authProfileStoreSource?: boolean;
   candidates: Array<string | null | undefined>;
   isProviderConfigured?: (provider: string) => boolean | undefined;
 }): ToolModelConfig | null {
@@ -444,6 +449,7 @@ export function buildToolModelConfigFromCandidates(params: {
         workspaceDir: params.workspaceDir,
         agentDir: params.agentDir,
         authStore: params.authStore,
+        authProfileStoreSource: params.authProfileStoreSource,
       });
     if (!provider || !providerConfigured) {
       continue;

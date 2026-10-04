@@ -208,6 +208,7 @@ function shouldExposeVideoReferenceAudioParams(params: {
   cfg: OpenClawConfig;
   agentDir?: string;
   authStore?: AuthProfileStore;
+  authProfileStoreSource?: boolean;
   workspaceDir?: string;
 }): boolean {
   const snapshot = loadCapabilityMetadataSnapshot({
@@ -288,6 +289,7 @@ function shouldExposeVideoReferenceAudioParams(params: {
         workspaceDir: params.workspaceDir,
         agentDir: params.agentDir,
         authStore: params.authStore,
+        authProfileStoreSource: params.authProfileStoreSource,
       })
     ) {
       return true;
@@ -313,6 +315,7 @@ export function createVideoGenerateTool(options?: MediaGenerateToolOptions): Any
     cfg,
     agentDir: options?.agentDir,
     authStore: options?.authProfileStore,
+    authProfileStoreSource: options?.authProfileStoreSource,
     workspaceDir: options?.workspaceDir,
   });
 
@@ -334,6 +337,7 @@ export function createVideoGenerateTool(options?: MediaGenerateToolOptions): Any
           workspaceDir: options?.workspaceDir,
           agentDir: options?.agentDir,
           authStore: options?.authProfileStore,
+          authProfileStoreSource: options?.authProfileStoreSource,
         });
       }
 

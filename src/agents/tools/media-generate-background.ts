@@ -36,6 +36,7 @@ export type MediaGenerateToolOptions = {
   config?: OpenClawConfig;
   agentDir?: string;
   authProfileStore?: AuthProfileStore;
+  authProfileStoreSource?: boolean;
   agentSessionKey?: string;
   /** Durable requester transcript key; task ownership stays on agentSessionKey. */
   requesterRunSessionKey?: string;
@@ -72,6 +73,7 @@ export function resolveMediaGenerateToolContext<K extends keyof typeof GENERATIO
       agentDir: options?.agentDir,
       workspaceDir: options?.workspaceDir,
       authStore: options?.authProfileStore,
+      authProfileStoreSource: options?.authProfileStoreSource,
       modelConfig: cfg.agents?.defaults?.mediaModels?.[GENERATION_LABELS[providerKey]],
       providerKey,
       providers: preparedProviders,
@@ -173,6 +175,7 @@ export async function prepareMediaGenerationTask<
         workspaceDir: options?.workspaceDir,
         agentDir: options?.agentDir,
         authStore: options?.authProfileStore,
+        authProfileStoreSource: options?.authProfileStoreSource,
         modelConfig: cfg.agents?.defaults?.mediaModels?.[generationLabel],
         modelOverride: model,
         providers: params.resolveProviders(resources),

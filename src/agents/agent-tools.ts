@@ -606,9 +606,12 @@ export function createOpenClawCodingToolsInternal(
   }).map(wrapGatewayCaller);
 }
 
-/** Build the SDK tool list without exposing core-only read scope or completion observations. */
+/** Build the SDK tool list without exposing core-only preparation and completion inputs. */
 export function createOpenClawCodingTools(
-  options?: Omit<OpenClawCodingToolsOptions, "sessionReadScopeKey" | "onProgressCardPlanSaved">,
+  options?: Omit<
+    OpenClawCodingToolsOptions,
+    "sessionReadScopeKey" | "onProgressCardPlanSaved" | "authProfileStoreSource"
+  >,
 ): AnyAgentTool[] {
   return createOpenClawCodingToolsInternal(options);
 }

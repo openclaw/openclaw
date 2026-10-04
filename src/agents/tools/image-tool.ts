@@ -181,6 +181,7 @@ function resolveImageModelConfigForTool(params: {
   agentDir: string;
   workspaceDir?: string;
   authStore?: AuthProfileStore;
+  authProfileStoreSource?: boolean;
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
 }): ImageModelConfig | null {
   // Native-vision runs route post-prompt image bytes to the active model, not fallback config.
@@ -307,6 +308,7 @@ function resolveImageModelConfigForTool(params: {
     workspaceDir: params.workspaceDir,
     agentDir: params.agentDir,
     authStore: params.authStore,
+    authProfileStoreSource: params.authProfileStoreSource,
     candidates: [...primaryAliasCandidates, ...primaryCandidates, ...remainingAutoCandidates],
     isProviderConfigured: (provider) =>
       verifiedSubstituteProvider && provider === verifiedSubstituteProvider ? true : undefined,
@@ -331,6 +333,7 @@ export function createImageTool(options?: {
   agentId?: string;
   agentDir?: string;
   authProfileStore?: AuthProfileStore;
+  authProfileStoreSource?: boolean;
   workspaceDir?: string;
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
   sandbox?: MediaToolSandbox;
@@ -371,6 +374,7 @@ export function createImageTool(options?: {
         agentDir,
         workspaceDir: options?.workspaceDir,
         authStore: options?.authProfileStore,
+        authProfileStoreSource: options?.authProfileStoreSource,
         preparedModelRuntime: options?.preparedModelRuntime,
       })
     : explicitImageModelConfig;
@@ -475,6 +479,7 @@ export function createImageTool(options?: {
               agentDir,
               workspaceDir: options?.workspaceDir,
               authStore: options?.authProfileStore,
+              authProfileStoreSource: options?.authProfileStoreSource,
               preparedModelRuntime: options?.preparedModelRuntime,
             });
           if (!imageModelConfig) {

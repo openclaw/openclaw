@@ -349,6 +349,12 @@ export async function handleInlineActions(params: {
       const rawArgs = (skillInvocation.args ?? "").trim();
       const { resolveSkillDispatchTools } = await skillToolDispatchRuntimeLoader.load();
       const dependencies = await import("../../agents/openclaw-tools.js");
+      const { hasAnyAuthProfileStoreSourceAsync } =
+        await import("../../agents/auth-profiles/source-check.js");
+      const authSourceAgentDir = agentDir?.trim();
+      const authProfileStoreSource = authSourceAgentDir
+        ? await hasAnyAuthProfileStoreSourceAsync(authSourceAgentDir)
+        : false;
       const authorizedTools = resolveSkillDispatchTools(
         {
           message: {
@@ -368,6 +374,7 @@ export async function handleInlineActions(params: {
           cfg,
           agentId,
           agentDir,
+          authProfileStoreSource,
           sessionEntry: targetSessionEntry,
           sessionKey,
           workspaceDir,

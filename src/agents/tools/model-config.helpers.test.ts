@@ -2,8 +2,10 @@
 // stored agent auth profiles for reusable media tools.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import * as authSource from "../auth-profiles/source-check.js";
 import type { AuthProfileCredential, AuthProfileStore } from "../auth-profiles/types.js";
 import {
+  hasAuthProfileForProvider,
   hasProviderAuthForTool,
   resolveOpenAiImageMediaCandidate,
 } from "./model-config.helpers.js";
@@ -112,6 +114,23 @@ afterEach(() => {
 });
 
 describe("hasProviderAuthForTool", () => {
+  it("keeps a prepared missing auth source unavailable without probing storage", () => {
+    const probe = vi.spyOn(authSource, "hasAnyAuthProfileStoreSource").mockImplementation(() => {
+      throw new Error("unexpected caller-thread auth source probe");
+    });
+    const params = {
+      provider: "unconfigured-provider",
+      agentDir: AGENT_DIR,
+      authProfileStoreSource: false,
+    };
+    try {
+      expect(hasAuthProfileForProvider(params)).toBe(false);
+      expect(probe).not.toHaveBeenCalled();
+    } finally {
+      probe.mockRestore();
+    }
+  });
+
   it("accepts env-key plugin provider auth only when config reaches env resolution", () => {
     // "acme" is not in models.json, so custom-provider auth is false; the only
     // path to true is the config-aware env lookup.

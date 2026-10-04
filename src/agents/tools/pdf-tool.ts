@@ -102,6 +102,7 @@ async function runPdfPrompt(params: {
   workspaceDir?: string;
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
   authProfileStore?: AuthProfileStore;
+  authProfileStoreSource?: boolean;
   activeModel?: PdfToolActiveModel;
   pdfModelConfig: ImageModelConfig;
   modelOverride?: string;
@@ -158,6 +159,7 @@ async function runPdfPrompt(params: {
     agentDir: runtimeAgentDir,
     ...(runtimeWorkspaceDir ? { workspaceDir: runtimeWorkspaceDir } : {}),
     authStore: params.authProfileStore,
+    authProfileStoreSource: params.authProfileStoreSource,
     activeModel: params.activeModel,
   });
   if (!committedPdfModelConfig) {
@@ -359,6 +361,7 @@ export function createPdfTool(options?: {
   agentId?: string;
   agentDir?: string;
   authProfileStore?: AuthProfileStore;
+  authProfileStoreSource?: boolean;
   workspaceDir?: string;
   cwd?: string;
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
@@ -389,6 +392,7 @@ export function createPdfTool(options?: {
         agentDir,
         workspaceDir: options?.workspaceDir,
         authStore: options?.authProfileStore,
+        authProfileStoreSource: options?.authProfileStoreSource,
         activeModel: options?.activeModel,
       });
   if (!registrationPdfModelConfig && !shouldDeferAutoModelResolution) {
@@ -444,6 +448,7 @@ export function createPdfTool(options?: {
         agentDir,
         workspaceDir: options?.workspaceDir,
         authStore: options?.authProfileStore,
+        authProfileStoreSource: options?.authProfileStoreSource,
         activeModel: options?.activeModel,
       });
     if (!pdfModelConfig) {
@@ -575,6 +580,7 @@ export function createPdfTool(options?: {
         ? { preparedModelRuntime: options.preparedModelRuntime }
         : {}),
       authProfileStore: options?.authProfileStore,
+      authProfileStoreSource: options?.authProfileStoreSource,
       activeModel: options?.activeModel,
       pdfModelConfig,
       modelOverride,
