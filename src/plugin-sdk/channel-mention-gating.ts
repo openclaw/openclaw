@@ -17,6 +17,8 @@ export {
   CURRENT_MESSAGE_MARKER,
   buildMentionRegexes,
   normalizeMentionText,
+  stripMentions,
+  stripStructuralPrefixes,
   type BuildMentionRegexesOptions,
 } from "../auto-reply/reply/mentions.js";
 export {
