@@ -1,5 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { DuplicateAgentError } from "../agents/agent-create-error.js";
+import { AuthProfileStoreUnreadableError } from "../agents/auth-profiles/store-unreadable-error.js";
 import { McpOAuthStoreCorruptionError } from "../agents/mcp-oauth-store-error.js";
 import { WorkspaceAliasRepointedError } from "../agents/workspace-state-identity.js";
 import {
@@ -9,6 +10,7 @@ import {
 } from "../config/sessions/goals-operations.types.js";
 import { SqliteSessionMutationConflictError } from "../config/sessions/session-mutation-conflict-error.js";
 import { SessionPendingInputCustodyError } from "../config/sessions/session-pending-input-custody-error.js";
+import { ModelAccountConnectAuthorityError } from "../gateway/model-account-connect-errors.js";
 import { WorkerSessionAlreadyAttachedError } from "../gateway/worker-environments/session-attachment.js";
 import { GatewayStateOwnerContentionError } from "../infra/gateway-state-owner.js";
 import {
@@ -28,6 +30,7 @@ import {
   SecretStoreValidationError,
   isSecretStoreValidationCode,
 } from "../secrets/store/secret-store-validation-error.js";
+import { ModelSelectionLockedError } from "../sessions/model-selection-error.js";
 import { SkillUploadRequestError } from "../skills/lifecycle/upload-store-error.js";
 import { SkillLibraryError, type SkillLibraryErrorCode } from "../skills/skill-library-error.js";
 import { OpenClawAgentDatabaseMediaMigrationRequiredError } from "./openclaw-agent-db-migration-required.js";
@@ -45,7 +48,9 @@ type StateMigrationKind = ConstructorParameters<
 >[0];
 
 const MESSAGE_ONLY_ERRORS = {
+  "model-account-authority": ModelAccountConnectAuthorityError,
   "duplicate-agent": DuplicateAgentError,
+  "model-selection-locked": ModelSelectionLockedError,
   "session-pending-input-custody": SessionPendingInputCustodyError,
   "skill-upload-request": SkillUploadRequestError,
   coordinator: SqliteCoordinatorError,
@@ -75,6 +80,7 @@ export type ErrorIdentity =
       currentWorkspacePath: string;
     }
   | { type: "error" | "aggregate" | "mcp-oauth-corruption" }
+  | { type: "auth-profile-store-unreadable"; databasePath: string }
   | { type: "state-owner-contention"; databasePath: string }
   | { type: "ownership-metadata"; databasePath: string }
   | { type: "external-ownership"; databasePath: string; managerId: string }
@@ -103,6 +109,9 @@ export type ErrorIdentity =
   | { type: "agent-media-migration"; pathname: string; schemaVersion: number };
 
 export function identifyError(error: Error): ErrorIdentity {
+  if (error instanceof AuthProfileStoreUnreadableError) {
+    return { type: "auth-profile-store-unreadable", databasePath: error.databasePath };
+  }
   if (error instanceof PluginStateStoreError) {
     return {
       type: "plugin-state",
@@ -339,6 +348,7 @@ export function parseIdentity(node: Record<string, unknown>): ErrorIdentity | un
         node.missingTables.every((table: unknown) => typeof table === "string")
         ? { type: node.type, reason: node.reason, missingTables: [...node.missingTables] }
         : undefined;
+    case "auth-profile-store-unreadable":
     case "state-owner-contention":
     case "ownership-metadata":
       return typeof node.databasePath === "string"
@@ -422,6 +432,8 @@ export function createError(node: ErrorIdentity & { message: string }): Error {
       return new McpOAuthStoreCorruptionError("", "");
     case "aggregate":
       return new AggregateError([], node.message);
+    case "auth-profile-store-unreadable":
+      return new AuthProfileStoreUnreadableError(node.databasePath);
     case "state-owner-contention":
       return new GatewayStateOwnerContentionError(node.databasePath);
     case "ownership-metadata":

@@ -2,7 +2,6 @@ import { listAgentIds } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { isLoopbackHost } from "openclaw/plugin-sdk/gateway-runtime";
-import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { PluginLogger, PluginServiceSchedulerV1 } from "openclaw/plugin-sdk/plugin-entry";
 import {
   assertRealtimeVoiceAgentConsultModelSelectionUnlocked,
@@ -61,20 +60,6 @@ const REALTIME_VOICE_CONSULT_SYSTEM_PROMPT = [
   "Do not print secret values or dump environment variables; only check whether required configuration is present.",
   "Be accurate, brief, and speakable.",
 ].join(" ");
-
-const loadTelnyxProvider = createLazyRuntimeModule(() => import("./providers/telnyx.js"));
-
-const loadTwilioProvider = createLazyRuntimeModule(() => import("./providers/twilio.js"));
-
-const loadPlivoProvider = createLazyRuntimeModule(() => import("./providers/plivo.js"));
-
-const loadMockProvider = createLazyRuntimeModule(() => import("./providers/mock.js"));
-
-const loadRealtimeVoiceRuntime = createLazyRuntimeModule(
-  () => import("./realtime-voice.runtime.js"),
-);
-
-const loadRealtimeHandler = createLazyRuntimeModule(() => import("./webhook/realtime-handler.js"));
 
 function mapVoiceCallConsultTranscript(
   call: {
@@ -148,7 +133,7 @@ async function resolveProvider(config: VoiceCallConfig): Promise<VoiceCallProvid
 
   switch (config.provider) {
     case "telnyx": {
-      const { TelnyxProvider } = await loadTelnyxProvider();
+      const { TelnyxProvider } = await import("./providers/telnyx.js");
       return new TelnyxProvider(
         {
           apiKey: config.telnyx?.apiKey,
@@ -161,7 +146,7 @@ async function resolveProvider(config: VoiceCallConfig): Promise<VoiceCallProvid
       );
     }
     case "twilio": {
-      const { TwilioProvider } = await loadTwilioProvider();
+      const { TwilioProvider } = await import("./providers/twilio.js");
       return new TwilioProvider(
         {
           accountSid: config.twilio?.accountSid,
@@ -178,7 +163,7 @@ async function resolveProvider(config: VoiceCallConfig): Promise<VoiceCallProvid
       );
     }
     case "plivo": {
-      const { PlivoProvider } = await loadPlivoProvider();
+      const { PlivoProvider } = await import("./providers/plivo.js");
       return new PlivoProvider(
         {
           authId: config.plivo?.authId,
@@ -193,7 +178,7 @@ async function resolveProvider(config: VoiceCallConfig): Promise<VoiceCallProvid
       );
     }
     case "mock": {
-      const { MockProvider } = await loadMockProvider();
+      const { MockProvider } = await import("./providers/mock.js");
       return new MockProvider();
     }
     default:
@@ -300,7 +285,9 @@ export async function createVoiceCallRuntime(params: {
     setVoiceCallStateRuntime({ state: stateRuntime });
   }
   const manager = new CallManager(config, undefined, cfg.session, stateRuntime);
-  const realtimeVoiceRuntime = config.realtime.enabled ? await loadRealtimeVoiceRuntime() : null;
+  const realtimeVoiceRuntime = config.realtime.enabled
+    ? await import("./realtime-voice.runtime.js")
+    : null;
   const webhookServer = new VoiceCallWebhookServer(
     params.scheduler,
     config,
@@ -312,7 +299,7 @@ export async function createVoiceCallRuntime(params: {
     log,
   );
   if (realtimeVoiceRuntime) {
-    const { RealtimeCallHandler } = await loadRealtimeHandler();
+    const { RealtimeCallHandler } = await import("./webhook/realtime-handler.js");
     const resolveRealtimeInstructions = await createRealtimeInstructionsResolver({
       config,
       coreConfig: cfg,

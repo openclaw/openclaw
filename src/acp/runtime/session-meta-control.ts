@@ -17,11 +17,7 @@ import {
   captureAcpSessionEntryBinding,
   type AcpSessionEntryExpectation,
 } from "./session-meta-entry.kernel.js";
-import {
-  buildAcpDatabaseSessionKey,
-  legacyAcpDatabaseSessionKeys,
-  resolveLegacyFreeAcpSessionKey,
-} from "./session-meta-keys.js";
+import { buildAcpDatabaseSessionKey } from "./session-meta-keys.js";
 import { captureAcpSessionReadContext } from "./session-meta-read-context.js";
 import { withAcpSessionEntryRead } from "./session-meta-read.js";
 import { readAcpSessionMetaForEntry } from "./session-meta-readonly.js";
@@ -165,11 +161,7 @@ export async function prepareAcpSessionControlRead(params: {
         entry: entry ? captureAcpSessionEntryBinding(entry) : undefined,
         ownerKey,
         read: {
-          keys: [
-            buildAcpDatabaseSessionKey(read.storeSessionKey, target.agentId),
-            ...legacyAcpDatabaseSessionKeys(read.storeSessionKey, target.agentId, cfg),
-          ],
-          legacyKey: resolveLegacyFreeAcpSessionKey(read.storeSessionKey),
+          keys: [buildAcpDatabaseSessionKey(read.storeSessionKey, target.agentId)],
         },
       };
     }

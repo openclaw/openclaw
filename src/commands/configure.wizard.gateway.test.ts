@@ -19,7 +19,7 @@ const { maybeInstallDaemon, formatHealthCheckFailure } = mocks;
 const written = () => mocks.writeConfigFile.mock.calls.at(-1)![0];
 
 function configure(sections?: WizardSection[]) {
-  return runConfigureWizard({ command: "configure", sections }, createRuntime());
+  return runConfigureWizard({ sections }, createRuntime());
 }
 
 type Gateway = NonNullable<OpenClawConfig["gateway"]>;
@@ -363,7 +363,7 @@ describe("runConfigureWizard", () => {
         throw new WizardCancelledError();
       });
     }
-    await runConfigureWizard({ command: "configure" }, runtime);
+    await runConfigureWizard({}, runtime);
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(mocks.writeConfigFile).not.toHaveBeenCalled();
   });

@@ -89,12 +89,7 @@ function hasLegacyVllmQwenThinkingFormat(defaultModels: unknown): boolean {
   return false;
 }
 
-function hasLegacyVllmQwenThinkingProviderParams(provider: unknown): boolean {
-  return hasLegacyVllmQwenThinkingParams(getRecord(provider)?.params);
-}
-
-function hasLegacyVllmQwenThinkingModelParams(provider: unknown): boolean {
-  const models = getRecord(provider)?.models;
+function hasLegacyVllmQwenThinkingModelParams(models: unknown): boolean {
   if (!Array.isArray(models)) {
     return false;
   }
@@ -176,17 +171,9 @@ export function createVllmModelTargets(
   raw: Record<string, unknown>,
   modelIds: string[],
 ): Array<{ model: Record<string, unknown>; index: number }> {
-  const targets: Array<{ model: Record<string, unknown>; index: number }> = [];
-  const seen = new Set<Record<string, unknown>>();
-  for (const modelId of modelIds) {
-    const target = findOrCreateVllmModelEntry(raw, modelId);
-    if (!target || seen.has(target.model)) {
-      continue;
-    }
-    seen.add(target.model);
-    targets.push(target);
-  }
-  return targets;
+  return combineVllmModelTargets(
+    modelIds.flatMap((modelId) => findOrCreateVllmModelEntry(raw, modelId) ?? []),
+  );
 }
 
 export function combineVllmModelTargets(
@@ -194,11 +181,8 @@ export function combineVllmModelTargets(
 ): Array<{ model: Record<string, unknown>; index: number }> {
   const targets: Array<{ model: Record<string, unknown>; index: number }> = [];
   const seen = new Set<Record<string, unknown>>();
-  for (const group of groups) {
-    for (const target of group) {
-      if (seen.has(target.model)) {
-        continue;
-      }
+  for (const target of groups.flat()) {
+    if (!seen.has(target.model)) {
       seen.add(target.model);
       targets.push(target);
     }
@@ -256,8 +240,8 @@ function hasLegacyVllmQwenThinkingNormalizedProvider(providers: unknown): boolea
   }
   const vllmProvider = findVllmProvider(providersRecord);
   return (
-    hasLegacyVllmQwenThinkingProviderParams(vllmProvider) ||
-    hasLegacyVllmQwenThinkingModelParams(vllmProvider)
+    hasLegacyVllmQwenThinkingParams(vllmProvider?.params) ||
+    hasLegacyVllmQwenThinkingModelParams(vllmProvider?.models)
   );
 }
 
@@ -267,39 +251,6 @@ function removeLegacyVllmQwenThinkingParams(params: Record<string, unknown>): vo
   }
 }
 
-function applyLegacyVllmQwenThinkingFormat(params: {
-  sourcePath: string;
-  legacyParams: Record<string, unknown>;
-  target: { model: Record<string, unknown>; index: number };
-  legacyFormat: NonNullable<ReturnType<typeof getLegacyVllmQwenThinkingFormat>>;
-  changes: string[];
-}): void {
-  if (!params.legacyFormat.compat) {
-    removeLegacyVllmQwenThinkingParams(params.legacyParams);
-    params.changes.push(
-      `Removed ${params.sourcePath}.${params.legacyFormat.key} (unrecognized value ${JSON.stringify(params.legacyFormat.value)}; configure models.providers.vllm.models[].compat.thinkingFormat if needed).`,
-    );
-    return;
-  }
-  if (params.target.model.reasoning === undefined) {
-    params.target.model.reasoning = true;
-  }
-  const compat = ensureRecord(params.target.model, "compat");
-  const currentThinkingFormat = compat.thinkingFormat;
-  if (typeof currentThinkingFormat === "string" && isModelThinkingFormat(currentThinkingFormat)) {
-    removeLegacyVllmQwenThinkingParams(params.legacyParams);
-    params.changes.push(
-      `Removed ${params.sourcePath}.${params.legacyFormat.key}; models.providers.vllm.models[${params.target.index}].compat.thinkingFormat is already ${JSON.stringify(currentThinkingFormat)}.`,
-    );
-    return;
-  }
-  compat.thinkingFormat = params.legacyFormat.compat;
-  removeLegacyVllmQwenThinkingParams(params.legacyParams);
-  params.changes.push(
-    `Moved ${params.sourcePath}.${params.legacyFormat.key} to models.providers.vllm.models[${params.target.index}].compat.thinkingFormat (${JSON.stringify(params.legacyFormat.compat)}).`,
-  );
-}
-
 export function applyLegacyVllmQwenThinkingFormatToTargets(params: {
   sourcePath: string;
   legacyParams: Record<string, unknown>;
@@ -307,71 +258,88 @@ export function applyLegacyVllmQwenThinkingFormatToTargets(params: {
   legacyFormat: NonNullable<ReturnType<typeof getLegacyVllmQwenThinkingFormat>>;
   changes: string[];
 }): void {
-  if (params.targets.length > 0) {
-    // Reuse the captured format after the first target removes the legacy keys.
-    for (const target of params.targets) {
-      applyLegacyVllmQwenThinkingFormat({ ...params, target });
-    }
+  removeLegacyVllmQwenThinkingParams(params.legacyParams);
+  if (params.targets.length === 0) {
+    params.changes.push(
+      `Removed ${params.sourcePath}.${params.legacyFormat.key}; no concrete vLLM model row or agent model ref exists, so configure models.providers.vllm.models[].compat.thinkingFormat on each Qwen model that needs it.`,
+    );
     return;
   }
-  removeLegacyVllmQwenThinkingParams(params.legacyParams);
-  params.changes.push(
-    `Removed ${params.sourcePath}.${params.legacyFormat.key}; no concrete vLLM model row or agent model ref exists, so configure models.providers.vllm.models[].compat.thinkingFormat on each Qwen model that needs it.`,
-  );
+  // Reuse the captured format after removing the legacy keys from their owner.
+  for (const target of params.targets) {
+    if (!params.legacyFormat.compat) {
+      params.changes.push(
+        `Removed ${params.sourcePath}.${params.legacyFormat.key} (unrecognized value ${JSON.stringify(params.legacyFormat.value)}; configure models.providers.vllm.models[].compat.thinkingFormat if needed).`,
+      );
+      continue;
+    }
+    if (target.model.reasoning === undefined) {
+      target.model.reasoning = true;
+    }
+    const compat = ensureRecord(target.model, "compat");
+    const currentThinkingFormat = compat.thinkingFormat;
+    if (typeof currentThinkingFormat === "string" && isModelThinkingFormat(currentThinkingFormat)) {
+      params.changes.push(
+        `Removed ${params.sourcePath}.${params.legacyFormat.key}; models.providers.vllm.models[${target.index}].compat.thinkingFormat is already ${JSON.stringify(currentThinkingFormat)}.`,
+      );
+      continue;
+    }
+    compat.thinkingFormat = params.legacyFormat.compat;
+    params.changes.push(
+      `Moved ${params.sourcePath}.${params.legacyFormat.key} to models.providers.vllm.models[${target.index}].compat.thinkingFormat (${JSON.stringify(params.legacyFormat.compat)}).`,
+    );
+  }
 }
 
-export const LEGACY_VLLM_QWEN_AGENT_THINKING_FORMAT_RULE: LegacyConfigRule = {
-  path: ["agents", "defaults", "models"],
-  message:
-    'agents.defaults.models.<vllm-model>.params.qwenThinkingFormat is legacy; run "openclaw doctor --fix" to move it to models.providers.vllm.models[].compat.thinkingFormat.',
-  match: (value) => hasLegacyVllmQwenThinkingFormat(value),
-};
-
-export const LEGACY_VLLM_QWEN_PROVIDER_THINKING_FORMAT_RULE: LegacyConfigRule = {
-  path: ["models", "providers", "vllm", "params"],
-  message:
-    'models.providers.vllm.params.qwenThinkingFormat is legacy; run "openclaw doctor --fix" to move it to models.providers.vllm.models[].compat.thinkingFormat.',
-  match: (value) => hasLegacyVllmQwenThinkingProviderParams({ params: value }),
-};
-
-export const LEGACY_VLLM_QWEN_PROVIDER_MODEL_THINKING_FORMAT_RULE: LegacyConfigRule = {
-  path: ["models", "providers", "vllm", "models"],
-  message:
-    'models.providers.vllm.models[*].params.qwenThinkingFormat is legacy; run "openclaw doctor --fix" to move it to models.providers.vllm.models[].compat.thinkingFormat.',
-  match: (value) => hasLegacyVllmQwenThinkingModelParams({ models: value }),
-};
-
-export const LEGACY_VLLM_QWEN_NORMALIZED_PROVIDER_THINKING_FORMAT_RULE: LegacyConfigRule = {
-  path: ["models", "providers"],
-  message:
-    'models.providers.<vllm>.params.qwenThinkingFormat is legacy; run "openclaw doctor --fix" to move it to models.providers.<vllm>.models[].compat.thinkingFormat.',
-  match: (value) => hasLegacyVllmQwenThinkingNormalizedProvider(value),
-};
-
-export const LEGACY_VLLM_QWEN_DEFAULT_PARAMS_THINKING_FORMAT_RULE: LegacyConfigRule = {
-  path: ["agents", "defaults", "params"],
-  message:
-    'agents.defaults.params.qwenThinkingFormat is legacy; run "openclaw doctor --fix" to move it to models.providers.vllm.models[].compat.thinkingFormat.',
-  match: (value) => hasLegacyVllmQwenThinkingParams(value),
-};
-
-export const LEGACY_VLLM_QWEN_AGENT_PARAMS_THINKING_FORMAT_RULE: LegacyConfigRule = {
-  path: ["agents"],
-  message:
-    'agents.entries.*.params.qwenThinkingFormat is legacy; run "openclaw doctor --fix" to move it to models.providers.vllm.models[].compat.thinkingFormat.',
-  match: (value) => hasLegacyVllmQwenThinkingAgentParams(value),
-};
+export const LEGACY_VLLM_QWEN_THINKING_FORMAT_RULES: LegacyConfigRule[] = [
+  {
+    path: ["agents", "defaults", "models"],
+    message:
+      'agents.defaults.models.<vllm-model>.params.qwenThinkingFormat is legacy; run "openclaw doctor --fix" to move it to models.providers.vllm.models[].compat.thinkingFormat.',
+    match: hasLegacyVllmQwenThinkingFormat,
+  },
+  {
+    path: ["models", "providers", "vllm", "params"],
+    message:
+      'models.providers.vllm.params.qwenThinkingFormat is legacy; run "openclaw doctor --fix" to move it to models.providers.vllm.models[].compat.thinkingFormat.',
+    match: hasLegacyVllmQwenThinkingParams,
+  },
+  {
+    path: ["models", "providers", "vllm", "models"],
+    message:
+      'models.providers.vllm.models[*].params.qwenThinkingFormat is legacy; run "openclaw doctor --fix" to move it to models.providers.vllm.models[].compat.thinkingFormat.',
+    match: hasLegacyVllmQwenThinkingModelParams,
+  },
+  {
+    path: ["models", "providers"],
+    message:
+      'models.providers.<vllm>.params.qwenThinkingFormat is legacy; run "openclaw doctor --fix" to move it to models.providers.<vllm>.models[].compat.thinkingFormat.',
+    match: hasLegacyVllmQwenThinkingNormalizedProvider,
+  },
+  {
+    path: ["agents", "defaults", "params"],
+    message:
+      'agents.defaults.params.qwenThinkingFormat is legacy; run "openclaw doctor --fix" to move it to models.providers.vllm.models[].compat.thinkingFormat.',
+    match: hasLegacyVllmQwenThinkingParams,
+  },
+  {
+    path: ["agents"],
+    message:
+      'agents.entries.*.params.qwenThinkingFormat is legacy; run "openclaw doctor --fix" to move it to models.providers.vllm.models[].compat.thinkingFormat.',
+    match: hasLegacyVllmQwenThinkingAgentParams,
+  },
+];
 
 export const INVALID_THINKING_FORMAT_RULE: LegacyConfigRule = {
   path: ["models", "providers"],
   message:
     'models.providers.<id>.models[*].compat.thinkingFormat has an unrecognized value; run "openclaw doctor --fix" to remove it and restore the runtime default.',
-  match: (value) => hasInvalidThinkingFormat(value),
+  match: hasInvalidThinkingFormat,
 };
 
 export const STALE_CONTEXT_WINDOW_RULE: LegacyConfigRule = {
   path: ["models", "providers"],
   message:
     'models.providers.<id>.models[*].contextWindow has a stale catalog value; run "openclaw doctor --fix" to repair it.',
-  match: (value) => hasStaleContextWindowValue(value),
+  match: hasStaleContextWindowValue,
 };

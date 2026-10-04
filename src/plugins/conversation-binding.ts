@@ -11,10 +11,7 @@ import {
   type SessionBindingScope,
 } from "../infra/outbound/session-binding-service.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import {
-  isPluginOwnedBindingMetadata,
-  type PluginBindingMetadata,
-} from "./conversation-binding-metadata.js";
+import { isPluginOwnedBindingMetadata } from "./conversation-binding-metadata.js";
 import {
   addPendingPluginBindingRequest,
   takePluginBindingRequestForApproval,
@@ -163,27 +160,6 @@ function buildApprovalInteractiveReply(
   };
 }
 
-function buildBindingMetadata(params: {
-  pluginId: string;
-  pluginName?: string;
-  pluginRoot: string;
-  summary?: string;
-  detachHint?: string;
-  data?: Record<string, unknown>;
-  bindingAttemptId?: string;
-}): PluginBindingMetadata {
-  return {
-    pluginBindingOwner: "plugin",
-    pluginId: params.pluginId,
-    pluginName: params.pluginName,
-    pluginRoot: params.pluginRoot,
-    summary: normalizeOptionalString(params.summary),
-    detachHint: normalizeOptionalString(params.detachHint),
-    data: normalizeBindingData(params.data),
-    bindingAttemptId: normalizeOptionalString(params.bindingAttemptId),
-  };
-}
-
 export function toPluginConversationBinding(
   record:
     | {
@@ -274,15 +250,16 @@ export async function bindConversationNow(params: {
     conversation: ref,
     placement: "current",
     ...(assertCurrent ? { assertCurrent } : {}),
-    metadata: buildBindingMetadata({
+    metadata: {
+      pluginBindingOwner: "plugin",
       pluginId: params.identity.pluginId,
       pluginName: params.identity.pluginName,
       pluginRoot: params.identity.pluginRoot,
-      summary: params.summary,
-      detachHint: params.detachHint,
-      data: params.data,
-      bindingAttemptId: params.bindingAttemptId,
-    }),
+      summary: normalizeOptionalString(params.summary),
+      detachHint: normalizeOptionalString(params.detachHint),
+      data: normalizeBindingData(params.data),
+      bindingAttemptId: normalizeOptionalString(params.bindingAttemptId),
+    },
   });
   const binding = toPluginConversationBinding(record);
   if (!binding) {

@@ -165,6 +165,12 @@ describe("OpenAI strict tool schema normalization", () => {
     expect(
       findOpenAIStrictSchemaViolations(schema, "parameters", { requireObjectRoot: true }),
     ).toEqual([]);
+    expect(
+      resolveOpenAIProjectedToolsStrictToolFlag(
+        projectOpenAITools([{ name: "lookup", parameters: schema }]),
+        true,
+      ),
+    ).toBe(true);
   });
 
   it("walks legacy and content schema applicators", () => {

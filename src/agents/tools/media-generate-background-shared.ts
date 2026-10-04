@@ -21,10 +21,8 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
 import { parseCronRunScopeSuffix } from "../../sessions/session-key-utils.js";
-import {
-  runInDetachedAsyncContext,
-  runOutsideAsyncWorkScope,
-} from "../../shared/async-work-scope.js";
+import { runOutsideAsyncWorkScope } from "../../shared/async-work-scope.js";
+import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import { captureAgentToolSourceExecutionGuard } from "../agent-tool-source-execution-guard.js";
 import {

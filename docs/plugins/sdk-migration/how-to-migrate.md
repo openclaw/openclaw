@@ -50,7 +50,9 @@ that depends on the operation. Dismissal IDs retain exact-match semantics.
 Replace `recordCommittedInput(input)` with `await recordCommittedInputAsync(input)`
 and `invalidate(sessionKey)` with `await invalidateAsync(sessionKey)`. Await
 recording before reading the resulting Inbox, and await invalidation before
-depending on refreshed connected views.
+depending on refreshed connected views. Recording also awaits the collaboration
+writer's session involvement update before saving Inbox items. Both writes retain
+their existing owners and settle before Gateway worker shutdown.
 
 The shipped `list`, `dismiss`, `recordCommittedInput`, and `invalidate` methods
 remain synchronous third-party adapters until the next Plugin SDK major and
@@ -61,6 +63,37 @@ timing stay intact, including recording before an immediate synchronous list.
 Notifications publish after the enclosing transaction commits and are discarded
 on rollback. This migration changes no schema, retained data, retention, or
 update behavior.
+
+## Await personal model-account operations
+
+The Gateway context's `modelAccountConnectService` now provides awaited
+replacements for its seven synchronous storage methods. Keep the existing
+arguments and await the result before publishing a response, starting dependent
+work, or releasing the caller's authority:
+
+| Synchronous method | Awaited replacement |
+| ------------------ | ------------------- |
+| `listLinks`        | `listLinksAsync`    |
+| `link`             | `linkAsync`         |
+| `unlink`           | `unlinkAsync`       |
+| `list`             | `listAsync`         |
+| `select`           | `selectAsync`       |
+| `status`           | `statusAsync`       |
+| `cancel`           | `cancelAsync`       |
+
+Each replacement resolves to the existing result envelope. Pass the current
+owner and live `assertCurrent` callback; the service rechecks authority across
+awaited work and before disclosing account summaries or links. Results never
+include credentials. If a write's commit outcome is unknown, do not retry it or
+fall back to its synchronous counterpart.
+
+The synchronous methods shipped in 2026.9.8 retain their arguments, immediate
+return values, and completion timing until the next Plugin SDK major and
+explicit breaking-release approval. Each emits one `DEP_SESSION_PERSISTENCE`
+warning per plugin and method per process, including across plugin reloads;
+unscoped calls warn once per method. Core and bundled callers use the awaited
+methods. This migration changes no RPC schema, stored data, retention, or update
+behavior.
 
 ## Await session transcript persistence
 

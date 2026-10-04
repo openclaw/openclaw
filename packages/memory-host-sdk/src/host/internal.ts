@@ -31,19 +31,13 @@ import { retryTransientMemoryRead } from "./read-retry.js";
 import type { MemoryExtraPath } from "./types.js";
 
 export { hashText } from "./hash.js";
-export {
-  parseEmbedding,
-  cosineSimilarity,
-  encodeMemoryEmbedding,
-  decodeMemoryEmbedding,
-} from "./embedding-vector.js";
+export { encodeMemoryEmbedding, decodeMemoryEmbedding } from "./embedding-vector.js";
 export {
   chunkMarkdown,
   splitCuratedMarkdownEntries,
   remapChunkLines,
   MEMORY_CHUNKING_VERSION,
   type MemoryChunk,
-  type CuratedMarkdownEntry,
 } from "./markdown-chunks.js";
 
 export type MemoryFileEntry = {
@@ -101,7 +95,7 @@ function expandHomePath(value: string): string {
   return value;
 }
 
-export type NormalizedExtraMemoryPath = { path: string; pattern?: string };
+type NormalizedExtraMemoryPath = { path: string; pattern?: string };
 
 export function normalizeExtraMemoryPathEntries(
   workspaceDir: string,
@@ -496,7 +490,6 @@ export {
   INVALID_PROJECT_ANNOTATION_KEY,
   normalizeProjectAnnotationKey,
   stripMemoryAnnotationCarriers,
-  type CuratedProjectAnnotations,
 } from "./curated-annotations.js";
 
 export { runWithConcurrency } from "./concurrency.js";

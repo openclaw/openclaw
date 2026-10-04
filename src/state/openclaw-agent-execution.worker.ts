@@ -62,6 +62,7 @@ import {
   loadAgentEntryPatchOperations,
   loadAgentCompoundOperations,
   loadAgentNativeBindingOperations,
+  loadAgentMessageCutOperations,
   prepareAgentNativeBindingOperation,
   loadAgentTrajectoryOperations,
   loadAgentArchiveOperations,
@@ -373,6 +374,7 @@ function openAgentDatabaseBackend(
     "session.turn.commit": loadAgentCompoundOperations,
     "session.lifecycle.reset": loadAgentCompoundOperations,
     "session.nativeBindings.delete": loadAgentNativeBindingOperations,
+    "session.messageCut.commit": loadAgentMessageCutOperations,
     "trajectory.events.append": loadAgentTrajectoryOperations,
     "session.archives.preparePublication": loadAgentArchiveOperations,
     "session.archives.recordPublication": loadAgentArchiveOperations,
@@ -495,10 +497,16 @@ function openAgentDatabaseBackend(
         return domain.prepare(command);
       }
       const preparing = registry.prepare(command.type);
-      if (command.type === "session.nativeBindings.delete") {
+      const nativeBindings =
+        command.type === "session.nativeBindings.delete"
+          ? command.input
+          : command.type === "session.messageCut.commit"
+            ? command.input.nativeBindings
+            : undefined;
+      if (nativeBindings) {
         return Promise.all([
           preparing,
-          prepareAgentNativeBindingOperation(command.input, input.environment),
+          prepareAgentNativeBindingOperation(nativeBindings, input.environment),
         ]).then(() => {});
       }
       if (

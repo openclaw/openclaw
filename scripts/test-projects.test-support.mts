@@ -936,10 +936,6 @@ const SOURCE_TEST_TARGETS = new Map([
     "src/secrets/provider-env-vars.ts",
     ["src/secrets/provider-env-vars.dynamic.test.ts", "src/secrets/provider-env-vars.test.ts"],
   ],
-  [
-    "packages/memory-host-sdk/src/host/embedding-defaults.ts",
-    ["extensions/memory-core/src/memory/embeddings.test.ts"],
-  ],
   ["src/auto-reply/reply/dispatch-from-config.ts", GROUP_VISIBLE_REPLY_TEST_TARGETS],
   ["src/auto-reply/reply/source-reply-delivery-mode.ts", GROUP_VISIBLE_REPLY_TEST_TARGETS],
   [
@@ -1801,7 +1797,7 @@ function listImportGraphFiles(
   return files;
 }
 
-function resolveImportSpecifiers(
+export function resolveImportSpecifiers(
   importer: string,
   specifier: string,
   fileSet: ReadonlySet<string>,
@@ -1876,11 +1872,17 @@ const cachedImportGraphGrepMatches = new Map<string, ImportGraphEdges[] | null>(
 const cachedImportGraphEdges = new Map<string, ImportGraphEdges>();
 const cachedImportGraphAliases = new Map<string, ImportGraphAlias[]>();
 
-function readImportGraphManifest(cwd: string, file: string): Record<string, unknown> {
-  if (!fs.existsSync(path.join(cwd, file))) {
+function readImportGraphManifest(
+  cwd: string,
+  file: string,
+  sources?: ReadonlyMap<string, string>,
+): Record<string, unknown> {
+  if (sources ? !sources.has(file) : !fs.existsSync(path.join(cwd, file))) {
     return {};
   }
-  const value: unknown = JSON.parse(fs.readFileSync(path.join(cwd, file), "utf8"));
+  const value: unknown = JSON.parse(
+    sources ? sources.get(file)! : fs.readFileSync(path.join(cwd, file), "utf8"),
+  );
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error(`Invalid test selector manifest: ${file}`);
   }
@@ -1888,24 +1890,31 @@ function readImportGraphManifest(cwd: string, file: string): Record<string, unkn
 }
 
 /** Read the maintained source mappings without loading a Vitest config or installed package. */
-function getImportGraphAliases(cwd: string): ImportGraphAlias[] {
-  const cached = cachedImportGraphAliases.get(cwd);
+export function getImportGraphAliases(
+  cwd: string,
+  sources?: ReadonlyMap<string, string>,
+): ImportGraphAlias[] {
+  const cached = sources ? undefined : cachedImportGraphAliases.get(cwd);
   if (cached) {
     return cached;
   }
   const aliases: ImportGraphAlias[] = [];
-  const files = listTrackedTestPlanFiles(cwd, [
-    "package.json",
-    ":(glob)packages/*/package.json",
-    ":(glob)extensions/*/package.json",
-  ]) ?? [
-    "package.json",
-    ...["packages", "extensions"].flatMap((root) =>
-      fs.existsSync(path.join(cwd, root))
-        ? fs.readdirSync(path.join(cwd, root)).map((entry) => `${root}/${entry}/package.json`)
-        : [],
-    ),
-  ];
+  const files = sources
+    ? [...sources.keys()].filter((file) =>
+        /^(?:(?:packages|extensions)\/[^/]+\/)?package\.json$/u.test(file),
+      )
+    : (listTrackedTestPlanFiles(cwd, [
+        "package.json",
+        ":(glob)packages/*/package.json",
+        ":(glob)extensions/*/package.json",
+      ]) ?? [
+        "package.json",
+        ...["packages", "extensions"].flatMap((root) =>
+          fs.existsSync(path.join(cwd, root))
+            ? fs.readdirSync(path.join(cwd, root)).map((entry) => `${root}/${entry}/package.json`)
+            : [],
+        ),
+      ]);
   const exportTargets = (value: unknown): string[] => {
     if (typeof value === "string") {
       return [value];
@@ -1913,7 +1922,7 @@ function getImportGraphAliases(cwd: string): ImportGraphAlias[] {
     return value && typeof value === "object" ? Object.values(value).flatMap(exportTargets) : [];
   };
   for (const file of files) {
-    const manifest = readImportGraphManifest(cwd, file);
+    const manifest = readImportGraphManifest(cwd, file, sources);
     if (typeof manifest.name !== "string" || !manifest.exports) {
       continue;
     }
@@ -1942,7 +1951,7 @@ function getImportGraphAliases(cwd: string): ImportGraphAlias[] {
       }
     }
   }
-  const config = readImportGraphManifest(cwd, "tsconfig.json");
+  const config = readImportGraphManifest(cwd, "tsconfig.json", sources);
   const compiler = config.compilerOptions;
   if (compiler && typeof compiler === "object" && "paths" in compiler) {
     const paths = compiler.paths;
@@ -1963,7 +1972,9 @@ function getImportGraphAliases(cwd: string): ImportGraphAlias[] {
       (leftStar >= 0 && rightStar >= 0 ? rightStar - leftStar : 0)
     );
   });
-  cachedImportGraphAliases.set(cwd, aliases);
+  if (!sources) {
+    cachedImportGraphAliases.set(cwd, aliases);
+  }
   return aliases;
 }
 

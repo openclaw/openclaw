@@ -32,8 +32,6 @@ export async function runNodeHostWorker(
   // The private app worker is a capability superset; persisted headless
   // command allowlists never apply here.
   const prepared = await prepareNodeHostRuntime({
-    enableDuplexPluginCommands: true,
-    enableWorkerRuns: true,
     installedAppsSharingEnabled: nodeConfig?.installedAppsSharing === true,
     desktopSharingEnabled: options.desktopSharingEnabled,
   });

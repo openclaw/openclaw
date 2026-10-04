@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
+import { WORKER_PROVIDER_REPLAY_MAX_DATA_BYTES } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { installSessionPlacementAdmissionProvider } from "../../agents/session-placement-admission.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
@@ -412,14 +412,14 @@ describe("worker turn launcher failure recovery", () => {
     await manager.appendMessageAsync(
       makeAgentAssistantMessage({
         content: [{ type: "toolCall", id: "call-replay", name: "read", arguments: {} }],
-        model: "gpt-test",
+        model: "gpt-5.6-luna",
         providerReplay: {
           v: 1,
           type: "openai-responses-compaction",
-          data: "gAAAAlauncherReplayCiphertext",
+          data: "x".repeat(WORKER_PROVIDER_REPLAY_MAX_DATA_BYTES + 1),
           provider: "openai",
           api: "openai-responses",
-          model: "gpt-test",
+          model: "gpt-5.6-luna",
           baseUrlHash: "ozhevd1smnk8s",
         },
         stopReason: "toolUse",
@@ -431,7 +431,6 @@ describe("worker turn launcher failure recovery", () => {
       toolCallId: "call-replay",
       toolName: "read",
       content: [{ type: "text", text: "result" }],
-      details: { payload: "x".repeat(WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES) },
       isError: false,
       timestamp: 2,
     });

@@ -19,6 +19,8 @@ import { createGatewayKernel } from "./server-kernel.js";
 import type { GatewayServer, GatewayServerOptions } from "./server-public.js";
 import { startGatewayServerCore } from "./server-start.js";
 import { reserveGatewayTestListener } from "./test-helpers.listener.js";
+// Keep cold source transformation of mandatory startup code outside behavior-test deadlines.
+import "./server-reload-managed.js";
 
 export async function createGatewayMetadataCloseFixture(label: string) {
   const original = captureActivePluginRegistrySnapshot();

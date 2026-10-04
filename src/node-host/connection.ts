@@ -359,8 +359,7 @@ export function startNodeHostConnection({
               ...(gatewayCapabilities.has(GATEWAY_SERVER_CAPS.NODE_WORKER_ENVIRONMENT_SESSION)
                 ? { environmentSession: NODE_WORKER_ENVIRONMENT_SESSION_VERSION }
                 : {}),
-              // Native Linux ownership is qualified; Windows keeps its existing SQLite/script route.
-              ...(process.platform === "linux" &&
+              ...((process.platform === "linux" || process.platform === "win32") &&
               !process.versions.bun &&
               gatewayCapabilities.has(GATEWAY_SERVER_CAPS.NODE_WORKER_WORKSPACE_QUIESCENCE)
                 ? { workspaceQuiescence: NODE_WORKER_WORKSPACE_QUIESCENCE_VERSION }

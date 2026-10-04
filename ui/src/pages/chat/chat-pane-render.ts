@@ -337,13 +337,13 @@ export class ChatPane extends ChatPaneLayoutRender {
           !(selectedSessionArchived || restartRecoveryTombstoned || placementComposer.blocksSend) &&
           (!pendingReason || initialHistoryUnavailable));
     const composerAvailability = {
-      canCompose: composerAccess.canCompose && composerAvailable,
-      canSend: composerAccess.canSend && composerAvailable,
+      canCompose: composerAccess && composerAvailable,
+      canSend: composerAccess && composerAvailable,
       ...chatSubmitState(state, initialHistoryUnavailable, !catalog && !suggestionViewer),
       modelRequiredReason,
       disabledReason:
         catalogDisabledReason ??
-        (!composerAccess.canSend ? t("chat.sessionSharing.scopeReadOnlyNotice") : null) ??
+        (!composerAccess ? t("chat.sessionSharing.scopeReadOnlyNotice") : null) ??
         disabledReason ??
         placementComposer.busyMessage ??
         (placementComposer.state.kind === "failed" && !placementComposer.state.recoveryAction
@@ -351,7 +351,7 @@ export class ChatPane extends ChatPaneLayoutRender {
           : null) ??
         (state.connected && (placementStartup || initialHistoryUnavailable) ? null : pendingReason),
       disabledReasonTone:
-        !composerAccess.canSend ||
+        !composerAccess ||
         disabledReason ||
         placementComposer.busyMessage ||
         (sessionParticipationBlocked && !suggestionViewer)

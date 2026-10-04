@@ -82,60 +82,67 @@ describe("registered Codex finalizer host silence contract", () => {
     return result;
   }
 
-  it("honors optional authored silence with empty replies disabled", async () => {
-    const input = await createInput();
-    input.terminalBase.runParams.allowEmptyAssistantReplyAsSilent = false;
-    returnBoundedText(" NO_REPLY\n");
-
-    const result = await prepareTerminalWithSettledTurnFinalization(input);
-
-    expect(fixture.runBounded).toHaveBeenCalledOnce();
-    expect(fixture.runBounded).toHaveBeenCalledWith(
-      expect.objectContaining({
-        isolation: "private-stdio",
-        requireNoExternalCapabilities: true,
-      }),
-    );
-    expect(result.finalizationOutcome).toBe("answered");
-    expect(result.attempt.assistantTexts).toEqual(["NO_REPLY"]);
-    expect(result.prepared.payloadsWithToolMedia ?? []).toEqual([]);
-    expect(fixture.mirror).not.toHaveBeenCalled();
-  });
-
   it.each([
-    { text: "NO_REPLY", expectation: "required" },
-    { text: " ", expectation: "optional" },
-  ] as const)("distinguishes $expectation $text output", async ({ text, expectation }) => {
-    const input = await createInput();
-    input.terminalBase.runParams.terminalReplyExpectation = expectation;
-    input.terminalBase.runParams.allowEmptyAssistantReplyAsSilent = true;
-    returnBoundedText(text);
+    { text: " NO_REPLY\n", expectation: "optional", allowEmpty: false, answered: true },
+    { text: "NO_REPLY", expectation: "required", allowEmpty: true, answered: false },
+    { text: " ", expectation: "optional", allowEmpty: true, answered: false },
+  ] as const)(
+    "distinguishes $expectation $text output",
+    async ({ text, expectation, allowEmpty, answered }) => {
+      const input = await createInput();
+      input.terminalBase.runParams.terminalReplyExpectation = expectation;
+      input.terminalBase.runParams.allowEmptyAssistantReplyAsSilent = allowEmpty;
+      returnBoundedText(text);
+      const result = await prepareTerminalWithSettledTurnFinalization(input);
+      expect(fixture.runBounded).toHaveBeenCalledTimes(answered ? 1 : 2);
+      expect(result.finalizationOutcome).toBe(answered ? "answered" : "completed-empty");
+      if (answered) {
+        expect(fixture.runBounded).toHaveBeenCalledWith(
+          expect.objectContaining({
+            isolation: "private-stdio",
+            requireNoExternalCapabilities: true,
+          }),
+        );
+        expect(result.attempt.assistantTexts).toEqual(["NO_REPLY"]);
+        expect(result.prepared.payloadsWithToolMedia ?? []).toEqual([]);
+      } else {
+        expect(result.prepared.payloadsWithToolMedia).toEqual([
+          expect.objectContaining({
+            text: "The tool run finished, but no final summary was produced. I did not repeat any completed actions.",
+          }),
+        ]);
+      }
+      expect(fixture.mirror).not.toHaveBeenCalled();
+    },
+  );
 
-    const result = await prepareTerminalWithSettledTurnFinalization(input);
-
-    expect(fixture.runBounded).toHaveBeenCalledTimes(2);
-    expect(result.finalizationOutcome).toBe("completed-empty");
-    expect(result.prepared.payloadsWithToolMedia).toEqual([
-      expect.objectContaining({
-        text: "The tool run finished, but no final summary was produced. I did not repeat any completed actions.",
-      }),
-    ]);
-    expect(fixture.mirror).not.toHaveBeenCalled();
-  });
-
-  it.each([{ failedTool: true }, { timedOut: true }])(
+  it.each(["failedTool", "timedOut", "cancelled"] as const)(
     "does not hide an original failure with authored silence: %j",
-    async (options) => {
-      const input = await createInput(options);
-      input.terminalBase.runParams.allowEmptyAssistantReplyAsSilent = true;
-      returnBoundedText("NO_REPLY");
+    async (failure) => {
+      const input = await createInput({
+        failedTool: failure === "failedTool",
+        timedOut: failure === "timedOut",
+      });
+      const boundedResult = returnBoundedText("NO_REPLY");
+      if (failure === "cancelled") {
+        const controller = new AbortController();
+        input.finalization.abortSignal = controller.signal;
+        fixture.runBounded.mockImplementation(async () => {
+          controller.abort(new Error("cancelled"));
+          return boundedResult;
+        });
+      } else {
+        input.terminalBase.runParams.allowEmptyAssistantReplyAsSilent = true;
+      }
 
       const result = await prepareTerminalWithSettledTurnFinalization(input);
 
-      expect(fixture.runBounded).toHaveBeenCalledTimes(options.timedOut ? 0 : 2);
-      expect(result.finalizationOutcome).toBe(options.timedOut ? "not-attempted" : "failed");
+      expect(fixture.runBounded).toHaveBeenCalledTimes(
+        failure === "timedOut" ? 0 : failure === "cancelled" ? 1 : 2,
+      );
+      expect(result.finalizationOutcome).toBe(failure === "timedOut" ? "not-attempted" : "failed");
       expect(result.attempt).toBe(input.initial.attempt);
-      if (options.timedOut) {
+      if (failure === "timedOut") {
         expect(isEmbeddedRunTerminalTimeout(result.terminalState.outcome)).toBe(true);
         expect(result.prepared.timedOutDuringPrompt).toBe(true);
         expect(result.prepared.payloadsWithToolMedia ?? []).toEqual([]);
@@ -162,28 +169,10 @@ describe("registered Codex finalizer host silence contract", () => {
         expect(setTerminalLifecycleMeta).toHaveBeenCalledWith(
           expect.objectContaining({ replayInvalid: true, livenessState: "blocked" }),
         );
-      } else {
+      } else if (failure === "failedTool") {
         expect(result.prepared.payloadsWithToolMedia?.[0]).toMatchObject({ isError: true });
       }
       expect(fixture.mirror).not.toHaveBeenCalled();
     },
   );
-
-  it("preserves cancellation while the bounded finalizer returns authored silence", async () => {
-    const input = await createInput();
-    const controller = new AbortController();
-    input.finalization.abortSignal = controller.signal;
-    const boundedResult = returnBoundedText("NO_REPLY");
-    fixture.runBounded.mockImplementation(async () => {
-      controller.abort(new Error("cancelled"));
-      return boundedResult;
-    });
-
-    const result = await prepareTerminalWithSettledTurnFinalization(input);
-
-    expect(fixture.runBounded).toHaveBeenCalledOnce();
-    expect(result.finalizationOutcome).toBe("failed");
-    expect(result.attempt).toBe(input.initial.attempt);
-    expect(fixture.mirror).not.toHaveBeenCalled();
-  });
 });

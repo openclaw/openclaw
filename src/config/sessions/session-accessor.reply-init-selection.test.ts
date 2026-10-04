@@ -63,7 +63,6 @@ it("retains only declared reply rows and their stored model parent at each snaps
     const committed = await commitReplySessionInitialization({
       ...scope,
       activeSessionKey: sessionKey,
-      archivePreviousTranscript: false,
       expectedRevision: snapshot.revision,
       sessionEntry: persistedCurrent,
       prepareSessionEntry: async ({ readEntry, sessionEntry }) => {

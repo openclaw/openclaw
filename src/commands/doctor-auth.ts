@@ -261,7 +261,7 @@ async function resolveAuthIssueHint(
   issue: AuthIssue,
   cfg: OpenClawConfig,
   store: ReturnType<typeof ensureAuthProfileStore>,
-): Promise<string | null> {
+): Promise<string> {
   if (issue.reasonCode === "invalid_expires") {
     return "Invalid token expires metadata. Set a future Unix ms timestamp or remove expires.";
   }
@@ -362,7 +362,6 @@ function loadAuthProfileHealth(params: {
       store: { ...store, profiles },
       cfg: params.cfg,
       warnAfterMs: DEFAULT_OAUTH_WARN_MS,
-      allowKeychainPrompt: params.allowKeychainPrompt,
     }),
   };
 }
@@ -405,11 +404,7 @@ export async function collectAuthProfileHealthFindings(params: {
         path: resolveAuthStorePathForDisplay(target.agentDir),
         target: issue.profileId,
         ...(issue.reasonCode ? { requirement: issue.reasonCode } : {}),
-        fixHint:
-          hint ??
-          (issue.status === "expiring"
-            ? "Run `openclaw doctor --fix` to refresh expiring OAuth profiles, or re-authenticate static tokens."
-            : "Run `openclaw doctor --fix` to refresh OAuth profiles, or re-authenticate this provider."),
+        fixHint: hint,
       });
     }
   }

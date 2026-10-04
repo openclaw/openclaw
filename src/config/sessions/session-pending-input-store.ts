@@ -3,10 +3,7 @@ import {
   hasSqliteWorkerOutcomeUnknown,
   SqliteWorkerError,
 } from "../../infra/sqlite-worker-contract.js";
-import {
-  assertExistingDatabaseIdentity,
-  readDatabasePathIdentitySync,
-} from "../../infra/sqlite-worker-identity.js";
+import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
 import type { SqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
 import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-worker-operation-settlement.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
@@ -30,7 +27,10 @@ import type {
   PendingInputMutationReceipt,
   PendingInputRead,
 } from "./session-pending-input-operations.types.js";
-import { assertSessionStoreReadCandidate } from "./session-store-read-candidates.js";
+import {
+  assertSessionStoreReadCandidate,
+  captureSessionStoreCandidateIdentities,
+} from "./session-store-read-candidates.js";
 import { captureSessionStoreReadCandidates } from "./session-store-target-inventory.js";
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
 
@@ -49,14 +49,7 @@ export async function preparePendingInputStore(
     captured.storePath ??
     resolveOpenClawAgentSqlitePath(toDatabaseOptions(logical));
   const candidates = incognito ? [] : captureSessionStoreReadCandidates(storePath);
-  const identities = new Map(
-    candidates
-      .filter((candidate) => !candidate.scope)
-      .map((candidate) => {
-        const identity = readDatabasePathIdentitySync(candidate.path);
-        return [identity.canonicalPath, identity] as const;
-      }),
-  );
+  const identities = captureSessionStoreCandidateIdentities(candidates);
   const resolved = await prepareSqliteScope(captured);
   assertCurrent();
   const options = {

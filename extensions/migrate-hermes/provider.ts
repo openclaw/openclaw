@@ -1,15 +1,8 @@
-import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type {
   MigrationPlan,
   MigrationProviderContext,
   MigrationProviderPlugin,
 } from "openclaw/plugin-sdk/plugin-entry";
-
-// Registration exposes the provider contract without loading migration execution.
-const loadApply = createLazyRuntimeModule(() => import("./apply.js"));
-const loadMemory = createLazyRuntimeModule(() => import("./memory.js"));
-const loadPlan = createLazyRuntimeModule(() => import("./plan.js"));
-const loadSource = createLazyRuntimeModule(() => import("./source.js"));
 
 export function buildHermesMigrationProvider(
   params: {
@@ -22,8 +15,8 @@ export function buildHermesMigrationProvider(
     description: "Import Hermes config, memories, skills, and supported credentials.",
     supportedItemKinds: ["memory"],
     async detect(ctx) {
-      const { discoverHermesSource, hasHermesSource } = await loadSource();
-      const { isMemoryOnlyMigration } = await loadMemory();
+      const { discoverHermesSource, hasHermesSource } = await import("./source.js");
+      const { isMemoryOnlyMigration } = await import("./memory.js");
       const source = await discoverHermesSource(ctx.source);
       const found = isMemoryOnlyMigration(ctx)
         ? Boolean(source.memoryPath || source.userPath)
@@ -37,10 +30,10 @@ export function buildHermesMigrationProvider(
       };
     },
     async plan(ctx) {
-      return await (await loadPlan()).buildHermesPlan(ctx);
+      return await (await import("./plan.js")).buildHermesPlan(ctx);
     },
     async apply(ctx, plan?: MigrationPlan) {
-      const { applyHermesPlan } = await loadApply();
+      const { applyHermesPlan } = await import("./apply.js");
       return await applyHermesPlan({ ctx, plan, runtime: params.runtime });
     },
   };

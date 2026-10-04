@@ -384,7 +384,7 @@ function markRecoveryUnavailable(state: QuestionPromptState, prompt: QuestionPro
 async function refreshPendingQuestions(
   state: QuestionPromptState,
   client: QuestionClient,
-  isCurrentClient: () => boolean = () => state.client === client,
+  isCurrentClient: () => boolean,
 ): Promise<boolean> {
   const startedAtRevision = state.revision;
   const listResult = await requestQuestionGateway(client, "question.list", {});

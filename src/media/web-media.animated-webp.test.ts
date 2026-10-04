@@ -37,35 +37,30 @@ describe("animated WebP delivery", () => {
   it.each([
     { limits: { maxSidePx: 12 }, constraint: "side" },
     { limits: { maxPixels: 144 }, constraint: "pixel" },
+    { limits: undefined, constraint: "byte" },
   ] as const)(
     "rejects animated WebP hard $constraint limits through the local loader",
-    async ({ limits }) => {
-      const imageCompression = { models: [limits] };
+    async ({ limits, constraint }) => {
+      let buffer = ANIMATED_WEBP_BUFFER;
+      if (constraint === "byte") {
+        const repeatedFrame = buffer.subarray(44, 140);
+        buffer = Buffer.concat([buffer, ...Array.from({ length: 12 }, () => repeatedFrame)]);
+        buffer.writeUInt32LE(buffer.length - 8, 4);
+      }
       const result = loadWebMedia("/virtual/animated.webp", {
         maxBytes: 1024,
         sandboxValidated: true,
-        readFile: async () => ANIMATED_WEBP_BUFFER,
-        imageCompression,
+        readFile: async () => buffer,
+        ...(limits ? { imageCompression: { models: [limits] } } : {}),
       });
-      await expect(result).rejects.toThrow(/dimensions exceed model image limits/i);
+      if (constraint === "byte") {
+        await expect(result).rejects.toMatchObject({
+          name: "ImageOptimizationLimitError",
+          maxBytes: 1024,
+        });
+      } else {
+        await expect(result).rejects.toThrow(/dimensions exceed model image limits/i);
+      }
     },
   );
-
-  it("rejects animated WebP beyond the byte cap through the local loader", async () => {
-    const repeatedFrame = ANIMATED_WEBP_BUFFER.subarray(44, 140);
-    const oversized = Buffer.concat([
-      ANIMATED_WEBP_BUFFER,
-      ...Array.from({ length: 12 }, () => repeatedFrame),
-    ]);
-    oversized.writeUInt32LE(oversized.length - 8, 4);
-    const result = loadWebMedia("/virtual/animated.webp", {
-      maxBytes: 1024,
-      sandboxValidated: true,
-      readFile: async () => oversized,
-    });
-    await expect(result).rejects.toMatchObject({
-      name: "ImageOptimizationLimitError",
-      maxBytes: 1024,
-    });
-  });
 });

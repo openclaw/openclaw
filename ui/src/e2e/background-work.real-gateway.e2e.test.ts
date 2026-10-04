@@ -436,6 +436,11 @@ suite.define(() => {
         await processes.getByText("Stopped", { exact: true }).waitFor();
         await processStop.waitFor({ state: "hidden" });
         await processes.getByRole("button", { name: "Back to Processes", exact: true }).click();
+        const finishedToggle = processes.getByRole("button", { name: "Finished (1)", exact: true });
+        await finishedToggle.waitFor();
+        expect(await finishedToggle.getAttribute("aria-expanded")).toBe("false");
+        expect(await processOpen.count()).toBe(0);
+        await finishedToggle.click();
         await processOpen.click();
         expect(await processes.locator("pre").textContent()).toContain(fixture.output);
         await capture(
@@ -457,6 +462,10 @@ suite.define(() => {
         await waitForControlUiGatewayReady(page);
         await composer.waitFor();
         await assertParent();
+        await finishedToggle.waitFor();
+        expect(await finishedToggle.getAttribute("aria-expanded")).toBe("false");
+        expect(await processOpen.count()).toBe(0);
+        await finishedToggle.click();
         await processOpen.waitFor();
         await processOpen.click();
         expect(await processes.locator("pre").textContent()).toContain(fixture.output);
