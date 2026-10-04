@@ -213,6 +213,28 @@ describe("routed CLI prompts in chat history", () => {
     ).toEqual([local, imported]);
   });
 
+  it("keeps typed bracketed System lines apart from an unrelated local turn", () => {
+    const local = user("done", 1_000);
+    const imported = user("System: [manual note]\n\ndone", 1_001, cliMeta("bracketed"));
+
+    expect(
+      mergeImportedChatHistoryMessages({ localMessages: [local], importedMessages: [imported] }),
+    ).toEqual([local, imported]);
+  });
+
+  it("strips queued system event lines with UTC and unknown timestamps", () => {
+    const local = user("done", 1_000);
+    const imported = user(
+      "System: [2026-09-30T17:16:38Z] Gateway connected.\nSystem: [unknown-time] Node paired.\n\ndone",
+      1_001,
+      cliMeta("utc-events"),
+    );
+
+    expect(
+      mergeImportedChatHistoryMessages({ localMessages: [local], importedMessages: [imported] }),
+    ).toEqual([{ ...local, __openclaw: cliMeta("utc-events") }]);
+  });
+
   it("dedupes prompts carrying queued system event lines", () => {
     const localMessage = user("what changed?", 1_000);
     const importedMessage = user(

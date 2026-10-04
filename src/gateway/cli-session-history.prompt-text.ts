@@ -30,14 +30,18 @@ export function readRoutedPromptView(
 
 // Queued system events reach the CLI as a block of `System:` lines above the
 // prompt, separated by a blank line. The local row stores only the prompt.
-// Each queued event starts with a bracketed timestamp, so a block without one
-// is text the sender typed.
+// Each queued event starts with the bracketed timestamp that
+// drainFormattedSystemEvents writes (UTC, zoned, or `unknown-time`), so a block
+// without one is text the sender typed.
+const SYSTEM_EVENT_TIMESTAMP_LINE =
+  /^System: \[(?:\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z|\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?: [^\s\]]+)?|unknown-time)\] /u;
+
 function stripLeadingSystemEventLines(text: string): string {
   const lines = text.replace(/^\n+/u, "").split("\n");
   let end = 0;
   let hasEvent = false;
   while (end < lines.length && (lines[end] === "System:" || lines[end]?.startsWith("System: "))) {
-    hasEvent ||= lines[end]?.startsWith("System: [") === true;
+    hasEvent ||= SYSTEM_EVENT_TIMESTAMP_LINE.test(lines[end] ?? "");
     end += 1;
   }
   if (!hasEvent || (end < lines.length && lines[end] !== "")) {
