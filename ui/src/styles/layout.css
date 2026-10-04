@@ -4058,7 +4058,8 @@ button.gateway-status:focus-visible {
   margin-bottom: calc(6px + var(--shell-dock-reserve-bottom));
 }
 
-.sidebar-session-group-running {
+.sidebar-session-group-running,
+.sidebar-session-group-unread {
   flex: none;
   margin-left: 4px;
 }

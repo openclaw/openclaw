@@ -19,6 +19,7 @@ import { runWithAsyncWorkResources } from "../shared/async-work-resources.js";
 import { getAsyncWorkSignal, trackAsyncWork } from "../shared/async-work-scope.js";
 import type { ChatAttachment } from "./chat-attachments.js";
 import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
+import { stripSessionTitleAddressing } from "./session-title-source.js";
 import {
   hasExplicitSessionName,
   resolveExplicitSessionName,
@@ -42,7 +43,7 @@ const DASHBOARD_SESSION_TITLE_MAX_CHARS = 60;
 const DASHBOARD_SESSION_TITLE_SOURCE_MAX_CHARS = 1_000;
 const WORKTREE_SESSION_TITLE_WAIT_MS = 30_000;
 const DASHBOARD_SESSION_TITLE_PROMPT =
-  "Generate a concise session title (3-6 words, max 60 characters) from the user's first message. Use the same language as the message, in sentence case: capitalize only the first word and words that language always capitalizes. No emoji. Return only the title.";
+  "Generate a concise session title (3-6 words, max 60 characters) that names the task or topic of the user's first message. Ignore greetings, @mentions, bot or sender names, and chat transport wrappers; never copy credentials, cookies, or tokens. Use the same language as the message, in sentence case: capitalize only the first word and words that language always capitalizes. No emoji. Return only the title.";
 
 function decodeTextAttachmentPrefix(attachment: ChatAttachment, maxChars: number): string | null {
   const mimeType = attachment.mimeType?.trim().toLowerCase();
@@ -74,7 +75,9 @@ export function buildDashboardSessionTitleSource(params: {
   message: string;
   attachments?: readonly ChatAttachment[];
 }): string {
-  const visibleMessage = params.message.trim();
+  // Channel turns lead with addressing (`<@U123> (bot) ...`); strip it before the
+  // slash check so an addressed command is still recognized as a command.
+  const visibleMessage = stripSessionTitleAddressing(params.message);
   const slashCommand = visibleMessage.startsWith("/");
   let source = slashCommand ? "" : visibleMessage;
   for (const attachment of params.attachments ?? []) {

@@ -294,7 +294,12 @@ On wide desktop panes, a compact rail of horizontal marks sits in the transcript
 Session dashboards follow the selected conversation's agent, including when multiple agents each use a `global` session. Split panes keep their owners separate; panes showing the same agent and conversation share dashboard updates.
 
 Automatic session titles describe the topic or intended task in your first message.
-They are generated separately from the agent's work, so a title is not a completion
+For sessions that started in a channel such as Slack or Discord, the title ignores how
+the message was addressed: leading bot mentions, the display name a channel adds after
+a mention (for example `<@U123> (mybot)`), and broadcast tokens such as `@here` are
+removed before the title model or the built-in fallback sees the message. A message that
+only mentions the bot gets no generated title. The stored transcript keeps the original
+text. Titles are generated separately from the agent's work, so a title is not a completion
 status or a report of tool access. Existing titles and manual names are left
 unchanged; click a title to rename it.
 

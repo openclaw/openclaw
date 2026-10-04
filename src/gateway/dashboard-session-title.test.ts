@@ -26,10 +26,16 @@ import {
   buildDashboardSessionTitleSource,
   generateWorktreeSessionTitle,
   maybeGenerateDashboardSessionTitle,
+  maybeGenerateSessionTitle,
   prepareDashboardSessionTitle,
 } from "./dashboard-session-title.js";
 import { deriveGoalSessionTitle } from "./derive-goal-session-title.js";
 import { hasExplicitSessionName, resolveExplicitSessionName } from "./session-title-state.js";
+
+// Shape recorded by the Slack plugin: resolved mentions render as `<@ID> (display name)`.
+const SLACK_NATURE_TASK =
+  "This is my cookies for Nature so you can open the paper and review the figures for me";
+const SLACK_NATURE_MESSAGE = `<@U0BNFBKJB7B> (ohmybot) ${SLACK_NATURE_TASK}`;
 
 const cfg = {
   agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
@@ -105,7 +111,7 @@ describe("maybeGenerateDashboardSessionTitle", () => {
     expect(generateConversationLabelWithFallback).toHaveBeenCalledWith({
       userMessage: "Help me plan the release",
       prompt:
-        "Generate a concise session title (3-6 words, max 60 characters) from the user's first message. Use the same language as the message, in sentence case: capitalize only the first word and words that language always capitalizes. No emoji. Return only the title.",
+        "Generate a concise session title (3-6 words, max 60 characters) that names the task or topic of the user's first message. Ignore greetings, @mentions, bot or sender names, and chat transport wrappers; never copy credentials, cookies, or tokens. Use the same language as the message, in sentence case: capitalize only the first word and words that language always capitalizes. No emoji. Return only the title.",
       cfg,
       agentId: "main",
       utilityModelRef: "openai/gpt-5.6-luna",
@@ -346,6 +352,49 @@ describe("maybeGenerateDashboardSessionTitle", () => {
     expect(generateConversationLabelWithFallback.mock.calls[0]?.[0]?.userMessage).toBe(
       "Original release plan",
     );
+  });
+
+  it("titles a Slack-originated session from its task, not the bot mention wrapper", async () => {
+    const entry = { ...baseEntry, systemSent: true };
+    readSessionTitleFieldsFromTranscript.mockReturnValue({
+      firstUserMessage: SLACK_NATURE_MESSAGE,
+      lastMessagePreview: "Done.",
+    });
+    generateConversationLabelWithFallback.mockResolvedValue("Nature paper access for review");
+    mockSessionUpdate(entry);
+
+    // Discussion open titles any session key, including channel-mirrored ones.
+    await expect(
+      maybeGenerateSessionTitle({
+        ...titleParams(entry),
+        sessionKey: "agent:main:slack:channel:c09rbbyr1hu:thread:1790666551.529919",
+        userMessage: "",
+      }),
+    ).resolves.toBe(true);
+
+    const request = generateConversationLabelWithFallback.mock.calls[0]?.[0];
+    expect(request?.userMessage).toBe(SLACK_NATURE_TASK);
+    expect(request?.prompt).toContain("names the task or topic");
+    expect(request?.prompt).toContain("Ignore greetings, @mentions, bot or sender names");
+    const update = updateSessionEntry.mock.calls[0]?.[1];
+    expect(await update?.({ ...entry })).toEqual({ displayName: "Nature paper access for review" });
+  });
+
+  it("does not title a channel turn that only addresses the bot", async () => {
+    readSessionTitleFieldsFromTranscript.mockReturnValue({
+      firstUserMessage: "<@U0BNFBKJB7B> (ohmybot)",
+      lastMessagePreview: null,
+    });
+
+    await expect(
+      maybeGenerateSessionTitle({
+        ...titleParams(),
+        sessionKey: "agent:main:slack:channel:c09rbbyr1hu",
+        userMessage: "",
+      }),
+    ).resolves.toBe(false);
+    expect(generateConversationLabelWithFallback).not.toHaveBeenCalled();
+    expect(updateSessionEntry).not.toHaveBeenCalled();
   });
 
   it("preserves attachment-aware input when the first turn is already in the transcript", async () => {
@@ -644,6 +693,18 @@ describe("buildDashboardSessionTitleSource", () => {
     );
   });
 
+  it("drops channel mention wrappers before the bounded title-model input", () => {
+    expect(buildDashboardSessionTitleSource({ message: SLACK_NATURE_MESSAGE })).toBe(
+      SLACK_NATURE_TASK,
+    );
+  });
+
+  it("keeps an addressed slash command recognizable as a command", () => {
+    expect(buildDashboardSessionTitleSource({ message: "<@U0BNFBKJB7B> (ohmybot) /status" })).toBe(
+      "/status",
+    );
+  });
+
   it.each([
     ["attachment-only", "", "Pasted migration checklist"],
     ["slash command with attachment", "/status", "Pasted incident report"],
@@ -755,6 +816,17 @@ describe("deriveGoalSessionTitle", () => {
         "[Mon 2026-08-10 12:00 UTC] investigate why heartbeat failed overnight",
       ),
     ).toBe("Investigate why heartbeat failed overnight");
+  });
+
+  it("drops Slack bot mention wrappers from the deterministic fallback", () => {
+    const title = deriveGoalSessionTitle(SLACK_NATURE_MESSAGE);
+    expect(title).toBe("This is my cookies for Nature so you can open the paper…");
+    expect(title).not.toContain("ohmybot");
+    expect(title).not.toContain("<@");
+  });
+
+  it("returns undefined when a channel turn only addresses the bot", () => {
+    expect(deriveGoalSessionTitle("<@U0BNFBKJB7B> (ohmybot)")).toBeUndefined();
   });
 
   it("ignores host envelope leftovers that are not a user task", () => {

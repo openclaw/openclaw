@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import {
   createGatewayHarness,
@@ -43,6 +44,7 @@ describe("AppSidebar group mutation collapsed state", () => {
   async function mountCollapsedGroup(options: {
     groupsRename?: () => Promise<SessionGroupMutationResult>;
     groupsDelete?: () => Promise<SessionGroupMutationResult>;
+    alpha?: Partial<GatewaySessionRow>;
   }) {
     localStorage.setItem(COLLAPSED_STORAGE_KEY, JSON.stringify(["category:Alpha"]));
     const gatewayHarness = createGatewayHarness({} as GatewayBrowserClient);
@@ -53,7 +55,7 @@ describe("AppSidebar group mutation collapsed state", () => {
     if (!alpha) {
       throw new Error("expected Alpha session fixture");
     }
-    alpha.category = "Alpha";
+    Object.assign(alpha, options.alpha, { category: "Alpha" });
     if (options.groupsRename) {
       harness.groupsRename.mockImplementation(options.groupsRename);
     }
@@ -129,6 +131,24 @@ describe("AppSidebar group mutation collapsed state", () => {
     });
     confirm.click();
   }
+
+  it.each<[string, Partial<GatewaySessionRow>, string[]]>([
+    ["an idle read session", {}, []],
+    ["a running session", { status: "running", hasActiveRun: true }, ["running"]],
+    ["an unread session", { unread: true }, ["unread"]],
+  ])("summarizes %s hidden in a collapsed custom group", async (_name, alpha, markers) => {
+    const { sidebar } = await mountCollapsedGroup({ alpha });
+    const section = sidebar.querySelector('[data-session-section="category:Alpha"]');
+
+    expect(section?.querySelector(".sidebar-recent-session")).toBeNull();
+    expect(section?.querySelector(".sidebar-session-group-count")?.textContent).toBe("1");
+    for (const marker of ["running", "unread"]) {
+      expect(
+        section?.querySelector(`.sidebar-session-group-${marker}`) !== null,
+        `${marker} marker`,
+      ).toBe(markers.includes(marker));
+    }
+  });
 
   it("keeps collapsed keys when group rename is rejected", async () => {
     const { sidebar, harness } = await mountCollapsedGroup({
