@@ -73,7 +73,10 @@ export function normalizeOpenAIReasoningEffort(effort: string): string {
   return CANONICAL_REASONING_EFFORTS.has(folded) ? folded : trimmed;
 }
 
-function readCompatReasoningEfforts(compat: unknown): OpenAIApiReasoningEffort[] | undefined {
+/** Read only the effort list declared in model compat, without inferring known model contracts. */
+export function readCompatReasoningEfforts(
+  compat: unknown,
+): OpenAIApiReasoningEffort[] | undefined {
   if (!compat || typeof compat !== "object") {
     return undefined;
   }
