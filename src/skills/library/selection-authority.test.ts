@@ -1,7 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import {
+  observeHostDataSql,
+  trackSqliteStatementExecutions,
+} from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { enableNodeSqliteKyselyStatementCache } from "../../infra/kysely-sync.js";
+import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
+import { admitSqliteSchema } from "../../infra/sqlite-schema-facts.js";
 import {
   SqliteWorkerError,
   type SqliteWorkerOperations,
@@ -12,9 +18,14 @@ import * as workerStore from "../../infra/sqlite-worker-store.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
-import { linkEmail, setUserProfileRole } from "../../state/user-profile-writes.worker.js";
+import {
+  linkEmail,
+  setAvatar,
+  setUserProfileRole,
+} from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { SkillLibraryError } from "../skill-library-error.js";
+import { skillLibraryReadOperations } from "./read.kernel.js";
 import { readSkillLibrarySelectionManifests } from "./selection-read.js";
 import {
   assertPreparedSkillLibrarySelection,
@@ -107,6 +118,75 @@ describe("skill library worker reads and prepared selection authority", () => {
       expect(sql.queries).toEqual([]);
     } finally {
       sql.restore();
+    }
+  });
+
+  it("projects a library through a separate admitted reader without copying actor avatars", async () => {
+    const { options, alice } = fixture();
+    const saved = [];
+    for (const slug of ["first", "second", "third"]) {
+      saved.push((await saveSkillLibrary(alice, draft(slug), options)).entry);
+    }
+    const alias = ensureProfileForEmail("alias@example.test", options);
+    linkEmail("alias@example.test", alice.profileId!, options);
+    expect(setAvatar(alice.profileId!, new Uint8Array(80 * 1024), "image/png", options).ok).toBe(
+      true,
+    );
+    const reader = openNodeSqliteDatabase(options.path, { readOnly: true });
+    enableNodeSqliteKyselyStatementCache(reader);
+    admitSqliteSchema(reader);
+    const sql = trackSqliteStatementExecutions(reader, ["profiles", "columnProbes"], (query) =>
+      /\bfrom "user_profiles"/i.test(query)
+        ? "profiles"
+        : /pragma table_info/i.test(query)
+          ? "columnProbes"
+          : null,
+    );
+    const read = (profileId: string) =>
+      skillLibraryReadOperations["skillLibrary.read"](
+        {
+          kind: "list",
+          params: {},
+          authority: {
+            profileId,
+            scopes: alice.scopes,
+            config: {
+              gateway: {
+                roles: {
+                  default: "writer",
+                  definitions: {
+                    writer: {
+                      sessions: { others: "none" },
+                      agents: "*",
+                      scopes: ["operator.read", "operator.write"],
+                    },
+                    blocked: { sessions: { others: "none" }, agents: [], scopes: [] },
+                  },
+                },
+              },
+            },
+          },
+        },
+        reader,
+      );
+    try {
+      for (const profileId of [alice.profileId!, alias.id]) {
+        expect(read(profileId)).toMatchObject({
+          kind: "list",
+          value: { profileId: alice.profileId, entries: saved },
+        });
+      }
+      // Each list resolves one presentation actor, then one actor and two owners per entry.
+      // The alias adds one actor hop; the multi-profile presentation adds one count per list.
+      expect(sql.counts.profiles).toBe(2 * (1 + 1 + 3 * 3) + 4);
+      expect(sql.blobBytes.profiles).toBe(0);
+      expect(sql.counts.columnProbes).toBe(0);
+      setUserProfileRole(alice.profileId!, "blocked", options);
+      expect(read(alias.id)).toMatchObject({ value: { profileId: alice.profileId, entries: [] } });
+      expect(sql.blobBytes.profiles).toBe(0);
+    } finally {
+      sql.restore();
+      reader.close();
     }
   });
 
