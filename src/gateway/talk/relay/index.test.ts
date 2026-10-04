@@ -50,6 +50,7 @@ import {
   createTalkRealtimeRelaySession as createTalkRealtimeRelaySessionRaw,
   ensureTalkRealtimeRelayVoiceSession,
   flushTalkRealtimeRelayVoiceWrites,
+  joinTalkRealtimeRelayAgentRun,
   registerTalkRealtimeRelayAgentRun,
   sendTalkRealtimeRelayAudio,
   steerTalkRealtimeRelayAgentRun,
@@ -1593,6 +1594,77 @@ describe("talk realtime gateway relay", () => {
       cancellationAccepted.resolve();
       await nextEventLoopTurn();
     }
+  });
+
+  function createSharedConsultFixture() {
+    let bridgeRequest: RealtimeVoiceBridgeCreateRequest | undefined;
+    const provider = createIdleRelayProvider((request) => {
+      bridgeRequest = request;
+      return makeRelayTransport({ submitToolResult: vi.fn() });
+    });
+    const fixture = createAbortableRelayRunFixture(provider, { register: false });
+    const relaySessionId = fixture.session.relaySessionId;
+    for (const callId of ["call-1", "call-2"]) {
+      bridgeRequest?.onToolCall?.({
+        itemId: callId,
+        callId,
+        name: "openclaw_agent_consult",
+        args: { question: "status?" },
+      });
+    }
+    registerTalkRealtimeRelayAgentRun({
+      relaySessionId,
+      connId: "conn-1",
+      sessionKey: "main",
+      runId: "run-1",
+      callId: "call-1",
+    });
+    const relay = relaySessions.get(relaySessionId);
+    if (!relay) {
+      throw new Error("missing relay fixture");
+    }
+    const cancel = (itemId: string) =>
+      bridgeRequest?.onEvent?.({ direction: "server", type: "tool.call.cancelled", itemId });
+    return { fixture, relay, relaySessionId, cancel };
+  }
+
+  it("keeps a shared consult running until every attached provider call is cancelled", () => {
+    const { fixture, relay, relaySessionId, cancel } = createSharedConsultFixture();
+    joinTalkRealtimeRelayAgentRun({
+      relaySessionId,
+      connId: "conn-1",
+      runId: "run-1",
+      callId: "call-2",
+    });
+
+    cancel("call-1");
+    expect(fixture.abortController.signal.aborted).toBe(false);
+    expect([...relay.activeAgentToolCalls.keys()]).toEqual(["call-2"]);
+    expect(relay.activeAgentRuns.has("run-1")).toBe(true);
+
+    cancel("call-2");
+    expect(fixture.abortController.signal.aborted).toBe(true);
+    expect(relay.activeAgentToolCalls.size).toBe(0);
+    expect(relay.activeAgentRuns.size).toBe(0);
+  });
+
+  it("refuses a repeat call cancelled before it joined without aborting the shared run", () => {
+    const { fixture, relay, relaySessionId, cancel } = createSharedConsultFixture();
+
+    cancel("call-2");
+    expect(() =>
+      joinTalkRealtimeRelayAgentRun({
+        relaySessionId,
+        connId: "conn-1",
+        runId: "run-1",
+        callId: "call-2",
+      }),
+    ).toThrow("Realtime provider cancelled the tool call before run registration");
+    expect(fixture.abortController.signal.aborted).toBe(false);
+    expect([...relay.activeAgentToolCalls.keys()]).toEqual(["call-1"]);
+
+    cancel("call-1");
+    expect(fixture.abortController.signal.aborted).toBe(true);
   });
 
   it("cancels the forced consult owner when a matching native call is cancelled", async () => {

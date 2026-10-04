@@ -52,6 +52,7 @@ import {
 import {
   ensureTalkRealtimeRelayVoiceSession,
   flushTalkRealtimeRelayVoiceWrites,
+  joinTalkRealtimeRelayAgentRun,
 } from "../relay/index.js";
 import { resolveOwnedActiveTalkRunTarget } from "../run-ownership.js";
 import { prepareTalkSessionTarget, requirePreparedTalkSessionTarget } from "../session-target.js";
@@ -176,7 +177,9 @@ export const talkClientHandlers: GatewayRequestHandlers = {
         return;
       }
 
+      let startedOwnRun = false;
       const startConsult = () => {
+        startedOwnRun = true;
         return startTalkRealtimeAgentConsult(request, {
           sessionTarget: target,
           callId: params.callId,
@@ -218,6 +221,21 @@ export const talkClientHandlers: GatewayRequestHandlers = {
       if (!result.ok) {
         respond(false, undefined, result.error);
         return;
+      }
+      if (!startedOwnRun && relaySessionId && connId) {
+        // A joined repeat started no run of its own. Attach its call to the shared run
+        // so cancelling one of the two calls does not abort the other's work.
+        try {
+          joinTalkRealtimeRelayAgentRun({
+            relaySessionId,
+            connId,
+            runId: result.runId,
+            callId: params.callId,
+          });
+        } catch (err) {
+          respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
+          return;
+        }
       }
       respond(
         true,

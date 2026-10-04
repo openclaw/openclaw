@@ -170,6 +170,43 @@ export function submitFinalProviderToolResult(params: {
   );
 }
 
+export type RelayAgentRunJoin = {
+  relaySessionId: string;
+  connId: string;
+  runId: string;
+  callId: string;
+};
+
+/** Attaches a repeated provider tool call to a consult run that another call already started. */
+export function attachRelayAgentToolCall(
+  session: RelaySession,
+  runId: string,
+  callId: string,
+): void {
+  if (session.toolCalls.isAgentCompleted(callId) || session.toolCalls.hasCancelled(callId)) {
+    // Only this late call is refused; the run belongs to the call that started it.
+    throw new Error("Realtime provider cancelled the tool call before run registration");
+  }
+  if (!session.activeAgentRuns.has(runId)) {
+    return;
+  }
+  if (!session.toolCalls.tryAdmit([callId])) {
+    throw new Error("Realtime relay tool-call session limit exceeded");
+  }
+  session.activeAgentToolCalls.set(callId, runId);
+}
+
+/** A joined repeat shares the run; cancelling one call must not end the other's work. */
+export function isRelayAgentRunShared(
+  session: RelaySession,
+  runId: string,
+  exceptCallId: string,
+): boolean {
+  return [...session.activeAgentToolCalls].some(
+    ([callId, attachedRunId]) => attachedRunId === runId && callId !== exceptCallId,
+  );
+}
+
 export function clearRelayAgentToolCall(session: RelaySession, callId: string): void {
   const runId = session.activeAgentToolCalls.get(callId);
   session.activeAgentToolCalls.delete(callId);

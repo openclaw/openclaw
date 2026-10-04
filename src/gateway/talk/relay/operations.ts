@@ -33,9 +33,12 @@ import {
   submitRelayAgentControlProviderResults,
 } from "./forced-consults.js";
 import {
+  attachRelayAgentToolCall,
   broadcastToolResultToOwner,
   clearRelayAgentToolCall,
   completeAfterToolResultSubmissions,
+  isRelayAgentRunShared,
+  type RelayAgentRunJoin,
   submitFinalProviderToolResult,
   suppressedToolResultOptions,
   trackToolResultCompletion,
@@ -416,7 +419,13 @@ export function registerTalkRealtimeRelayAgentRun(params: {
   });
 }
 
-/** Retires one provider-owned tool call and aborts its exact relay consult, if started. */
+/** Attaches a repeated provider tool call to the consult run that its first call started. */
+export function joinTalkRealtimeRelayAgentRun(params: RelayAgentRunJoin): void {
+  const session = getRelaySession(params.relaySessionId, params.connId);
+  attachRelayAgentToolCall(session, params.runId, params.callId.trim());
+}
+
+/** Retires one provider-owned tool call and aborts its relay consult once no other call shares it. */
 export function cancelTalkRealtimeRelayProviderToolCall(
   session: RelaySession,
   providerCallId: string,
@@ -457,7 +466,7 @@ export function cancelTalkRealtimeRelayProviderToolCall(
 
   const runId = session.activeAgentToolCalls.get(relayCallId);
   const sessionKey = runId ? session.activeAgentRuns.get(runId) : undefined;
-  if (runId && sessionKey) {
+  if (runId && sessionKey && !isRelayAgentRunShared(session, runId, relayCallId)) {
     abortChatRunById(session.context, {
       runId,
       sessionKey,

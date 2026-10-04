@@ -99,6 +99,8 @@ const mocks = vi.hoisted(() => ({
   cancelTalkRealtimeRelayTurn: vi.fn(),
   stopTalkRealtimeRelaySession: vi.fn(),
   registerTalkRealtimeRelayAgentRun: vi.fn(),
+  joinTalkRealtimeRelayAgentRun: vi.fn(),
+  resolveClientVoiceRunBinding: vi.fn<(runId: string) => unknown>(),
   flushTalkRealtimeRelayVoiceWrites: vi.fn(async () => undefined),
   ensureTalkRealtimeRelayVoiceSession: vi.fn(),
   submitTalkRealtimeRelayToolResult: vi.fn(),
@@ -228,6 +230,11 @@ vi.mock("../../../talk/client-voice-session.js", async (importOriginal) => {
     createOrResumeClientVoiceSession: mocks.createOrResumeClientVoiceSession,
     ensureClientVoiceAgentSessionEntry: mocks.ensureClientVoiceAgentSessionEntry,
     registerClientVoiceConsultRun: mocks.registerClientVoiceConsultRun,
+    // Tests that need a live run binding install an implementation; otherwise the real lookup runs.
+    resolveClientVoiceRunBinding: (runId: string) =>
+      mocks.resolveClientVoiceRunBinding.getMockImplementation()
+        ? mocks.resolveClientVoiceRunBinding(runId)
+        : actual.resolveClientVoiceRunBinding(runId),
     resolveClientVoiceAgentSessionId: mocks.resolveClientVoiceAgentSessionId,
     resolveOpenClientVoiceSessionId: mocks.resolveOpenClientVoiceSessionId,
   };
@@ -254,6 +261,7 @@ vi.mock("../relay/index.js", async (importOriginal) => {
     createTalkRealtimeRelaySession: mocks.createTalkRealtimeRelaySession,
     ensureTalkRealtimeRelayVoiceSession: mocks.ensureTalkRealtimeRelayVoiceSession,
     flushTalkRealtimeRelayVoiceWrites: mocks.flushTalkRealtimeRelayVoiceWrites,
+    joinTalkRealtimeRelayAgentRun: mocks.joinTalkRealtimeRelayAgentRun,
     registerTalkRealtimeRelayAgentRun: mocks.registerTalkRealtimeRelayAgentRun,
     sendTalkRealtimeRelayAudio: mocks.sendTalkRealtimeRelayAudio,
     steerTalkRealtimeRelayAgentRun: mocks.steerTalkRealtimeRelayAgentRun,
@@ -3294,6 +3302,48 @@ describe("talk.client.toolCall handler", () => {
       callId: "call-1",
     });
     expectRespondOk(respond, { runId: "run-voice-1" });
+  });
+
+  it("joins an identical repeat to the running relay consult and starts a different question on its own", async () => {
+    mocks.resolveClientVoiceRunBinding.mockImplementation(() => ({
+      agentId: "main",
+      voiceSessionId: "relay-join",
+    }));
+    onTestFinished(() => {
+      mocks.resolveClientVoiceRunBinding.mockReset();
+    });
+    const call = async (callId: string, question: string) => {
+      const respond = vi.fn();
+      await callTalkHandler("talk.client.toolCall", {
+        params: {
+          sessionKey: "main",
+          voiceSessionId: "relay-join",
+          relaySessionId: "relay-join",
+          callId,
+          name: "openclaw_agent_consult",
+          args: { question },
+        },
+        respond,
+      });
+      return respond;
+    };
+
+    expectRespondOk(await call("call-1", "How many files?"), { runId: "run-voice-1" });
+    expectRespondOk(await call("call-2", "  how many FILES? "), { runId: "run-voice-1" });
+    expect(mocks.chatSend).toHaveBeenCalledTimes(1);
+    expect(mocks.registerTalkRealtimeRelayAgentRun).toHaveBeenCalledTimes(1);
+    expect(mocks.joinTalkRealtimeRelayAgentRun).toHaveBeenCalledWith({
+      relaySessionId: "relay-join",
+      connId: "conn-1",
+      runId: "run-voice-1",
+      callId: "call-2",
+    });
+
+    // A different question is never answered by the running consult: it reaches chat.send,
+    // where admission decides.
+    await call("call-3", "What is the date?");
+    expect(mocks.chatSend).toHaveBeenCalledTimes(2);
+    expect(mocks.joinTalkRealtimeRelayAgentRun).toHaveBeenCalledTimes(1);
   });
 
   it.each([
