@@ -25,13 +25,13 @@ describe("chat pane history loading", () => {
       render(renderChatHistoryBoundary(pane.chatProps!.historyPagination!), container);
       return container.querySelector<HTMLButtonElement>("button")!;
     };
-    expect(historyAction().disabled).toBe(false);
+    expect(historyAction().getAttribute("aria-disabled")).toBe("false");
     expect(historyAction().textContent?.trim()).toBe("Show earlier");
 
     const hydration = loadChatHistory(state);
     await vi.waitFor(() => expect(state.chatLoading).toBe(true));
     const loading = historyAction();
-    expect(loading.disabled).toBe(true);
+    expect(loading.getAttribute("aria-disabled")).toBe("true");
     expect(loading.textContent?.trim()).toBe("Loading earlier…");
     expect(loading.getAttribute("aria-label")).toBe("Loading earlier…");
     expect(loading.getAttribute("aria-busy")).toBe("true");
@@ -42,7 +42,7 @@ describe("chat pane history loading", () => {
     response.resolve({ messages, hasMore: true, nextOffset: 2, totalMessages: 4 });
     await hydration;
     const idle = historyAction();
-    expect(idle.disabled).toBe(false);
+    expect(idle.getAttribute("aria-disabled")).toBe("false");
     expect(idle.textContent?.trim()).toBe("Show earlier");
     expect(idle.getAttribute("aria-label")).toBe("Show earlier");
     expect(idle.getAttribute("aria-busy")).toBe("false");
