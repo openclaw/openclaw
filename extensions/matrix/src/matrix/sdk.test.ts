@@ -2495,6 +2495,8 @@ describe("MatrixClient event bridge", () => {
 
 describe("MatrixClient crypto bootstrapping", () => {
   beforeEach(() => {
+    resetPluginStateStoreForTests();
+    installMatrixTestRuntime();
     matrixJsClient = createMatrixJsClientStub();
     lastCreateClientOpts = null;
   });
@@ -2503,6 +2505,7 @@ describe("MatrixClient crypto bootstrapping", () => {
     await stopStartedClients();
     vi.useRealTimers();
     vi.restoreAllMocks();
+    resetPluginStateStoreForTests();
   });
 
   it("does not persist or start sync when startup aborts during crypto initialization", async () => {
