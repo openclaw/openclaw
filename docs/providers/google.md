@@ -73,6 +73,60 @@ the Gateway already runs inside a managed Google Cloud environment.
 
   </Tab>
 
+  <Tab title="Vertex AI (ADC)">
+    **Recommended for:** Gateways running inside Google Cloud (GCE, GKE, Cloud
+    Run) or any host with gcloud Application Default Credentials.
+
+    `google-vertex` authenticates with Application Default Credentials (ADC).
+    The stored provider credential must be the literal sentinel value
+    `gcp-vertex-credentials`, which tells OpenClaw to resolve OAuth2 tokens
+    from the environment (metadata server or ADC file) instead of sending an
+    API key.
+
+    <Steps>
+      <Step title="Set up ADC">
+        On a GCE VM, attach a service account with the `cloud-platform` scope
+        and `roles/aiplatform.user`. Elsewhere, run
+        `gcloud auth application-default login`.
+      </Step>
+      <Step title="Set project and location">
+        The Gateway environment must define `GOOGLE_CLOUD_PROJECT` (or
+        `GCLOUD_PROJECT`) and `GOOGLE_CLOUD_LOCATION`, for example in
+        `~/.openclaw/.env` or the service unit. Without a project, runs fail
+        earlier with `Vertex AI requires a project ID`.
+      </Step>
+      <Step title="Store the sentinel credential">
+        ```bash
+        openclaw models auth paste-api-key --provider google-vertex
+        # paste exactly: gcp-vertex-credentials
+        ```
+      </Step>
+      <Step title="Set a default model">
+        ```json5
+        {
+          agents: {
+            defaults: {
+              model: { primary: "google-vertex/gemini-3.7-flash" },
+            },
+          },
+        }
+        ```
+      </Step>
+    </Steps>
+
+    <Warning>
+    Any other stored credential value — including a real access token from
+    `gcloud auth print-access-token` — is sent as an `x-goog-api-key` header
+    and rejected by Vertex AI with `401 UNAUTHENTICATED` ("API keys are not
+    supported by this API"). Access tokens also expire within an hour; the
+    sentinel lets the transport refresh tokens from ADC on its own.
+    </Warning>
+
+    Vertex uses its own static model catalog, separate from the AI Studio
+    discovery refresh.
+
+  </Tab>
+
   <Tab title="Gemini CLI runtime">
     **Advanced use only:** run a canonical `google/*` model through an installed
     Gemini CLI while keeping authentication on the supported AI Studio API-key
