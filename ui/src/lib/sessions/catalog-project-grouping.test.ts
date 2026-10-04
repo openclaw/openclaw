@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { SessionCatalogSession } from "../../../../packages/gateway-protocol/src/index.ts";
 import {
+  foldWorktreeCheckoutPath,
   groupCatalogSessionsByPerson,
   groupCatalogSessionsByProject,
   normalizeCatalogProjectGrouping,
@@ -13,6 +14,17 @@ describe("normalizeCatalogProjectGrouping", () => {
     [undefined, "project"],
   ] as const)("normalizes %s to %s", (raw, expected) => {
     expect(normalizeCatalogProjectGrouping(raw)).toBe(expected);
+  });
+});
+
+describe("foldWorktreeCheckoutPath", () => {
+  it.each([
+    ["C:\\", "C:"],
+    ["c:/", "c:"],
+    ["C:/.claude/worktrees/fix/src", "C:"],
+    ["C:/.CLAUDE/WORKTREES/fix/src", "C:/.CLAUDE/WORKTREES/fix/src"],
+  ])("preserves the live sidebar's existing project identity for %s", (path, expected) => {
+    expect(foldWorktreeCheckoutPath(path)).toBe(expected);
   });
 });
 
@@ -30,6 +42,75 @@ describe("groupCatalogSessionsByProject", () => {
     ]);
     expect(result.groups.map((group) => group.label)).toEqual(["bravo", "alpha"]);
     expect(result.groups[0]?.sessions.map((item) => item.threadId)).toEqual(["b-1", "b-2"]);
+  });
+
+  it.each([
+    ["C:\\Work\\Notes", "c:/work/notes/"],
+    ["C:\\Work\\Notes", "c:/WORK/NOTES/.CLAUDE/WORKTREES/fix/src"],
+    ["\\\\Server\\Share\\Notes", "\\\\server\\share\\notes\\"],
+  ])(
+    "combines equivalent Windows paths %s and %s without changing display identity",
+    (first, second) => {
+      const result = groupCatalogSessionsByProject([
+        session("first", first),
+        session("second", second),
+      ]);
+      expect(result.groups).toHaveLength(1);
+      expect(result.groups[0]).toMatchObject({
+        key: `project:${first.toLowerCase()}`,
+        legacySectionKey: first,
+        title: first,
+        sessions: [{ threadId: "first" }, { threadId: "second" }],
+      });
+    },
+  );
+
+  it("keeps Windows state identity stable when the first session changes", () => {
+    const sessions = [session("upper", "C:\\Work\\Notes"), session("lower", "c:/work/notes/")];
+    const first = groupCatalogSessionsByProject(sessions).groups[0];
+    const reordered = groupCatalogSessionsByProject(sessions.toReversed()).groups[0];
+    expect(first?.key).toBe("project:c:\\work\\notes");
+    expect(reordered?.key).toBe(first?.key);
+    expect(first?.title).toBe("C:\\Work\\Notes");
+    expect(reordered?.title).toBe("c:/work/notes");
+  });
+
+  it("combines drive roots and root-level worktrees", () => {
+    const result = groupCatalogSessionsByProject([
+      session("upper", "C:\\"),
+      session("lower", "c:/"),
+      session("worktree", "C:/.CLAUDE/WORKTREES/fix/src"),
+    ]);
+    expect(result.groups).toHaveLength(1);
+    expect(result.groups[0]).toMatchObject({ key: "project:c:\\", title: "C:\\" });
+    expect(result.groups[0]?.sessions).toHaveLength(3);
+  });
+
+  it("keeps actual drive-relative cwds separate from absolute drive paths", () => {
+    const result = groupCatalogSessionsByProject([
+      session("root-relative", "C:"),
+      session("root-absolute", "C:\\"),
+      session("directory-relative", "C:notes"),
+      session("directory-absolute", "C:\\notes"),
+    ]);
+    expect(result.groups.map((group) => group.key)).toEqual([
+      "project:C:",
+      "project:c:\\",
+      "project:C:notes",
+      "project:c:\\notes",
+    ]);
+  });
+
+  it("preserves case-sensitive POSIX double-slash and worktree paths", () => {
+    const result = groupCatalogSessionsByProject([
+      session("upper", "//mnt/Repo"),
+      session("lower", "//mnt/repo"),
+      session("marker", "/repo/.CLAUDE/WORKTREES/fix"),
+      session("root", "/repo"),
+      session("windows-root", "\\repo"),
+      session("windows-unc", "\\\\mnt\\Repo"),
+    ]);
+    expect(result.groups).toHaveLength(6);
   });
 
   it("uses a custom group before the session project", () => {
@@ -80,7 +161,9 @@ describe("groupCatalogSessionsByProject", () => {
     ]);
 
     expect(result.groups).toHaveLength(1);
-    expect(result.groups[0]?.key).toBe(`project:${expectedProject}`);
+    expect(result.groups[0]?.key).toBe(
+      `project:${expectedProject.startsWith("C:") ? expectedProject.toLowerCase() : expectedProject}`,
+    );
     expect(result.groups[0]?.sessions.map((item) => item.threadId)).toEqual(["direct", "worktree"]);
   });
 
@@ -101,7 +184,7 @@ describe("groupCatalogSessionsByProject", () => {
     const result = groupCatalogSessionsByProject([session("one", cwd)]);
 
     expect(result.groups[0]).toMatchObject({
-      key: `project:${expectedPath}`,
+      key: `project:${expectedPath.startsWith("C:") ? expectedPath.toLowerCase() : expectedPath}`,
       legacySectionKey: expectedPath,
       label: expectedLabel,
       title: expectedPath,

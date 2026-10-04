@@ -518,10 +518,15 @@ export class SessionOrganizerController {
     storeCollapsedSessionSections(sections);
   }
 
-  toggleSection(sectionId: string) {
+  toggleSection(sectionId: string, equivalentSectionIds: readonly string[] = []) {
     const collapsed = new Set(this.collapsedSessionSections);
-    if (collapsed.has(sectionId)) {
-      collapsed.delete(sectionId);
+    const sectionIds = [sectionId, ...equivalentSectionIds];
+    if (sectionIds.some((id) => collapsed.has(id))) {
+      // Expansion clears every equivalent persisted spelling in one save so
+      // a roster refresh or reload cannot resurrect a second collapsed alias.
+      for (const id of sectionIds) {
+        collapsed.delete(id);
+      }
     } else {
       collapsed.add(sectionId);
     }

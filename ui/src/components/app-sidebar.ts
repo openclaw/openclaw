@@ -373,11 +373,11 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
     this.sidebarMenus.openSessionMenu(session, rect.right, rect.bottom + 4, trigger);
   }
 
-  toggleSection(sectionId: string): void {
-    if (!this.collapsedSessionSections.has(sectionId)) {
+  toggleSection(sectionId: string, equivalentSectionIds: readonly string[] = []): void {
+    if (![sectionId, ...equivalentSectionIds].some((id) => this.collapsedSessionSections.has(id))) {
       this.sessionProjection.resetMembership(sectionId);
     }
-    this.sessionOrganizer.toggleSection(sectionId);
+    this.sessionOrganizer.toggleSection(sectionId, equivalentSectionIds);
   }
 
   setVisibleSessionLimit(sectionId: string, limit: number): void {
