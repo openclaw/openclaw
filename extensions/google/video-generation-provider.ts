@@ -1,3 +1,4 @@
+import { buildTimeoutAbortSignal } from "openclaw/plugin-sdk/extension-shared";
 import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
@@ -419,16 +420,44 @@ export function buildGoogleVideoGenerationProvider(): VideoGenerationProvider {
           "Google video generation does not support image and video inputs together.",
         );
       }
-      const auth = await resolveApiKeyForProvider({
-        provider: "google",
-        cfg: req.cfg,
-        agentDir: req.agentDir,
-        store: req.authStore,
+      // One explicit timeout budget covers credential preparation AND
+      // generation. The deadline is an absolute timestamp set from
+      // req.timeoutMs; credential preparation receives an abort signal whose
+      // duration is the deadline's remaining time, and generation reuses the
+      // same deadline (resolveProviderOperationTimeoutMs yields the remaining
+      // time for each HTTP call). An omitted timeout leaves the deadline open
+      // (no deadlineAtMs) and the signal undefined, preserving the existing
+      // per-request DEFAULT_TIMEOUT_MS fallback used by the HTTP layer.
+      const deadline = createProviderOperationDeadline({
+        timeoutMs: req.timeoutMs,
+        label: "Google video generation",
       });
-      if (!auth.apiKey) {
-        throw new Error("Google API key missing");
+      const credentialTimeoutMs =
+        typeof deadline.deadlineAtMs === "number"
+          ? Math.max(1, deadline.deadlineAtMs - Date.now())
+          : undefined;
+      const { signal, cleanup } = buildTimeoutAbortSignal({
+        timeoutMs: credentialTimeoutMs,
+        operation: "Google video generation",
+      });
+      let apiKey: string;
+      try {
+        signal?.throwIfAborted();
+        const auth = await resolveApiKeyForProvider({
+          provider: "google",
+          cfg: req.cfg,
+          agentDir: req.agentDir,
+          store: req.authStore,
+          ...(signal ? { signal } : {}),
+        });
+        signal?.throwIfAborted();
+        if (!auth.apiKey) {
+          throw new Error("Google API key missing");
+        }
+        apiKey = auth.apiKey;
+      } finally {
+        cleanup();
       }
-      const apiKey = auth.apiKey;
 
       const configuredUrl = normalizeOptionalString(req.cfg?.models?.providers?.google?.baseUrl);
       const configuredBaseUrl = configuredUrl
@@ -450,10 +479,6 @@ export function buildGoogleVideoGenerationProvider(): VideoGenerationProvider {
       const resolution = resolveResolution({ resolution: req.resolution, size: req.size });
       const hasReferenceInputs =
         (req.inputImages?.length ?? 0) > 0 || (req.inputVideos?.length ?? 0) > 0;
-      const deadline = createProviderOperationDeadline({
-        timeoutMs: req.timeoutMs,
-        label: "Google video generation",
-      });
       const client = createGoogleGenAI({
         apiKey,
         httpOptions: {
