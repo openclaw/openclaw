@@ -26,6 +26,54 @@ function expectFields(actual: unknown, expected: Record<string, unknown>): void 
 }
 
 describe("provider replay helpers", () => {
+  it("keeps the prefix append-only for a route that declares a prompt cache", () => {
+    // Such a route reuses the prefix it already saw. Replaying a message with a dropped
+    // runtime-context carrier would shift every later item (tool definitions included) and turn
+    // the turn into a full re-prefill.
+    const cached = { compat: { supportsPromptCacheKey: true } } as never;
+    expectFields(buildOpenAICompatibleReplayPolicy("openai-responses", { model: cached }), {
+      appendOnlyRuntimeContext: true,
+    });
+    expectFields(
+      buildHybridAnthropicOrOpenAIReplayPolicy({
+        provider: "local-deepseek",
+        modelApi: "openai-responses",
+        modelId: "local-model",
+        model: cached,
+      }) ?? {},
+      { appendOnlyRuntimeContext: true },
+    );
+  });
+
+  it("keeps the prefix append-only for a route that continues a stored response", () => {
+    // Continuation reuses the provider-side sequence, so the same stability requirement applies:
+    // without it the continuation sees a changed history and replays the full prompt instead.
+    expectFields(
+      buildOpenAICompatibleReplayPolicy("openai-responses", {
+        model: { compat: { supportsResponsesContinuation: true } } as never,
+      }),
+      { appendOnlyRuntimeContext: true },
+    );
+  });
+
+  it("leaves the prefix replay untouched without a prefix-caching capability", () => {
+    for (const compat of [{}, { supportsPromptCacheKey: false }]) {
+      const model = { compat } as never;
+      expect(buildOpenAICompatibleReplayPolicy("openai-responses", { model })).not.toHaveProperty(
+        "appendOnlyRuntimeContext",
+      );
+    }
+    expect(
+      buildOpenAICompatibleReplayPolicy("openai-responses", { modelId: "local-model" }),
+    ).not.toHaveProperty("appendOnlyRuntimeContext");
+    // Chat Completions routes are outside the Responses-family gate.
+    expect(
+      buildOpenAICompatibleReplayPolicy("openai-completions", {
+        model: { compat: { supportsPromptCacheKey: true } } as never,
+      }),
+    ).not.toHaveProperty("appendOnlyRuntimeContext");
+  });
+
   it("builds strict openai-completions replay policy", () => {
     expectFields(buildOpenAICompatibleReplayPolicy("openai-completions"), {
       sanitizeToolCallIds: true,

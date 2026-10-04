@@ -193,6 +193,43 @@ describe("interrupted canonical user replay", () => {
     },
   );
 
+  it("resumes a session whose persisted history predates carrier retention", async () => {
+    // The upgrade path, which is the one an existing deployment actually walks: this transcript
+    // was written while the route did NOT retain runtime carriers (the behavior before this
+    // change), and the same session now resumes under a policy that does. Two things must hold
+    // across that transition and neither is implied by the same-policy cases above: nothing
+    // already persisted may be rewritten, and the interrupted turn must not be replayed twice
+    // just because the carrier format underneath it changed.
+    await withInterruptedTurn(false, async (fixture) => {
+      const before = loadTranscriptEventsSync(fixture.target);
+      await withReplaySession(fixture, true, async (session, submit) => {
+        streamMocks.streamSimple.mockImplementation((model) =>
+          createAssistantResultStream(
+            createAssistant(model, [{ type: "text", text: "Resumed under new retention" }]),
+          ),
+        );
+        await submit();
+        expect(Reflect.get(session.messages.at(-1)!, "errorMessage")).toBeUndefined();
+        const messages = streamMocks.streamSimple.mock.calls[0]![1].messages as Array<{
+          role: string;
+          content: unknown;
+        }>;
+        expect(
+          messages.filter(
+            (message) =>
+              message.role === "user" &&
+              JSON.stringify(message.content).includes(fixture.attempt.prompt),
+          ),
+        ).toHaveLength(1);
+        expect(session.getLastAssistantText()).toBe("Resumed under new retention");
+        // Append-only across the transition: the pre-change prefix stays byte-identical, so a
+        // provider-side cache can still reuse it after the retention policy changed.
+        const after = loadTranscriptEventsSync(fixture.target);
+        expect(after.slice(0, before.length)).toEqual(before);
+      });
+    });
+  });
+
   it("reports a replayed durable user as persisted when its append is suppressed", async () => {
     await withInterruptedTurn(
       true,
