@@ -135,6 +135,7 @@ enum ManagedNodeGatewayMigration {
             return .migrated(runtime)
         } catch {
             let migrationError = error.localizedDescription
+            if migrationError.contains(GatewayLaunchAgentManager.runtimePinSelectionChanged) { throw error }
             // Pause/quit may cancel the original operation. Its drain still owns recovery until
             // the previous same-version Node service is restored and verified.
             let restoration = Task { @MainActor in

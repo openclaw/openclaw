@@ -3,6 +3,8 @@ import { closedObject } from "./closed-object.js";
 import { NonEmptyString, SessionLabelString } from "./primitives.js";
 
 export const SessionsListParamsSchema = closedObject({
+  /** Omit detail-only capability metadata; sessions.describe retains the full row. */
+  rowMode: Type.Optional(Type.Literal("compact")),
   /** Maximum rows to return; omitted Gateway RPC calls use a bounded default. */
   limit: Type.Optional(Type.Integer({ minimum: 1 })),
   offset: Type.Optional(Type.Integer({ minimum: 0 })),

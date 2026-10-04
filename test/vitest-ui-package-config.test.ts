@@ -55,20 +55,25 @@ function requireTestConfig(config: unknown): ExpectedTestConfig {
   return config.test as ExpectedTestConfig;
 }
 
-function requireAlias(config: unknown, specifier: string): { find: string; replacement: string } {
+function requireAlias(
+  config: unknown,
+  specifier: string,
+): { find: string | RegExp; replacement: string } {
   const aliases = (config as { resolve?: { alias?: unknown } }).resolve?.alias;
   if (!Array.isArray(aliases)) {
     throw new Error("expected ui package vitest aliases");
   }
-  const alias = aliases.find((candidate): candidate is { find: string; replacement: string } =>
-    Boolean(
-      candidate &&
-      typeof candidate === "object" &&
-      "find" in candidate &&
-      candidate.find === specifier &&
-      "replacement" in candidate &&
-      typeof candidate.replacement === "string",
-    ),
+  const alias = aliases.find(
+    (candidate): candidate is { find: string | RegExp; replacement: string } =>
+      Boolean(
+        candidate &&
+        typeof candidate === "object" &&
+        "find" in candidate &&
+        (candidate.find === specifier ||
+          (candidate.find instanceof RegExp && candidate.find.test(specifier))) &&
+        "replacement" in candidate &&
+        typeof candidate.replacement === "string",
+      ),
   );
   if (!alias) {
     throw new Error(`missing ui package vitest alias ${specifier}`);
@@ -609,9 +614,24 @@ describe("ui package vitest config", () => {
     expect(testConfig.clearMocks).toBe(false);
   });
 
+  it("keeps Node dependency shims out of standalone UI projects", () => {
+    const projects = requireTestConfig(uiConfig).projects ?? [];
+    for (const config of [uiConfig, ...projects]) {
+      for (const specifier of ["zod", "undici", "ws"]) {
+        expect(() => requireAlias(config, specifier)).toThrow(
+          `missing ui package vitest alias ${specifier}`,
+        );
+      }
+    }
+  });
+
   it.each([
     ["@openclaw/gateway-client/scope-upgrade", "packages/gateway-client/src/scope-upgrade.ts"],
+    ["@openclaw/worker-runtime", "packages/worker-runtime/src/index.ts"],
+    ["@openclaw/worker-runtime/worker", "packages/worker-runtime/src/worker.ts"],
+    ["@openclaw/worker-runtime/lifecycle", "packages/worker-runtime/src/lifecycle.ts"],
     ["openclaw/plugin-sdk/control-ui", "src/plugin-sdk/control-ui.ts"],
+    ["../logging/redact.js", "ui/src/lib/browser-redact.ts"],
   ])("aliases %s from source in every standalone UI project", (specifier, source) => {
     const projects = requireTestConfig(uiConfig).projects ?? [];
     for (const config of [uiConfig, ...projects]) {

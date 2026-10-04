@@ -37,6 +37,7 @@ const SESSION_TARGET_POLICY_BY_METHOD = new Map<string, SessionTargetPolicy>([
   ["progressCard.refresh", { fields: ["sessionKey"], required: true, runStart: true }],
   ["send", { fields: ["sessionKey"], runStart: true }],
   ["session.discussion.open", { fields: ["sessionKey"], required: true }],
+  ["sessions.processes.stop", { fields: ["key"], required: true }],
   ["sessions.abort", { fields: ["key"], required: true }],
   ["sessions.assignOwner", { fields: ["key"], required: true }],
   // This changes a personal list preference, not the shared session.
@@ -92,6 +93,7 @@ const SESSION_TARGET_POLICY_BY_METHOD = new Map<string, SessionTargetPolicy>([
 const DIRECT_SESSION_READ_METHODS = new Set([
   "board.get",
   "chat.history",
+  "sessions.processes.list",
   "sessions.describe",
   "sessions.get",
   "sessions.preview",

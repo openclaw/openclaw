@@ -177,7 +177,7 @@ export function createOpenClawDatabaseMaintenanceScope(
         release: () => resources.delete(resource),
       });
     },
-    close() {
+    close(beforeResources) {
       if (closing) {
         return closing;
       }
@@ -186,7 +186,8 @@ export function createOpenClawDatabaseMaintenanceScope(
       closing = completion.promise;
       void maintenanceResources.current
         .run({ scope, active: true }, async () => {
-          while (pending.size || resources.size) {
+          let beforeSharedResources = beforeResources;
+          while (pending.size || resources.size || beforeSharedResources) {
             while (pending.size) {
               await Promise.allSettled(pending);
             }
@@ -199,6 +200,12 @@ export function createOpenClawDatabaseMaintenanceScope(
               "shared-references",
               "shared-handles",
             ] as const) {
+              if (phase === "shared-leases" && beforeSharedResources) {
+                // Retire scope-owned agent resources first, then drain any remaining
+                // cached handles while their shared-state lease authority is still live.
+                await beforeSharedResources();
+                beforeSharedResources = undefined;
+              }
               while ([...resources.values()].some((resource) => resource.phase === phase)) {
                 // Earlier cleanup can start tracked work using resources in this batch.
                 while (pending.size) {

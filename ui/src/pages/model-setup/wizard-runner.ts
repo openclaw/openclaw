@@ -49,6 +49,7 @@ type WizardRunnerOptions = {
   getAgentId: () => string | null;
   onChange: (state: ModelSetupWizardState) => void;
   onBackgroundCompletion?: (completion: ModelSetupWizardCompletion) => Promise<void>;
+  onSessionMissing?: () => void;
   onStart?: (
     method: ModelSetupWizardStartMethod,
     activation?: Parameters<FirstRunSetup["beginActivation"]>[0],
@@ -644,7 +645,9 @@ export class ModelSetupWizardRunner {
     this.session = null;
     session.abortController.abort();
     const sessionExpired = isWizardNotFoundError(error);
-    if (!sessionExpired) {
+    if (sessionExpired) {
+      this.options.onSessionMissing?.();
+    } else {
       void this.cancelSession(session);
     }
     const message = sessionExpired

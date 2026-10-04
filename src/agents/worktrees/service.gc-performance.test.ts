@@ -85,7 +85,10 @@ it("bounds cold cleanup inventories and retains dispositions across registry reo
     }).gc();
     measurements.push({
       pass,
-      gitSpawns: text.mock.calls.length + bytes.mock.calls.length + buffered.mock.calls.length,
+      gitSpawns:
+        text.mock.calls.filter(([, args]) => args[0] !== "maintenance").length +
+        bytes.mock.calls.length +
+        buffered.mock.calls.length,
       elapsedMs: performance.now() - started,
       rssBytes: process.memoryUsage().rss,
     });
@@ -108,9 +111,9 @@ it("bounds cold cleanup inventories and retains dispositions across registry reo
   bytes.mockClear();
   buffered.mockClear();
   await new ManagedWorktreeService({ env, now: () => now }).gc();
-  const inspectedPaths = [...text.mock.calls, ...bytes.mock.calls, ...buffered.mock.calls].map(
-    ([cwd]) => cwd,
-  );
+  const inspectedPaths = [...text.mock.calls, ...bytes.mock.calls, ...buffered.mock.calls]
+    .filter(([, args]) => args[0] !== "maintenance")
+    .map(([cwd]) => cwd);
   expect(inspectedPaths).toContain(records[0]!.path);
   expect(inspectedPaths.every((cwd) => cwd === repo || cwd === records[0]!.path)).toBe(true);
   // External repairs have an explicit retry path without changing configuration.
@@ -194,9 +197,10 @@ it("protects a sweep of live leases without writer admission or checkout inspect
     writes: writes.mock.calls.length,
     registryReads:
       cleanupReads.mock.calls.filter(([, command]) => command.type === "worktrees.cleanupState")
-        .length +
-      lists.mock.calls.length +
-      reads.mock.calls.filter(([, command]) => command.type === "worktrees.list").length,
+        .length + lists.mock.calls.length,
+    maintenanceInventoryReads: reads.mock.calls.filter(
+      ([, command]) => command.type === "worktrees.list",
+    ).length,
     checkoutInspections: inspections.mock.calls.length,
     elapsedMs: performance.now() - started,
     rssBytes: process.memoryUsage().rss,
@@ -205,7 +209,12 @@ it("protects a sweep of live leases without writer admission or checkout inspect
   expect(result.removed).toEqual([]);
   expect(result.protectedCount).toBe(count);
   expect(result.issues.every((issue) => issue.reason === "run lease is active")).toBe(true);
-  expect(measurements).toMatchObject({ writes: 0, registryReads: 1, checkoutInspections: 0 });
+  expect(measurements).toMatchObject({
+    writes: 0,
+    registryReads: 1,
+    maintenanceInventoryReads: 1,
+    checkoutInspections: 0,
+  });
 });
 
 it("protects a late lease without loading removed history for cleanup limits", async () => {

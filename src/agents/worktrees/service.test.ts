@@ -14,6 +14,7 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { InvalidWorktreeBaseRefError } from "./base-ref.js";
 import * as worktreeGit from "./git.js";
+import * as worktreeRegistry from "./registry.js";
 import {
   getRegistryWorktree,
   getRegistryWorktreeProvisionedPaths,
@@ -838,9 +839,11 @@ describe("ManagedWorktreeService", () => {
       const created = await materialize("claim-failure");
       const lease = await acquireWorktreeRunLease(created.id, { env });
       const failure = new Error("synthetic removal claim failure");
-      runLeaseTesting.setDeadPidResolverForTest(() => {
-        throw failure;
-      });
+      const removalClaim = vi
+        .spyOn(worktreeRegistry, "claimWorktreeRemovalRow")
+        .mockImplementation(() => {
+          throw failure;
+        });
 
       await expect(service.removeIfLossless(created.id)).rejects.toBe(failure);
 
@@ -852,7 +855,7 @@ describe("ManagedWorktreeService", () => {
         },
       });
       await expect(fs.access(created.path)).resolves.toBeUndefined();
-      runLeaseTesting.setDeadPidResolverForTest(null);
+      removalClaim.mockRestore();
       await lease.release();
     });
   });

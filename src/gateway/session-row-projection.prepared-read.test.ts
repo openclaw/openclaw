@@ -1,4 +1,5 @@
 import { DatabaseSync, StatementSync } from "node:sqlite";
+import { WorkerTaskError } from "@openclaw/worker-runtime";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
@@ -6,7 +7,6 @@ import {
   loadSessionEntryReadOnly,
   replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
-import { WorkerTaskError } from "../infra/worker-task-pool-core.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";

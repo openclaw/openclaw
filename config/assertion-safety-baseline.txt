@@ -407,7 +407,6 @@ extensions/googlechat/src/monitor-event.ts	2
 extensions/groq/index.ts	2
 extensions/huggingface/index.ts	1
 extensions/huggingface/models.ts	2
-extensions/imessage/src/accounts.ts	4
 extensions/imessage/src/actions-contract.ts	1
 extensions/imessage/src/actions.runtime.ts	2
 extensions/imessage/src/actions.ts	1
@@ -418,7 +417,6 @@ extensions/imessage/src/approval-reactions.ts	2
 extensions/imessage/src/approval-target-keys.ts	1
 extensions/imessage/src/channel.runtime.ts	1
 extensions/imessage/src/channel.ts	2
-extensions/imessage/src/chat.ts	1
 extensions/imessage/src/client.ts	3
 extensions/imessage/src/monitor/catchup-bridge.ts	1
 extensions/imessage/src/monitor/catchup.ts	2
@@ -464,7 +462,6 @@ extensions/matrix/src/approval-handler.runtime.ts	7
 extensions/matrix/src/approval-native.ts	6
 extensions/matrix/src/approval-reactions.ts	1
 extensions/matrix/src/auth-precedence.ts	1
-extensions/matrix/src/channel-account-paths.ts	1
 extensions/matrix/src/channel.ts	4
 extensions/matrix/src/cli-account.ts	1
 extensions/matrix/src/cli-direct.ts	2
@@ -622,7 +619,6 @@ extensions/msteams/src/feedback-invoke.ts	2
 extensions/msteams/src/file-consent.ts	1
 extensions/msteams/src/graph.ts	2
 extensions/msteams/src/inbound.ts	1
-extensions/msteams/src/messenger.ts	1
 extensions/msteams/src/monitor-handler/inbound-dispatch.ts	1
 extensions/msteams/src/monitor-handler/inbound-facts.ts	1
 extensions/msteams/src/monitor.ts	5
@@ -991,7 +987,6 @@ extensions/twitch/src/token.ts	3
 extensions/twitch/src/twitch-ingress.ts	4
 extensions/venice/models.ts	1
 extensions/vllm/stream.ts	1
-extensions/voice-call/doctor-contract-api.ts	1
 extensions/voice-call/index.ts	2
 extensions/voice-call/setup-api.ts	1
 extensions/voice-call/src/config.ts	2
@@ -1280,8 +1275,6 @@ src/agents/bootstrap-hooks.ts	1
 src/agents/btw-transcript.ts	5
 src/agents/btw.ts	6
 src/agents/cache-trace.ts	3
-src/agents/cli-auth-epoch.ts	1
-src/agents/cli-backends.ts	1
 src/agents/cli-credentials.ts	7
 src/agents/cli-executable-identity.ts	3
 src/agents/cli-output-records.ts	1
@@ -1296,7 +1289,7 @@ src/agents/cli-runner/cli-run-transcript.ts	1
 src/agents/cli-runner/delivery-evidence.ts	2
 src/agents/cli-runner/execute-node-claude.ts	5
 src/agents/cli-runner/execute.ts	2
-src/agents/cli-runner/prepare.ts	3
+src/agents/cli-runner/prepare.ts	1
 src/agents/cli-runner/session-history.ts	3
 src/agents/code-mode-runtime.ts	2
 src/agents/code-mode-script-syntax.ts	1
@@ -2446,7 +2439,6 @@ src/meeting-bot/voice-call-gateway.ts	1
 src/memory-host-sdk/event-store.ts	2
 src/memory-host-sdk/events.ts	1
 src/model-catalog/bundled-catalog-stamp.ts	1
-src/model-catalog/remote-overlay.ts	1
 src/model-picker/apply-session-model-selection.ts	1
 src/node-host/config.ts	1
 src/node-host/invoke-agent-cli-claude-params.ts	1

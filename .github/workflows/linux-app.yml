@@ -134,7 +134,9 @@ jobs:
 
       - name: Build native inline browser candidate
         working-directory: apps/linux/src-tauri
-        run: cargo +stable build --locked
+        run: |
+          node ../scripts/stage-runtime.mjs
+          cargo +stable build --locked
 
       - name: Test native inline browser
         id: inline-browser

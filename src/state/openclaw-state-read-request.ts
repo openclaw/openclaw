@@ -221,6 +221,9 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
     return Buffer.byteLength(JSON.stringify(command), "utf8");
   }
   let bytes = Buffer.byteLength(command.type, "utf8");
+  if (command.type === "generatedHtmlProvenance.read") {
+    return bytes + Buffer.byteLength(command.input, "utf8");
+  }
   if (command.type === "diagnostic.latest") {
     return bytes + Buffer.byteLength(command.input.scope, "utf8") + 16;
   }

@@ -7,6 +7,7 @@ import {
 import type { ChannelReplayClaimHandle } from "openclaw/plugin-sdk/persistent-dedupe";
 import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { buildTelegramInboundDebounceKey } from "./bot-handlers.debounce-key.js";
 import {
   buildSyntheticContext,
@@ -67,12 +68,6 @@ export type TelegramDebounceEntry = {
   channelIngressResolvers: readonly TelegramChannelIngressResolver[];
 };
 
-interface TelegramInboundBuffers {
-  cancelPending: (target: TelegramPendingInboundTarget) => void;
-  inboundDebouncer: ReturnType<typeof createInboundDebouncer<TelegramDebounceEntry>>;
-  resolveTelegramDebounceLane: (msg: Message) => TelegramDebounceLane;
-}
-
 const spooledReplayParticipants = (entries: readonly TelegramDebounceEntry[]) =>
   entries.flatMap((entry) =>
     entry.spooledReplayParticipant ? [entry.spooledReplayParticipant] : [],
@@ -84,7 +79,7 @@ export function createTelegramInboundBuffers({
 }: {
   params: Pick<RegisterTelegramHandlerParams, "cfg" | "accountId" | "bot" | "runtime" | "opts">;
   message: TelegramMessagePipeline;
-}): TelegramInboundBuffers {
+}) {
   const {
     mergeDispatchDedupeClaims,
     releaseDispatchDedupeClaims,
@@ -165,6 +160,27 @@ export function createTelegramInboundBuffers({
     resolveDebounceMs: resolveTelegramDebounceEntryMs,
     buildKey: (entry) => entry.debounceKey,
     shouldDebounce: shouldDebounceTelegramEntry,
+    shouldHoldFlush: async (entries) => {
+      const first = entries[0];
+      if (first?.debounceLane !== "forward") {
+        return false;
+      }
+      const participant = entries.findLast(
+        (entry) => entry.spooledReplayParticipant,
+      )?.spooledReplayParticipant;
+      const updates = (await participant?.readLaneBacklogUpdates()) ?? [];
+      return updates.some((update) => {
+        const msg = isRecord(update) ? (update.message ?? update.channel_post) : undefined;
+        return (
+          isRecord(msg) &&
+          msg.forward_origin != null &&
+          isRecord(msg.chat) &&
+          msg.chat.id === first.msg.chat.id &&
+          isRecord(msg.from) &&
+          msg.from.id === first.msg.from?.id
+        );
+      });
+    },
     canAppend: (entry, pending) =>
       entry.debounceLane === pending[0]?.debounceLane &&
       (entry.debounceLane === "forward" ||

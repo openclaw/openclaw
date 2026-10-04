@@ -26,6 +26,7 @@ Proof: `src/channels/message/ingress-drain.test.ts`,
 
 ### Telegram-owned (transport + channel policy)
 
+- Album and forward buffers hold flushes while the same-lane backlog contains a matching member; quiet windows stay sized for Telegram delivery, not local load.
 - Durable-before-ack on both transports. Polling: ingress worker advances its
   offset only after the parent's committed spool enqueue
   (`writeTelegramSpooledUpdate`). Webhook: respond 200 only after the spool

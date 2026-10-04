@@ -106,7 +106,11 @@ import {
   splitTestTargetChunks as splitTargetChunks,
 } from "./lib/gateway-server-test-plan.mts";
 import { GIT_LS_FILES_MAX_BUFFER_BYTES } from "./lib/list-test-files.mts";
-import { readTestSelectorSourceFacts } from "./lib/test-selector-source-facts.mts";
+import {
+  readTestSelectorExportNames,
+  readTestSelectorImportNames,
+  readTestSelectorSourceFacts,
+} from "./lib/test-selector-source-facts.mts";
 // CI imports planning before dependency installation; execution owners stay outside this closure.
 import { resolveVitestCliEntry } from "./lib/vitest-build-prerequisites.mts";
 import { resolveVitestCacheRoot, resolveVitestCacheSlotPath } from "./lib/vitest-cache-slots.mts";
@@ -156,6 +160,7 @@ export type FailedVitestShard = {
 };
 
 type ChangedTestTargetOptions = {
+  baseRef?: string;
   cwd?: string;
   env?: NodeJS.ProcessEnv;
   broad?: boolean;
@@ -200,11 +205,13 @@ type WatchableVitestSpecShape = VitestSpecShape & Pick<VitestRunSpec, "watchMode
 type ImportGraph = {
   files: readonly string[];
   reverseImports: Map<string, string[]>;
+  reverseMocks: Map<string, string[]>;
   testFiles: Set<string>;
 };
 type ImportGraphEdges = {
   file: string;
   specifiers: string[];
+  mocks: string[];
   typeOnlySpecifiers: Set<string>;
   imports: Set<string>;
   references: Set<string>;
@@ -2103,10 +2110,11 @@ function readImportGraphEdges(
     .filter(({ parseImports }) => parseImports || terms.length > 0);
   return readTestSelectorSourceFacts(cwd, requests, terms, GIT_LS_FILES_MAX_BUFFER_BYTES, {
     matchingOnly: terms.length > 0,
-  }).map(({ file, imports, typeOnlyImports, matches, references }) => {
+  }).map(({ file, imports, typeOnlyImports, mocks, matches, references }) => {
     const edges = cachedImportGraphEdges.get(cacheKey(file)) ?? {
       file,
       specifiers: imports,
+      mocks,
       typeOnlySpecifiers: new Set(typeOnlyImports),
       imports: resolve(file, imports),
       references: new Set<string>(),
@@ -2366,6 +2374,7 @@ function getImportGraph(
     fileSet.add(file);
   }
   const reverseImports = new Map<string, string[]>();
+  const reverseMocks = new Map<string, string[]>();
   const testFiles = new Set(
     files.filter((file) => isTestFileTarget(file) && !file.endsWith(".live.test.ts")),
   );
@@ -2380,6 +2389,21 @@ function getImportGraph(
     const edges = cachedImportGraphEdges.get(`${cwd}\0${options.tooling === true}\0${file}`);
     if (!edges) {
       continue;
+    }
+    for (const specifier of edges.mocks) {
+      for (const mocked of resolveImportSpecifiers(
+        file,
+        specifier,
+        fileSet,
+        extensions,
+        aliases,
+        aliasResolutions,
+        options.runtimeOnly,
+      )) {
+        const consumers = reverseMocks.get(mocked) ?? [];
+        consumers.push(file);
+        reverseMocks.set(mocked, consumers);
+      }
     }
     // Re-resolve cached source facts against deleted paths and this query's alias policy.
     for (const specifier of edges.specifiers) {
@@ -2402,7 +2426,7 @@ function getImportGraph(
     }
   }
 
-  const graph = { files, reverseImports, testFiles };
+  const graph = { files, reverseImports, reverseMocks, testFiles };
   cachedImportGraphs.set(cacheKey, { graph, additionalPaths: missingKey });
   return graph;
 }
@@ -4328,6 +4352,79 @@ function resolveChangedTestOwnerAreas(targets: string[], cwd: string): string[] 
   );
 }
 
+function changedModuleExports(changedPath: string, cwd: string, baseRef: string | undefined) {
+  // Preflight already fetched and selected this base. Do not rediscover a merge
+  // base: a depth-one PR merge still has the exact comparison tree available.
+  if (!baseRef || /\.c[jt]s$/u.test(changedPath) || !fs.existsSync(path.join(cwd, changedPath))) {
+    return true;
+  }
+  const before = spawnSync("git", ["show", `${baseRef}:${changedPath}`], {
+    cwd,
+    encoding: "utf8",
+    maxBuffer: GIT_LS_FILES_MAX_BUFFER_BYTES,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  if (before.error || before.status !== 0) {
+    return true;
+  }
+  const previous = readTestSelectorExportNames(before.stdout);
+  const current = readTestSelectorExportNames(fs.readFileSync(path.join(cwd, changedPath), "utf8"));
+  return (
+    previous === null || current === null || JSON.stringify(previous) !== JSON.stringify(current)
+  );
+}
+
+function newlyConsumedMockModules(
+  changedPath: string,
+  cwd: string,
+  baseRef: string | undefined,
+  graph: ImportGraph,
+) {
+  if (
+    !TOOLING_IMPORTABLE_FILE_EXTENSIONS.some((extension) => changedPath.endsWith(extension)) ||
+    isTestFileTarget(changedPath) ||
+    !fs.existsSync(path.join(cwd, changedPath))
+  ) {
+    return [];
+  }
+  const current = readTestSelectorImportNames(fs.readFileSync(path.join(cwd, changedPath), "utf8"));
+  const files = new Set(graph.files);
+  const aliases = getImportGraphAliases(cwd);
+  const typeOnly = cachedImportGraphEdges.get(`${cwd}\0true\0${changedPath}`)?.typeOnlySpecifiers;
+  const candidates = [...current].flatMap(([specifier, names]) => {
+    if (typeOnly?.has(specifier)) {
+      return [];
+    }
+    const modules = resolveImportSpecifiers(
+      changedPath,
+      specifier,
+      files,
+      TOOLING_IMPORTABLE_FILE_EXTENSIONS,
+      aliases,
+      undefined,
+      true,
+    ).filter((file) => graph.reverseMocks.has(file));
+    return modules.length > 0 ? [{ specifier, names, modules }] : [];
+  });
+  if (candidates.length === 0) {
+    return [];
+  }
+  const before = baseRef
+    ? spawnSync("git", ["show", `${baseRef}:${changedPath}`], {
+        cwd,
+        encoding: "utf8",
+        maxBuffer: GIT_LS_FILES_MAX_BUFFER_BYTES,
+        stdio: ["ignore", "pipe", "pipe"],
+      })
+    : undefined;
+  const previous = before?.status === 0 ? readTestSelectorImportNames(before.stdout) : undefined;
+  return uniqueOrdered(
+    candidates.flatMap(({ specifier, names, modules }) =>
+      !previous || names.some((name) => !previous.get(specifier)?.includes(name)) ? modules : [],
+    ),
+  );
+}
+
 function resolveBoundedChangedTestTargetPlan(
   changedPaths: string[],
   options: ChangedTestTargetOptions,
@@ -4409,6 +4506,33 @@ function resolveBoundedChangedTestTargetPlan(
           : 1
         : undefined;
       affectedTests = walkAffectedTestsFromImportGraph([changedPath], graph, depth);
+    }
+    if (graph) {
+      const changedExports =
+        graph.reverseMocks.has(changedPath) &&
+        changedModuleExports(changedPath, cwd, options.baseRef);
+      const mockedModules = uniqueOrdered([
+        ...(changedExports ? [changedPath] : []),
+        ...newlyConsumedMockModules(changedPath, cwd, options.baseRef, graph),
+      ]);
+      // Newly using an existing export only affects fixtures that also execute
+      // this caller. Export-set changes retain every mock owner independently.
+      const callerTests = new Set(
+        mockedModules.some((mocked) => !changedExports || mocked !== changedPath)
+          ? walkAffectedTestsFromImportGraph([changedPath], graph)
+          : [],
+      );
+      for (const mocked of mockedModules) {
+        const mockConsumers = graph.reverseMocks.get(mocked) ?? [];
+        // Shared installers can sit arbitrarily far from tests. Ordinary
+        // importer hub/depth caps must not hide an incomplete module mock.
+        const mockTests = uniqueOrdered([
+          ...mockConsumers.filter(isTestFileTarget),
+          ...walkAffectedTestsFromImportGraph(mockConsumers, graph),
+        ]).filter((file) => (changedExports && mocked === changedPath) || callerTests.has(file));
+        targets.push(...mockTests);
+        options.onSelection?.({ rule: "mock-export-consumer", input: mocked, targets: mockTests });
+      }
     }
     // Direct readers keep their coverage without broadening the owner's transitive area.
     const importers = affectedTests.filter(

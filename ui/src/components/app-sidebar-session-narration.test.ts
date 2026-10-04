@@ -14,7 +14,7 @@ import {
   SidebarSessionNarrationController,
   type SidebarNarrationSyncInput,
 } from "./app-sidebar-session-narration.ts";
-import type { SidebarToolActivity } from "./app-sidebar-session-types.ts";
+import type { SidebarRecentSession, SidebarToolActivity } from "./app-sidebar-session-types.ts";
 import { deriveSidebarNarrationLine } from "./sidebar-narration-line.ts";
 import "../test-helpers/app-sidebar-tool-activity-cases.ts";
 
@@ -126,63 +126,75 @@ describe("SidebarSessionNarrationController", () => {
     expect(source.unsubscribeMessages).toHaveBeenCalledTimes(15);
   });
 
-  it.each([false, true])("retains a failed hidden release (late acquisition: %s)", async (late) => {
-    vi.spyOn(Math, "random").mockReturnValue(0.5);
-    const visibility = browserVisibility();
-    const subscribed = createDeferred();
-    const released = createDeferred();
-    const wireKeys = new Set<string>();
-    let releases = 0;
-    const request = vi.fn().mockImplementation(async (method: string, params: { key: string }) => {
-      if (method === "sessions.messages.subscribe") {
-        await subscribed.promise;
-        wireKeys.add(params.key);
-      } else {
-        releases += 1;
-        if (releases === 1) {
-          throw new GatewayProtocolRequestError({ retryable: true });
-        }
-        await released.promise;
-        wireKeys.delete(params.key);
+  it.each([
+    { retirement: "hidden", late: false },
+    { retirement: "hidden", late: true },
+    { retirement: "disposed", late: false },
+    { retirement: "disposed", late: true },
+  ])(
+    "retains a failed $retirement release (late acquisition: $late)",
+    async ({ retirement, late }) => {
+      vi.spyOn(Math, "random").mockReturnValue(0.5);
+      const visibility = browserVisibility();
+      const subscribed = createDeferred();
+      const released = createDeferred();
+      const wireKeys = new Set<string>();
+      let releases = 0;
+      const request = vi
+        .fn()
+        .mockImplementation(async (method: string, params: { key: string }) => {
+          if (method === "sessions.messages.subscribe") {
+            await subscribed.promise;
+            wireKeys.add(params.key);
+          } else {
+            releases += 1;
+            if (releases === 1) {
+              throw new GatewayProtocolRequestError({ retryable: true });
+            }
+            await released.promise;
+            wireKeys.delete(params.key);
+          }
+          return { key: params.key };
+        });
+      const coordinator = new GatewaySessionMessageSubscriptionCoordinator({ request });
+      const source = {
+        subscribeMessages: vi.fn<SessionCapability["subscribeMessages"]>((key, options) =>
+          coordinator.acquire(key, options),
+        ),
+        unsubscribeMessages: vi.fn<SessionCapability["unsubscribeMessages"]>((handle) =>
+          coordinator.release(handle),
+        ),
+      };
+      const { controller } = createRunningNarrationController(source);
+      const retire = () =>
+        retirement === "disposed" ? controller.dispose() : visibility("hidden");
+      if (late) {
+        retire();
       }
-      return { key: params.key };
-    });
-    const coordinator = new GatewaySessionMessageSubscriptionCoordinator({ request });
-    const source = {
-      subscribeMessages: vi.fn<SessionCapability["subscribeMessages"]>((key, options) =>
-        coordinator.acquire(key, options),
-      ),
-      unsubscribeMessages: vi.fn<SessionCapability["unsubscribeMessages"]>((handle) =>
-        coordinator.release(handle),
-      ),
-    };
-    const { controller } = createRunningNarrationController(source);
-    if (late) {
-      visibility("hidden");
-    }
-    subscribed.resolve();
-    const handle = await source.subscribeMessages.mock.results[0]?.value;
-    visibility("hidden");
-    await vi.advanceTimersByTimeAsync(0);
-    expect(wireKeys.size).toBe(1);
+      subscribed.resolve();
+      const handle = await source.subscribeMessages.mock.results[0]?.value;
+      retire();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(wireKeys.size).toBe(1);
 
-    visibility("hidden");
-    visibility("hidden");
-    expect(source.unsubscribeMessages.mock.calls).toEqual([[handle]]);
-    await vi.advanceTimersByTimeAsync(250);
-    expect(source.unsubscribeMessages.mock.calls).toEqual([[handle], [handle]]);
-    visibility("visible");
-    expect(releases).toBe(2);
-    released.resolve();
-    await vi.advanceTimersByTimeAsync(0);
-    expect(wireKeys.size).toBe(1);
-    expect(source.subscribeMessages).toHaveBeenCalledTimes(2);
+      retire();
+      retire();
+      expect(source.unsubscribeMessages.mock.calls).toEqual([[handle]]);
+      await vi.advanceTimersByTimeAsync(250);
+      expect(source.unsubscribeMessages.mock.calls).toEqual([[handle], [handle]]);
+      visibility("visible");
+      expect(releases).toBe(2);
+      released.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(wireKeys.size).toBe(retirement === "disposed" ? 0 : 1);
+      expect(source.subscribeMessages).toHaveBeenCalledTimes(retirement === "disposed" ? 1 : 2);
 
-    controller.disconnect();
-    await vi.advanceTimersByTimeAsync(0);
-    expect(wireKeys.size).toBe(0);
-    expect(vi.getTimerCount()).toBe(0);
-  });
+      controller.disconnect();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(wireKeys.size).toBe(0);
+      expect(vi.getTimerCount()).toBe(0);
+    },
+  );
 
   it("releases hidden narration interests while preserving selected-pane and outbox owners", async () => {
     const visibility = browserVisibility();
@@ -329,6 +341,11 @@ describe("SidebarSessionNarrationController", () => {
     const unsubscribeMessages = vi.fn(() => Promise.resolve());
     const source = { subscribeMessages, unsubscribeMessages };
     const controller = new SidebarSessionNarrationController(() => undefined);
+    const rows: SidebarRecentSession[] = [
+      { ...runningRow("agent:main:stale"), hasActiveRun: false, status: "running" },
+      { ...runningRow("agent:main:failed"), hasActiveRun: false, status: "failed" },
+      runningRow("agent:main:active"),
+    ];
 
     controller.sync({
       enabled: true,
@@ -336,11 +353,7 @@ describe("SidebarSessionNarrationController", () => {
       connectionIdentity: {},
       source,
       openSessionKey: "",
-      rows: [
-        { ...runningRow("agent:main:stale"), hasActiveRun: false, status: "running" },
-        { ...runningRow("agent:main:failed"), hasActiveRun: false, status: "failed" },
-        runningRow("agent:main:active"),
-      ],
+      rows,
       agentId: "main",
     });
     await Promise.resolve();

@@ -162,7 +162,6 @@ export async function processMessage(params: {
   replyResolver: typeof getReplyFromConfig;
   replyLogger: ReturnType<typeof getChildLogger>;
   backgroundTasks: Set<Promise<unknown>>;
-  maxMediaTextChunkLimit?: number;
   groupHistory?: GroupHistoryEntry[];
   groupHistoryLimit?: number;
   suppressGroupHistoryClear?: boolean;
@@ -384,19 +383,13 @@ export async function processMessage(params: {
           peerId: dmRouteTarget ?? conversationId,
         });
 
-  const commandAuthorization =
-    commandAuthorized === undefined
-      ? ({ kind: "not_checked" } as const)
-      : commandAuthorized
-        ? ({ kind: "authorized" } as const)
-        : ({ kind: "denied" } as const);
   const prepared = await prepareWhatsAppInboundContext({
     bodyForAgent: msgForAgent.payload.body,
     combinedBody,
     command: {
       kind: isTextCommand ? "text-slash" : "normal",
       body: commandBody,
-      authorization: commandAuthorization,
+      ...(commandAuthorized !== undefined ? { authorized: commandAuthorized } : {}),
     },
     groupHistory: visibleGroupHistory,
     groupHistoryLimit: params.groupHistoryLimit,
@@ -474,8 +467,7 @@ export async function processMessage(params: {
           context: ctxPayload,
           deliverReply: deliverWebReply,
           maxMediaBytes: params.maxMediaBytes,
-          maxMediaTextChunkLimit: params.maxMediaTextChunkLimit,
-          inbound,
+          conversationId,
           onModelSelected,
           replyLogger: params.replyLogger,
           replyPipeline: {

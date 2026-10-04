@@ -77,10 +77,16 @@ export const PackageActivationPhaseSchema = z.enum([
   "aborted",
   "retiring",
   "anchor-retired",
+  "superseded",
 ]);
 export type PackageActivationPhase = z.infer<typeof PackageActivationPhaseSchema>;
 export const intentSchema = z
   .union([
+    z.strictObject({
+      kind: z.literal("superseded-by-manual-install"),
+      replacementIdentity: packageActivationIdentitySchema,
+      settled: z.boolean(),
+    }),
     z.strictObject({
       kind: z.literal("prepare"),
       completed: z.array(transferName).max(5),
