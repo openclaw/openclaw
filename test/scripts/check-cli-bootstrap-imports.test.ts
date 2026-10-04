@@ -34,9 +34,11 @@ const workerDeployArtifactNames = [
   "file-tool-planning.worker.mjs",
   "github-exec-launcher.mjs",
   "image-processor.worker.mjs",
+  "openclaw-state-read.worker.mjs",
   "service-child-group-anchor.mjs",
   "service-child-relay.mjs",
   "sqlite-store.worker.mjs",
+  "worker-native-lifecycle.worker.mjs",
   "worker.mjs",
   "workspace-rsync-receiver.mjs",
 ];
