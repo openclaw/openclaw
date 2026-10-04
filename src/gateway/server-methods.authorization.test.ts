@@ -7,6 +7,7 @@ import {
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import { applySessionEntryCanonicalReplacements } from "../config/sessions/session-accessor.sqlite-replacement-projection.js";
+import { assignSessionOwnerInWorker } from "../config/sessions/session-metadata-write.async.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
@@ -393,9 +394,6 @@ describe("gateway method authorization", () => {
             sessionId,
             updatedAt: 2,
             ...(phase === "before response" ? { label: "current owner label" } : {}),
-            ...(change === "reassignment"
-              ? { owner: { actor: { type: "human" as const, id: "owner" }, assignedAt: 2 } }
-              : {}),
             visibility: "draft",
             createdVia: "operator",
             createdActor: { type: "human", source: "profile", id: "owner" },
@@ -404,6 +402,17 @@ describe("gateway method authorization", () => {
         await patchSessionEntryCore({ agentId: "main", sessionKey }, () => ({
           visibility: "draft",
         }));
+        if (change === "reassignment") {
+          await assignSessionOwnerInWorker(
+            { agentId: "main", sessionKey },
+            {
+              owner: { type: "human", id: "owner" },
+              assignedBy: { type: "system", id: "fixture" },
+              assignedAt: 2,
+              expectedSessionId: sessionId,
+            },
+          );
+        }
         handlerCanContinue.resolve();
         await request;
 
