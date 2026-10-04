@@ -10020,17 +10020,14 @@ struct ChatViewModelTests {
             vm.selectModel("openai/gpt-5.6-luna")
             vm.selectThinkingLevel("ultra")
         }
-        try await waitUntil("model patch starts") {
-            await transport.patchedModels() == ["openai/gpt-5.6-luna"]
-        }
+        await transport.waitForState { $0.patchedModels.count >= 1 }
+        #expect(await transport.patchedModels() == ["openai/gpt-5.6-luna"])
         try await Task.sleep(for: .milliseconds(50))
         #expect(await (transport.patchedThinkingLevels()).isEmpty)
 
         await modelPatchGate.open()
-        try await waitUntil("thinking patch follows model") {
-            await transport.patchedThinkingLevels() == ["ultra"]
-        }
         await vm.waitForPendingSessionSettings(in: "main")
+        #expect(await transport.patchedThinkingLevels() == ["ultra"])
         #expect(await MainActor.run { vm.modelSelectionID } == "openai/gpt-5.6-luna")
         #expect(await MainActor.run { vm.thinkingLevel } == "ultra")
     }
@@ -10059,27 +10056,20 @@ struct ChatViewModelTests {
         try await loadAndWaitBootstrap(vm: vm)
 
         await MainActor.run { vm.selectModel("openai/gpt-5.4") }
-        try await waitUntil("model patch started") {
-            let patched = await transport.patchedModels()
-            return patched == ["openai/gpt-5.4"]
-        }
+        await transport.waitForState { $0.patchedModels.count >= 1 }
+        #expect(await transport.patchedModels() == ["openai/gpt-5.4"])
 
-        await sendUserMessage(vm, text: "hello")
-        try await waitUntil("send entered waiting state") {
-            await MainActor.run { vm.isSending }
-        }
+        let send = await sendUserMessage(vm, text: "hello")
+        await waitForObservedState { vm.isSending }
         #expect(await transport.lastSentRunId() == nil)
 
         await MainActor.run { vm.selectThinkingLevel("high") }
-        try await waitUntil("thinking level changed while send is blocked") {
-            await MainActor.run { vm.thinkingLevel == "high" }
-        }
+        #expect(await MainActor.run { vm.thinkingLevel } == "high")
 
         await gate.open()
 
-        try await waitUntil("send released after model patch") {
-            await transport.lastSentRunId() != nil
-        }
+        await send?.value
+        #expect(await transport.lastSentRunId() != nil)
         #expect(await transport.sentThinkingLevels() == ["off"])
     }
 
@@ -10114,22 +10104,13 @@ struct ChatViewModelTests {
         try await loadAndWaitBootstrap(vm: vm)
 
         await MainActor.run { vm.selectModel("openai/gpt-5.4") }
-        do {
-            try await waitUntil("older model patch starts") {
-                await transport.patchedModels() == ["openai/gpt-5.4"]
-            }
-            await MainActor.run { vm.selectModel("openai/gpt-5.4-pro") }
-            await firstPatchGate.open()
-            try await waitUntil("latest model patch starts after earlier success") {
-                await transport.patchedModels() == ["openai/gpt-5.4", "openai/gpt-5.4-pro"]
-            }
-            #expect(await MainActor.run { vm.modelSelectionID } == "openai/gpt-5.4-pro")
-        } catch {
-            await firstPatchGate.open()
-            await secondPatchGate.open()
-            await vm.waitForPendingSessionSettings(in: "main")
-            throw error
-        }
+        await transport.waitForState { $0.patchedModels.count >= 1 }
+        #expect(await transport.patchedModels() == ["openai/gpt-5.4"])
+        await MainActor.run { vm.selectModel("openai/gpt-5.4-pro") }
+        await firstPatchGate.open()
+        await transport.waitForState { $0.patchedModels.count >= 2 }
+        #expect(await transport.patchedModels() == ["openai/gpt-5.4", "openai/gpt-5.4-pro"])
+        #expect(await MainActor.run { vm.modelSelectionID } == "openai/gpt-5.4-pro")
         await secondPatchGate.open()
         await vm.waitForPendingSessionSettings(in: "main")
 
@@ -10170,22 +10151,18 @@ struct ChatViewModelTests {
             vm.selectModel("openai/gpt-second")
         }
 
-        try await waitUntil("both queued patches fail back to the confirmed model") {
-            let patched = await transport.patchedModels()
-            let selectionID = await MainActor.run { vm.modelSelectionID }
-            return patched == ["openai/gpt-first", "openai/gpt-second"] &&
-                selectionID == "openai/gpt-original"
-        }
+        await vm.waitForPendingSessionSettings(in: "main")
+        #expect(await transport.patchedModels() == ["openai/gpt-first", "openai/gpt-second"])
+        #expect(await MainActor.run { vm.modelSelectionID } == "openai/gpt-original")
         #expect(await MainActor.run { vm.sessions.first?.model } == "gpt-original")
 
         await MainActor.run { vm.selectModel("openai/gpt-first") }
-        try await waitUntil("failed optimistic model remains retryable") {
-            await transport.patchedModels() == [
-                "openai/gpt-first",
-                "openai/gpt-second",
-                "openai/gpt-first",
-            ]
-        }
+        await vm.waitForPendingSessionSettings(in: "main")
+        #expect(await transport.patchedModels() == [
+            "openai/gpt-first",
+            "openai/gpt-second",
+            "openai/gpt-first",
+        ])
     }
 
     @Test @MainActor func `switch session notifies session changed callback`() async throws {
@@ -10201,9 +10178,8 @@ struct ChatViewModelTests {
 
         vm.switchSession(to: "other")
 
-        try await waitUntil("user switch bootstrapped target session") {
-            await MainActor.run { vm.sessionKey == "other" && vm.sessionId == "sess-other" }
-        }
+        await vm.bootstrapTask?.value
+        #expect(vm.sessionKey == "other" && vm.sessionId == "sess-other")
         #expect(changedSessionKeys == ["other"])
     }
 
@@ -10220,9 +10196,8 @@ struct ChatViewModelTests {
 
         vm.syncSession(to: "other")
 
-        try await waitUntil("external sync bootstrapped target session") {
-            await MainActor.run { vm.sessionKey == "other" && vm.sessionId == "sess-other" }
-        }
+        await vm.bootstrapTask?.value
+        #expect(vm.sessionKey == "other" && vm.sessionId == "sess-other")
         #expect(changedSessionKeys.isEmpty)
     }
 
@@ -10273,7 +10248,7 @@ struct ChatViewModelTests {
         let staleRefreshGate = SessionSubscribeGate()
         let mainHistoryCount = AsyncCounter()
         let staleRefreshReleasedCount = AsyncCounter()
-        let (transport, vm) = await makeViewModel(
+        let (_, vm) = await makeViewModel(
             historyResponses: [
                 historyPayload(sessionKey: "main", sessionId: "sess-main"),
                 historyPayload(
@@ -10296,25 +10271,20 @@ struct ChatViewModelTests {
 
         try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
 
-        transport.emit(.seqGap)
-        try await waitUntil("same-session event refresh is in flight") {
-            await mainHistoryCount.current() == 2
-        }
+        let eventRefresh = vm.handleTransportEvent(.seqGap)
+        await staleRefreshGate.waitUntilBlocked()
+        #expect(await mainHistoryCount.current() == 2)
 
         vm.refresh()
-        try await waitUntil("manual refresh wins") {
-            await MainActor.run {
-                vm.sessionId == "sess-main-manual-refresh" &&
-                    vm.messages.contains { message in
-                        message.content.contains { $0.text == "current manual refresh" }
-                    }
-            }
-        }
+        await vm.bootstrapTask?.value
+        #expect(vm.sessionId == "sess-main-manual-refresh")
+        #expect(vm.messages.contains { message in
+            message.content.contains { $0.text == "current manual refresh" }
+        })
 
         await staleRefreshGate.release()
-        try await waitUntil("stale same-session event refresh resumes") {
-            await staleRefreshReleasedCount.current() == 1
-        }
+        await eventRefresh?.value
+        #expect(await staleRefreshReleasedCount.current() == 1)
 
         #expect(await MainActor.run { vm.sessionId } == "sess-main-manual-refresh")
         #expect(await MainActor.run {
@@ -10540,29 +10510,21 @@ struct ChatViewModelTests {
         try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
 
         vm.input = "hello"
-        vm.send()
-        try await waitUntil("post-send refresh is in flight") {
-            await mainHistoryCount.current() == 2
-        }
+        let send = vm.send()
+        await sendRefreshGate.waitUntilBlocked()
+        #expect(await mainHistoryCount.current() == 2)
 
         vm.refresh()
-        try await waitUntil("manual user-only refresh applies") {
-            await MainActor.run {
-                vm.sessionId == "sess-main-manual-user-only-refresh" &&
-                    vm.pendingRunCount == 0
-            }
-        }
+        await vm.bootstrapTask?.value
+        #expect(vm.sessionId == "sess-main-manual-user-only-refresh" && vm.pendingRunCount == 0)
 
         await sendRefreshGate.release()
 
-        try await waitUntil("older successful send refresh applies after manual refresh") {
-            await MainActor.run {
-                vm.sessionId == "sess-main-send-refresh" &&
-                    vm.messages.contains { message in
-                        message.content.contains { $0.text == "reply from older success" }
-                    }
-            }
-        }
+        await send?.value
+        #expect(vm.sessionId == "sess-main-send-refresh")
+        #expect(vm.messages.contains { message in
+            message.content.contains { $0.text == "reply from older success" }
+        })
     }
 
     @Test @MainActor func `manual refresh older complete history does not drop pending user assistant run refresh`() async throws {
@@ -10602,34 +10564,27 @@ struct ChatViewModelTests {
         try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
 
         vm.input = "hello"
-        vm.send()
-        try await waitUntil("post-send refresh is in flight") {
-            await mainHistoryCount.current() == 2
-        }
+        let send = vm.send()
+        await sendRefreshGate.waitUntilBlocked()
+        #expect(await mainHistoryCount.current() == 2)
 
         vm.refresh()
-        try await waitUntil("manual older complete refresh applies") {
-            await MainActor.run {
-                vm.sessionId == "sess-main-manual-older-complete-refresh" &&
-                    vm.messages.contains { message in
-                        message.content.contains { $0.text == "older answer" }
-                    } &&
-                    !vm.messages.contains { message in
-                        message.content.contains { $0.text == "reply from pending turn" }
-                    }
-            }
-        }
+        await vm.bootstrapTask?.value
+        #expect(vm.sessionId == "sess-main-manual-older-complete-refresh")
+        #expect(vm.messages.contains { message in
+            message.content.contains { $0.text == "older answer" }
+        })
+        #expect(!vm.messages.contains { message in
+            message.content.contains { $0.text == "reply from pending turn" }
+        })
 
         await sendRefreshGate.release()
 
-        try await waitUntil("older successful send refresh applies pending turn answer") {
-            await MainActor.run {
-                vm.sessionId == "sess-main-send-refresh" &&
-                    vm.messages.contains { message in
-                        message.content.contains { $0.text == "reply from pending turn" }
-                    }
-            }
-        }
+        await send?.value
+        #expect(vm.sessionId == "sess-main-send-refresh")
+        #expect(vm.messages.contains { message in
+            message.content.contains { $0.text == "reply from pending turn" }
+        })
     }
 
     @Test @MainActor func `manual stale complete refresh after final event does not drop durable reply refresh`() async throws {
@@ -10953,25 +10908,20 @@ struct ChatViewModelTests {
         try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
 
         vm.syncSession(to: "other")
-        try await waitUntil("other session subscribe starts") {
-            await transport.activeSessionKeys().last == "other"
-        }
+        let staleBootstrap = vm.bootstrapTask
+        await staleHistoryGate.waitUntilBlocked()
+        #expect(await transport.activeSessionKeys().last == "other")
 
         vm.syncSession(to: "main")
-        try await waitUntil("main session wins") {
-            await MainActor.run {
-                vm.sessionKey == "main" &&
-                    vm.sessionId == "sess-main-current" &&
-                    vm.messages.contains { message in
-                        message.content.contains { $0.text == "current main" }
-                    }
-            }
-        }
+        await vm.bootstrapTask?.value
+        #expect(vm.sessionKey == "main" && vm.sessionId == "sess-main-current")
+        #expect(vm.messages.contains { message in
+            message.content.contains { $0.text == "current main" }
+        })
 
         await staleHistoryGate.release()
-        try await waitUntil("stale other history resumes") {
-            await staleHistoryReleasedCount.current() == 1
-        }
+        await staleBootstrap?.value
+        #expect(await staleHistoryReleasedCount.current() == 1)
 
         #expect(await MainActor.run { vm.sessionId } == "sess-main-current")
         #expect(await MainActor.run {
@@ -10985,7 +10935,7 @@ struct ChatViewModelTests {
         let staleBootstrapGate = SessionSubscribeGate()
         let otherHistoryCount = AsyncCounter()
         let staleBootstrapReleasedCount = AsyncCounter()
-        let (transport, vm) = await makeViewModel(
+        let (_, vm) = await makeViewModel(
             historyResponses: [
                 historyPayload(
                     sessionKey: "main",
@@ -11012,26 +10962,20 @@ struct ChatViewModelTests {
         try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
 
         vm.syncSession(to: "other")
-        try await waitUntil("other bootstrap history is in flight") {
-            await otherHistoryCount.current() == 1
-        }
+        let staleBootstrap = vm.bootstrapTask
+        await staleBootstrapGate.waitUntilBlocked()
+        #expect(await otherHistoryCount.current() == 1)
         #expect(await MainActor.run { vm.messages.isEmpty })
 
-        transport.emit(.seqGap)
-        try await waitUntil("newer other refresh applies") {
-            await MainActor.run {
-                vm.sessionKey == "other" &&
-                    vm.sessionId == "sess-other-newer-refresh" &&
-                    vm.messages.contains { message in
-                        message.content.contains { $0.text == "newer other refresh" }
-                    }
-            }
-        }
+        await vm.handleTransportEvent(.seqGap)?.value
+        #expect(vm.sessionKey == "other" && vm.sessionId == "sess-other-newer-refresh")
+        #expect(vm.messages.contains { message in
+            message.content.contains { $0.text == "newer other refresh" }
+        })
 
         await staleBootstrapGate.release()
-        try await waitUntil("stale other bootstrap resumes") {
-            await staleBootstrapReleasedCount.current() == 1
-        }
+        await staleBootstrap?.value
+        #expect(await staleBootstrapReleasedCount.current() == 1)
 
         #expect(await MainActor.run { vm.sessionId } == "sess-other-newer-refresh")
         #expect(await MainActor.run {
@@ -11045,7 +10989,7 @@ struct ChatViewModelTests {
         let staleRefreshGate = SessionSubscribeGate()
         let mainHistoryCount = AsyncCounter()
         let staleRefreshReleasedCount = AsyncCounter()
-        let (transport, vm) = await makeViewModel(
+        let (_, vm) = await makeViewModel(
             historyResponses: [
                 historyPayload(sessionKey: "main", sessionId: "sess-main"),
                 historyPayload(
@@ -11068,26 +11012,20 @@ struct ChatViewModelTests {
 
         try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
 
-        transport.emit(.seqGap)
-        try await waitUntil("seq gap refresh is in flight") {
-            await mainHistoryCount.current() == 2
-        }
+        let eventRefresh = vm.handleTransportEvent(.seqGap)
+        await staleRefreshGate.waitUntilBlocked()
+        #expect(await mainHistoryCount.current() == 2)
 
         vm.syncSession(to: "other")
-        try await waitUntil("other session bootstrap wins") {
-            await MainActor.run {
-                vm.sessionKey == "other" &&
-                    vm.sessionId == "sess-other-current" &&
-                    vm.messages.contains { message in
-                        message.content.contains { $0.text == "current other" }
-                    }
-            }
-        }
+        await vm.bootstrapTask?.value
+        #expect(vm.sessionKey == "other" && vm.sessionId == "sess-other-current")
+        #expect(vm.messages.contains { message in
+            message.content.contains { $0.text == "current other" }
+        })
 
         await staleRefreshGate.release()
-        try await waitUntil("stale seq gap refresh resumes") {
-            await staleRefreshReleasedCount.current() == 1
-        }
+        await eventRefresh?.value
+        #expect(await staleRefreshReleasedCount.current() == 1)
 
         #expect(await MainActor.run { vm.sessionId } == "sess-other-current")
         #expect(await MainActor.run {
@@ -11119,25 +11057,16 @@ struct ChatViewModelTests {
         #expect(await transport.patchedModels() == ["openai/gpt-5.4"])
 
         vm.input = "hello before switch"
-        vm.send()
-        try await waitUntil("send is waiting for model patch") {
-            await MainActor.run { vm.pendingRunCount == 1 }
-        }
+        let send = vm.send()
+        await waitForObservedState { vm.pendingRunCount == 1 }
 
         vm.syncSession(to: "other")
-        try await waitUntil("session switch clears pending send") {
-            await MainActor.run {
-                vm.sessionKey == "other" &&
-                    vm.sessionId == "sess-other" &&
-                    vm.pendingRunCount == 0
-            }
-        }
+        await vm.bootstrapTask?.value
+        #expect(vm.sessionKey == "other" && vm.sessionId == "sess-other" && vm.pendingRunCount == 0)
 
         await modelPatchGate.release()
-        try await waitUntil("model patch resumes") {
-            await modelPatchReleasedCount.current() == 1
-        }
-        try await Task.sleep(for: .milliseconds(100))
+        await send?.value
+        #expect(await modelPatchReleasedCount.current() == 1)
 
         #expect(await transport.sentRunIds().isEmpty)
     }
@@ -11159,23 +11088,19 @@ struct ChatViewModelTests {
         try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
 
         vm.syncSession(to: "other")
-        try await waitUntil("stale subscribe is in flight") {
-            await transport.activeSessionKeys().last == "other"
-        }
+        let staleBootstrap = vm.bootstrapTask
+        await staleSubscribeGate.waitUntilBlocked()
+        #expect(await transport.activeSessionKeys().last == "other")
 
         vm.syncSession(to: "main")
-        try await waitUntil("current session subscribed") {
-            let sessionKey = await MainActor.run { vm.sessionKey }
-            let activeSessionKeys = await transport.activeSessionKeys()
-            return sessionKey == "main" &&
-                Array(activeSessionKeys.suffix(2)) == ["other", "main"]
-        }
+        await vm.bootstrapTask?.value
+        #expect(vm.sessionKey == "main")
+        #expect(await Array(transport.activeSessionKeys().suffix(2)) == ["other", "main"])
 
         await staleSubscribeGate.release()
 
-        try await waitUntil("current session resubscribed after stale subscribe") {
-            await Array(transport.activeSessionKeys().suffix(3)) == ["other", "main", "main"]
-        }
+        await staleBootstrap?.value
+        #expect(await Array(transport.activeSessionKeys().suffix(3)) == ["other", "main", "main"])
     }
 
     @Test @MainActor func `stale subscribe failure reasserts current active session subscription`() async throws {
@@ -11198,20 +11123,18 @@ struct ChatViewModelTests {
         try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
 
         vm.syncSession(to: "other")
-        try await waitUntil("stale subscribe is in flight") {
-            await transport.activeSessionKeys().last == "other"
-        }
+        let staleBootstrap = vm.bootstrapTask
+        await staleSubscribeGate.waitUntilBlocked()
+        #expect(await transport.activeSessionKeys().last == "other")
 
         vm.syncSession(to: "main")
-        try await waitUntil("current session subscribed") {
-            await Array(transport.activeSessionKeys().suffix(2)) == ["other", "main"]
-        }
+        await vm.bootstrapTask?.value
+        #expect(await Array(transport.activeSessionKeys().suffix(2)) == ["other", "main"])
 
         await staleSubscribeGate.release()
 
-        try await waitUntil("current session resubscribed after stale subscribe failure") {
-            await Array(transport.activeSessionKeys().suffix(3)) == ["other", "main", "main"]
-        }
+        await staleBootstrap?.value
+        #expect(await Array(transport.activeSessionKeys().suffix(3)) == ["other", "main", "main"])
     }
 
     @Test @MainActor func `stale sync repair reasserts latest active session subscription`() async throws {
@@ -11239,32 +11162,27 @@ struct ChatViewModelTests {
         try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
 
         vm.syncSession(to: "other")
-        try await waitUntil("stale subscribe is in flight") {
-            await transport.activeSessionKeys().last == "other"
-        }
+        let staleBootstrap = vm.bootstrapTask
+        await staleSubscribeGate.waitUntilBlocked()
+        #expect(await transport.activeSessionKeys().last == "other")
 
         vm.syncSession(to: "main")
-        try await waitUntil("main session subscribed") {
-            await Array(transport.activeSessionKeys().suffix(2)) == ["other", "main"]
-        }
+        await vm.bootstrapTask?.value
+        #expect(await Array(transport.activeSessionKeys().suffix(2)) == ["other", "main"])
 
         await staleSubscribeGate.release()
-        try await waitUntil("stale repair is in flight") {
-            await Array(transport.activeSessionKeys().suffix(3)) == ["other", "main", "main"]
-        }
+        await staleRepairGate.waitUntilBlocked()
+        #expect(await Array(transport.activeSessionKeys().suffix(3)) == ["other", "main", "main"])
 
         vm.syncSession(to: "final")
-        try await waitUntil("newest session subscribed") {
-            let sessionKey = await MainActor.run { vm.sessionKey }
-            let activeSessionKeys = await transport.activeSessionKeys()
-            return sessionKey == "final" && activeSessionKeys.last == "final"
-        }
+        await vm.bootstrapTask?.value
+        #expect(vm.sessionKey == "final")
+        #expect(await transport.activeSessionKeys().last == "final")
 
         await staleRepairGate.release()
 
-        try await waitUntil("newest session resubscribed after stale repair") {
-            await Array(transport.activeSessionKeys().suffix(3)) == ["main", "final", "final"]
-        }
+        await staleBootstrap?.value
+        #expect(await Array(transport.activeSessionKeys().suffix(3)) == ["main", "final", "final"])
     }
 
     @Test func `switching sessions ignores late model patch completion from previous session`() async throws {
@@ -11344,21 +11262,19 @@ struct ChatViewModelTests {
             })
 
         try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
+        let patchTarget = await MainActor.run { vm.currentModelPatchTarget() }
         await MainActor.run { vm.selectModel("openai/gpt-5.4") }
-        try await waitUntil("main session model patch starts") {
-            await transport.patchedModels() == ["openai/gpt-5.4"]
-        }
+        await transport.waitForState { $0.patchedModels.count >= 1 }
+        #expect(await transport.patchedModels() == ["openai/gpt-5.4"])
 
         await MainActor.run { vm.syncActiveAgentId("beta") }
-        try await waitUntil("replacement agent bootstrap completes") {
-            await MainActor.run { vm.activeAgentId == "beta" && vm.sessionId == "sess-beta" && !vm.isLoading }
-        }
+        await vm.bootstrapTask?.value
+        #expect(await MainActor.run { vm.activeAgentId == "beta" && vm.sessionId == "sess-beta" && !vm.isLoading })
         await patchGate.open()
-        try await waitUntil("late patch updates canonical main row") {
-            await MainActor.run {
-                vm.sessions.first(where: { $0.key == "agent:alpha:main" })?.model == "gpt-5.4"
-            }
-        }
+        await vm.waitForPendingSessionSettings(for: patchTarget)
+        #expect(await MainActor.run {
+            vm.sessions.first(where: { $0.key == "agent:alpha:main" })?.model
+        } == "gpt-5.4")
 
         #expect(await MainActor.run { vm.sessions.contains(where: { $0.key == "main" }) } == false)
         #expect(await MainActor.run { vm.activeAgentId } == "beta")
@@ -11403,27 +11319,25 @@ struct ChatViewModelTests {
             })
 
         try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-alpha")
+        let patchTarget = await MainActor.run { vm.currentModelPatchTarget() }
         await MainActor.run { vm.selectModel("openai/gpt-alpha-next") }
-        try await waitUntil("Alpha model patch starts") {
-            await transport.patchedModels() == ["openai/gpt-alpha-next"]
-        }
+        await transport.waitForState { $0.patchedModels.count >= 1 }
+        #expect(await transport.patchedModels() == ["openai/gpt-alpha-next"])
 
         await MainActor.run { vm.syncActiveAgentId("beta") }
-        try await waitUntil("Beta bootstrap applies while Alpha patch remains pending") {
-            await MainActor.run {
-                vm.activeAgentId == "beta" &&
-                    vm.sessionId == "sess-beta" &&
-                    vm.sessions.first?.key == "agent:beta:main" &&
-                    vm.modelSelectionID == "openai/gpt-beta"
-            }
-        }
+        await vm.bootstrapTask?.value
+        #expect(await MainActor.run {
+            vm.activeAgentId == "beta" &&
+                vm.sessionId == "sess-beta" &&
+                vm.sessions.first?.key == "agent:beta:main" &&
+                vm.modelSelectionID == "openai/gpt-beta"
+        })
 
         await patchGate.open()
-        try await waitUntil("late Alpha patch stays scoped to Alpha") {
-            await MainActor.run {
-                vm.sessions.first(where: { $0.key == "agent:alpha:main" })?.model == "gpt-alpha-next"
-            }
-        }
+        await vm.waitForPendingSessionSettings(for: patchTarget)
+        #expect(await MainActor.run {
+            vm.sessions.first(where: { $0.key == "agent:alpha:main" })?.model
+        } == "gpt-alpha-next")
         #expect(await MainActor.run {
             vm.sessions.first(where: { $0.key == "agent:beta:main" })?.model
         } == "gpt-beta")
@@ -11513,9 +11427,8 @@ struct ChatViewModelTests {
 
         try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-thread")
         await MainActor.run { vm.selectModel("openai/model-a") }
-        try await waitUntil("first model patch starts") {
-            await transport.patchedModels() == ["openai/model-a"]
-        }
+        await transport.waitForState { $0.patchedModels.count >= 1 }
+        #expect(await transport.patchedModels() == ["openai/model-a"])
 
         await MainActor.run {
             vm.syncSessionRoutingContract("per-sender|work|alpha")
@@ -11525,10 +11438,8 @@ struct ChatViewModelTests {
         #expect(await transport.patchedModels() == ["openai/model-a"])
 
         await firstPatchGate.open()
-        try await waitUntil("second model patch follows the first") {
-            await transport.patchedModels() == ["openai/model-a", "openai/model-b"]
-        }
         await vm.waitForPendingSessionSettings(in: sessionKey)
+        #expect(await transport.patchedModels() == ["openai/model-a", "openai/model-b"])
         #expect(await MainActor.run { vm.modelSelectionID } == "openai/model-b")
     }
 
@@ -11561,19 +11472,15 @@ struct ChatViewModelTests {
 
         try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-old")
         await MainActor.run { vm.selectModel("openai/model-a") }
-        try await waitUntil("old-route model patch starts") {
-            await transport.patchedModels() == ["openai/model-a"]
-        }
+        await transport.waitForState { $0.patchedModels.count >= 1 }
+        #expect(await transport.patchedModels() == ["openai/model-a"])
 
         await MainActor.run { vm.syncSessionRoutingContract(newContract) }
-        try await waitUntil("replacement route bootstraps") {
-            await MainActor.run { vm.sessionId == "sess-new" && !vm.isLoading }
-        }
+        await vm.bootstrapTask?.value
+        #expect(await MainActor.run { vm.sessionId == "sess-new" && !vm.isLoading })
         await MainActor.run { vm.selectModel("openai/model-b") }
-        try await waitUntil("replacement route model patch completes") {
-            await transport.patchedModels() == ["openai/model-a", "openai/model-b"]
-        }
         await vm.waitForPendingSessionSettings(in: sessionKey)
+        #expect(await transport.patchedModels() == ["openai/model-a", "openai/model-b"])
         #expect(await MainActor.run { vm.modelSelectionID } == "openai/model-b")
 
         await firstPatchGate.open()
@@ -11634,24 +11541,17 @@ struct ChatViewModelTests {
         try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
 
         await MainActor.run { vm.selectModel("openai/gpt-5.4") }
-        try await waitUntil("main session model patch starts") {
-            await transport.patchedModels() == ["openai/gpt-5.4"]
-        }
+        await transport.waitForState { $0.patchedModels.count >= 1 }
+        #expect(await transport.patchedModels() == ["openai/gpt-5.4"])
         await MainActor.run { vm.switchSession(to: "other") }
-        try await waitUntil("switched to other session") {
-            await MainActor.run { vm.sessionKey == "other" && vm.sessionId == "sess-other" && !vm.isLoading }
-        }
+        await vm.bootstrapTask?.value
+        #expect(await MainActor.run { vm.sessionKey == "other" && vm.sessionId == "sess-other" && !vm.isLoading })
 
         await MainActor.run { vm.selectModel("openai/gpt-5.4-pro") }
-        try await waitUntil("both model patches issued") {
-            let patched = await transport.patchedModels()
-            return patched == ["openai/gpt-5.4", "openai/gpt-5.4-pro"]
-        }
         await vm.waitForPendingSessionSettings(in: "other")
+        #expect(await transport.patchedModels() == ["openai/gpt-5.4", "openai/gpt-5.4-pro"])
         await MainActor.run { vm.switchSession(to: "main") }
-        try await waitUntil("switched back to main session") {
-            await MainActor.run { vm.sessionKey == "main" && vm.sessionId == "sess-main" }
-        }
+        await waitForObservedState { vm.sessionKey == "main" && vm.sessionId == "sess-main" }
 
         // Bootstrap waits for the pending patch before loading its catalog.
         // Refresh it independently so the nil reply still resolves through model choices.
@@ -11662,14 +11562,11 @@ struct ChatViewModelTests {
         #expect(await MainActor.run { vm.sessions.first(where: { $0.key == "main" })?.model } == "gpt-5.4")
         #expect(await MainActor.run { vm.sessions.first(where: { $0.key == "main" })?.modelProvider } == "openai")
         await mainBootstrapListGate.open()
-        try await waitUntil("main bootstrap completes after the late model patch") {
-            await MainActor.run { !vm.isLoading }
-        }
+        await vm.bootstrapTask?.value
+        #expect(await MainActor.run { !vm.isLoading })
         transport.emit(.sessionsChanged(.init(sessionKey: "main", reason: "patch")))
-        try await waitUntil("authoritative sessions refresh applies the other session patch") {
-            await MainActor.run {
-                vm.sessions.first(where: { $0.key == "other" })?.model == "openai/gpt-5.4-pro"
-            }
+        await waitForObservedState {
+            vm.sessions.first(where: { $0.key == "other" })?.model == "openai/gpt-5.4-pro"
         }
 
         #expect(await MainActor.run { vm.modelSelectionID } == "openai/gpt-5.4")
@@ -11696,10 +11593,8 @@ struct ChatViewModelTests {
 
         await MainActor.run { vm.selectThinkingLevel("medium") }
 
-        try await waitUntil("thinking level patched") {
-            let patched = await transport.patchedThinkingLevels()
-            return patched == ["medium"]
-        }
+        await vm.waitForPendingSessionSettings(in: "main")
+        #expect(await transport.patchedThinkingLevels() == ["medium"])
 
         #expect(await MainActor.run { vm.thinkingLevel } == "medium")
         #expect(await MainActor.run { callbackState.values } == ["medium"])
@@ -11913,16 +11808,12 @@ struct ChatViewModelTests {
 
         try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
         transport.emit(.sessionsChanged(.init(sessionKey: "main", reason: "command-metadata")))
-        try await waitUntil("older sessions refresh starts") {
-            await listCallCount.current() >= 2
-        }
+        await listCallCount.wait { $0 >= 2 }
         transport.emit(.sessionsChanged(.init(sessionKey: "main", reason: "command-metadata")))
-        try await waitUntil("newer Luna refresh applies") {
-            await MainActor.run {
-                vm.modelSelectionID == "openai/gpt-5.6-luna" &&
-                    vm.thinkingLevel == "max" &&
-                    vm.thinkingLevelOptions.map(\.id) == lunaLevels.map(\.id)
-            }
+        await waitForObservedState {
+            vm.modelSelectionID == "openai/gpt-5.6-luna" &&
+                vm.thinkingLevel == "max" &&
+                vm.thinkingLevelOptions.map(\.id) == lunaLevels.map(\.id)
         }
 
         await staleListGate.open()
@@ -11939,10 +11830,9 @@ struct ChatViewModelTests {
         try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
         #expect(await MainActor.run { vm.thinkingLevel } == "xhigh")
 
-        await sendUserMessage(vm, text: "hello")
-        try await waitUntil("send uses preserved thinking level") {
-            await transport.sentThinkingLevels() == ["xhigh"]
-        }
+        let send = await sendUserMessage(vm, text: "hello")
+        await send?.value
+        #expect(await transport.sentThinkingLevels() == ["xhigh"])
     }
 
     @Test func `decodes gateway thinking metadata from session list`() throws {
@@ -12060,9 +11950,7 @@ struct ChatViewModelTests {
                 initialThinkingLevel: "medium")
 
             try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
-            try await waitUntil("off-only thinking metadata applied") {
-                await MainActor.run { vm.thinkingLevelOptions.map(\.id) == ["off"] }
-            }
+            #expect(await MainActor.run { vm.thinkingLevelOptions.map(\.id) } == ["off"])
 
             #expect(await MainActor.run { !vm.showsThinkingPicker })
         }
@@ -12078,9 +11966,7 @@ struct ChatViewModelTests {
             sessionsResponses: [multiLevelSessions])
 
         try await loadAndWaitBootstrap(vm: multiLevelVM, sessionId: "sess-main")
-        try await waitUntil("multi-level thinking metadata applied") {
-            await MainActor.run { multiLevelVM.thinkingLevelOptions.map(\.id) == ["off", "high"] }
-        }
+        #expect(await MainActor.run { multiLevelVM.thinkingLevelOptions.map(\.id) } == ["off", "high"])
 
         #expect(await MainActor.run { multiLevelVM.showsThinkingPicker })
 
@@ -12112,10 +11998,9 @@ struct ChatViewModelTests {
         try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
         #expect(await MainActor.run { !vm.showsThinkingPicker })
 
-        await sendUserMessage(vm, text: "hello")
-        try await waitUntil("gated send uses off") {
-            await transport.sentThinkingLevels() == ["off"]
-        }
+        let send = await sendUserMessage(vm, text: "hello")
+        await send?.value
+        #expect(await transport.sentThinkingLevels() == ["off"])
 
         #expect(await MainActor.run { vm.thinkingLevel } == "medium")
     }
@@ -12145,10 +12030,9 @@ struct ChatViewModelTests {
         try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
         #expect(await MainActor.run { vm.showsThinkingPicker })
 
-        await sendUserMessage(vm, text: "hello")
-        try await waitUntil("ungated send uses stored level") {
-            await transport.sentThinkingLevels() == ["medium"]
-        }
+        let send = await sendUserMessage(vm, text: "hello")
+        await send?.value
+        #expect(await transport.sentThinkingLevels() == ["medium"])
     }
 
     @Test func `switching back to reasoning model restores stored thinking level for send`() async throws {
@@ -12177,30 +12061,20 @@ struct ChatViewModelTests {
 
         try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
         await MainActor.run { vm.selectModel("openai/plain-model") }
-        try await waitUntil("plain model selected") {
-            await MainActor.run {
-                vm.sessions.first?.model == "plain-model" && !vm.showsThinkingPicker
-            }
-        }
+        await vm.waitForPendingSessionSettings(in: "main")
+        #expect(await MainActor.run { vm.sessions.first?.model == "plain-model" && !vm.showsThinkingPicker })
 
-        await sendUserMessage(vm, text: "plain send")
-        try await waitUntil("plain send uses off") {
-            await transport.sentThinkingLevels() == ["off"]
-        }
-        try await waitUntil("plain send completed") {
-            await MainActor.run { !vm.isSending && vm.pendingRunCount == 0 }
-        }
+        let plainSend = await sendUserMessage(vm, text: "plain send")
+        await plainSend?.value
+        #expect(await transport.sentThinkingLevels() == ["off"])
+        #expect(await MainActor.run { !vm.isSending && vm.pendingRunCount == 0 })
 
         await MainActor.run { vm.selectModel("openai/reasoning-model") }
-        try await waitUntil("reasoning model restored") {
-            await MainActor.run {
-                vm.sessions.first?.model == "reasoning-model" && vm.showsThinkingPicker
-            }
-        }
-        await sendUserMessage(vm, text: "reasoning send")
-        try await waitUntil("reasoning send restores stored level") {
-            await transport.sentThinkingLevels() == ["off", "medium"]
-        }
+        await vm.waitForPendingSessionSettings(in: "main")
+        #expect(await MainActor.run { vm.sessions.first?.model == "reasoning-model" && vm.showsThinkingPicker })
+        let reasoningSend = await sendUserMessage(vm, text: "reasoning send")
+        await reasoningSend?.value
+        #expect(await transport.sentThinkingLevels() == ["off", "medium"])
 
         #expect(await MainActor.run { vm.thinkingLevel } == "medium")
     }
@@ -12236,9 +12110,7 @@ struct ChatViewModelTests {
             initialThinkingLevel: "medium")
 
         try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
-        try await waitUntil("model picker bootstrap completed") {
-            await MainActor.run { !vm.isLoading }
-        }
+        #expect(await MainActor.run { !vm.isLoading })
         #expect(await MainActor.run { vm.modelSelectionID == "openai/plain-model" })
         #expect(await MainActor.run { !vm.showsThinkingPicker })
         await MainActor.run { vm.selectModel("openai/reasoning-model") }
@@ -12246,20 +12118,13 @@ struct ChatViewModelTests {
         #expect(await MainActor.run { vm.showsThinkingPicker })
         #expect(await transport.patchedModels() == ["openai/reasoning-model"])
 
-        await sendUserMessage(vm, text: "send after rollback")
-        try await waitUntil("send waits for model patch") {
-            let isSending = await MainActor.run { vm.isSending }
-            let sentThinkingLevels = await transport.sentThinkingLevels()
-            return isSending && sentThinkingLevels.isEmpty
-        }
+        let send = await sendUserMessage(vm, text: "send after rollback")
+        await waitForObservedState { vm.isSending }
+        #expect(await transport.sentThinkingLevels().isEmpty)
         await modelPatchGate.release()
-        try await waitUntil("rolled back send uses off") {
-            let rolledBack = await MainActor.run {
-                vm.modelSelectionID == "openai/plain-model" && !vm.showsThinkingPicker
-            }
-            let sentThinkingLevels = await transport.sentThinkingLevels()
-            return rolledBack && sentThinkingLevels == ["off"]
-        }
+        await send?.value
+        #expect(await MainActor.run { vm.modelSelectionID == "openai/plain-model" && !vm.showsThinkingPicker })
+        #expect(await transport.sentThinkingLevels() == ["off"])
 
         #expect(await MainActor.run { vm.thinkingLevel } == "medium")
     }
@@ -12297,11 +12162,7 @@ struct ChatViewModelTests {
             })
 
         try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
-        try await waitUntil("reasoning model loaded") {
-            await MainActor.run {
-                vm.modelSelectionID == "openai/reasoning-model" && vm.showsThinkingPicker
-            }
-        }
+        #expect(await MainActor.run { vm.modelSelectionID == "openai/reasoning-model" && vm.showsThinkingPicker })
 
         await MainActor.run { vm.selectModel("openai/plain-model") }
         await modelPatchGate.waitUntilBlocked()
@@ -12348,10 +12209,8 @@ struct ChatViewModelTests {
         await MainActor.run { vm.selectModel("openai/model-x") }
         #expect(await transport.patchedModels() == ["openai/model-y"])
         await modelPatchGate.release()
-        try await waitUntil("model X re-selection patched") {
-            await transport.patchedModels() == ["openai/model-y", "openai/model-x"]
-        }
         await vm.waitForPendingSessionSettings(in: "main")
+        #expect(await transport.patchedModels() == ["openai/model-y", "openai/model-x"])
 
         #expect(await MainActor.run { vm.sessions.first?.thinkingLevels?.map(\.id) } == ["off"])
         #expect(await MainActor.run { vm.sessions.first?.thinkingOptions } == ["off"])
@@ -12387,11 +12246,8 @@ struct ChatViewModelTests {
         #expect(await MainActor.run { vm.contextUsageFraction } == 0.1)
 
         await MainActor.run { vm.selectModel("openai/model-y") }
-        try await waitUntil("model Y patch completed") {
-            await MainActor.run {
-                vm.sessions.first?.model == "model-y" && !vm.showsThinkingPicker
-            }
-        }
+        await vm.waitForPendingSessionSettings(in: "main")
+        #expect(await MainActor.run { vm.sessions.first?.model == "model-y" && !vm.showsThinkingPicker })
 
         #expect(await transport.patchedModels() == ["openai/model-y"])
         #expect(await MainActor.run { vm.thinkingLevelOptions.isEmpty })
@@ -12416,12 +12272,10 @@ struct ChatViewModelTests {
             modelResponses: [models])
 
         try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
-        try await waitUntil("models loaded with default selection") {
-            await MainActor.run {
-                vm.modelChoices.count == 2 &&
-                    vm.modelSelectionID == OpenClawChatViewModel.defaultModelSelectionID
-            }
-        }
+        #expect(await MainActor.run {
+            vm.modelChoices.count == 2 &&
+                vm.modelSelectionID == OpenClawChatViewModel.defaultModelSelectionID
+        })
 
         await MainActor.run {
             vm.sessions = [
@@ -12552,15 +12406,12 @@ struct ChatViewModelTests {
         try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
 
         await MainActor.run { vm.selectThinkingLevel("medium") }
-        try await waitUntil("older thinking patch starts") {
-            await transport.patchedThinkingLevels() == ["medium"]
-        }
+        await transport.waitForState { $0.patchedThinkingLevels.count >= 1 }
+        #expect(await transport.patchedThinkingLevels() == ["medium"])
         await MainActor.run { vm.selectThinkingLevel("high") }
 
-        try await waitUntil("thinking patch applies latest selection") {
-            let patched = await transport.patchedThinkingLevels()
-            return patched == ["medium", "high"]
-        }
+        await vm.waitForPendingSessionSettings(in: "main")
+        #expect(await transport.patchedThinkingLevels() == ["medium", "high"])
 
         #expect(await MainActor.run { vm.thinkingLevel } == "high")
     }
@@ -12642,9 +12493,8 @@ struct ChatViewModelTests {
         }
         await patchStarted.wait()
         await MainActor.run { vm.switchSession(to: "other") }
-        try await waitUntil("other session loads") {
-            await MainActor.run { vm.sessionKey == "other" && vm.sessionId == "sess-other" }
-        }
+        await vm.bootstrapTask?.value
+        #expect(await MainActor.run { vm.sessionKey == "other" && vm.sessionId == "sess-other" })
         await patchGate.open()
         await vm.waitForPendingSessionSettings(in: "main")
 
@@ -12685,9 +12535,8 @@ struct ChatViewModelTests {
         try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
         await MainActor.run { vm.selectThinkingLevel("medium") }
         await MainActor.run { vm.switchSession(to: "other") }
-        try await waitUntil("other session loads") {
-            await MainActor.run { vm.sessionKey == "other" && vm.sessionId == "sess-other" }
-        }
+        await vm.bootstrapTask?.value
+        #expect(await MainActor.run { vm.sessionKey == "other" && vm.sessionId == "sess-other" })
         await MainActor.run { vm.selectThinkingLevel("high") }
         await vm.waitForPendingSessionSettings(in: "other")
 
@@ -12852,9 +12701,8 @@ struct ChatViewModelTests {
         await MainActor.run { vm.selectFastMode("off") }
         await patchStarted.wait()
         await MainActor.run { vm.syncActiveAgentId("beta") }
-        try await waitUntil("Beta target bootstraps") {
-            await MainActor.run { vm.activeAgentId == "beta" && vm.sessionId == "sess-beta" && !vm.isLoading }
-        }
+        await vm.bootstrapTask?.value
+        #expect(await MainActor.run { vm.activeAgentId == "beta" && vm.sessionId == "sess-beta" && !vm.isLoading })
         await patchGate.open()
         await vm.waitForPendingSessionSettings(
             in: "main",
@@ -12898,13 +12746,11 @@ struct ChatViewModelTests {
 
         try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
         await MainActor.run { vm.selectVerboseLevel("on") }
-        try await waitUntil("first verbosity patch starts") {
-            await patchCount.current() == 1
-        }
+        await patchCount.wait { $0 >= 1 }
+        #expect(await patchCount.current() == 1)
         await MainActor.run { vm.switchSession(to: "other") }
-        try await waitUntil("other session loads") {
-            await MainActor.run { vm.sessionKey == "other" && vm.sessionId == "sess-other" && !vm.isLoading }
-        }
+        await vm.bootstrapTask?.value
+        #expect(await MainActor.run { vm.sessionKey == "other" && vm.sessionId == "sess-other" && !vm.isLoading })
         await MainActor.run { vm.selectVerboseLevel("full") }
         await vm.waitForPendingSessionSettings(in: "other")
         #expect(await patchCount.current() == 2)
@@ -12943,9 +12789,8 @@ struct ChatViewModelTests {
         try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
         await MainActor.run { vm.selectVerboseLevel("on") }
         await MainActor.run { vm.switchSession(to: "other") }
-        try await waitUntil("other session loads") {
-            await MainActor.run { vm.sessionKey == "other" && vm.sessionId == "sess-other" }
-        }
+        await vm.bootstrapTask?.value
+        #expect(await MainActor.run { vm.sessionKey == "other" && vm.sessionId == "sess-other" })
         #expect(await MainActor.run { vm.verboseLevel } == OpenClawChatViewModel.inheritedThinkingSelectionID)
         await MainActor.run { vm.selectVerboseLevel("full") }
         await vm.waitForPendingSessionSettings(in: "other")
@@ -12977,9 +12822,8 @@ struct ChatViewModelTests {
 
         try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
         await MainActor.run { vm.selectThinkingLevel("medium") }
-        try await waitUntil("older thinking patch starts") {
-            await transport.patchedThinkingLevels() == ["medium"]
-        }
+        await transport.waitForState { $0.patchedThinkingLevels.count >= 1 }
+        #expect(await transport.patchedThinkingLevels() == ["medium"])
         await MainActor.run { vm.selectThinkingLevel("high") }
 
         await firstPatchGate.open()
@@ -13165,9 +13009,8 @@ struct ChatViewModelTests {
         await vm.waitForPendingSessionSettings(in: "main")
 
         let refresh = Task { await vm.fetchSessions(limit: nil) }
-        try await waitUntil("sessions refresh starts before thinking patch") {
-            await listCallCount.current() == 2
-        }
+        await listCallCount.wait { $0 >= 2 }
+        #expect(await listCallCount.current() == 2)
         await MainActor.run { vm.selectThinkingLevel("max") }
         await vm.waitForPendingSessionSettings(in: "main")
         await staleListGate.open()
@@ -13219,9 +13062,8 @@ struct ChatViewModelTests {
 
         try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
         let refresh = Task { await vm.fetchSessions(limit: nil) }
-        try await waitUntil("stale sessions refresh starts") {
-            await listCallCount.current() == 2
-        }
+        await listCallCount.wait { $0 >= 2 }
+        #expect(await listCallCount.current() == 2)
         await MainActor.run { vm.selectModel("openai/model-b") }
         await modelPatchStarted.wait()
 
@@ -13281,9 +13123,8 @@ struct ChatViewModelTests {
 
         try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
         let refresh = Task { await vm.fetchSessions(limit: nil) }
-        try await waitUntil("stale sessions refresh starts") {
-            await listCallCount.current() == 2
-        }
+        await listCallCount.wait { $0 >= 2 }
+        #expect(await listCallCount.current() == 2)
         await MainActor.run { vm.selectModel("openai/model-b") }
         await vm.waitForPendingSessionSettings(in: "main")
         await MainActor.run { vm.selectThinkingLevel("high") }
@@ -13353,9 +13194,8 @@ struct ChatViewModelTests {
 
         try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
         let refresh = Task { await vm.fetchSessions(limit: nil) }
-        try await waitUntil("stale sessions refresh starts") {
-            await listCallCount.current() == 2
-        }
+        await listCallCount.wait { $0 >= 2 }
+        #expect(await listCallCount.current() == 2)
 
         await MainActor.run { vm.selectFastMode("on") }
         await vm.waitForPendingSessionSettings(in: "main")
@@ -13627,17 +13467,12 @@ struct ChatViewModelTests {
         await MainActor.run { vm.selectModel("openai/model-b") }
         await modelPatchStarted.wait()
         await MainActor.run { vm.selectThinkingLevel("medium") }
-        try await waitUntil("old route is captured by queued thinking") {
-            await transport.capturedSessionSettingsRouteGenerations() == [0, 0]
-        }
+        await transport.waitForState { $0.capturedSessionSettingsRouteGenerations.count >= 2 }
+        #expect(await transport.capturedSessionSettingsRouteGenerations() == [0, 0])
         await transport.replaceSessionSettingsRoute()
         await MainActor.run { vm.selectThinkingLevel("high") }
         await modelPatchGate.open()
-        try await waitUntil("replacement connection thinking patch completes") {
-            await transport.patchedThinkingLevels() == ["high"]
-        }
-
-        try await Task.sleep(for: .milliseconds(100))
+        await vm.waitForPendingSessionSettings(in: "main")
 
         #expect(await transport.patchedThinkingLevels() == ["high"])
         #expect(await MainActor.run { vm.thinkingLevel } == "high")
@@ -13689,9 +13524,8 @@ struct ChatViewModelTests {
         await MainActor.run { vm.selectModel("openai/model-b") }
         await modelPatchStarted.wait()
         await MainActor.run { vm.selectThinkingLevel("medium") }
-        try await waitUntil("old route is captured by queued thinking") {
-            await transport.capturedSessionSettingsRouteGenerations() == [0, 0]
-        }
+        await transport.waitForState { $0.capturedSessionSettingsRouteGenerations.count >= 2 }
+        #expect(await transport.capturedSessionSettingsRouteGenerations() == [0, 0])
         await transport.replaceSessionSettingsRoute()
         await MainActor.run { vm.selectThinkingLevel("high") }
         await modelPatchGate.open()
@@ -13742,13 +13576,11 @@ struct ChatViewModelTests {
         await MainActor.run { vm.selectModel("openai/model-b") }
         await modelPatchStarted.wait()
         await MainActor.run { vm.selectThinkingLevel("medium") }
-        try await waitUntil("main settings leases are captured") {
-            await transport.capturedSessionSettingsRouteGenerations() == [0, 0]
-        }
+        await transport.waitForState { $0.capturedSessionSettingsRouteGenerations.count >= 2 }
+        #expect(await transport.capturedSessionSettingsRouteGenerations() == [0, 0])
         await MainActor.run { vm.switchSession(to: "other") }
-        try await waitUntil("other session opens") {
-            await MainActor.run { vm.sessionKey == "other" && vm.sessionId == "sess-other" }
-        }
+        await vm.bootstrapTask?.value
+        #expect(await MainActor.run { vm.sessionKey == "other" && vm.sessionId == "sess-other" })
         await transport.replaceSessionSettingsRoute()
         await modelPatchGate.open()
         await vm.waitForPendingSessionSettings(in: "main")
@@ -13790,9 +13622,8 @@ struct ChatViewModelTests {
         await MainActor.run { vm.selectThinkingLevel("medium") }
         await patchStarted.wait()
         await MainActor.run { vm.switchSession(to: otherKey) }
-        try await waitUntil("other agent session opens") {
-            await MainActor.run { vm.sessionKey == otherKey && vm.sessionId == "sess-other" }
-        }
+        await vm.bootstrapTask?.value
+        #expect(await MainActor.run { vm.sessionKey == otherKey && vm.sessionId == "sess-other" })
 
         await patchGate.open()
         await vm.waitForPendingSessionSettings(
@@ -13829,18 +13660,14 @@ struct ChatViewModelTests {
 
         try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
         await MainActor.run { vm.selectThinkingLevel("medium") }
-        try await waitUntil("main thinking patch starts") {
-            await transport.patchedThinkingLevels() == ["medium"]
-        }
+        await transport.waitForState { $0.patchedThinkingLevels.count >= 1 }
+        #expect(await transport.patchedThinkingLevels() == ["medium"])
         await MainActor.run { vm.switchSession(to: "other") }
-        try await waitUntil("other session opens") {
-            await MainActor.run { vm.sessionKey == "other" && vm.sessionId == "sess-other" && !vm.isLoading }
-        }
+        await vm.bootstrapTask?.value
+        #expect(await MainActor.run { vm.sessionKey == "other" && vm.sessionId == "sess-other" && !vm.isLoading })
         await MainActor.run { vm.selectThinkingLevel("high") }
-        try await waitUntil("other thinking patch finishes") {
-            await transport.patchedThinkingLevels() == ["medium", "high"]
-        }
         await vm.waitForPendingSessionSettings(in: "other")
+        #expect(await transport.patchedThinkingLevels() == ["medium", "high"])
         #expect(await MainActor.run { vm.thinkingLevel } == "high")
 
         await firstPatchGate.open()
@@ -13883,29 +13710,19 @@ struct ChatViewModelTests {
 
         try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-alpha")
         await MainActor.run { vm.selectThinkingLevel("medium") }
-        try await waitUntil("Alpha thinking patch starts") {
-            await transport.patchedThinkingLevels() == ["medium"]
-        }
+        await transport.waitForState { $0.patchedThinkingLevels.count >= 1 }
+        #expect(await transport.patchedThinkingLevels() == ["medium"])
 
         await MainActor.run { vm.syncActiveAgentId("beta") }
-        try await waitUntil("Beta target bootstraps") {
-            await MainActor.run {
-                vm.activeAgentId == "beta" &&
-                    vm.sessionId == "sess-beta"
-            }
-        }
+        await vm.bootstrapTask?.value
+        #expect(await MainActor.run { vm.activeAgentId == "beta" && vm.sessionId == "sess-beta" })
         await MainActor.run { vm.selectThinkingLevel("max") }
-        try await waitUntil("Beta thinking patch completes") {
-            let patched = await transport.patchedThinkingLevels()
-            let level = await MainActor.run { vm.thinkingLevel }
-            return patched == ["medium", "max"] && level == "max"
-        }
+        await vm.waitForPendingSessionSettings(in: "main")
+        #expect(await transport.patchedThinkingLevels() == ["medium", "max"])
+        #expect(await MainActor.run { vm.thinkingLevel } == "max")
         await MainActor.run { vm.switchSession(to: "other") }
-        try await waitUntil("Beta other session opens") {
-            await MainActor.run {
-                vm.sessionKey == "other" && vm.sessionId == "sess-other" && !vm.isLoading
-            }
-        }
+        await vm.bootstrapTask?.value
+        #expect(await MainActor.run { vm.sessionKey == "other" && vm.sessionId == "sess-other" && !vm.isLoading })
         let betaLevelsBeforeOldFailure = await MainActor.run {
             vm.sessions.map { "\($0.key)=\($0.thinkingLevel ?? "nil")" }.sorted()
         }
@@ -13931,9 +13748,7 @@ struct ChatViewModelTests {
 
         emitAssistantText(transport: transport, runId: sessionId, text: "external stream")
 
-        try await waitUntil("streaming active") {
-            await MainActor.run { vm.streamingAssistantText == "external stream" }
-        }
+        await waitForObservedState { vm.streamingAssistantText == "external stream" }
 
         transport.emit(
             .chat(
@@ -13944,7 +13759,7 @@ struct ChatViewModelTests {
                     message: nil,
                     errorMessage: "boom")))
 
-        try await waitUntil("streaming cleared") { await MainActor.run { vm.streamingAssistantText == nil } }
+        await waitForObservedState { vm.streamingAssistantText == nil }
     }
 
     @Test func `strips inbound metadata from history messages`() async throws {
@@ -13966,8 +13781,8 @@ struct ChatViewModelTests {
         let transport = TestChatTransport(historyResponses: [history])
         let vm = await MainActor.run { OpenClawChatViewModel(sessionKey: "main", transport: transport) }
 
-        await MainActor.run { vm.load() }
-        try await waitUntil("history loaded") { await MainActor.run { !vm.messages.isEmpty } }
+        try await loadAndWaitBootstrap(vm: vm)
+        #expect(await MainActor.run { !vm.messages.isEmpty })
 
         let sanitized = await MainActor.run { vm.messages.first?.content.first?.text }
         #expect(sanitized == "Hello?")
@@ -14000,8 +13815,8 @@ struct ChatViewModelTests {
         let transport = TestChatTransport(historyResponses: [history])
         let vm = await MainActor.run { OpenClawChatViewModel(sessionKey: "main", transport: transport) }
 
-        await MainActor.run { vm.load() }
-        try await waitUntil("system history loaded") { await MainActor.run { vm.messages.count == 2 } }
+        try await loadAndWaitBootstrap(vm: vm)
+        #expect(await MainActor.run { vm.messages.count == 2 })
 
         let rows = await MainActor.run { ChatTranscriptRow.build(from: vm.messages) }
         #expect(rows.count == 2)
@@ -14090,21 +13905,19 @@ struct ChatViewModelSessionManagementTests {
             sessionsResponses: [initial, pinned])
 
         await MainActor.run { vm.refreshSessions() }
-        try await waitUntil("initial sessions applied") {
-            await MainActor.run { vm.sessions.map(\.key) == ["agent:main:topic-a", "agent:main:topic-b"] }
-        }
+        await waitForObservedState { vm.sessions.count >= 2 }
+        #expect(await MainActor.run { vm.sessions.map(\.key) } == ["agent:main:topic-a", "agent:main:topic-b"])
 
         await MainActor.run { vm.setSessionPinned(key: "agent:main:topic-b", pinned: true) }
         // Optimistic reorder happens before the transport call settles.
         #expect(await MainActor.run { vm.sessions.first?.key } == "agent:main:topic-b")
 
-        try await waitUntil("pin patch sent") {
-            let changes = await transport.pinnedChanges()
-            return changes.count == 1 && changes[0].key == "agent:main:topic-b" && changes[0].pinned
-        }
-        try await waitUntil("refresh keeps pinned order") {
-            await MainActor.run { vm.sessions.first?.isPinned == true }
-        }
+        await transport.waitForState { $0.pinnedChanges.count >= 1 }
+        let changes = await transport.pinnedChanges()
+        #expect(changes.count == 1 && changes[0].key == "agent:main:topic-b" && changes[0].pinned)
+        // The server timestamp distinguishes the refresh from the optimistic pin.
+        await waitForObservedState { vm.sessions.first?.pinnedAt == 300 }
+        #expect(await MainActor.run { vm.sessions.first?.isPinned == true })
     }
 
     @Test func `rename patches label optimistically and reverts on failure`() async throws {
@@ -14116,7 +13929,7 @@ struct ChatViewModelSessionManagementTests {
         let renamed = sessionsResponse([
             sessionEntry(
                 key: "agent:main:topic-a",
-                updatedAt: 200,
+                updatedAt: 201,
                 displayName: "Trip planning",
                 label: "Trip planning"),
         ])
@@ -14130,28 +13943,22 @@ struct ChatViewModelSessionManagementTests {
             })
 
         await MainActor.run { vm.refreshSessions() }
-        try await waitUntil("initial sessions applied") {
-            await MainActor.run { !vm.sessions.isEmpty }
-        }
+        await waitForObservedState { !vm.sessions.isEmpty }
 
         await MainActor.run { vm.renameSession(key: "agent:main:topic-a", label: " Trip planning ") }
         #expect(await MainActor.run { vm.sessions.first?.displayName } == "Trip planning")
-        try await waitUntil("rename sent trimmed label") {
-            let renames = await transport.renamedLabels()
-            return renames.count == 1 && renames[0].label == "Trip planning"
-        }
-        // Let the post-rename refresh settle so the failing rename below
-        // captures a deterministic pre-mutation snapshot to revert to.
-        try await waitUntil("post-rename refresh applied") {
-            await transport.listSessionsQueries().count >= 2
-        }
+        await transport.waitForState { $0.renamedLabelsByKey.count >= 1 }
+        let renames = await transport.renamedLabels()
+        #expect(renames.count == 1 && renames[0].label == "Trip planning")
+        // The server timestamp proves the refresh settled before the failing rename.
+        await waitForObservedState { vm.sessions.first?.updatedAt == 201 }
+        #expect(await transport.listSessionsQueries().count >= 2)
 
         await MainActor.run { vm.renameSession(key: "agent:main:topic-a", label: "Bad name") }
-        try await waitUntil("failed rename reverts") {
-            await MainActor.run {
-                vm.sessions.first?.displayName == "Trip planning" && vm.errorText == "rename failed"
-            }
-        }
+        // The failure path reverts the row and publishes the error in one MainActor step.
+        await waitForObservedState { vm.errorText != nil }
+        #expect(await MainActor.run { vm.sessions.first?.displayName } == "Trip planning")
+        #expect(await MainActor.run { vm.errorText } == "rename failed")
     }
 
     @Test func `archive removes the session from the active list`() async throws {
@@ -14171,19 +13978,17 @@ struct ChatViewModelSessionManagementTests {
             sessionsResponses: [initial, afterArchive])
 
         await MainActor.run { vm.refreshSessions() }
-        try await waitUntil("initial sessions applied") {
-            await MainActor.run { vm.sessions.count == 2 }
-        }
+        await waitForObservedState { vm.sessions.count >= 2 }
+        #expect(await MainActor.run { vm.sessions.count == 2 })
 
         await MainActor.run { vm.setSessionArchived(archivedSession, archived: true) }
         #expect(await MainActor.run { vm.sessions.map(\.key) } == ["agent:main:topic-a"])
-        try await waitUntil("archive patch sent") {
-            let changes = await transport.archivedChanges()
-            return changes.count == 1 &&
-                changes[0].key == "agent:main:topic-b" &&
-                changes[0].expectedSessionID == "session-topic-b" &&
-                changes[0].archived
-        }
+        await transport.waitForState { $0.archivedChanges.count >= 1 }
+        let changes = await transport.archivedChanges()
+        #expect(changes.count == 1 &&
+            changes[0].key == "agent:main:topic-b" &&
+            changes[0].expectedSessionID == "session-topic-b" &&
+            changes[0].archived)
     }
 
     @Test func `fetchSessionList sends search and archived to the server`() async {
@@ -14247,9 +14052,8 @@ struct ChatViewModelSessionManagementTests {
             })
 
         await MainActor.run { vm.refreshSessions() }
-        try await waitUntil("cached sessions applied") {
-            await MainActor.run { vm.sessions.count == 2 }
-        }
+        await waitForObservedState { vm.sessions.count >= 2 }
+        #expect(await MainActor.run { vm.sessions.count == 2 })
 
         let filtered = await vm.fetchSessionList(search: "trip", archived: false)
         #expect(filtered.map(\.key) == ["agent:main:topic-a"])
