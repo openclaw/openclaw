@@ -50,6 +50,7 @@ vi.mock("../../gateway/call.js", async (importOriginal) => {
     callGateway: (opts: unknown) => callGatewayMock(opts),
   };
 });
+// mock-isolation: Keep transport inside this fixture; real loopback and admission have Gateway integration coverage.
 vi.mock("./in-process-gateway.js", () => ({
   bindAgentToolGatewayRequest: () => callGatewayMock,
   callAgentToolGatewayRequest: (opts: unknown) => callGatewayMock(opts),
