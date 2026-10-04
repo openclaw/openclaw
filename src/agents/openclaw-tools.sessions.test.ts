@@ -118,6 +118,7 @@ function installMessagingTestRegistry() {
 function getSessionTool(
   name: "sessions_list" | "sessions_history" | "sessions_send",
   options?: {
+    agentId?: string;
     agentSessionKey?: string;
     agentChannel?: string;
     sandboxed?: boolean;
@@ -654,14 +655,14 @@ describe("sessions tools", () => {
 
   it.each([
     {
-      name: "ordinary peer",
-      requesterKey: "agent:main:whatsapp:group:req",
+      name: "unscoped requester",
+      requesterKey: "main",
       requesterChannel: "whatsapp",
       targetKey: "agent:director1:discord:group:target",
     },
     {
       name: "internal requester",
-      requesterKey: "agent:main:main",
+      requesterKey: "agent:stevo:main",
       requesterChannel: "webchat",
       targetKey: "agent:director1:main",
     },
@@ -680,7 +681,17 @@ describe("sessions tools", () => {
         return {};
       });
       const tool = getSessionTool("sessions_send", {
+        agentId: "stevo",
         agentSessionKey: requesterKey,
+        config: {
+          ...TEST_CONFIG,
+          agents: {
+            list: [
+              { id: "main", default: true, identity: { name: "Wrong Main" } },
+              { id: "stevo", identity: { name: "Stevo" } },
+            ],
+          },
+        },
         agentChannel: requesterChannel,
       });
       const waited = await tool.execute("inline-reply", {
@@ -721,7 +732,8 @@ describe("sessions tools", () => {
         sourceTool: "sessions_send",
       });
       expect(params.inputProvenance?.sourceRole).toBeUndefined();
-      expect(params.extraSystemPrompt).toBeUndefined();
+      expect(params.extraSystemPrompt).toContain("Agent 1 (requester) name: Stevo.");
+      expect(params.extraSystemPrompt).not.toContain("Wrong Main");
     },
   );
 

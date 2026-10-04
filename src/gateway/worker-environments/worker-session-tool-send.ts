@@ -40,6 +40,7 @@ export async function executeWorkerSessionSend(operation: {
     };
     await assertCurrentTarget();
     const tool = createSessionsSendTool({
+      agentId: operation.source.agentId,
       agentSessionKey: operation.source.sessionKey,
       agentChannel: sessionDeliveryChannel(operation.source.entry),
       expectedTargetSessionId: operation.target.sessionId,

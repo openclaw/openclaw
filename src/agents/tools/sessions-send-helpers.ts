@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { truncateWithMarker } from "@openclaw/normalization-core/utf16-slice";
 import {
   getChannelPlugin,
   normalizeChannelId as normalizeAnyChannelId,
@@ -6,7 +7,10 @@ import {
 import { resolveSessionConversationRef } from "../../channels/plugins/session-conversation.js";
 import { normalizeChatChannelId } from "../../channels/registry.js";
 import { parseSessionDeliveryRoute } from "../../sessions/session-key-utils.js";
+import { sanitizeAgentIdentityLine } from "../identity-file.js";
 import { jsonResult } from "./tool-results.js";
+
+const MAX_A2A_REQUESTER_NAME_PROMPT_CHARS = 120;
 
 export type SessionDeliveryTarget = {
   channel: string;
@@ -77,4 +81,17 @@ export function resolveSessionDeliveryTargetFromKey(
     to: normalized ?? (normalizedChannel ? genericTarget : parsed.id),
     threadId: parsed.threadId,
   };
+}
+
+export function buildSessionsSendRequesterContext(name: string | undefined): string | undefined {
+  const requesterName = name
+    ? truncateWithMarker(sanitizeAgentIdentityLine(name), MAX_A2A_REQUESTER_NAME_PROMPT_CHARS, {
+        marker: "...",
+        reserve: 3,
+        trimEnd: true,
+      })
+    : undefined;
+  return requesterName
+    ? `Agent-to-agent message context:\nAgent 1 (requester) name: ${requesterName}.`
+    : undefined;
 }
