@@ -181,6 +181,7 @@ export type ChatThreadProps = ChatSendStatusActions & {
   githubRepo?: MarkdownRenderOptions["githubRepo"];
   githubRepositories?: MarkdownRenderOptions["githubRepositories"];
   autoExpandToolCalls?: boolean;
+  realtimeTalkActive?: boolean;
   realtimeTalkConversation?: RealtimeTalkConversationEntry[];
   typingActors?: readonly ChatTypingActorView[];
   typingOverflow?: ChatTypingOverflow;
