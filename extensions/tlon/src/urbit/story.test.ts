@@ -124,6 +124,34 @@ describe("markdownToStory inline formatting", () => {
   });
 });
 
+describe("markdownToStory nested image hoisting", () => {
+  const image = {
+    block: { image: { src: "https://example.com/x.png", alt: "x", height: 0, width: 0 } },
+  };
+
+  it.each([
+    {
+      markdown: "# Chart ![x](https://example.com/x.png)",
+      expected: [{ block: { header: { tag: "h1", content: ["Chart "] } } }, image],
+    },
+    { markdown: "## ![x](https://example.com/x.png)", expected: [image] },
+    {
+      markdown: "> Chart ![x](https://example.com/x.png)",
+      expected: [{ inline: [{ blockquote: ["Chart "] }] }, image],
+    },
+    {
+      markdown: "a **Chart ![x](https://example.com/x.png) here** b",
+      expected: [{ inline: ["a ", { bold: ["Chart  here"] }, " b"] }, image],
+    },
+    {
+      markdown: "a *~~![x](https://example.com/x.png)~~* b",
+      expected: [{ inline: ["a  b"] }, image],
+    },
+  ])("hoists images out of %j", ({ markdown, expected }) => {
+    expect(markdownToStory(markdown)).toEqual(expected);
+  });
+});
+
 describe("markdownToStory paragraph boundaries", () => {
   it.each(["####### heading", "# "])("preserves non-heading %j as ordinary text", (markdown) => {
     expect(markdownToStory(markdown)).toEqual([{ inline: [markdown] }]);

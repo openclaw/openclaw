@@ -154,17 +154,42 @@ export function isImageUrl(url: string): boolean {
   return imageExtensions.test(path);
 }
 
+const NESTED_INLINE_KEYS = ["bold", "italics", "strike", "blockquote"] as const;
+
+function hoistImageBlocks(inlines: StoryInline[], imageBlocks: StoryVerse[]): StoryInline[] {
+  const kept: StoryInline[] = [];
+  for (const inline of inlines) {
+    if (typeof inline === "string") {
+      kept.push(inline);
+      continue;
+    }
+    if ("imageBlock" in inline) {
+      imageBlocks.push(createImageBlock(inline.imageBlock.src, inline.imageBlock.alt));
+      continue;
+    }
+    const key = NESTED_INLINE_KEYS.find((candidate) => candidate in inline);
+    if (!key) {
+      kept.push(inline);
+      continue;
+    }
+    const content = hoistImageBlocks(
+      (inline as Record<typeof key, StoryInline[]>)[key],
+      imageBlocks,
+    );
+    if (content.length > 0) {
+      kept.push({ [key]: content } as StoryInline);
+    }
+  }
+  return mergeAdjacentStrings(kept);
+}
+
 function parseInlinesWithBreaks(text: string): {
   inlines: StoryInline[];
   imageBlocks: StoryVerse[];
 } {
   const withBreaks: StoryInline[] = [];
   const imageBlocks: StoryVerse[] = [];
-  for (const inline of parseInlineMarkdown(text)) {
-    if (typeof inline === "object" && "imageBlock" in inline) {
-      imageBlocks.push(createImageBlock(inline.imageBlock.src, inline.imageBlock.alt));
-      continue;
-    }
+  for (const inline of hoistImageBlocks(parseInlineMarkdown(text), imageBlocks)) {
     if (typeof inline !== "string" || !inline.includes("\n")) {
       withBreaks.push(inline);
       continue;
@@ -498,14 +523,15 @@ export function markdownToStory(markdown: string): Story {
     if (headerMatch) {
       const tag =
         HEADING_TAGS[expectDefined(headerMatch[1], "header marker capture").length - 1] ?? "h6";
-      story.push({
-        block: {
-          header: {
-            tag,
-            content: parseInlineMarkdown(expectDefined(headerMatch[2], "header body capture")),
-          },
-        },
-      });
+      const imageBlocks: StoryVerse[] = [];
+      const content = hoistImageBlocks(
+        parseInlineMarkdown(expectDefined(headerMatch[2], "header body capture")),
+        imageBlocks,
+      );
+      if (content.length > 0) {
+        story.push({ block: { header: { tag, content } } });
+      }
+      story.push(...imageBlocks);
       i++;
       continue;
     }
@@ -526,10 +552,15 @@ export function markdownToStory(markdown: string): Story {
         quoteLines.push(quoteLine.slice(2));
         i++;
       }
-      const quoteText = quoteLines.join("\n");
-      story.push({
-        inline: [{ blockquote: parseInlineMarkdown(quoteText) }],
-      });
+      const imageBlocks: StoryVerse[] = [];
+      const quote = hoistImageBlocks(
+        [{ blockquote: parseInlineMarkdown(quoteLines.join("\n")) }],
+        imageBlocks,
+      );
+      if (quote.length > 0) {
+        story.push({ inline: quote });
+      }
+      story.push(...imageBlocks);
       continue;
     }
 
