@@ -4065,11 +4065,19 @@ describe("chat model controls", () => {
   it.each([
     {
       name: "previous run without exact identities",
+      sending: false,
       hasActiveRun: true,
       activeRunIds: undefined,
       activeModel: "fallback",
     },
-  ])("keeps the selected model while starting instead of the $name", (row) => {
+    {
+      name: "new message admission",
+      sending: true,
+      hasActiveRun: false,
+      activeRunIds: undefined,
+      activeModel: "fallback",
+    },
+  ])("keeps the selected model quiet instead of the $name", (row) => {
     const { state } = createChatHeaderState({
       model: "primary",
       modelProvider: "example",
@@ -4086,10 +4094,11 @@ describe("chat model controls", () => {
       activeModel: row.activeModel,
       activeModelProvider: row.activeModel ? "example" : undefined,
     });
-    const trigger = getChatModelSelect(renderModelControls(state));
-    expect(trigger.getAttribute("aria-label")).toBe("Chat model: Primary · Starting…");
-    expect(trigger.getAttribute("aria-busy")).toBe("true");
-    expect(trigger.querySelector(".btn__spinner")).not.toBeNull();
+    const trigger = getChatModelSelect(renderModelControls(state, { sending: row.sending }));
+    expect(trigger.getAttribute("aria-label")).toBe("Chat model: Primary");
+    expect(trigger.getAttribute("aria-busy")).toBe("false");
+    expect(trigger.querySelector(".btn__spinner")).toBeNull();
+    expect(trigger.querySelector(".chat-controls__inline-select-chevron svg")).not.toBeNull();
     expect(trigger.textContent).toContain("Primary");
     expect(trigger.textContent).not.toContain("Model pending");
     expect(trigger.textContent).not.toContain("Fallback");
