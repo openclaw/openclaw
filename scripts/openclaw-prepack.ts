@@ -13,6 +13,7 @@ import { restorePrepackArtifacts } from "./openclaw-postpack.mjs";
 import { preparePackageChangelog } from "./package-changelog.mjs";
 import { preparePackageDocsMap } from "./package-docs-map.mjs";
 import { preparePackageManifest } from "./package-manifest.mjs";
+import { preparePackagedWorkerBundle } from "./package-worker-bundle.mts";
 import { createPnpmRunnerSpawnSpec } from "./pnpm-runner.mts";
 const requiredPreparedPathGroups = [
   ["dist/index.js", "dist/index.mjs"],
@@ -273,6 +274,7 @@ export async function preparePrepackArtifacts(env: NodeJS.ProcessEnv = process.e
   // changelog is touched, so concurrent packs cannot restore each other's files.
   await preparePackageDocsMap(process.cwd());
   try {
+    await preparePackagedWorkerBundle(process.cwd());
     await writePackageDistInventoryForPublish(process.cwd());
     await preparePackageManifest(process.cwd());
     await preparePackageChangelog(process.cwd(), {

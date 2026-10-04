@@ -37,7 +37,6 @@ import {
   SINGLE_VALUE_FILE_REF_ID,
 } from "./ref-contract.js";
 import {
-  isMissingSecretRefResolutionError,
   isProviderScopedSecretResolutionError,
   isSecretResolutionError,
   providerResolutionError,
@@ -73,7 +72,7 @@ type ResolveSecretRefOptions = {
 
 type ProviderResolutionOutput = Map<string, unknown>;
 
-export { isMissingSecretRefResolutionError, isProviderScopedSecretResolutionError };
+export { isProviderScopedSecretResolutionError };
 
 function throwUnknownProviderResolutionError(params: {
   source: SecretRefSource;
@@ -535,7 +534,7 @@ async function resolveProviderRefs(params: {
       });
     }
     if (params.providerConfig.source === "store") {
-      return resolveStoreRefs({
+      return await resolveStoreRefs({
         refs: params.refs,
         providerName: params.providerName,
         onRefError: params.onRefError,

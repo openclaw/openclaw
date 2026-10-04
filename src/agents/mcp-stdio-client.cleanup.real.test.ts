@@ -135,10 +135,12 @@ if (process.argv.some(arg => arg.includes("service-child-group-anchor"))) {
 }
 
 describe.skipIf(process.platform === "win32")("MCP retained relay cleanup", () => {
-  it.each(["accepted", "reported failure"] as const)(
+  it.each(["accepted", "reported failure", "blocked relay"] as const)(
     "confirms forced relay exit and permits a fresh client after graceful cleanup stalls (%s)",
     async (signalReport) => {
-      const { createClient } = await createFixture();
+      const { createClient } = await createFixture(
+        signalReport === "blocked relay" ? "blocked-relay" : "relay",
+      );
       const client = createClient();
       await expect(client.request("ping", {}, { timeoutMs: 10_000 })).resolves.toEqual({
         ok: true,
@@ -198,17 +200,6 @@ describe.skipIf(process.platform === "win32")("MCP retained relay cleanup", () =
       }),
     });
     expect(kill).toHaveBeenCalledWith("SIGKILL");
-  });
-
-  it("kills an unresponsive relay after its anchor group has disappeared", async () => {
-    const { createClient } = await createFixture("blocked-relay");
-    const client = createClient();
-    await client.request("ping", {}, { timeoutMs: 10_000 });
-    await client.stop();
-    expect(client.cleanupResult).toMatchObject({
-      signalRequested: "SIGKILL",
-      exit: { code: null, signal: "SIGKILL" },
-    });
   });
 
   it("escalates and reaps an anchor whose group persists after its closing receipt", async ({

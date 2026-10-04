@@ -71,68 +71,105 @@ function makeProfileClient(
 }
 
 describe("createGatewayRequestContext presence", () => {
-  it("refreshes every live connection and presence row for a changed user profile", async () => {
-    const first = makeProfileClient("ada-one", "ada@example.test");
-    const second = makeProfileClient("ada-two", "ada@work.test");
-    const unrelated = makeProfileClient("grace", "grace@example.test", {
-      profileId: "profile-grace",
-      displayName: "Grace",
-      avatarRevision: "1",
-      hasAvatar: false,
-    });
-    const params = makePresenceContextParams({
-      clients: new Set([first, second, unrelated]) as never,
-    });
-    const context = createGatewayRequestContext(params);
-    const capturedFirstProfile = first.authenticatedUserProfile;
-    const readCapturedDisplayName = () => capturedFirstProfile.displayName;
-
-    const revisions = ["avatar-new-png", "avatar-newer-png"];
-    for (const [index, avatarRevision] of revisions.entries()) {
-      context.refreshConnectedUserProfile?.({
-        id: "profile-ada",
-        displayName: "Augusta Ada",
-        avatarRevision,
-        hasAvatar: index === 0,
-        updatedAt: 2,
+  it.each(["email", "owner", "tailscale"] as const)(
+    "refreshes every live profile connection with %s identity",
+    async (identity) => {
+      let now = Date.now();
+      const clock = vi.spyOn(Date, "now").mockImplementation(() => now++);
+      onTestFinished(() => {
+        clock.mockRestore();
       });
-      await params.presenceClock.advanceBy(200);
-    }
-
-    expect(first.authenticatedUserProfile).toEqual({
-      profileId: "profile-ada",
-      displayName: "Augusta Ada",
-      avatarRevision: "avatar-newer-png",
-      hasAvatar: false,
-      updatedAt: 2,
-    });
-    expect(first.authenticatedUserProfile).toBe(capturedFirstProfile);
-    expect(readCapturedDisplayName()).toBe("Augusta Ada");
-    expect(second.authenticatedUserProfile).toEqual(first.authenticatedUserProfile);
-    expect(unrelated.authenticatedUserProfile.displayName).toBe("Grace");
-    for (const [index, avatarRevision] of revisions.entries()) {
-      expect(params.runtime.broadcast).toHaveBeenNthCalledWith(
-        index + 1,
-        "presence",
-        {
-          presence: expect.arrayContaining(
-            ["ada@example.test", "ada@work.test"].map((email) =>
-              expect.objectContaining({
-                user: {
-                  id: "profile-ada",
-                  identity: { type: "profile", id: "profile-ada" },
-                  email,
-                  name: "Augusta Ada",
-                  avatarUrl: `/api/users/profile-ada/avatar?v=${avatarRevision}`,
-                },
-              }),
+      const profileId = `profile-${identity}`;
+      const emails =
+        identity === "email"
+          ? ["ada@example.test", "ada@work.test"]
+          : identity === "owner"
+            ? [undefined, undefined]
+            : ["ada@github"];
+      const clients = emails.map((email, index) => ({
+        ...makeProfileClient(`${identity}-${index}`, email, { profileId }),
+        ...(identity === "owner" ? { personPresence: { onlineSince: 1_000 } } : {}),
+        ...(identity === "tailscale" ? { authenticatedUserIsTailscaleProvider: true } : {}),
+      }));
+      const unrelated = makeProfileClient("grace", "grace@example.test", {
+        profileId: "profile-grace",
+        displayName: "Grace",
+        avatarRevision: "1",
+        hasAvatar: false,
+      });
+      const params = makePresenceContextParams({
+        clients: new Set([...clients, unrelated]) as never,
+      });
+      const context = createGatewayRequestContext(params);
+      const first = clients[0]!;
+      const capturedProfile = first.authenticatedUserProfile;
+      const readCapturedDisplayName = () => capturedProfile.displayName;
+      const revisions =
+        identity === "email"
+          ? ["avatar-new-png", "avatar-newer-png"]
+          : identity === "owner"
+            ? ["2"]
+            : ["avatar-tailscale-new-png"];
+      const expectedUser = (email: string | undefined, avatarRevision: string) => ({
+        id: profileId,
+        identity: { type: "profile", id: profileId },
+        ...(identity === "email" ? { email } : {}),
+        name: "Augusta Ada",
+        avatarUrl: `/api/users/${profileId}/avatar?v=${avatarRevision}`,
+      });
+      for (const [index, avatarRevision] of revisions.entries()) {
+        context.refreshConnectedUserProfile?.({
+          id: profileId,
+          displayName: "Augusta Ada",
+          avatarRevision,
+          hasAvatar: identity !== "owner" && index === 0,
+          updatedAt: 2,
+        });
+        await params.presenceClock.advanceBy(200);
+        expect(params.runtime.broadcast).toHaveBeenNthCalledWith(
+          index + 1,
+          "presence",
+          {
+            presence: expect.arrayContaining(
+              emails.map((email) =>
+                expect.objectContaining({ user: expectedUser(email, avatarRevision) }),
+              ),
             ),
-          ),
-        },
-        { dropIfSlow: true, stateVersion: { presence: 1, health: 1 } },
-      );
-    }
-  });
+          },
+          { dropIfSlow: true, stateVersion: { presence: 1, health: 1 } },
+        );
+      }
+      expect(params.runtime.broadcast).toHaveBeenCalledTimes(revisions.length);
+      expect(first.authenticatedUserProfile).toBe(capturedProfile);
+      expect(readCapturedDisplayName()).toBe("Augusta Ada");
+      for (const client of clients) {
+        expect(client.authenticatedUserProfile).toEqual({
+          profileId,
+          displayName: "Augusta Ada",
+          avatarRevision: revisions.at(-1),
+          hasAvatar: identity === "tailscale",
+          updatedAt: 2,
+        });
+      }
+      expect(unrelated.authenticatedUserProfile.displayName).toBe("Grace");
+      const rows = listSystemPresence().filter((entry) => entry.user?.id === profileId);
+      expect(rows).toHaveLength(clients.length);
+      const newestFirstEmails = emails.toReversed();
+      for (const [index, row] of rows.entries()) {
+        expect(row.user).toEqual(expectedUser(newestFirstEmails[index], revisions.at(-1)!));
+      }
+      if (identity === "email") {
+        expect(rows[0]!.ts).toBeGreaterThan(rows[1]!.ts);
+      }
+      if (identity === "owner") {
+        expect(params.runtime.broadcast).toHaveBeenCalledExactlyOnceWith(
+          "presence",
+          { presence: expect.arrayContaining(rows) },
+          { dropIfSlow: true, stateVersion: { presence: 1, health: 1 } },
+        );
+      }
+    },
+  );
 
   it("canonicalizes a connected profile after its durable identity is merged", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -214,47 +251,6 @@ describe("createGatewayRequestContext presence", () => {
         false,
       );
     });
-  });
-
-  it("publishes an owner rename to every tab without inventing an email", async () => {
-    const ownerClients = ["one", "two"].map((tab) =>
-      Object.assign(
-        makeProfileClient(`owner-${tab}`, undefined, {
-          profileId: "profile-owner",
-          avatarRevision: "1",
-          hasAvatar: false,
-        }),
-        { personPresence: { onlineSince: 1_000 } },
-      ),
-    );
-    const params = makePresenceContextParams({ clients: new Set(ownerClients) as never });
-    createGatewayRequestContext(params).refreshConnectedUserProfile?.({
-      id: "profile-owner",
-      displayName: "Augusta Ada",
-      avatarRevision: "2",
-      hasAvatar: false,
-      updatedAt: 2,
-    });
-    await params.presenceClock.advanceBy(200);
-
-    for (const client of ownerClients) {
-      expect(client.authenticatedUserProfile.displayName).toBe("Augusta Ada");
-    }
-    const ownerRows = listSystemPresence().filter((entry) => entry.user?.id === "profile-owner");
-    expect(ownerRows).toHaveLength(2);
-    for (const entry of ownerRows) {
-      expect(entry.user).toEqual({
-        id: "profile-owner",
-        identity: { type: "profile", id: "profile-owner" },
-        name: "Augusta Ada",
-        avatarUrl: "/api/users/profile-owner/avatar?v=2",
-      });
-    }
-    expect(params.runtime.broadcast).toHaveBeenCalledExactlyOnceWith(
-      "presence",
-      { presence: expect.arrayContaining(ownerRows) },
-      { dropIfSlow: true, stateVersion: { presence: 1, health: 1 } },
-    );
   });
 
   it("coalesces typing activity across a person's tabs and publishes explicit changes after the coalescing window", async () => {
@@ -434,37 +430,4 @@ describe("createGatewayRequestContext presence", () => {
       ).toBe(false);
     },
   );
-
-  it("keeps Tailscale provider identities out of refreshed presence email", async () => {
-    const client = {
-      ...makeProfileClient("ada-tailscale", "ada@github", {
-        profileId: "profile-ada-tailscale",
-        avatarRevision: "avatar-tailscale-png",
-      }),
-      authenticatedUserIsTailscaleProvider: true,
-    };
-    const params = makePresenceContextParams({ clients: new Set([client]) as never });
-    const context = createGatewayRequestContext(params);
-
-    context.refreshConnectedUserProfile?.({
-      id: "profile-ada-tailscale",
-      displayName: "Augusta Ada",
-      avatarRevision: "avatar-tailscale-new-png",
-      hasAvatar: true,
-      updatedAt: 2,
-    });
-    await params.presenceClock.advanceBy(200);
-
-    const presence = vi.mocked(params.runtime.broadcast).mock.calls[0]?.[1] as {
-      presence?: Array<{ user?: { id?: string; email?: string } }>;
-    };
-    expect(
-      presence.presence?.find((entry) => entry.user?.id === "profile-ada-tailscale")?.user,
-    ).toEqual({
-      id: "profile-ada-tailscale",
-      identity: { type: "profile", id: "profile-ada-tailscale" },
-      name: "Augusta Ada",
-      avatarUrl: "/api/users/profile-ada-tailscale/avatar?v=avatar-tailscale-new-png",
-    });
-  });
 });

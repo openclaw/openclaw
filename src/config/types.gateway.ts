@@ -44,7 +44,7 @@ export type GatewayControlUiConfig = Omit<
    * this break-glass flag can migrate an unpaired browser safely.
    */
   dangerouslyDisableDeviceAuth?: boolean;
-  github?: { token?: SecretInput };
+  github?: { host?: string; token?: SecretInput };
 };
 
 /** Gateway authentication strategy for WebSocket and HTTP clients. */
@@ -125,7 +125,7 @@ export type GatewayOperatorRolesConfig = Omit<
   NonNullable<GatewayConfigInput["roles"]>,
   "default"
 > & {
-  /** Required validated default for profiles without a valid assigned role. */
+  /** Required default for profiles without a valid explicit or GitHub login assignment. */
   default?: string;
 };
 

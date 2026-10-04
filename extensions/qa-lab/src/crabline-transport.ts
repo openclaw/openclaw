@@ -9,6 +9,10 @@ import {
   type StartedOpenClawCrablineCorrelatedAdapter,
 } from "@openclaw/crabline";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type {
+  QaBusInboundMessageInput,
+  QaBusMessage,
+} from "openclaw/plugin-sdk/qa-channel-protocol";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   isRecord,
@@ -38,7 +42,6 @@ import {
   waitForQaTransportAccountReady,
   waitForQaTransportOutboundSequence,
 } from "./qa-transport.js";
-import type { QaBusInboundMessageInput, QaBusMessage } from "./runtime-api.js";
 
 type QaCrablineTransportState = QaTransportState & {
   slackIngress?: ReturnType<typeof createCrablineSlackIngress>;

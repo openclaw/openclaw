@@ -1,5 +1,6 @@
 import type fs from "node:fs";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { err, ok } from "@openclaw/normalization-core/result";
 import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
 import { isVerbose } from "../global-state.js";
@@ -47,7 +48,11 @@ import {
 } from "./io.audit.js";
 import type { ConfigIoContext } from "./io.context.js";
 import { prepareCronOwnerWriteRefusal } from "./io.cron-owner-refusal.js";
-import { recordConfigWriteMetadata, stampConfigWriteMetadata } from "./io.meta.js";
+import {
+  projectWebhookMigrationIncludeWrite,
+  recordConfigWriteMetadata,
+  stampConfigWriteMetadata,
+} from "./io.meta.js";
 import {
   containsConfigIncludeDirective,
   hashConfigRaw,
@@ -75,7 +80,7 @@ import {
   createConfigValidationFailedError,
   type ConfigWriteRollbackStatus,
 } from "./io.write-errors.js";
-import { resolvePersistCandidateForWrite } from "./io.write-prepare.js";
+import { injectExplicitlySetPaths, resolvePersistCandidateForWrite } from "./io.write-prepare.js";
 import {
   assertBaseSnapshotStillCurrent,
   createConfigFileWriteGuard,
@@ -193,6 +198,9 @@ export async function writeConfigFileFromContext(
   // Doctor repairs need the same authored projection so roster moves preserve nested includes.
   // Missing snapshots also use this owner; exact bootstrap rosters carry explicitSetPaths.
   if (snapshot.valid || (snapshot.exists && hasAuthoredIncludes)) {
+    const webhookMigration = hasAuthoredIncludes
+      ? projectWebhookMigrationIncludeWrite(authoredSourceConfig, authoredConfig)
+      : undefined;
     const keyedAgentEntryIncludes = resolveKeyedAgentEntryIncludePreservation({
       configPath: snapshot.path,
       provenance: snapshot.includeProvenance,
@@ -203,18 +211,31 @@ export async function writeConfigFileFromContext(
       sourceConfig: authoredSourceConfig,
       sourceConfigValid: snapshot.valid,
       sourceConfigBeforeMigrations: snapshot.sourceConfigBeforeMigrations,
-      nextConfig: authoredConfig,
+      nextConfig: webhookMigration?.config ?? authoredConfig,
       rootAuthoredConfig: snapshot.parsed,
       agentRosterIncludeOwned: snapshot.agentRosterIncludeOwned,
       keyedAgentEntryIncludePaths: keyedAgentEntryIncludes?.includePaths,
       unsetPaths,
-      explicitSetPaths,
+      explicitSetPaths: explicitSetPaths.filter(
+        (field) => !webhookMigration?.paths.some((pin) => isDeepStrictEqual(pin, field)),
+      ),
       explicitSetValueSource,
       persistCanonicalAgentRoster,
       allowedAgentRosterRemovals: options.allowedAgentRosterRemovals,
       allowIncludeAncestorExplicitSetPaths: options.allowIncludeAncestorExplicitSetPaths,
       preserveLegacyAgentRoster,
     });
+    if (webhookMigration) {
+      persistCandidate = injectExplicitlySetPaths({
+        valueSource: authoredConfig,
+        persistedCandidate: persistCandidate,
+        runtimeConfig: authoredRuntimeConfig,
+        sourceConfig: authoredSourceConfig,
+        rootAuthoredConfig: snapshot.parsed,
+        explicitSetPaths: webhookMigration.paths,
+        allowIncludeAncestorExplicitSetPaths: true,
+      });
+    }
   }
   const validationEnvBase = createConfigRuntimeEnvBase(
     snapshot.sourceConfigBeforeMigrations ?? snapshot.sourceConfig,
@@ -222,7 +243,7 @@ export async function writeConfigFileFromContext(
   );
   const resolveValidationCandidate = (candidate: unknown) => {
     // Validate removals now; apply them once to the final authored output after materialization.
-    const config = applyUnsetPathsForWrite(candidate as OpenClawConfig, unsetPaths);
+    const config = applyUnsetPathsForWrite(candidate, unsetPaths);
     if (containsConfigIncludeDirective(config)) {
       return context.resolveRuntimePreflightSourceConfig(
         config,
@@ -264,7 +285,6 @@ export async function writeConfigFileFromContext(
     snapshot.exists
       ? validatedCandidate
       : initializeNativeSessionCatalogPreferences(validatedCandidate),
-    undefined,
     options.lastTouchedVersionOverride,
     snapshot.exists ? previousSource : null,
   );
@@ -304,7 +324,6 @@ export async function writeConfigFileFromContext(
   });
   const stampedOutputConfig = stampConfigWriteMetadata(
     outputConfig,
-    undefined,
     options.lastTouchedVersionOverride,
   );
   rejectConfigNonFiniteNumbers(stampedOutputConfig);

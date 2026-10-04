@@ -218,81 +218,63 @@ it("refuses a backup destination replaced between mode and rename", async () => 
   }
 });
 
-it("retains original and private cleanup failures during conditional rollback", async () => {
-  const f = fixture();
-  const { prepared, guarded } = await prepare(f);
-  try {
-    prepared.publish();
-  } finally {
-    await prepared[Symbol.asyncDispose]();
-  }
-  let stage: string | undefined;
-  const primary = Object.assign(new Error("rollback destination read-only"), { code: "EROFS" });
-  const cleanup = Object.assign(new Error("rollback private cleanup denied"), { code: "EACCES" });
-  const io: typeof fs = {
-    ...fs,
-    renameSync: (from, to) => {
-      if (to === f.target) {
-        stage = String(from);
-        throw primary;
-      }
-      fs.renameSync(from, to);
-    },
-    unlinkSync: (name) => {
-      if (name === stage) {
-        throw cleanup;
-      }
-      fs.unlinkSync(name);
-    },
-  };
-  const failure = await rollbackConfigFileWriteIfUnchanged({
-    configPath: f.target,
-    previousSnapshot: f.options.snapshot,
-    committedHash: hashConfigRaw(content),
-    fsModule: io,
-    ...guarded.captureRollbackProof(f.assertCurrent),
-  }).catch((error: unknown) => error);
-  expect(failure).toMatchObject({ cause: primary });
-  expect(String(failure)).toContain("rollback private cleanup denied");
-  expect(fs.readFileSync(f.target, "utf8")).toBe(content);
-  expect(fs.readFileSync(`${f.target}.bak`, "utf8")).toBe(original);
-});
-
-it("restores an authorized publication through EPERM rollback fallback", async () => {
-  const f = fixture();
-  const { prepared, guarded } = await prepare(f);
-  try {
-    prepared.publish();
-  } finally {
-    await prepared[Symbol.asyncDispose]();
-  }
-  let injected = 0;
-  const io: typeof fs = {
-    ...fs,
-    renameSync: (from, to) => {
-      if (to === f.target && injected++ === 0) {
-        throw Object.assign(new Error("rollback sharing violation"), { code: "EPERM" });
-      }
-      fs.renameSync(from, to);
-    },
-  };
-  await expect(
-    rollbackConfigFileWriteIfUnchanged({
+it.each(["cleanup failure", "permission fallback"] as const)(
+  "settles a conditional rollback after %s",
+  async (fault) => {
+    const f = fixture();
+    const { prepared, guarded } = await prepare(f);
+    try {
+      prepared.publish();
+    } finally {
+      await prepared[Symbol.asyncDispose]();
+    }
+    let stage: string | undefined;
+    let injected = 0;
+    const fallback = fault === "permission fallback";
+    const primary = Object.assign(
+      new Error(fallback ? "rollback sharing violation" : "rollback destination read-only"),
+      { code: fallback ? "EPERM" : "EROFS" },
+    );
+    const cleanup = Object.assign(new Error("rollback private cleanup denied"), { code: "EACCES" });
+    const io: typeof fs = {
+      ...fs,
+      renameSync: (from, to) => {
+        if (to === f.target && (!fallback || injected++ === 0)) {
+          stage = String(from);
+          throw primary;
+        }
+        fs.renameSync(from, to);
+      },
+      unlinkSync: (name) => {
+        if (!fallback && name === stage) {
+          throw cleanup;
+        }
+        fs.unlinkSync(name);
+      },
+    };
+    const result = rollbackConfigFileWriteIfUnchanged({
       configPath: f.target,
       previousSnapshot: f.options.snapshot,
       committedHash: hashConfigRaw(content),
       fsModule: io,
-      preserveDirectoryMode: true,
-      durable: true,
-      destinationHardlinks: "reject",
+      ...(fallback
+        ? { preserveDirectoryMode: true, durable: true, destinationHardlinks: "reject" as const }
+        : {}),
       ...guarded.captureRollbackProof(f.assertCurrent),
-    }),
-  ).resolves.toBe(true);
-  expect(injected).toBe(1);
-  expect(fs.readFileSync(f.target, "utf8")).toBe(original);
-  expect(fs.readFileSync(`${f.target}.bak`, "utf8")).toBe(original);
-  expect(fs.readdirSync(f.dir).filter((name) => name.endsWith(".tmp"))).toEqual([]);
-});
+    });
+    if (fallback) {
+      await expect(result).resolves.toBe(true);
+      expect(injected).toBe(1);
+      expect(fs.readdirSync(f.dir).filter((name) => name.endsWith(".tmp"))).toEqual([]);
+    } else {
+      const failure = await result.catch((error: unknown) => error);
+      expect(failure).toMatchObject({ cause: primary });
+      expect(String(failure)).toContain("rollback private cleanup denied");
+    }
+    expect(fs.readFileSync(f.target, "utf8")).toBe(fallback ? original : content);
+    expect(fs.readFileSync(`${f.target}.bak`, "utf8")).toBe(original);
+  },
+);
 
 describe("rollback owns only its permission-fallback transitions", () => {
   // Exercise every dispatch guard once; path and inode changes need distinct controls,

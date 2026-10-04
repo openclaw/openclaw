@@ -111,11 +111,17 @@ export function parseSessionRosterRecord(value: unknown): SessionRosterRecord | 
 }
 
 function sessionRosterQuery(options: SessionListOptions): SessionListOptions {
-  return normalizeManagedSessionListQuery({
+  const {
+    source: _source,
+    rowMode: _rowMode,
+    ...query
+  } = normalizeManagedSessionListQuery({
     ...options,
     includeDerivedTitles: options.includeDerivedTitles ?? true,
     includeLastMessage: options.includeLastMessage ?? true,
   });
+  // Wire diagnostics and detail projection do not change persisted roster membership.
+  return query;
 }
 
 function rosterRecordMatches(record: SessionRosterRecord, expected: RosterExpectation): boolean {

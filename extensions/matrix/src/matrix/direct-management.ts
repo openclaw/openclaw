@@ -2,7 +2,6 @@ import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import {
   normalizeOptionalString,
   normalizeUniqueTrimmedStringList,
-  uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { inspectMatrixDirectRoomEvidence } from "./direct-room.js";
 import type { MatrixClient } from "./sdk.js";
@@ -68,10 +67,6 @@ function normalizeRemoteUserId(remoteUserId: string): string {
   return normalized;
 }
 
-function normalizeRoomIdList(values: readonly string[]): string[] {
-  return uniqueStrings(Array.from(values, (value) => value.trim()).filter(Boolean));
-}
-
 function resolveDirectAccountDataWriteQueue(client: MatrixClient): KeyedAsyncQueue {
   const existing = directAccountDataWriteQueues.get(client);
   if (existing) {
@@ -92,7 +87,7 @@ async function writeMatrixDirectRoomMappings(params: {
     async () => {
       const directContentBefore = await readMatrixDirectAccountData(params.client);
       const current = normalizeUniqueTrimmedStringList(directContentBefore[params.remoteUserId]);
-      const next = normalizeRoomIdList([...params.roomIds, ...current]);
+      const next = normalizeUniqueTrimmedStringList([...params.roomIds, ...current]);
       const directContentAfter = { ...directContentBefore, [params.remoteUserId]: next };
       const changed =
         current.length !== next.length || current.some((roomId, index) => roomId !== next[index]);
@@ -232,7 +227,7 @@ export async function inspectMatrixDirectRooms(params: {
     }
   }
   const discoveredStrictRooms: MatrixDirectRoomCandidate[] = [];
-  for (const roomId of normalizeRoomIdList(joinedRooms)) {
+  for (const roomId of normalizeUniqueTrimmedStringList(joinedRooms)) {
     if (mappedRoomIds.includes(roomId)) {
       continue;
     }

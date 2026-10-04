@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import {
   resolveDaemonInstallRuntimeInputs,
   resolveDaemonServicePathDirs,
@@ -15,7 +16,7 @@ describe("resolveDaemonInstallRuntimeInputs", () => {
       const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "daemon-pin-")));
       const pinned = path.join(root, "node");
       try {
-        fs.symlinkSync(process.execPath, pinned);
+        fs.symlinkSync(resolveTestNodeExecPath(), pinned);
         await expect(
           resolveDaemonInstallRuntimeInputs({
             env: {},

@@ -17,7 +17,7 @@ const parser = createNativeTypeScriptParser();
 afterAll(() => parser.close());
 
 function parseFixture(content: string, fileName = "source.ts") {
-  return [content, fileName, parser.parseSourceFile(fileName, content)] as const;
+  return [fileName, parser.parseSourceFile(fileName, content)] as const;
 }
 
 const guardScriptPath = fileURLToPath(

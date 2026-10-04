@@ -1,5 +1,6 @@
 import { isMainThread } from "node:worker_threads";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
+import { ownedWorkerBytes } from "../../infra/worker-transfer-bytes.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { retainOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import { captureOpenClawAgentDatabaseValidationTransfer } from "../../state/openclaw-agent-db-validation-cache.js";
@@ -18,7 +19,10 @@ import type {
   SqliteSessionReclamationDiagnostics,
 } from "./session-accessor.sqlite-contract.js";
 import { prepareSessionDeletionInDatabase } from "./session-accessor.sqlite-deletion-plan.js";
-import { hasPreparedNativeSessionDeletion } from "./session-accessor.sqlite-deletion.js";
+import {
+  hasPreparedNativeSessionDeletion,
+  captureNativeSessionWorkerDeletion,
+} from "./session-accessor.sqlite-deletion.js";
 import { assertSessionSubagentRunsCurrent } from "./session-accessor.sqlite-descendant-basis.js";
 import { publishSessionEntryWorkerInvalidations } from "./session-accessor.sqlite-entry-cache-publication.js";
 import type {
@@ -117,8 +121,26 @@ export async function runSqliteSessionReclamation(params: {
     params.diagnostics.kind = params.plan.kind;
   }
   if (
+    params.plan.kind === "entry" &&
+    supportsOpenClawAgentDatabaseExecution(params.plan.databaseOptions)
+  ) {
+    const participants = captureNativeSessionWorkerDeletion(params.plan.preparedTargetSnapshot);
+    if (participants) {
+      const { deleteSessionWithNativeBindingsInWorker } =
+        await import("./session-native-binding.js");
+      return deleteSessionWithNativeBindingsInWorker(
+        params.plan,
+        participants,
+        () => params.assertCommitAllowed?.(),
+        params.onWorkerResult,
+      );
+    }
+  }
+  if (
     params.forceInProcess ||
-    ((params.plan.kind === "maintenance-plan" || params.plan.kind === "maintenance-statistics") &&
+    ((params.plan.kind === "maintenance-plan" ||
+      params.plan.kind === "maintenance-statistics" ||
+      params.plan.kind === "maintenance-age") &&
       !supportsOpenClawAgentDatabaseExecution(params.plan.databaseOptions)) ||
     isIncognitoOpenClawAgentSqlitePath(params.plan.databaseOptions.path, {
       agentId: params.plan.databaseOptions.agentId,
@@ -176,7 +198,11 @@ export async function runSqliteSessionReclamation(params: {
           ...params.plan,
           databaseOptions: { ...params.plan.databaseOptions, path: nativeLocation },
         };
-        if (plan.kind === "maintenance-plan" || plan.kind === "maintenance-statistics") {
+        if (
+          plan.kind === "maintenance-plan" ||
+          plan.kind === "maintenance-statistics" ||
+          plan.kind === "maintenance-age"
+        ) {
           const { runSessionMaintenanceMetadataInWorker } =
             await import("./session-accessor.sqlite-maintenance-worker.js");
           return await runSessionMaintenanceMetadataInWorker({
@@ -217,6 +243,14 @@ export async function runSqliteSessionReclamation(params: {
         params.plan.databaseOptions,
         async () => {
           assertRequestCurrent();
+          if (
+            params.plan.kind === "maintenance-plan" ||
+            params.plan.kind === "maintenance-statistics" ||
+            params.plan.kind === "maintenance-age"
+          ) {
+            // Metadata uses its worker's generation claim, not a host read admission.
+            return undefined;
+          }
           const database = getOpenClawAgentDatabaseIfOpen(params.plan.databaseOptions);
           // Reuse an already-owned handle, but never open a host connection for reclamation.
           return database && !database.db.isTransaction
@@ -242,7 +276,11 @@ export async function runSqliteSessionReclamation(params: {
       const plan = params.plan;
       const execution = captureOpenClawAgentDatabaseExecution(plan.databaseOptions);
       try {
-        if (plan.kind === "maintenance-plan" || plan.kind === "maintenance-statistics") {
+        if (
+          plan.kind === "maintenance-plan" ||
+          plan.kind === "maintenance-statistics" ||
+          plan.kind === "maintenance-age"
+        ) {
           // Metadata keeps its existing executor; archive preparation uses the reclaimer below.
           const admitted = await withSessionEntryWorker(
             plan.databaseOptions,
@@ -352,22 +390,9 @@ function prepareReclamationWorkerTransferList(plan: SqliteArchiveReclamationPlan
     if (!archive) {
       continue;
     }
-    const bytes = archive.bytes;
-    let owned = bytes;
-    let buffer: ArrayBuffer;
-    if (
-      bytes.buffer instanceof ArrayBuffer &&
-      bytes.byteOffset === 0 &&
-      bytes.byteLength === bytes.buffer.byteLength
-    ) {
-      buffer = bytes.buffer;
-    } else {
-      buffer = new ArrayBuffer(bytes.byteLength);
-      owned = new Uint8Array(buffer);
-      owned.set(bytes);
-    }
-    materializedPlan.archive = { ...archive, bytes: owned };
-    buffers.add(buffer);
+    const bytes = ownedWorkerBytes(archive.bytes);
+    materializedPlan.archive = { ...archive, bytes };
+    buffers.add(bytes.buffer);
   }
   return [...buffers];
 }

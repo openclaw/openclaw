@@ -2,6 +2,7 @@ import { resolveNonNegativeIntegerOption } from "@openclaw/normalization-core/nu
 import { formatThinkingLevels } from "../../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { FastMode } from "../../../shared/fast-mode.js";
+import type { ResolvedAgentConfig } from "../../agent-scope-config.js";
 import {
   modelFallbackOverrideFromAvailability,
   resolveModelFallbackAvailability,
@@ -44,8 +45,8 @@ export function resolveConfiguredSubagentRunTimeoutSeconds(params: {
 export async function resolveSubagentModelAndThinkingPlan(params: {
   cfg: OpenClawConfig;
   targetAgentId: string;
-  requesterAgentConfig?: unknown;
-  targetAgentConfig?: unknown;
+  requesterAgentConfig?: ResolvedAgentConfig;
+  targetAgentConfig?: ResolvedAgentConfig;
   modelOverride?: string;
   thinkingOverrideRaw?: string;
   callerThinkingRaw?: string;

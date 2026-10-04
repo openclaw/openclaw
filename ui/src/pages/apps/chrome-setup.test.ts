@@ -236,29 +236,31 @@ describe("Apps local Chrome setup", () => {
     expect(setup.textContent).toContain("Extension connected on this device.");
     expect(setup.textContent).not.toContain("Setup required");
   });
-  it("rejects replies from a replaced native handler", async () => {
-    const pending = createDeferred<unknown>();
-    bridge(() => pending.promise);
-    const { setup } = await mount();
-    click(setup, "Refresh setup status");
-    const replacement = vi.fn();
-    bridge(replacement);
-    pending.resolve(result());
-    await vi.waitFor(() => expect(setup.textContent).toContain("Setup could not finish"));
-    expect(setup.textContent).not.toContain("Example Mac");
-    click(setup, "Set up Chrome on this device");
-    await setup.updateComplete;
-    await vi.waitFor(() => expect(setup.querySelector("button")!.disabled).toBe(false));
-    expect(replacement).not.toHaveBeenCalled();
-  });
-  it.each([{ action: "verify" }, { phase: "unknown" }])(
-    "rejects malformed or mismatched replies %j",
-    async (patch) => {
-      bridge(async () => ({ ...result(), ...patch }));
+  it.each(["replaced handler", "mismatched action", "malformed phase"])(
+    "rejects a setup reply with %s",
+    async (reason) => {
+      const pending = createDeferred<unknown>();
+      bridge(() => pending.promise);
       const { setup } = await mount();
       click(setup, "Refresh setup status");
+      const replacement = vi.fn();
+      if (reason === "replaced handler") {
+        bridge(replacement);
+      }
+      pending.resolve({
+        ...result(),
+        ...(reason === "mismatched action" ? { action: "verify" } : {}),
+        ...(reason === "malformed phase" ? { phase: "unknown" } : {}),
+      });
       await vi.waitFor(() => expect(setup.textContent).toContain("Setup could not finish"));
       expect(setup.textContent).not.toContain("Host:");
+      expect(setup.textContent).not.toContain("Example Mac");
+      if (reason === "replaced handler") {
+        click(setup, "Set up Chrome on this device");
+        await setup.updateComplete;
+        await vi.waitFor(() => expect(setup.querySelector("button")!.disabled).toBe(false));
+        expect(replacement).not.toHaveBeenCalled();
+      }
     },
   );
 });

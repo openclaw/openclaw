@@ -45,6 +45,7 @@ import type {
   PreparedModelRuntimeLeaseOptions,
   PreparedModelRuntimePluginGeneration,
 } from "../prepared-model-runtime.types.js";
+import { buildConfiguredAgentSystemPrompt } from "../system-prompt-config.js";
 import { markCoreTtsAttemptResult } from "../tools/tts-tool-result-provenance.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
@@ -57,7 +58,6 @@ import {
   useOpenAIPlatformAuthFixture,
 } from "./run.overflow-compaction.harness.js";
 import type { RunEmbeddedAgentInternalParams } from "./run/internal-params.js";
-import { buildEmbeddedSystemPrompt } from "./system-prompt.js";
 
 const runnerState = await setupAgentRunnerExecutionTestState();
 
@@ -102,7 +102,8 @@ describe("prepared harness source delivery", () => {
 
   it.each([
     {
-      name: "delivers one streamed answer when preparation changes tool ownership to automatic",
+      name: "delivers one streamed answer when preparation changes legacy tool ownership to automatic",
+      legacyPreliminary: true,
       candidatePath: "cli-failure-embedded" as const,
       preliminaryVisibleReplies: "message_tool" as const,
       preparedVisibleReplies: "automatic" as const,
@@ -133,7 +134,8 @@ describe("prepared harness source delivery", () => {
       genuineTtsDelivery: true,
     },
     {
-      name: "rejects a native harness attempt to mint TTS source delivery",
+      name: "rejects a native harness attempt to mint TTS source delivery with legacy defaults",
+      legacyPrepared: true,
       candidatePath: "embedded" as const,
       preliminaryVisibleReplies: "automatic" as const,
       preparedVisibleReplies: "message_tool" as const,
@@ -189,7 +191,7 @@ describe("prepared harness source delivery", () => {
       forceMessageTool?: boolean;
       sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
     }) => {
-      modelVisiblePrompt = buildEmbeddedSystemPrompt({
+      modelVisiblePrompt = buildConfiguredAgentSystemPrompt({
         workspaceDir: followupRun.run.workspaceDir,
         reasoningTagHint: false,
         extraSystemPrompt: attemptParams.extraSystemPrompt,
@@ -200,7 +202,6 @@ describe("prepared harness source delivery", () => {
           arch: "arm64",
           node: "24",
           model: "model",
-          provider: "custom",
           channel: "discord",
           chatType: "direct",
         },
@@ -289,7 +290,10 @@ describe("prepared harness source delivery", () => {
       registerAgentHarness({
         id: "preliminary-owner",
         label: "Preliminary owner",
-        deliveryDefaults: { visibleReplies: testCase.preliminaryVisibleReplies },
+        deliveryDefaults:
+          "legacyPreliminary" in testCase
+            ? { sourceVisibleReplies: testCase.preliminaryVisibleReplies }
+            : { visibleReplies: testCase.preliminaryVisibleReplies },
         supports: ({ modelProvider }) =>
           testCase.preparedVisibleReplies === "automatic" && modelProvider?.preparedAuth
             ? { supported: false, reason: "raw route only" }
@@ -302,7 +306,10 @@ describe("prepared harness source delivery", () => {
         {
           id: "codex",
           label: "Prepared tool owner",
-          deliveryDefaults: { visibleReplies: "message_tool" },
+          deliveryDefaults:
+            "legacyPrepared" in testCase
+              ? { sourceVisibleReplies: "message_tool" }
+              : { visibleReplies: "message_tool" },
           supports: ({ provider, modelProvider }) =>
             provider === "openai" && modelProvider?.preparedAuth
               ? { supported: true, priority: 200 }
@@ -578,10 +585,9 @@ describe("prepared harness source delivery", () => {
       modelFallbacksOverride: ["fast"],
       config: {
         agents: {
-          list: [
-            { id: "main", default: true },
-            {
-              id: "worker",
+          entries: {
+            main: {},
+            worker: {
               models: {
                 "openai/gpt-5.4": { agentRuntime: { id: "codex" } },
                 "custom/plugin-fallback": {
@@ -590,7 +596,7 @@ describe("prepared harness source delivery", () => {
                 },
               },
             },
-          ],
+          },
           defaults: {
             models: {
               "custom/global-fallback": { alias: "fast" },

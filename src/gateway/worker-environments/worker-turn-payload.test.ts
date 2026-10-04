@@ -6,6 +6,7 @@ import {
 } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
 import type { OperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import { createTestAdmittedRunContext } from "../../agents/admitted-run-context.test-support.js";
+import { buildRuntimeContextCustomMessage } from "../../agents/embedded-agent-runner/run/runtime-context-prompt.js";
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
 import {
@@ -192,6 +193,67 @@ describe("assertSupportedTurn", () => {
 });
 
 describe("windowInitialMessages", () => {
+  it.each([{ source: "openclaw-runtime-context" }, { runtimeContextCarrier: true }])(
+    "preserves historical carrier details %j and provider-visible bytes",
+    (details) => {
+      for (const content of [
+        "retained context",
+        [{ type: "text" as const, text: "retained context" }],
+      ]) {
+        const history: AgentMessage[] = [
+          userMessage("previous turn", 1),
+          {
+            role: "custom",
+            customType: "openclaw.runtime-context",
+            content,
+            display: false,
+            details,
+            timestamp: 2,
+          },
+          assistantMessage(3, true),
+        ];
+        expect(windowInitialMessages(history)).toEqual({ kind: "complete", messages: history });
+      }
+    },
+  );
+
+  it.each([
+    {},
+    { source: "foreign" },
+    { source: "openclaw-runtime-context", runtimeContextCarrier: false },
+  ])("rejects invalid runtime carrier metadata %j", (details) => {
+    expect(() =>
+      windowInitialMessages([
+        {
+          role: "custom",
+          customType: "openclaw.runtime-context",
+          content: "retained context",
+          display: false,
+          details,
+          timestamp: 1,
+        },
+      ]),
+    ).toThrow("Invalid worker runtime context");
+  });
+
+  it.each([false, true])(
+    "retains hidden runtime context before the provider replay anchor (structured: %s)",
+    (structured) => {
+      const context = buildRuntimeContextCustomMessage(
+        "Active exec sessions: none",
+        structured
+          ? [{ kind: "conversation-data", text: "Active exec sessions: none" }]
+          : undefined,
+      );
+      expect(context).toBeDefined();
+      if (!context) {
+        throw new Error("Expected runtime context");
+      }
+      const history = [userMessage("previous turn", 1), context, assistantMessage(3, true)];
+      expect(windowInitialMessages(history)).toEqual({ kind: "complete", messages: history });
+    },
+  );
+
   it("reports oversized replay through the typed unavailable result", () => {
     const message = assistantMessage(1, true);
     if (message.role !== "assistant" || !message.providerReplay) {
@@ -233,21 +295,21 @@ describe("windowInitialMessages", () => {
     });
   });
 
-  it("reserves one context slot for the current prompt", () => {
+  it.each([1, 2])("reserves %i context slots for the complete current prompt", (promptMessages) => {
     const history = Array.from({ length: WORKER_INFERENCE_MAX_CONTEXT_MESSAGES }, (_value, index) =>
       userMessage(`history-${index}`, index + 1),
     );
 
-    const result = windowInitialMessages(history);
+    const result = windowInitialMessages(history, promptMessages);
 
     expect(result.kind).toBe("complete");
     if (result.kind !== "complete") {
       throw new Error("expected complete window");
     }
-    expect(result.messages).toHaveLength(WORKER_INFERENCE_MAX_CONTEXT_MESSAGES - 1);
+    expect(result.messages).toHaveLength(WORKER_INFERENCE_MAX_CONTEXT_MESSAGES - promptMessages);
     expect(result.messages[0]).toMatchObject({
       role: "user",
-      content: [{ type: "text", text: "history-1" }],
+      content: [{ type: "text", text: `history-${promptMessages}` }],
     });
   });
 
@@ -275,20 +337,21 @@ describe("windowInitialMessages", () => {
     });
   });
 
-  it("returns a typed degraded result instead of slicing past replay", () => {
+  it.each([1, 2])("rejects replay that cannot leave %i current-prompt slots", (promptMessages) => {
     const history = [assistantMessage(1, true)];
     history.push(
-      ...Array.from({ length: WORKER_INFERENCE_MAX_CONTEXT_MESSAGES - 1 }, (_value, index) =>
-        userMessage(`suffix-${index}`, index + 2),
+      ...Array.from(
+        { length: WORKER_INFERENCE_MAX_CONTEXT_MESSAGES - promptMessages },
+        (_value, index) => userMessage(`suffix-${index}`, index + 2),
       ),
     );
 
-    expect(windowInitialMessages(history)).toEqual({
+    expect(windowInitialMessages(history, promptMessages)).toEqual({
       kind: "provider-replay-unavailable",
       details: {
         reason: "provider-replay-message-limit",
-        messageCount: WORKER_INFERENCE_MAX_CONTEXT_MESSAGES,
-        limitMessages: WORKER_INFERENCE_MAX_CONTEXT_MESSAGES - 1,
+        messageCount: WORKER_INFERENCE_MAX_CONTEXT_MESSAGES - promptMessages + 1,
+        limitMessages: WORKER_INFERENCE_MAX_CONTEXT_MESSAGES - promptMessages,
       },
     });
   });
@@ -444,8 +507,10 @@ describe("fitLaunchDescriptor", () => {
       text: "[image data removed - already processed by model]",
     };
     const operationalRunInstance = createTestAdmittedRunContext("run").operationalRunInstance;
-    const build = (token: string, initialMessages: typeof messages) =>
-      parseWorkerLaunchPlan(buildDescriptor(initialMessages, token, operationalRunInstance));
+    const build = (
+      token: string,
+      initialMessages: WorkerLaunchPlan["assignment"]["initialMessages"],
+    ) => parseWorkerLaunchPlan(buildDescriptor(initialMessages, token, operationalRunInstance));
     const padding =
       WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES -
       measureLaunch(build(runtimeIdentityToken.value, expected));

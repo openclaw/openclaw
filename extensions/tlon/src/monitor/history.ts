@@ -59,18 +59,10 @@ async function fetchChannelHistory(
       return [];
     }
 
-    let posts: unknown[] = [];
-    if (Array.isArray(data)) {
-      posts = data;
-    } else {
-      const dataRecord = asRecord(data);
-      const postMap = asRecord(dataRecord?.posts);
-      if (postMap) {
-        posts = Object.values(postMap);
-      } else if (dataRecord) {
-        posts = Object.values(dataRecord);
-      }
-    }
+    const dataRecord = asRecord(data);
+    const posts = Array.isArray(data)
+      ? data
+      : Object.values(asRecord(dataRecord?.posts) ?? dataRecord ?? {});
 
     const messages = posts
       .map((item) => {

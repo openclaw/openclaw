@@ -24,14 +24,24 @@ beforeEach(() => {
   runtime = createSqliteSnapshotStagingRuntime(factory);
 });
 
-it.each([
-  Object.assign(new Error("spawn node EACCES"), { code: "EACCES" }),
-  Object.assign(new Error("spawn node ENOENT"), { code: "ENOENT" }),
-  new Error("SQLite snapshot staging owner launch context changed"),
-])("preserves non-directory allocation failures: $message", async (failure) => {
-  transport.run.mockRejectedValueOnce(failure);
-  await expect(runtime.allocate("/fixture", false, launch, 1)).rejects.toBe(failure);
-  expect(transport.close).toHaveBeenCalledOnce();
+it.each([false, true])("preserves allocation failures when cleanup fails=%s", async (fails) => {
+  const allocation = Object.assign(new Error("spawn node EACCES"), { code: "EACCES" });
+  const cleanup = new Error("close failed");
+  transport.run.mockRejectedValueOnce(allocation);
+  if (fails) {
+    transport.close.mockRejectedValueOnce(cleanup);
+    await expect(runtime.allocate("/fixture", false, launch, 1)).rejects.toMatchObject({
+      errors: [allocation, cleanup],
+      cause: allocation,
+    });
+    const owned = await runtime.allocate("/fixture", false, launch, 1);
+    expect(transport.close).toHaveBeenCalledTimes(2);
+    await owned.retire();
+    expect(transport.close).toHaveBeenCalledTimes(3);
+  } else {
+    await expect(runtime.allocate("/fixture", false, launch, 1)).rejects.toBe(allocation);
+    expect(transport.close).toHaveBeenCalledOnce();
+  }
 });
 
 it("acknowledges a lost session before reconciling retirement and accepting new allocations", async () => {
@@ -55,6 +65,10 @@ it("acknowledges a lost session before reconciling retirement and accepting new 
     env: { FIXTURE: "changed-before-retirement" },
     transport: { kind: "native" },
   };
+  await expect(runtime.allocate("/fixture", false, launch, 1)).rejects.toThrow(
+    "launch context changed",
+  );
+  expect(factory).toHaveBeenCalledOnce();
   const retired = owned.retire();
   await vi.waitFor(() => expect(transport.close).toHaveBeenCalledOnce());
   expect(replacement.run).not.toHaveBeenCalled();
@@ -75,6 +89,12 @@ it("acknowledges a lost session before reconciling retirement and accepting new 
   expect(replacement.run).toHaveBeenCalledWith("/fixture/snapshot", { mode: "staging-reconcile" });
   expect(replacement.close).toHaveBeenCalledOnce();
   const next = await runtime.allocate("/fixture", false, launch, 1);
+  expect(factory).toHaveBeenLastCalledWith(
+    expect.objectContaining({
+      env: { FIXTURE: "changed" },
+      cwd: "/changed-after-close-started",
+    }),
+  );
   await next.retire();
 });
 
@@ -88,74 +108,4 @@ it("retries the same last session close before releasing snapshot custody", asyn
   expect(transport.run).toHaveBeenCalledTimes(2);
   await owned.retire();
   expect(transport.close).toHaveBeenCalledTimes(2);
-});
-
-it("preserves allocation and close failures and joins retained close before new allocation", async () => {
-  const allocation = new Error("allocation failed");
-  const cleanup = new Error("close failed");
-  transport.run.mockRejectedValueOnce(allocation);
-  transport.close.mockRejectedValueOnce(cleanup);
-  await expect(runtime.allocate("/fixture", false, launch, 1)).rejects.toMatchObject({
-    errors: [allocation, cleanup],
-    cause: allocation,
-  });
-  const owned = await runtime.allocate("/fixture", false, launch, 1);
-  expect(transport.close).toHaveBeenCalledTimes(2);
-  await owned.retire();
-  expect(transport.close).toHaveBeenCalledTimes(3);
-});
-
-it("refuses a changed launch after session retirement until its original tokens close", async () => {
-  const original = await runtime.allocate("/fixture", false, launch, 1);
-  transport.isRetired.mockReturnValue(true);
-  const replacement = {
-    compatible: () => true,
-    isRetired: () => false,
-    run: vi.fn().mockResolvedValue("/fixture/replacement"),
-    close: vi.fn().mockResolvedValue(undefined),
-  };
-  factory.mockReturnValue(replacement);
-  launch = {
-    cwd: "/changed-generation",
-    env: { FIXTURE: "changed-generation" },
-    transport: { kind: "native" },
-  };
-  const outcome = await runtime.allocate("/fixture", false, launch, 1).then(
-    (value) => ({ value }),
-    (error: unknown) => ({ error }),
-  );
-  let next: Awaited<ReturnType<typeof runtime.allocate>> | undefined;
-  try {
-    expect(outcome).toMatchObject({
-      error: expect.objectContaining({
-        message: expect.stringContaining("launch context changed"),
-      }),
-    });
-    expect(factory).toHaveBeenCalledOnce();
-    await original.retire();
-    expect(factory).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        env: { FIXTURE: "captured" },
-        cwd: "/fixture",
-        transport: { kind: "native" },
-      }),
-    );
-    expect(replacement.run).toHaveBeenCalledWith("/fixture/snapshot", {
-      mode: "staging-reconcile",
-    });
-    expect(replacement.close).toHaveBeenCalledOnce();
-    next = await runtime.allocate("/fixture", false, launch, 1);
-    expect(factory).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        env: { FIXTURE: "changed-generation" },
-        cwd: "/changed-generation",
-      }),
-    );
-  } finally {
-    if ("value" in outcome) {
-      await outcome.value.retire();
-    }
-    await original.retire();
-    await next?.retire();
-  }
 });

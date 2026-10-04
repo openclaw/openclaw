@@ -13,10 +13,13 @@ import {
   noteActiveCronJobMessageActionAuthorityMutation,
   noteActiveCronJobMessageSourceAuthorityMutation,
   noteActiveCronJobScheduleMutation,
+  onCronJobInactive,
   type CronActiveJobMarker,
 } from "../active-jobs.js";
 import { resolveCronJobEffectiveAgentId } from "../agent-id.js";
 import { cronStoreKey } from "../store/key.js";
+import { projectCronReceiptAuthorityJobFacts } from "../store/receipt-authority-facts.js";
+import { observeCronReceiptAuthority } from "../store/receipt-authority-owner.js";
 import {
   CronRunReceiptRevisionError,
   prepareCronRunReceiptAdjudication,
@@ -94,9 +97,10 @@ export function markServiceCronJobActive(
   job: CronJob,
   runReceipt: CronRunReceiptHandle,
 ): CronActiveJobMarker | undefined {
-  return markCronJobActive(job.id, {
+  const context = captureOpenClawStateWorkerContext();
+  const marker = markCronJobActive(job.id, {
     agentId: runReceipt.agentId,
-    stateIdentityKey: captureOpenClawStateWorkerContext().admission.identity.key,
+    stateIdentityKey: context.admission.identity.key,
     declarationKey: job.declarationKey,
     preserveAcrossGenerationAdvance: !runsDetachedFromMainSession(job),
     isMessageActionAuthorityCurrent: createServiceCronRunMessageAuthorityChecker({
@@ -112,6 +116,24 @@ export function markServiceCronJobActive(
       resolveInputs: resolveCronJobMessageActionAuthorityInputs,
     }),
   });
+  if (marker) {
+    const observation = observeCronReceiptAuthority(
+      context,
+      {
+        type: "cron.currentReceipt",
+        handle: runReceipt,
+        includeJob: true,
+        includeAvailability: true,
+      },
+      {
+        receipt: runReceipt,
+        job: projectCronReceiptAuthorityJobFacts(job),
+        deletionBlocked: false,
+      },
+    );
+    onCronJobInactive(marker, () => observation.release());
+  }
+  return marker;
 }
 
 /** Retains admission's permission facts while consulting the existing canonical receipt owner. */

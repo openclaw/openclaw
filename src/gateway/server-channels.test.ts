@@ -13,21 +13,13 @@ import type {
   ChannelAccountLinkState,
   ChannelGatewayContext,
 } from "../channels/plugins/types.adapters.js";
-import type {
-  ChannelAccountSnapshot,
-  ChannelId,
-  ChannelPlugin,
-} from "../channels/plugins/types.public.js";
+import type { ChannelAccountSnapshot, ChannelId } from "../channels/plugins/types.public.js";
 import { formatGatewayChannelsStatusLines } from "../commands/channels/status.runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getGatewayNativeApprovalRuntime } from "../infra/approval-gateway-runtime-context.js";
 import type { GatewayNativeApprovalRuntime } from "../infra/approval-gateway-runtime.types.js";
 import { tryReadSecretFileSync } from "../infra/secret-file.js";
-import {
-  createSubsystemLogger,
-  type SubsystemLogger,
-  runtimeForLogger,
-} from "../logging/subsystem.js";
+import { createSubsystemLogger, type SubsystemLogger } from "../logging/subsystem.js";
 import { registerPluginHttpRoute } from "../plugins/http-registry.js";
 import { createPluginModuleLoader } from "../plugins/loader-module-runtime.js";
 import { createEmptyPluginRegistry, type PluginRegistry } from "../plugins/registry.js";
@@ -36,6 +28,7 @@ import {
   requireActivePluginChannelRegistry,
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
+import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createRuntimeChannel } from "../plugins/runtime/runtime-channel.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import {
@@ -58,9 +51,22 @@ import {
   createTransportActivityStatusPatch,
 } from "./channel-status-patches.js";
 import { restartRunningChannelAccounts } from "./channel-thaw-restart.js";
+import { createGatewayMethodRegistry } from "./methods/registry.js";
 import { createChannelManager, type ChannelManager } from "./server-channels.js";
-import { createTestPlugin, healthOf, type TestAccount } from "./server-channels.test-support.js";
+import {
+  createTestPlugin,
+  createTestChannelRegistry,
+  createTestChannelManager,
+  waitForAbort,
+  flushMicrotasks,
+  healthOf,
+  type TestAccount,
+} from "./server-channels.test-support.js";
 import { AUTH_NONE, createTestGatewayServer } from "./server-http.test-harness.js";
+import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
+import { dispatchGatewayMethodInProcess } from "./server-plugin-in-process-dispatch.js";
+import { createContext } from "./server-plugin-in-process-dispatch.test-support.js";
+import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
 import { createGatewayPluginRequestHandler } from "./server/plugins-http.js";
 
 const hoisted = vi.hoisted(() => {
@@ -115,18 +121,6 @@ type ApprovalGatewayRequestRuntime = Pick<GatewayNativeApprovalRuntime, "request
 const createdManagers: Array<{ manager: ChannelManager; channelIds: ChannelId[] }> = [];
 const channelTempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function waitForAbort(signal: AbortSignal): Promise<void> {
-  return new Promise<void>((resolve) => {
-    signal.addEventListener("abort", () => resolve(), { once: true });
-  });
-}
-
-async function flushMicrotasks(times = 8): Promise<void> {
-  for (let i = 0; i < times; i += 1) {
-    await Promise.resolve();
-  }
-}
-
 async function waitForImmediate(): Promise<void> {
   await new Promise<void>((resolve) => {
     const handle = setImmediate(resolve);
@@ -176,52 +170,15 @@ function firstStartAccountContext(
   return ctx as ChannelGatewayContext<TestAccount>;
 }
 
-function installTestRegistry(
-  ...plugins: Array<
-    | ChannelPlugin<TestAccount>
-    | {
-        plugin: ChannelPlugin<TestAccount>;
-        origin: string;
-        resolveChannelRuntime?: () => PluginRuntime["channel"];
-      }
-  >
-) {
-  const registry = createEmptyPluginRegistry();
-  for (const candidate of plugins) {
-    const plugin = "plugin" in candidate ? candidate.plugin : candidate;
-    registry.channels.push({
-      pluginId: plugin.id,
-      ...("origin" in candidate ? { origin: candidate.origin as never } : {}),
-      ...(typeof candidate === "object" && "resolveChannelRuntime" in candidate
-        ? { resolveChannelRuntime: candidate.resolveChannelRuntime }
-        : {}),
-      source: "test",
-      plugin,
-    } as PluginRegistry["channels"][number]);
-  }
+function installTestRegistry(...plugins: Parameters<typeof createTestChannelRegistry>) {
+  const registry = createTestChannelRegistry(...plugins);
   setActivePluginRegistry(registry);
   return registry;
 }
 
-function createManager(
-  options: Partial<
-    Omit<
-      Parameters<typeof createChannelManager>[0],
-      "scheduler" | "channelLogs" | "channelRuntimeEnvs"
-    >
-  > & { channelIds?: ChannelId[] } = {},
-) {
-  const { channelIds = ["discord"], ...overrides } = options;
-  const log = createSubsystemLogger("gateway/server-channels-test");
-  const manager = createChannelManager({
-    scheduler: createTestGatewayScheduler(),
-    getRuntimeConfig: () => ({}),
-    getPluginRegistry: requireActivePluginChannelRegistry,
-    channelLogs: Object.fromEntries(channelIds.map((id) => [id, log.child(id)])),
-    channelRuntimeEnvs: Object.fromEntries(channelIds.map((id) => [id, runtimeForLogger(log)])),
-    ...overrides,
-  });
-  createdManagers.push({ channelIds, manager });
+function createManager(options: Parameters<typeof createTestChannelManager>[0] = {}) {
+  const manager = createTestChannelManager(options);
+  createdManagers.push({ channelIds: options.channelIds ?? ["discord"], manager });
   return manager;
 }
 
@@ -360,6 +317,79 @@ describe("server-channels auto restart", () => {
       );
       expect(signals.every((signal) => signal.aborted && joined.includes(signal))).toBe(true);
       expect(joined).toHaveLength(signals.length);
+    }
+  });
+
+  it("keeps channel requests bound to their Gateway after the starting client closes", async () => {
+    const continueChannelRequest = createDeferred();
+    const observedGateway = createDeferred<{ gateway: string }>();
+    const ownerContext = createContext();
+    ownerContext.getGatewayMethodRegistry = () =>
+      createGatewayMethodRegistry([
+        {
+          name: "health",
+          scope: "operator.read",
+          owner: { kind: "core", area: "channel-startup" },
+          handler: ({ respond }: GatewayRequestHandlerOptions) =>
+            respond(true, { gateway: "channel-owner" }),
+        },
+      ]);
+    const callerContext = createContext();
+    callerContext.getGatewayMethodRegistry = () =>
+      createGatewayMethodRegistry([
+        {
+          name: "health",
+          scope: "operator.read",
+          owner: { kind: "core", area: "channel-startup" },
+          handler: ({ respond }: GatewayRequestHandlerOptions) =>
+            respond(true, { gateway: "starting-client" }),
+        },
+      ]);
+    const startAccount = async ({ abortSignal }: ChannelGatewayContext<TestAccount>) => {
+      await continueChannelRequest.promise;
+      try {
+        observedGateway.resolve(
+          await dispatchGatewayMethodInProcess<{ gateway: string }>(
+            "health",
+            {},
+            {
+              syntheticScopes: ["operator.read"],
+              operatorRoleActor: { kind: "system" },
+            },
+          ),
+        );
+      } catch (error) {
+        observedGateway.reject(error);
+      }
+      await waitForAbort(abortSignal);
+    };
+    installTestRegistry(createTestPlugin({ startAccount }));
+    const manager = createManager({ resolveGatewayContext: () => ownerContext });
+    const callerLifetime = new AbortController();
+
+    try {
+      await withPluginRuntimeGatewayRequestScope(
+        {
+          context: callerContext,
+          client: createSyntheticPluginRuntimeClient({
+            scopes: ["operator.read"],
+            operatorRoleActor: { kind: "system" },
+          }),
+          isWebchatConnect: () => false,
+          signal: callerLifetime.signal,
+          hasCurrentClientAuthority: () => !callerLifetime.signal.aborted,
+        },
+        () => manager.startChannel("discord", DEFAULT_ACCOUNT_ID, { manual: true }),
+      );
+      callerLifetime.abort();
+      const requestResult = expect(observedGateway.promise).resolves.toEqual({
+        gateway: "channel-owner",
+      });
+      continueChannelRequest.resolve();
+      await requestResult;
+    } finally {
+      continueChannelRequest.resolve();
+      await manager.stopChannel("discord");
     }
   });
 
@@ -1022,6 +1052,7 @@ describe("server-channels auto restart", () => {
     const manager = createManager();
     const starting = manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
     let stopped: Promise<unknown> | undefined;
+    let joinedStop: Promise<void> | undefined;
     try {
       await preparing.promise;
       stopped = manager
@@ -1033,18 +1064,25 @@ describe("server-channels auto restart", () => {
       expect(startAccount).not.toHaveBeenCalled();
       await vi.advanceTimersByTimeAsync(5_000);
       expect(await stopped).toBeInstanceOf(Error);
+      let joined = false;
+      joinedStop = manager
+        .stopChannel("discord", DEFAULT_ACCOUNT_ID, { manual: false, strict: true })
+        .then(() => {
+          joined = true;
+        });
+      await flushMicrotasks();
+      expect(joined).toBe(false);
+      expect(stopAccount).toHaveBeenCalledOnce();
       releaseStop.resolve();
-      await expect(
-        manager.stopChannel("discord", DEFAULT_ACCOUNT_ID, { manual: false, strict: true }),
-      ).resolves.toBeUndefined();
-      expect(stopAccount).toHaveBeenCalledTimes(2);
+      await expect(joinedStop).resolves.toBeUndefined();
+      expect(stopAccount).toHaveBeenCalledOnce();
       await manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
       await flushMicrotasks();
       expect(startAccount).toHaveBeenCalledOnce();
     } finally {
       releasePreparation.resolve();
       releaseStop.resolve();
-      await Promise.allSettled([starting, stopped]);
+      await Promise.allSettled([starting, stopped, joinedStop]);
     }
   });
 
@@ -2454,7 +2492,10 @@ describe("server-channels auto restart", () => {
       try {
         await manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
         expect(await readIngress()).toEqual({ status: 200, body: "abandoned" });
-        const stopping = manager.stopChannel("discord", DEFAULT_ACCOUNT_ID, { manual: false });
+        const stopping = manager.stopChannel("discord", DEFAULT_ACCOUNT_ID, {
+          manual: false,
+          routeHandoff: abandonedHook === "stop",
+        });
         await abandonedStarted.promise;
         await flushMicrotasks();
         await vi.advanceTimersByTimeAsync(5_000);
@@ -3258,6 +3299,7 @@ describe("server-channels auto restart", () => {
     let observerCount: number | undefined;
     const startAccount = vi.fn(async (ctx: ChannelGatewayContext<TestAccount>) => {
       observerCount = getEventListeners(ctx.abortSignal, "abort").length;
+      const stopped = waitForAbort(ctx.abortSignal);
       const approvalRuntime =
         ctx.channelRuntime?.runtimeContexts.get<ApprovalGatewayRequestRuntime>({
           channelId: "discord",
@@ -3272,7 +3314,7 @@ describe("server-channels auto restart", () => {
       await expect(approvalRuntime?.request("config.get" as never, {})).rejects.toThrow(
         "channel approval runtime cannot dispatch config.get",
       );
-      await waitForAbort(ctx.abortSignal);
+      await stopped;
     });
     installTestRegistry(createTestPlugin({ startAccount }));
     const manager = createManager({
@@ -3287,12 +3329,19 @@ describe("server-channels auto restart", () => {
     releaseAccountStart();
     await flushMicrotasks();
 
-    expect(observerCount).toBe(1); // Approval disposal owns the remaining listener.
+    // Scheduler retirement and approval disposal remain; the deferred-start waiter is gone.
+    expect(observerCount).toBe(2);
     expect(request).toHaveBeenCalledWith(
       "approval.resolve",
       { id: "approval-1", kind: "exec", decision: "deny" },
       { clientDisplayName: "Discord approval" },
     );
+    const context = startAccount.mock.calls[0]?.[0];
+    if (!context) {
+      throw new Error("Expected the approval account to start");
+    }
+    await manager.stopChannel("discord", DEFAULT_ACCOUNT_ID);
+    expect(getEventListeners(context.abortSignal, "abort")).toHaveLength(0);
   });
 
   it("keeps auto-restart running when scoped runtime cleanup throws", async () => {

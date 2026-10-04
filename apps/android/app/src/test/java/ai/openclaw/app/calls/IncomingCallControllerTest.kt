@@ -11,6 +11,8 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Context
+import android.media.AudioManager
+import android.media.ToneGenerator
 import android.os.ParcelUuid
 import android.os.PowerManager
 import android.telecom.CallAudioState
@@ -21,6 +23,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
@@ -40,6 +43,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.Robolectric
@@ -60,10 +64,70 @@ class IncomingCallTelecomShadow : ShadowTelecomManager() {
   protected fun isIncomingCallPermitted(handle: PhoneAccountHandle): Boolean = true
 }
 
+@Implements(ToneGenerator::class)
+class IncomingCallToneShadow {
+  companion object {
+    val instances = mutableListOf<IncomingCallToneShadow>()
+    var failPlayback = false
+
+    fun reset() {
+      instances.clear()
+      failPlayback = false
+    }
+  }
+
+  var stream = -1
+  var volume = -1
+  var starts = 0
+  var stops = 0
+  var released = false
+
+  @Implementation
+  protected fun __constructor__(
+    streamType: Int,
+    volume: Int,
+  ) {
+    stream = streamType
+    this.volume = volume
+    instances += this
+  }
+
+  @Implementation
+  protected fun startTone(
+    toneType: Int,
+    durationMs: Int,
+  ): Boolean {
+    check(!released)
+    assertEquals(ToneGenerator.TONE_PROP_BEEP2, toneType)
+    assertTrue("Both 35 ms beeps and their 200 ms gap must fit", durationMs in 270..300)
+    if (failPlayback) error("Synthetic audio output unavailable")
+    starts++
+    return true
+  }
+
+  @Implementation
+  protected fun stopTone() {
+    check(!released)
+    stops++
+  }
+
+  @Implementation
+  protected fun release() {
+    check(!released)
+    released = true
+  }
+}
+
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [34], shadows = [IncomingCallTelecomShadow::class])
+@Config(sdk = [34], shadows = [IncomingCallTelecomShadow::class, IncomingCallToneShadow::class])
 class IncomingCallControllerTest {
+  @Before
+  fun resetToneFixture() {
+    // Custom shadows are not generated ShadowProvider entries; reset their static observations explicitly.
+    IncomingCallToneShadow.reset()
+  }
+
   private class Fixture(
     scope: TestScope,
     proximitySupported: Boolean = true,
@@ -602,6 +666,85 @@ class IncomingCallControllerTest {
   }
 
   @Test
+  fun `reconnect cue repeats locally without duplicate loops and stops before resumed capture`() =
+    runTest {
+      Dispatchers.setMain(UnconfinedTestDispatcher(testScheduler))
+      try {
+        val f = Fixture(this) { assertTrue(IncomingCallToneShadow.instances.all { it.released }) }
+        answered(f)
+        assertTrue("Normal Answer must not play the recovery cue", IncomingCallToneShadow.instances.isEmpty())
+        f.gateway = null
+        f.controller.transportInterrupted()
+        val tone = IncomingCallToneShadow.instances.single()
+        assertEquals(AudioManager.STREAM_VOICE_CALL, tone.stream)
+        assertTrue(tone.volume in 1..30)
+        assertEquals(1, tone.starts)
+        f.controller.transportInterrupted()
+        assertEquals("Flapping must not create another tone owner", 1, IncomingCallToneShadow.instances.size)
+        advanceTimeBy(3_000)
+        runCurrent()
+        assertEquals(2, tone.starts)
+        f.gateway = "synthetic-gateway"
+        f.controller.transportConnected()
+        advanceTimeBy(4_000)
+        runCurrent()
+        assertEquals(IncomingCallStatus.Active, status(f))
+        assertTrue(tone.released)
+        assertTrue(tone.stops > 0)
+        val count = tone.starts
+        advanceTimeBy(10_000)
+        runCurrent()
+        assertEquals(count, tone.starts)
+        f.controller.end(f.id)
+      } finally {
+        Dispatchers.resetMain()
+      }
+    }
+
+  @Test
+  fun `reconnect cue failure cannot prevent recovery`() =
+    runTest {
+      Dispatchers.setMain(UnconfinedTestDispatcher(testScheduler))
+      try {
+        val f = Fixture(this)
+        answered(f)
+        IncomingCallToneShadow.failPlayback = true
+        f.controller.transportInterrupted()
+        assertEquals(IncomingCallStatus.Connecting, status(f))
+        assertTrue(IncomingCallToneShadow.instances.single().released)
+        advanceTimeBy(1_000)
+        runCurrent()
+        assertEquals(IncomingCallStatus.Active, status(f))
+        f.controller.end(f.id)
+      } finally {
+        Dispatchers.resetMain()
+      }
+    }
+
+  @Test
+  fun `scope cancellation releases the reconnect cue without a later call callback`() =
+    runTest {
+      Dispatchers.setMain(UnconfinedTestDispatcher(testScheduler))
+      try {
+        val f = Fixture(this)
+        answered(f)
+        f.gateway = null
+        f.controller.transportInterrupted()
+        val tone = IncomingCallToneShadow.instances.single()
+        backgroundScope.cancel()
+        runCurrent()
+        assertTrue(tone.released)
+        val count = tone.starts
+        advanceTimeBy(10_000)
+        runCurrent()
+        assertEquals(count, tone.starts)
+        f.controller.end(f.id)
+      } finally {
+        Dispatchers.resetMain()
+      }
+    }
+
+  @Test
   fun `socket loss preserves answered call service mute route and invited session then resumes with fresh authority`() =
     runTest {
       Dispatchers.setMain(UnconfinedTestDispatcher(testScheduler))
@@ -672,6 +815,8 @@ class IncomingCallControllerTest {
         runCurrent()
         assertEquals(IncomingCallStatus.Error, status(f))
         assertFalse(f.controller.ownsForegroundService(service))
+        assertTrue(IncomingCallToneShadow.instances.isNotEmpty())
+        assertTrue(IncomingCallToneShadow.instances.all { it.released })
         val starts = f.starts
         fail = false
         f.controller.transportConnected()
@@ -699,6 +844,7 @@ class IncomingCallControllerTest {
         runCurrent()
         assertEquals(IncomingCallStatus.Ended, status(f))
         assertEquals(0, f.starts)
+        assertTrue("Unanswered calls must never play a recovery cue", IncomingCallToneShadow.instances.isEmpty())
       } finally {
         Dispatchers.resetMain()
       }
@@ -727,6 +873,7 @@ class IncomingCallControllerTest {
           runCurrent()
           assertTrue("$reason must end recovery", status(f)?.isTerminal == true)
           assertEquals(1, f.starts)
+          assertTrue("$reason must release the recovery cue", IncomingCallToneShadow.instances.all { it.released })
         }
       } finally {
         Dispatchers.resetMain()
@@ -767,8 +914,10 @@ class IncomingCallControllerTest {
         f.controller.answer(f.id)
         f.gateway = null
         f.controller.transportInterrupted()
+        assertTrue("No cue before the accepted foreground service owns the call", IncomingCallToneShadow.instances.isEmpty())
         val service = Robolectric.buildService(IncomingCallForegroundService::class.java).create().get()
         assertTrue(f.controller.foregroundServiceReady(f.id, service))
+        assertEquals(1, IncomingCallToneShadow.instances.single().starts)
         assertEquals(0, f.starts)
         f.gateway = "synthetic-gateway"
         f.controller.transportConnected()

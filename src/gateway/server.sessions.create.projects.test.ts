@@ -51,7 +51,11 @@ import {
   setupGatewaySessionsHandlerTestHarness,
 } from "./test/server-sessions.test-helpers.js";
 
-const projectCloneMocks = vi.hoisted(() => ({ materialize: vi.fn() }));
+const projectCloneMocks = vi.hoisted(() => ({
+  assertSelected: vi.fn(),
+  materialize: vi.fn(),
+  prepareIdentity: vi.fn(),
+}));
 const titleMocks = vi.hoisted(() => ({ generate: vi.fn() }));
 
 vi.mock("../auto-reply/reply/conversation-label-generator.js", () => ({
@@ -62,6 +66,9 @@ vi.mock("../projects/project-clone.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../projects/project-clone.js")>();
   return { ...actual, materializeProjectClone: projectCloneMocks.materialize };
 });
+vi.mock("./project-github-identity.js", () => ({
+  prepareGatewayProjectGitHubIdentity: projectCloneMocks.prepareIdentity,
+}));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const directoryLinkType = process.platform === "win32" ? "junction" : "dir";
@@ -93,6 +100,8 @@ async function setupStartedBeforeSettlement(
 afterEach(async () => {
   titleMocks.generate.mockReset();
   projectCloneMocks.materialize.mockReset();
+  projectCloneMocks.prepareIdentity.mockReset();
+  projectCloneMocks.assertSelected.mockReset();
   dispatchInboundMessageMock.mockReset();
   await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
@@ -127,6 +136,8 @@ test.each([
 ])(
   "sessions.create admits remote project work (worktree=$worktree, base=$baseRef, sandboxed=$sandboxed) before materialization and dispatches only after authoritative binding",
   async ({ worktree, sandboxed, image, baseRef }) => {
+    vi.stubEnv("GH_TOKEN", "");
+    vi.stubEnv("GITHUB_TOKEN", "");
     const root = tempDirs.make("openclaw-session-remote-project-startup-");
     const workspace = await initializeRepository(root, "workspace");
     const projectRoot = await initializeRepository(sandboxed ? workspace : root, "project");
@@ -135,6 +146,10 @@ test.each([
     testState.agentConfig = { workspace: alias, sandbox: { mode: sandboxed ? "all" : "off" } };
     const { storePath } = await createSessionStoreDir();
     const project = await registerProjectRegistry({ path: projectRoot, name: "Project" });
+    projectCloneMocks.prepareIdentity.mockResolvedValue({
+      token: "protected-native-token",
+      assertSelected: projectCloneMocks.assertSelected,
+    });
     const materialization = createDeferredCore<typeof project>();
     projectCloneMocks.materialize.mockReturnValueOnce(materialization.promise);
     dispatchInboundMessageMock.mockImplementation(async (dispatchParams: unknown) => {
@@ -193,7 +208,10 @@ test.each([
       await vi.waitFor(() => expect(projectCloneMocks.materialize).toHaveBeenCalledOnce());
       expect(projectCloneMocks.materialize).toHaveBeenCalledWith(
         expect.objectContaining({ gitUrl: "https://github.com/openclaw/openclaw.git" }),
-        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+        expect.objectContaining({
+          signal: expect.any(AbortSignal),
+          token: "protected-native-token",
+        }),
       );
       expect(events).toContainEqual(
         expect.objectContaining({
@@ -236,6 +254,7 @@ test.each([
 
       materialization.resolve(project);
       await settleWorkspaceRuns(context, storePath, key);
+      expect(projectCloneMocks.assertSelected).toHaveBeenCalled();
       const error = broadcast.mock.calls.find(
         ([event, payload]) => event === "chat" && payload.state === "error",
       );

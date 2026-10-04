@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { runNodeScript } from "../../test/helpers/run-node-script.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
-import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { readStableSqliteFileGeneration } from "../infra/sqlite-file-generation.js";
 import { readMainDatabasePosixLocks } from "../infra/sqlite-posix-locks.test-support.js";
 import { readSqliteNumberPragma } from "../infra/sqlite-pragma.test-support.js";
@@ -234,7 +234,7 @@ describe("OpenClaw database integrity verifier", () => {
 
   it("relays a late restart-receipt Worker open to the parent verifier after native opening settles", async () => {
     const result = await runNodeScript(
-      resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(databaseVerifyHostRuntimeEntrypoint)),
+      (workerArgv) => workerArgv(resolveRuntimeWorkerUrl(databaseVerifyHostRuntimeEntrypoint)),
       process.env,
       30_000,
       { requireProcessTreeExit: true },
@@ -591,11 +591,20 @@ describe("OpenClaw database integrity verifier", () => {
     closeOpenClawStateDatabaseForTest();
 
     const storePath = quarantineStorePath(stateDir);
-    // A read-only quarantine store cannot drop the row; the clear must say so
-    // instead of letting doctor report success while the next open still refuses.
-    fs.chmodSync(storePath, 0o444);
+    const before = readPersistedQuarantineRow(agentPath, { env });
+    expect(before).toMatchObject({ kind: "agent", reason: "corrupt index" });
+    const { DatabaseSync } = requireNodeSqlite();
+    const quarantine = new DatabaseSync(storePath);
     try {
+      // chmod cannot refuse writes from root; fail the real SQLite writes instead.
+      quarantine.exec(`
+        CREATE TRIGGER refuse_quarantine_clear BEFORE DELETE ON quarantined_databases
+        BEGIN SELECT RAISE(ABORT, 'quarantine store is read-only'); END;
+        CREATE TRIGGER refuse_quarantine_record BEFORE INSERT ON quarantined_databases
+        BEGIN SELECT RAISE(ABORT, 'quarantine store is read-only'); END;
+      `);
       expect(clearOpenClawAgentDatabaseOpenFailure(agentPath, { env })).toBe(false);
+      expect(readPersistedQuarantineRow(agentPath, { env })).toEqual(before);
       expect(
         recordOpenClawDatabaseQuarantine({
           env,
@@ -604,10 +613,21 @@ describe("OpenClaw database integrity verifier", () => {
           reason: "new reason",
         }),
       ).toBe(false);
+      expect(readPersistedQuarantineRow(agentPath, { env })).toEqual(before);
+      expect(() => openOpenClawAgentDatabase({ agentId: "worker-1", env })).toThrow(
+        expect.objectContaining({
+          name: "SqliteIntegrityError",
+          message: expect.stringContaining("corrupt index"),
+        }),
+      );
+      quarantine.exec(
+        "DROP TRIGGER refuse_quarantine_clear; DROP TRIGGER refuse_quarantine_record;",
+      );
     } finally {
-      fs.chmodSync(storePath, 0o600);
+      quarantine.close();
     }
     expect(clearOpenClawAgentDatabaseOpenFailure(agentPath, { env })).toBe(true);
+    expect(readPersistedQuarantineRow(agentPath, { env })).toBeUndefined();
     expect(openOpenClawAgentDatabase({ agentId: "worker-1", env }).db.isOpen).toBe(true);
   });
 

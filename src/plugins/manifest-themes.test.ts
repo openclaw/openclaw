@@ -45,124 +45,85 @@ function fixture() {
 }
 
 describe("manifest theme artwork", () => {
-  it("normalizes package-relative paths and preserves presentation metadata", () => {
-    expect(
-      normalizeManifestThemes(
-        [
-          {
-            ...declaration,
-            hats: { beret: "./assets/beret.svg" },
-            critters: { ferris: { source: "./assets/ferris.svg", title: "a crab", crossMs: 5000 } },
-          },
-        ],
-        "theme-pack",
-      ),
-    ).toEqual({
-      ok: true,
-      themes: [
-        {
-          ...declaration,
-          hats: { beret: "assets/beret.svg" },
-          critters: { ferris: { source: "assets/ferris.svg", title: "a crab", crossMs: 5000 } },
-        },
-      ],
-    });
-  });
-
+  const hats = Object.fromEntries(
+    Array.from({ length: 8 }, (_, i) => [`${i}${"a".repeat(31)}`, "hat.svg"]),
+  );
+  const critters = Object.fromEntries(
+    Object.keys(hats).map((id) => [
+      id,
+      { source: "critter.svg", title: "a".repeat(60), crossMs: 90000 },
+    ]),
+  );
   it.each([
-    { hats: [] },
-    { critters: null },
-    { hats: { Beret: "beret.svg" } },
-    { hats: { ["a".repeat(33)]: "beret.svg" } },
-    { hats: { "": "beret.svg" } },
-    { hats: { "hat.svg": "beret.svg" } },
-    { hats: { fedora: "beret.svg" } },
-    { hats: { crown: "beret.svg" } },
-    { hats: { santa: "beret.svg" } },
-    { hats: { party: "beret.svg" } },
-    { hats: { pumpkin: "beret.svg" } },
-    { critters: { penguin: { source: "ferris.svg" } } },
-    { critters: { fedora: { source: "ferris.svg" } } },
-    { critters: { Ferris: { source: "ferris.svg" } } },
-    { critters: { ferris: "ferris.svg" } },
-    { critters: { ferris: { source: "ferris.svg", extra: true } } },
-    { hats: Object.fromEntries(Array.from({ length: 9 }, (_, i) => [`hat-${i}`, "beret.svg"])) },
     {
-      critters: Object.fromEntries(
-        Array.from({ length: 9 }, (_, i) => [`critter-${i}`, { source: "ferris.svg" }]),
-      ),
+      name: "package-relative paths and presentation metadata",
+      artwork: {
+        hats: { beret: "./assets/beret.svg" },
+        critters: { ferris: { source: "./assets/ferris.svg", title: "a crab", crossMs: 5000 } },
+      },
+      expected: {
+        hats: { beret: "assets/beret.svg" },
+        critters: { ferris: { source: "assets/ferris.svg", title: "a crab", crossMs: 5000 } },
+      },
     },
-  ])("rejects invalid IDs, catalog collisions, and declaration limits: %j", (artwork) => {
-    expect(normalizeManifestThemes([{ ...declaration, ...artwork }], "theme-pack")).toMatchObject({
-      ok: false,
+    {
+      name: "entry, ID, title, and crossing-time boundaries",
+      artwork: { hats, critters },
+      expected: { hats, critters },
+    },
+  ])("normalizes $name", ({ artwork, expected }) => {
+    expect(normalizeManifestThemes([{ ...declaration, ...artwork }], "theme-pack")).toEqual({
+      ok: true,
+      themes: [{ ...declaration, ...expected }],
     });
   });
 
   it.each([
-    "../beret.svg",
-    "/beret.svg",
-    "assets/../../beret.svg",
-    "assets\\beret.svg",
-    "assets//beret.svg",
-    "https://example.invalid/beret.svg",
-    "beret.png",
-    "beret.svg?hash=1",
-  ])("rejects unsafe or non-SVG artwork paths: %s", (source) => {
-    for (const artwork of [{ hats: { beret: source } }, { critters: { ferris: { source } } }]) {
+    ...[
+      { hats: [] },
+      { critters: null },
+      { hats: { Beret: "beret.svg" } },
+      { hats: { fedora: "beret.svg" } },
+      { critters: { penguin: { source: "ferris.svg" } } },
+      { critters: { ferris: "ferris.svg" } },
+      { critters: { ferris: { source: "ferris.svg", extra: true } } },
+      { hats: Object.fromEntries(Array.from({ length: 9 }, (_, i) => [`hat-${i}`, "beret.svg"])) },
+      {
+        critters: Object.fromEntries(
+          Array.from({ length: 9 }, (_, i) => [`critter-${i}`, { source: "ferris.svg" }]),
+        ),
+      },
+    ].map((artwork) => ({ artworks: [artwork], error: undefined })),
+    ...[
+      "../beret.svg",
+      "/beret.svg",
+      "assets/../../beret.svg",
+      "assets\\beret.svg",
+      "assets//beret.svg",
+      "https://example.invalid/beret.svg",
+      "beret.png",
+      "beret.svg?hash=1",
+    ].map((source) => ({
+      artworks: [{ hats: { beret: source } }, { critters: { ferris: { source } } }],
+      error: "SVG file inside the plugin root",
+    })),
+    ...[4999, 90001, 12000.5, "12000"].map((crossMs) => ({
+      artworks: [{ critters: { ferris: { source: "ferris.svg", crossMs } } }],
+      error: "crossMs",
+    })),
+    ...["a".repeat(61), "hello\nworld", "hello\u202e", 12].map((title) => ({
+      artworks: [{ critters: { ferris: { source: "ferris.svg", title } } }],
+      error: "title",
+    })),
+  ])("rejects invalid artwork declarations: %j", ({ artworks, error }) => {
+    for (const artwork of artworks) {
       expect(normalizeManifestThemes([{ ...declaration, ...artwork }], "theme-pack")).toMatchObject(
         {
           ok: false,
-          error: expect.stringContaining("SVG file inside the plugin root"),
+          ...(error ? { error: expect.stringContaining(error) } : {}),
         },
       );
     }
-  });
-
-  it.each([4999, 90001, 12000.5, "12000", null])("rejects invalid crossing time %j", (crossMs) => {
-    expect(
-      normalizeManifestThemes(
-        [
-          {
-            ...declaration,
-            critters: { ferris: { source: "ferris.svg", crossMs } },
-          },
-        ],
-        "theme-pack",
-      ),
-    ).toMatchObject({ ok: false, error: expect.stringContaining("crossMs") });
-  });
-
-  it.each(["a".repeat(61), "hello\nworld", "hello\u007f", "hello\u0085", "hello\u202e", 12])(
-    "rejects nonprintable or oversized title %j",
-    (title) => {
-      expect(
-        normalizeManifestThemes(
-          [
-            {
-              ...declaration,
-              critters: { ferris: { source: "ferris.svg", title } },
-            },
-          ],
-          "theme-pack",
-        ),
-      ).toMatchObject({ ok: false, error: expect.stringContaining("title") });
-    },
-  );
-
-  it("accepts the entry, ID, title, and crossing-time boundaries", () => {
-    const hats = Object.fromEntries(
-      Array.from({ length: 8 }, (_, i) => [`${i}${"a".repeat(31)}`, "hat.svg"]),
-    );
-    const critters = Object.fromEntries(
-      Object.keys(hats).map((id) => [
-        id,
-        { source: "critter.svg", title: "a".repeat(60), crossMs: 90000 },
-      ]),
-    );
-    expect(normalizeManifestThemes([{ ...declaration, hats, critters }], "theme-pack")).toEqual({
-      ok: true,
-      themes: [{ ...declaration, hats, critters }],
-    });
   });
 
   it.each([

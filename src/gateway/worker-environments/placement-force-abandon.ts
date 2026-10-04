@@ -75,7 +75,7 @@ export async function forceAbandonWorkerEnvironment(
     refs: string[];
     repositoryWorkspaceId?: string;
   }> = [];
-  for (const pending of placements.listPendingWorkspaceResults()) {
+  for (const pending of await placements.listPendingWorkspaceResultsAsync()) {
     if (pending.environmentId === environmentId) {
       const placement = placements.get(pending.sessionId);
       if (isCurrentWorkerWorkspacePendingResultOwner(placement, pending)) {
@@ -95,9 +95,9 @@ export async function forceAbandonWorkerEnvironment(
             owner: placementTurnOwner(placement),
           });
         }
-        placements.failWorkspaceResultAndReleaseTurn(pending, recoveryError);
+        await placements.failWorkspaceResultAndReleaseTurn(pending, recoveryError);
       } else {
-        placements.abandonWorkspaceResult(pending);
+        await placements.abandonWorkspaceResult(pending);
       }
     }
   }
@@ -107,7 +107,7 @@ export async function forceAbandonWorkerEnvironment(
     }
     let current = placements.get(placement.sessionId);
     if (current?.state === "active") {
-      current = placements.startDrain({
+      current = await placements.startDrain({
         sessionId: current.sessionId,
         environmentId: current.environmentId,
         ownerEpoch: current.activeOwnerEpoch,
@@ -124,7 +124,7 @@ export async function forceAbandonWorkerEnvironment(
           owner: placementTurnOwner(current),
         });
       }
-      current = placements.startReconcile({
+      current = await placements.startReconcile({
         sessionId: current.sessionId,
         environmentId: current.environmentId,
         ownerEpoch: current.activeOwnerEpoch,
@@ -133,7 +133,7 @@ export async function forceAbandonWorkerEnvironment(
       });
     }
     if (current && (current.state !== "failed" || current.recoveryError !== recoveryError)) {
-      placements.fail({
+      await placements.fail({
         sessionId: current.sessionId,
         expectedGeneration: current.generation,
         recoveryError,

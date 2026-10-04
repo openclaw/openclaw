@@ -113,6 +113,7 @@ afterEach(async () => {
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
   fs.rmSync(paths.tempDir, { recursive: true, force: true });
+  vi.unstubAllEnvs();
 });
 
 function agentKysely() {
@@ -209,6 +210,7 @@ describe("searchSessionTranscripts", () => {
   });
 
   it("reports archived search exclusions within the requested scope and searches again after restore", async () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", paths.stateDir);
     const sessionKey = "agent:main:archived";
     const scope = transcriptScope("old", sessionKey);
     await appendUserMessage("old", sessionKey, "archived needle");
@@ -228,7 +230,7 @@ describe("searchSessionTranscripts", () => {
       withEnvAsync({ OPENCLAW_STATE_DIR: paths.stateDir }, () =>
         runSessionColdStorageMaintenance({
           config: {
-            agents: { list: [{ id: "main" }] },
+            agents: { entries: { main: {} } },
             session: {
               store: resolveOpenClawAgentSqlitePath(options),
               maintenance: { coldStorage: { enabled: true, afterDays: 30 } },

@@ -10,8 +10,6 @@ import {
 import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
 import type { RealtimeVoiceProviderId } from "./provider-types.js";
 
-export { normalizeRealtimeVoiceProviderId };
-
 /**
  * Lists canonical realtime voice providers, discovering additional candidates through manifest policy.
  */

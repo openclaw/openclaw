@@ -1,14 +1,15 @@
-// Regression coverage for read-only Claw state access on databases that predate
-// the additive provenance columns but already report the current schema version.
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { backupDoctorMigrationDatabases } from "../commands/doctor-migration-backup.js";
+import { withDoctorSqliteMaintenanceLock } from "../commands/doctor-sqlite-maintenance-lock.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
+  repairOpenClawStateDatabaseSchema,
 } from "../state/openclaw-state-db.js";
-import { OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY } from "../state/openclaw-state-schema-compatibility.js";
 import { readClawResumeStateReadOnly } from "./package-resume.js";
 import { parseClawManifest } from "./schema.js";
 import type { ClawSourceIdentity } from "./types.js";
@@ -39,21 +40,17 @@ function createBaseShapeState(params: {
       )`,
     )
     .run(params.packageRoot, join(params.packageRoot, "CLAW.md"), params.workspace);
-  for (const column of OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY.allowedMissingColumns ??
-    []) {
+  for (const column of [
+    "claw_installs.bootstrap_source_path",
+    "claw_installs.bootstrap_content_digest",
+    "claw_package_refs.extension_id",
+    "claw_package_refs.extension_format",
+    "claw_package_refs.extension_detected_format",
+    "claw_package_refs.extension_mapped_json",
+    "claw_package_refs.extension_unavailable_json",
+    "claw_package_refs.extension_adapter_identity",
+  ]) {
     const [table, name] = column.split(".");
-    if (!table || !name) {
-      continue;
-    }
-    // Additive columns can belong to tables that are stripped from claw-scoped
-    // schemas entirely (e.g. node_worker_launches); base shape only drops
-    // columns whose owning table exists here.
-    const tableExists = database.db
-      .prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`)
-      .get(table);
-    if (!tableExists) {
-      continue;
-    }
     database.db.exec(`ALTER TABLE ${table} DROP COLUMN ${name};`);
   }
   closeOpenClawStateDatabaseForTest();
@@ -81,8 +78,8 @@ async function createFixture(label: string): Promise<{
   };
 }
 
-describe("read-only Claw state compatibility", () => {
-  it("plans an update against a base-shape database without mutating it", async () => {
+describe("read-only Claw state admission", () => {
+  it("requires backed-up Doctor schema repair before plan and resume reads", async () => {
     const fixture = await createFixture("openclaw-claw-base-shape-");
     const before = await readFile(fixture.databasePath);
     const parsed = parseClawManifest({
@@ -103,37 +100,67 @@ describe("read-only Claw state compatibility", () => {
       byteLength: 12,
     };
 
-    const plan = await buildClawUpdatePlan({
-      agentId: "legacy-worker",
-      targetManifest: parsed.manifest,
-      targetSource: source,
-      config: {},
-      sourceMcpServers: {},
-      stateOptions: { env: fixture.env },
-      packagePreflight: async () => ({
-        ok: true as const,
-        action: "install" as const,
-        integrity: `sha256:${"a".repeat(64)}`,
-      }),
+    const planUpdate = () =>
+      buildClawUpdatePlan({
+        agentId: "legacy-worker",
+        targetManifest: parsed.manifest,
+        targetSource: source,
+        config: {},
+        sourceMcpServers: {},
+        stateOptions: { env: fixture.env },
+        packagePreflight: async () => ({
+          ok: true as const,
+          action: "install" as const,
+          integrity: `sha256:${"a".repeat(64)}`,
+        }),
+      });
+    const resume = () =>
+      readClawResumeStateReadOnly("legacy-worker", { path: fixture.databasePath });
+    await expect(planUpdate()).rejects.toThrow("openclaw doctor --fix");
+    await expect(resume()).rejects.toThrow("openclaw doctor --fix");
+    expect(await readFile(fixture.databasePath)).toEqual(before);
+    const readRows = (file: string) => {
+      const db = new DatabaseSync(file, { readOnly: true });
+      try {
+        return db.prepare("SELECT * FROM claw_installs").all();
+      } finally {
+        db.close();
+      }
+    };
+    const originalRows = readRows(fixture.databasePath);
+    const backupParams = { env: fixture.env, pendingDatabasePaths: [], databasePaths: [] };
+    await withDoctorSqliteMaintenanceLock({
+      env: fixture.env,
+      operation: "Claw provenance schema repair",
+      protectedPaths: [fixture.databasePath],
+      run: async () => {
+        const backup = await backupDoctorMigrationDatabases(backupParams);
+        expect(backup.changes).toHaveLength(1);
+        expect(repairOpenClawStateDatabaseSchema({ env: fixture.env }).warnings).toEqual([]);
+        expect(await backupDoctorMigrationDatabases(backupParams)).toEqual({
+          changes: [],
+          warnings: [],
+        });
+      },
     });
-
+    const backupFiles = (await readdir(dirname(fixture.databasePath))).filter(
+      (name) => name.includes(".pre-startup-migration-") && name.endsWith(".bak"),
+    );
+    expect(backupFiles).toHaveLength(1);
+    expect(readRows(join(dirname(fixture.databasePath), backupFiles[0]!))).toEqual(originalRows);
+    const canonicalRows = structuredClone(originalRows);
+    for (const row of canonicalRows) {
+      row.bootstrap_source_path = null;
+      row.bootstrap_content_digest = null;
+    }
+    expect(readRows(fixture.databasePath)).toEqual(canonicalRows);
+    const plan = await planUpdate();
     expect(plan.blockers).not.toContainEqual(expect.objectContaining({ code: "claw_not_found" }));
     expect(plan.blockers).not.toContainEqual(
       expect.objectContaining({ code: "claw_identity_mismatch" }),
     );
-    expect(before.equals(await readFile(fixture.databasePath))).toBe(true);
-  });
-
-  it("resumes a base-shape database without mutating it", async () => {
-    const fixture = await createFixture("openclaw-claw-base-shape-resume-");
-    const before = await readFile(fixture.databasePath);
-
-    const state = await readClawResumeStateReadOnly("legacy-worker", {
-      path: fixture.databasePath,
-    });
-
+    const state = await resume();
     expect(state?.record).toMatchObject({ agentId: "legacy-worker", status: "complete" });
     expect(state?.record.bootstrap).toBeUndefined();
-    expect(before.equals(await readFile(fixture.databasePath))).toBe(true);
   });
 });

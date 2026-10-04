@@ -27,18 +27,8 @@ describe("node invocation lifecycle contract", () => {
   it("matches the Gateway request producer and node-host consumer", () => {
     expect(fixture.version).toBe(3);
     const request = fixture.request.canonical;
-    expect(
-      buildNodeInvokeRequest({
-        id: request.id,
-        nodeId: request.nodeId,
-        command: request.command,
-        timeoutMs: request.timeoutMs,
-        idempotencyKey: request.idempotencyKey,
-        sessionKey: request.sessionKey,
-      }),
-    ).toEqual(request);
+    expect(buildNodeInvokeRequest(request)).toEqual(request);
     expect(coerceNodeInvokePayload(request)).toEqual(request);
-    expect(fixture.request.withExtensions).toHaveProperty("unexpected", true);
     expect(coerceNodeInvokePayload(fixture.request.withExtensions)).toEqual(request);
     expect(coerceNodeInvokePayload(fixture.request.legacyParams)).toEqual({
       id: "invoke-legacy",

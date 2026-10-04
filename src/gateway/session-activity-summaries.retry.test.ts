@@ -653,28 +653,50 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
     const next = await addSession(2);
     const blocker = await addSession(3, "healthy");
     const healthy = await addSession(4, "healthy");
-    cfg.agents!.list = [{ id: "main" }, { id: "healthy", utilityModel: "test/other" }];
+    cfg.agents!.entries = { main: {}, healthy: { utilityModel: "test/other" } };
     const failure = createDeferred<typeof result>();
     const release = createDeferred<typeof result>();
+    const started = createDeferred();
+    const healthyReady = createDeferred();
+    const retried = createDeferred();
+    const completed = new Set<string>();
+    changed.mockImplementation((target: ActivitySummaryTarget) => {
+      if (view(target)?.state !== "current") {
+        return;
+      }
+      completed.add(target.key);
+      if (target.key === healthy.key) {
+        healthyReady.resolve();
+      }
+      if (completed.has(first.key) && completed.has(next.key)) {
+        retried.resolve();
+      }
+    });
     complete
       .mockImplementationOnce(() => failure.promise)
-      .mockImplementationOnce(() => release.promise);
+      .mockImplementationOnce(() => {
+        started.resolve();
+        return release.promise;
+      });
     fakeTime();
     try {
       service.ensure(first);
       service.ensure(blocker);
-      await vi.waitFor(() => expect(complete).toHaveBeenCalledTimes(2));
+      await started.promise;
+      expect(complete).toHaveBeenCalledTimes(2);
       service.ensure(next);
       service.ensure(healthy);
       failure.reject(Object.assign(new Error("Overloaded"), { status: 529 }));
-      await vi.waitFor(() => expect(view(healthy)?.state).toBe("current"));
+      await healthyReady.promise;
+      expect(view(healthy)?.state).toBe("current");
       expect(complete).toHaveBeenCalledTimes(3);
       expect(view(first)?.state).toBe("updating");
       expect(view(next)?.state).toBe("updating");
       release.resolve(result);
       await vi.advanceTimersByTimeAsync(30_000);
-      await vi.waitFor(() => expect(view(first)?.state).toBe("current"));
-      await vi.waitFor(() => expect(view(next)?.state).toBe("current"));
+      await retried.promise;
+      expect(view(first)?.state).toBe("current");
+      expect(view(next)?.state).toBe("current");
       expect(
         complete.mock.calls.map(([request]) => JSON.parse(request.prompt).messages[0]),
       ).toEqual([

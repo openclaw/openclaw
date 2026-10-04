@@ -1,6 +1,8 @@
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import type { SessionProjectionState } from "../../packages/gateway-client/src/session-projection.js";
+import type { AgentSummary as GatewayAgentSummary } from "../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import type { SessionGoal } from "../config/sessions/types.js";
+import type { SessionScope } from "../config/types.base.js";
 import type { GatewayAgentRuntime } from "../shared/session-types.js";
 import type { TuiPendingSubmit } from "./tui-submit-state.js";
 
@@ -146,13 +148,9 @@ export type SessionInfo = {
   displayName?: string;
 };
 
-export type SessionScope = "per-sender" | "global";
+export type { SessionScope } from "../config/types.base.js";
 
-export type AgentSummary = {
-  id: string;
-  kind?: "agent" | "system";
-  name?: string;
-};
+export type AgentSummary = Pick<GatewayAgentSummary, "id" | "kind" | "name">;
 
 export type GatewayStatusSummary = {
   runtimeVersion?: string | null;

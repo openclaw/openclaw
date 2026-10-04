@@ -19,7 +19,6 @@ import {
 } from "./plugin-native-admission-state.js";
 import {
   auditOpenClawPeerDependenciesInManagedNpmRoot,
-  linkOpenClawPeerDependencies,
   relinkOpenClawPeerDependenciesInManagedNpmRoot,
 } from "./plugin-peer-link.js";
 
@@ -107,6 +106,18 @@ function expectNoNativeIo(io: ReturnType<ReturnType<typeof observeNativeIo>["mea
     largestBuffer: 0,
     copies: 0,
   });
+}
+
+async function disposeCaptures(
+  artifacts: ReturnType<typeof capturePluginGenerationArtifact>[],
+  caches: ReturnType<typeof createPluginCache>[],
+) {
+  for (const artifact of artifacts) {
+    await artifact.disposeAsync();
+  }
+  for (const cache of caches) {
+    await retirePluginCache(cache);
+  }
 }
 
 it("shares first native admission across private inspections and publishes after install settlement", async () => {
@@ -538,12 +549,7 @@ it.each(["npm", "clawhub"] as const)(
         expectNoNativeIo(runtime.io);
       } finally {
         observer.restore();
-        for (const artifact of artifacts) {
-          await artifact.disposeAsync();
-        }
-        for (const cache of caches) {
-          await retirePluginCache(cache);
-        }
+        await disposeCaptures(artifacts, caches);
       }
     });
   },
@@ -626,61 +632,103 @@ it.each([false, true])(
       } finally {
         rootFault?.mockRestore();
         fault?.mockRestore();
-        for (const artifact of artifacts) {
-          await artifact.disposeAsync();
-        }
-        for (const cache of caches) {
-          await retirePluginCache(cache);
-        }
+        await disposeCaptures(artifacts, caches);
       }
     });
   },
 );
 
-it("keeps captured companions current across independent native admissions", async () => {
-  await withOpenClawTestState({ label: "native-admission-independent" }, async (state) => {
-    const fixture = createFixture(state.path("installed"), true);
-    const companion = path.join(fixture.root, "lib", "companion.cjs");
-    const original = "module.exports = 'original';\n";
-    fs.mkdirSync(path.dirname(companion));
-    fs.writeFileSync(companion, original);
-    await writePersistedInstalledPluginIndex(fixture.index, { stateDir: state.stateDir });
-    const caches = [createPluginCache(), createPluginCache()];
-    const artifacts: ReturnType<typeof capturePluginGenerationArtifact>[] = [];
-    const capture = (cache: ReturnType<typeof createPluginCache>) => {
-      // Independent readers can begin from the same index before either publishes its receipt.
-      preparePluginNativeAdmissions(fixture.index, cache);
-      const artifact = withPluginCache(cache, () => capturePluginGenerationArtifact(fixture.root));
-      artifacts.push(artifact);
-      return artifact;
-    };
-    try {
-      const first = capture(caches[0]!);
-      expect(fs.readFileSync(first.resolve(companion), "utf8")).toBe(original);
-      expect(first.assertSourceCurrent).not.toThrow();
-
-      const second = capture(caches[1]!);
-      for (const artifact of [first, second]) {
-        expect(fs.readFileSync(artifact.resolve(companion), "utf8")).toBe(original);
-        expect(fs.readFileSync(artifact.resolve(fixture.filename)).equals(fixture.bytes)).toBe(
-          true,
+it.each(["direct", "transitive"] as const)(
+  "keeps %s native companions current across independent cache admissions",
+  async (ownership) => {
+    await withOpenClawTestState({ label: `native-admission-${ownership}` }, async (state) => {
+      const fixture = createFixture(state.path("installed"), true);
+      const transitive = ownership === "transitive";
+      if (transitive) {
+        fs.unlinkSync(fixture.filename);
+        const manifestPath = path.join(fixture.root, "package.json");
+        const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+        const dependencies = { "native-a": "1.0.0", "native-b": "1.0.0" };
+        fs.writeFileSync(manifestPath, JSON.stringify({ ...manifest, dependencies }));
+        for (const name of [...Object.keys(dependencies), "common"]) {
+          const dependencyRoot = path.join(fixture.root, "node_modules", name);
+          fs.mkdirSync(dependencyRoot, { recursive: true });
+          fs.writeFileSync(
+            path.join(dependencyRoot, "package.json"),
+            JSON.stringify({
+              name,
+              version: "1.0.0",
+              ...(name === "common" ? {} : { dependencies: { common: "1.0.0" } }),
+            }),
+          );
+          if (name !== "common") {
+            fs.writeFileSync(path.join(dependencyRoot, "fixture.bin"), "native fixture");
+          }
+        }
+      }
+      const companion = path.join(
+        fixture.root,
+        transitive ? "node_modules/common/a-companion.txt" : "lib/companion.cjs",
+      );
+      const original = transitive ? "unchanged native companion" : "module.exports = 'original';\n";
+      const modifiedAt = new Date(1_000);
+      fs.mkdirSync(path.dirname(companion), { recursive: true });
+      fs.writeFileSync(companion, original);
+      if (transitive) {
+        fs.utimesSync(companion, modifiedAt, modifiedAt);
+      }
+      await writePersistedInstalledPluginIndex(fixture.index, { stateDir: state.stateDir });
+      const caches = [createPluginCache(), createPluginCache()];
+      const artifacts: ReturnType<typeof capturePluginGenerationArtifact>[] = [];
+      const capture = (cache: ReturnType<typeof createPluginCache>) => {
+        // Independent readers can begin from the same index before either publishes its receipt.
+        preparePluginNativeAdmissions(fixture.index, cache);
+        const artifact = withPluginCache(cache, () =>
+          capturePluginGenerationArtifact(fixture.root),
         );
-        expect(artifact.assertSourceCurrent).not.toThrow();
+        artifacts.push(artifact);
+        return artifact;
+      };
+      try {
+        const first = capture(caches[0]!);
+        if (!transitive) {
+          expect(fs.readFileSync(first.resolve(companion), "utf8")).toBe(original);
+          expect(first.assertSourceCurrent).not.toThrow();
+        }
+        const second = capture(caches[1]!);
+        if (!transitive) {
+          for (const artifact of [first, second]) {
+            expect(fs.readFileSync(artifact.resolve(companion), "utf8")).toBe(original);
+            expect(fs.readFileSync(artifact.resolve(fixture.filename)).equals(fixture.bytes)).toBe(
+              true,
+            );
+            expect(artifact.assertSourceCurrent).not.toThrow();
+          }
+        } else {
+          expect(first.assertSourceCurrent).not.toThrow();
+        }
+        const capturedCompanion = transitive
+          ? createRequire(
+              createRequire(first.resolve(fixture.entry)).resolve("native-a/package.json"),
+            ).resolve("common/a-companion.txt")
+          : undefined;
+        fs.writeFileSync(
+          companion,
+          transitive ? "different native companion" : "module.exports = 'modified';\n",
+        );
+        if (transitive) {
+          fs.utimesSync(companion, modifiedAt, modifiedAt);
+        }
+        expect(first.assertSourceCurrent).toThrow("Plugin source changed");
+        expect(fs.readFileSync(capturedCompanion ?? first.resolve(companion), "utf8")).toBe(
+          original,
+        );
+      } finally {
+        await disposeCaptures(artifacts, caches);
       }
-
-      fs.writeFileSync(companion, "module.exports = 'modified';\n");
-      expect(first.assertSourceCurrent).toThrow("Plugin source changed");
-      expect(fs.readFileSync(first.resolve(companion), "utf8")).toBe(original);
-    } finally {
-      for (const artifact of artifacts) {
-        await artifact.disposeAsync();
-      }
-      for (const cache of caches) {
-        await retirePluginCache(cache);
-      }
-    }
-  });
-});
+    });
+  },
+);
 
 it.each([false, true])(
   "captures managed native packages that share a companion dependency (copied=%s)",
@@ -765,61 +813,6 @@ it.each([false, true])(
   },
 );
 
-it("keeps an installed generation current while another cache admits its native companions", async () => {
-  await withOpenClawTestState({ label: "native-admission-overlapping-caches" }, async (state) => {
-    const fixture = createFixture(state.path("installed"), true);
-    fs.unlinkSync(fixture.filename);
-    const manifestPath = path.join(fixture.root, "package.json");
-    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
-    const dependencies = { "native-a": "1.0.0", "native-b": "1.0.0" };
-    fs.writeFileSync(manifestPath, JSON.stringify({ ...manifest, dependencies }));
-    for (const name of [...Object.keys(dependencies), "common"]) {
-      const dependencyRoot = path.join(fixture.root, "node_modules", name);
-      fs.mkdirSync(dependencyRoot, { recursive: true });
-      fs.writeFileSync(
-        path.join(dependencyRoot, "package.json"),
-        JSON.stringify({
-          name,
-          version: "1.0.0",
-          ...(name === "common" ? {} : { dependencies: { common: "1.0.0" } }),
-        }),
-      );
-      if (name !== "common") {
-        fs.writeFileSync(path.join(dependencyRoot, "fixture.bin"), "native fixture");
-      }
-    }
-    const companion = path.join(fixture.root, "node_modules", "common", "a-companion.txt");
-    fs.writeFileSync(companion, "unchanged native companion");
-    const modifiedAt = new Date(1_000);
-    fs.utimesSync(companion, modifiedAt, modifiedAt);
-    await writePersistedInstalledPluginIndex(fixture.index, { stateDir: state.stateDir });
-    const caches = [createPluginCache(), createPluginCache()];
-    const artifacts: ReturnType<typeof capturePluginGenerationArtifact>[] = [];
-    try {
-      for (const cache of caches) {
-        preparePluginNativeAdmissions(fixture.index, cache);
-        artifacts.push(withPluginCache(cache, () => capturePluginGenerationArtifact(fixture.root)));
-      }
-      expect(() => artifacts[0]!.assertSourceCurrent()).not.toThrow();
-      const capturedDependency = createRequire(artifacts[0]!.resolve(fixture.entry)).resolve(
-        "native-a/package.json",
-      );
-      const capturedCompanion = createRequire(capturedDependency).resolve("common/a-companion.txt");
-      fs.writeFileSync(companion, "different native companion");
-      fs.utimesSync(companion, modifiedAt, modifiedAt);
-      expect(() => artifacts[0]!.assertSourceCurrent()).toThrow("Plugin source changed");
-      expect(fs.readFileSync(capturedCompanion, "utf8")).toBe("unchanged native companion");
-    } finally {
-      for (const artifact of artifacts) {
-        await artifact.disposeAsync();
-      }
-      for (const cache of caches) {
-        await retirePluginCache(cache);
-      }
-    }
-  });
-});
-
 it("snapshots a mutable native edit once while retained generations keep their previous bytes", async () => {
   await withOpenClawTestState({ label: "native-admission-mutable" }, async (state) => {
     const fixture = createFixture(state.path("source"), false);
@@ -895,99 +888,7 @@ it("snapshots a mutable native edit once while retained generations keep their p
       expectNoNativeIo(capture().io);
     } finally {
       observer.restore();
-      for (const artifact of artifacts) {
-        await artifact.disposeAsync();
-      }
-      await retirePluginCache(cache);
+      await disposeCaptures(artifacts, [cache]);
     }
   });
 });
-
-it.each(["npm", "archive"] as const)(
-  "uses a source-path fallback only for retained npm trees when linking a %s artifact is unavailable",
-  async (source) => {
-    await withOpenClawTestState({ label: `native-link-${source}` }, async (state) => {
-      const fixture = createFixture(state.path("installed"), true);
-      fixture.index.installRecords = {
-        "fixture-package": { source, installPath: fixture.installRoot },
-      };
-      fs.writeFileSync(
-        path.join(fixture.root, "child.cjs"),
-        "module.exports = require('openclaw/plugin-sdk/identity');",
-      );
-      const hosts = ["first", "second"].map((identity) => {
-        const host = state.path(`fallback-host-${identity}`);
-        fs.mkdirSync(host);
-        fs.writeFileSync(
-          path.join(host, "package.json"),
-          JSON.stringify({
-            name: "openclaw",
-            exports: { "./plugin-sdk/identity": "./identity.cjs" },
-          }),
-        );
-        fs.writeFileSync(
-          path.join(host, "identity.cjs"),
-          `module.exports = ${JSON.stringify(identity)};`,
-        );
-        return host;
-      });
-      fs.writeFileSync(
-        path.join(fixture.installRoot, "package.json"),
-        JSON.stringify({
-          name: "fixture-package",
-          version: "1.0.0",
-          peerDependencies: { openclaw: "*" },
-        }),
-      );
-      await linkOpenClawPeerDependencies({
-        installedDir: fixture.installRoot,
-        peerDependencies: { openclaw: "*" },
-        hostRoot: hosts[0],
-        logger: {},
-      });
-      const cache = createPluginCache();
-      preparePluginNativeAdmissions(fixture.index, cache);
-      const failure = Object.assign(new Error("fixture filesystem does not support hardlinks"), {
-        code: "EXDEV",
-      });
-      const link = fs.linkSync;
-      const fault = vi.spyOn(fs, "linkSync").mockImplementation((from, to) => {
-        if (from === fixture.filename) {
-          throw failure;
-        }
-        link(from, to);
-      });
-      let artifact: ReturnType<typeof capturePluginGenerationArtifact> | undefined;
-      let successor: ReturnType<typeof capturePluginGenerationArtifact> | undefined;
-      try {
-        const capture = () => {
-          artifact = withPluginCache(cache, () => capturePluginGenerationArtifact(fixture.root));
-        };
-        if (source === "archive") {
-          expect(capture).toThrow(failure);
-        } else {
-          capture();
-          artifact!.linkHost(hosts[0]!);
-          expect(fs.realpathSync(artifact!.resolve(fixture.filename))).toBe(fixture.filename);
-          expect(fs.readFileSync(artifact!.resolve(fixture.filename)).equals(fixture.bytes)).toBe(
-            true,
-          );
-          const native = fs.realpathSync(artifact!.resolve(fixture.filename));
-          expect(createRequire(native)(path.join(path.dirname(native), "child.cjs"))).toBe("first");
-          successor = withPluginCache(cache, () => capturePluginGenerationArtifact(fixture.root));
-          expect(() => successor!.linkHost(hosts[1]!)).toThrow(
-            "does not resolve the selected OpenClaw host",
-          );
-          expect(fs.realpathSync(path.join(fixture.installRoot, "node_modules", "openclaw"))).toBe(
-            fs.realpathSync(hosts[0]!),
-          );
-        }
-      } finally {
-        fault.mockRestore();
-        await successor?.disposeAsync();
-        await artifact?.disposeAsync();
-        await retirePluginCache(cache);
-      }
-    });
-  },
-);

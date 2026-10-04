@@ -52,11 +52,11 @@ type GatewaySessionStoreLookupParams = {
   readConsistency?: SessionEntryListScope["readConsistency"];
   readOnly?: boolean;
   exactRead?: boolean;
-  listCandidatesOnly?: boolean;
   includeStoreChildEntries?: boolean;
   store?: Record<string, SessionEntry>;
   storeCache?: GatewaySessionStoreCache;
   targetDiscoveryCache?: GatewaySessionStoreDiscoveryCache;
+  readStore?: typeof readGatewaySessionStore;
 };
 
 type GatewaySessionStorePlan<T> = {
@@ -70,9 +70,9 @@ function storeReadOptions(
   readOnly: boolean | undefined,
 ): GatewaySessionStoreRead["options"] {
   return {
+    env: params.env,
     readOnly,
     ...(params.exactRead || params.preserveQualifiedAddress ? { exactKeys: keys } : {}),
-    ...(params.listCandidatesOnly ? { listKeys: keys } : {}),
     ...(params.projection ? { projection: params.projection } : {}),
     ...(params.readConsistency ? { readConsistency: params.readConsistency } : {}),
     ...(params.storeCache ? { cache: params.storeCache } : {}),
@@ -107,7 +107,7 @@ function prepareGatewaySessionStoreLookup(
       resolveGatewaySessionStoreReadResults({
         ...params,
         reads,
-        readStore: readGatewaySessionStore,
+        readStore: params.readStore ?? readGatewaySessionStore,
         scanTargets,
       }),
   };
@@ -160,7 +160,7 @@ function prepareExplicitDeletedLegacyMainStoreTarget(
       }
       const best = resolveGatewaySessionStoreReadResults({
         reads,
-        readStore: readGatewaySessionStore,
+        readStore: params.readStore ?? readGatewaySessionStore,
         scanTargets: lookupSeeds,
         canonicalKey,
       });
@@ -215,7 +215,7 @@ function prepareGatewaySessionStoreTarget(
         storePath,
         canonicalKey,
         storeKeys: [canonicalKey],
-        store: readGatewaySessionStore(read),
+        store: (params.readStore ?? readGatewaySessionStore)(read),
         ...(read.readSource ? { readSource: read.readSource } : {}),
         ...(read.capturedReadSource
           ? {
@@ -254,6 +254,33 @@ function prepareGatewaySessionStoreTarget(
   };
 }
 
+/** Prepare discovery before a writer uses transaction-local rows in the same routing selection. */
+export function prepareGatewaySessionStoreTargetLookup(
+  params: GatewaySessionStoreLookupParams,
+): GatewaySessionStorePlan<GatewaySessionStoreTargetWithStore> {
+  const normalized = { ...params, key: normalizeOptionalString(params.key) ?? "" };
+  const deletedMain = prepareExplicitDeletedLegacyMainStoreTarget(normalized);
+  let current: Result<GatewaySessionStorePlan<GatewaySessionStoreTargetWithStore>, unknown>;
+  try {
+    current = ok(prepareGatewaySessionStoreTarget(normalized));
+  } catch (error) {
+    current = err(error);
+  }
+  return {
+    reads: [...(deletedMain?.reads ?? []), ...(current.ok ? current.value.reads : [])],
+    resolve() {
+      const legacy = deletedMain?.resolve();
+      if (legacy) {
+        return legacy;
+      }
+      if (!current.ok) {
+        throw current.error;
+      }
+      return current.value.resolve();
+    },
+  };
+}
+
 export function resolveGatewaySessionStoreTargetWithStore(
   params: GatewaySessionStoreLookupParams,
 ): GatewaySessionStoreTargetWithStore {
@@ -280,7 +307,7 @@ export async function prepareGatewaySessionStoreTargetReadOnly(
     key: normalizeOptionalString(params.key) ?? "",
     exactRead: true,
     readOnly: true,
-    projection: "list" as const,
+    projection: params.projection ?? ("list" as const),
   };
   const resolve = async <T>(plan: GatewaySessionStorePlan<T>) => {
     return await prepareReads(plan.reads, () => {
@@ -499,7 +526,7 @@ export function resolveGatewaySessionStoreTarget(params: {
   clone?: boolean;
   store?: Record<string, SessionEntry>;
 }): GatewaySessionStoreTarget {
-  // Keep listing validation and read mode while avoiding unrelated entry clones.
+  // Routing needs canonical candidates, not a listing's unrelated rows and participants.
   const {
     store: _store,
     readSource: _readSource,
@@ -509,7 +536,8 @@ export function resolveGatewaySessionStoreTarget(params: {
   } = resolveGatewaySessionStoreTargetWithStore({
     ...params,
     projection: "list",
-    listCandidatesOnly: true,
+    exactRead: true,
+    readOnly: false,
   });
   return target;
 }

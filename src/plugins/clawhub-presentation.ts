@@ -1,6 +1,7 @@
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { formatTerminalLink } from "../../packages/terminal-core/src/terminal-link.js";
 import { resolveClawHubBaseUrl } from "../infra/clawhub-client.js";
+import { encodeClawHubPackagePath, formatClawHubReleaseLabel } from "../infra/clawhub-display.js";
 import type {
   ClawHubPackageCompatibility,
   ClawHubPackageDetail,
@@ -15,19 +16,8 @@ export function formatClawHubSpecifier(params: { name: string; version?: string 
   return `clawhub:${params.name}${params.version ? `@${params.version}` : ""}`;
 }
 
-function encodeClawHubPackagePath(packageName: string): string {
-  return packageName
-    .split("/")
-    .map((part) => encodeURIComponent(part).replaceAll("%40", "@"))
-    .join("/");
-}
-
 function resolveClawHubPluginUrl(params: { baseUrl?: string; packageName: string }): string {
   return `${resolveClawHubBaseUrl(params.baseUrl)}/plugins/${encodeClawHubPackagePath(params.packageName)}`;
-}
-
-export function formatClawHubReleaseLabel(packageName: string, version: string): string {
-  return `${sanitizeTerminalText(packageName)}@${sanitizeTerminalText(version)}`;
 }
 
 export function logClawHubPackageSummary(params: {

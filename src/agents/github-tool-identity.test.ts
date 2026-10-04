@@ -170,7 +170,14 @@ describe("GitHub tool identity", () => {
       agentId: "main",
     });
     expect(envScrub.credentialScrubEnv).toEqual({
-      ...(managed ? { GH_TOKEN: "", GITHUB_TOKEN: "" } : {}),
+      ...(managed
+        ? {
+            GH_TOKEN: "",
+            GH_ENTERPRISE_TOKEN: "",
+            GITHUB_TOKEN: "",
+            GITHUB_ENTERPRISE_TOKEN: "",
+          }
+        : {}),
       PREVIEW_SERVICE_TOKEN: "",
     });
     expect(Object.keys(envScrub.localIdentityEnv).length).toBe(managed ? 1 : 0);
@@ -190,7 +197,14 @@ describe("GitHub tool identity", () => {
       agentId: "main",
     });
     expect(storeScrub.credentialScrubEnv).toEqual({
-      ...(managed ? { GH_TOKEN: "", GITHUB_TOKEN: "" } : {}),
+      ...(managed
+        ? {
+            GH_TOKEN: "",
+            GH_ENTERPRISE_TOKEN: "",
+            GITHUB_TOKEN: "",
+            GITHUB_ENTERPRISE_TOKEN: "",
+          }
+        : {}),
       PREVIEW_STORE_TOKEN: "",
     });
     expect(storeScrub.excludedStoreNames).toEqual(["PREVIEW_STORE_TOKEN"]);
@@ -223,7 +237,9 @@ describe("GitHub tool identity", () => {
     });
     expect(publication.env).toMatchObject({
       GH_TOKEN: "test-token",
+      GH_ENTERPRISE_TOKEN: "test-token",
       GITHUB_TOKEN: undefined,
+      GITHUB_ENTERPRISE_TOKEN: undefined,
     });
   });
 
@@ -588,11 +604,15 @@ describe("GitHub tool identity", () => {
     expect(identity.env).toMatchObject({
       GH_CONFIG_DIR: profileDir,
       GH_TOKEN: "managed-publication-token",
+      GH_ENTERPRISE_TOKEN: "managed-publication-token",
       GITHUB_TOKEN: undefined,
+      GITHUB_ENTERPRISE_TOKEN: undefined,
       PREVIEW_SERVICE_TOKEN: undefined,
     });
     expect(childEnv.GH_TOKEN).toBe("managed-publication-token");
+    expect(childEnv.GH_ENTERPRISE_TOKEN).toBe("managed-publication-token");
     expect(childEnv.GITHUB_TOKEN).toBeUndefined();
+    expect(childEnv.GITHUB_ENTERPRISE_TOKEN).toBeUndefined();
     expect(childEnv.GH_CONFIG_DIR).toBe(profileDir);
     expect(childEnv.PREVIEW_SERVICE_TOKEN).toBeUndefined();
     expect(

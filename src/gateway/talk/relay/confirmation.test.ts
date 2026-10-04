@@ -59,7 +59,7 @@ describe("native relay confirmation transcript admission", () => {
   });
 
   function createHarness(challenge = true) {
-    const cfg = { agents: { entries: { main: { default: true } } } };
+    const cfg = { agents: { entries: { main: {} } } };
     let request: RealtimeVoiceBridgeCreateRequest | undefined;
     const session = createTalkRealtimeRelaySession({
       cfg,

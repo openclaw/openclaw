@@ -11,11 +11,7 @@ import {
 } from "./data-auth-shapes.js";
 import { policyEvidenceFinding } from "./policy-evidence-finding.js";
 import { authProfileHasMetadata, requiredAuthProfileMetadata } from "./policy-runtime.js";
-import {
-  agentScopedPolicyTargets,
-  dataHandlingPolicyHasRules,
-  scopedAgentIdMatches,
-} from "./policy-scope.js";
+import { agentScopedPolicyTargets, policyHasRules, scopedAgentIdMatches } from "./policy-scope.js";
 import { ocPathSegment, readPolicyBoolean, readStringList } from "./utils.js";
 
 export function secretAuthProvenanceFindings(
@@ -32,7 +28,6 @@ export function secretAuthProvenanceFindings(
       : [
           ...secretManagedProviderFindings(policy, policyDocName, evidence),
           ...secretDeniedSourceFindings(policy, policyDocName, evidence),
-          ...secretInsecureProviderFindings(policy, policyDocName, evidence),
         ]),
     ...(authShapeFindings.length > 0
       ? authShapeFindings
@@ -58,7 +53,7 @@ export function dataHandlingFindings(
     ...dataHandlingFindingsForRule(policy, policyDocName, "dataHandling", evidence, () => true),
   );
   for (const target of agentScopedPolicyTargets(policy)) {
-    if (!dataHandlingPolicyHasRules(target.overlay.dataHandling)) {
+    if (!policyHasRules(target.overlay, "dataHandling")) {
       continue;
     }
     findings.push(
@@ -214,26 +209,6 @@ function secretDeniedSourceFindings(
         message: `Secret ${secret.kind} '${secret.id}' uses denied source '${source}'.`,
         requirement: `oc://${policyDocName}/secrets/denySources`,
         fixHint: "Move this secret to an approved source or update policy after review.",
-      });
-    });
-}
-
-function secretInsecureProviderFindings(
-  policy: unknown,
-  policyDocName: string,
-  evidence: PolicyEvidence,
-): readonly HealthFinding[] {
-  if (readPolicyBoolean(policy, ["secrets", "allowInsecureProviders"]) !== false) {
-    return [];
-  }
-  return (evidence.secrets ?? [])
-    .filter((secret) => secret.kind === "provider" && (secret.insecure?.length ?? 0) > 0)
-    .map((secret): HealthFinding => {
-      return policyEvidenceFinding(secret, {
-        checkId: CHECK_IDS.policySecretsInsecureProvider,
-        message: `Secret provider '${secret.id}' enables insecure posture: ${(secret.insecure ?? []).join(", ")}.`,
-        requirement: `oc://${policyDocName}/secrets/allowInsecureProviders`,
-        fixHint: "Remove insecure provider overrides or update policy after review.",
       });
     });
 }

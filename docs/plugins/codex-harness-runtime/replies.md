@@ -42,6 +42,9 @@ bounded `command/exec` requests. The host's
 [reply-media capability](/plugins/sdk-agent-harness/attempt-runtime#reply-attachments-from-a-remote-workspace)
 applies read policy and stages the bytes for delivery. The original reply remains
 in the transcript; Gateway workspace copies are not used as a fallback.
+Files outside the remote workspace produce a labeled attachment failure. Copy
+them into the workspace before sending. HTTP references and managed `media://`
+attachments continue to work.
 
 ## Final answers after settled tool work
 

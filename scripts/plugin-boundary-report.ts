@@ -104,11 +104,7 @@ type BoundaryReportSummary = {
     removalPendingDueCount: number;
     removalPending: RemovalPendingDebtSummary[];
   };
-  pluginSdk: {
-    entrypointCount: number;
-    supportedBundledFacadeCount: number;
-    publicPluginOwnedCount: number;
-  };
+  pluginSdk: BoundaryReport["pluginSdk"];
   memoryHostSdk: {
     privatePackage: boolean;
     exportedSubpathCount: number;
@@ -158,47 +154,25 @@ function isExistingTextFile(file: string): boolean {
 }
 
 function collectWorkspaceTextFiles(): string[] {
-  const gitFiles = collectWorkspaceTextFilesFromGit();
+  const gitFiles = collectWorkspaceTextFilesFromGit([
+    "ls-files",
+    "--cached",
+    "--others",
+    "--exclude-standard",
+  ]);
   return (
     gitFiles ?? SOURCE_ROOTS.flatMap((root) => collectTextFiles(resolve(REPO_ROOT, root)))
   ).toSorted((left, right) => relative(REPO_ROOT, left).localeCompare(relative(REPO_ROOT, right)));
 }
 
-function collectWorkspaceTextFilesFromGit(): string[] | null {
-  const result = spawnSync(
-    "git",
-    ["ls-files", "--cached", "--others", "--exclude-standard", "--", ...SOURCE_ROOTS],
-    {
-      cwd: REPO_ROOT,
-      encoding: "utf8",
-      maxBuffer: 32 * 1024 * 1024,
-      stdio: ["ignore", "pipe", "ignore"],
-    },
-  );
-  if (result.status !== 0) {
-    return null;
-  }
-  return result.stdout
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0 && TEXT_FILE_PATTERN.test(line))
-    .filter((line) => !line.split("/").some((part) => SKIPPED_DIRS.has(part)))
-    .map((line) => resolve(REPO_ROOT, line))
-    .filter(isExistingTextFile);
-}
-
-function collectWorkspaceTextFilesMatchingGit(patternArgs: readonly string[]): string[] | null {
-  const result = spawnSync(
-    "git",
-    ["grep", "--untracked", "-l", ...patternArgs, "--", ...SOURCE_ROOTS],
-    {
-      cwd: REPO_ROOT,
-      encoding: "utf8",
-      maxBuffer: 32 * 1024 * 1024,
-      stdio: ["ignore", "pipe", "ignore"],
-    },
-  );
-  if (result.status === 1) {
+function collectWorkspaceTextFilesFromGit(args: readonly string[]): string[] | null {
+  const result = spawnSync("git", [...args, "--", ...SOURCE_ROOTS], {
+    cwd: REPO_ROOT,
+    encoding: "utf8",
+    maxBuffer: 32 * 1024 * 1024,
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  if (args[0] === "grep" && result.status === 1) {
     return [];
   }
   if (result.status !== 0) {
@@ -237,7 +211,10 @@ function collectWorkspaceTextFileSources(
   );
   // Keep every file either collector can use; Git failure retains the exhaustive scan.
   const matches = tokens
-    ? collectWorkspaceTextFilesMatchingGit([
+    ? collectWorkspaceTextFilesFromGit([
+        "grep",
+        "--untracked",
+        "-l",
         "-F",
         ...[...tokens, MEMORY_HOST_SOURCE_BRIDGE_TOKEN, MEMORY_HOST_CORE_REFERENCE_TOKEN].flatMap(
           (token) => ["-e", token],
@@ -259,7 +236,10 @@ function collectSummaryWorkspaceTextFileSources(): WorkspaceTextFile[] {
   if (summaryWorkspaceTextFileSources) {
     return summaryWorkspaceTextFileSources;
   }
-  const pluginSdkFiles = collectWorkspaceTextFilesMatchingGit([
+  const pluginSdkFiles = collectWorkspaceTextFilesFromGit([
+    "grep",
+    "--untracked",
+    "-l",
     "-E",
     String.raw`openclaw/plugin-sdk/[a-z0-9][a-z0-9-]*`,
   ]);
@@ -552,11 +532,7 @@ function buildSummary(report: BoundaryReport, owner?: string): BoundaryReportSum
         readerSample: readerFiles.slice(0, 5),
       })),
     },
-    pluginSdk: {
-      entrypointCount: report.pluginSdk.entrypointCount,
-      supportedBundledFacadeCount: report.pluginSdk.supportedBundledFacadeCount,
-      publicPluginOwnedCount: report.pluginSdk.publicPluginOwnedCount,
-    },
+    pluginSdk: report.pluginSdk,
     memoryHostSdk: {
       privatePackage: report.memoryHostSdk.privatePackage,
       exportedSubpathCount: report.memoryHostSdk.exportedSubpaths.length,
@@ -649,16 +625,6 @@ function renderText(report: BoundaryReport, owner?: string): string {
   return lines.join("\n");
 }
 
-function collectFailures(report: BoundaryReport, options: CliOptions): string[] {
-  const failures: string[] = [];
-  if (options.failOnEligibleCompat && report.compat.eligibleForRemovalCount > 0) {
-    failures.push(
-      `${report.compat.eligibleForRemovalCount} compatibility record(s) are due for removal`,
-    );
-  }
-  return failures;
-}
-
 export function createPluginBoundaryReport(args: readonly string[]): PluginBoundaryReportResult {
   const options = parseArgs(args);
   if (options.help) {
@@ -676,14 +642,13 @@ export function createPluginBoundaryReport(args: readonly string[]): PluginBound
     : options.summary
       ? renderSummaryText(summary)
       : renderText(report, options.owner);
-  const failures = collectFailures(report, options);
+  const failed = options.failOnEligibleCompat && report.compat.eligibleForRemovalCount > 0;
   return {
     stdout: `${body}\n`,
-    stderr:
-      failures.length > 0
-        ? `${failures.map((failure) => `plugin-boundary-report: ${failure}`).join("\n")}\n`
-        : "",
-    exitCode: failures.length > 0 ? 1 : 0,
+    stderr: failed
+      ? `plugin-boundary-report: ${report.compat.eligibleForRemovalCount} compatibility record(s) are due for removal\n`
+      : "",
+    exitCode: failed ? 1 : 0,
   };
 }
 

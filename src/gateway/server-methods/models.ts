@@ -13,7 +13,7 @@ import { refreshExpiredPreparedModelCatalog } from "../../agents/prepared-model-
 import { PreparedModelRuntimePublicationSupersededError } from "../../agents/prepared-model-runtime.errors.js";
 import { applyRemoteModelCatalogUpdate } from "../../agents/prepared-model-runtime.js";
 import { roleScopesAllow } from "../../shared/operator-scope-compat.js";
-import { ModelAccountConnectAuthorityError } from "../model-account-connect.js";
+import { ModelAccountConnectAuthorityError } from "../model-account-connect-errors.js";
 import { prepareOperatorModelPresentation } from "../operator-model-presentation.js";
 import { authorizeCurrentOperatorRoleScopes } from "../operator-role-policy.js";
 import { READ_SCOPE, SESSION_READ_SCOPE } from "../operator-scopes.js";

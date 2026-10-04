@@ -69,7 +69,6 @@ import {
   scopeLegacySessionKeyToAgent,
 } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
-import { createLazyPromiseLoader } from "../shared/lazy-runtime.js";
 import { normalizeMessageChannel } from "../utils/message-channel-normalize.js";
 import { sleep } from "../utils/sleep.js";
 
@@ -176,32 +175,9 @@ const AGENT_CLI_SIGNAL_EXIT_CODES: Record<AgentCliSignal, number> = {
 };
 const MESSAGE_FILE_DECODER = new TextDecoder("utf-8", { fatal: true });
 
-const embeddedAgentCommandLoader = createLazyPromiseLoader(
-  () => import("./agent.js").then((module) => module.agentCommand),
-  { cacheRejections: true },
-);
-const agentSessionModuleCache = createLazyPromiseLoader(
-  () => import("./agent/session.runtime.js"),
-  { cacheRejections: true },
-);
-const runtimeConfigModuleLoader = createLazyPromiseLoader(() => import("../config/io.js"), {
-  cacheRejections: true,
-});
-const embeddedStateLockModuleLoader = createLazyPromiseLoader(
-  () => import("../infra/embedded-state-lock.js"),
-  { cacheRejections: true },
-);
-const replyPayloadModuleLoader = createLazyPromiseLoader(
-  () => import("openclaw/plugin-sdk/reply-payload"),
-  { cacheRejections: true },
-);
 let gatewayAbortRetryDelaysMsForTests: readonly number[] | undefined;
 
-const loadAgentSessionModule = agentSessionModuleCache.load;
-
-type EmbeddedAgentCommandOpts = Parameters<
-  Awaited<ReturnType<typeof embeddedAgentCommandLoader.load>>
->[0];
+type EmbeddedAgentCommandOpts = Parameters<typeof import("./agent.js").agentCommand>[0];
 type EmbeddedRunDiagnosticsOptions = {
   suppressStdoutDiagnosticLogs: boolean;
 };
@@ -235,9 +211,7 @@ async function runEmbeddedAgentCommand(
   deps: AgentCliDeps | undefined,
   diagnosticsOptions: EmbeddedRunDiagnosticsOptions,
 ) {
-  const agentCommand = await measureAgentStartup("command-import", () =>
-    embeddedAgentCommandLoader.load(),
-  );
+  const { agentCommand } = await measureAgentStartup("command-import", () => import("./agent.js"));
   const config = await loadRuntimeConfig();
   const diagnostics = await startEmbeddedRunDiagnosticsExporters(
     runtime,
@@ -261,7 +235,7 @@ async function runEmbeddedAgentCommand(
 }
 
 async function loadRuntimeConfig(): Promise<OpenClawConfig> {
-  const { getRuntimeConfig } = await runtimeConfigModuleLoader.load();
+  const { getRuntimeConfig } = await import("../config/io.js");
   return getRuntimeConfig();
 }
 
@@ -318,7 +292,7 @@ async function acquireEmbeddedAgentStateLock(
   options: GatewayLockOptions | undefined,
   signal: AbortSignal,
 ) {
-  const { acquireEmbeddedStateLock } = await embeddedStateLockModuleLoader.load();
+  const { acquireEmbeddedStateLock } = await import("../infra/embedded-state-lock.js");
   return await acquireEmbeddedStateLock({
     options,
     signal,
@@ -326,17 +300,8 @@ async function acquireEmbeddedAgentStateLock(
   });
 }
 
-const loadReplyPayloadModule = replyPayloadModuleLoader.load;
-
-/** Test-only hooks for resetting lazy imports and shortening retry timing. */
+/** Test-only hook for shortening retry timing. */
 export const agentViaGatewayTesting = {
-  resetLazyImportsForTests(): void {
-    embeddedAgentCommandLoader.clear();
-    agentSessionModuleCache.clear();
-    runtimeConfigModuleLoader.clear();
-    embeddedStateLockModuleLoader.clear();
-    replyPayloadModuleLoader.clear();
-  },
   setGatewayAbortRetryDelaysMsForTests(delays?: readonly number[]): void {
     gatewayAbortRetryDelaysMsForTests = delays;
   },
@@ -455,7 +420,7 @@ async function formatPayloadForLog(payload: {
   mediaUrls?: string[];
   mediaUrl?: string | null;
 }) {
-  const { resolveSendableOutboundReplyParts } = await loadReplyPayloadModule();
+  const { resolveSendableOutboundReplyParts } = await import("openclaw/plugin-sdk/reply-payload");
   const parts = resolveSendableOutboundReplyParts({
     text: payload.text,
     mediaUrls: payload.mediaUrls,
@@ -982,7 +947,7 @@ async function agentViaGatewayCommand(
         ? undefined
         : classifySessionKeyShape(explicitSessionKey) === "agent"
           ? explicitSessionKey
-          : (await loadAgentSessionModule()).resolveSessionKeyForRequest({
+          : (await import("./agent/session.runtime.js")).resolveSessionKeyForRequest({
               cfg,
               agentId,
               to: opts.to,
@@ -992,7 +957,8 @@ async function agentViaGatewayCommand(
   const abortSessionKey = deferRemoteSessionId
     ? undefined
     : deferExplicitRecipientSession
-      ? (await loadAgentSessionModule()).resolveSessionKeyForRequest({ cfg, agentId }).sessionKey
+      ? (await import("./agent/session.runtime.js")).resolveSessionKeyForRequest({ cfg, agentId })
+          .sessionKey
       : sessionKey;
 
   const idempotencyKey = normalizeOptionalString(opts.runId) || randomIdempotencyKey();

@@ -148,33 +148,18 @@ export function createReplyTurnLedger(dispatcher: ReplyDispatcher) {
       if (abortSignal?.aborted) {
         return "aborted";
       }
-      let timedOut = false;
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      const deadline = new Promise<void>((resolve) => {
-        timer = setTimeout(() => {
-          timedOut = true;
-          resolve();
-        }, SETTLE_QUEUED_TIMEOUT_MS);
-        timer.unref?.();
-      });
-      let removeAbortListener: (() => void) | undefined;
-      const aborted = abortSignal
-        ? new Promise<void>((resolve) => {
-            const onAbort = () => resolve();
-            abortSignal.addEventListener("abort", onAbort, { once: true });
-            removeAbortListener = () => abortSignal.removeEventListener("abort", onAbort);
-          })
-        : undefined;
+      const deadline = new AbortController();
+      const timer = setTimeout(() => deadline.abort(), SETTLE_QUEUED_TIMEOUT_MS);
+      timer.unref?.();
       try {
-        const receipt = await Promise.race([
-          dispatcher.waitForIdle(),
-          deadline,
-          ...(aborted ? [aborted] : []),
-        ]);
+        const receipt = await waitForReplyDispatcherIdle(
+          dispatcher,
+          abortSignal ? AbortSignal.any([abortSignal, deadline.signal]) : deadline.signal,
+        );
         if (abortSignal?.aborted) {
           return "aborted";
         }
-        if (timedOut) {
+        if (deadline.signal.aborted) {
           return "timed-out";
         }
         if (dispatcher.supportsSettledReceipt === true && receipt) {
@@ -190,10 +175,7 @@ export function createReplyTurnLedger(dispatcher: ReplyDispatcher) {
         pendingDelivery ||= receipt?.hasPendingDelivery === true;
         return "settled";
       } finally {
-        if (timer) {
-          clearTimeout(timer);
-        }
-        removeAbortListener?.();
+        clearTimeout(timer);
       }
     },
     mayHaveDelivered,

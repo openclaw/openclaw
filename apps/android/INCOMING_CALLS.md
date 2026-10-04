@@ -61,6 +61,10 @@ Only one call is allowed at a time. Other audio capture blocks acceptance. A
 transport drop during an answered call pauses audio and gives the same Gateway
 up to 30 seconds to reconnect. Recovery retains the call's session, mute, and
 audio route without repeating its opening greeting or replaying outage audio.
+A quiet local double beep repeats about every three seconds while waiting for
+recovery, using the current call audio route and volume. It stops before microphone
+capture resumes, and on hangup or timeout. It does not play before Answer, change
+the selected route, or require a network connection.
 A disconnection while ringing, a Gateway switch, revoked consent or permission,
 user decline/hangup, or remote end closes the call. Protocol, authorization, and
 microphone errors are terminal and report the voice failure; they are not

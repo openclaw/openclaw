@@ -1,5 +1,6 @@
 import { channel } from "node:diagnostics_channel";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
+import { joinOwnedWorkerTasks } from "@openclaw/worker-runtime";
 import {
   captureSqliteWorkerClosePolicy,
   ensureSqliteLibrarySelected,
@@ -13,14 +14,13 @@ import {
   type UsageCostWorkerReply,
 } from "../../infra/session-cost-usage-worker.types.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../../infra/sqlite-handle-lifecycle.js";
-import { joinOwnedWorkerTasks } from "../../infra/worker-task-pool-owned.js";
 import {
   createOwnedWorkerTaskPool,
   WorkerTaskError,
   WorkerTaskPool,
 } from "../../infra/worker-task-pool.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
-import { runInDetachedAsyncContext } from "../../shared/async-work-scope.js";
+import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
 import {
   matchesAgentDatabaseReadCandidatePath,

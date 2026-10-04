@@ -44,6 +44,7 @@ import { workerBackgroundExecEntrypoints } from "./worker-runtime-background-exe
 const workerProcessUrl = resolveRuntimeWorkerUrl(workerBackgroundExecEntrypoints.worker);
 const supervisorUrl = resolveRuntimeWorkerUrl(workerBackgroundExecEntrypoints.supervisor);
 const moduleLoaderUrl = resolveRuntimeWorkerUrl(workerBackgroundExecEntrypoints.moduleLoader);
+const thinkingUrl = resolveRuntimeWorkerUrl(workerBackgroundExecEntrypoints.thinking);
 const sdkEntrypoints = [
   workerBackgroundExecEntrypoints.providerModelMetadata,
   workerBackgroundExecEntrypoints.stringCoerceRuntime,
@@ -137,16 +138,36 @@ export function registerWorkerBackgroundExecLifecycleTests({
             : []),
           `const { runWorkerProcess } = await import(${JSON.stringify(workerProcessUrl.href)});`,
           `const { getPluginModuleLoaderStats } = await import(${JSON.stringify(moduleLoaderUrl.href)});`,
+          `const { resolveThinkingDefaultForModel } = await import(${JSON.stringify(thinkingUrl.href)});`,
           "const nativeRequire = createRequire(import.meta.url);",
           `const sdkTargets = new Set(${JSON.stringify(expectedSdkModules)});`,
+          "const readSdkWitness = () => ({",
+          "  policyTargets: getPluginModuleLoaderStats().topSourceTransformTargets.map(({ target }) => target),",
+          "  sdkModules: Object.keys(nativeRequire.cache).filter((file) => sdkTargets.has(file)),",
+          "});",
           "const write = process.stdout.write.bind(process.stdout);",
           "process.stdout.write = (chunk, ...args) => {",
           "  let frame;",
           "  try { frame = JSON.parse(chunk.toString()); } catch {}",
           '  if (frame?.type === "result") {',
+          "    const preparedTurn = readSdkWitness();",
+          // Prepared worker turns do not need local policy discovery. Exercise the
+          // native SDK graph separately through an explicit policy request.
+          `    resolveThinkingDefaultForModel(${JSON.stringify({
+            provider: launch.assignment.modelRef.provider,
+            model: launch.assignment.modelRef.model,
+            catalog: [
+              {
+                provider: launch.assignment.modelRef.provider,
+                id: launch.assignment.modelRef.model,
+                api: "openai-responses",
+                reasoning: false,
+              },
+            ],
+          })});`,
           `    writeFileSync(${JSON.stringify(sdkWitness)}, JSON.stringify({`,
-          "      policyTargets: getPluginModuleLoaderStats().topSourceTransformTargets.map(({ target }) => target),",
-          "      sdkModules: Object.keys(nativeRequire.cache).filter((file) => sdkTargets.has(file)),",
+          "      preparedTurn,",
+          "      ...readSdkWitness(),",
           "    }));",
           "  }",
           "  return write(chunk, ...args);",
@@ -275,6 +296,7 @@ export function registerWorkerBackgroundExecLifecycleTests({
         ).toHaveLength(1);
         expect(capacity).toEqual({ total: 1, available: 0 });
         expect(JSON.parse(await readFile(sdkWitness, "utf8"))).toMatchObject({
+          preparedTurn: { policyTargets: [], sdkModules: [] },
           policyTargets: expect.arrayContaining([
             path.resolve("extensions/openai/provider-policy-api.ts"),
           ]),

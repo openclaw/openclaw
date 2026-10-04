@@ -1,6 +1,7 @@
 import path from "node:path";
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { buildAcpDatabaseSessionKey } from "../acp/runtime/session-meta-keys.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
@@ -16,13 +17,15 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import { resolveGatewaySessionStoreTargetWithStore } from "../gateway/session-utils-store-lookup.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import * as requesterTransfer from "./subagents/registry/subagent-registry-requester-wake-commit.js";
 
 const { config, callGatewayMock, readAcpSessionMetaMock, readAcpSessionMetaForEntryMock } =
   vi.hoisted(() => ({
     config: {
       session: { mainKey: "main", scope: "per-sender" },
       agents: {
-        list: [{ id: "main", default: true }, { id: "peer" }],
+        entries: { main: {}, peer: {} },
       },
       tools: { sessions: { visibility: "all" }, agentToAgent: { enabled: true } },
     } as OpenClawConfig,
@@ -87,6 +90,7 @@ import "./test-helpers/fast-openclaw-tools-sessions.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import {
   getActiveGatewayRootWorkCount,
+  getActiveGatewayRootWorkHolders,
   resetGatewayWorkAdmission,
 } from "../process/gateway-work-admission.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
@@ -104,7 +108,6 @@ import {
   registerSessionsSendRequesterRetirementTests,
   type GatewayCall,
 } from "./openclaw-tools.sessions-send-requester-retirement.test-support.js";
-import { observeSessionSendContinuations } from "./openclaw-tools.sessions-timeout.test-support.js";
 import { announceTesting } from "./subagents/announce/subagent-announce-overrides.test-support.js";
 import { mutateSubagentRuns } from "./subagents/registry/subagent-registry-persistence.js";
 import { subscribeSubagentRunChanges } from "./subagents/registry/subagent-registry-publication.js";
@@ -120,18 +123,12 @@ import { createSessionsSendTool } from "./tools/sessions-send-tool.js";
 import { createSessionsYieldTool } from "./tools/sessions-yield-tool.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const continuations = observeSessionSendContinuations({ trackAllWork: true });
 let settleRootWork: ReturnType<typeof observeRootWork>;
 
 async function settleSessionWork() {
-  await continuations.settle();
   await settleRootWork(true);
-  expect(getActiveGatewayRootWorkCount()).toBe(0);
+  expect(getActiveGatewayRootWorkCount(), getActiveGatewayRootWorkHolders().join(", ")).toBe(0);
 }
-
-afterAll(() => {
-  continuations.restore();
-});
 
 type AgentCallParams = {
   extraSystemPrompt?: string;
@@ -540,6 +537,158 @@ describe("sessions_send child coordination", () => {
     },
   );
 
+  it("yields two watched followups when the first settles during yield preparation", async () => {
+    const requesterSessionKey = "agent:main:dashboard:race-parent";
+    const childSessionKey = "agent:main:dashboard:race-child";
+    const requesterTurnRunId = "race-parent-turn";
+    await writeEntry(requesterSessionKey, { sessionId: "race-parent", updatedAt: 1 });
+    await writeEntry(childSessionKey, {
+      sessionId: "race-child",
+      updatedAt: 1,
+      spawnedBy: requesterSessionKey,
+      spawnDepth: 1,
+    });
+    await resetSubagentRegistryForTests();
+    const replies = [createDeferredCore(), createDeferredCore()];
+    const runIds = ["race-followup-1", "race-followup-2"];
+    let dispatched = 0;
+    callGatewayMock.mockImplementation(async (request: GatewayCall) => {
+      calls.push(request);
+      if (request.method === "agent" && request.params?.sessionKey === childSessionKey) {
+        return { runId: runIds[dispatched++], status: "accepted", targetDisposition: "queued" };
+      }
+      if (request.method === "agent.wait") {
+        const index = runIds.indexOf(String(request.params?.runId));
+        if (index >= 0) {
+          await replies[index]!.promise;
+          return {
+            status: "ok",
+            startedAt: 10,
+            endedAt: 20 + index,
+            terminalReply: { disposition: "visible", text: "FOLLOWUP-" + (index + 1) },
+          };
+        }
+      }
+      return {
+        status: "ok",
+        inputProcessingCompleted: true,
+        result: {
+          payloads: [{ text: "Both replies reviewed" }],
+          deliveryStatus: { status: "sent", resultCount: 1 },
+        },
+      };
+    });
+    announceTesting.setDepsForTest({ callGateway: callGatewayMock });
+    const enteredPreparation = createDeferredCore();
+    const releasePreparation = createDeferredCore();
+    const commit = requesterTransfer.commitRequesterInitialTransfer;
+    const barrier = vi
+      .spyOn(requesterTransfer, "commitRequesterInitialTransfer")
+      .mockImplementation((context, params) =>
+        commit(context, {
+          ...params,
+          prepare: async () => {
+            await params.prepare?.();
+            if (params.kind === "intent") {
+              enteredPreparation.resolve();
+              await releasePreparation.promise;
+            }
+          },
+        }),
+      );
+    let stopObserving = () => {};
+    try {
+      const tool = createSessionsSendTool({
+        agentSessionKey: requesterSessionKey,
+        requesterTurnRunId,
+        config,
+        callGateway: callGatewayMock,
+      });
+      for (const runId of runIds) {
+        expect(
+          (
+            await tool.execute(runId, {
+              sessionKey: childSessionKey,
+              mode: "followup",
+              watch: true,
+              timeoutSeconds: 0,
+              message: runId,
+            })
+          ).details,
+        ).toMatchObject({ status: "accepted", runId, watched: true });
+      }
+      const onYield = vi.fn();
+      const yielded = createSessionsYieldTool({
+        sessionId: "race-parent",
+        onYield,
+        claimYield: createRequesterYieldCallback({
+          requesterSessionKey,
+          requesterAgentId: "main",
+          requesterTurnRunId,
+        }),
+      }).execute("yield-raced-followups", {});
+      void yielded.catch(() => {});
+      await enteredPreparation.promise;
+      const settled = createDeferredCore();
+      stopObserving = subscribeSubagentRunChanges("persistence", () => {
+        if (getSubagentRunByRunId(runIds[0]!)?.execution.status === "terminal") {
+          settled.resolve();
+        }
+      });
+      replies[0]!.resolve();
+      await settled.promise;
+      releasePreparation.resolve();
+      expect((await yielded).details).toEqual({ status: "yielded" });
+      expect(onYield).toHaveBeenCalledOnce();
+      expect(
+        await settleRequesterAfterSessionSpawns({
+          requesterSessionKey,
+          requesterAgentId: "main",
+          requesterTurnRunId,
+          requesterYielded: true,
+          acceptedSessionSpawns: runIds.map((runId) => ({
+            runId,
+            childSessionKey,
+            expectsCompletionMessage: true,
+          })),
+        }),
+      ).toBe(true);
+      stopObserving();
+      const delivered = createDeferredCore();
+      stopObserving = subscribeSubagentRunChanges("persistence", () => {
+        if (
+          runIds.every((runId) => {
+            const child = getSubagentRunByRunId(runId);
+            return child?.delivery?.status === "delivered" && !child.requesterSettleWake;
+          })
+        ) {
+          delivered.resolve();
+        }
+      });
+      replies[1]!.resolve();
+      await delivered.promise;
+      await settleSessionWork();
+      const batches = calls.filter(
+        (call) =>
+          call.method === "agent" &&
+          call.params?.sessionKey === requesterSessionKey &&
+          (call.params?.inputProvenance as { sourceTool?: string })?.sourceTool ===
+            "subagent_settle",
+      );
+      expect(batches).toHaveLength(1);
+      expect(batches[0]?.params?.message).toEqual(expect.stringContaining("FOLLOWUP-1"));
+      expect(batches[0]?.params?.message).toEqual(expect.stringContaining("FOLLOWUP-2"));
+    } finally {
+      releasePreparation.resolve();
+      replies.forEach((reply) => reply.resolve());
+      stopObserving();
+      barrier.mockRestore();
+      await settleSessionWork();
+      await resetSubagentRegistryForTests();
+      announceTesting.setDepsForTest();
+    }
+  });
+
   registerSessionsSendRequesterRetirementTests({
     config,
     callGatewayMock,
@@ -649,7 +798,7 @@ describe("sessions_send child coordination", () => {
       };
       metadata.writeAcpSessionMetaForMigration({
         databasePath,
-        sessionKey: reusedKey,
+        sessionKey: buildAcpDatabaseSessionKey(reusedKey, parseAgentSessionKey(reusedKey)?.agentId),
         sessionId,
         lifecycleRevision,
         now: () => 100,

@@ -150,7 +150,6 @@ class DirectCuaDriverSession {
   isAvailable(): boolean {
     return !this.disposed && this.runtime.isAvailable();
   }
-  resetAvailabilityCache(): void {}
   async callTool(name: string, args: Record<string, unknown>, signal?: AbortSignal) {
     return await this.invoke(signal, () =>
       this.session.callTool(
@@ -310,10 +309,6 @@ function unavailableError(failure: unknown): Error {
   });
 }
 
-function isPromise<T>(value: T | Promise<T>): value is Promise<T> {
-  return typeof (value as Promise<T>).then === "function";
-}
-
 class LazyCuaDriverSession implements CuaDriverSession {
   // The execution owns this generation before and after its lazy runtime loads.
   readonly generation = randomUUID();
@@ -323,7 +318,7 @@ class LazyCuaDriverSession implements CuaDriverSession {
   private hasLoadFailure = false;
   private disposed = false;
 
-  constructor(private readonly loadSdk: () => CuaDriverSdk | Promise<CuaDriverSdk>) {}
+  constructor(private readonly loadSdk: () => Promise<CuaDriverSdk>) {}
 
   private resolveRuntime(): DirectCuaDriverSession | undefined {
     if (this.disposed || this.hasLoadFailure || this.loadPromise) {
@@ -332,39 +327,26 @@ class LazyCuaDriverSession implements CuaDriverSession {
     if (this.runtime) {
       return this.runtime;
     }
-    try {
-      const loadedSdk = this.loadSdk();
-      if (!isPromise(loadedSdk)) {
-        this.runtime = new DirectCuaDriverSession(loadedSdk);
+    const loadPromise = this.loadSdk()
+      .then((sdk) => {
+        this.runtime = new DirectCuaDriverSession(sdk);
         return this.runtime;
-      }
-
-      const loadPromise = loadedSdk
-        .then((sdk) => new DirectCuaDriverSession(sdk))
-        .then((runtime) => {
-          this.runtime = runtime;
-          return runtime;
-        })
-        .catch((error: unknown) => {
-          this.loadFailure = error;
-          this.hasLoadFailure = true;
-          throw error;
-        })
-        .finally(() => {
-          if (this.loadPromise === loadPromise) {
-            this.loadPromise = undefined;
-          }
-        });
-      this.loadPromise = loadPromise;
-      // Availability is synchronous, so the first probe starts the ESM import
-      // and reports unavailable until a later probe observes the loaded SDK.
-      void loadPromise.catch(() => {});
-      return this.runtime;
-    } catch (error) {
-      this.loadFailure = error;
-      this.hasLoadFailure = true;
-      return undefined;
-    }
+      })
+      .catch((error: unknown) => {
+        this.loadFailure = error;
+        this.hasLoadFailure = true;
+        throw error;
+      })
+      .finally(() => {
+        if (this.loadPromise === loadPromise) {
+          this.loadPromise = undefined;
+        }
+      });
+    this.loadPromise = loadPromise;
+    // Availability is synchronous, so the first probe starts the ESM import
+    // and reports unavailable until a later probe observes the loaded SDK.
+    void loadPromise.catch(() => {});
+    return undefined;
   }
 
   private async requireRuntime(): Promise<DirectCuaDriverSession> {
@@ -396,9 +378,7 @@ class LazyCuaDriverSession implements CuaDriverSession {
   }
 
   resetAvailabilityCache(): void {
-    if (this.runtime) {
-      this.runtime.resetAvailabilityCache();
-    } else if (!this.disposed && !this.loadPromise) {
+    if (!this.runtime && !this.disposed && !this.loadPromise) {
       this.loadFailure = undefined;
       this.hasLoadFailure = false;
     }
@@ -432,7 +412,7 @@ class LazyCuaDriverSession implements CuaDriverSession {
 }
 
 export function createCuaDriver(
-  options: { loadSdk?: () => CuaDriverSdk | Promise<CuaDriverSdk> } = {},
+  options: { loadSdk?: () => Promise<CuaDriverSdk> } = {},
 ): CuaDriverSession {
   return new LazyCuaDriverSession(options.loadSdk ?? loadCuaDriverSdk);
 }

@@ -11,10 +11,9 @@ beforeEach(() => {
 });
 
 const acpAgent = {
-  id: "research",
   runtime: { type: "acp", acp: { agent: "cursor" } },
   model: "gpt-5.6-sol[context=272k,reasoning=medium,fast=false]",
-} satisfies NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[number];
+} satisfies NonNullable<NonNullable<OpenClawConfig["agents"]>["entries"]>[string];
 
 describe("subagent initial model plan", () => {
   it.each(["auto", "ultrafast"] as const)(
@@ -31,7 +30,10 @@ describe("subagent initial model plan", () => {
   it("applies an explicit native model instead of ACP defaults", async () => {
     const plan = await resolveSubagentModelAndThinkingPlan({
       cfg: {
-        agents: { defaults: { subagents: { model: "minimax/MiniMax-M2.7" } }, list: [acpAgent] },
+        agents: {
+          defaults: { subagents: { model: "minimax/MiniMax-M2.7" } },
+          entries: { research: acpAgent },
+        },
       },
       targetAgentId: "research",
       targetAgentConfig: acpAgent,
@@ -122,7 +124,7 @@ describe("subagent initial model plan", () => {
               model: { primary: "minimax/MiniMax-M2.7" },
               subagents: { model: defaultModel },
             },
-            list: [targetAgentConfig],
+            entries: { research: targetAgentConfig },
           },
         },
         targetAgentId: "research",

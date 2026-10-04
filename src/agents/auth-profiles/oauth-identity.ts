@@ -5,6 +5,10 @@
  */
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import {
   loadBundledPluginPublicSurfaceModuleSyncCore,
   MissingPublicSurfaceError,
 } from "../../plugin-sdk/facade-loader.js";
@@ -46,17 +50,6 @@ export function isSafeToCopyOAuthRoutingScope(
   return existingScope !== undefined && existingScope === incomingScope;
 }
 
-/** Normalize account-id style identity tokens for exact comparison. */
-export function normalizeAuthIdentityToken(value: string | undefined): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed ? trimmed : undefined;
-}
-
-/** Normalize email identity tokens for case-insensitive comparison. */
-export function normalizeAuthEmailToken(value: string | undefined): string | undefined {
-  return normalizeAuthIdentityToken(value)?.toLowerCase();
-}
-
 export type OAuthIdentity = Pick<OAuthCredential, "accountId" | "email" | "issuer" | "clientId"> &
   Partial<Pick<OAuthCredential, "provider" | "enterpriseUrl">>;
 
@@ -68,8 +61,8 @@ export function hasOidcRegistration(credential: OAuthIdentity): boolean {
 export function hasOAuthIdentity(credential: OAuthIdentity): boolean {
   return (
     hasOidcRegistration(credential) ||
-    normalizeAuthIdentityToken(credential.accountId) !== undefined ||
-    normalizeAuthEmailToken(credential.email) !== undefined
+    normalizeOptionalString(credential.accountId) !== undefined ||
+    normalizeOptionalLowercaseString(credential.email) !== undefined
   );
 }
 
@@ -92,8 +85,8 @@ export function isSafeToCopyOAuthIdentity(
   ) {
     return false;
   }
-  const aAcct = normalizeAuthIdentityToken(existing.accountId);
-  const bAcct = normalizeAuthIdentityToken(incoming.accountId);
+  const aAcct = normalizeOptionalString(existing.accountId);
+  const bAcct = normalizeOptionalString(incoming.accountId);
   if (hasOidcRegistration(existing) || hasOidcRegistration(incoming)) {
     // The provider binds accountId to its verified registration identity before
     // persistence. Older unbound credentials must reconnect, never fall back to email.
@@ -104,8 +97,8 @@ export function isSafeToCopyOAuthIdentity(
       aAcct === bAcct
     );
   }
-  const aEmail = normalizeAuthEmailToken(existing.email);
-  const bEmail = normalizeAuthEmailToken(incoming.email);
+  const aEmail = normalizeOptionalLowercaseString(existing.email);
+  const bEmail = normalizeOptionalLowercaseString(incoming.email);
 
   if (aAcct !== undefined && bAcct !== undefined) {
     return aAcct === bAcct;

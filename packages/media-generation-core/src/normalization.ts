@@ -16,16 +16,3 @@ export type MediaGenerationNormalizationMetadataInput = {
   resolution?: MediaNormalizationEntry<string>;
   durationSeconds?: MediaNormalizationEntry<number>;
 };
-
-/** True when a normalization entry contains any user-visible normalization metadata. */
-export function hasMediaNormalizationEntry<TValue extends MediaNormalizationValue>(
-  entry: MediaNormalizationEntry<TValue> | undefined,
-): entry is MediaNormalizationEntry<TValue> {
-  return Boolean(
-    entry &&
-    (entry.requested !== undefined ||
-      entry.applied !== undefined ||
-      entry.derivedFrom !== undefined ||
-      (entry.supportedValues?.length ?? 0) > 0),
-  );
-}

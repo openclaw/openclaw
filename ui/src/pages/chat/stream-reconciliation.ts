@@ -19,6 +19,7 @@ import {
 import { extractText } from "../../lib/chat/message-extract.ts";
 import { isKeyedAssistantStreamFallbackMessage } from "./chat-thread-run-identity.ts";
 import {
+  lastUserMessageIndex,
   resolveAssistantTextTail,
   streamCausalInsertIndex,
   streamCausalInterval,
@@ -70,20 +71,6 @@ type MaterializeVisibleStreamOptions = {
   isHiddenAssistantMessage: AssistantMessageVisibility;
   isHiddenStreamText: StreamVisibility;
 };
-
-function lastUserMessageIndex(messages: unknown[]): number {
-  for (let index = messages.length - 1; index >= 0; index--) {
-    const message = messages[index];
-    if (!message || typeof message !== "object") {
-      continue;
-    }
-    const role = normalizeLowercaseStringOrEmpty((message as { role?: unknown }).role);
-    if (role === "user") {
-      return index;
-    }
-  }
-  return -1;
-}
 
 export function maybeResetToolStream(
   state: StreamReconciliationState,
@@ -351,10 +338,7 @@ function hasVisibleAssistantMessageAfterUser(
 ): boolean {
   const startIndex = lastUserMessageIndex(messages) + 1;
   return messages.slice(startIndex).some((message) => {
-    if (!message || typeof message !== "object") {
-      return false;
-    }
-    const role = normalizeLowercaseStringOrEmpty((message as { role?: unknown }).role);
+    const role = normalizeLowercaseStringOrEmpty(asNullableRecord(message)?.role);
     if (role !== "assistant" || isHiddenAssistantMessage(message)) {
       return false;
     }
@@ -433,27 +417,22 @@ function currentToolStreamMessageIndex(
   state: StreamReconciliationState,
   startIndex: number,
   endIndex: number,
-  toolCallId?: string,
+  toolCallId: string,
   runId?: string,
 ): number {
   const liveToolRefs = resolveLiveToolStreamRefs(state);
-  const selectedToolIdentity = toolCallId
-    ? resolveMatchingLiveToolIdentity({ id: toolCallId, ...(runId ? { runId } : {}) }, liveToolRefs)
-    : undefined;
-  const liveToolIds = selectedToolIdentity
-    ? new Set([selectedToolIdentity])
-    : toolCallId
-      ? new Set<string>()
-      : new Set(liveToolRefs.map((ref) => ref.identity));
-  if (liveToolIds.size === 0) {
+  const selectedToolIdentity = resolveMatchingLiveToolIdentity(
+    { id: toolCallId, ...(runId ? { runId } : {}) },
+    liveToolRefs,
+  );
+  if (!selectedToolIdentity) {
     return -1;
   }
   for (let index = startIndex; index < endIndex; index++) {
     if (
-      extractToolMessageRefs(messages[index]).some((ref) => {
-        const identity = resolveMatchingLiveToolIdentity(ref, liveToolRefs);
-        return identity !== undefined && liveToolIds.has(identity);
-      })
+      extractToolMessageRefs(messages[index]).some(
+        (ref) => resolveMatchingLiveToolIdentity(ref, liveToolRefs) === selectedToolIdentity,
+      )
     ) {
       return index;
     }

@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { WORKER_PROTOCOL_MAX_CONCURRENT_TOOLS } from "../../../packages/gateway-protocol/src/schema/worker-protocol-primitives.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { generateSecureToken } from "../../infra/secure-random.js";
 import {
@@ -18,8 +19,6 @@ type WorkerSessionToolOperationIdentity = {
   toolCallId: string;
   requestDigest: string;
 };
-
-export const MAX_RUNNING_WORKER_SESSION_TOOL_OPERATIONS = 4;
 
 function runningOperations(db: DatabaseSync, identity: WorkerTurnToolStateIdentity) {
   return query(db)
@@ -224,7 +223,7 @@ export function createPlacementSessionToolOperationKernel(runtime: {
       }
       const runningCount = executeSqliteQuerySync(db, runningOperations(db, params.claim)).rows
         .length;
-      if (runningCount >= MAX_RUNNING_WORKER_SESSION_TOOL_OPERATIONS) {
+      if (runningCount >= WORKER_PROTOCOL_MAX_CONCURRENT_TOOLS) {
         return { kind: "capacity" };
       }
       const timestamp = now();

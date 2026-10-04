@@ -193,67 +193,56 @@ function detectJsonlReplayDrift(): boolean {
 async function buildQaConfidenceSelfTestSummary(
   generatedAt = new Date().toISOString(),
 ): Promise<QaConfidenceSelfTestSummary> {
-  const promptDriftDetected = detectHarnessDrift(
-    { systemPromptHash: "system-prompt-b" },
-    "system-prompt",
-  );
-  const toolDescriptionDetected = detectHarnessDrift(
-    { toolDescriptionHash: "summary-b" },
-    "tool-description",
-  );
-  const toolSchemaDetected = detectHarnessDrift({ toolSchemaHash: "schema-b" }, "tool-schema");
-  const runtimeToolCallDropDetected = await detectRuntimeDrift({
-    scenarioId: "runtime-tool-call-drop",
-    openclaw: { toolCalls: [syntheticToolCall()] },
-    codex: { toolCalls: [] },
-    expectedDrift: "tool-call-shape",
-  });
-  const toolResultMismatchDetected = await detectRuntimeDrift({
-    scenarioId: "tool-result-mismatch",
-    openclaw: { toolCalls: [syntheticToolCall()] },
-    codex: {
-      toolCalls: [syntheticToolCall({ resultHash: "result-b" })],
-    },
-    expectedDrift: "tool-result-shape",
-  });
-  const failureModeDriftDetected = await detectRuntimeDrift({
-    scenarioId: "failure-mode-drift",
-    codex: { transportErrorClass: "synthetic-transport" },
-    expectedDrift: "failure-mode",
-  });
   const canaries: QaConfidenceSelfTestCanary[] = [
     {
       id: "prompt-drift",
       category: "prompt",
-      detected: promptDriftDetected,
+      detected: detectHarnessDrift({ systemPromptHash: "system-prompt-b" }, "system-prompt"),
       expectedVerdict: "qa-harness-bug",
       details: "synthetic harness prompt hash changed",
     },
     {
       id: "tool-description-schema-drift",
       category: "tool-schema",
-      detected: toolDescriptionDetected && toolSchemaDetected,
+      detected: [
+        detectHarnessDrift({ toolDescriptionHash: "summary-b" }, "tool-description"),
+        detectHarnessDrift({ toolSchemaHash: "schema-b" }, "tool-schema"),
+      ].every(Boolean),
       expectedVerdict: "qa-harness-bug",
       details: "synthetic tool description/schema hash changed",
     },
     {
       id: "runtime-tool-call-drop",
       category: "tool-call",
-      detected: runtimeToolCallDropDetected,
+      detected: await detectRuntimeDrift({
+        scenarioId: "runtime-tool-call-drop",
+        openclaw: { toolCalls: [syntheticToolCall()] },
+        codex: { toolCalls: [] },
+        expectedDrift: "tool-call-shape",
+      }),
       expectedVerdict: "product-bug",
       details: "synthetic runtime transcript omitted a required tool call",
     },
     {
       id: "tool-result-mismatch",
       category: "tool-result",
-      detected: toolResultMismatchDetected,
+      detected: await detectRuntimeDrift({
+        scenarioId: "tool-result-mismatch",
+        openclaw: { toolCalls: [syntheticToolCall()] },
+        codex: { toolCalls: [syntheticToolCall({ resultHash: "result-b" })] },
+        expectedDrift: "tool-result-shape",
+      }),
       expectedVerdict: "product-bug",
       details: "synthetic runtime transcript returned a mismatched tool result",
     },
     {
       id: "failure-mode-drift",
       category: "failure-mode",
-      detected: failureModeDriftDetected,
+      detected: await detectRuntimeDrift({
+        scenarioId: "failure-mode-drift",
+        codex: { transportErrorClass: "synthetic-transport" },
+        expectedDrift: "failure-mode",
+      }),
       expectedVerdict: "product-bug",
       details: "synthetic runtime failed with a different failure mode",
     },

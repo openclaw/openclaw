@@ -2,6 +2,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import type { SessionRowFacts } from "../../sessions/session-row-changes.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
+import type { SessionEntryMaintenanceAgeChange } from "./session-accessor.sqlite-maintenance-age.js";
 import type { InternalSessionEntry, SessionEntry } from "./types.js";
 
 export type SessionEntryCacheDatabase = Pick<OpenClawAgentDatabase, "agentId" | "db">;
@@ -21,35 +22,13 @@ export type SessionEntryCacheSnapshot = {
 
 export type SessionSharingEntry = Pick<
   InternalSessionEntry,
-  | "sessionId"
-  | "updatedAt"
-  | "createdAt"
-  | "initializationPending"
-  | "providerReview"
-  | "mainRestartRecovery"
-  | "modelSelectionLocked"
-  | "pendingProjectGitUrl"
-  | "pendingWorktree"
-  | "lifecycleRevision"
-  | "lifecycleRunId"
-  | "activeWriterRunId"
-  | "subagentRecovery"
-  | "archivedAt"
-  | "repositoryWorkspaceId"
-  | "visibility"
-  | "incognito"
-  | "createdActor"
-  | "owner"
-  | "sandbox"
-  | "spawnedBy"
-  | "spawnDepth"
-  | "parentSessionKey"
-  | "sessionStartedAt"
+  keyof ReturnType<typeof projectSessionSharingEntry>
 >;
 
-export function projectSessionSharingEntry(entry: InternalSessionEntry): SessionSharingEntry {
+export function projectSessionSharingEntry(entry: InternalSessionEntry) {
   return {
     sessionId: entry.sessionId,
+    previousSessionId: entry.previousSessionId,
     updatedAt: entry.updatedAt,
     createdAt: entry.createdAt,
     initializationPending: entry.initializationPending,
@@ -141,6 +120,7 @@ export type SessionEntryReplacementPublication = {
   pendingArchiveRecovery: boolean;
   previous: Map<string, Pick<SessionEntry, "sessionId" | "lifecycleRevision">>;
   current: Map<string, SessionEntry>;
+  ageChanges: SessionEntryMaintenanceAgeChange[];
   source?: SessionEntryPublicationSource;
   changedKeys: string[];
   membershipInvalidatedKeys: string[];

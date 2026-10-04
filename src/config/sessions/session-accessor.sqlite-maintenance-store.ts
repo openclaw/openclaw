@@ -112,7 +112,7 @@ function canSkipSessionEntryMaintenanceInDatabase(
   );
 }
 
-/** Inline callers already hold their transaction; workers prepare before write admission. */
+/** Inline callers already hold their transaction; workers prepare before the write transaction. */
 export function applySessionEntryMaintenanceInDatabase(
   database: OpenClawAgentDatabase,
   params: Omit<SessionEntryMaintenanceInput, "preservation">,
@@ -127,7 +127,7 @@ export function applySessionEntryMaintenanceInDatabase(
   )(database, onArchived);
 }
 
-/** Prepare outside write admission; compare only selected rows and protection dependencies inside it. */
+/** Prepare before the write transaction; compare selected rows and protection dependencies inside it. */
 export function prepareSessionEntryMaintenanceInDatabase(
   reader: Pick<OpenClawAgentDatabase, "db">,
   params: Omit<SessionEntryMaintenanceInput, "preservation">,
@@ -175,7 +175,6 @@ export function prepareSessionEntryMaintenanceInDatabase(
   };
   const { store, archived, capArchived, modelRunPruned, pruned, capped } =
     planSessionEntryMaintenance({
-      profile: "write",
       maintenance,
       initialUnarchivedCount: entryCount,
       forceMaintenance: params.forceMaintenance,

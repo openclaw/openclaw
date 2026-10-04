@@ -299,7 +299,9 @@ val generateNativeI18n =
     sourceFiles.from(
       listOf(
         "scripts/android-app-i18n.ts",
+        "scripts/native-i18n-inventory.ts",
         "scripts/native-i18n-locales.ts",
+        "scripts/lib/canonical-json.mjs",
         "scripts/lib/direct-run.mjs",
         "packages/normalization-core/src/expect.ts",
         "apps/.i18n/native-source.json",

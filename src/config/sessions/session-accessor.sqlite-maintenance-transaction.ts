@@ -1,5 +1,10 @@
+import type { DatabaseSync } from "node:sqlite";
 import { runWithSqliteBusyTimeout } from "../../infra/sqlite-busy-timeout.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import {
+  isOpenClawAgentDatabasePathCurrent,
+  readOpenClawAgentDatabaseIdentity,
+} from "../../state/openclaw-agent-db-identity.js";
 import { retainOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
   openOpenClawAgentDatabase,
@@ -27,8 +32,10 @@ import type {
 } from "./session-accessor.sqlite-lifecycle-types.js";
 import {
   invalidateSessionEntryMaintenanceAgeFact,
-  readSessionEntryMaintenanceAgeFact,
-  stageSessionEntryMaintenanceAgeFact,
+  applySessionEntryMaintenanceAgeChange,
+  captureSessionEntryMaintenanceAgeFact,
+  readSessionEntryMaintenanceNextAgeAt,
+  type SessionEntryMaintenanceAgeCapture,
 } from "./session-accessor.sqlite-maintenance-age.js";
 import {
   applySessionEntryMaintenanceInDatabase,
@@ -40,11 +47,50 @@ import { SqliteReclamationInputsChangedError } from "./session-accessor.sqlite-r
 type MaintenancePlan = Extract<
   SqliteSessionReclamationPlan,
   {
-    kind: "maintenance-plan" | "maintenance-finalize" | "maintenance-statistics";
+    kind:
+      | "maintenance-plan"
+      | "maintenance-finalize"
+      | "maintenance-statistics"
+      | "maintenance-age";
   }
 >;
 
 class MaintenancePreservationRequiredError extends Error {}
+
+const ageOwners = new WeakMap<DatabaseSync, string>();
+const ageCaptureIds = new WeakMap<SessionEntryMaintenanceAgeCapture, number>();
+let nextAgeCaptureId = 0;
+
+function prepareWorkerAgeFact(
+  database: Pick<OpenClawAgentDatabase, "db">,
+  plan: Extract<SessionMaintenanceMetadataCommand, { kind: "maintenance-plan" }>,
+) {
+  if (plan.ageOwner !== undefined && ageOwners.get(database.db) !== plan.ageOwner) {
+    invalidateSessionEntryMaintenanceAgeFact(database.db);
+    ageOwners.set(database.db, plan.ageOwner);
+  }
+  for (const change of plan.ageChanges ?? []) {
+    applySessionEntryMaintenanceAgeChange(database.db, change);
+  }
+}
+
+function captureWorkerAgeSnapshot(
+  database: OpenClawAgentDatabase,
+  maintenance: SessionEntryMaintenanceInput["maintenance"],
+) {
+  const revision = readSessionEntryCacheValidityToken(database.db);
+  const capture = captureSessionEntryMaintenanceAgeFact(database.db, maintenance);
+  let id = ageCaptureIds.get(capture);
+  if (id === undefined) {
+    id = ++nextAgeCaptureId;
+    ageCaptureIds.set(capture, id);
+  }
+  return {
+    incarnation: readOpenClawAgentDatabaseIdentity(database).incarnation,
+    revision,
+    capture: id,
+  };
+}
 
 function readPreservation(input: SessionEntryMaintenanceInput) {
   if (input.preservation === null) {
@@ -68,7 +114,7 @@ export function prepareSessionMaintenanceInWorker(
   const { database, claim } = reader;
   try {
     claim.assertCurrent();
-    stageSessionEntryMaintenanceAgeFact(database.db, plan.input.ageFact);
+    prepareWorkerAgeFact(database, plan);
     const revision = readSessionEntryCacheValidityToken(database.db);
     let apply: ReturnType<typeof prepareSessionEntryMaintenanceInDatabase>;
     try {
@@ -178,8 +224,29 @@ export function runSessionMaintenanceMetadataInTransaction(
     return runOpenClawAgentWriteTransaction(
       (database) => {
         callbacks.beforeMutation?.(database);
-        // Retained Workers receive only the parent's current fact, including its absence.
-        stageSessionEntryMaintenanceAgeFact(database.db, plan.input.ageFact);
+        if (plan.kind === "maintenance-age") {
+          for (const change of plan.ageChanges ?? []) {
+            applySessionEntryMaintenanceAgeChange(database.db, change);
+          }
+          const snapshot = captureWorkerAgeSnapshot(database, plan.maintenance);
+          if (
+            !isOpenClawAgentDatabasePathCurrent(database) ||
+            (plan.expected &&
+              (plan.expected.incarnation !== snapshot.incarnation ||
+                plan.expected.capture !== snapshot.capture ||
+                !cacheValidityTokensEqual(plan.expected.revision, snapshot.revision)))
+          ) {
+            return { kind: "maintenance-plan-stale" };
+          }
+          callbacks.beforeCommit?.(database);
+          return {
+            kind: "maintenance-age",
+            nextAt: readSessionEntryMaintenanceNextAgeAt(database, plan.maintenance),
+          };
+        }
+        if (!prepared) {
+          prepareWorkerAgeFact(database, plan);
+        }
         const maintenance = prepared
           ? prepared.apply(database, callbacks.onArchived)
           : applySessionEntryMaintenanceInDatabase(
@@ -195,7 +262,7 @@ export function runSessionMaintenanceMetadataInTransaction(
         return {
           kind: plan.kind,
           value: maintenance,
-          ageFact: readSessionEntryMaintenanceAgeFact(database.db, plan.input.maintenance),
+          ageSnapshot: captureWorkerAgeSnapshot(database, plan.input.maintenance),
         };
       },
       plan.databaseOptions,

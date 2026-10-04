@@ -33,10 +33,11 @@ const mocks = vi.hoisted(() => {
       typeof createWorkerEnvironmentService
     >[0]["prepareNodeArtifacts"],
     service: {
+      setHumanPresence: vi.fn(async () => {}),
       get: vi.fn<WorkerEnvironmentService["get"]>(),
       ready: vi.fn<WorkerEnvironmentService["ready"]>(async () => {}),
       stop: vi.fn<WorkerEnvironmentService["stop"]>(async () => {}),
-    } satisfies Pick<WorkerEnvironmentService, "get" | "ready" | "stop">,
+    } satisfies Pick<WorkerEnvironmentService, "get" | "ready" | "stop" | "setHumanPresence">,
   };
 });
 

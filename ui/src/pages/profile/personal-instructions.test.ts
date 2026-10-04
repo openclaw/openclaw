@@ -17,6 +17,14 @@ const file = {
   hash: "hash-1",
   missing: false,
 };
+const hello = {
+  type: "hello-ok",
+  protocol: 3,
+  server: { connId: "connection-1" },
+  snapshot: {},
+  policy: { hasMultipleSessionSharingIdentities: true },
+  auth: { role: "operator", scopes: ["operator.read"] },
+} satisfies NonNullable<ApplicationGatewaySnapshot["hello"]>;
 const tag = "test-personal-instructions";
 if (!customElements.get(tag)) {
   customElements.define(tag, class extends PersonalInstructions {});
@@ -29,7 +37,11 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function mount(request: GatewayBrowserClient["request"], signedIn = true, multipleProfiles = true) {
+function createContext(
+  request: GatewayBrowserClient["request"],
+  signedIn = true,
+  multipleProfiles = true,
+) {
   const base = createConnectedContext(
     request,
     signedIn ? { id: "profile-1", name: "Ada" } : null,
@@ -37,12 +49,8 @@ function mount(request: GatewayBrowserClient["request"], signedIn = true, multip
   let snapshot: ApplicationGatewaySnapshot = {
     ...base.gateway.snapshot,
     hello: {
-      type: "hello-ok",
-      protocol: 3,
-      server: { connId: "connection-1" },
-      snapshot: {},
+      ...hello,
       policy: { hasMultipleSessionSharingIdentities: multipleProfiles },
-      auth: { role: "operator", scopes: ["operator.read"] },
     },
   };
   const listeners = new Set<() => void>();
@@ -80,18 +88,22 @@ function mount(request: GatewayBrowserClient["request"], signedIn = true, multip
       },
     },
   };
-  const provider = createApplicationContextProvider(context);
-  const element = document.createElement(tag) as PersonalInstructions;
-  provider.append(element);
-  document.body.append(provider);
   return {
-    element,
+    context,
     selection,
     emit: (patch: Partial<ApplicationGatewaySnapshot>) => {
       snapshot = { ...snapshot, ...patch };
       listeners.forEach((listener) => listener());
     },
   };
+}
+function mount(request: GatewayBrowserClient["request"], signedIn = true, multipleProfiles = true) {
+  const harness = createContext(request, signedIn, multipleProfiles);
+  const provider = createApplicationContextProvider(harness.context);
+  const element = document.createElement(tag) as PersonalInstructions;
+  provider.append(element);
+  document.body.append(provider);
+  return { ...harness, element };
 }
 async function settle(element: PersonalInstructions) {
   await Promise.resolve();
@@ -107,31 +119,18 @@ async function input(element: PersonalInstructions, value: string) {
   await element.updateComplete;
 }
 
-it("loads and saves only the signed-in personal file with operator.read", async () => {
+it.each([false, true])("saves the signed-in personal file (missing: %s)", async (missing) => {
+  const initial = missing ? { ...file, content: "", hash: null, missing } : file;
+  const content = missing ? "New file" : "Draft";
   const request = vi
     .fn()
-    .mockResolvedValueOnce(file)
-    .mockResolvedValueOnce({ ...file, content: "Draft", hash: "hash-2" });
+    .mockResolvedValueOnce(initial)
+    .mockResolvedValueOnce({ ...file, content, hash: "hash-2" });
   const { element } = mount(request);
   await settle(element);
   expect(request).toHaveBeenCalledWith("users.personalFile.get", { agentId: "main" });
   expect(button(element, "Save").disabled).toBe(true);
   expect(button(element, "Reload")).toBeUndefined();
-  await input(element, "Draft");
-  button(element, "Save").click();
-  await settle(element);
-  expect(request).toHaveBeenLastCalledWith("users.personalFile.set", {
-    agentId: "main",
-    content: "Draft",
-    expectedHash: "hash-1",
-  });
-  expect(element.textContent).toContain("Saved");
-  expect(button(element, "Reload")).toBeUndefined();
-});
-
-it("shows one section heading without repeating it inside the editor card", async () => {
-  const { element } = mount(vi.fn().mockResolvedValue(file));
-  await settle(element);
   const heading = element.querySelector(".settings-section__heading");
   const editor = element.querySelector("textarea");
   expect(heading?.textContent?.trim()).toBe("Personal instructions");
@@ -140,33 +139,40 @@ it("shows one section heading without repeating it inside the editor card", asyn
   expect(editor?.getAttribute("aria-label")).toBe("Personal instructions");
   expect(editor?.getAttribute("aria-describedby")).toBe("personal-instructions-guidance");
   expect(editor?.rows).toBe(7);
-});
-
-it("never loads a personal file without a signed-in profile", async () => {
-  const request = vi.fn();
-  const { element } = mount(request, false);
-  await settle(element);
-  expect(request).not.toHaveBeenCalled();
-  expect(element.querySelector("textarea")).toBeNull();
-});
-
-it("creates missing files with a null expected hash and rejects oversized drafts locally", async () => {
-  const request = vi.fn().mockResolvedValue({ ...file, content: "", hash: null, missing: true });
-  const { element } = mount(request);
-  await settle(element);
-  expect(element.textContent).toContain("created when you save");
-  await input(element, "x".repeat(4001));
-  expect(button(element, "Save").disabled).toBe(true);
-  expect(element.querySelector('[role="alert"]')?.textContent).toContain("4,000");
-  await input(element, "New file");
+  if (missing) {
+    expect(element.textContent).toContain("created when you save");
+    await input(element, "x".repeat(4001));
+    expect(button(element, "Save").disabled).toBe(true);
+    expect(element.querySelector('[role="alert"]')?.textContent).toContain("4,000");
+  }
+  await input(element, content);
   button(element, "Save").click();
   await settle(element);
   expect(request).toHaveBeenLastCalledWith("users.personalFile.set", {
     agentId: "main",
-    content: "New file",
-    expectedHash: null,
+    content,
+    expectedHash: initial.hash,
   });
+  expect(element.textContent).toContain("Saved");
+  expect(button(element, "Reload")).toBeUndefined();
 });
+
+it.each([
+  { signedIn: false, multipleProfiles: true },
+  { signedIn: true, multipleProfiles: false },
+])(
+  "never loads personal files with $signedIn sign-in and $multipleProfiles profiles",
+  async ({ signedIn, multipleProfiles }) => {
+    const request = signedIn ? vi.fn().mockResolvedValue(file) : vi.fn();
+    const { element } = mount(request, signedIn, multipleProfiles);
+    await settle(element);
+    expect(request).not.toHaveBeenCalled();
+    expect(element.querySelector("textarea")).toBeNull();
+    if (!multipleProfiles) {
+      expect(element.textContent?.trim()).toBe("");
+    }
+  },
+);
 
 it("offers recovery after an automatic load fails, then hides it after retry", async () => {
   const request = vi.fn().mockRejectedValueOnce(new Error("Offline")).mockResolvedValueOnce(file);
@@ -210,28 +216,6 @@ it("preserves a conflicting draft, confirms reload, and keeps it when reload fai
   expect(button(element, "Reload")).toBeUndefined();
 });
 
-it("follows the global Settings agent without a second selector or leaking unsaved drafts", async () => {
-  const request = vi
-    .fn()
-    .mockResolvedValueOnce(file)
-    .mockResolvedValueOnce({ ...file, agentId: "other", content: "Other instructions" });
-  const { element, selection } = mount(request);
-  await settle(element);
-  expect(element.querySelector("select")).toBeNull();
-  await input(element, "Main draft");
-  selection.set("other");
-  await settle(element);
-  expect(request).toHaveBeenLastCalledWith("users.personalFile.get", { agentId: "other" });
-  expect(element.querySelector("textarea")?.value).toBe("Other instructions");
-  expect(button(element, "Reload")).toBeUndefined();
-  selection.set("main");
-  await settle(element);
-  expect(element.querySelector("textarea")?.value).toBe("Main draft");
-  expect(element.textContent).toContain("Unsaved changes");
-  expect(request).toHaveBeenCalledTimes(2);
-  expect(request.mock.calls.some(([method]) => method === "users.personalFile.set")).toBe(false);
-});
-
 it("drops a cached draft after undoing back to the saved content", async () => {
   const request = vi
     .fn()
@@ -241,12 +225,18 @@ it("drops a cached draft after undoing back to the saved content", async () => {
     .mockResolvedValueOnce(file);
   const { element, selection } = mount(request);
   await settle(element);
+  expect(element.querySelector("select")).toBeNull();
   await input(element, "Unsaved main edit");
   selection.set("other");
   await settle(element);
+  expect(request).toHaveBeenLastCalledWith("users.personalFile.get", { agentId: "other" });
+  expect(element.querySelector("textarea")?.value).toBe("Other instructions");
+  expect(button(element, "Reload")).toBeUndefined();
   selection.set("main");
   await settle(element);
   expect(element.querySelector("textarea")?.value).toBe("Unsaved main edit");
+  expect(element.textContent).toContain("Unsaved changes");
+  expect(request).toHaveBeenCalledTimes(2);
   await input(element, file.content);
   selection.set("other");
   await settle(element);
@@ -254,6 +244,7 @@ it("drops a cached draft after undoing back to the saved content", async () => {
   await settle(element);
   expect(element.querySelector("textarea")?.value).toBe(file.content);
   expect(element.textContent).not.toContain("Unsaved changes");
+  expect(request.mock.calls.some(([method]) => method === "users.personalFile.set")).toBe(false);
   expect(request.mock.calls.map(([, params]) => params)).toEqual([
     { agentId: "main" },
     { agentId: "other" },
@@ -289,35 +280,38 @@ it("never restores a former person's cached draft after an account change", asyn
   expect(element.querySelector("textarea")?.value).not.toBe("Former person's draft");
 });
 
-it("ignores a late read for a previously selected agent", async () => {
-  const old = createDeferred<typeof file>();
-  const request = vi
-    .fn()
-    .mockReturnValueOnce(old.promise)
-    .mockResolvedValueOnce({ ...file, agentId: "other", content: "Other instructions" });
-  const { element, selection } = mount(request);
-  await settle(element);
-  selection.set("other");
-  await settle(element);
-  old.resolve(file);
-  await settle(element);
-  expect(element.querySelector("textarea")?.value).toBe("Other instructions");
-});
-
-it("ignores an old connection read after the current profile changes", async () => {
-  const old = createDeferred<typeof file>();
-  const request = vi.fn().mockReturnValue(old.promise);
-  const { element, emit } = mount(request);
-  await settle(element);
-  const newRequest = vi
-    .fn()
-    .mockResolvedValue({ ...file, profileId: "profile-2", content: "New profile" });
-  emit({ client: createTestGatewayClient(newRequest), selfUser: { id: "profile-2" } });
-  await settle(element);
-  old.resolve(file);
-  await settle(element);
-  expect(element.querySelector("textarea")?.value).toBe("New profile");
-});
+it.each(["agent", "profile", "connection hello"])(
+  "ignores a late read after changing %s",
+  async (change) => {
+    const old = createDeferred<typeof file>();
+    const current = {
+      ...file,
+      agentId: change === "agent" ? "other" : file.agentId,
+      profileId: change === "profile" ? "profile-2" : file.profileId,
+      content: "Current instructions",
+    };
+    const request =
+      change === "profile"
+        ? vi.fn().mockReturnValue(old.promise)
+        : vi.fn().mockReturnValueOnce(old.promise).mockResolvedValueOnce(current);
+    const { element, selection, emit } = mount(request);
+    await settle(element);
+    if (change === "agent") {
+      selection.set("other");
+    } else if (change === "profile") {
+      emit({
+        client: createTestGatewayClient(vi.fn().mockResolvedValue(current)),
+        selfUser: { id: "profile-2" },
+      });
+    } else {
+      emit({ hello: { ...hello, server: { connId: "connection-2" } } });
+    }
+    await settle(element);
+    old.resolve(file);
+    await settle(element);
+    expect(element.querySelector("textarea")?.value).toBe(current.content);
+  },
+);
 
 it("retains the unsettled draft but ignores an old save completion after reconnecting", async () => {
   const saving = createDeferred<typeof file>();
@@ -351,41 +345,13 @@ it("rejects a response for a different profile rather than enabling a save", asy
   expect(element.querySelector('[role="alert"]')?.textContent).toContain("does not match");
 });
 
-it("invalidates an old read when the same client receives a new connection hello", async () => {
-  const old = createDeferred<typeof file>();
-  const request = vi
-    .fn()
-    .mockReturnValueOnce(old.promise)
-    .mockResolvedValueOnce({ ...file, content: "Reconnected" });
-  const { element, emit } = mount(request);
-  await settle(element);
-  emit({
-    hello: {
-      type: "hello-ok",
-      protocol: 3,
-      server: { connId: "connection-2" },
-      snapshot: {},
-      policy: { hasMultipleSessionSharingIdentities: true },
-      auth: { role: "operator", scopes: ["operator.read"] },
-    },
-  });
-  await settle(element);
-  old.resolve(file);
-  await settle(element);
-  expect(element.querySelector("textarea")?.value).toBe("Reconnected");
-});
-
 it("retires a pending read after read access is revoked", async () => {
   const old = createDeferred<typeof file>();
   const { element, emit } = mount(vi.fn().mockReturnValue(old.promise));
   await settle(element);
   emit({
     hello: {
-      type: "hello-ok",
-      protocol: 3,
-      server: { connId: "connection-1" },
-      snapshot: {},
-      policy: { hasMultipleSessionSharingIdentities: true },
+      ...hello,
       auth: { role: "operator", scopes: [] },
     },
   });
@@ -423,68 +389,19 @@ it("retains drafts privately while offline and restores them only for the same p
 });
 
 it("keeps the actual Profile editor mounted across an offline transition", async () => {
-  const base = createConnectedContext(vi.fn().mockResolvedValue(file), { id: "profile-1" });
-  const context: ApplicationContext = {
-    ...base.context,
-    gateway: {
-      ...base.context.gateway,
-      get snapshot(): ApplicationGatewaySnapshot {
-        return {
-          ...base.context.gateway.snapshot,
-          hello: {
-            type: "hello-ok",
-            protocol: 3,
-            server: { connId: "connection-1" },
-            snapshot: {},
-            policy: { hasMultipleSessionSharingIdentities: true },
-            auth: { role: "operator", scopes: ["operator.read"] },
-          },
-        };
-      },
-    },
-    agents: {
-      ...base.context.agents,
-      state: {
-        ...base.context.agents.state,
-        agentsList: {
-          defaultId: "main",
-          mainKey: "main",
-          scope: "per-sender",
-          agents: [{ id: "main" }],
-        },
-      },
-    },
-  };
-  const page = mountProfilePage({
-    ...context,
-    settingsAgentSelection: createAgentSelectionCapability(
-      context.gateway,
-      context.agents,
-      undefined,
-      undefined,
-      { requireConfiguredAgent: true },
-    ),
-  });
+  const { context, emit } = createContext(vi.fn().mockResolvedValue(file));
+  const page = mountProfilePage(context);
   await page.updateComplete;
   const editor = page.querySelector<PersonalInstructions>("openclaw-personal-instructions")!;
   await settle(editor);
   await input(editor, "Keep this draft across a network interruption");
-  base.emitConnected(false);
+  emit({ phase: "reconnecting" });
   await page.updateComplete;
   expect(page.querySelector("openclaw-personal-instructions")).toBe(editor);
-  base.emitConnected(true);
+  emit({ phase: "connected" });
   await page.updateComplete;
   await settle(editor);
   expect(editor.querySelector("textarea")?.value).toBe(
     "Keep this draft across a network interruption",
   );
-});
-
-it("hides the personal editor and sends no file requests on a single-user Gateway", async () => {
-  const request = vi.fn().mockResolvedValue(file);
-  const { element } = mount(request, true, false);
-  await settle(element);
-  expect(element.textContent?.trim()).toBe("");
-  expect(element.querySelector("textarea")).toBeNull();
-  expect(request).not.toHaveBeenCalled();
 });

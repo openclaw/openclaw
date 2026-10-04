@@ -5,6 +5,7 @@ import android.util.Log
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.serialization.Required
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
@@ -44,15 +45,11 @@ data class GatewayRegistryEntry(
 
 @Serializable
 internal data class PersistedGatewayRegistry(
+  @Required
   val version: Int = 1,
   val activeStableId: String? = null,
   val connectedStableIds: List<String>? = null,
   val entries: List<GatewayRegistryEntry> = emptyList(),
-)
-
-@Serializable
-private data class PersistedGatewayRegistryVersion(
-  val version: Int,
 )
 
 class GatewayRegistryStore(
@@ -236,19 +233,15 @@ class GatewayRegistryStore(
 
   private fun decode(rawValue: String?): DecodedRegistry {
     val raw = rawValue ?: return DecodedRegistry(PersistedGatewayRegistry(), canRewrite = false)
-    val version =
-      runCatching { json.decodeFromString<PersistedGatewayRegistryVersion>(raw) }
-        .getOrNull()
-        ?.version
-        ?.takeIf { it in 1..2 }
-        ?: return DecodedRegistry(PersistedGatewayRegistry(), canRewrite = false)
     val decoded =
-      runCatching { json.decodeFromString<PersistedGatewayRegistry>(raw) }.getOrNull()
+      runCatching { json.decodeFromString<PersistedGatewayRegistry>(raw) }
+        .getOrNull()
+        ?.takeIf { it.version in 1..2 }
         ?: return DecodedRegistry(PersistedGatewayRegistry(), canRewrite = false)
     val entries = decoded.entries.sortedForStorage()
     val active = decoded.activeStableId?.takeIf { activeId -> entries.any { it.stableId == activeId } }
     val connected =
-      (decoded.connectedStableIds ?: if (version == 1) listOfNotNull(active) else emptyList())
+      (decoded.connectedStableIds ?: if (decoded.version == 1) listOfNotNull(active) else emptyList())
         .distinct()
         .filter { connectedId -> entries.any { it.stableId == connectedId } }
     return DecodedRegistry(

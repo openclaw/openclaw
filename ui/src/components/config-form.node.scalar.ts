@@ -37,12 +37,7 @@ import {
   setControlValidity,
   type ScalarEditHint,
 } from "./config-form.scalar-edit.ts";
-import {
-  configFieldId,
-  hintForPath,
-  redactedPlaceholder,
-  schemaType,
-} from "./config-form.shared.ts";
+import { configFieldId, hintForPath, schemaType } from "./config-form.shared.ts";
 
 function coerceTextInputValue(
   value: string,
@@ -183,7 +178,7 @@ export function renderTextInput(
         : t("configForm.structuredSecretFile")
       : masked
         ? "••••••••"
-        : redactedPlaceholder()
+        : t("configForm.redactedPlaceholder")
     : (hint?.placeholder ??
       (!masked && schema.default !== undefined
         ? t("configForm.defaultValue", { value: formatConfigValueText(schema.default) })
@@ -299,7 +294,12 @@ export function renderTextInput(
       ?disabled=${disabled}
       ?readonly=${effectiveRedacted}
       @click=${() => {
-        if (sensitiveState.isRedacted && !isStructuredSecretRef && params.onToggleSensitivePath) {
+        if (
+          !masked &&
+          sensitiveState.isRedacted &&
+          !isStructuredSecretRef &&
+          params.onToggleSensitivePath
+        ) {
           params.onToggleSensitivePath(path);
         }
       }}
@@ -348,7 +348,11 @@ export function renderTextInput(
         disabled,
         onToggleSensitivePath: params.onToggleSensitivePath,
       });
-  const wrappedInput = wrapSensitiveControl(inputControl, revealToggle);
+  const wrappedInput = wrapSensitiveControl(
+    inputControl,
+    revealToggle,
+    sensitiveState.isSensitiveField && params.onToggleSensitivePath !== undefined,
+  );
   const presentedInput = isPhonePresentation
     ? html`
         <span class="settings-phone-presentation">

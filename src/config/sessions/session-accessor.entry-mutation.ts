@@ -14,8 +14,6 @@ import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-wo
 import { loadSessionEntry, patchSessionEntryCore } from "./session-accessor.entry.js";
 import { createSessionEntryWithTranscriptInScope } from "./session-accessor.sqlite-creation.js";
 import { hasPreparedNativeSessionDeletion } from "./session-accessor.sqlite-deletion.js";
-import "./session-accessor.sqlite-entry.js";
-import "./session-accessor.sqlite-parent-session.js";
 import { prepareSessionEntryReplacementDatabase } from "./session-accessor.sqlite-replacement-worker.js";
 import {
   captureLifecycleDatabaseScope,
@@ -36,7 +34,10 @@ import type {
   SessionEntryCreateWithTranscriptOptions,
 } from "./session-accessor.types.js";
 import { resolveSessionStorePathForScope } from "./session-store-path.js";
-import { captureSessionStoreReadCandidate } from "./session-store-read-candidates.js";
+import {
+  assertSessionStoreReadCandidate,
+  captureSessionStoreReadCandidate,
+} from "./session-store-read-candidates.js";
 import { captureSessionStoreReadCandidates } from "./session-store-target-inventory.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
@@ -70,12 +71,9 @@ function captureSessionEntryDatabasePreparation(
   const shared = captureOpenClawStateWorkerContext({ env: target.env });
   const candidates = [target, ...relatedScopes.map(captureScope)].flatMap((related) =>
     captureSessionStoreReadCandidates(resolveSessionStorePathForScope(related)).map(
-      (candidate) => ({
-        path: candidate.path,
-        physicalPath: candidate.physicalPath,
-        scope: candidate.scope,
-        identity: readDatabasePathIdentitySync(candidate.path),
-      }),
+      // Each capture returns fresh candidate objects, so attaching the identity in place is safe.
+      (candidate) =>
+        Object.assign(candidate, { identity: readDatabasePathIdentitySync(candidate.path) }),
     ),
   );
   const releases: Array<() => void> = [];
@@ -171,11 +169,19 @@ function captureSessionEntryDatabasePreparation(
       ) {
         return undefined;
       }
-      const original = candidates.find(
+      let original = candidates.find(
         (candidate) => candidate.path === resolved.path || candidate.physicalPath === resolved.path,
       );
       if (!original) {
-        throw new Error("Session creation lost its originally captured database target");
+        // A held custom-store family may allocate a new suffix. Never adopt an
+        // unobserved existing file or a target outside that original family.
+        assertSessionStoreReadCandidate(resolved.path, candidates);
+        const identity = readDatabasePathIdentitySync(resolved.path);
+        if (!identity.key.startsWith("path:")) {
+          throw new Error("Session creation lost its originally captured database target");
+        }
+        original = { ...captureSessionStoreReadCandidate(resolved.path), identity };
+        candidates.push(original);
       }
       return {
         options,

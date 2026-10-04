@@ -47,20 +47,12 @@ export async function reconcileInterruptedSkillProposalApply(request: {
       if (hashSkillProposalContent(params.draftContent) !== stored.record.draftHash) {
         return false;
       }
-      let proposedContent: string;
-      try {
-        proposedContent = stripProposalFrontmatterForSkill(params.draftContent);
-      } catch {
-        return false;
-      }
+      const proposedContent = stripProposalFrontmatterForSkill(params.draftContent);
       const recovery = await inspectInterruptedApplyState({
         record: stored.record,
         rollback,
         proposedContent,
-      }).catch(() => null);
-      if (!recovery) {
-        return false;
-      }
+      });
       if (recovery.state === "proposed") {
         const now = new Date().toISOString();
         const applied: SkillProposalRecord = {
@@ -154,12 +146,7 @@ function resolveRecoveryRollback(
   );
   const rollbackSupport = new Set<string>();
   for (const file of rollback.supportFiles ?? []) {
-    let normalizedPath: string;
-    try {
-      normalizedPath = normalizeWorkspaceSkillSupportPath(file.path);
-    } catch {
-      return null;
-    }
+    const normalizedPath = normalizeWorkspaceSkillSupportPath(file.path);
     if (
       normalizedPath !== file.path ||
       !proposedSupport.has(normalizedPath) ||

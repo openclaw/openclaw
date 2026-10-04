@@ -5,7 +5,6 @@ import { listAgentIds, resolveAgentConfig } from "../agents/agent-scope.js";
 import type {
   GitHubDeviceAuthorizationRecord,
   GitHubIdentityScope,
-  GitHubOAuthRecord,
 } from "../agents/github-oauth-records.js";
 import type { GitHubToolAccount } from "../agents/github-tool-account.js";
 import { resolveConfiguredGitHubToolIdentity } from "../agents/github-tool-identity.js";
@@ -67,11 +66,4 @@ export function configuredOAuthIdentities(config: OpenClawConfig): ConfiguredOAu
     }
     return identities;
   });
-}
-
-export function currentIdentityForRecord(
-  config: OpenClawConfig,
-  record: Pick<GitHubOAuthRecord, "scope" | "agentId">,
-): GitHubToolIdentityConfig | undefined {
-  return resolveConfiguredGitHubToolIdentity({ config, ...record });
 }

@@ -3,6 +3,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { sleepWithAbort } from "./backoff.js";
 
 type GitNetworkOperation = "fetch" | "ls-remote" | "clone";
+export type GitOperationStarter = <T>(operation: () => T) => Promise<Awaited<T>>;
 type GitNetworkResult = {
   termination: string;
   code: number | null;
@@ -67,12 +68,23 @@ function isTransientGitFailure(result: GitNetworkResult): boolean {
 /** Retry one settled network read inside its original deadline and caller-owned admission. */
 export async function withGitNetworkRetry<T extends GitNetworkResult>(
   operation: GitNetworkOperation | undefined,
-  options: { timeoutMs: number; signal?: AbortSignal; beforeRun?: () => void },
+  options: {
+    timeoutMs: number;
+    signal?: AbortSignal;
+    beforeRun?: () => void;
+    startRun?: GitOperationStarter;
+  },
   run: (timeoutMs: number) => Promise<T>,
 ): Promise<T> {
   const started = performance.now();
-  options.beforeRun?.();
-  const result = await run(options.timeoutMs);
+  const attempt = (timeoutMs: number) => {
+    const start = () => {
+      options.beforeRun?.();
+      return run(timeoutMs);
+    };
+    return options.startRun ? options.startRun(start) : start();
+  };
+  const result = await attempt(options.timeoutMs);
   if (!operation || !isTransientGitFailure(result)) {
     return result;
   }
@@ -105,6 +117,5 @@ export async function withGitNetworkRetry<T extends GitNetworkResult>(
   if (remainingMs <= 0) {
     return result;
   }
-  options.beforeRun?.();
-  return await run(remainingMs);
+  return await attempt(remainingMs);
 }

@@ -5,7 +5,7 @@ import {
   readChannelContextAdmissionEvidence,
 } from "../channels/message-access/admission-evidence.js";
 import { importBundledChannelContractSourceArtifact } from "../channels/plugins/contracts/test-helpers/runtime-artifacts.js";
-import type { ChannelPlugin } from "../channels/plugins/types.js";
+import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayRequestContext } from "../gateway/server-methods/types.js";
 import { runChannelInboundEvent } from "../plugin-sdk/channel-inbound.js";

@@ -71,7 +71,6 @@ function prepareAutomaticConfigRepairWrite(snapshot: ConfigFileSnapshot, config:
       unsetPaths,
     ),
     undefined,
-    undefined,
     snapshot.parsed,
   );
 }

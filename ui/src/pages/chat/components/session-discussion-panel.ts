@@ -38,15 +38,8 @@ export type SessionDiscussionPanelConfig = {
 };
 
 function resolveDiscussionUrl(value: string | undefined): string | null {
-  if (!value?.trim()) {
-    return null;
-  }
-  try {
-    const url = new URL(value);
-    return url.protocol === "https:" || url.protocol === "http:" ? url.href : null;
-  } catch {
-    return null;
-  }
+  const url = value ? URL.parse(value) : null;
+  return url && (url.protocol === "https:" || url.protocol === "http:") ? url.href : null;
 }
 
 // The frame runs with allow-scripts + allow-same-origin (cookies must flow for

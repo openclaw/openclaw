@@ -9,6 +9,92 @@ sidebarTitle: "How to migrate"
 
 The ordered migration steps. Work through them in order; each step is self-contained. Part of the [Plugin SDK migration](/plugins/sdk-migration) guide.
 
+## Workspace mutation guards
+
+Await `api.runtime.agent.ensureAgentWorkspace({ dir, guard: { assertHost } })`.
+Prepare database-derived inputs asynchronously before calling it; `assertHost`
+must synchronously check current caller authority without accessing SQLite.
+Core-owned recovery predicates execute on the worker's transaction connection.
+
+The released `beforePersistentApply: () => void` option remains supported for
+TypeScript and JavaScript plugins until the next Plugin SDK major. It runs on the
+host once immediately before each worker mutation dispatch, outside admission
+grants, and at host filesystem mutation boundaries. Throwing stops that apply.
+Synchronous OpenClaw database access in the callback is allowed and deprecated;
+a warning explains the timing and typed replacement once per process.
+
+There is no compatibility break for legacy callbacks or their database reads.
+The timing nuance is that the legacy check runs just before dispatch, while
+`guard.assertHost` is also rechecked inside transaction and commit grants.
+Prefer the typed guard for live revocation at commit. Callback errors continue
+to propagate. No schema, retention, durability, or update migration is required.
+
+## Await Mention Inbox operations
+
+Replace synchronous `context.mentionInbox.list(client)` and
+`context.mentionInbox.dismiss(client, ids)` calls with
+`listAsync(client, publish)` and `dismissAsync(client, ids, publish)`.
+Both methods prepare durable state in workers, then call `publish` synchronously
+with the current authorized result. Send the Gateway response inside that
+callback without awaiting more work:
+
+```ts
+await mentionInbox.listAsync(client, (result) => {
+  respond(result.ok, result.ok ? result.value : undefined, result.ok ? undefined : result.error);
+});
+```
+
+Await the returned promise before releasing request resources or starting work
+that depends on the operation. Dismissal IDs retain exact-match semantics.
+
+Replace `recordCommittedInput(input)` with `await recordCommittedInputAsync(input)`
+and `invalidate(sessionKey)` with `await invalidateAsync(sessionKey)`. Await
+recording before reading the resulting Inbox, and await invalidation before
+depending on refreshed connected views. Recording also awaits the collaboration
+writer's session involvement update before saving Inbox items. Both writes retain
+their existing owners and settle before Gateway worker shutdown.
+
+The shipped `list`, `dismiss`, `recordCommittedInput`, and `invalidate` methods
+remain synchronous third-party adapters until the next Plugin SDK major and
+explicit breaking-release approval. Each emits a `DEP_SESSION_PERSISTENCE`
+deprecation warning once per plugin and method per process; calls outside a
+plugin invocation warn once per method. Existing return values and completion
+timing stay intact, including recording before an immediate synchronous list.
+Notifications publish after the enclosing transaction commits and are discarded
+on rollback. This migration changes no schema, retained data, retention, or
+update behavior.
+
+## Await personal model-account operations
+
+The Gateway context's `modelAccountConnectService` now provides awaited
+replacements for its seven synchronous storage methods. Keep the existing
+arguments and await the result before publishing a response, starting dependent
+work, or releasing the caller's authority:
+
+| Synchronous method | Awaited replacement |
+| ------------------ | ------------------- |
+| `listLinks`        | `listLinksAsync`    |
+| `link`             | `linkAsync`         |
+| `unlink`           | `unlinkAsync`       |
+| `list`             | `listAsync`         |
+| `select`           | `selectAsync`       |
+| `status`           | `statusAsync`       |
+| `cancel`           | `cancelAsync`       |
+
+Each replacement resolves to the existing result envelope. Pass the current
+owner and live `assertCurrent` callback; the service rechecks authority across
+awaited work and before disclosing account summaries or links. Results never
+include credentials. If a write's commit outcome is unknown, do not retry it or
+fall back to its synchronous counterpart.
+
+The synchronous methods shipped in 2026.9.8 retain their arguments, immediate
+return values, and completion timing until the next Plugin SDK major and
+explicit breaking-release approval. Each emits one `DEP_SESSION_PERSISTENCE`
+warning per plugin and method per process, including across plugin reloads;
+unscoped calls warn once per method. Core and bundled callers use the awaited
+methods. This migration changes no RPC schema, stored data, retention, or update
+behavior.
+
 ## Await session transcript persistence
 
 Use the awaited `SessionManager` methods from
@@ -90,6 +176,22 @@ awaited replacement. The
 October 1, 2026, with removal at the next Plugin SDK major
 (`next-plugin-sdk-major`); there is no calendar removal deadline. Bundled callers
 use the awaited methods. Do not add a sync fallback when adopting the new API.
+
+User-turn transcript recorders also provide optional
+`completeProcessingAsync(outcome)` and `waitForPendingInputSettlement()` methods.
+Await processing completion before publishing its outcome. Completion records
+processing separately from transcript consumption; it does not append or consume
+the pending input. The synchronous `completeProcessing` callback shipped in
+`v2026.9.8` retains its immediate result for existing SDK consumers. The host
+uses that legacy callback only when a supplied recorder has no async companion,
+never after an async failure or an undefined async result.
+
+`finishPendingInput(disposition)` still revokes prompt custody synchronously.
+After calling it, await `waitForPendingInputSettlement()` when available before
+releasing the turn's session admission. This joins accepted completion and
+disposition writes, including each original source of a collected input. An
+uncertain write outcome is preserved and must not be replayed through either
+callback. These additions change no schema, retention, or update behavior.
 
 ### Await extension session changes
 
@@ -205,6 +307,30 @@ source/backup identities still verify. Conflicts, lost authority, and uncertain
 imports remain refusals.
 Do not implement import as runtime `enqueue` followed by `fail`: an interruption
 would expose a historical failure as new pending work.
+
+## Agent roster config
+
+Author agent rosters as `agents.entries`, keyed by agent ID. Entries contain no
+`id` field or `default` marker; their insertion order is the roster order. Read
+`cfg.agents.entries` directly, or use `listAgentIds` and `resolveAgentConfig` from
+`openclaw/plugin-sdk/agent-runtime`. Select the owner explicitly for the surface
+you use, such as `agents.defaults.systemAgent.agentId` for system work.
+
+Authored `agents.list` and boolean entry `default` markers are rejected. Run
+`openclaw doctor --fix` to migrate stored legacy configs; Doctor also records
+explicit ownership for migrated multi-agent rosters.
+
+Entries also carry no `agentRuntime` or `compaction`. Validation rejects both, so
+the authored config type omits them and `resolveAgentConfig` no longer returns
+`agentRuntime`. Read runtime policy from per-model `models[ref].agentRuntime` and
+compaction settings from `agents.defaults.compaction`.
+
+Plugins built against stable SDK releases through 2026.9.x may still read the
+deprecated, non-enumerable runtime `agents.list` projection introduced in
+[#113146](https://github.com/openclaw/openclaw/pull/113146). It is no longer typed
+or read internally, is not serialized or copied by `structuredClone`, and is
+scheduled for removal after January 2, 2027. Config mutation drafts must read and
+write `agents.entries`. This compatibility window adds no runtime warnings.
 
 ## How to migrate
 

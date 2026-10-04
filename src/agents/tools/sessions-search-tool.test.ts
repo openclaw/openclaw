@@ -7,6 +7,7 @@ import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { callGateway as gatewayCall } from "../../gateway/call.js";
 import { createSessionVisibilityChecker } from "../../plugin-sdk/session-visibility.js";
+import { normalizeToolParameters } from "../agent-tools.schema.js";
 import { describeSessionLinkRule } from "../tool-description-presets.js";
 import { compactToolOutputHint } from "../tool-schema-hints.js";
 import { createSessionsSearchTool } from "./sessions-search-tool.js";
@@ -45,7 +46,7 @@ function createTool(params: {
     config: {
       ...config,
       agents: {
-        entries: { main: { default: true } },
+        entries: { main: {} },
         ...(config.agents as Record<string, unknown> | undefined),
       },
     },
@@ -202,6 +203,25 @@ describe("sessions_search tool", () => {
     );
   });
 
+  it("rejects an empty query in the schema while accepting keywords", () => {
+    const tool = createTool({});
+    expect(Value.Check(tool.parameters, { query: "" })).toBe(false);
+    expect(Value.Check(tool.parameters, { query: "loan" })).toBe(true);
+    expect(Value.Check(tool.parameters, { query: "  loan  " })).toBe(true);
+  });
+
+  it.each(["openai", "google"])(
+    "rejects blank execution with retry guidance after %s schema normalization",
+    async (modelProvider) => {
+      const tool = normalizeToolParameters(createTool({}), { modelProvider });
+      for (const query of ["", "   "]) {
+        await expect(tool.execute!("blank-query", { query })).rejects.toThrow(
+          /query must not be empty; retry with non-empty keywords/,
+        );
+      }
+    },
+  );
+
   it("filters invisible hits before applying the limit", async () => {
     const requests: CallGatewayRequest[] = [];
     const tool = createTool({
@@ -280,9 +300,10 @@ describe("sessions_search tool", () => {
     const requests: CallGatewayRequest[] = [];
     const tool = createTool({
       requests,
+      agentId: "main",
       config: {
         tools: { sessions: { visibility: "all" }, agentToAgent: { enabled: true } },
-        agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+        agents: { entries: { main: {}, work: {} } },
       },
       results: [hit({ sessionKey: "global", agentId: "work", messageId: "work-global" })],
     });
@@ -303,7 +324,7 @@ describe("sessions_search tool", () => {
       agentSessionKey: "global",
       config: {
         tools: { sessions: { visibility: "agent" } },
-        agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+        agents: { entries: { main: {}, work: {} } },
       },
       results: [
         hit({ sessionKey: "global", agentId: "work" }),
@@ -338,7 +359,7 @@ describe("sessions_search tool", () => {
       agentSessionKey: "agent:main:main",
       config: {
         tools: { sessions: { visibility: "all" }, agentToAgent: { enabled: true } },
-        agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+        agents: { entries: { main: {}, work: {} } },
       },
       results: [hit({ sessionKey: "agent:work:other", agentId: "work" })],
     });
@@ -359,7 +380,7 @@ describe("sessions_search tool", () => {
   it("accepts the gateway's canonical key for the current-session alias", async () => {
     const tool = createSessionsSearchTool({
       config: {
-        agents: { entries: { main: { default: true } } },
+        agents: { entries: { main: {} } },
         tools: { sessions: { visibility: "self" } },
       },
       callGateway: async <T = Record<string, unknown>>(request: CallGatewayRequest): Promise<T> => {

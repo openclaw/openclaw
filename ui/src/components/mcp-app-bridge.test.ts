@@ -1,13 +1,17 @@
 import { InMemoryTransport } from "@modelcontextprotocol/client";
 import { App } from "@modelcontextprotocol/ext-apps";
+import { render } from "lit";
 import { afterEach, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { bindMcpAppResourceHandlers, OpenClawAppBridge } from "./mcp-app-bridge.ts";
+import { McpAppConfirm } from "./mcp-app-confirm.ts";
 import {
   buildMcpAppHostCapabilities,
   dispatchMcpAppMessage,
   MCP_APP_MESSAGE_EVENT,
+  MCP_APP_FILE_OPEN_EVENT,
+  type McpAppFileOpenEventDetail,
   type McpAppMessageEventDetail,
 } from "./mcp-app-security.ts";
 import { McpAppView } from "./mcp-app-view.ts";
@@ -18,13 +22,107 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+it("confirms file paths in the pane before requesting or opening a file", async () => {
+  const [hostTransport, appTransport] = InMemoryTransport.createLinkedPair();
+  const bridge = new OpenClawAppBridge(
+    null,
+    { name: "OpenClaw", version: "test" },
+    buildMcpAppHostCapabilities(undefined, false, false, { openFiles: true }),
+  );
+  const app = new App({ name: "file-proof", version: "1" }, {}, { autoResize: false });
+  const root = document.createElement("div");
+  const frame = document.createElement("iframe");
+  document.body.append(root, frame);
+  frame.checkVisibility = () => true;
+  let disposed = false;
+  let prompted = createDeferred();
+  const confirmation = new McpAppConfirm(() => {
+    render(confirmation.render(), root);
+    prompted.resolve();
+  });
+  const request = vi.fn(async () => ({ path: "/workspace/parts.txt", name: "parts.txt" }));
+  const opened = vi.fn();
+  root.addEventListener(MCP_APP_FILE_OPEN_EVENT, (event) => {
+    event.preventDefault();
+    const detail = (event as CustomEvent<McpAppFileOpenEventDetail>).detail;
+    opened(detail);
+    detail.respond(true);
+  });
+  const owner = {
+    bridge,
+    request,
+    sessionKey: "file-session",
+    viewId: "file-view",
+    iframe: frame,
+    openFilesSupported: true,
+    confirmOpenFile: (text: string) =>
+      confirmation.request({
+        frame,
+        title: "Parts library",
+        text,
+        kind: "file",
+        isCurrent: () => !disposed,
+      }),
+    isDisposed: () => disposed,
+    addCleanup: vi.fn(),
+    dispatchEvent: (event: Event) => root.dispatchEvent(event),
+    onModelContextChanged: vi.fn(),
+    onConversationInputRequested: vi.fn(),
+    subscribeEvents: () => undefined,
+  };
+  bindMcpAppResourceHandlers(owner);
+  vi.spyOn(window, "confirm").mockReturnValue(false);
+  await bridge.connect(hostTransport);
+  await app.connect(appTransport);
+  const open = () =>
+    app.request(
+      { method: "openai/files/open", params: { path: "parts.txt" } },
+      z.record(z.string(), z.unknown()),
+    );
+  try {
+    for (const action of ["Cancel", "Open", "retire"] as const) {
+      frame.focus();
+      prompted = createDeferred();
+      const opening = open();
+      await Promise.race([prompted.promise, opening]);
+      const dialog = root.querySelector<HTMLElement>('[role="alertdialog"]');
+      expect(dialog).not.toBeNull();
+      expect(dialog!.textContent).toContain("Parts library");
+      expect(dialog!.querySelector('[title="parts.txt"]')).not.toBeNull();
+      expect(request).toHaveBeenCalledTimes(action === "retire" ? 1 : 0);
+      if (action === "retire") {
+        disposed = true;
+        confirmation.cancel();
+      } else {
+        Array.from(dialog!.querySelectorAll("button"))
+          .find((button) => button.textContent?.trim() === action)!
+          .click();
+      }
+      expect(await opening).toEqual(action === "Open" ? {} : { isError: true });
+      expect(opened).toHaveBeenCalledTimes(action === "Cancel" ? 0 : 1);
+    }
+    expect(request).toHaveBeenCalledExactlyOnceWith("mcp.app.openFile", { path: "parts.txt" });
+    expect(opened).toHaveBeenCalledWith({
+      sessionKey: "file-session",
+      viewId: "file-view",
+      path: "/workspace/parts.txt",
+      name: "parts.txt",
+      respond: expect.any(Function),
+    });
+    expect(window.confirm).not.toHaveBeenCalled();
+  } finally {
+    confirmation.cancel();
+    await app.close();
+    await bridge.close();
+  }
+});
+
 it("negotiates extension capabilities and preserves rich request metadata over the actual AppBridge transport", async () => {
   const [hostTransport, appTransport] = InMemoryTransport.createLinkedPair();
   const bridge = new OpenClawAppBridge(
     null,
     { name: "OpenClaw", version: "test" },
-    buildMcpAppHostCapabilities(undefined, true, true, true, {
-      richMessage: true,
+    buildMcpAppHostCapabilities(undefined, true, true, {
       richModelContext: true,
       fileResources: true,
     }),
@@ -274,7 +372,7 @@ it("forwards resource metadata and keeps subscriptions with the extracted bridge
   const bridge = new OpenClawAppBridge(
     null,
     { name: "OpenClaw", version: "test" },
-    buildMcpAppHostCapabilities(undefined, true, false, true, { fileResources: true }),
+    buildMcpAppHostCapabilities(undefined, true, false, { fileResources: true }),
   );
   const app = new App({ name: "resources-proof", version: "1" }, {}, { autoResize: false });
   const frame = document.createElement("iframe");
@@ -306,6 +404,7 @@ it("forwards resource metadata and keeps subscriptions with the extracted bridge
     viewId: "app",
     iframe: frame,
     fileResourcesSupported: true,
+    confirmOpenFile: vi.fn(async () => false),
     isDisposed: () => disposed,
     addCleanup: (cleanup) => {
       cleanups.add(cleanup);

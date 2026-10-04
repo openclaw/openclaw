@@ -135,12 +135,15 @@ async function startMcpLoopbackServer(
   work: AsyncWorkScope,
 ): Promise<() => Promise<void>> {
   // Shutdown preloads this module even when no MCP listener is needed.
-  const [{ handleMcpJsonRpc }, { McpLoopbackToolCache }, { isCompletionGrantLineageCurrent }] =
-    await Promise.all([
-      import("./mcp-http.handlers.js"),
-      import("./mcp-http.runtime.js"),
-      import("./tool-resolution-completion.js"),
-    ]);
+  const [
+    { handleMcpJsonRpc },
+    { McpLoopbackToolCache },
+    { createCompletionGrantLineageAdmission },
+  ] = await Promise.all([
+    import("./mcp-http.handlers.js"),
+    import("./mcp-http.runtime.js"),
+    import("./tool-resolution-completion.js"),
+  ]);
   const ownerToken = crypto.randomBytes(32).toString("hex");
   const nonOwnerToken = crypto.randomBytes(32).toString("hex");
   const toolCache = new McpLoopbackToolCache();
@@ -239,9 +242,9 @@ async function startMcpLoopbackServer(
         // A completion grant is current only while its requester lineage verifies. The
         // child entry can go away while preparation, hooks or approvals await, so the
         // dispatch authorization and the tools' source-effect guard both re-check it.
+        const lineage = createCompletionGrantLineageAdmission({ cfg, context: requestContext });
         const isGrantAndLineageCurrent = () =>
-          (boundClientGrant?.isCurrent() ?? true) &&
-          isCompletionGrantLineageCurrent({ cfg, context: requestContext });
+          (boundClientGrant?.isCurrent() ?? true) && lineage.isCurrent();
         const authorizeToolCall = () =>
           !work.isClosing &&
           getActiveMcpLoopbackRuntime()?.ownerToken === ownerToken &&
@@ -412,6 +415,7 @@ async function startMcpLoopbackServer(
               ? createAdmittedGatewayToolCallerIdentity({
                   admittedRunContext: boundClientGrant.admittedRunContext,
                   receiptAuthority: isGrantAndLineageCurrent,
+                  receiptAdmission: lineage.admission,
                   cronAuthorityCheck: boundClientGrant.cronAuthorityCheck,
                   mintCronRequesterGrant: boundClientGrant.mintCronRequesterGrant,
                   agentId: scopedTools.agentId,

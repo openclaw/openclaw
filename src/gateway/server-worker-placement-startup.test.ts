@@ -39,7 +39,7 @@ function placementStoreDefaults(
     retireSessionPlacement: vi.fn(),
     pruneOrphanedWorkspaceReconciliations: async () => [],
     listWorkspaceReconciliationOwners: async () => [],
-    listPendingWorkspaceResults: () => [],
+    listPendingWorkspaceResultsAsync: () => [],
   };
 }
 
@@ -712,7 +712,7 @@ describe("worker placement startup recovery authority", () => {
       )
       .finally(() => admission.release());
     await vi.waitFor(() => expect(events).toEqual(["recovery:/gateway/workspace"]));
-    const contender = runExclusiveSessionLifecycleMutation({
+    const contender = runExclusiveSessionLifecycleMutation("placement-activate", {
       scope: "/tmp/openclaw-worker-placement-session.sqlite",
       identities: [
         request.sessionKey,

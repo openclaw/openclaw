@@ -263,52 +263,32 @@ describe("scheduleGatewayHandlerPrewarm", () => {
     }
   });
 
-  it("waits for gateway readiness before warming handler data", async () => {
-    vi.useFakeTimers();
-    const { promise: gatewayReady, resolve: releaseGatewayReady } = createDeferred();
-    const load = vi.fn(async () => {});
+  it.each([false, true])(
+    "waits for readiness and respects shutdown (stopped: %s)",
+    async (stopped) => {
+      vi.useFakeTimers();
+      const { promise: gatewayReady, resolve: releaseGatewayReady } = createDeferred();
+      const load = vi.fn(async () => {});
 
-    const sidecar = scheduleGatewayHandlerPrewarm({
-      scheduler: createTestGatewayScheduler("fake-timers"),
-      getConfig: () => ({}),
-      log: { warn: vi.fn() },
-      items: [{ name: "sessions", load }],
-      waitForPostReadyWork: () => gatewayReady,
-    });
+      const sidecar = scheduleGatewayHandlerPrewarm({
+        scheduler: createTestGatewayScheduler("fake-timers"),
+        getConfig: () => ({}),
+        log: { warn: vi.fn() },
+        items: [{ name: "sessions", load }],
+        waitForPostReadyWork: () => gatewayReady,
+      });
 
-    await vi.advanceTimersToNextTimerAsync();
-    expect(load).not.toHaveBeenCalled();
-
-    releaseGatewayReady();
-    await vi.runAllTimersAsync();
-    expect(load).toHaveBeenCalledOnce();
-    await sidecar.stop();
-  });
-
-  it("waits for admitted request work before warming handler data", async () => {
-    vi.useFakeTimers();
-    const admission = tryBeginGatewayRootWorkAdmission();
-    if (!admission) {
-      throw new Error("Expected request work admission");
-    }
-    const load = vi.fn(async () => {});
-    const sidecar = scheduleGatewayHandlerPrewarm({
-      scheduler: createTestGatewayScheduler("fake-timers"),
-      getConfig: () => ({}),
-      log: { warn: vi.fn() },
-      items: [{ name: "sessions", load }],
-    });
-
-    await vi.advanceTimersByTimeAsync(0);
-    expect(load).not.toHaveBeenCalled();
-
-    admission.release();
-    await vi.advanceTimersByTimeAsync(249);
-    expect(load).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(1);
-    expect(load).toHaveBeenCalledOnce();
-    await sidecar.stop();
-  });
+      await vi.advanceTimersToNextTimerAsync();
+      expect(load).not.toHaveBeenCalled();
+      if (stopped) {
+        await sidecar.stop();
+      }
+      releaseGatewayReady();
+      await vi.runAllTimersAsync();
+      expect(load).toHaveBeenCalledTimes(stopped ? 0 : 1);
+      await sidecar.stop();
+    },
+  );
 
   it("prepares the history worker during foreground work while other preparation stays idle", async () => {
     vi.useFakeTimers();
@@ -335,27 +315,6 @@ describe("scheduleGatewayHandlerPrewarm", () => {
       admission.release();
       await sidecar.stop();
     }
-  });
-
-  it("stays stopped when readiness arrives after shutdown", async () => {
-    vi.useFakeTimers();
-    const { promise: gatewayReady, resolve: releaseGatewayReady } = createDeferred();
-    const load = vi.fn(async () => {});
-
-    const sidecar = scheduleGatewayHandlerPrewarm({
-      scheduler: createTestGatewayScheduler("fake-timers"),
-      getConfig: () => ({}),
-      log: { warn: vi.fn() },
-      items: [{ name: "sessions", load }],
-      waitForPostReadyWork: () => gatewayReady,
-    });
-
-    await vi.advanceTimersToNextTimerAsync();
-    await sidecar.stop();
-    releaseGatewayReady();
-    await vi.runAllTimersAsync();
-
-    expect(load).not.toHaveBeenCalled();
   });
 
   it("logs failures and continues without changing later request behavior", async () => {
@@ -441,8 +400,10 @@ it("keeps the context cache delayed and uses current config after foreground wor
     expect(mocks.prewarmContextWindowCacheAfterReady).not.toHaveBeenCalled();
     current = { agents: { entries: {} }, skills: { load: { watch: false } } };
     request.release();
-    await vi.advanceTimersByTimeAsync(250);
-    expect(mocks.prewarmContextWindowCacheAfterReady).toHaveBeenCalledWith({
+    await vi.advanceTimersByTimeAsync(249);
+    expect(mocks.prewarmContextWindowCacheAfterReady).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(mocks.prewarmContextWindowCacheAfterReady).toHaveBeenCalledExactlyOnceWith({
       config: current,
       isCancelled: expect.any(Function),
     });

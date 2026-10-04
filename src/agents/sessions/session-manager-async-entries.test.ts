@@ -8,6 +8,7 @@ import {
 import * as hostTranscriptWriter from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
 import { withSessionTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
 import { SessionManager } from "../../plugin-sdk/agent-sessions.js";
+import { readGlobalSingleton } from "../../shared/global-singleton.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
@@ -280,26 +281,47 @@ it("propagates queued write revocation and user/custom commit failures without p
 });
 
 it("warns once per synchronous method across manager instances while preserving compatibility results", () => {
-  const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
-  for (let index = 0; index < 2; index++) {
-    const manager = SessionManager.inMemory();
-    const id = manager.appendCustomEntry("legacy", { index });
-    expect(manager.getEntry(id)).toMatchObject({ id, customType: "legacy", data: { index } });
-    const info = manager.appendSessionInfo("Legacy name");
-    expect(manager.getEntry(info)).toMatchObject({ id: info, type: "session_info" });
-  }
-  for (const [method, replacement] of [
+  const methods = [
     ["appendCustomEntry", "appendCustomEntryAsync"],
     ["appendSessionInfo", "appendSessionInfoAsync"],
-  ]) {
-    const calls = warning.mock.calls.filter(([message]) =>
-      String(message).startsWith(`SessionManager.${method} is deprecated;`),
-    );
-    expect(calls).toHaveLength(1);
-    expect(calls[0]?.[0]).toContain(replacement);
-    expect(calls[0]?.[1]).toMatchObject({
-      code: "DEP_SESSION_PERSISTENCE",
-      type: "DeprecationWarning",
-    });
+  ] as const;
+  const warned = readGlobalSingleton(Symbol.for("openclaw.sessionPersistenceDeprecations"));
+  if (!(warned instanceof Set)) {
+    throw new Error("Expected the process-wide session persistence warning registry");
+  }
+  // Shared Vitest workers retain earlier files' process-wide warning budgets.
+  const priorWarnings = methods.map(([method]) => {
+    const key = `SessionManager.${method}`;
+    return { key, existed: warned.delete(key) };
+  });
+  const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
+  try {
+    for (let index = 0; index < 2; index++) {
+      const manager = SessionManager.inMemory();
+      const id = manager.appendCustomEntry("legacy", { index });
+      expect(manager.getEntry(id)).toMatchObject({ id, customType: "legacy", data: { index } });
+      const info = manager.appendSessionInfo("Legacy name");
+      expect(manager.getEntry(info)).toMatchObject({ id: info, type: "session_info" });
+    }
+    for (const [method, replacement] of methods) {
+      const calls = warning.mock.calls.filter(([message]) =>
+        String(message).startsWith(`SessionManager.${method} is deprecated;`),
+      );
+      expect(calls).toHaveLength(1);
+      expect(calls[0]?.[0]).toContain(replacement);
+      expect(calls[0]?.[1]).toMatchObject({
+        code: "DEP_SESSION_PERSISTENCE",
+        type: "DeprecationWarning",
+      });
+    }
+  } finally {
+    warning.mockRestore();
+    for (const { key, existed } of priorWarnings) {
+      if (existed) {
+        warned.add(key);
+      } else {
+        warned.delete(key);
+      }
+    }
   }
 });

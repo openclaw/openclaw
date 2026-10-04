@@ -1,29 +1,28 @@
 // One lifecycle owner for interactive Markdown in transcripts and previews.
 import { nothing } from "lit";
-import { AsyncDirective } from "lit/async-directive.js";
 import { directive, type ElementPart } from "lit/directive.js";
 import { t } from "../i18n/index.ts";
 import {
-  PRESENTATION_CHANGED_EVENT,
+  PresentationAsyncDirective,
   type PresentationBinding,
+  type PresentationValue,
 } from "../lit/presentation-binding.ts";
 import { updateCodeBlockWidthOverflow } from "./markdown-code-blocks.ts";
 import { enhanceMarkdownTables, releaseMarkdownTables } from "./markdown-tables.ts";
 
 let codeBlockRegionSequence = 0;
 const blockSelector = ".code-block-wrapper, .markdown-mermaid";
-class MarkdownBlocksDirective extends AsyncDirective {
+class MarkdownBlocksDirective extends PresentationAsyncDirective {
   private root: HTMLElement | undefined;
   private observedRoot: HTMLElement | undefined;
   private scanPending = false;
   private active = true;
-  private presentation?: PresentationBinding;
-  private readonly handlePresentationChange = () => {
-    if (this.presentation?.isPresented() === false) {
+  protected override presentationChanged(binding?: PresentationBinding) {
+    if (binding?.isPresented() === false) {
       this.active = false;
       this.release();
     }
-  };
+  }
   private readonly pendingBlocks = new Set<HTMLElement>();
   private readonly observedNodes = new Set<HTMLElement>();
   private readonly resizeObserver =
@@ -75,31 +74,18 @@ class MarkdownBlocksDirective extends AsyncDirective {
     }
   }
 
-  render(_active = true, _presentation?: PresentationBinding) {
+  render(_presented: PresentationValue = true) {
     return nothing;
   }
 
-  override update(
-    part: ElementPart,
-    [active = true, presentation]: [boolean?, PresentationBinding?],
-  ) {
-    const previousOwner = this.presentation?.owner;
-    this.presentation = presentation;
-    if (previousOwner !== presentation?.owner) {
-      previousOwner?.removeEventListener(PRESENTATION_CHANGED_EVENT, this.handlePresentationChange);
-      if (this.isConnected) {
-        presentation?.owner.addEventListener(
-          PRESENTATION_CHANGED_EVENT,
-          this.handlePresentationChange,
-        );
-      }
-    }
+  override update(part: ElementPart, [presented = true]: [PresentationValue?]) {
+    this.updatePresentation(presented);
     const root = part.element instanceof HTMLElement ? part.element : undefined;
     if (root !== this.root) {
       this.release();
       this.root = root;
     }
-    this.active = active && presentation?.isPresented() !== false;
+    this.active = typeof presented === "boolean" ? presented : presented.isPresented();
     if (this.active) {
       this.scheduleScan();
     } else {
@@ -109,10 +95,7 @@ class MarkdownBlocksDirective extends AsyncDirective {
   }
 
   protected override disconnected(): void {
-    this.presentation?.owner.removeEventListener(
-      PRESENTATION_CHANGED_EVENT,
-      this.handlePresentationChange,
-    );
+    super.disconnected();
     this.release();
   }
 
@@ -129,11 +112,7 @@ class MarkdownBlocksDirective extends AsyncDirective {
   }
 
   protected override reconnected(): void {
-    this.presentation?.owner.addEventListener(
-      PRESENTATION_CHANGED_EVENT,
-      this.handlePresentationChange,
-    );
-    this.handlePresentationChange();
+    super.reconnected();
     this.scheduleScan();
   }
 

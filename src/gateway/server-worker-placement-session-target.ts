@@ -1,4 +1,5 @@
 import type { managedWorktrees } from "../agents/worktrees/service.js";
+import type { ManagedWorktreeRecord } from "../agents/worktrees/types.js";
 import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
 import { createSessionEntryRevisionGuard } from "../config/sessions/session-accessor.sqlite-entry-revision.js";
 import { createSessionTranscriptOwnerPredicate } from "../config/sessions/session-accessor.sqlite-transcript-write-guard.js";
@@ -28,6 +29,16 @@ import { createWorkerWorkspaceConflictTranscriptHandlers } from "./worker-worksp
 export class WorkerDispatchTargetChangedError extends Error {
   readonly code = "invalid_state";
 }
+
+export type WorkerPlacementSessionRuntime = {
+  managedWorktrees: {
+    findLiveByOwner: (
+      ...args: Parameters<typeof managedWorktrees.findLiveByOwner>
+    ) => Pick<ManagedWorktreeRecord, "id" | "ownerId" | "path"> | undefined;
+  };
+  resolveCanonicalSessionEntryFromStoreKeys: typeof sessionUtils.resolveCanonicalSessionEntryFromStoreKeys;
+  resolveGatewaySessionStoreTargetWithStore: typeof sessionUtils.resolveGatewaySessionStoreTargetWithStore;
+};
 
 export function createWorkerWorkspaceRecoveryPreparer(options: {
   loadSessionRuntime: () => Promise<WorkerPlacementSessionRuntime>;
@@ -67,14 +78,6 @@ export function createWorkerWorkspaceRecoveryPreparer(options: {
     const completion = createDeferredCore();
     const controller = new AbortController();
     let unregister = () => {};
-    const release = () => {
-      if (released) {
-        return;
-      }
-      released = true;
-      unregister();
-      retained.claim.release();
-    };
     const assertSourceCurrent = () => {
       controller.signal.throwIfAborted();
       assertOwnerCurrent();
@@ -136,22 +139,20 @@ export function createWorkerWorkspaceRecoveryPreparer(options: {
         }),
       );
     } finally {
-      release();
+      released = true;
+      unregister();
+      retained.claim.release();
       completion.resolve();
     }
   };
 }
 
-type WorkerPlacementSessionRuntime = {
-  resolveWorkerPlacementExecutionMode: typeof placementSessionRuntime.resolveWorkerPlacementExecutionMode;
-  managedWorktrees: typeof managedWorktrees;
-  resolveWorkerPlacementSessionRuntime: typeof placementSessionRuntime.resolveWorkerPlacementSessionRuntime;
-  resolveCanonicalSessionEntryFromStoreKeys: typeof sessionUtils.resolveCanonicalSessionEntryFromStoreKeys;
-  resolveGatewaySessionStoreTargetWithStore: typeof sessionUtils.resolveGatewaySessionStoreTargetWithStore;
-};
-
 export async function runWorkerPlacementSessionBarrier<T>(params: {
-  sessionRuntime: WorkerPlacementSessionRuntime;
+  sessionRuntime: WorkerPlacementSessionRuntime &
+    Pick<
+      typeof placementSessionRuntime,
+      "resolveWorkerPlacementExecutionMode" | "resolveWorkerPlacementSessionRuntime"
+    >;
   getConfig: () => OpenClawConfig;
   sessionId: string;
   sessionKey: string;
@@ -159,7 +160,7 @@ export async function runWorkerPlacementSessionBarrier<T>(params: {
   executionMode: WorkerPlacementExecutionMode;
   action: "activation" | "recovery";
   signal?: AbortSignal;
-  run: (workspace: WorkerSessionWorkspace) => T | Promise<T>;
+  run: (workspace: WorkerSessionWorkspace, assertCurrent: () => void) => T | Promise<T>;
 }): Promise<T> {
   const target = params.sessionRuntime.resolveGatewaySessionStoreTargetWithStore({
     cfg: params.getConfig(),
@@ -169,13 +170,13 @@ export async function runWorkerPlacementSessionBarrier<T>(params: {
     clone: false,
     exactRead: true,
   });
-  return await runExclusiveSessionLifecycleMutation({
+  const operation = params.action === "activation" ? "placement-activate" : "placement-recover";
+  return await runExclusiveSessionLifecycleMutation(operation, {
     scope: target.storePath,
     identities: [params.sessionKey, target.canonicalKey, ...target.storeKeys, params.sessionId],
     signal: params.signal,
     run: async () => {
       const {
-        config,
         target: currentTarget,
         entry,
         workspace,
@@ -196,80 +197,51 @@ export async function runWorkerPlacementSessionBarrier<T>(params: {
           `Session ${params.sessionKey} was archived before cloud worker ${params.action}. Retry.`,
         );
       }
-      const currentRuntime = params.sessionRuntime.resolveWorkerPlacementSessionRuntime({
-        cfg: config,
-        entry,
-        agentId: currentTarget.agentId,
-        sessionKey: currentTarget.canonicalKey,
-      });
-      if (
-        params.sessionRuntime.resolveWorkerPlacementExecutionMode(currentRuntime) !==
-        params.executionMode
-      ) {
-        throw new WorkerDispatchTargetChangedError(
-          `Session ${params.sessionKey} runtime changed to ${currentRuntime} before cloud worker ${params.action}. Retry.`,
-        );
-      }
-      return await params.run(workspace);
+      const assertPlacementCurrent = () => {
+        params.signal?.throwIfAborted();
+        const config = params.getConfig();
+        assertCurrent(config);
+        const currentRuntime = params.sessionRuntime.resolveWorkerPlacementSessionRuntime({
+          cfg: config,
+          entry,
+          agentId: currentTarget.agentId,
+          sessionKey: currentTarget.canonicalKey,
+        });
+        if (
+          params.sessionRuntime.resolveWorkerPlacementExecutionMode(currentRuntime) !==
+          params.executionMode
+        ) {
+          throw new WorkerDispatchTargetChangedError(
+            `Session ${params.sessionKey} runtime changed to ${currentRuntime} before cloud worker ${params.action}. Retry.`,
+          );
+        }
+      };
+      assertPlacementCurrent();
+      return await params.run(workspace, assertPlacementCurrent);
     },
   });
 }
 
-type SessionEntryShape = {
-  sessionId?: string;
-  lifecycleRevision?: string;
-  archivedAt?: number;
-  worktree?: { id?: string };
-  repositoryWorkspaceId?: string;
-};
-
-type SessionTargetShape<Store> = {
-  storePath: string;
-  canonicalKey: string;
-  agentId: string;
-  store: Store;
-  storeKeys: string[];
-};
-
 /** Keep canonical session identity and its durable workspace owner in one lifecycle fence. */
-export async function resolveWorkerPlacementSessionTarget<
-  Entry extends SessionEntryShape,
-  Store extends Record<string, Entry>,
-  Target extends SessionTargetShape<Store>,
-  Worktree extends { id: string; ownerId?: string; path: string },
->(params: {
-  sessionRuntime: {
-    resolveGatewaySessionStoreTargetWithStore: (input: {
-      cfg: OpenClawConfig;
-      key: string;
-      agentId: string;
-      preserveQualifiedAddress: true;
-      clone: false;
-      exactRead: true;
-    }) => Target;
-    resolveCanonicalSessionEntryFromStoreKeys: (
-      store: Store,
-      storeKeys: string[],
-    ) => Entry | undefined;
-    managedWorktrees: {
-      findLiveByOwner: (ownerKind: "session", ownerId: string) => Worktree | undefined;
-    };
-  };
+export async function resolveWorkerPlacementSessionTarget(params: {
+  sessionRuntime: WorkerPlacementSessionRuntime;
   config: OpenClawConfig;
   sessionId: string;
   sessionKey: string;
   agentId: string;
-  expectedTarget?: Target;
+  expectedTarget?: ReturnType<typeof sessionUtils.resolveGatewaySessionStoreTargetWithStore>;
   errorMessage: string;
 }) {
-  const initialTarget = params.sessionRuntime.resolveGatewaySessionStoreTargetWithStore({
-    cfg: params.config,
-    key: params.sessionKey,
-    agentId: params.agentId,
-    preserveQualifiedAddress: true,
-    clone: false,
-    exactRead: true,
-  });
+  const resolveTarget = (cfg: OpenClawConfig) =>
+    params.sessionRuntime.resolveGatewaySessionStoreTargetWithStore({
+      cfg,
+      key: params.sessionKey,
+      agentId: params.agentId,
+      preserveQualifiedAddress: true,
+      clone: false,
+      exactRead: true,
+    });
+  const initialTarget = resolveTarget(params.config);
   const initialEntry = params.sessionRuntime.resolveCanonicalSessionEntryFromStoreKeys(
     initialTarget.store,
     initialTarget.storeKeys,
@@ -298,14 +270,7 @@ export async function resolveWorkerPlacementSessionTarget<
     ? await getSessionRepositoryWorkspaceStore().prepare(initialIdentity.repositoryWorkspaceId)
     : undefined;
   const resolveBinding = (config = params.config) => {
-    const target = params.sessionRuntime.resolveGatewaySessionStoreTargetWithStore({
-      cfg: config,
-      key: params.sessionKey,
-      agentId: params.agentId,
-      preserveQualifiedAddress: true,
-      clone: false,
-      exactRead: true,
-    });
+    const target = resolveTarget(config);
     const entry = params.sessionRuntime.resolveCanonicalSessionEntryFromStoreKeys(
       target.store,
       target.storeKeys,

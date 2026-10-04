@@ -31,6 +31,7 @@ const targets = [
   "node-host-launcher.mjs",
   "node-runtime-update.mjs",
   "node-runtime-recovery.mjs",
+  "node-runtime-env.mjs",
   "node-sqlite.mjs",
   "node-version.mjs",
   "openclaw.mjs",

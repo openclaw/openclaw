@@ -1,7 +1,7 @@
 // Verifies that nested session tools keep execution identity without narrowing discovery policy.
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { registerAcpRuntimeBackend, unregisterAcpRuntimeBackend } from "../acp/runtime/registry.js";
-import type { ChannelPlugin } from "../channels/plugins/types.js";
+import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
 import { setEmbeddedMode } from "../infra/embedded-mode.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
@@ -81,7 +81,7 @@ function requireTool(tools: ReturnType<typeof createOpenClawTools>, name: string
 
 function sessionPolicyConfig(visibility: "all" | "self" = "all") {
   return {
-    agents: { list: [{ id: "main", default: true }, { id: "research" }] },
+    agents: { entries: { main: {}, research: {} } },
     tools: {
       sessions: { visibility },
       agentToAgent: visibility === "all" ? { enabled: true, allow: ["*"] } : { enabled: false },
@@ -234,7 +234,7 @@ describe("openclaw session lookup context", () => {
     const runSessionKey = "agent:research:main";
     setEmbeddedMode(true);
     const tools = createTools(
-      { agents: { list: [{ id: "main", default: true }, { id: "research" }] } },
+      { agents: { entries: { main: {}, research: {} } } },
       { sandboxed: true },
     );
 

@@ -298,13 +298,10 @@ describePosix("scripts/pr ci-dispatch", () => {
     40_000,
   );
 
-  it("rejects caller-supplied proof handles", () => {
-    const fakeGh = createFakeGh();
-    const result = spawnSync(
-      process.execPath,
+  it.each([
+    [
+      "caller-supplied proof",
       [
-        dispatchScript,
-        "12345",
         "contributor/fix-hosted-gates",
         headSha,
         baseSha,
@@ -314,52 +311,33 @@ describePosix("scripts/pr ci-dispatch", () => {
         "--run-id",
         "run_attacker",
       ],
-      {
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          OPENCLAW_GH_BIN: fakeGh.realGh,
-          OPENCLAW_TEST_GH_CALLS: fakeGh.calls,
-          PATH: `${fakeGh.binDir}:${process.env.PATH ?? ""}`,
-        },
+    ],
+    ["fork PR", ["fix", headSha, baseSha, "true"]],
+  ])("rejects %s before invoking GitHub", (_name, args) => {
+    const fakeGh = createFakeGh();
+    const result = spawnSync(process.execPath, [dispatchScript, "12345", ...args], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        OPENCLAW_GH_BIN: fakeGh.realGh,
+        OPENCLAW_TEST_GH_CALLS: fakeGh.calls,
+        PATH: `${fakeGh.binDir}:${process.env.PATH ?? ""}`,
       },
-    );
+    });
     expect(result.status).not.toBe(0);
     expect(existsSync(fakeGh.dispatched)).toBe(false);
-  });
-
-  it("fails closed for a check from the wrong app", () => {
-    const result = runDispatch(createFakeGh(), { backend: "crabbox", wrongCheck: true });
-    expect(result.status).not.toBe(0);
-    expect(`${result.stdout}\n${result.stderr}`).toMatch(
-      /without the exact-head GitHub Actions check/u,
-    );
-  });
-
-  it("rechecks the remote head after dispatch", () => {
-    const result = runDispatch(createFakeGh(), { mode: "head-change" });
-    expect(result.status).not.toBe(0);
-    expect(`${result.stdout}\n${result.stderr}`).toMatch(/head changed/u);
-  });
-
-  it("rejects fork PRs before invoking GitHub", () => {
-    const fakeGh = createFakeGh();
-    const result = spawnSync(
-      process.execPath,
-      [dispatchScript, "12345", "fix", headSha, baseSha, "true"],
-      {
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          OPENCLAW_GH_BIN: fakeGh.realGh,
-          OPENCLAW_TEST_GH_CALLS: fakeGh.calls,
-          PATH: `${fakeGh.binDir}:${process.env.PATH ?? ""}`,
-        },
-      },
-    );
-    expect(result.status).not.toBe(0);
     expect(existsSync(fakeGh.calls)).toBe(false);
   });
+
+  it.each([
+    [{ backend: "crabbox", wrongCheck: true }, /without the exact-head GitHub Actions check/u],
+    [{ mode: "head-change" }, /head changed/u],
+  ] as const)("rejects dispatch observation drift: %j", (options, error) => {
+    const result = runDispatch(createFakeGh(), options);
+    expect(result.status).not.toBe(0);
+    expect(`${result.stdout}\n${result.stderr}`).toMatch(error);
+  });
+
   it("resumes a legacy pending run without dispatch or discovery and retains only pending provenance", () => {
     const fakeGh = createFakeGh();
     writePending(fakeGh);
@@ -461,50 +439,34 @@ syncBuiltinESMExports();
   });
 
   it.each([
-    { id: 100 },
-    { html_url: "https://example.invalid/run/99" },
-    { display_title: "PR Crabbox gate #999 / " + headSha },
-    { event: "pull_request" },
-    { head_branch: "topic" },
-    { path: ".github/workflows/ci.yml" },
-    { run_attempt: 0 },
-    { head_sha: "bad" },
-    { conclusion: "failure" },
-  ])("rejects a mismatched or failed resume run %j without dispatch", (run) => {
+    ...[
+      { id: 100 },
+      { html_url: "https://example.invalid/run/99" },
+      { display_title: "PR Crabbox gate #999 / " + headSha },
+      { event: "pull_request" },
+      { head_branch: "topic" },
+      { path: ".github/workflows/ci.yml" },
+      { run_attempt: 0 },
+      { head_sha: "bad" },
+      { conclusion: "failure" },
+    ].map((run) => ({ options: { run }, error: undefined })),
+    { options: { finalRun: { run_attempt: 2 } }, error: "run identity changed" },
+    { options: { proofBase: changedSha }, error: "does not bind the dispatched PR base" },
+  ])("rejects mismatched or racing resume proof %j without dispatch", ({ options, error }) => {
     const fakeGh = createFakeGh();
     writePending(fakeGh);
-    const result = runDispatch(fakeGh, { backend: "crabbox", pending: true, resume: "99", run });
+    const result = runDispatch(fakeGh, {
+      backend: "crabbox",
+      pending: true,
+      resume: "99",
+      ...options,
+    });
     expect(result.status).not.toBe(0);
     expect(existsSync(fakeGh.dispatched)).toBe(false);
     expect(pendingText(fakeGh)).toContain("FULL_GATES_HEAD_SHA=''");
-  });
-
-  it("rejects a rerun racing the exact check lookup", () => {
-    const fakeGh = createFakeGh();
-    writePending(fakeGh);
-    const result = runDispatch(fakeGh, {
-      backend: "crabbox",
-      pending: true,
-      resume: "99",
-      finalRun: { run_attempt: 2 },
-    });
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("run identity changed");
-    expect(existsSync(fakeGh.dispatched)).toBe(false);
-  });
-
-  it("does not adopt the check's base instead of retained preparation provenance", () => {
-    const fakeGh = createFakeGh();
-    writePending(fakeGh);
-    const result = runDispatch(fakeGh, {
-      backend: "crabbox",
-      pending: true,
-      resume: "99",
-      proofBase: changedSha,
-    });
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("does not bind the dispatched PR base");
-    expect(existsSync(fakeGh.dispatched)).toBe(false);
+    if (error) {
+      expect(result.stderr).toContain(error);
+    }
   });
 
   it.each(["0", "01", "-1", "9007199254740992", "run_abc"])(
@@ -532,51 +494,46 @@ syncBuiltinESMExports();
     expect(existsSync(fakeGh.calls)).toBe(false);
     expect(pendingText(fakeGh)).toBe(before);
   });
-  it("reverifies completed gates after interrupted preparation without dispatch", () => {
+  it.each([false, true])("reverifies completed gates without redispatch (legacy=%s)", (legacy) => {
     const fakeGh = createFakeGh();
     writeCompleted(
       fakeGh,
-      [
-        `REMOTE_GATES_BASE_SHA=${baseSha}`,
-        `REMOTE_GATES_WORKFLOW_SHA=${workflowSha}`,
-        "REMOTE_GATES_ACTIONS_RUN_ATTEMPT=1",
-      ].join("\n"),
+      legacy
+        ? ""
+        : [
+            `REMOTE_GATES_BASE_SHA=${baseSha}`,
+            `REMOTE_GATES_WORKFLOW_SHA=${workflowSha}`,
+            "REMOTE_GATES_ACTIONS_RUN_ATTEMPT=1",
+          ].join("\n"),
     );
-    const before = pendingText(fakeGh);
-    const result = runDispatch(fakeGh, { backend: "crabbox", pending: true, resume: "99" });
-    expect(result.status, result.stderr).toBe(0);
-    expect(pendingText(fakeGh)).toBe(before);
-    expect(existsSync(fakeGh.dispatched)).toBe(false);
-    const mismatch = runDispatch(fakeGh, {
-      backend: "crabbox",
-      pending: true,
-      resume: "99",
-      run: { run_attempt: 2 },
-    });
-    expect(mismatch.status).not.toBe(0);
-    expect(pendingText(fakeGh)).toBe(before);
-    expect(existsSync(fakeGh.dispatched)).toBe(false);
-    const wrongRun = runDispatch(fakeGh, { backend: "crabbox", pending: true, resume: "100" });
-    expect(wrongRun.status).not.toBe(0);
-    expect(wrongRun.stderr).toContain("does not match the selected pending publisher");
-  });
-
-  it("reverifies an old completed stamp using its retained broker pair and observed attempt", () => {
-    const fakeGh = createFakeGh();
-    writeCompleted(fakeGh);
     const before = pendingText(fakeGh);
     const result = runDispatch(fakeGh, {
       backend: "crabbox",
       pending: true,
       resume: "99",
-      run: { run_attempt: 3 },
+      run: { run_attempt: legacy ? 3 : 1 },
     });
     expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).toContain('"actionsRunAttempt":3');
+    expect(result.stdout).toContain(`"actionsRunAttempt":${legacy ? 3 : 1}`);
     expect(pendingText(fakeGh)).toBe(before);
+    expect(existsSync(fakeGh.dispatched)).toBe(false);
     const calls = readFileSync(fakeGh.calls, "utf8");
     expect(calls).not.toContain("workflow run");
     expect(calls).not.toContain("actions/workflows/");
+    if (!legacy) {
+      const mismatch = runDispatch(fakeGh, {
+        backend: "crabbox",
+        pending: true,
+        resume: "99",
+        run: { run_attempt: 2 },
+      });
+      expect(mismatch.status).not.toBe(0);
+      expect(pendingText(fakeGh)).toBe(before);
+      expect(existsSync(fakeGh.dispatched)).toBe(false);
+      const wrongRun = runDispatch(fakeGh, { backend: "crabbox", pending: true, resume: "100" });
+      expect(wrongRun.status).not.toBe(0);
+      expect(wrongRun.stderr).toContain("does not match the selected pending publisher");
+    }
   });
 
   it.each(["run", "lease", "base", "selector", "partial", "failed", "attempt-race"])(

@@ -15,6 +15,16 @@ export type LoadSessionPullRequests = (
   read: ControlUiSessionPrReadContext,
 ) => Promise<ControlUiSessionPullRequests>;
 
+export async function loadSessionPullRequests(
+  params: ControlUiSessionPullRequestsParams,
+  cacheSignal: AbortSignal | undefined,
+  read: ControlUiSessionPrReadContext,
+): Promise<ControlUiSessionPullRequests> {
+  read.assertCurrent();
+  const { loadControlUiSessionPullRequests } = await import("./control-ui-session-prs.js");
+  return loadControlUiSessionPullRequests(params, { cacheSignal, read });
+}
+
 export function pushedSnapshot(
   result: ControlUiSessionPullRequests,
 ): ControlUiSessionPullRequestSnapshot {
@@ -39,6 +49,10 @@ export function createControlUiSessionPrSnapshotRead(deps: {
     operation: (assertCurrent: () => void, sourceIdentity: string) => Promise<T>,
   ) => Promise<T>;
   load: LoadSessionPullRequests;
+  publish?: (
+    target: ControlUiSessionPrTarget,
+    snapshot: ControlUiSessionPullRequestSnapshot,
+  ) => void;
 }) {
   return (
     target: ControlUiSessionPrTarget,
@@ -70,9 +84,16 @@ export function createControlUiSessionPrSnapshotRead(deps: {
               assertCurrent: assertReadCurrent,
             });
             assertReadCurrent();
-            return pushedSnapshot(result);
+            const snapshot = pushedSnapshot(result);
+            if (projection !== "publication") {
+              deps.publish?.(target, snapshot);
+            }
+            return snapshot;
           } catch {
             assertReadCurrent();
+            if (projection !== "publication") {
+              deps.publish?.(target, UNAVAILABLE_SNAPSHOT);
+            }
             return { ...UNAVAILABLE_SNAPSHOT };
           }
         });

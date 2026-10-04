@@ -1,11 +1,11 @@
-import type { DatabaseSync } from "node:sqlite";
 import { withSqlitePostCommitPublications } from "../../infra/sqlite-post-commit.js";
 import {
   assertTransactionUsable,
   runSqliteDeferredTransactionSync,
-  runSqliteImmediateTransactionSync,
+  runSqliteWorkerTransactionSync,
 } from "../../infra/sqlite-transaction.js";
 import type { SqliteWorkerBackend } from "../../infra/sqlite-worker-contract.js";
+import type { SqliteWorkerDatabaseContext } from "../../infra/sqlite-worker-database-context.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import {
@@ -14,6 +14,7 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../../state/openclaw-state-db-contract.js";
 import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
+import { updatePreparedSessionProfileInvolvement } from "./session-accessor.sqlite-involvement.js";
 import { assignSessionOwner } from "./session-accessor.sqlite-owner.js";
 import { readSqliteSessionParticipantProjection } from "./session-accessor.sqlite-participant-projection.js";
 import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
@@ -39,11 +40,7 @@ export type { SessionSharingWorkerOperations } from "./session-sharing-store.typ
 /** The canonical agent executor retains the connection and both live admission checks. */
 export function bindSqliteWorkerBackend(
   _input: undefined,
-  context: {
-    databasePath: string;
-    database: DatabaseSync;
-    admit(stage: "transaction" | "commit"): void;
-  },
+  context: SqliteWorkerDatabaseContext,
 ): SqliteWorkerBackend<SessionSharingWorkerOperations> {
   const db = context.database;
   let categoryPlan:
@@ -110,10 +107,16 @@ export function bindSqliteWorkerBackend(
           : undefined;
       try {
         return withSqlitePostCommitPublications(db, () =>
-          runSqliteImmediateTransactionSync(
-            db,
+          runSqliteWorkerTransactionSync(
+            context,
             () => {
-              context.admit("transaction");
+              if (command.type === "involvement") {
+                return updatePreparedSessionProfileInvolvement(
+                  scope,
+                  command.input.params,
+                  command.input.profiles,
+                );
+              }
               if (command.type === "owner.assign") {
                 ownerResult = { value: assignSessionOwner(scope, command.input.params) };
                 return ownerResult;
@@ -177,7 +180,6 @@ export function bindSqliteWorkerBackend(
               busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
               databaseLabel: context.databasePath,
               withCommit(commit) {
-                context.admit("commit");
                 if (command.type === "category.apply") {
                   assertSessionGroupCategoryDestination(
                     command.input.to,

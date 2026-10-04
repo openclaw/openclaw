@@ -865,8 +865,7 @@ class SecurePrefs(
     expectedRevision: Long,
   ): Boolean {
     if (!gatewayAppearancePreferenceMayApply("ui.themeMode", expectedRevision)) return false
-    plainPrefs.edit { putString(appearanceThemeModeKey, mode.rawValue) }
-    _appearanceThemeMode.value = mode
+    setAppearanceThemeMode(mode)
     return true
   }
 
@@ -876,8 +875,7 @@ class SecurePrefs(
     expectedRevision: Long,
   ): Boolean {
     if (!gatewayAppearancePreferenceMayApply("ui.theme", expectedRevision)) return false
-    plainPrefs.edit { putString(appearanceThemeFamilyKey, family.rawValue) }
-    _appearanceThemeFamily.value = family
+    setAppearanceThemeFamily(family)
     return true
   }
 
@@ -887,14 +885,7 @@ class SecurePrefs(
     expectedRevision: Long,
   ): Boolean {
     if (!gatewayAppearancePreferenceMayApply("ui.accent", expectedRevision)) return false
-    plainPrefs.edit {
-      if (argb == null) {
-        remove(appearanceAccentArgbKey)
-      } else {
-        putLong(appearanceAccentArgbKey, argb)
-      }
-    }
-    _appearanceAccentArgb.value = argb
+    setAppearanceAccentArgb(argb)
     return true
   }
 

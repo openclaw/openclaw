@@ -8,10 +8,11 @@ import { createResourceLoader } from "./agent-session-loop-resource-loader.test-
 import type { AgentSessionConfig } from "./agent-session-types.js";
 import { AgentSession } from "./agent-session.js";
 import { AuthStorage } from "./auth-storage.js";
+import { DEFAULT_THINKING_LEVEL } from "./defaults.js";
 import type { ToolDefinition } from "./extensions/types.js";
 import { ModelRegistry } from "./model-registry.js";
 import type { ResourceLoader } from "./resource-loader.js";
-import { createAgentSession, createAgentSessionForEmbeddedRunner } from "./sdk.js";
+import { createAgentSession } from "./sdk.js";
 import { SessionManager } from "./session-manager.js";
 import { SettingsManager } from "./settings-manager.js";
 
@@ -122,6 +123,7 @@ export function mockInvalidThenTextSummary(recoveredText: string) {
 
 export async function createTestSession(
   options: {
+    systemPrompt?: string;
     model?: Model;
     settingsManager?: SettingsManager;
     sessionManager?: SessionManager;
@@ -151,25 +153,23 @@ export async function createTestSession(
     api: model.api,
     streamSimple: streamMocks.streamSimple,
   });
-  const sessionOptions = {
+  const result = await createAgentSession({
+    systemPrompt: options.systemPrompt ?? "Test session prompt",
     model,
-    authStorage,
-    noTools: "builtin" as const,
+    thinkingLevel: settingsManager.getDefaultThinkingLevel() ?? DEFAULT_THINKING_LEVEL,
+    tools: options.customTools?.map((tool) => tool.name) ?? [],
     customTools: options.customTools,
     resourceLoader: options.resourceLoader ?? createResourceLoader(),
     sessionManager,
     settingsManager,
     modelRegistry,
     withSessionWriteSettlement: options.withSessionWriteSettlement,
-  };
-  const internalOptions = {
     contextOverflowRecoveryOwner: options.contextOverflowRecoveryOwner ?? "session",
     resolveCompactionThinkingLevel: options.resolveCompactionThinkingLevel,
-  };
-  const result =
-    options.contextOverflowRecoveryOwner || options.resolveCompactionThinkingLevel
-      ? await createAgentSessionForEmbeddedRunner(sessionOptions, internalOptions)
-      : await createAgentSession(sessionOptions);
+    cleanupProviderSessionResourcesOnDispose: !(
+      options.contextOverflowRecoveryOwner || options.resolveCompactionThinkingLevel
+    ),
+  });
   sessions.push(result.session);
   return { ...result, modelRegistry, settingsManager, sessionManager };
 }

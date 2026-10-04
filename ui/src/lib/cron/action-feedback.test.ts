@@ -86,66 +86,37 @@ function createStateWithRequest(request: unknown, overrides: Partial<CronState>)
   };
 }
 
-it("preserves queued run feedback when due-mode history refresh fails", async () => {
-  const request = vi.fn(async (method: string) => {
-    if (method === "cron.run") {
-      return { ok: true, enqueued: true, runId: "run-due" };
-    }
-    if (method === "cron.runs") {
-      throw new Error("run history refresh unavailable");
-    }
-    return {};
-  });
-  const state = createStateWithRequest(request, {
-    cronRunsScope: "job",
-    cronRunsJobId: "job-due",
-  });
-  await runCronJob(state, "job-due", "due");
-
-  expect(request).toHaveBeenCalledWith("cron.run", { id: "job-due", mode: "due" });
-  expect(request).toHaveBeenCalledWith("cron.runs", expect.any(Object));
-  expect(state.cronError).toBe("job-due: Run queued. Run ID: run-due");
-});
-
 it.each([
-  ["not-due", "This automation is not due yet."],
-  ["already-running", "This automation is already running."],
-  ["stopped", "The scheduler is stopped."],
+  ["queued", "Run queued. Run ID: run-due", "due", true],
+  ["not-due", "This automation is not due yet.", "force", false],
+  ["already-running", "This automation is already running.", "force", false],
+  ["stopped", "The scheduler is stopped.", "force", false],
+  ["invalid-spec", "This automation has an invalid schedule or payload.", "force", true],
 ] as const)(
-  "surfaces cron.run %s outcomes without reloading run history",
-  async (reason, message) => {
+  "reports %s and refreshes only recorded runs",
+  async (reason, message, mode, refresh) => {
     const request = vi.fn(async (method: string) => {
       if (method === "cron.run") {
-        return { ok: true, ran: false, reason };
+        return reason === "queued"
+          ? { ok: true, enqueued: true, runId: "run-due" }
+          : { ok: true, ran: false, reason };
+      }
+      if (method === "cron.runs") {
+        if (reason === "queued") {
+          throw new Error("run history refresh unavailable");
+        }
+        return { entries: [], total: 0, offset: 0, limit: 50, hasMore: false };
       }
       return {};
     });
-    const state = createStateWithRequest(request, {
-      cronRunsScope: "job",
-      cronRunsJobId: "job-blocked",
-    });
-
-    await runCronJob(state, "job-blocked", "force");
-
-    expect(state.cronError).toBe(`job-blocked: ${message}`);
-    expect(request).toHaveBeenCalledWith("cron.run", { id: "job-blocked", mode: "force" });
-    expect(request).not.toHaveBeenCalledWith("cron.runs", expect.anything());
+    const state = createStateWithRequest(request, { cronRunsScope: "job", cronRunsJobId: "job" });
+    await runCronJob(state, "job", mode);
+    expect(state.cronError).toBe(`job: ${message}`);
+    expect(request).toHaveBeenCalledWith("cron.run", { id: "job", mode });
+    if (refresh) {
+      expect(request).toHaveBeenCalledWith("cron.runs", expect.objectContaining({ id: "job" }));
+    } else {
+      expect(request).not.toHaveBeenCalledWith("cron.runs", expect.anything());
+    }
   },
 );
-
-it("reloads the skipped run recorded for an invalid persisted specification", async () => {
-  const responses: Record<string, unknown> = {
-    "cron.run": { ok: true, ran: false, reason: "invalid-spec" },
-    "cron.runs": { entries: [], total: 0, offset: 0, limit: 50, hasMore: false },
-  };
-  const request = vi.fn(async (method: string) => responses[method] ?? {});
-  const state = createStateWithRequest(request, {
-    cronRunsScope: "job",
-    cronRunsJobId: "job-invalid",
-  });
-
-  await runCronJob(state, "job-invalid", "force");
-
-  expect(state.cronError).toBe("job-invalid: This automation has an invalid schedule or payload.");
-  expect(request).toHaveBeenCalledWith("cron.runs", expect.objectContaining({ id: "job-invalid" }));
-});

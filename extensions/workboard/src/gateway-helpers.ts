@@ -1,14 +1,10 @@
-import { WORKBOARD_STATUSES } from "@openclaw/workboard-contract";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { ErrorCodes, errorShape } from "openclaw/plugin-sdk/gateway-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { asRecord, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { OpenClawPluginApi } from "../api.js";
 import { redactClaimToken, redactDispatchResult } from "./card-redaction.js";
-import {
-  dispatchAndStartWorkboardCards,
-  type WorkboardDispatchStartOptions,
-} from "./dispatcher.js";
+import { dispatchAndStartWorkboardCards } from "./dispatcher.js";
 import { WorkboardCardConflictError, type WorkboardStore } from "./store.js";
 import {
   resolveAgentWorkboardWorkspaceRuntime,
@@ -117,11 +113,6 @@ export function assertNoCursorAdvance(params: Record<string, unknown>) {
   }
 }
 
-export async function listWorkboardCards(store: WorkboardStore, boardId: unknown) {
-  const [cards, { boards }] = await Promise.all([store.list({ boardId }), store.listBoards()]);
-  return { cards: cards.map(redactClaimToken), boards, statuses: WORKBOARD_STATUSES };
-}
-
 export function resolveGatewayWorkboardWorkspaceAccess(params: {
   context: GatewayMethodContext["context"];
   client: GatewayMethodContext["client"];
@@ -139,36 +130,6 @@ export function resolveGatewayWorkboardWorkspaceAccess(params: {
     config: params.context.getRuntimeConfig(),
     unrestricted: false,
   });
-}
-
-function gatewayDispatchOptions(params: {
-  api: OpenClawPluginApi;
-  request: Pick<GatewayMethodContext, "client" | "context">;
-  input: Pick<
-    WorkboardDispatchStartOptions,
-    "boardId" | "cardId" | "maxStarts" | "provider" | "model"
-  >;
-}): WorkboardDispatchStartOptions {
-  const { context, client } = params.request;
-  return {
-    ...params.input,
-    materializeWorktree: true,
-    resolveAgentWorkspace: (agentId) =>
-      resolveWorkboardAgentWorkspace(context.getRuntimeConfig(), agentId),
-    resolveAgentWorkspaceRuntime: (agentId, sessionKey, workspaceDir, modelProvider, modelId) => {
-      const config = context.getRuntimeConfig();
-      return resolveAgentWorkboardWorkspaceRuntime({
-        config,
-        agentId,
-        sessionKey,
-        workspaceDir,
-        modelProvider,
-        modelId,
-        prepareSandboxWorkspaceAuthority: params.api.runtime.sandbox.prepareWorkspaceAuthority,
-      });
-    },
-    workspaceAccess: resolveGatewayWorkboardWorkspaceAccess({ context, client }),
-  };
 }
 
 export function createWorkboardDispatchHandler(params: {
@@ -202,17 +163,36 @@ export function createWorkboardDispatchHandler(params: {
         store: params.store,
         subagent: params.api.runtime.subagent,
         worktrees: params.api.runtime.worktrees,
-        options: gatewayDispatchOptions({
-          api: params.api,
-          request: { context, client },
-          input: {
-            ...(cardId ? { cardId, maxStarts: 1 } : {}),
-            boardId: typeof boardId === "string" ? boardId : undefined,
-            ...(maxStarts !== undefined ? { maxStarts } : {}),
-            ...(provider ? { provider } : {}),
-            ...(model ? { model } : {}),
+        options: {
+          ...(cardId ? { cardId, maxStarts: 1 } : {}),
+          boardId: typeof boardId === "string" ? boardId : undefined,
+          ...(maxStarts !== undefined ? { maxStarts } : {}),
+          ...(provider ? { provider } : {}),
+          ...(model ? { model } : {}),
+          materializeWorktree: true,
+          resolveAgentWorkspace: (agentId) =>
+            resolveWorkboardAgentWorkspace(context.getRuntimeConfig(), agentId),
+          resolveAgentWorkspaceRuntime: (
+            agentId,
+            sessionKey,
+            workspaceDir,
+            modelProvider,
+            modelId,
+          ) => {
+            const config = context.getRuntimeConfig();
+            return resolveAgentWorkboardWorkspaceRuntime({
+              config,
+              agentId,
+              sessionKey,
+              workspaceDir,
+              modelProvider,
+              modelId,
+              prepareSandboxWorkspaceAuthority:
+                params.api.runtime.sandbox.prepareWorkspaceAuthority,
+            });
           },
-        }),
+          workspaceAccess: resolveGatewayWorkboardWorkspaceAccess({ context, client }),
+        },
       });
       if (cardId) {
         const started = result.started[0];

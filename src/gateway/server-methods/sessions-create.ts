@@ -16,18 +16,17 @@ import { captureAgentTurnPrincipal } from "../agent-turn/principal.js";
 import { buildDashboardSessionTitleSource } from "../dashboard-session-title.js";
 import { acceptGatewayDeviceSourceAuthority } from "../device-revocation.js";
 import { ADMIN_SCOPE, authorizeOperatorScopesForRequiredScope } from "../method-scopes.js";
-import { ModelAccountConnectAuthorityError } from "../model-account-connect.js";
+import { ModelAccountConnectAuthorityError } from "../model-account-connect-errors.js";
 import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { startSessionCreateDiagnostics } from "../session-create-diagnostics.js";
 import { buildDashboardSessionKey } from "../session-create-key.js";
 import { resolveSessionCreateCatalogSelectionError } from "../session-create-model-selection.js";
 import { createGatewaySession } from "../session-create-service.js";
 import type { PreparedGatewaySessionLifecycle } from "../session-create-service.types.js";
+import { resolveOperatorSessionCreation } from "../session-creation-provenance.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
-import {
-  loadGatewaySessionEntryReadOnly,
-  resolveGatewaySessionStoreTarget,
-} from "../session-utils.js";
+import { resolveGatewaySessionStoreTargetInWorker } from "../session-utils-store-worker.js";
+import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
 import {
   prepareSessionWorktreeCreation,
   resolveSessionProjectRoot,
@@ -58,7 +57,6 @@ import {
   resolveSessionCreateRootParameters,
 } from "./session-create-root.js";
 import { resolveSessionCreateSpawnContext } from "./session-create-spawn.js";
-import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
 import {
   bindGatewayRequestHandlerMutationAuthority,
   readGatewayRequestMutationAuthority,
@@ -108,7 +106,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       return;
     }
     const parentSessionKey = normalizeOptionalString(p.parentSessionKey);
-    const sessionCreation = prepareSkillLibrarySessionCreation(
+    const sessionCreation = await prepareSkillLibrarySessionCreation(
       client,
       context.getRuntimeConfig,
       resolveOperatorSessionCreation(client, { allowTrustedHint: true }),
@@ -414,7 +412,12 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
         }
       }
       targetKey ??= buildDashboardSessionKey(agentId);
-      const target = resolveGatewaySessionStoreTarget({ cfg, key: targetKey, agentId });
+      const target = await resolveGatewaySessionStoreTargetInWorker({
+        cfg,
+        key: targetKey,
+        agentId,
+        assertActive: commitGuard,
+      });
       sessionKey = preservesUnspecifiedKey ? undefined : targetKey;
       sessionAgentId = target.agentId;
       const inheritParentWorktree =

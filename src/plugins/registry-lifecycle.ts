@@ -3,6 +3,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { createLazyRuntimeNamedExport } from "../shared/lazy-runtime.js";
+import { summarizePluginRetirementResults } from "./host-hook-cleanup-result.js";
 import { PluginLoaderCacheState } from "./loader-cache-state.js";
 import {
   getPluginCache,
@@ -137,6 +138,21 @@ export function getPluginRegistryGatewayOwner(
   return gatewayOwners.get(getPluginRegistryResourceOwner(registry)) ?? undefined;
 }
 
+/** Prepared views inherit the publication snapshot, not a successor generation. */
+export function isPluginRegistryGatewayViewOf(
+  registry: PluginRegistry,
+  published: PluginRegistry,
+): boolean {
+  const owner = getPluginRegistryGatewayOwner(registry);
+  const admitted = gatewayChannels.get(getPluginRegistryResourceOwner(registry));
+  return (
+    owner !== undefined &&
+    admitted !== undefined &&
+    admitted === gatewayChannels.get(getPluginRegistryResourceOwner(published)) &&
+    owner === getPluginRegistryGatewayOwner(published)
+  );
+}
+
 /** Publication-time identity survives teardown; the live Gateway owner still admits every send. */
 export function getPluginRegistryGatewayChannelRegistration(
   registry: PluginRegistry,
@@ -203,19 +219,7 @@ export function getPluginLoaderCacheState(cache = getPluginCache()) {
     const results = await Promise.allSettled(
       [...registries].map((registry) => disposePluginRegistryInstances(registry)),
     );
-    const failures = results.flatMap((result) =>
-      result.status === "rejected" ? [result.reason] : [],
-    );
-    if (failures.length) {
-      throw new AggregateError(failures, "Plugin cached registry cleanup failed");
-    }
-    const completed = results.flatMap((result) =>
-      result.status === "fulfilled" ? [result.value] : [],
-    );
-    return {
-      cleanupCount: completed.reduce((count, result) => count + result.cleanupCount, 0),
-      failures: completed.flatMap((result) => result.failures),
-    };
+    return summarizePluginRetirementResults(results, "Plugin cached registry cleanup failed");
   };
   return loads;
 }

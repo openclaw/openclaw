@@ -188,7 +188,6 @@ suite.define(() => {
           document.body.append(stage);
         });
         const notice = page.locator("#storage-error-recovery .chat-outbox-recovery");
-        await notice.locator("summary").click();
         await notice.getByRole("alert").waitFor();
         if (process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim()) {
           const artifacts = createControlUiE2eArtifactDir("recovery-error");
@@ -196,14 +195,12 @@ suite.define(() => {
           await page.setViewportSize({ width: 390, height: 700 });
           await page.screenshot({ path: `${artifacts}/mobile.png`, animations: "disabled" });
         }
-        expect((await notice.locator("summary").textContent())?.trim()).toBe(
-          "Saved messages could not be loaded",
+        expect(await notice.getByRole("alert").textContent()).toContain(
+          "We could not access your saved messages.",
         );
         expect(await notice.textContent()).not.toContain("older browser");
         expect(await notice.textContent()).not.toContain("Free browser storage");
-        expect(await notice.getByRole("button", { name: "Restore here for review" }).count()).toBe(
-          0,
-        );
+        expect(await notice.getByRole("button", { name: "Restore", exact: true }).count()).toBe(0);
       },
     );
   });
@@ -414,16 +411,19 @@ suite.define(() => {
           { initialIncognito: change === "incognito", key: legacyKey, value: legacyValue },
         );
         const notice = page.locator("openclaw-chat-outbox-recovery");
-        const restore = notice.getByRole("button", { name: "Restore here for review" });
+        const restore = notice.getByRole("button", { name: "Restore", exact: true });
         if (change === "incognito") {
           await notice.evaluate(async (element) => {
             const component = element as LitElement;
             await component.updateComplete;
             await component.updateComplete;
           });
-          expect(await notice.locator("summary").count()).toBe(0);
+          expect(await notice.locator(".chat-outbox-recovery-row").count()).toBe(0);
           expect(
-            await notice.getByText("Retained confirmation draft", { exact: true }).count(),
+            await notice
+              .locator(".chat-outbox-recovery-row")
+              .getByText("Retained confirmation draft", { exact: true })
+              .count(),
           ).toBe(0);
           expect(await restore.count()).toBe(0);
           expect(await page.locator("openclaw-modal-dialog").count()).toBe(0);
@@ -441,13 +441,13 @@ suite.define(() => {
             component.identity = "non-incognito-review-owner";
           });
         }
-        await notice.locator("summary").click();
+        await notice.locator(".chat-outbox-recovery-row").first().waitFor();
         if (change === "incognito") {
           expect(await restore.isDisabled()).toBe(false);
         } else {
           await restore.click();
           const dialog = page.locator("openclaw-modal-dialog");
-          await dialog.getByText("agent:main:main (main)", { exact: true }).waitFor();
+          await dialog.getByText(/Add this saved copy to “Main/).waitFor();
           await page.evaluate(
             ({ host: currentHost, change: retirement }) => {
               if (retirement === "replacement") {
@@ -462,7 +462,7 @@ suite.define(() => {
             },
             { host: hostHandle, change },
           );
-          await dialog.getByRole("button", { name: "Restore here for review" }).click();
+          await dialog.getByRole("button", { name: "Restore", exact: true }).click();
           await dialog.waitFor({ state: "detached" });
           await expect
             .poll(
@@ -502,7 +502,10 @@ suite.define(() => {
             text: "Keep this quote",
           });
         }
-        await notice.getByText("Retained confirmation draft", { exact: true }).waitFor();
+        await notice
+          .locator(".chat-outbox-recovery-row")
+          .getByText("Retained confirmation draft", { exact: true })
+          .waitFor();
       });
     },
   );

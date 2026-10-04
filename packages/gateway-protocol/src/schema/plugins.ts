@@ -6,6 +6,8 @@ import {
   ClawHubDownloadabilitySchema,
   ClawHubSelectedReleaseSchema,
   ClawHubPluginMetadataSchema,
+  ClawHubPluginConfigFieldSchema,
+  ClawHubPluginMcpServerSchema,
 } from "./clawhub-listing.js";
 import { closedObject } from "./closed-object.js";
 import {
@@ -469,13 +471,6 @@ const PluginDiscoveryCompatibilitySchema = closedObject({
   minGatewayVersion: Type.Optional(NonEmptyString),
 });
 
-const PluginDiscoveryConfigFieldSchema = closedObject({
-  name: NonEmptyString,
-  description: Type.Optional(Type.String()),
-  required: Type.Boolean(),
-  sensitive: Type.Boolean(),
-});
-
 const PluginDiscoveryVersionSchema = closedObject({
   version: NonEmptyString,
   createdAt: Type.Integer({ minimum: 0 }),
@@ -512,8 +507,9 @@ export const PluginDiscoveryDetailSchema = closedObject({
   providers: Type.Optional(Type.Array(NonEmptyString)),
   channels: Type.Optional(Type.Array(NonEmptyString)),
   uiCapabilities: Type.Optional(PluginUiCapabilitiesSchema),
-  configuration: Type.Array(PluginDiscoveryConfigFieldSchema),
+  configuration: Type.Array(ClawHubPluginConfigFieldSchema),
   mcpServers: Type.Array(NonEmptyString),
+  mcpServerDetails: Type.Optional(Type.Array(ClawHubPluginMcpServerSchema)),
   skills: Type.Array(
     closedObject({
       name: NonEmptyString,

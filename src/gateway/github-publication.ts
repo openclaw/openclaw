@@ -17,8 +17,10 @@ import {
 import { createPersonalGitHubPublicationCoordinator } from "./github-personal-publication.js";
 import {
   assertExpectedSharedGitHubPublisher,
+  matchesCurrentGitHubPublicationIdentity,
   prepareCurrentGitHubPublicationIdentity,
   resolveGitHubPublicationWorktreeOwner,
+  readGitHubPublicationWorktreeOwner,
   prepareGitHubPublicationWorkspaceOwner,
 } from "./github-publication-availability.js";
 import {
@@ -158,7 +160,7 @@ export function createGitHubPublicationCoordinator(params: {
     ) {
       throw new Error("GitHub publication session identity changed.");
     }
-    const admitted = resolveGitHubPublicationWorktreeOwner({
+    const admitted = await readGitHubPublicationWorktreeOwner({
       sessionId: request.claim.sessionId,
       sessionKey: request.sessionKey,
       agentId: request.agentId,
@@ -180,15 +182,19 @@ export function createGitHubPublicationCoordinator(params: {
           ),
       },
     );
-    if (!params.placements.validateTurnClaim(request.claim)) {
-      throw new Error("GitHub publication lost the live session turn claim after verification.");
-    }
-    const { worktree } = resolveGitHubPublicationWorktreeOwner({
+    const { worktree } = await readGitHubPublicationWorktreeOwner({
       sessionId: request.claim.sessionId,
       sessionKey: request.sessionKey,
       agentId: request.agentId,
       lifecycleRevision: admitted.loaded.entry?.lifecycleRevision ?? null,
     });
+    assertRequester();
+    if (!params.placements.validateTurnClaim(request.claim)) {
+      throw new Error("GitHub publication lost the live session turn claim after verification.");
+    }
+    if (!matchesCurrentGitHubPublicationIdentity({ agentId: request.agentId, identity })) {
+      throw new Error("GitHub publication identity changed.");
+    }
     const requestDigest = digestRequest({
       sessionId: request.claim.sessionId,
       idempotencyKey: request.idempotencyKey,
@@ -467,11 +473,9 @@ export function createGitHubPublicationCoordinator(params: {
     if (rows.length === 0) {
       return;
     }
-    if (!params.placements.validateWorkspaceResultClaim(claim)) {
-      throw new Error("GitHub publication lost its workspace result claim before snapshot.");
-    }
+    await params.placements.prepareWorkspaceResultClaim(claim);
     const first = rows[0]!;
-    const { worktree } = resolveGitHubPublicationWorktreeOwner({
+    const { worktree } = await readGitHubPublicationWorktreeOwner({
       sessionId: first.session_id,
       sessionKey: first.session_key,
       agentId: first.agent_id,
@@ -481,6 +485,9 @@ export function createGitHubPublicationCoordinator(params: {
         branch: first.branch,
       },
     });
+    if (!params.placements.validateWorkspaceResultClaim(claim)) {
+      throw new Error("GitHub publication lost its workspace result claim before snapshot.");
+    }
     for (const row of rows) {
       if (!sameWorktree(row, worktree)) {
         throw new Error("GitHub publication worktree changed before accepted snapshot.");
@@ -544,7 +551,7 @@ export function createGitHubPublicationCoordinator(params: {
           sessionKey: request.sessionKey,
           agentId: request.agentId,
         })
-      )().kind === "repository"
+      ).initial.kind === "repository"
         ? repository.requestForClaim(request)
         : requestForClaim(request),
     async prepareClaimWorkspace(claim: WorkerSessionTurnClaim) {
@@ -564,7 +571,7 @@ export function createGitHubPublicationCoordinator(params: {
     async requestPersonalForSession(
       ...args: Parameters<typeof personal.requestPersonalForSession>
     ) {
-      return (await prepareGitHubPublicationWorkspaceOwner(args[1]))().kind === "repository"
+      return (await prepareGitHubPublicationWorkspaceOwner(args[1])).initial.kind === "repository"
         ? repository.requestPersonalForSession(...args)
         : personal.requestPersonalForSession(...args);
     },
@@ -609,9 +616,14 @@ export function createGitHubPublicationCoordinator(params: {
         );
       }
     },
-    deferOrphanedRequests() {
+    /** @deprecated Await deferOrphanedRequestsAsync; retained for released plugin contexts. */
+    deferOrphanedRequests(): void {
       methods.deferOrphanedRequests();
       repository.deferOrphanedRequests();
+    },
+    async deferOrphanedRequestsAsync(): Promise<void> {
+      await methods.deferOrphanedRequestsAsync();
+      await repository.deferOrphanedRequestsAsync();
     },
     listUnreportedResults() {
       return [...methods.listUnreportedResults(), ...repository.listUnreportedResults()];

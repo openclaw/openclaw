@@ -12,6 +12,7 @@ import {
   waitUntilAbort,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import type { PluginServiceSchedulerV1 } from "openclaw/plugin-sdk/plugin-entry";
 import type { GetReplyOptions, ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
@@ -68,12 +69,14 @@ import {
 } from "./utils.js";
 
 type MonitorTlonOpts = {
+  scheduler: PluginServiceSchedulerV1;
   runtime?: RuntimeEnv;
   abortSignal?: AbortSignal;
   accountId?: string | null;
 };
 
-export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<void> {
+export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> {
+  const discoveryScheduler = opts.scheduler.scope();
   const core = getTlonRuntime();
   const cfg = core.config.current() as OpenClawConfig;
   if (cfg.channels?.tlon?.enabled === false) {
@@ -102,7 +105,6 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
     account.dangerouslyAllowPrivateNetwork,
   );
 
-  // Store validated values for use in closures (TypeScript narrowing doesn't propagate)
   const accountUrl = account.url;
   const accountCode = account.code;
 
@@ -145,7 +147,6 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
       log: (message) => runtime.log?.(message),
       error: (message) => runtime.error?.(message),
     },
-    // Re-authenticate on reconnect in case the session expired
     onReconnect: async (client) => {
       runtime.log?.("[tlon] Re-authenticating on SSE reconnect...");
       const newCookie = await authenticateWithRetry(5);
@@ -162,7 +163,6 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
     error: (msg) => runtime.error?.(msg),
   });
 
-  // Reactive state that can be updated via settings store
   let effectiveDmAllowlist: string[] = account.dmAllowlist;
   let effectiveShowModelSig: boolean = account.showModelSignature ?? false;
   let effectiveAutoAcceptDmInvites: boolean = account.autoAcceptDmInvites ?? false;
@@ -196,10 +196,10 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
     runtime.log?.(`[tlon] Could not fetch nickname: ${formatErrorMessage(error)}`);
   }
 
-  // Store init foreigns for processing after settings are loaded
   let initForeigns: Foreigns | null = null;
 
-  async function migrateConfigToSettings() {
+  try {
+    currentSettings = await settingsManager.load();
     const migrations = buildTlonSettingsMigrations(account, currentSettings);
 
     for (const { key, fileValue, settingsValue } of migrations) {
@@ -212,12 +212,6 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
         }
       }
     }
-  }
-
-  try {
-    currentSettings = await settingsManager.load();
-
-    await migrateConfigToSettings();
     ({
       effectiveDmAllowlist,
       effectiveShowModelSig,
@@ -555,14 +549,6 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
       };
     };
 
-    const rememberThreadParticipation = (result: { visibleReplySent?: boolean } | void) => {
-      if (!isGroup || !channelNest || !parentId || result?.visibleReplySent === false) {
-        return;
-      }
-      participatedThreads.add(parentId);
-      runtime.log?.(`[tlon] Now tracking thread for future replies: ${parentId}`);
-    };
-
     const replyOptions: GetReplyOptions = {
       ...(turnAdoptionLifecycle ? bindIngressLifecycleToReplyOptions(turnAdoptionLifecycle) : {}),
       ...(promptMedia.media.length > 0 ? { media: promptMedia.media } : {}),
@@ -617,7 +603,10 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
           return { visibleReplySent: true };
         },
         onDelivered: (_payload, _info, result) => {
-          rememberThreadParticipation(result);
+          if (isGroup && channelNest && parentId && result?.visibleReplySent !== false) {
+            participatedThreads.add(parentId);
+            runtime.log?.(`[tlon] Now tracking thread for future replies: ${parentId}`);
+          }
         },
         onError: (err, info) => {
           const dispatchDuration = Date.now() - dispatchStartTime;
@@ -640,16 +629,17 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
 
   const watchedChannels = new Set<string>(groupChannels);
 
-  const refreshWatchedChannels = async (): Promise<number> => {
-    const { channels: discoveredChannels } = await fetchInitData(api, runtime);
-    let newCount = 0;
-    for (const channelNest of discoveredChannels) {
+  const addWatchedChannels = (channels: readonly string[], logPrefix?: string): number => {
+    const previousCount = watchedChannels.size;
+    for (const channelNest of channels) {
       if (!watchedChannels.has(channelNest)) {
         watchedChannels.add(channelNest);
-        newCount++;
+        if (logPrefix) {
+          runtime.log?.(`${logPrefix}${channelNest}`);
+        }
       }
     }
-    return newCount;
+    return watchedChannels.size - previousCount;
   };
 
   const { resolveAllCites } = createTlonCitationResolver({
@@ -709,7 +699,10 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
             }),
         });
       },
-      refreshWatchedChannels,
+      refreshWatchedChannels: async () => {
+        const { channels: discoveredChannels } = await fetchInitData(api, runtime);
+        return addWatchedChannels(discoveredChannels);
+      },
     });
 
   const handleChannelsFirehose = async (
@@ -793,7 +786,6 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
       }
 
       if (!senderAllowed) {
-        // If owner is configured, queue approval request
         if (effectiveOwnerShip) {
           const approval = createPendingApproval({
             type: "channel",
@@ -857,7 +849,6 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
     }
   };
 
-  // Firehose handler for all DM messages (/v3)
   // Track processed DM invites only while they remain in the active /v3 snapshot.
   const processedDmInvites = createActiveSnapshotTracker();
 
@@ -1056,7 +1047,6 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
       runtime.log?.(`[tlon] Subscribed to ${source} firehose (${path})`);
     }
 
-    // Subscribe to contacts updates to track nickname changes
     await api.subscribe({
       app: "contacts",
       path: "/v1/news",
@@ -1088,42 +1078,33 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
     });
     runtime.log?.("[tlon] Subscribed to contacts updates (/v1/news)");
 
-    // Subscribe to settings store for hot-reloading config
-    settingsManager.onChange((newSettings) => {
-      currentSettings = newSettings;
-
-      if (newSettings.groupChannels?.length) {
-        const newChannels = newSettings.groupChannels;
-        for (const ch of newChannels) {
-          if (!watchedChannels.has(ch)) {
-            watchedChannels.add(ch);
-            runtime.log?.(`[tlon] Settings: now watching channel ${ch}`);
-          }
-        }
-        // Note: we don't remove channels from watchedChannels to avoid missing messages
-        // during transitions. The authorization check handles access control.
-      }
-
-      // Recompute effective settings from the latest snapshot so deletions
-      // cleanly fall back to file config and empty arrays remain authoritative.
-      ({
-        effectiveDmAllowlist,
-        effectiveShowModelSig,
-        effectiveAutoAcceptDmInvites,
-        effectiveAutoAcceptGroupInvites,
-        effectiveGroupInviteAllowlist,
-        effectiveAutoDiscoverChannels,
-        effectiveOwnerShip,
-        pendingApprovals,
-      } = applyTlonSettingsOverrides({
-        account,
-        currentSettings: newSettings,
-        log: (message) => runtime.log?.(message),
-      }));
-    });
-
     try {
-      await settingsManager.startSubscription();
+      await settingsManager.startSubscription((newSettings) => {
+        currentSettings = newSettings;
+
+        // Keep watching during transitions; the authorization check handles removals.
+        addWatchedChannels(
+          newSettings.groupChannels ?? [],
+          "[tlon] Settings: now watching channel ",
+        );
+
+        // Recompute effective settings from the latest snapshot so deletions
+        // cleanly fall back to file config and empty arrays remain authoritative.
+        ({
+          effectiveDmAllowlist,
+          effectiveShowModelSig,
+          effectiveAutoAcceptDmInvites,
+          effectiveAutoAcceptGroupInvites,
+          effectiveGroupInviteAllowlist,
+          effectiveAutoDiscoverChannels,
+          effectiveOwnerShip,
+          pendingApprovals,
+        } = applyTlonSettingsOverrides({
+          account,
+          currentSettings: newSettings,
+          log: (message) => runtime.log?.(message),
+        }));
+      });
     } catch (err) {
       // Settings subscription is optional - don't fail if it doesn't work
       runtime.log?.(`[tlon] Settings subscription not available: ${String(err)}`);
@@ -1148,12 +1129,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
               joinedChannels.filter((channel): channel is string => typeof channel === "string"),
             ).filter((channel) => channel.startsWith("chat/"));
 
-            for (const channelNest of discoveredChannels) {
-              if (!watchedChannels.has(channelNest)) {
-                watchedChannels.add(channelNest);
-                runtime.log?.(`[tlon] Auto-detected new channel: ${channelNest}`);
-              }
-            }
+            addWatchedChannels(discoveredChannels, "[tlon] Auto-detected new channel: ");
 
             if (!effectiveAutoAcceptGroupInvites) {
               return;
@@ -1310,9 +1286,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
 
     if (effectiveAutoDiscoverChannels) {
       const { channels: discoveredChannels } = await fetchInitData(api, runtime);
-      for (const channelNest of discoveredChannels) {
-        watchedChannels.add(channelNest);
-      }
+      addWatchedChannels(discoveredChannels);
       runtime.log?.(`[tlon] Watching ${watchedChannels.size} channel(s)`);
     }
 
@@ -1322,39 +1296,36 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
 
     runtime.log?.("[tlon] All subscriptions registered, connecting to SSE stream...");
     await api.connect();
+    if (discoveryScheduler.signal.aborted) {
+      return;
+    }
     ingress.start();
     runtime.log?.("[tlon] Connected! Firehose subscriptions active");
 
-    const pollInterval = setInterval(
-      () => {
-        void (async () => {
-          if (!opts.abortSignal?.aborted) {
-            try {
-              if (effectiveAutoDiscoverChannels) {
-                const { channels: discoveredChannels } = await fetchInitData(api, runtime);
-                for (const channelNest of discoveredChannels) {
-                  if (!watchedChannels.has(channelNest)) {
-                    watchedChannels.add(channelNest);
-                    runtime.log?.(`[tlon] Now watching new channel: ${channelNest}`);
-                  }
-                }
-              }
-            } catch (error: unknown) {
-              runtime.error?.(`[tlon] Channel refresh error: ${formatErrorMessage(error)}`);
-            }
+    discoveryScheduler.schedule({
+      id: "channel-discovery",
+      delayMs: 2 * 60 * 1000,
+      everyMs: 2 * 60 * 1000,
+      run: async () => {
+        if (!effectiveAutoDiscoverChannels) {
+          return;
+        }
+        try {
+          const { channels: discoveredChannels } = await fetchInitData(api, runtime);
+          if (discoveryScheduler.signal.aborted) {
+            return;
           }
-        })();
+          addWatchedChannels(discoveredChannels, "[tlon] Now watching new channel: ");
+        } catch (error: unknown) {
+          runtime.error?.(`[tlon] Channel refresh error: ${formatErrorMessage(error)}`);
+        }
       },
-      2 * 60 * 1000,
-    );
-
-    // Startup may finish after cancellation, so replay an already-aborted signal
-    // and release the discovery timer before running the monitor cleanup.
-    await waitUntilAbort(opts.abortSignal, () => {
-      clearInterval(pollInterval);
     });
+    await waitUntilAbort(opts.abortSignal);
   } finally {
+    discoveryScheduler.beginClose();
     api.stopReceiving();
+    await discoveryScheduler.stop();
     await ingress.stop();
     try {
       await api.close();

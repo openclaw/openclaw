@@ -1,7 +1,11 @@
 import { expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import { seedCanonicalAcpSessionMeta } from "../../acp/runtime/session-meta-fixture.test-support.js";
+import * as acpReads from "../../acp/runtime/session-meta-readonly.js";
 import { createSubagentRunRecord } from "../../agents/subagent-test-fixtures.test-helpers.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
 import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
+import { withPluginSubagentTestState } from "./agent.spawned-child.test-support.js";
 import {
   backendGatewayClient,
   getAgentTestMocks,
@@ -33,30 +37,96 @@ function expectReactivationFailure(respond: ReturnType<typeof vi.fn>, runId: str
 }
 
 export function registerAgentPreDispatchFailureTests() {
-  it("removes the chatAbortControllers entry if pre-dispatch reactivation fails", async () => {
-    prime("reactivation-session");
-    mockCompletedRun("agent:main:main");
-    mocks.replaceSubagentRunAfterSteer.mockImplementationOnce(() => {
-      throw new Error("reactivate boom");
-    });
+  it.each([{ acp: false }, { acp: true }, { acp: true, cancel: true }])(
+    "keeps pre-dispatch reactivation with its runtime (%j)",
+    async ({ acp, cancel }) => {
+      await withPluginSubagentTestState("openclaw-reactivation-owner-", async () => {
+        prime("reactivation-session");
+        if (acp) {
+          seedCanonicalAcpSessionMeta({
+            sessionKey: "agent:main:main",
+            sessionId: "reactivation-session",
+            meta: {
+              backend: "acpx",
+              agent: "main",
+              runtimeSessionName: "reactivation-owner",
+              mode: "persistent",
+              state: "idle",
+              lastActivityAt: 1,
+            },
+          });
+          mocks.agentCommand.mockResolvedValue({ payloads: [], meta: { durationMs: 1 } });
+        }
+        mockCompletedRun("agent:main:main");
+        mocks.replaceSubagentRunAfterSteer.mockImplementationOnce(() => {
+          throw new Error("reactivate boom");
+        });
 
-    const context = makeContext();
-    const runId = "idem-abort-reactivation-fails";
-    const respond = vi.fn();
-    await invokeAgent(
-      {
-        message: "hi",
-        agentId: "main",
-        sessionKey: "agent:main:main",
-        idempotencyKey: runId,
-      },
-      { context, reqId: runId, respond },
-    );
+        const context = makeContext();
+        const runId = "idem-abort-reactivation-fails";
+        const terminal = createDeferred();
+        const respond = vi.fn((_ok, payload, error) => {
+          if (error || payload?.status === "ok" || payload?.status === "error") {
+            terminal.resolve();
+          }
+        });
+        const read = acpReads.readAcpSessionMetaForEntries;
+        const cancellation = cancel
+          ? vi
+              .spyOn(acpReads, "readAcpSessionMetaForEntries")
+              .mockImplementationOnce(async (...args) => {
+                const result = await read(...args);
+                const active = context.chatAbortControllers.get(runId);
+                if (!active) {
+                  throw new Error("Expected the ACP read to retain run admission");
+                }
+                active.controller.abort(new Error("ACP preparation cancelled"));
+                return result;
+              })
+          : undefined;
+        try {
+          await invokeAgent(
+            {
+              message: "hi",
+              agentId: "main",
+              sessionKey: "agent:main:main",
+              idempotencyKey: runId,
+            },
+            { context, reqId: runId, respond },
+          );
+          await terminal.promise;
 
-    expect(context.chatAbortControllers.has(runId)).toBe(false);
-    expect(mocks.agentCommand).not.toHaveBeenCalled();
-    expectReactivationFailure(respond, runId);
-  });
+          expect(context.chatAbortControllers.has(runId)).toBe(false);
+          if (cancel) {
+            expect(mocks.replaceSubagentRunAfterSteer).not.toHaveBeenCalled();
+            expect(mocks.agentCommand).not.toHaveBeenCalled();
+            expect(respond).toHaveBeenCalledWith(
+              false,
+              undefined,
+              expect.objectContaining({
+                code: "UNAVAILABLE",
+                message: "ACP preparation cancelled",
+              }),
+            );
+          } else if (acp) {
+            expect(mocks.replaceSubagentRunAfterSteer).not.toHaveBeenCalled();
+            expect(mocks.agentCommand).toHaveBeenCalledOnce();
+            expect(respond).toHaveBeenCalledWith(
+              true,
+              expect.objectContaining({ runId, status: "ok" }),
+              undefined,
+              expect.anything(),
+            );
+          } else {
+            expect(mocks.agentCommand).not.toHaveBeenCalled();
+            expectReactivationFailure(respond, runId);
+          }
+        } finally {
+          cancellation?.mockRestore();
+        }
+      });
+    },
+  );
 
   it.each(["pending input admission", "pre-dispatch reactivation"] as const)(
     "restores admitted restart recovery if %s fails",
@@ -242,7 +312,7 @@ export function registerAgentPreDispatchFailureTests() {
       ),
     ).rejects.toThrow("owner release write failed");
     await expect(
-      runExclusiveSessionLifecycleMutation({
+      runExclusiveSessionLifecycleMutation("patch", {
         scope: storePath,
         identities: [sessionKey, sessionId],
         signal: AbortSignal.timeout(100),

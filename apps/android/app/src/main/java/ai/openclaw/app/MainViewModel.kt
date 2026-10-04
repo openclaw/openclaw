@@ -544,8 +544,6 @@ class MainViewModel private constructor(
     runtimeState(initial = GatewayNodeCapabilityApproval.Loading) { it.nodeCapabilityApproval }
   val nodeApprovalAction: StateFlow<GatewayNodeApprovalActionState> =
     runtimeState(initial = GatewayNodeApprovalActionState()) { it.nodeApprovalAction }
-  val statusText: StateFlow<String> = runtimeState(initial = "Offline") { it.statusText }
-  val gatewayConnectionProblem: StateFlow<GatewayConnectionProblem?> = runtimeState(initial = null) { it.gatewayConnectionProblem }
   val gatewayConnectionDisplay: StateFlow<GatewayConnectionDisplay> =
     runtimeState(initial = GatewayConnectionDisplay(false, "Offline", null)) { it.gatewayConnectionDisplay }
   val operatorAdminScopeAvailable: StateFlow<Boolean> = runtimeState(initial = false) { it.operatorAdminScopeAvailable }

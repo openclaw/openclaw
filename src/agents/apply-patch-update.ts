@@ -35,17 +35,13 @@ type SourceFile = {
 
 type Replacement = [number, number, SourceLine[]];
 
-async function defaultReadFile(filePath: string): Promise<string> {
-  return fs.readFile(filePath, "utf8");
-}
-
 /** Apply parsed update chunks to one file and return the new file contents. */
 export async function applyUpdateHunk(
   filePath: string,
   chunks: UpdateFileChunk[],
   options?: { readFile?: (filePath: string) => Promise<string> },
 ): Promise<string> {
-  const reader = options?.readFile ?? defaultReadFile;
+  const reader = options?.readFile ?? ((target: string) => fs.readFile(target, "utf8"));
   const originalContents = await reader(filePath).catch((err: unknown) => {
     throw new Error(`Failed to read file to update ${filePath}: ${formatErrorMessage(err)}`);
   });

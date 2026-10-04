@@ -202,6 +202,8 @@ describe("runCodexAppServerAttempt context-engine overflow recovery", () => {
             },
             { persistedThreads: ["thread-old"] },
           );
+          // Binding ownership is independent of real worker preparation time.
+          vi.useFakeTimers({ toFake: ["Date"] });
           const run = runCodexAppServerAttempt(params, {
             bindingStore: { ...bindingStore, mutate: observedMutate },
           });
@@ -241,12 +243,10 @@ describe("runCodexAppServerAttempt context-engine overflow recovery", () => {
                 "thread/read",
                 "thread/resume",
                 "thread/inject_items",
-                "model/list",
                 "turn/start",
                 "config/read",
                 "configRequirements/read",
                 "thread/start",
-                "model/list",
                 "turn/start",
               ]);
               await harness.notify({
@@ -270,6 +270,7 @@ describe("runCodexAppServerAttempt context-engine overflow recovery", () => {
             expect(bornBindings).toHaveLength(1);
             expect(bornBindings[0]).toMatchObject({
               threadId: "thread-fresh",
+              clientId: harness.client.getInstanceId(),
               contextEngine: {
                 engineId: "lossless-claw",
                 policyFingerprint: contextEnginePolicyFingerprint,
@@ -283,12 +284,14 @@ describe("runCodexAppServerAttempt context-engine overflow recovery", () => {
                     {
                       kind: "patch",
                       threadId: "thread-fresh",
+                      clientId: harness.client.getInstanceId(),
                       patch: { historyCoveredThrough: expect.any(String) },
                     },
                   ],
             );
             const savedBinding = bindingStore.read(identity);
             expect(savedBinding?.threadId).toBe("thread-fresh");
+            expect(savedBinding?.clientId).toBe(harness.client.getInstanceId());
             expect(savedBinding?.contextEngine?.engineId).toBe("lossless-claw");
             expect(savedBinding?.contextEngine?.projection).toBeUndefined();
           } finally {
@@ -438,7 +441,6 @@ describe("runCodexAppServerAttempt context-engine overflow recovery", () => {
       "thread/read",
       "thread/resume",
       "thread/inject_items",
-      "model/list",
       "turn/start",
       "config/read",
       "configRequirements/read",
@@ -490,7 +492,6 @@ describe("runCodexAppServerAttempt context-engine overflow recovery", () => {
       "thread/read",
       "thread/resume",
       "thread/inject_items",
-      "model/list",
       "turn/start",
       "thread/unsubscribe",
     ]);
@@ -529,7 +530,6 @@ describe("runCodexAppServerAttempt context-engine overflow recovery", () => {
       "config/read",
       "configRequirements/read",
       "thread/start",
-      "model/list",
       "turn/start",
     ]);
     const inputText = getRequestInputText(harness);
@@ -570,7 +570,6 @@ describe("runCodexAppServerAttempt context-engine overflow recovery", () => {
       "config/read",
       "configRequirements/read",
       "thread/start",
-      "model/list",
       "turn/start",
       "thread/unsubscribe",
     ]);

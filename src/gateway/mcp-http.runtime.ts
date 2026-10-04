@@ -67,6 +67,8 @@ type McpLoopbackScopeParams = {
   authProfileStoreAgentDir?: string;
   skillLibraryAuthoring?: SkillLibraryAuthoringCapability;
   rootedExecution?: PreparedRootedExecutionCapability;
+  /** Host-selected coding owners for pre-grant projection only. */
+  defaultMediatedToolNames?: readonly string[];
   messageActionTurnCapability?: string;
   grantToken?: string;
   /**
@@ -172,6 +174,7 @@ async function resolveNodeExecScope(
     !params.rootedExecution &&
     !params.context.trustedInternalHandoff &&
     params.context.nodeExecAllowed === true &&
+    !params.defaultMediatedToolNames?.length &&
     resolveMediatedNativeTools(params.context.toolsAllow, mode).size === 0;
   if (!shouldResolveExec) {
     return params;
@@ -199,13 +202,6 @@ type ResolvedNodeScope = {
   params: CapturedMcpLoopbackScope;
   policyResolved?: CachedScopedTools;
 };
-
-async function resolveNodeScope(
-  input: CapturedMcpLoopbackScope,
-  mode: LoopbackToolsAllowMode,
-): Promise<ResolvedNodeScope> {
-  return resolvePairedComputerNodeScope(await resolveNodeExecScope(input, mode), mode);
-}
 
 async function resolvePairedComputerNodeScope(
   params: CapturedMcpLoopbackScope,
@@ -303,6 +299,13 @@ function constructMcpLoopbackTools(
     params.rootedExecution || context.trustedInternalHandoff
       ? new Set(NATIVE_TOOL_EXCLUDE)
       : resolveMediatedNativeTools(toolsAllow, mode);
+  for (const toolName of params.defaultMediatedToolNames ?? []) {
+    const name = normalizeToolPolicyName(toolName);
+    if (!NATIVE_TOOL_EXCLUDE.has(name)) {
+      throw new Error(`Unknown host-owned coding tool: ${toolName}`);
+    }
+    mediatedNativeTools.add(name);
+  }
   for (const toolName of mediatedNativeTools) {
     excludeToolNames.delete(toolName);
   }
@@ -349,15 +352,16 @@ function constructMcpLoopbackTools(
   };
 }
 
-/** Resolves loopback-visible tools from the exact names carried by a minted grant. */
-export async function resolveMcpLoopbackScopedTools(params: McpLoopbackScopeParams): Promise<{
-  agentId: string | undefined;
-  workspaceDir?: string;
-  tools: McpLoopbackTool[];
-}> {
-  const resolved = await resolveNodeScope(captureMcpLoopbackScope(params), "exact");
+async function resolveMcpLoopbackCatalog(
+  params: McpLoopbackScopeParams,
+  mode: LoopbackToolsAllowMode,
+): Promise<CachedScopedTools> {
+  const resolved = await resolvePairedComputerNodeScope(
+    await resolveNodeExecScope(captureMcpLoopbackScope(params), mode),
+    mode,
+  );
   for (;;) {
-    const tools = await resolveMcpLoopbackTools(resolved.params, "exact", resolved.policyResolved);
+    const tools = await resolveMcpLoopbackTools(resolved.params, mode, resolved.policyResolved);
     resolved.params.assertCurrent();
     if (isMcpCatalogSessionCurrent(tools, resolved.params)) {
       return tools;
@@ -365,19 +369,21 @@ export async function resolveMcpLoopbackScopedTools(params: McpLoopbackScopePara
   }
 }
 
+/** Resolves loopback-visible tools from the exact names carried by a minted grant. */
+export function resolveMcpLoopbackScopedTools(params: McpLoopbackScopeParams): Promise<{
+  agentId: string | undefined;
+  workspaceDir?: string;
+  tools: McpLoopbackTool[];
+}> {
+  return resolveMcpLoopbackCatalog(params, "exact");
+}
+
 /** Materializes runtime policy expressions against the concrete loopback catalog. */
-export async function resolveMcpLoopbackPolicyTools(params: McpLoopbackScopeParams): Promise<{
+export function resolveMcpLoopbackPolicyTools(params: McpLoopbackScopeParams): Promise<{
   agentId: string | undefined;
   tools: McpLoopbackTool[];
 }> {
-  const resolved = await resolveNodeScope(captureMcpLoopbackScope(params), "policy");
-  for (;;) {
-    const tools = await resolveMcpLoopbackTools(resolved.params, "policy", resolved.policyResolved);
-    resolved.params.assertCurrent();
-    if (isMcpCatalogSessionCurrent(tools, resolved.params)) {
-      return tools;
-    }
-  }
+  return resolveMcpLoopbackCatalog(params, "policy");
 }
 
 /**
@@ -437,6 +443,7 @@ function buildMcpLoopbackToolCacheKey(params: McpLoopbackScopeParams): string {
         context.delegationCapability === "report_only" ? "report_only" : undefined,
     },
     admittedRunInstance: params.admittedRunContext?.operationalRunInstance,
+    defaultMediatedToolNames: params.defaultMediatedToolNames,
     sessionControlsAllowed: hasSessionControlAuthority(
       readAdmittedRunOperatorAuthority(params.admittedRunContext),
     ),

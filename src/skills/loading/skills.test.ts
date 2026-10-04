@@ -325,7 +325,7 @@ describe("buildWorkspaceSkillCommandSpecs", () => {
           defaults: {
             skills: ["alpha-skill"],
           },
-          list: [{ id: "writer", workspace: workspaceDir }],
+          entries: { writer: { workspace: workspaceDir } },
         },
       },
       agentId: "writer",
@@ -438,15 +438,14 @@ describe("buildWorkspaceSkillsPrompt", () => {
               },
             },
             agents: {
-              list: [
-                {
-                  id: "writer",
+              entries: {
+                writer: {
                   workspace: workspaceDir,
                   skillsLimits: {
                     maxSkillsPromptChars: 220,
                   },
                 },
-              ],
+              },
             },
           },
           agentId: "writer",
@@ -456,7 +455,7 @@ describe("buildWorkspaceSkillsPrompt", () => {
     expect(prompt).toContain("Skills truncated: included 0 of 3");
   });
 
-  it("does not apply agents.list[].skillsLimits without an explicit agent id", async () => {
+  it("does not apply agents.entries.<id>.skillsLimits without an explicit agent id", async () => {
     const workspaceDir = await makeWorkspace();
     await writePromptLimitSkills(workspaceDir);
 
@@ -472,15 +471,14 @@ describe("buildWorkspaceSkillsPrompt", () => {
               },
             },
             agents: {
-              list: [
-                {
-                  id: "main",
+              entries: {
+                main: {
                   workspace: workspaceDir,
                   skillsLimits: {
                     maxSkillsPromptChars: 220,
                   },
                 },
-              ],
+              },
             },
           },
         }),

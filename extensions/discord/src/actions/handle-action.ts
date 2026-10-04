@@ -124,18 +124,8 @@ async function dispatchDiscordMessageAction(
     ...(ctx.progressSnapshot ? { progressSnapshot: ctx.progressSnapshot } : {}),
     ...readPolicyOptions,
   } as const;
-  const runAction = ({
-    action: runtimeAction,
-    ...payload
-  }: {
-    action: string;
-    [key: string]: unknown;
-  }) =>
-    handleDiscordAction(
-      { action: runtimeAction, accountId: accountId ?? undefined, ...payload },
-      cfg,
-      actionOptions,
-    );
+  const runAction = (payload: { action: string; [key: string]: unknown }) =>
+    handleDiscordAction({ accountId, ...payload }, cfg, actionOptions);
   const notifyVisibleOutbound = (
     result: AgentToolResult<unknown>,
     to: string,

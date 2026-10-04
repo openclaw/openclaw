@@ -47,6 +47,11 @@ const SPAWN_OPERATIONS = {
   "worktree.snapshot": "worktree.snapshot",
   "worktree.snapshot-verify-exact": "worktree.snapshot",
   "worktree.cleanup-inspection": "worktree.cleanup",
+  "worktree.cleanup-fingerprint": "worktree.cleanup",
+  "worktree.eviction-classify": "worktree.cleanup",
+  "worktree.eviction-source": "worktree.cleanup",
+  "worktree.eviction-repositories": "worktree.cleanup",
+  "worktree.eviction-purge": "worktree.cleanup",
   "worktree.provisioning-inspection": "worktree.provision",
   "worktree.git-size": "worktree.inspect",
   "worktree.checkout-transition-size": "worktree.inspect",
@@ -102,7 +107,13 @@ function runtime(): GitWorkerRuntime {
 
 function poolFor(state: GitWorkerRuntime, command: GitWorkerCommand): GitPool {
   const owner =
-    command.type === "worktree.snapshot" || command.type === "worktree.cleanup-inspection"
+    command.type === "worktree.snapshot" ||
+    command.type === "worktree.cleanup-inspection" ||
+    command.type === "worktree.cleanup-fingerprint" ||
+    command.type === "worktree.eviction-classify" ||
+    command.type === "worktree.eviction-source" ||
+    command.type === "worktree.eviction-repositories" ||
+    command.type === "worktree.eviction-purge"
       ? "worktreeMaintenance"
       : command.type.startsWith("worktree.")
         ? "worktrees"
@@ -173,7 +184,7 @@ export async function runGitWorkerOperation<Command extends GitWorkerCommand>(
     !Object.entries(baseEnv).some(
       ([key, value]) =>
         value !== undefined &&
-        /^(GIT_DIR|GIT_WORK_TREE|GIT_COMMON_DIR|GIT_CEILING_DIRECTORIES|GIT_DISCOVERY_ACROSS_FILESYSTEM|GIT_NAMESPACE)$/i.test(
+        /^(GIT_DIR|GIT_WORK_TREE|GIT_COMMON_DIR|GIT_CEILING_DIRECTORIES|GIT_DISCOVERY_ACROSS_FILESYSTEM|GIT_NAMESPACE|GIT_SHALLOW_FILE|GIT_GRAFT_FILE|GIT_REPLACE_REF_BASE|GIT_NO_REPLACE_OBJECTS|GIT_INDEX_FILE|GIT_OBJECT_DIRECTORY|GIT_ALTERNATE_OBJECT_DIRECTORIES)$/i.test(
           key,
         ),
     );

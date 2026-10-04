@@ -19,7 +19,7 @@ import {
 } from "./session-accessor.sqlite-lifecycle-state.js";
 import type {
   ProjectedLifecycleCommitResult,
-  ProjectedLifecycleRemovalCommitInput,
+  ProjectedLifecycleCommitInput,
   ProjectedLifecycleMutation,
   SessionEntryMaintenancePlan,
 } from "./session-accessor.sqlite-lifecycle-types.js";
@@ -31,10 +31,16 @@ import { appendSessionResetBoundary } from "./session-accessor.sqlite-reset-boun
 import type { ResolvedSqliteReadScope } from "./session-accessor.sqlite-scope.js";
 import type { SessionEntry } from "./types.js";
 
-type ProjectedLifecycleCommitOptions = Omit<ProjectedLifecycleRemovalCommitInput, "maintenance"> & {
+type ProjectedLifecycleCommitOptions = Omit<ProjectedLifecycleCommitInput, "maintenance"> & {
   removalPlans: MaterializedSessionStateDeletePlan[];
   resetScope: ResolvedSqliteReadScope;
   applyMaintenance: (database: OpenClawAgentDatabase) => SessionEntryMaintenancePlan;
+  onResetBoundary?: (facts: {
+    sessionKey: string;
+    sessionId: string;
+    progressCardReset: boolean;
+    projectionNeedsReconcile: boolean;
+  }) => void;
   afterUpsertsInTransaction?: (database: OpenClawAgentDatabase) => void;
   afterFreshUpsertsInTransaction?: (database: OpenClawAgentDatabase) => void;
 };
@@ -138,7 +144,27 @@ export function commitProjectedSessionEntryLifecycleMutationInDatabase(
         sessionId: expectedEntry.sessionId,
         sessionKey,
       };
-      appendSessionResetBoundary(database, boundaryScope, expectedEntry, resetBoundary);
+      let projectionNeedsReconcile = false;
+      const progressCardReset = appendSessionResetBoundary(
+        database,
+        boundaryScope,
+        expectedEntry,
+        resetBoundary,
+        options.onResetBoundary
+          ? {
+              scheduleProjectionReconcile: false,
+              onProjectionReconcileNeeded: () => {
+                projectionNeedsReconcile = true;
+              },
+            }
+          : undefined,
+      );
+      options.onResetBoundary?.({
+        sessionKey,
+        sessionId: expectedEntry.sessionId,
+        progressCardReset,
+        projectionNeedsReconcile,
+      });
     }
     writeSessionEntry(database, sessionKey, entry, {
       allowStoredAliases: options.allowCanonicalRepair === true,
@@ -204,19 +230,18 @@ export function commitProjectedSessionEntryLifecycleMutationInDatabase(
   };
 }
 
-/** Adapt cloneable removal inputs to the shared transaction kernel. */
-export function commitProjectedSessionEntryRemovalsInDatabase(
+/** Adapt prepared lifecycle inputs to the shared transaction kernel. */
+export function commitPreparedSessionEntryLifecycleMutationInDatabase(
   database: OpenClawAgentDatabase,
-  input: ProjectedLifecycleRemovalCommitInput,
+  input: ProjectedLifecycleCommitInput,
   removalPlans: MaterializedSessionStateDeletePlan[],
+  options?: Pick<ProjectedLifecycleCommitOptions, "resetScope" | "onResetBoundary">,
 ): ProjectedLifecycleCommitResult {
-  if (input.projected.upsertedEntries.length > 0) {
-    throw new Error("Worker lifecycle removal cannot contain upserts");
-  }
   return commitProjectedSessionEntryLifecycleMutationInDatabase(database, {
     ...input,
     removalPlans,
-    resetScope: { agentId: database.agentId },
+    resetScope: options?.resetScope ?? { agentId: database.agentId },
+    onResetBoundary: options?.onResetBoundary,
     applyMaintenance: (current) => {
       const maintenance = input.maintenance;
       if (!maintenance) {
@@ -224,7 +249,7 @@ export function commitProjectedSessionEntryRemovalsInDatabase(
       }
       const preservation = maintenance.preservation;
       if (!preservation) {
-        throw new Error("Worker lifecycle removal requires maintenance preservation");
+        throw new Error("Worker lifecycle mutation requires maintenance preservation");
       }
       return applySessionEntryMaintenanceInDatabase(current, maintenance, () => preservation);
     },

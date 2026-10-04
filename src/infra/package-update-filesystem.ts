@@ -207,7 +207,7 @@ export async function copyPackagePathEntry(
   destination: string,
   assertCaller = () => {},
   beforePublish?: (staged: string) => void,
-): Promise<{ ownershipPreserved: boolean }> {
+): Promise<void> {
   const assertCurrent = retainMutationAuthority(assertCaller);
   assertCurrent();
   const sourceIdentity = fsSync.lstatSync(source, { bigint: true });
@@ -236,7 +236,6 @@ export async function copyPackagePathEntry(
     assertParent();
     assertPackagePathIdentity(staging, stagingIdentity);
   };
-  let ownershipPreserved = true;
   let failure: { error: unknown } | undefined;
   try {
     const stagedRoot = await fsSafeRoot(staging, { assertBeforeMutation: assertStaging });
@@ -302,8 +301,29 @@ export async function copyPackagePathEntry(
           }
         } else {
           // Launcher metadata is best effort, but must never follow its target.
+          const ownership = destinationIdentity?.isSymbolicLink() ? destinationIdentity : identity;
+          const preserveOwnership = async () => {
+            try {
+              await fs.lchown(to, Number(ownership.uid), Number(ownership.gid));
+            } catch (error) {
+              if (
+                (!hasErrnoCode(error, "EPERM") && !hasErrnoCode(error, "EACCES")) ||
+                !process.geteuid ||
+                !process.getegid
+              ) {
+                throw error;
+              }
+              // macOS inherits the bin directory's group even for a non-root
+              // updater. Do not leave that unrepeatable ownership on a new link.
+              assertLink();
+              await fs.lchown(to, process.geteuid(), process.getegid());
+              log.warn(
+                `Could not preserve launcher symlink ownership from ${source}; using updater ownership`,
+              );
+            }
+          };
           for (const [field, preserve] of [
-            ["ownership", () => fs.lchown(to, Number(identity.uid), Number(identity.gid))],
+            ["ownership", preserveOwnership],
             ...(process.platform === "darwin"
               ? ([["mode", () => fs.lchmod(to, Number(identity.mode))]] as const)
               : []),
@@ -320,7 +340,6 @@ export async function copyPackagePathEntry(
               ) {
                 throw error;
               }
-              ownershipPreserved &&= field !== "ownership";
               log.warn(
                 `Could not preserve launcher symlink ${field} from ${source}; continuing with the copied link`,
               );
@@ -424,7 +443,6 @@ export async function copyPackagePathEntry(
   if (failure) {
     throw failure.error;
   }
-  return { ownershipPreserved };
 }
 
 export type PackageLauncherBackup = {
@@ -438,6 +456,16 @@ export type PackageLauncherBackup = {
   }>;
 };
 
+export function resolvePackageUpdateLauncherNames(
+  packageName: string,
+  entries?: readonly string[],
+) {
+  const names = new Set([packageName, "openclaw"]);
+  return (
+    entries?.filter((entry) => names.has(entry) || names.has(path.parse(entry).name)) ?? [...names]
+  ).toSorted();
+}
+
 /** Publish partial backup state so the swap owner can recover after any failed copy. */
 export async function capturePackageLaunchers(
   snapshot: PackageLauncherBackup,
@@ -447,11 +475,11 @@ export async function capturePackageLaunchers(
 ): Promise<void> {
   const native = params.stage.native;
   await fs.mkdir(targetLayout.globalRoot, { recursive: true });
-  const shimNames = new Set([params.packageName, "openclaw"]);
   const shimEntries =
     params.installTarget.directNodeModulesRoot === true
       ? []
-      : (
+      : resolvePackageUpdateLauncherNames(
+          params.packageName,
           await (
             native
               ? fs.readdir(params.stage.layout.binDir)
@@ -461,10 +489,8 @@ export async function capturePackageLaunchers(
               return [];
             }
             throw error;
-          })
-        )
-          .filter((entry) => shimNames.has(entry) || shimNames.has(path.parse(entry).name))
-          .toSorted();
+          }),
+        );
   if (shimEntries.length > 0) {
     snapshot.backupDir = await fs.mkdtemp(
       path.join(targetLayout.globalRoot, ".openclaw.shim-backup-"),
@@ -479,25 +505,20 @@ export async function capturePackageLaunchers(
         : reader.exists(destination)))
         ? path.join(snapshot.backupDir, entry)
         : null;
-      let fingerprint = backup && !native ? await reader.launcher(destination) : undefined;
+      const fingerprint = backup && !native ? await reader.launcher(destination) : undefined;
       if (backup) {
-        const copied = await copyPackagePathEntry(destination, backup);
+        await copyPackagePathEntry(destination, backup);
         if (fingerprint) {
           // Keep failed verification evidence even when activation never starts.
           snapshot.failedCopy = backup;
           const actual = await reader.launcher(backup);
-          const differences = packageLauncherDifferences(
-            fingerprint,
-            actual,
-            copied.ownershipPreserved,
-          );
+          const differences = packageLauncherDifferences(fingerprint, actual);
           if (differences.length > 0) {
             throw new Error(
               `Package rollback launcher backup changed: ${destination}; differing fields: ${differences.join(", ")}`,
             );
           }
           snapshot.failedCopy = undefined;
-          fingerprint = actual;
         }
       }
       snapshot.entries.push({

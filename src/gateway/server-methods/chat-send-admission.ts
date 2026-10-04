@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import { readAcpSessionMetaForEntries } from "../../acp/runtime/session-meta-readonly.js";
 import {
   createAgentRunRestartAbortError,
   isAgentRunDirectAbortReason,
@@ -32,7 +33,6 @@ import {
 } from "../../sessions/session-lifecycle-admission.js";
 import { captureAgentJobSession, setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
 import { registerChatAbortController, resolveChatRunExpiresAtMs } from "../chat-abort.js";
-import { ExpectedProfileMismatchError } from "../expected-profile.js";
 import { retainGatewayOperatorRun } from "../operator-run-cancellation.js";
 import { PENDING_CHAT_SEND_DEDUPE_PREFIX, type DedupeEntry } from "../server-shared.js";
 import {
@@ -44,6 +44,8 @@ import { resolveChatSendOriginatingRoute } from "./chat-origin-routing.js";
 import {
   isRetryableUnadoptedChatClaim,
   resolveRestartSafeChatAdmission,
+  withRestartSafeChatPlacement,
+  type PreparedRestartSafeChatPlacement,
 } from "./chat-restart-recovery.js";
 import { assertExpectedLeafActive } from "./chat-send-active-leaf.js";
 import { prepareGoalChatSendRetry } from "./chat-send-goal-retry.js";
@@ -52,7 +54,6 @@ import {
   readChatSendDedupeResponse,
   resolveChatSendRequestConflict,
   respondChatSendAdmissionError,
-  respondChatSendRetry,
   respondChatSessionRoutingChanged,
   type ChatSendPreAdmissionParams,
 } from "./chat-send-pre-admission.js";
@@ -67,7 +68,11 @@ import {
   admitChatSendUploads,
   assertChatSendExclusiveAdmission,
   createChatSendWorkAdmission,
+  consumeChatSendAdmissionRetry,
+  prepareChatSendAdmissionRetry,
+  prepareCurrentChatSendRetry,
   releaseChatSendCallerAuthority,
+  respondChatSendWorkAdmissionFailure,
 } from "./chat-send-work-admission.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
@@ -149,18 +154,15 @@ export async function admitChatSend(
     }
     return { ok: false as const };
   }
-  // A plain chat retry must not replace a Goal reservation after yielding in recovery.
-  if (readPendingReservation()?.payload.goalFingerprint) {
-    respond(
-      false,
-      undefined,
-      errorShape(ErrorCodes.INVALID_REQUEST, "Run ID is reserved by a Goal request; use a new ID."),
-    );
+  const pendingRetry = prepareChatSendAdmissionRetry(params);
+  const preparedRetry = pendingRetry instanceof Promise ? await pendingRetry : pendingRetry;
+  const retry = consumeChatSendAdmissionRetry(params, preparedRetry);
+  if (retry === false) {
     return { ok: false as const };
   }
-  if (!request.goalOperation && respondChatSendRetry(params)) {
-    return { ok: false as const };
-  }
+  let retryComparison = retry;
+  params.assertCurrent?.();
+  assertSessionTargetCurrent();
   const uploadAdmission = admitChatSendUploads({ params: p, client, context, respond });
   if (!uploadAdmission.ok) {
     return uploadAdmission;
@@ -198,6 +200,14 @@ export async function admitChatSend(
       context.dedupe.delete(pendingChatSendKey);
     }
   };
+  const abortPendingChatSend = (stopReason: string) =>
+    writePreRegisteredChatAbort({
+      context,
+      runId: clientRunId,
+      stopReason,
+      attemptId: pendingAttemptId,
+      requestIdentity,
+    });
   let admittedSessionId = backingSessionId ?? clientRunId;
   let expectedActiveReplyOperation: ReplyOperation | undefined;
   let gatewayWorkAdmission: Awaited<ReturnType<typeof beginSessionWorkAdmission>> | undefined;
@@ -211,9 +221,25 @@ export async function admitChatSend(
   let runInterruptTarget: ReturnType<typeof replyRunRegistry.resolveCurrentInterruptTarget>;
   let reservationSuperseded = false;
   let supersedingResult: DedupeEntry | undefined;
-  const commitChatWorkAdmission = () => {
+  let preparedGoalEntry: Awaited<ReturnType<typeof prepareChatSendSessionEntry>> | undefined;
+  const placementService = context.workerSessionPlacementService;
+  const commitChatWorkAdmission = async (
+    acpMeta: SessionEntry["acp"] | null,
+    preparedPlacement?: PreparedRestartSafeChatPlacement,
+  ): Promise<void> => {
+    if (context.workerSessionPlacementService !== placementService) {
+      throw new Error("Worker placement owner changed during chat admission; retry.");
+    }
+    if (placementService && preparedPlacement?.sessionId !== admittedSessionId) {
+      return withRestartSafeChatPlacement(placementService, admittedSessionId, (prepared) =>
+        commitChatWorkAdmission(acpMeta, prepared),
+      );
+    }
+    const current = prepareCurrentChatSendRetry(params, pendingAttemptId);
+    retryComparison = current.comparison ? await current.comparison : undefined;
+    const latestSession = current.readSession();
     params.assertCurrent?.();
-    const retainedRequestConflict = resolveChatSendRequestConflict(params);
+    const retainedRequestConflict = resolveChatSendRequestConflict(params, retryComparison);
     if (retainedRequestConflict) {
       throw new Error(retainedRequestConflict.message);
     }
@@ -237,33 +263,22 @@ export async function admitChatSend(
       }
     }
     if (lifecycleGeneration !== getAgentEventLifecycleGeneration()) {
-      writePreRegisteredChatAbort({
-        context,
-        runId: clientRunId,
-        stopReason: "restart",
-        attemptId: pendingAttemptId,
-      });
+      abortPendingChatSend("restart");
       return;
     }
     if (
       !pendingReservation ||
       !isFutureDateTimestampMs(pendingReservation.payload.expiresAtMs, { nowMs: Date.now() })
     ) {
-      writePreRegisteredChatAbort({
-        context,
-        runId: clientRunId,
-        stopReason: "timeout",
-        attemptId: pendingAttemptId,
-      });
+      abortPendingChatSend("timeout");
       return;
     }
-    const latestSession = loadCurrentChatSendSession(session);
     const latestEntry = latestSession.entry;
     admittedSessionEntry = latestEntry;
-    const requestConflict = resolveChatSendRequestConflict({
-      ...params,
-      session: { ...session, entry: latestEntry },
-    });
+    const requestConflict = resolveChatSendRequestConflict(
+      { ...params, session: { ...session, entry: latestEntry } },
+      retryComparison,
+    );
     if (requestConflict) {
       throw new Error(requestConflict.message);
     }
@@ -328,16 +343,29 @@ export async function admitChatSend(
     // Retain compaction lineage before attachment/context preparation can outlive this owner.
     expectedActiveReplyOperation = replyRunRegistry.get(activeRunScopeKey);
     if (request.goalOperation?.action === "start" && !latestEntry && !requestedSessionId) {
-      const prepared = prepareChatSendSessionEntry({
-        cfg: latestSession.cfg,
-        client,
-        agentId,
-        getRuntimeConfig: context.getRuntimeConfig,
-      });
+      if (!preparedGoalEntry) {
+        preparedGoalEntry = await prepareChatSendSessionEntry({
+          cfg: latestSession.cfg,
+          client,
+          agentId,
+          getRuntimeConfig: context.getRuntimeConfig,
+        });
+        // Preparation only read facts; re-enter all current reservation and authority checks once.
+        return commitChatWorkAdmission(acpMeta, preparedPlacement);
+      }
+      const prepared = preparedGoalEntry;
       initialSessionEntry = prepared.entry;
       assertInitialSkillSelection = prepared.assertSkillSelection;
       admittedSessionId = initialSessionEntry.sessionId;
     }
+    if (context.workerSessionPlacementService !== placementService) {
+      throw new Error("Worker placement owner changed during chat admission; retry.");
+    }
+    if (placementService && preparedPlacement?.sessionId !== admittedSessionId) {
+      // A newly prepared goal may establish an incarnation that did not exist at entry.
+      return commitChatWorkAdmission(acpMeta);
+    }
+    preparedPlacement?.facts.assertCurrent();
     restartSafeAdmission = resolveRestartSafeChatAdmission({
       activeRunScopeKey,
       agentId,
@@ -346,7 +374,9 @@ export async function admitChatSend(
       context,
       entry: latestEntry,
       initialSessionEntry,
+      acpMeta,
       now: Date.now(),
+      placement: preparedPlacement?.facts.placement,
       request: restartSafeRequest,
       requestedSessionId,
       sessionId: admittedSessionId,
@@ -385,6 +415,7 @@ export async function admitChatSend(
     });
   };
 
+  let retainedRequestConflict: ReturnType<typeof resolveChatSendRequestConflict>;
   try {
     gatewayWorkAdmission = await beginSessionWorkAdmission({
       scope: storePath,
@@ -395,17 +426,23 @@ export async function admitChatSend(
         assertSessionTargetCurrent();
         assertChatSendExclusiveAdmission(request, session);
       },
-      revalidateAllowed: commitChatWorkAdmission,
+      revalidateAllowed: async () => {
+        if (!restartSafeRequest) {
+          return commitChatWorkAdmission(null);
+        }
+        const latest = loadCurrentChatSendSession(session);
+        const [acpMeta] = await readAcpSessionMetaForEntries({
+          cfg: latest.cfg,
+          entries: [{ agentId, sessionKey: latest.canonicalKey, entry: latest.entry }],
+        });
+        // The writer barrier retains the selected row; commit rechecks request and run authority.
+        return commitChatWorkAdmission(acpMeta ?? null);
+      },
       onInterrupt: (reason) => {
         const stopReason = isAgentRunDirectAbortReason(reason) ? "rpc" : "restart";
         if (!admittedRunAbort) {
           if (!context.chatRunState.hasAbortMarker(clientRunId)) {
-            writePreRegisteredChatAbort({
-              context,
-              runId: clientRunId,
-              stopReason,
-              attemptId: pendingAttemptId,
-            });
+            abortPendingChatSend(stopReason);
           }
         } else if (!admittedRunAbort.controller.signal.aborted) {
           // A later lifecycle drain must not overwrite the first abort reason.
@@ -419,29 +456,14 @@ export async function admitChatSend(
       },
     });
     params.assertCurrent?.();
+    retainedRequestConflict = resolveChatSendRequestConflict(params, retryComparison);
   } catch (err) {
     clearPendingChatSendReservation();
     admittedRunAbort?.cleanup();
     gatewayWorkAdmission?.release();
-    if (err instanceof ExpectedProfileMismatchError) {
-      throw err;
-    }
-    const requestConflict = resolveChatSendRequestConflict(params);
-    if (requestConflict) {
-      respond(false, undefined, requestConflict);
-      return { ok: false as const };
-    }
-    const aborted =
-      context.chatRunState.hasAbortMarker(clientRunId) &&
-      readChatSendDedupeResponse(context.dedupe, clientRunId);
-    if (aborted) {
-      respond(aborted.ok, aborted.payload, aborted.error, { cached: true, runId: clientRunId });
-      return { ok: false as const };
-    }
-    respondChatSendAdmissionError(err, respond);
+    respondChatSendWorkAdmissionFailure(params, err, retryComparison);
     return { ok: false as const };
   }
-  const retainedRequestConflict = resolveChatSendRequestConflict(params);
   if (retainedRequestConflict) {
     clearPendingChatSendReservation();
     admittedRunAbort?.cleanup();
@@ -491,12 +513,7 @@ export async function admitChatSend(
     }
     gatewayWorkAdmission.release();
     if (!readChatSendDedupeResponse(context.dedupe, clientRunId)) {
-      writePreRegisteredChatAbort({
-        context,
-        runId: clientRunId,
-        stopReason: activeRunAbort?.entry?.abortStopReason ?? "restart",
-        attemptId: pendingAttemptId,
-      });
+      abortPendingChatSend(activeRunAbort?.entry?.abortStopReason ?? "restart");
     }
     const aborted = readChatSendDedupeResponse(context.dedupe, clientRunId);
     respond(aborted?.ok ?? true, aborted?.payload, aborted?.error, {
@@ -633,6 +650,7 @@ export async function admitChatSend(
   const retainedWork = createChatSendWorkAdmission({
     admission: acquiredGatewayWorkAdmission,
     releaseCallerAuthority,
+    releaseGatewayRootContinuation,
     logGateway: context.logGateway,
   });
   // Prepared inbound media has no transcript reference until the user turn
@@ -644,7 +662,6 @@ export async function admitChatSend(
   const cleanupAdmittedRun: typeof activeRunAbort.cleanup = () => {
     activeRunAbort.cleanup();
     retainedWork.release();
-    releaseGatewayRootContinuation();
     discardAbandonedPreparedMedia?.();
     discardAbandonedPreparedMedia = undefined;
   };
@@ -700,6 +717,7 @@ export async function admitChatSend(
       messageInjectionTarget,
       originatingRoute,
       rejectSessionRoutingChanged,
+      releaseSourceWorkAdmission: retainedWork.release,
       retainGatewayWorkAdmission: retainedWork.retain,
       setPendingInputCleanup: retainedWork.setPendingInputCleanup,
       assertClientUploadAllowed: uploadAdmission.assertClientUploadAllowed,

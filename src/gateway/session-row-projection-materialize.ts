@@ -24,6 +24,7 @@ import {
 } from "../state/openclaw-agent-db.paths.js";
 import type { SessionRepositoryWorkspaceRecord } from "../state/session-repository-workspaces.types.js";
 import { readSessionRowFacts } from "./server-methods/session-placement-read-projection.js";
+import { readPreparedGatewayModelMetadata } from "./server-model-catalog-view.js";
 import { readSessionRowModelFacts } from "./session-row-model-facts.js";
 import { isColdArchivedSessionRow } from "./session-row-projection-archive.js";
 import * as records from "./session-row-projection-record.js";
@@ -36,20 +37,6 @@ import {
   createGatewaySessionEntryReader,
   resolveGatewaySessionStoreTargetWithStore,
 } from "./session-utils-store-lookup.js";
-
-/** Capture retains published identity while category facts wait for worker reconciliation. */
-export function createSessionRowCapture(
-  lookup: (query: records.Lookup) => records.Row | undefined,
-  needsAcquisition: (row: records.Row) => boolean,
-  acquire: (row: records.Row) => records.Row | undefined,
-) {
-  return (query: records.Lookup) => {
-    const row = lookup(query);
-    return row && row.unresolvedDatabaseFacts !== "category" && needsAcquisition(row)
-      ? (acquire(row) ?? row)
-      : row;
-  };
-}
 
 /** Apply committed metadata before observers without reacquiring it from SQLite. */
 export function createSessionRowPublication(owner: {
@@ -217,9 +204,11 @@ export function createSessionRowModelFactsReader(params: {
     if (!row?.entry) {
       throw new Error("Session changed while preparing search facts; retry the request");
     }
+    const state = params.state();
     return readSessionRowModelFacts({
-      ...params.state(),
+      ...state,
       ...row,
+      preparedModelMetadata: readPreparedGatewayModelMetadata(state.cfg),
       source: {
         entry: row.storedEntry,
         readSourceEntry: (key) => params.readSourceEntry(row, key, metadataPrepared),
@@ -441,6 +430,7 @@ export function readResidentSessionRow(
     ...row,
     cfg,
     preparedAcpMeta: databaseFacts ? databaseFacts.acpMeta : row.preparedAcpMeta,
+    preparedModelMetadata: readPreparedGatewayModelMetadata(cfg),
     preparedRepositoryWorkspace: databaseFacts
       ? databaseFacts.repositoryWorkspace
       : params.repositoryWorkspace,
@@ -466,8 +456,7 @@ export function readResidentSessionRow(
     includeLastMessage: Boolean(source),
     skipTranscriptUsageFallback: true,
     includeSwarmChildren: true,
-    storeChildSessionLinksByKey:
-      source || prepared ? undefined : new Map([[row.key, params.links]]),
+    childLinks: source || prepared ? undefined : params.links,
   });
   if (!source) {
     inputs.derivedTitle = deriveSessionTitle(row.entry, undefined, inputs.displayName);

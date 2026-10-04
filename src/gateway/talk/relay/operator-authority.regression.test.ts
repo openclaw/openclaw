@@ -41,6 +41,7 @@ import { usePersistentRelayTestState } from "./session-state.test-support.js";
 import { relaySessions } from "./state.js";
 
 const { runEmbeddedAgent } = vi.hoisted(() => ({ runEmbeddedAgent: vi.fn() }));
+// mock-isolation: Substitute inference without provider or credential access; real admission and completion custody execute below.
 vi.mock("../../../agents/embedded-agent.js", () => ({ runEmbeddedAgent }));
 
 const sessionKey = "agent:main:main";
@@ -108,7 +109,7 @@ describe("Talk relay operator authority across setup and consult lifetimes", () 
       constructionFailure?: "throw" | "close";
     } = {},
   ) {
-    const cfg = { agents: { entries: { main: { default: true } } } };
+    const cfg = { agents: { entries: { main: {} } } };
     const context = options.context ?? createContext();
     if (!options.context) {
       context.getRuntimeConfig = () => cfg;

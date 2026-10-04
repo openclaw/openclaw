@@ -79,7 +79,7 @@ function createSubagentSelectionConfig(params: {
   defaultPrimary?: string;
   modelEntries?: Record<string, unknown>;
   defaultSubagentModel?: string;
-  agents?: Array<Record<string, unknown>>;
+  agents?: NonNullable<OpenClawConfig["agents"]>["entries"];
 }) {
   return {
     agents: {
@@ -90,7 +90,7 @@ function createSubagentSelectionConfig(params: {
           ? { subagents: { model: params.defaultSubagentModel } }
           : {}),
       },
-      ...(params.agents ? { list: params.agents } : {}),
+      ...(params.agents ? { entries: params.agents } : {}),
     },
   } as unknown as OpenClawConfig;
 }
@@ -967,13 +967,12 @@ it("uses agent model metadata to resolve an inherited bare default", () => {
 it("prefers the agent subagent model over default subagent and primary models", () => {
   const cfg = createSubagentSelectionConfig({
     defaultSubagentModel: "openai/gpt-5.4",
-    agents: [
-      {
-        id: "research",
+    agents: {
+      research: {
         model: { primary: "anthropic/claude-opus-4-6" },
         subagents: { model: "google/gemini-2.5-pro" },
       },
-    ],
+    },
   });
   expect(resolveSubagentConfiguredModelSelection({ cfg, agentId: "research" })).toBe(
     "google/gemini-2.5-pro",
@@ -987,7 +986,7 @@ it("keeps runtime policy attached to the configured default subagent model", () 
         subagents: { model: "anthropic/claude-sonnet-4-6" },
         models: { "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "claude-cli" } } },
       },
-      list: [{ id: "research", model: "anthropic/claude-opus-4-7" }],
+      entries: { research: { model: "anthropic/claude-opus-4-7" } },
     },
   } as OpenClawConfig;
 
@@ -1009,7 +1008,7 @@ it.each([
     config: {
       defaultPrimary: "openai/gpt-5.4",
       modelEntries: { "claude-opus-4-6": { alias: "opus" } },
-      agents: [{ id: "research", model: "anthropic/claude-sonnet-4-6" }],
+      agents: { research: { model: "anthropic/claude-sonnet-4-6" } },
     },
     agentId: "research",
     modelOverride: "OPUS",
@@ -1036,12 +1035,11 @@ it.each([
     name: "resolves an alias configured only on the target agent",
     config: {
       modelEntries: { "openai/gpt-5.4": { alias: "global-gpt" } },
-      agents: [
-        {
-          id: "research",
+      agents: {
+        research: {
           models: { "anthropic/claude-opus-4-6": { alias: "research-opus" } },
         },
-      ],
+      },
     },
     agentId: "research",
     modelOverride: "research-opus",

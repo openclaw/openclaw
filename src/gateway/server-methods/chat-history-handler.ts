@@ -4,6 +4,7 @@ import {
   errorShape,
   validateChatHistoryParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { readAcpSessionMetaForEntries } from "../../acp/runtime/session-meta-readonly.js";
 import { resolveAgentConfig } from "../../agents/agent-scope.js";
 import { findModelCatalogEntry } from "../../agents/model-catalog.js";
 import { resolveConfiguredThinkingDefault } from "../../agents/model-thinking-default.js";
@@ -22,7 +23,7 @@ import { scopeLegacySessionKeyToAgent } from "../../routing/session-key.js";
 import { resolveInFlightRunSnapshot } from "../chat-abort.js";
 import { resolveEffectiveChatHistoryMaxChars } from "../chat-display-projection.js";
 import { isQueuedChatTurnForSession } from "../chat-queued-turns.js";
-import { resolveClaudeCliBindingSessionId } from "../cli-session-history.js";
+import { resolveClaudeCliBindingSessionId } from "../cli-session-history.claude.js";
 import { projectOperatorModelRead } from "../operator-model-presentation.js";
 import { SerializedJsonArray } from "../serialized-json.js";
 import { getMaxChatHistoryMessagesBytes } from "../server-constants.js";
@@ -321,6 +322,12 @@ export async function handleChatHistoryRequest({
       agentId: sessionAgentId,
       storePath,
     };
+    const [unsavedAcpMeta] = entry
+      ? []
+      : await readAcpSessionMetaForEntries({
+          cfg,
+          entries: [{ agentId: sessionAgentId, sessionKey: canonicalKey, entry: undefined }],
+        });
     const publishDelta = await withReadySessionRows(rowProjection, queries, (read) => {
       const currentSharing = readCurrentSharing(read);
       if (!currentSharing) {
@@ -335,6 +342,7 @@ export async function handleChatHistoryRequest({
             : buildGatewaySessionRow({
                 ...selectedSession,
                 key: canonicalKey,
+                preparedAcpMeta: unsavedAcpMeta ?? null,
                 modelCatalog: sessionModelCatalog,
                 rowContext: rowProjection.state.rowContext,
               })),
@@ -600,7 +608,6 @@ export async function handleChatHistoryRequest({
 
 export const chatHistoryHandlers: GatewayRequestHandlers = {
   "chat.history": (opts) => handleChatHistoryRequest({ ...opts, method: "chat.history" }),
-  "chat.startup": (opts) =>
-    handleChatStartupRequest(opts, handleChatHistoryRequest, respondChatHistoryUnavailable),
+  "chat.startup": (opts) => handleChatStartupRequest(opts, handleChatHistoryRequest),
   "chat.metadata": handleChatMetadataRequest,
 };

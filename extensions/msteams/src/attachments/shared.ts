@@ -116,10 +116,8 @@ const GRAPH_SHARED_LINK_HOST_SUFFIXES = [
 ] as const;
 
 function isGraphSharedLinkUrl(url: string): boolean {
-  let parsed: URL;
-  try {
-    parsed = new URL(url);
-  } catch {
+  const parsed = URL.parse(url);
+  if (!parsed) {
     return false;
   }
   const host = normalizeLowercaseStringOrEmpty(parsed.hostname);
@@ -255,13 +253,7 @@ export function extractHtmlFromAttachment(att: MSTeamsAttachmentLike): string | 
 }
 
 function fileHintFromUrl(src: string): string | undefined {
-  try {
-    const url = new URL(src);
-    const name = url.pathname.split("/").pop();
-    return name || undefined;
-  } catch {
-    return undefined;
-  }
+  return URL.parse(src)?.pathname.split("/").pop() || undefined;
 }
 
 export function extractInlineImageReferences(
@@ -309,11 +301,8 @@ export function extractInlineImageReferences(
 }
 
 export function safeHostForUrl(url: string): string {
-  try {
-    return normalizeLowercaseStringOrEmpty(new URL(url).hostname);
-  } catch {
-    return "invalid-url";
-  }
+  const parsed = URL.parse(url);
+  return parsed ? normalizeLowercaseStringOrEmpty(parsed.hostname) : "invalid-url";
 }
 
 export type MSTeamsAttachmentFetchPolicy = {
@@ -493,10 +482,8 @@ export async function safeFetchWithPolicy(params: {
     return res;
   }
 
-  let redirectUrl: string;
-  try {
-    redirectUrl = new URL(location, currentUrl).toString();
-  } catch {
+  const redirectUrl = URL.parse(location, currentUrl)?.toString();
+  if (!redirectUrl) {
     throw new Error(`Invalid redirect URL: ${location}`);
   }
 

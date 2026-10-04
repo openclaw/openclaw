@@ -20,19 +20,21 @@ import { runAgentHarnessBeforeAgentFinalizeHook } from "./lifecycle-hook-helpers
 import {
   nativeHookRelayParamsWereRewritten,
   normalizeNativeHookToolName,
+  readCodexToolInput,
+  readCodexToolResponse,
   readNativeHookRelayApprovalMode,
 } from "./native-hook-relay-codec.js";
 import {
   runNativeHookRelayPermissionRequest,
   setNativeHookRelayPreToolUseApproval,
 } from "./native-hook-relay-permissions.js";
+import { codexNativeHookRelayResponseCodec } from "./native-hook-relay-response-codec.js";
 import type {
   ActiveNativeHookRelayRegistration,
   NativeHookRelayEvent,
   NativeHookRelayExecutionAdmission,
   NativeHookRelayInvocation,
   NativeHookRelayProcessResponse,
-  NativeHookRelayProviderAdapter,
   NativeHookRelayRegistration,
 } from "./native-hook-relay-types.js";
 import { createAgentToolResultMiddlewareRunner } from "./tool-result-middleware.js";
@@ -122,7 +124,6 @@ export function nativeHookRelayEventToolMatcher(
 export async function processNativeHookRelayInvocation(params: {
   registration: NativeHookRelayRegistration;
   invocation: NativeHookRelayInvocation;
-  adapter: NativeHookRelayProviderAdapter;
   executionAdmission?: NativeHookRelayExecutionAdmission;
   assertExecutionAdmissionCurrent: () => void;
 }): Promise<NativeHookRelayProcessResponse> {
@@ -142,7 +143,7 @@ async function runNativeHookRelayPreToolUse(
   params: Parameters<typeof processNativeHookRelayInvocation>[0],
 ): Promise<NativeHookRelayProcessResponse> {
   const toolName = normalizeNativeHookToolName(params.invocation.toolName);
-  const toolInput = params.adapter.readToolInput(params.invocation.rawPayload);
+  const toolInput = readCodexToolInput(params.invocation.rawPayload);
   const originalToolInputFingerprint = stableStringify(toolInput);
   const approvalMode = readNativeHookRelayApprovalMode(params.invocation.rawPayload);
   const policyRequest = {
@@ -185,7 +186,7 @@ async function runNativeHookRelayPreToolUse(
     throw error;
   }
   if (outcome.blocked) {
-    return params.adapter.renderPreToolUseBlockResponse(
+    return codexNativeHookRelayResponseCodec.renderPreToolUseBlockResponse(
       outcome.reason,
       outcome.kind === "failure" && outcome.disposition !== "blocked"
         ? outcome.disposition
@@ -197,7 +198,7 @@ async function runNativeHookRelayPreToolUse(
     nativeHookRelayParamsWereRewritten(originalToolInputFingerprint, outcome.params)
   ) {
     // Native execution must not retain custody of rewritten inputs it will not use.
-    return params.adapter.renderPreToolUseBlockResponse(
+    return codexNativeHookRelayResponseCodec.renderPreToolUseBlockResponse(
       "OpenClaw tool policy rewrote Codex app-server approval params; refusing original request.",
     );
   }
@@ -223,7 +224,7 @@ async function runNativeHookRelayPreToolUse(
         if (outcome.deferredApproval) {
           cancelDeferredPluginToolApproval(outcome.deferredApproval);
         }
-        return params.adapter.renderPreToolUseBlockResponse(refusal);
+        return codexNativeHookRelayResponseCodec.renderPreToolUseBlockResponse(refusal);
       }
     }
   } catch (error) {
@@ -242,12 +243,12 @@ async function runNativeHookRelayPreToolUse(
       })
     ) {
       cancelDeferredPluginToolApproval(outcome.deferredApproval);
-      return params.adapter.renderPreToolUseBlockResponse(
+      return codexNativeHookRelayResponseCodec.renderPreToolUseBlockResponse(
         "Plugin approval required but Codex tool id unavailable.",
       );
     }
   }
-  return params.adapter.renderNoopResponse(params.invocation.event);
+  return codexNativeHookRelayResponseCodec.renderNoopResponse();
 }
 
 async function runNativeHookRelayPostToolUse(
@@ -256,8 +257,8 @@ async function runNativeHookRelayPostToolUse(
   const toolName = normalizeNativeHookToolName(params.invocation.toolName);
   const toolCallId =
     params.invocation.toolUseId ?? `${params.invocation.event}:${params.invocation.receivedAt}`;
-  const startArgs = params.adapter.readToolInput(params.invocation.rawPayload);
-  const rawResult = params.adapter.readToolResponse(params.invocation.rawPayload);
+  const startArgs = readCodexToolInput(params.invocation.rawPayload);
+  const rawResult = readCodexToolResponse(params.invocation.rawPayload);
   // Native results are observe-only for middleware: codex-rs PostToolUse hooks
   // cannot replace tool_response (PostToolUseOutcome has no result field), so a
   // transformed result reaches only after_tool_call observers, never the model.
@@ -289,7 +290,7 @@ async function runNativeHookRelayPostToolUse(
     startArgs,
     result,
   });
-  return params.adapter.renderNoopResponse(params.invocation.event);
+  return codexNativeHookRelayResponseCodec.renderNoopResponse();
 }
 
 async function runNativeHookRelayBeforeAgentFinalize(
@@ -323,10 +324,12 @@ async function runNativeHookRelayBeforeAgentFinalize(
     },
   });
   if (outcome.action === "revise") {
-    return params.adapter.renderBeforeAgentFinalizeReviseResponse(outcome.reason);
+    return codexNativeHookRelayResponseCodec.renderBeforeAgentFinalizeReviseResponse(
+      outcome.reason,
+    );
   }
   if (outcome.action === "finalize") {
-    return params.adapter.renderBeforeAgentFinalizeStopResponse(outcome.reason);
+    return codexNativeHookRelayResponseCodec.renderBeforeAgentFinalizeStopResponse(outcome.reason);
   }
-  return params.adapter.renderNoopResponse(params.invocation.event);
+  return codexNativeHookRelayResponseCodec.renderNoopResponse();
 }

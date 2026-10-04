@@ -72,10 +72,7 @@ const DESCRIPTOR_LABEL_ACRONYMS: ReadonlyMap<string, string> = new Map([
   ["sso", "SSO"],
 ] as const);
 
-function resolveProviderAuthChoiceOriginPriority(origin: PluginOrigin | undefined): number {
-  if (!origin) {
-    return Number.MAX_SAFE_INTEGER;
-  }
+function resolveProviderAuthChoiceOriginPriority(origin: PluginOrigin): number {
   return PROVIDER_AUTH_CHOICE_ORIGIN_PRIORITY[origin] ?? Number.MAX_SAFE_INTEGER;
 }
 

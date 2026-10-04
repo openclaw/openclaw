@@ -33,7 +33,7 @@ vi.mock("../../infra/system-events.js", () => ({
 const { createGatewayHooksRequestHandler } = await import("./hooks.js");
 
 const config: OpenClawConfig = {
-  agents: { entries: { main: { default: true } } },
+  agents: { entries: { main: {} } },
   hooks: {
     enabled: true,
     token: "hook-secret",
@@ -119,6 +119,70 @@ describe("hook background admission", () => {
     const body = JSON.parse(response.body()) as { runIds?: string[] };
     expect(body.runIds).toHaveLength(2);
     expect(mocks.runCronIsolatedAgentTurn).toHaveBeenCalledTimes(2);
+  });
+
+  it("announces a pre-execution fan-out failure once across producer redeliveries", async () => {
+    mocks.getRuntimeConfig.mockReturnValue(config);
+    mocks.runCronIsolatedAgentTurn.mockResolvedValue({
+      status: "skipped" as const,
+      error: "model provider unavailable",
+      admissionDisposition: "rejected" as const,
+    });
+    const handler = createHandler(100);
+    const redelivered = { messages: [{ id: "alert1", from: "a@example.com", subject: "Alert" }] };
+
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const response = await post(handler, "/hooks/gmail", redelivered);
+      expect(response.res.statusCode).toBe(502);
+    }
+    await post(handler, "/hooks/gmail", {
+      messages: [{ id: "alert2", from: "b@example.com", subject: "Other" }],
+    });
+
+    expect(mocks.runCronIsolatedAgentTurn).toHaveBeenCalledTimes(4);
+    expect(mocks.enqueueSystemEvent.mock.calls.map(([text]) => text)).toEqual([
+      "Hook Gmail (skipped): model provider unavailable",
+      "Hook Gmail (skipped): model provider unavailable",
+    ]);
+
+    const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 5 * 60_000 + 1);
+    try {
+      expect((await post(handler, "/hooks/gmail", redelivered)).res.statusCode).toBe(502);
+      expect(mocks.runCronIsolatedAgentTurn).toHaveBeenCalledTimes(5);
+      expect(mocks.enqueueSystemEvent.mock.calls.map(([text]) => text)).toEqual([
+        "Hook Gmail (skipped): model provider unavailable",
+        "Hook Gmail (skipped): model provider unavailable",
+        "Hook Gmail (skipped): model provider unavailable",
+      ]);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it("announces an execution failure after an earlier redelivery failed admission", async () => {
+    mocks.getRuntimeConfig.mockReturnValue(config);
+    mocks.runCronIsolatedAgentTurn
+      .mockResolvedValueOnce({
+        status: "skipped" as const,
+        error: "model provider unavailable",
+        admissionDisposition: "rejected" as const,
+      })
+      .mockImplementationOnce(async (params: { onExecutionStarted?: () => void }) => {
+        params.onExecutionStarted?.();
+        return { status: "error" as const, error: "execution failed" };
+      });
+    const handler = createHandler(100);
+    const redelivered = { messages: [{ id: "alert3", from: "c@example.com", subject: "Alert" }] };
+
+    expect((await post(handler, "/hooks/gmail", redelivered)).res.statusCode).toBe(502);
+    expect((await post(handler, "/hooks/gmail", redelivered)).res.statusCode).toBe(200);
+
+    await vi.waitFor(() =>
+      expect(mocks.enqueueSystemEvent.mock.calls.map(([text]) => text)).toEqual([
+        "Hook Gmail (skipped): model provider unavailable",
+        "Hook Gmail (error): execution failed",
+      ]),
+    );
   });
 
   it("keeps the bounded admission cancel for direct agent hooks", async () => {

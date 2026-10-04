@@ -2,7 +2,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { sha256Hex } from "./crypto-digest.js";
 import type { ExecCommandSegment } from "./exec-approvals-analysis.js";
-// Binds system-run approval requests to stable command identities.
 import type {
   SystemRunApprovalBinding,
   SystemRunApprovalFileOperand,
@@ -41,7 +40,7 @@ function normalizeSystemRunEnvEntries(env: unknown): NormalizedSystemRunEnvEntry
     return [];
   }
   const entries: NormalizedSystemRunEnvEntry[] = [];
-  for (const [rawKey, rawValue] of Object.entries(env as Record<string, unknown>)) {
+  for (const [rawKey, rawValue] of Object.entries(env)) {
     if (typeof rawValue !== "string") {
       continue;
     }
@@ -185,17 +184,10 @@ export function toSystemRunApprovalMismatchError(params: {
   runId: string;
   match: SystemRunApprovalMismatch;
 }): { ok: false; message: string; details: Record<string, unknown> } {
-  const details: Record<string, unknown> = {
-    code: params.match.code,
-    runId: params.runId,
-  };
-  if (params.match.details) {
-    Object.assign(details, params.match.details);
-  }
   return {
     ok: false,
     message: params.match.message,
-    details,
+    details: Object.assign({ code: params.match.code, runId: params.runId }, params.match.details),
   };
 }
 

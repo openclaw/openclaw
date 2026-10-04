@@ -101,54 +101,68 @@ describe("Desktop observe abandonment", () => {
     },
   );
 
-  it("retains a credential-waiting observation until the panel closes", async () => {
-    const request = desktopRequests({ ...observed, auth: "vnc-password", preauthenticated: false });
-    const connect = vi.fn(async () => createConnectionHandle());
-    const panel = await openPanel(request, connect);
-    await waitForFast(() =>
-      expect(panel.renderRoot.querySelector(".desktop-credentials")).not.toBeNull(),
-    );
-    expect(request.mock.calls.some(([method]) => method === "desktop.release")).toBe(false);
-    panel.presented = false;
-    await panel.updateComplete;
-    panel.remove();
-    await settleTasks();
-
-    expect(request.mock.calls.filter(([method]) => method === "desktop.release")).toEqual([
-      ["desktop.release", { wsPath: observed.wsPath }],
-    ]);
-    expect(connect).not.toHaveBeenCalled();
-  });
-
-  it.each(["pending", "returned"] as const)(
-    "releases before RFB authentication while the connection handle is %s",
-    async (handleState) => {
+  it.each(["credentials", "pending", "returned", "authenticated"] as const)(
+    "abandons only unauthenticated observations when hidden at the %s stage",
+    async (stage) => {
       const result = createDeferred<DesktopConnectionHandle>();
       const handle = createConnectionHandle();
-      const request = desktopRequests(observed);
-      const connect = vi.fn(async () => result.promise);
+      const request = desktopRequests(
+        stage === "credentials"
+          ? { ...observed, auth: "vnc-password", preauthenticated: false }
+          : observed,
+      );
+      const connect = vi.fn(async (options: Parameters<DesktopClient["connect"]>[0]) => {
+        if (stage === "authenticated") {
+          options.onConnect?.();
+        }
+        return stage === "authenticated" || stage === "credentials" ? handle : result.promise;
+      });
       const panel = await openPanel(request, connect);
       try {
-        await waitForFast(() => expect(connect).toHaveBeenCalledOnce());
-        if (handleState === "returned") {
-          result.resolve(handle);
+        if (stage === "credentials") {
+          await waitForFast(() =>
+            expect(panel.renderRoot.querySelector(".desktop-credentials")).not.toBeNull(),
+          );
+        } else {
+          await waitForFast(() => expect(connect).toHaveBeenCalledOnce());
+          if (stage === "returned") {
+            result.resolve(handle);
+          }
           await settleTasks();
         }
         expect(request.mock.calls.some(([method]) => method === "desktop.release")).toBe(false);
         panel.presented = false;
         await panel.updateComplete;
-        await settleTasks();
-
-        expect(request.mock.calls.filter(([method]) => method === "desktop.release")).toEqual([
-          ["desktop.release", { wsPath: observed.wsPath }],
-        ]);
-        result.resolve(handle);
-        await settleTasks();
-        expect(handle.disconnect).toHaveBeenCalledOnce();
+        if (stage === "authenticated") {
+          expect(handle.disconnect).not.toHaveBeenCalled();
+          panel.presented = true;
+          await panel.updateComplete;
+          await settleTasks();
+          expect(connect).toHaveBeenCalledOnce();
+        } else {
+          await settleTasks();
+          expect(request.mock.calls.filter(([method]) => method === "desktop.release")).toEqual([
+            ["desktop.release", { wsPath: observed.wsPath }],
+          ]);
+          result.resolve(handle);
+          await settleTasks();
+          if (stage !== "credentials") {
+            expect(handle.disconnect).toHaveBeenCalledOnce();
+          }
+        }
         panel.remove();
-        expect(request.mock.calls.filter(([method]) => method === "desktop.release")).toHaveLength(
-          1,
-        );
+        await settleTasks();
+        if (stage === "authenticated") {
+          expect(handle.disconnect).toHaveBeenCalledOnce();
+          expect(request.mock.calls.some(([method]) => method === "desktop.release")).toBe(false);
+        } else {
+          expect(request.mock.calls.filter(([method]) => method === "desktop.release")).toEqual([
+            ["desktop.release", { wsPath: observed.wsPath }],
+          ]);
+          if (stage === "credentials") {
+            expect(connect).not.toHaveBeenCalled();
+          }
+        }
       } finally {
         result.resolve(handle);
         panel.remove();
@@ -156,26 +170,4 @@ describe("Desktop observe abandonment", () => {
       }
     },
   );
-
-  it("keeps an authenticated viewer across a short hide without abandoning its observation", async () => {
-    const handle = createConnectionHandle();
-    const request = desktopRequests(observed);
-    const connect = vi.fn(async (options: Parameters<DesktopClient["connect"]>[0]) => {
-      options.onConnect?.();
-      return handle;
-    });
-    const panel = await openPanel(request, connect);
-    await waitForFast(() => expect(connect).toHaveBeenCalledOnce());
-    await settleTasks();
-    panel.presented = false;
-    await panel.updateComplete;
-    expect(handle.disconnect).not.toHaveBeenCalled();
-    panel.presented = true;
-    await panel.updateComplete;
-    await settleTasks();
-    expect(connect).toHaveBeenCalledOnce();
-    panel.remove();
-    expect(handle.disconnect).toHaveBeenCalledOnce();
-    expect(request.mock.calls.some(([method]) => method === "desktop.release")).toBe(false);
-  });
 });

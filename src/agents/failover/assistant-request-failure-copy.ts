@@ -10,6 +10,7 @@ import { isContextOverflowErrorFromTables } from "./context-overflow-tables.js";
 import {
   isServerErrorMessage,
   isSessionTranscriptValidationErrorMessage,
+  resolveExecutionApprovalFailureMessage,
 } from "./message-patterns.js";
 import { extractFailoverSignalDetails } from "./signal-details.js";
 import type { FailoverReason } from "./signal.js";
@@ -50,6 +51,14 @@ const STORAGE_FAILURE_COPY: Record<GatewayStorageFailure, string> = {
     "OpenClaw couldn't save your conversation. Check the storage on the computer running OpenClaw before continuing.",
   transcript_writer_fenced:
     "This conversation changed while OpenClaw was working. Check its latest messages before continuing.",
+};
+
+const RUNTIME_COORDINATION_FAILURE_CODE_COPY: Readonly<Record<string, string>> = {
+  codex_node_disconnected: "Codex execution node disconnected. Start a fresh attempt.",
+  node_runner_update_required:
+    "The device worker requires an update before it can host sessions. Run `openclaw update`, reconnect it, then run `openclaw node restart` on a headless node before trying again.",
+  "runner-offline":
+    "The device runner is offline. Reconnect it, retry later, or bring the session back to this gateway.",
 };
 
 const ASSISTANT_REQUEST_FAILURE_COPY = {
@@ -106,6 +115,12 @@ export function renderAssistantRequestFailureCopy(
   return `⚠️ OpenClaw couldn't finish this reply. ${ERROR_DETAILS_HINT}`;
 }
 
+/** Render already-classified coordination facts without loading provider runtime. */
+export function renderRuntimeCoordinationFailureCopy(code: string | undefined): string | undefined {
+  const copy = code ? RUNTIME_COORDINATION_FAILURE_CODE_COPY[code] : undefined;
+  return copy ? `⚠️ ${copy}` : undefined;
+}
+
 /** Surface bounded rejection facts without arbitrary provider-controlled text. */
 export function renderFormatErrorCopy(raw: string): string {
   const trimmed = raw.trim();
@@ -115,13 +130,10 @@ export function renderFormatErrorCopy(raw: string): string {
   if (isSessionTranscriptValidationErrorMessage(candidate)) {
     return GATEWAY_SESSION_TRANSCRIPT_VALIDATION_USER_TEXT;
   }
-  const cacheLimit = candidate.match(PROVIDER_CACHE_CONTROL_LIMIT_RE);
-  if (cacheLimit) {
+  if (PROVIDER_CACHE_CONTROL_LIMIT_RE.test(candidate)) {
     return "The AI service couldn't accept this conversation. Start a new conversation with /new, or choose another model in the Control UI.";
   }
-  const match = candidate.length <= 300 ? candidate.match(PROVIDER_OUTPUT_TOKEN_LIMIT_RE) : null;
-  const [, value, maximum] = match ?? [];
-  if (!value || !maximum) {
+  if (candidate.length > 300 || !PROVIDER_OUTPUT_TOKEN_LIMIT_RE.test(candidate)) {
     return PROVIDER_SCHEMA_REJECTION_USER_TEXT;
   }
   return "The reply length is set too high for this model. Lower its reply limit in the Control UI settings, or choose another model.";
@@ -160,6 +172,12 @@ export function renderRecordedAssistantFailureCopy(message: {
   errorCode?: unknown;
   errorType?: unknown;
 }): string | undefined {
+  const approvalMessage = resolveExecutionApprovalFailureMessage(
+    typeof message.errorMessage === "string" ? message.errorMessage : undefined,
+  );
+  if (approvalMessage) {
+    return `⚠️ ${approvalMessage}`;
+  }
   const formatCopy = renderAssistantFormatFailureCopy(message);
   if (formatCopy) {
     return formatCopy;

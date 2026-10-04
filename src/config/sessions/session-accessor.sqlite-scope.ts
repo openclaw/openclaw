@@ -335,19 +335,16 @@ function resolveCachedSqliteStoreTarget(
   },
   targetCache: SessionSqliteTargetResolutionCache | undefined,
 ): ReturnType<typeof resolveSqliteTargetFromSessionStorePath> {
-  if (!targetCache) {
-    return resolveSqliteTargetFromSessionStorePath(params.storePath, {
-      agentId: params.agentId,
-      defaultAgentId: params.defaultAgentId,
-      ...(params.env ? { env: params.env } : {}),
-    });
-  }
   // Store ownership is stable for this batch. Scope the cache to the caller so later requests
   // still observe owner changes after migration, install, or doctor flows.
-  const envCache = targetCache.get(params.env) ?? new Map();
-  targetCache.set(params.env, envCache);
-  const cacheKey = JSON.stringify([params.storePath, params.agentId, params.defaultAgentId]);
-  const cached = envCache.get(cacheKey);
+  const envCache = targetCache && (targetCache.get(params.env) ?? new Map());
+  if (envCache) {
+    targetCache?.set(params.env, envCache);
+  }
+  const cacheKey = envCache
+    ? JSON.stringify([params.storePath, params.agentId, params.defaultAgentId])
+    : "";
+  const cached = envCache?.get(cacheKey);
   if (cached) {
     return cached;
   }
@@ -356,7 +353,7 @@ function resolveCachedSqliteStoreTarget(
     defaultAgentId: params.defaultAgentId,
     ...(params.env ? { env: params.env } : {}),
   });
-  envCache.set(cacheKey, resolved);
+  envCache?.set(cacheKey, resolved);
   return resolved;
 }
 

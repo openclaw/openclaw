@@ -153,6 +153,19 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
     calls without fast mode. The cutoff defaults to 60 seconds; set
     `params.fastAutoOnSeconds` on the active model to change it.
 
+    For the embedded OpenClaw runtime, available API-key OpenAI Responses
+    routes that support Fast mode offer Standard, Fast, and Ultrafast in the
+    Control UI without requiring a catalog to advertise the tier, whether the
+    key comes from an auth profile, environment, or provider config (including
+    SecretRefs). If a response
+    to an Ultrafast request echoes a different `service_tier`, OpenClaw records
+    the downgrade for that selected credential, model, and route and removes
+    Ultrafast from later model-list results. Profile observations clear when
+    account discovery refreshes or credentials change; direct-key observations
+    clear when their configured binding changes. Both clear when the prepared
+    runtime retires. ChatGPT-account
+    availability remains based on authenticated account catalog discovery.
+
     ```json5
     {
       agents: {
@@ -215,9 +228,9 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
     <Warning>
     `params.serviceTier` is an authored embedded-provider setting, not native
     Codex app-server configuration. It is forwarded only by the embedded
-    runtime to native OpenAI endpoints (`api.openai.com`) and native ChatGPT
-    endpoints (`chatgpt.com/backend-api`). If you route either provider through
-    a proxy, OpenClaw leaves `service_tier` untouched. Configure the native
+    runtime on OpenAI Responses routes, including compatible base URLs, and native
+    ChatGPT endpoints (`chatgpt.com/backend-api`). Compatible endpoints must honor
+    the requested tier; a saved preference does not guarantee fulfillment. Configure the native
     harness separately with `plugins.entries.codex.config.appServer.serviceTier`;
     the shared Fast-mode run control can supersede that value.
     </Warning>
@@ -387,6 +400,8 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
     `strict: false`. Debug logs report the downgrade under `openai-transport`,
     with a bounded sample of incompatible tools. Built-in and managed Responses
     requests share duplicate suppression for the same model and schemas.
+    Compatibility checks inspect schema constraints, not literal names in schema maps
+    or annotation data such as examples and defaults.
 
   </Accordion>
 </AccordionGroup>

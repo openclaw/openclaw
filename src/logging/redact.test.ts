@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withEnv } from "../test-utils/env.js";
 import { replacePatternBounded } from "./redact-bounded.js";
+import { replaceRedactPattern } from "./redact-pattern-runtime.js";
 import { TOOL_PAYLOAD_AMBIGUOUS_ASSIGNMENT_PATTERNS } from "./redact-patterns.js";
 import { redactSourceInputTextWithConfig } from "./redact-source.js";
 import {
@@ -46,34 +47,45 @@ afterEach(() => {
 });
 
 describe("bounded replacement output", () => {
+  const firstChunk = "a".repeat(16_384);
+  const remainingChunks = "b".repeat(16_384) + "c".repeat(16_384);
   it.each<[RegExp, string, string]>([
-    [/none/g, "blue", "aaaabbbbcccc"],
-    [/aaaa/g, "", "bbbbcccc"],
+    [/none/g, "blue", firstChunk + remainingChunks],
+    [/a+/g, "", remainingChunks],
   ])("preserves complete output for %s", (pattern, replacement, expected) => {
-    expect(
-      replacePatternBounded("aaaabbbbcccc", pattern, () => replacement, {
-        chunkThreshold: 4,
-        chunkSize: 4,
-      }),
-    ).toBe(expected);
+    expect(replacePatternBounded(firstChunk + remainingChunks, pattern, () => replacement)).toBe(
+      expected,
+    );
   });
 
   it("keeps calling a stateful replacer after unchanged results", () => {
     const calls: Array<{ match: string; offset: number; input: string }> = [];
-    const output = replacePatternBounded(
-      "red red red",
-      /red/g,
-      (match, offset, input) => {
-        calls.push({ match, offset, input });
-        return calls.length === 3 ? "blue" : match;
-      },
-      { chunkThreshold: 4, chunkSize: 4 },
-    );
+    const chunk = "red" + " ".repeat(16_384 - 3);
+    const output = replacePatternBounded(chunk + chunk + "red", /red/g, (match, offset, input) => {
+      calls.push({ match, offset, input });
+      return calls.length === 3 ? "blue" : match;
+    });
+    expect(output).toBe(chunk + chunk + "blue");
+    expect(calls).toEqual([
+      { match: "red", offset: 0, input: chunk },
+      { match: "red", offset: 0, input: chunk },
+      { match: "red", offset: 0, input: "red" },
+    ]);
+  });
+});
+
+describe("whole-text rule replacement", () => {
+  it("applies replacements across the full text through the production owner", () => {
+    const calls: Array<{ match: string; offset: number; input: string }> = [];
+    const output = replaceRedactPattern("red red red", /red/g, (match) => {
+      calls.push({ match: match.match, offset: match.offset, input: match.input });
+      return calls.length === 3 ? "blue" : match.match;
+    });
     expect(output).toBe("red red blue");
     expect(calls).toEqual([
-      { match: "red", offset: 0, input: "red " },
-      { match: "red", offset: 0, input: "red " },
-      { match: "red", offset: 0, input: "red" },
+      { match: "red", offset: 0, input: "red red red" },
+      { match: "red", offset: 4, input: "red red red" },
+      { match: "red", offset: 8, input: "red red red" },
     ]);
   });
 });
@@ -735,6 +747,21 @@ describe("redactSensitiveText", () => {
     );
   });
 
+  it("keeps long URL credentials reachable through the default prefilter", () => {
+    const longPassword = "a".repeat(600);
+    const longUsername = "u".repeat(600);
+    for (const input of [
+      `https://u:${longPassword}@example.test`,
+      `https://${longUsername}:opaque-password-value-123@example.test`,
+      `postgres://u:${longPassword}@example.test/db`,
+    ]) {
+      const output = redactSensitiveText(input);
+      expect(output).not.toBe(input);
+      expect(output).not.toContain(longPassword);
+      expect(output).not.toContain("opaque-password-value-123");
+    }
+  });
+
   it("masks sensitive form-urlencoded body fields by exact key", () => {
     const input =
       "code=oauth-code-123&hook_token=hook-token-123&jwt=jwt-secret-123&pass=form-pass-123&client_secret=oauth-client-secret-1234567890&refresh_token=refresh-token-1234567890&token_count=42&session_id=session-visible";
@@ -895,7 +922,7 @@ describe("redactSensitiveText", () => {
     expect(output).toBe(input);
   });
 
-  it("masks Telegram bot tokens that cross bounded-replacement chunk boundaries", () => {
+  it("masks Telegram bot tokens placed across former chunk boundaries", () => {
     const chunkSize = 16_384;
     const credential = `123456:${"A".repeat(28)}WXYZ`;
     const cases = [
@@ -913,10 +940,9 @@ describe("redactSensitiveText", () => {
     }
   });
 
-  it("does not corrupt large data URLs across chunked replacement boundaries", () => {
-    // replacePatternBounded slices 32 KiB+ inputs into 16 KiB chunks; a chunk start must not
-    // satisfy the pure-base64 prefix boundary (`^`) or hide the `;base64,` container from its
-    // lookbehind, so the boundary patterns run unchunked.
+  it("keeps large data URLs unredacted across former chunk boundaries", () => {
+    // Whole-text matching keeps the data-URL exemption: a `;base64,` container immediately
+    // before a base64-safe token start must still suppress the boundary rules.
     const prefix = "data:application/octet-stream;base64,";
     const chunkSize = 16_384;
     const pad = "A".repeat(chunkSize * 2 - prefix.length);
@@ -945,6 +971,18 @@ describe("redactSensitiveText", () => {
         mode: "tools",
       }),
     ).toBe("body: client_se\u3164cret\u3164=***&safe=1");
+  });
+
+  it("keeps arbitrarily padded sensitive keys reachable through the default prefilter", () => {
+    for (const key of [
+      `p\u200Bassword${"\u200B".repeat(600)}`,
+      `p%61ssword${"\u200B".repeat(600)}`,
+      `p+assword${"\u200B".repeat(600)}`,
+    ]) {
+      const input = `${key}=opaque-value-123`;
+      const output = redactSensitiveText(input, { mode: "tools" });
+      expect(output).not.toContain("opaque-value-123");
+    }
   });
 
   it("redacts raw secret values that contain an ellipsis", () => {

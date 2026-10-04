@@ -7,6 +7,8 @@ import {
 import { AgentHarnessPreflightError } from "../../agents/harness/errors.js";
 import { resolveReplyCompletion } from "../../agents/reply-completion.js";
 import { WorkerTaskError } from "../../infra/worker-task-pool.js";
+import { SkillResourceDeliveryLimitError } from "../../skills/runtime/resource-delivery-error.js";
+import { SkillLibraryError } from "../../skills/skill-library-error.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import {
@@ -48,6 +50,41 @@ describe("buildEmptyInteractiveReplyPayload", () => {
 });
 
 describe("buildExternalRunFailureReply", () => {
+  it.each(["direct", "wrapped"])(
+    "keeps %s skill delivery-limit guidance visible without diagnostics",
+    (kind) => {
+      const limit = new SkillResourceDeliveryLimitError();
+      const error =
+        kind === "direct" ? limit : new Error("private-diagnostic-canary", { cause: limit });
+      const reply = buildExternalRunFailureReply({ message: error.message, error });
+      expect(reply).toEqual({
+        text: "⚠️ Selected skill resources exceed the 8 MiB delivery limit. Select fewer skills, then try again.",
+        isGenericRunnerFailure: false,
+      });
+      expect(
+        buildKnownAgentRunFailureReplyPayload({
+          err: error,
+          sessionCtx: { Provider: "webchat", Surface: "webchat", ChatType: "direct" },
+          resolvedVerboseLevel: "off",
+        }),
+      ).toMatchObject({ text: reply.text, isError: true });
+    },
+  );
+
+  it.each([
+    new Error(new SkillResourceDeliveryLimitError().message),
+    Object.assign(new Error("private-diagnostic-canary"), {
+      name: "SkillResourceDeliveryLimitError",
+    }),
+    new SkillLibraryError("LIMIT", "private-skill-path-canary"),
+    new SkillLibraryError("INVALID_BUNDLE", "private-skill-path-canary"),
+  ])("does not expose untyped or unrelated skill failures: %s", (error) => {
+    expect(buildExternalRunFailureReply({ message: error.message, error })).toEqual({
+      text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+      isGenericRunnerFailure: true,
+    });
+  });
+
   it("does not expose a foreign error's userMessage property", () => {
     const error = Object.assign(new Error("private-diagnostic-canary"), {
       userMessage: "untrusted-public-canary",
@@ -66,6 +103,33 @@ describe("buildExternalRunFailureReply", () => {
       isGenericRunnerFailure: true,
     });
   });
+
+  it("uses typed runtime guidance without exposing the private diagnostic", () => {
+    const error = Object.assign(new Error("private runtime diagnostic"), {
+      code: "codex_node_disconnected",
+      name: "CodexNodeExecServerDisconnectedError",
+    });
+    expect(buildExternalRunFailureReply({ message: error.message, error })).toEqual({
+      text: "⚠️ Codex execution node disconnected. Start a fresh attempt.",
+      isGenericRunnerFailure: false,
+    });
+  });
+
+  it.each(["runner-offline", "node_runner_update_required", "codex_node_disconnected"])(
+    "does not trust provider code %s as runtime coordination provenance",
+    (code) => {
+      const error = new FailoverError("private provider diagnostic", {
+        code,
+        provider: "private-provider",
+        reason: "server_error",
+        status: 500,
+      });
+      expect(buildExternalRunFailureReply({ message: error.message, error })).toEqual({
+        text: "⚠️ The AI service is having trouble. Please try again in a moment.",
+        isGenericRunnerFailure: false,
+      });
+    },
+  );
 
   it("uses preserved format diagnostics without exposing raw details", () => {
     const message = "safe summary";

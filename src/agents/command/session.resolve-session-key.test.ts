@@ -334,7 +334,7 @@ describe("resolveSessionKeyForRequest", () => {
     const migrated = createCanonicalAgentConfigFixture({
       session: { store: "/stores/shared.sqlite" },
       agents: { entries: { main: { default: true }, research: {} } },
-    }).config as OpenClawConfig;
+    }).config;
     expect(migrated.agents?.defaults?.sessionStore?.agentId).toBe("main");
     const afterMainRemoval = {
       ...migrated,
@@ -533,7 +533,7 @@ describe("resolveSessionKeyForRequest", () => {
       hoisted.listAgentIdsMock.mockReturnValue(["ops", "research"]);
       mockSessionStores({});
       const cfg = retainLegacyDefaultAgentId(
-        {
+        createCanonicalAgentConfigFixture({
           session: { store: "/stores/{agentId}.json" },
           agents: {
             ...(ownership === "explicit"
@@ -541,7 +541,7 @@ describe("resolveSessionKeyForRequest", () => {
               : {}),
             entries: { ops: ownership === "explicit" ? {} : { default: true }, research: {} },
           },
-        },
+        }).config,
         "ops",
       );
 

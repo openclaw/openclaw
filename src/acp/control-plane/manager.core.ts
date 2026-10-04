@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { toErrorObject } from "../../infra/errors.js";
 import { recordSubagentTerminalState } from "../../sessions/subagent-terminal-state.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { AcpRuntimeError } from "../runtime/errors.js";
 import { runAcceptedManagerTurn, type AcceptedTurns } from "./manager.accepted-turns.js";
 import { cancelManagerAcceptedTurn, runManagerCancelSession } from "./manager.cancel-session.js";
@@ -378,7 +379,6 @@ export class AcpSessionManager {
           input: acceptedInput,
           acceptedTurn,
           ...target,
-          deps: this.deps,
           runtimeHandles: this.runtimeHandles,
           activeTurnBySession: this.activeTurnBySession,
           resolveSession: this.resolveSessionAsync.bind(this),
@@ -652,44 +652,29 @@ export class AcpSessionManager {
       return await queued;
     }
 
-    return await new Promise<T>((resolve, reject) => {
-      let settled = false;
-      const cleanup = () => {
-        signal.removeEventListener("abort", onAbort);
-      };
-      const settleValue = (value: T) => {
-        if (settled) {
-          return;
-        }
-        settled = true;
-        cleanup();
-        resolve(value);
-      };
-      const settleError = (error: unknown) => {
-        if (settled) {
-          return;
-        }
-        settled = true;
-        cleanup();
-        reject(toErrorObject(error, "Non-Error rejection"));
-      };
-      const onAbort = () => {
-        if (actorStarted) {
-          return;
-        }
-        try {
-          this.throwIfAborted(signal);
-        } catch (error) {
-          settleError(error);
-        }
-      };
-
-      signal.addEventListener("abort", onAbort, { once: true });
-      queued.then(settleValue, settleError);
-      if (signal.aborted) {
-        onAbort();
+    const outcome = createDeferredCore<T>();
+    const onAbort = () => {
+      if (actorStarted) {
+        return;
       }
-    });
+      try {
+        this.throwIfAborted(signal);
+      } catch (error) {
+        outcome.reject(error);
+      }
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    void queued.then(outcome.resolve, (error: unknown) =>
+      outcome.reject(toErrorObject(error, "Non-Error rejection")),
+    );
+    if (signal.aborted) {
+      onAbort();
+    }
+    try {
+      return await outcome.promise;
+    } finally {
+      signal.removeEventListener("abort", onAbort);
+    }
   }
 
   private throwIfAborted(signal?: AbortSignal): void {

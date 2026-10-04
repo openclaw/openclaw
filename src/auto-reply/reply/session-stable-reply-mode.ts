@@ -31,7 +31,7 @@ import { resolveSourceReplyDeliveryMode } from "./source-reply-delivery-mode.js"
 export function resolveSessionStableReplyMode(params: {
   cfg: OpenClawConfig;
   ctx: FinalizedMsgContext;
-  sessionEntry: SessionEntry;
+  sessionEntry?: SessionEntry;
   sessionAgentId: string;
   sessionKey?: string;
   sessionStore?: Record<string, SessionEntry>;
@@ -39,7 +39,7 @@ export function resolveSessionStableReplyMode(params: {
 }): SourceReplyDeliveryMode {
   const { cfg, ctx, sessionEntry } = params;
   const chatType =
-    normalizeChatType(ctx.ChatType) ?? normalizeChatType(sessionEntry.chatType) ?? undefined;
+    normalizeChatType(ctx.ChatType) ?? normalizeChatType(sessionEntry?.chatType) ?? undefined;
   // A targetless internal turn uses the session's established reply policy;
   // changing that policy on a wake would invalidate its reusable CLI binding.
   const stableReplyContext = {
@@ -84,29 +84,6 @@ export function resolveStableMessageToolAvailability(params: {
   sessionKey?: string;
 }): boolean {
   const { cfg, ctx, sessionEntry } = params;
-  const {
-    globalPolicy,
-    globalProviderPolicy,
-    agentPolicy,
-    agentProviderPolicy,
-    profile,
-    providerProfile,
-    profileAlsoAllow,
-    providerProfileAlsoAllow,
-  } = resolveEffectiveToolPolicy({
-    config: cfg,
-    sessionKey: params.sessionKey,
-    agentId: params.sessionAgentId,
-  });
-  // Match dispatch's runtimeProfileAlsoAllow; outer deny layers still apply.
-  const profilePolicy = mergeAlsoAllowPolicy(resolveToolProfilePolicy(profile), [
-    ...(profileAlsoAllow ?? []),
-    "message",
-  ]);
-  const providerProfilePolicy = mergeAlsoAllowPolicy(resolveToolProfilePolicy(providerProfile), [
-    ...(providerProfileAlsoAllow ?? []),
-    "message",
-  ]);
   // Bare command/wake contexts need the same persisted group/account facts as live dispatch.
   const groupPolicy = resolveGroupToolPolicy({
     config: cfg,
@@ -129,6 +106,45 @@ export function resolveStableMessageToolAvailability(params: {
       ctx.AccountId ??
       (sessionEntry ? deliveryContextFromSession(sessionEntry)?.accountId : undefined),
   });
+  return resolveReplyMessageToolAvailability({
+    ...params,
+    groupPolicy,
+    prefersMessageToolDelivery: true,
+  });
+}
+
+/** Applies the same profile, account, group, and delegation layers to every reply turn. */
+export function resolveReplyMessageToolAvailability(params: {
+  cfg: OpenClawConfig;
+  sessionAgentId: string;
+  sessionKey?: string;
+  groupPolicy: ReturnType<typeof resolveGroupToolPolicy>;
+  prefersMessageToolDelivery: boolean;
+}): boolean {
+  const { cfg, groupPolicy } = params;
+  const {
+    globalPolicy,
+    globalProviderPolicy,
+    agentPolicy,
+    agentProviderPolicy,
+    profile,
+    providerProfile,
+    profileAlsoAllow,
+    providerProfileAlsoAllow,
+  } = resolveEffectiveToolPolicy({
+    config: cfg,
+    sessionKey: params.sessionKey,
+    agentId: params.sessionAgentId,
+  });
+  const profileAlsoAllowed = params.prefersMessageToolDelivery ? ["message"] : [];
+  const profilePolicy = mergeAlsoAllowPolicy(resolveToolProfilePolicy(profile), [
+    ...(profileAlsoAllow ?? []),
+    ...profileAlsoAllowed,
+  ]);
+  const providerProfilePolicy = mergeAlsoAllowPolicy(resolveToolProfilePolicy(providerProfile), [
+    ...(providerProfileAlsoAllow ?? []),
+    ...profileAlsoAllowed,
+  ]);
   const subagentStore = resolveSubagentCapabilityStore(params.sessionKey, { cfg });
   const subagentPolicy =
     params.sessionKey && isSubagentEnvelopeSession(params.sessionKey, { cfg, store: subagentStore })

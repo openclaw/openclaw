@@ -12,6 +12,7 @@ import { enqueueCommandInLane, isCommandLaneTaskMarkerCurrent } from "../process
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { resolveAdmittedRunActiveAssertion } from "./admitted-run-context.js";
 import { resolveSessionLane } from "./embedded-agent-runner/lanes.js";
+import type { RunEmbeddedAgentInternalParams } from "./embedded-agent-runner/run/internal-params.js";
 import { resolveEmbeddedRunSessionLanePolicy } from "./embedded-agent-runner/run/lane-runtime.js";
 import type { RunEmbeddedAgentParams } from "./embedded-agent-runner/run/params.js";
 import type { EmbeddedAgentRunResult } from "./embedded-agent-runner/types.js";
@@ -36,7 +37,7 @@ export type LocalTurnPlacementClaim = {
   runId: string;
 };
 
-export type SessionPlacementTurnParams = RunEmbeddedAgentParams & { sessionFile: string };
+export type SessionPlacementTurnParams = RunEmbeddedAgentInternalParams & { sessionFile: string };
 
 type SessionPlacementSandboxParams = {
   agentId: string;
@@ -47,12 +48,17 @@ type SessionPlacementSandboxParams = {
 };
 
 export type SessionPlacementAdmissionProvider = {
-  resolveRuntimeOverride?: (identity: Omit<LocalTurnPlacementClaim, "runId">) => string | undefined;
+  resolveRuntimeOverride?: (
+    identity: Omit<LocalTurnPlacementClaim, "runId">,
+  ) => Promise<string | undefined>;
   assertCompactionSuccessorAllowed: (params: {
     currentTarget: SessionTranscriptRuntimeTarget;
     successorSessionId: string;
   }) => void;
-  recoverTerminalTurn?: (session: { sessionId: string; sessionKey?: string }) => string | undefined;
+  recoverTerminalTurn?: (
+    session: { sessionId: string; sessionKey?: string },
+    assertCurrent?: () => void,
+  ) => Promise<string | undefined>;
   executeLocalTurn: <T>(
     claim: LocalTurnPlacementClaim,
     runLocal: () => Promise<T>,
@@ -93,10 +99,15 @@ export function installSessionPlacementAdmissionProvider(
 }
 
 /** Carries placement-owned runtime selection into candidate preparation and execution. */
-export function resolveSessionPlacementRuntimeOverride(
+export async function resolveSessionPlacementRuntimeOverride(
   identity: Omit<LocalTurnPlacementClaim, "runId">,
-): string | undefined {
-  return state.provider?.resolveRuntimeOverride?.(identity);
+): Promise<string | undefined> {
+  const provider = state.provider;
+  const runtime = await provider?.resolveRuntimeOverride?.(identity);
+  if (state.provider !== provider) {
+    throw createAbortError("session placement owner changed during runtime selection");
+  }
+  return runtime;
 }
 
 /** Captures the exact placement owner, including standalone absence, before awaited work. */
@@ -312,9 +323,15 @@ export async function resolveSessionPlacementSandbox(
 }
 
 /** The current placement owner alone can settle a proven terminal worker turn. */
-export function recoverTerminalSessionPlacementTurn(session: {
-  sessionId: string;
-  sessionKey?: string;
-}): string | undefined {
-  return state.provider?.recoverTerminalTurn?.(session);
+export async function recoverTerminalSessionPlacementTurn(
+  session: { sessionId: string; sessionKey?: string },
+  assertCurrent?: () => void,
+): Promise<string | undefined> {
+  const provider = state.provider;
+  return await provider?.recoverTerminalTurn?.(session, () => {
+    assertCurrent?.();
+    if (state.provider !== provider) {
+      throw new Error("session placement owner changed during terminal recovery");
+    }
+  });
 }

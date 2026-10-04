@@ -54,7 +54,7 @@ function runExclusiveSharingMutation<T>(
 ): Promise<T> {
   // Sharing and lifecycle mutations share one exact-row fence so authorization
   // cannot change between archive's stop and commit boundaries.
-  return runExclusiveSessionLifecycleMutation({
+  return runExclusiveSessionLifecycleMutation("sharing", {
     scope: storePath,
     identities: [target.canonicalKey, target.storeKey, ...target.storeKeys, target.entry.sessionId],
     run,

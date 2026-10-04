@@ -171,7 +171,7 @@ describe("human mention directory", () => {
         } else if (change === "session visibility") {
           await f.setSession({ visibility: "draft" });
         } else {
-          f.inbox.dispose();
+          await f.inbox.dispose();
         }
         held.release();
         expect(await pending).toMatchObject({ ok: false, error: { code } });
@@ -208,8 +208,8 @@ describe("human mention directory", () => {
       expect(
         f.inbox.validateRecipients(f.aliceClient, { sessionKey: SESSION_KEY }, [f.bob.id]),
       ).toEqual({ ok: true, value: [f.bob.id] });
-      f.post();
-      expect(read(f.inbox, f.bobClient).items).toHaveLength(1);
+      await f.post();
+      expect((await read(f.inbox, f.bobClient)).items).toHaveLength(1);
       syncGitHubIdentity({
         identity: { accountId: 42, login: "robert-new" },
         authenticationAlias: { kind: "email", email: "bob@mentions.example.test" },
@@ -323,11 +323,11 @@ describe("human mention directory", () => {
           throw new Error("Invalid mention directory response");
         }
         const admission = f.inbox.validateRecipients(f.aliceClient, { sessionKey }, [f.bob.id]);
-        f.post("policy-source", { sessionKey, sessionId });
+        await f.post("policy-source", { sessionKey, sessionId });
         expect({
           users: directory.payload.users.map((user) => [user.profileId, user.online]),
           accepted: admission.ok,
-          inboxKeys: read(f.inbox, f.bobClient).items.map((item) => item.sessionKey),
+          inboxKeys: (await read(f.inbox, f.bobClient)).items.map((item) => item.sessionKey),
           pushedRecipients: f.push.mock.calls.map(([mention]) => mention.recipientProfileId),
           storedSources: openOpenClawStateDatabase()
             .db.prepare(
@@ -357,7 +357,7 @@ describe("human mention directory", () => {
           ok: true,
           value: [f.bob.id],
         });
-        expect(read(f.inbox, f.bobClient).items).toEqual([]);
+        expect((await read(f.inbox, f.bobClient)).items).toEqual([]);
       },
       {
         session: { scope: "global", store: "/synthetic/fixed-global.sqlite" },

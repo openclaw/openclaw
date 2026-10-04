@@ -1,10 +1,10 @@
 package ai.openclaw.app.node
 
 import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.app.hasPermission
 import android.Manifest
 import android.content.Context
 import android.provider.CallLog
-import androidx.core.content.ContextCompat
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -44,11 +44,7 @@ internal interface CallLogDataSource {
 }
 
 private object SystemCallLogDataSource : CallLogDataSource {
-  override fun hasReadPermission(context: Context): Boolean =
-    ContextCompat.checkSelfPermission(
-      context,
-      Manifest.permission.READ_CALL_LOG,
-    ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+  override fun hasReadPermission(context: Context): Boolean = context.hasPermission(Manifest.permission.READ_CALL_LOG)
 
   override fun search(
     context: Context,

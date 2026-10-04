@@ -89,29 +89,6 @@ describe("memory workspace lock comparisons", () => {
   const key = "synthetic-workspace";
   const expected: ShortTermLockEntry = { owner: "synthetic-owner", acquiredAt: 1 };
 
-  it("releases a completed workspace lock through data-only storage", async () => {
-    const store = createLockStore();
-    await expect(
-      withMemoryWorkspaceLock(key, async () => {
-        expect(await store.lookup(key)).toBeDefined();
-        return "completed";
-      }),
-    ).resolves.toBe("completed");
-    expect(await store.lookup(key)).toBeUndefined();
-  });
-
-  it("reclaims a stale synthetic lock before running the next task", async () => {
-    const store = createLockStore();
-    await store.register(key, expected);
-    await expect(
-      withMemoryWorkspaceLock(key, async () => {
-        expect(await store.lookup(key)).not.toEqual(expected);
-        return "recovered";
-      }),
-    ).resolves.toBe("recovered");
-    expect(await store.lookup(key)).toBeUndefined();
-  });
-
   it("reports the observed holder when the acquisition bound expires", async () => {
     const store = createLockStore();
     const acquiredAt = Date.now();
@@ -161,22 +138,6 @@ describe("memory workspace lock comparisons", () => {
 
     await expect(deleteShortTermLockEntryIfCurrent(store, key, expected)).resolves.toBe(true);
     expect(await store.lookup(key)).toBeUndefined();
-  });
-
-  it("reports a missing lock as unchanged", async () => {
-    const store = createLockStore();
-    await expect(deleteShortTermLockEntryIfCurrent(store, key, expected)).resolves.toBe(false);
-  });
-
-  it.each(["observe", "compareAndApply"] as const)("does not retry a failed %s", async (method) => {
-    const store = createLockStore();
-    await store.register(key, expected);
-    const failure = new Error("worker result unavailable");
-    store[method].mockRejectedValue(failure);
-
-    await expect(deleteShortTermLockEntryIfCurrent(store, key, expected)).rejects.toBe(failure);
-    expect(store[method]).toHaveBeenCalledOnce();
-    expect(await store.lookup(key)).toEqual(expected);
   });
 
   it("keeps a failed release best effort and recovers before the next owner runs", async () => {

@@ -8,10 +8,10 @@ import type { AgentTurnExecutionResult, AgentTurnParams } from "./agent-runner-e
 
 const messageToolOutcomeLog = createSubsystemLogger("auto-reply/message-tool-outcome");
 
-export function recordAgentTurnExecutionOutcome(
+export async function recordAgentTurnExecutionOutcome(
   params: AgentTurnParams,
   result: AgentTurnExecutionResult | undefined,
-): void {
+): Promise<void> {
   if (result?.outcome.kind === "settled" && params.opts?.onVisibleWorkSessions) {
     const sessions = new Map<string, VisibleWorkSession>();
     for (const spawn of result.outcome.result.acceptedSessionSpawns ?? []) {
@@ -63,7 +63,7 @@ export function recordAgentTurnExecutionOutcome(
     storePath: params.storePath,
   };
   try {
-    recordMessageToolRunOutcome(values);
+    await recordMessageToolRunOutcome(values);
     messageToolOutcomeLog.info("recorded message-tool-only run outcome", values);
   } catch (error) {
     messageToolOutcomeLog.warn("failed to record message-tool-only run outcome", {

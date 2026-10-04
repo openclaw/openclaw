@@ -145,7 +145,13 @@ describe("resolveBrowserOpenCommand", () => {
         platform: "linux",
         env: { WSL_DISTRO_NAME: "Ubuntu" },
       }),
-    ).resolves.toEqual({ ok: true, command: "wslview" });
+    ).resolves.toEqual({ ok: true });
+
+    const resolved = await resolveBrowserOpenCommand({
+      platform: "linux",
+      env: { WSL_DISTRO_NAME: "Ubuntu" },
+    });
+    expect(resolved.argv).toEqual(["wslview"]);
 
     detectBinaryMock.mockResolvedValue(false);
     await expect(
@@ -170,7 +176,6 @@ describe("resolveBrowserOpenCommand", () => {
 
     const rundll32 = path.win32.join("D:\\Windows", "System32", "rundll32.exe");
     expect(resolved.argv).toEqual([rundll32, "url.dll,FileProtocolHandler"]);
-    expect(resolved.command).toBe(rundll32);
   });
 
   it("resolves macOS open even when SSH environment variables are present", async () => {
@@ -181,7 +186,7 @@ describe("resolveBrowserOpenCommand", () => {
     const resolved = await resolveBrowserOpenCommand();
 
     expect(detectBinaryMock).toHaveBeenCalledWith("open");
-    expect(resolved).toEqual({ argv: ["open"], command: "open" });
+    expect(resolved).toEqual({ argv: ["open"] });
   });
 
   it("still refuses browser launch over Linux SSH without a display", async () => {
@@ -204,6 +209,6 @@ describe("resolveBrowserOpenCommand", () => {
       },
     });
 
-    expect(resolved).toEqual({ argv: ["xdg-open"], command: "xdg-open" });
+    expect(resolved).toEqual({ argv: ["xdg-open"] });
   });
 });

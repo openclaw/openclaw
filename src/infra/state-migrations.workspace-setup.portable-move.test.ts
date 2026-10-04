@@ -50,7 +50,7 @@ describe("workspace migration portable-move recovery", () => {
     "settles an interrupted source/claim link without replaying state (receipt=%s)",
     async (receiptExists) => {
       const context = setup();
-      const source = path.join(context.workspaceDir, ".openclaw", "workspace-state.json");
+      const source = path.join(context.workspaceDir, "openclaw-workspace-state.json");
       const claim = `${source}.doctor-importing`;
       const completedAt = "2026-07-15T10:01:00.000Z";
       const raw = `${JSON.stringify({ version: 1, setupCompletedAt: completedAt })}\n`;
@@ -84,7 +84,7 @@ describe("workspace migration portable-move recovery", () => {
       });
       const archives = fs.readdirSync(path.dirname(source));
       expect(archives).toHaveLength(1);
-      expect(archives[0]).toMatch(/^workspace-state\.json\.migrated\./);
+      expect(archives[0]).toMatch(/^openclaw-workspace-state\.json\.migrated\./);
       expect(fs.readFileSync(path.join(path.dirname(source), archives[0]!), "utf8")).toBe(raw);
     },
   );

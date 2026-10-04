@@ -38,35 +38,43 @@ async function status(port: number, host: string, path: string) {
 }
 
 describe("Gateway portal ingress startup", () => {
-  it("starts one dedicated loopback listener that cannot route Gateway endpoints", async () => {
-    const runtime = await createGatewayRuntimeStateForTest(undefined, {
-      cfg: {
-        gateway: {
-          publicOrigin: "https://control.example.net",
-          portals: { ingress: { domain: "previews.example.net", port: 0 } },
+  it.each([false, true])(
+    "isolates portal ingress and leaves it unclaimed for canaries (canary: %s)",
+    async (updateCanary) => {
+      const runtime = await createGatewayRuntimeStateForTest(undefined, {
+        updateCanary,
+        cfg: {
+          gateway: {
+            publicOrigin: "https://control.example.net",
+            portals: { ingress: { domain: "previews.example.net", port: 0 } },
+          },
         },
-      },
-      getReadiness: () => ({ ready: true, failing: [], uptimeMs: 1 }),
-    });
-    runtimes.push(runtime);
-    const gatewayServers = new Set(runtime.httpServers);
-    await runtime.startListening();
-    expect(runtime.httpServers).toHaveLength(gatewayServers.size + 1);
-    const listener = runtime.httpServers.find((server) => !gatewayServers.has(server));
-    const address = listener?.address();
-    expect(address).toMatchObject({ address: "127.0.0.1" });
-    if (!address || typeof address === "string") {
-      throw new Error("Expected dedicated portal listener");
-    }
-    expect(await status(address.port, "unknown.previews.example.net", "/ready")).toBe(404);
-    const portal = await runtime.portalService.open({ targetPort: 3000 });
-    expect(portal.listenPort).toBe(address.port);
-    expect(await status(address.port, new URL(portal.url).hostname, "/ready")).toBe(401);
-    expect(runtime.httpServers).toHaveLength(gatewayServers.size + 1);
-    await runtime.portalService.closeAll();
-    expect(listener?.listening).toBe(false);
-    expect(runtime.httpServer.listening).toBe(true);
-  });
+        getReadiness: () => ({ ready: true, failing: [], uptimeMs: 1 }),
+      });
+      runtimes.push(runtime);
+      const gatewayServers = [...runtime.httpServers];
+      await runtime.startListening();
+      if (updateCanary) {
+        expect(runtime.httpServers).toEqual(gatewayServers);
+        return;
+      }
+      expect(runtime.httpServers).toHaveLength(gatewayServers.length + 1);
+      const listener = runtime.httpServers.find((server) => !gatewayServers.includes(server));
+      const address = listener?.address();
+      expect(address).toMatchObject({ address: "127.0.0.1" });
+      if (!address || typeof address === "string") {
+        throw new Error("Expected dedicated portal listener");
+      }
+      expect(await status(address.port, "unknown.previews.example.net", "/ready")).toBe(404);
+      const portal = await runtime.portalService.open({ targetPort: 3000 });
+      expect(portal.listenPort).toBe(address.port);
+      expect(await status(address.port, new URL(portal.url).hostname, "/ready")).toBe(401);
+      expect(runtime.httpServers).toHaveLength(gatewayServers.length + 1);
+      await runtime.portalService.closeAll();
+      expect(listener?.listening).toBe(false);
+      expect(runtime.httpServer.listening).toBe(true);
+    },
+  );
 
   it("fails startup instead of reusing an occupied external ingress listener", async () => {
     await withServer(
@@ -87,16 +95,5 @@ describe("Gateway portal ingress startup", () => {
         expect(await (await fetch(url)).text()).toBe("unrelated listener");
       },
     );
-  });
-
-  it("does not claim the live ingress port during updater canary validation", async () => {
-    const runtime = await createGatewayRuntimeStateForTest(undefined, {
-      updateCanary: true,
-      cfg: { gateway: { portals: { ingress: { domain: "previews.example.net", port: 0 } } } },
-    });
-    runtimes.push(runtime);
-    const gatewayServers = [...runtime.httpServers];
-    await runtime.startListening();
-    expect(runtime.httpServers).toEqual(gatewayServers);
   });
 });

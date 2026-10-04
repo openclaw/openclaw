@@ -13,84 +13,52 @@ useChatSendBrowserFixture();
 const privateKey = "agent:main:dashboard:incognito-expired";
 
 it.each([
-  { name: "missing private session", key: privateKey, sessionId: undefined, sends: 0 },
-  { name: "valid empty private session", key: privateKey, sessionId: "existing", sends: 1 },
-  {
-    name: "ordinary uncreated session",
-    key: "agent:main:dashboard:new",
-    sessionId: undefined,
-    sends: 1,
-  },
-])(
-  "admits input according to authoritative history for $name",
-  async ({ key, sessionId, sends }) => {
-    const host = makeChatHost({
-      sessionKey: key,
-      requestHandlers: {
-        "chat.history": { messages: [], sessionId },
-        "chat.send": { status: "started", runId: "accepted-input" },
-      },
-      chatMessage: "Keep this unsent text",
-    });
-    await loadChatHistory(host);
-    await handleSendChat(host);
-    expect(requestCalls(host.request, "chat.send")).toHaveLength(sends);
-    if (!sends) {
-      expect(host.chatMessage).toBe("Keep this unsent text");
-      expect(host.chatQueue).toEqual([]);
-    }
-  },
-);
-
-it("does not apply a missing private result to a replacement session", async () => {
-  const response = createDeferred<{ messages: never[] }>();
+  "missing private session",
+  "valid empty private session",
+  "ordinary uncreated session",
+  "replacement selection",
+  "pending creation",
+  "pending initial turn",
+])("admits input according to authoritative history for %s", async (scenario) => {
+  const key = scenario === "ordinary uncreated session" ? "agent:main:dashboard:new" : privateKey;
+  const response = createDeferred<{ messages: never[]; sessionId?: string }>();
+  let initialTurnPending = scenario === "pending initial turn";
   const host = makeChatHost({
-    sessionKey: privateKey,
+    sessionKey: key,
+    hasPendingInitialTurn: () => initialTurnPending,
+    chatMessage: "Keep this unsent text",
     requestHandlers: {
       "chat.history": () => response.promise,
       "chat.send": { status: "started", runId: "accepted-input" },
     },
   });
+  const endCreation =
+    scenario === "pending creation"
+      ? host.chatSubmissions.beginCreate({
+          creation: { sessionKey: privateKey, admitted: false },
+          message: null,
+          canDisplay: () => true,
+        })
+      : undefined;
   const loading = loadChatHistory(host);
-  host.sessionKey = "agent:main:dashboard:other";
-  response.resolve({ messages: [] });
+  if (scenario === "replacement selection") {
+    host.sessionKey = "agent:main:dashboard:other";
+  }
+  endCreation?.();
+  initialTurnPending = false;
+  response.resolve({
+    messages: [],
+    sessionId: scenario === "valid empty private session" ? "existing" : undefined,
+  });
   await loading;
-  host.chatMessage = "New selection input";
   await handleSendChat(host);
-  expect(requestCalls(host.request, "chat.send")).toHaveLength(1);
+  const sends = scenario === "missing private session" ? 0 : 1;
+  expect(requestCalls(host.request, "chat.send")).toHaveLength(sends);
+  if (!sends) {
+    expect(host.chatMessage).toBe("Keep this unsent text");
+    expect(host.chatQueue).toEqual([]);
+  }
 });
-
-it.each(["creation", "initial turn"] as const)(
-  "does not expire a session whose history began during pending %s",
-  async (pendingKind) => {
-    const response = createDeferred<{ messages: never[] }>();
-    let initialTurnPending = pendingKind === "initial turn";
-    const host = makeChatHost({
-      sessionKey: privateKey,
-      hasPendingInitialTurn: () => initialTurnPending,
-      requestHandlers: {
-        "chat.history": () => response.promise,
-        "chat.send": { status: "started", runId: "accepted-input" },
-      },
-    });
-    const endCreation =
-      pendingKind === "creation"
-        ? host.chatSubmissions.beginCreate({
-            creation: { sessionKey: privateKey, admitted: false },
-            message: null,
-            canDisplay: () => true,
-          })
-        : undefined;
-    const loading = loadChatHistory(host);
-    endCreation?.();
-    initialTurnPending = false;
-    response.resolve({ messages: [] });
-    await loading;
-    host.chatMessage = "Input after admission";
-    await handleSendChat(host);
-    expect(requestCalls(host.request, "chat.send")).toHaveLength(1);
-  },
-);
 
 it.each(["client", "epoch"] as const)(
   "does not retain an expired result across a changed %s",

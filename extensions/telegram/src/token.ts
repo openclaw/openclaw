@@ -121,16 +121,8 @@ export function resolveTelegramToken(
     ? undefined
     : resolveNormalizedAccountEntry(telegramCfg?.accounts, accountId, normalizeAccountId);
 
-  // When a non-default accountId is explicitly specified but not found in config,
-  // decide whether to fall through to channel-level defaults based on whether
-  // the config has an explicit accounts section (multi-bot setup).
-  //
-  // Multi-bot: accounts section exists with entries → block fallthrough to prevent
-  // routing via the wrong bot's token.
-  //
-  // Single-bot: no accounts section (or empty) → allow fallthrough so that
-  // binding-created accountIds inherit the channel-level token.
-  // See: https://github.com/openclaw/openclaw/issues/53876
+  // Unknown accounts may inherit the single-bot token, but must not select
+  // another bot's credentials in a multi-bot setup (#53876).
   if (accountId !== DEFAULT_ACCOUNT_ID && !accountCfg) {
     const accounts = telegramCfg?.accounts;
     const hasConfiguredAccounts =

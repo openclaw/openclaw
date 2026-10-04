@@ -532,11 +532,11 @@ describe("worker turn launcher reclaimed placement", () => {
         sessionKey: SESSION_KEY,
         agentId: "main",
       });
-      placements.fail({
+      await placements.fail({
         sessionId: SESSION_ID,
         recoveryError: "stale terminal worker failure",
       });
-      placements.fail({
+      await placements.fail({
         sessionId: SESSION_ID,
         recoveryError,
       });

@@ -964,13 +964,7 @@ wa-popover.new-session-page__where-popover::part(body) {
 }
 
 .new-session-page__start-submit.new-session-page__start-submit--busy svg {
-  animation: new-session-start-spin 2.25s linear infinite;
-}
-
-@keyframes new-session-start-spin {
-  to {
-    transform: rotate(1turn);
-  }
+  animation: btn-spinner-spin 2.25s linear infinite;
 }
 
 .new-session-page__start-submit--blocked {
@@ -1464,10 +1458,6 @@ wa-popover.new-session-page__where-popover::part(body) {
     height: 14px;
   }
 
-  .new-session-page__composer.agent-chat__composer-shell {
-    margin-top: 0;
-  }
-
   .new-session-page__incognito-notice {
     align-items: flex-start;
     width: calc(100% - 2 * var(--chat-mobile-edge-inset));
@@ -1558,10 +1548,7 @@ wa-popover.new-session-page__where-popover::part(body) {
   gap: 2px;
 }
 
-.new-session-page__cloud-choice-list .session-menu__text {
-  flex: 0 1 auto;
-}
-
+.new-session-page__cloud-choice-list .session-menu__text,
 .new-session-page__cloud-choice-list .session-menu__sub {
   flex: 0 1 auto;
 }

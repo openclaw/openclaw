@@ -25,7 +25,7 @@ import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 
 export type CommittedAgentMessage = Extract<
   AgentMessage,
-  { role: "assistant" | "toolResult" | "user" }
+  { role: "assistant" | "toolResult" | "user" | "custom" }
 > & { idempotencyKey: string };
 type AppliedTranscriptMessage = {
   appended: boolean;
@@ -34,7 +34,7 @@ type AppliedTranscriptMessage = {
   messageSeq?: number;
 };
 export type ApplyTranscriptCommitResult =
-  | { ok: true; messages: AppliedTranscriptMessage[] }
+  | { ok: true; messages: AppliedTranscriptMessage[]; lifecycleRevision: string | undefined }
   | { ok: false; reason: "invalid-batch" | "session-not-attached" | "stale-base-leaf" };
 type PersistedCommitResolution =
   | { kind: "ambiguous" | "missing" }
@@ -68,7 +68,12 @@ export function isCommittedAgentMessage(message: unknown): message is CommittedA
   }
   const role = message.role;
   return (
-    (role === "user" || role === "assistant" || role === "toolResult") &&
+    (role === "user" ||
+      role === "assistant" ||
+      role === "toolResult" ||
+      (role === "custom" &&
+        (message.customType === "openclaw.runtime-context" ||
+          message.customType === "openclaw.system-update"))) &&
     readMessageIdempotencyKey(message) !== undefined
   );
 }
@@ -188,7 +193,10 @@ export function prepareTranscriptCommit(input: TranscriptCommitInput): PreparedT
       nextMessageSeq: 0,
     };
   }
-  if (entry.lifecycleRevision !== input.lifecycleRevision) {
+  if (
+    input.lifecycleRevision !== undefined &&
+    entry.lifecycleRevision !== input.lifecycleRevision
+  ) {
     return { result: { ok: false, reason: "invalid-batch" }, parentId: null, nextMessageSeq: 0 };
   }
   const snapshot = loadTranscriptReadSnapshotSync(input.scope);
@@ -212,7 +220,11 @@ export function prepareTranscriptCommit(input: TranscriptCommitInput): PreparedT
       messages: input.messages,
     });
     if (recovered.kind === "found") {
-      return plan({ ok: true, messages: recovered.messages });
+      return plan({
+        ok: true,
+        messages: recovered.messages,
+        lifecycleRevision: entry.lifecycleRevision,
+      });
     }
     if (recovered.kind === "ambiguous") {
       return plan({ ok: false, reason: "invalid-batch" });
@@ -224,7 +236,14 @@ export function prepareTranscriptCommit(input: TranscriptCommitInput): PreparedT
     messages: input.messages,
   });
   return prefix.ok
-    ? plan({ ok: true, messages: prefix.recoveredMessages }, prefix.activeVisibleEntryCount)
+    ? plan(
+        {
+          ok: true,
+          messages: prefix.recoveredMessages,
+          lifecycleRevision: entry.lifecycleRevision,
+        },
+        prefix.activeVisibleEntryCount,
+      )
     : plan({ ok: false, reason: "stale-base-leaf" });
 }
 
@@ -235,11 +254,14 @@ export function applyPreparedTranscriptCommit(
   freshMessages: readonly CommittedAgentMessage[],
   onProjectionReconcileNeeded: () => void,
 ): ApplyTranscriptCommitResult {
+  if (!plan.result.ok) {
+    return plan.result;
+  }
   const currentEntry = loadSessionEntry(input.scope);
   if (!currentEntry || currentEntry.sessionId !== input.scope.sessionId) {
     return { ok: false, reason: "session-not-attached" };
   }
-  if (currentEntry.lifecycleRevision !== input.lifecycleRevision) {
+  if (currentEntry.lifecycleRevision !== plan.result.lifecycleRevision) {
     return { ok: false, reason: "invalid-batch" };
   }
   const database = openOpenClawAgentDatabase(
@@ -253,9 +275,6 @@ export function applyPreparedTranscriptCommit(
     version.updatedAt !== plan.version.updatedAt
   ) {
     return { ok: false, reason: "stale-base-leaf" };
-  }
-  if (!plan.result.ok) {
-    return plan.result;
   }
   if (plan.result.messages.length === input.messages.length) {
     return plan.result;
@@ -311,7 +330,7 @@ export function applyPreparedTranscriptCommit(
   if (
     !entry ||
     entry.sessionId !== input.scope.sessionId ||
-    entry.lifecycleRevision !== input.lifecycleRevision
+    entry.lifecycleRevision !== plan.result.lifecycleRevision
   ) {
     throw new Error("Worker transcript session changed inside its transaction");
   }
@@ -319,5 +338,5 @@ export function applyPreparedTranscriptCommit(
     ...entry,
     updatedAt: Math.max(entry.updatedAt ?? 0, Date.now()),
   });
-  return { ok: true, messages };
+  return { ...plan.result, messages };
 }

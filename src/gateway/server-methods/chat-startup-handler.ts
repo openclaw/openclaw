@@ -6,6 +6,7 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
 import { withPreparedSessionResolve } from "../sessions-resolve.js";
+import { respondChatHistoryUnavailable } from "./chat-history-recovery.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -14,11 +15,6 @@ export async function handleChatStartupRequest(
   handleHistory: (
     opts: GatewayRequestHandlerOptions & { method: "chat.history" | "chat.startup" },
   ) => Promise<void>,
-  respondUnavailable: (
-    method: "chat.history" | "chat.startup",
-    respond: GatewayRequestHandlerOptions["respond"],
-    message: string,
-  ) => void,
 ) {
   if (!assertValidParams(opts.params, validateChatStartupParams, "chat.startup", opts.respond)) {
     return;
@@ -44,7 +40,7 @@ export async function handleChatStartupRequest(
   const { shortId, slugHint, agentId, limit, maxBytes } = opts.params;
   const projection = getSessionRowProjection(opts.context);
   if (!projection) {
-    respondUnavailable(
+    respondChatHistoryUnavailable(
       "chat.startup",
       opts.respond,
       "session rows are initializing; reload the conversation",

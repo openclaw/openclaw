@@ -1,6 +1,6 @@
-import { createHash } from "node:crypto";
 import { resolve } from "node:path";
 import { root as fsSafeRoot } from "../infra/fs-safe.js";
+import { digestClawBytes } from "./digest.js";
 import { ClawMigrationError } from "./migrate-errors.js";
 import { lstatMigrationPathIfExists } from "./migrate-package.js";
 import type { CapturedWorkspaceFile } from "./migrate-package.js";
@@ -9,10 +9,6 @@ import { MAX_MANAGED_FILE_BYTES, MAX_MANAGED_WORKSPACE_BYTES } from "./source-li
 import { CLAW_BOOTSTRAP_FILE_NAMES } from "./types.js";
 
 const PROMPT_FILE_NAMES = [...CLAW_BOOTSTRAP_FILE_NAMES];
-
-function sha256(value: Uint8Array): string {
-  return `sha256:${createHash("sha256").update(value).digest("hex")}`;
-}
 
 export async function readSelectedWorkspaceFiles(
   workspace: string,
@@ -66,7 +62,7 @@ export async function readSelectedWorkspaceFiles(
         "$.workspace",
       );
     }
-    captured.push({ name, content: read.buffer, digest: sha256(read.buffer) });
+    captured.push({ name, content: read.buffer, digest: digestClawBytes(read.buffer) });
   }
   return captured;
 }

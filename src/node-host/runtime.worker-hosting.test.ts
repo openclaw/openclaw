@@ -41,9 +41,11 @@ vi.mock("./node-worker-workspace.js", () => ({
     readonly checkAdmission = mocks.checkWorkspaceAdmission;
   },
 }));
-vi.mock("./plugin-node-host.js", () => ({
+vi.mock("./plugin-node-host.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./plugin-node-host.js")>()),
   ensureNodeHostPluginRegistry: vi.fn(async () => undefined),
   hasRegisteredNodeHostCommandActiveWork: vi.fn(() => false),
+  isRegisteredNodeHostCommandDuplex: vi.fn(() => false),
   notifyRegisteredNodeHostCommandDisconnect: vi.fn(async () => undefined),
   listRegisteredNodeHostCapsAndCommands: vi.fn(() => ({
     caps: [],
@@ -81,7 +83,6 @@ function prepareWorkerRuntime(
       nodeHost: { skills: { enabled: false }, workerRuns: { enabled, isolation, containerImage } },
     },
     env: { PATH: "/usr/bin" },
-    enableWorkerRuns: true,
     ...runtimeOptions,
   });
 }

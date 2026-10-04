@@ -6,6 +6,7 @@ import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gatewa
 import { buildAssistantMediaUrl } from "../../app/assistant-media.ts";
 import { t } from "../../i18n/index.ts";
 import { registerBrowserEnglish } from "../../i18n/locales/en-browser.ts";
+import { readBlobAsDataUrl } from "../../lib/blob-data-url.ts";
 import { browserInspectScript } from "./browser-inspect-script.ts";
 import {
   readBrowserTabTarget,
@@ -599,18 +600,8 @@ export async function fetchBrowserScreenshotDataUrl(params: {
   } finally {
     clearTimeout(timeout);
   }
-  return await new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.addEventListener("load", () => {
-      if (typeof reader.result === "string") {
-        resolve(reader.result);
-      } else {
-        reject(new Error(t("browser.errors.screenshotReadFailed")));
-      }
-    });
-    reader.addEventListener("error", () =>
-      reject(reader.error ?? new Error(t("browser.errors.screenshotReadFailed"))),
-    );
-    reader.readAsDataURL(blob);
+  return readBlobAsDataUrl(blob, {
+    readError: () => t("browser.errors.screenshotReadFailed"),
+    invalidResultError: () => t("browser.errors.screenshotReadFailed"),
   });
 }

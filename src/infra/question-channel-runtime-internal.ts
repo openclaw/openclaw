@@ -10,6 +10,7 @@ import {
   captureAsyncWorkTracker,
   getAsyncWorkSignal,
 } from "../shared/async-work-scope.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import type { GatewayScheduler, GatewayScheduledJob } from "./gateway-scheduler.js";
 
 const TERMINAL_DELIVERY_RETENTION_MS = 24 * 60 * 60 * 1_000;
@@ -156,11 +157,13 @@ export function createQuestionChannelRuntime(
         finalizeDelivery(entry, deliveryId, finalize);
       }
       if (retainedEntries.has(entry)) {
-        entry.cleanupJob = entry.scheduler.schedule({
-          id: `question-delivery:${randomUUID()}`,
-          delayMs: TERMINAL_DELIVERY_RETENTION_MS,
-          run: () => releaseEntry(entry),
-        });
+        entry.cleanupJob = runInDetachedAsyncContext(() =>
+          entry.scheduler.schedule({
+            id: `question-delivery:${randomUUID()}`,
+            delayMs: TERMINAL_DELIVERY_RETENTION_MS,
+            run: () => releaseEntry(entry),
+          }),
+        );
       }
     },
     runWithDeliveries(questionIds, run, deliveryOptions) {

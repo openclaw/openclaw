@@ -2689,7 +2689,7 @@ describe("talk.session unified handlers", () => {
       session: { store: "/tmp/shared-sessions.sqlite", scope: "global" },
       agents: {
         ownership: "explicit",
-        list: [{ id: "ops" }, { id: "research" }],
+        entries: { ops: {}, research: {} },
         defaults: { sessionStore: { agentId: "ops" } },
       },
     };

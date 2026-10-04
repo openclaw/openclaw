@@ -169,10 +169,10 @@ overrides:
   chevrotain>lodash-es: 4.18.1
   '@chevrotain/cst-dts-gen>lodash-es': 4.18.1
   '@chevrotain/gast>lodash-es': 4.18.1
-  '@agentclientprotocol/codex-acp@1.12.0>@openai/codex': 0.159.1
+  '@agentclientprotocol/codex-acp@1.12.0>@openai/codex': 0.160.0
   '@codemirror/commands@6.11.1>@codemirror/view': 6.43.13
   '@codemirror/view@6.43.13>@codemirror/state': 6.7.6
-  '@anthropic-ai/sdk': 0.127.0
+  '@anthropic-ai/sdk': 0.128.0
   '@anthropic-ai/vertex-sdk@0.19.10>google-auth-library': 11.1.0
   '@opentelemetry/core': 2.11.0
   '@opentelemetry/propagator-jaeger': 2.11.0
@@ -228,11 +228,11 @@ importers:
   .:
     dependencies:
       '@agentclientprotocol/sdk':
-        specifier: 1.4.0
-        version: 1.4.0(zod@4.6.5)
+        specifier: 1.5.0
+        version: 1.5.0(zod@4.6.5)
       '@anthropic-ai/sdk':
-        specifier: 0.127.0
-        version: 0.127.0(zod@4.6.5)
+        specifier: 0.128.0
+        version: 0.128.0(zod@4.6.5)
       '@babel/generator':
         specifier: 8.0.6
         version: 8.0.6
@@ -252,8 +252,8 @@ importers:
         specifier: 0.86.1
         version: 0.86.1
       '@google/genai':
-        specifier: 2.23.0
-        version: 2.23.0(@modelcontextprotocol/sdk@1.30.1(supports-color@10.2.2)(zod@4.6.5))(supports-color@10.2.2)
+        specifier: 2.24.0
+        version: 2.24.0(@modelcontextprotocol/sdk@1.30.1(supports-color@10.2.2)(zod@4.6.5))(supports-color@10.2.2)
       '@grammyjs/transformer-throttler':
         specifier: 1.2.1
         version: 1.2.1(grammy@1.46.0(supports-color@10.2.2))
@@ -372,8 +372,8 @@ importers:
         specifier: 12.1.0
         version: 12.1.0
       openai:
-        specifier: 7.20.0
-        version: 7.20.0(@aws-sdk/credential-provider-node@3.972.83)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.3)(undici@8.11.2)(ws@8.21.3)(zod@4.6.5)
+        specifier: 7.23.0
+        version: 7.23.0(@aws-sdk/credential-provider-node@3.972.83)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.3)(undici@8.11.2)(ws@8.21.3)(zod@4.6.5)
       p-limit:
         specifier: 7.3.3
         version: 7.3.3
@@ -640,7 +640,7 @@ importers:
     dependencies:
       '@agentclientprotocol/claude-agent-acp':
         specifier: 0.79.0
-        version: 0.79.0(@anthropic-ai/sdk@0.127.0(zod@4.6.5))(@modelcontextprotocol/sdk@1.30.1(supports-color@10.2.2)(zod@4.6.5))
+        version: 0.79.0(@anthropic-ai/sdk@0.128.0(zod@4.6.5))(@modelcontextprotocol/sdk@1.30.1(supports-color@10.2.2)(zod@4.6.5))
       '@agentclientprotocol/codex-acp':
         specifier: 1.12.0
         version: 1.12.0
@@ -670,8 +670,8 @@ importers:
   extensions/agentsapi:
     dependencies:
       openai:
-        specifier: 7.20.0
-        version: 7.20.0(@aws-sdk/credential-provider-node@3.972.83)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.3)(undici@8.11.2)(ws@8.21.3)(zod@4.6.5)
+        specifier: 7.23.0
+        version: 7.23.0(@aws-sdk/credential-provider-node@3.972.83)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.3)(undici@8.11.2)(ws@8.21.3)(zod@4.6.5)
       zod:
         specifier: 4.6.5
         version: 4.6.5
@@ -711,8 +711,8 @@ importers:
   extensions/amazon-bedrock-mantle:
     dependencies:
       '@anthropic-ai/sdk':
-        specifier: 0.127.0
-        version: 0.127.0(zod@4.6.5)
+        specifier: 0.128.0
+        version: 0.128.0(zod@4.6.5)
       '@aws/bedrock-token-generator':
         specifier: 1.1.0
         version: 1.1.0
@@ -934,8 +934,8 @@ importers:
   extensions/codex:
     dependencies:
       '@openai/codex':
-        specifier: 0.159.1
-        version: 0.159.1
+        specifier: 0.160.0
+        version: 0.160.0
       '@openclaw/fs-safe':
         specifier: 0.23.0
         version: 0.23.0
@@ -1303,8 +1303,8 @@ importers:
   extensions/google:
     dependencies:
       '@google/genai':
-        specifier: 2.23.0
-        version: 2.23.0(@modelcontextprotocol/sdk@1.30.1(supports-color@10.2.2)(zod@4.6.5))(supports-color@10.2.2)
+        specifier: 2.24.0
+        version: 2.24.0(@modelcontextprotocol/sdk@1.30.1(supports-color@10.2.2)(zod@4.6.5))(supports-color@10.2.2)
       dotenv:
         specifier: 18.0.3
         version: 18.0.3
@@ -1604,8 +1604,8 @@ importers:
         specifier: 21.2.0
         version: 21.2.0
       openai:
-        specifier: 7.20.0
-        version: 7.20.0(@aws-sdk/credential-provider-node@3.972.83)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.3)(undici@8.11.2)(ws@8.21.3)(zod@4.6.5)
+        specifier: 7.23.0
+        version: 7.23.0(@aws-sdk/credential-provider-node@3.972.83)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.3)(undici@8.11.2)(ws@8.21.3)(zod@4.6.5)
       typebox:
         specifier: 1.3.34
         version: 1.3.34
@@ -2267,6 +2267,9 @@ importers:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
   extensions/tencent:
     devDependencies:
@@ -2577,17 +2580,17 @@ importers:
   packages/ai:
     dependencies:
       '@anthropic-ai/sdk':
-        specifier: 0.127.0
-        version: 0.127.0(zod@4.6.5)
+        specifier: 0.128.0
+        version: 0.128.0(zod@4.6.5)
       '@google/genai':
-        specifier: 2.23.0
-        version: 2.23.0(@modelcontextprotocol/sdk@1.30.1(supports-color@10.2.2)(zod@4.6.5))(supports-color@10.2.2)
+        specifier: 2.24.0
+        version: 2.24.0(@modelcontextprotocol/sdk@1.30.1(supports-color@10.2.2)(zod@4.6.5))(supports-color@10.2.2)
       '@mistralai/mistralai':
         specifier: 2.7.0
         version: 2.7.0(@opentelemetry/api@1.9.1)(@opentelemetry/resources@2.11.0(@opentelemetry/api@1.9.1))(@opentelemetry/sdk-trace-base@2.11.0(@opentelemetry/api@1.9.1))
       openai:
-        specifier: 7.20.0
-        version: 7.20.0(@aws-sdk/credential-provider-node@3.972.83)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.3)(undici@8.11.2)(ws@8.21.3)(zod@4.6.5)
+        specifier: 7.23.0
+        version: 7.23.0(@aws-sdk/credential-provider-node@3.972.83)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.3)(undici@8.11.2)(ws@8.21.3)(zod@4.6.5)
       partial-json:
         specifier: 0.1.7
         version: 0.1.7
@@ -2794,6 +2797,12 @@ importers:
 
   packages/workboard-contract: {}
 
+  packages/worker-runtime:
+    dependencies:
+      '@openclaw/normalization-core':
+        specifier: workspace:*
+        version: link:../normalization-core
+
   ui:
     dependencies:
       '@awesome.me/webawesome':
@@ -2984,6 +2993,11 @@ packages:
     peerDependencies:
       zod: ^3.25.0 || ^4.0.0
 
+  '@agentclientprotocol/sdk@1.5.0':
+    resolution: {integrity: sha512-524jwbB2iYWA+kWWyv9fhKbhU89dH/lu9u5EXwVNmfYzopV8BujCDxByBDZhxRUkB7RWIJzISCnwivdDk+bdVg==}
+    peerDependencies:
+      zod: ^3.25.0 || ^4.0.0
+
   '@antfu/install-pkg@2.1.0':
     resolution: {integrity: sha512-sdg9NxU3zR4Mnawfbc/x6GB5Wf17WYud5qOuEuxXjaKpYpMkISSJEjItGebXJ2bQ4DIcly4NYH23mtkGJjvKUw==}
 
@@ -3035,12 +3049,12 @@ packages:
     resolution: {integrity: sha512-kFmWMsh/BEd4jKkOxUeihr0xMkaMdOxONhNNkZ2pGmP0ElHkArvFvuZxqJTPvREnhCsPZByv5f0EzyAb/hkRZw==}
     engines: {node: '>=18.0.0'}
     peerDependencies:
-      '@anthropic-ai/sdk': 0.127.0
+      '@anthropic-ai/sdk': 0.128.0
       '@modelcontextprotocol/sdk': ^1.29.0
       zod: ^4.0.0
 
-  '@anthropic-ai/sdk@0.127.0':
-    resolution: {integrity: sha512-OKiVbG9LHCxjn4fBJZJFy/Bz3hqE1RYpwaeSEDNheQnvz0XNKmGT/Lhkz2Sf1a27Ldt3vVv+BkU81I0U/8EpoQ==}
+  '@anthropic-ai/sdk@0.128.0':
+    resolution: {integrity: sha512-tl5cBFZC1jVFrTuQyvQObA4WmuNgcYVeXfriqOumgtLAHUm4gPUj18YnszBW60v0PrjDB8nBDOC6wd9CmHQFlA==}
     hasBin: true
     peerDependencies:
       zod: ^3.25.0 || ^4.0.0
@@ -3912,8 +3926,8 @@ packages:
     resolution: {integrity: sha512-knNiXKO7jpp8OrLc8ePGuPssf7CsktJwhv4ukfFXfB2RNgO/59hloSILaEL+mDjwt+QjawrLqgO3HN7Pyud2hA==}
     engines: {node: ^20.19.0 || >=22.12.0}
 
-  '@google/genai@2.23.0':
-    resolution: {integrity: sha512-NFMzktoZ7jJg9AA3vUbWZocnkQP6DSGzL21ORwdVcBWkHli3k7v6B9zy07M4bTiKDAyIWfUh2J/oLYxCu0hNpQ==}
+  '@google/genai@2.24.0':
+    resolution: {integrity: sha512-bIu5eoxF1AaPWs9ivmUJGp1RpDHyapoODvWvnkzRDx2CTIW6UJXFhDdjj0BlRve3ZHMMuEkQBVrA/ALqpW4apA==}
     engines: {node: '>=20.0.0'}
     peerDependencies:
       '@modelcontextprotocol/sdk': ^1.25.2
@@ -4578,43 +4592,43 @@ packages:
     resolution: {integrity: sha512-3zcN5Q3yEmeyxXBzqB6fXPQFzYa2ROsGFSr69W0ArXIAGJqxl/aFECOVPD2kbkYPm0U/EHxFKgclK3UA9WQg5A==}
     engines: {node: ^22.22.2 || ^24.15.0 || >=26.0.0}
 
-  '@openai/codex@0.159.1':
-    resolution: {integrity: sha512-tCAmvOk40hcmVDefwV4Jae/i5eAMrl7qUCRYUq1uYiQGZoIIVSCa/b3Fs+0uXG46p4jaG2DzqhG/RIunvnOa1g==}
+  '@openai/codex@0.160.0':
+    resolution: {integrity: sha512-kEtVGzjRAYAMOwJxN39bGcna7LT3IDQgq64NNJ/dDTfu4OzZaocJcyNb5/gGJ/IVF/Vj7oK7E2m3nmTan7lpjg==}
     engines: {node: '>=16'}
     hasBin: true
 
-  '@openai/codex@0.159.1-darwin-arm64':
-    resolution: {integrity: sha512-asbXtXQerzPO8CL3t/5++Whj00k+NkbE4ngT56pCwx2/5JJVCI0glEjCECGK8rA0v4zb94EAZonxAcfOd+/1MA==}
+  '@openai/codex@0.160.0-darwin-arm64':
+    resolution: {integrity: sha512-aefV6cqZA2REZgR//4McyXlp7zLcTti4CI2v3j9IVgNndPBv2kCeNEcz07qeelXcwOdSFPUKb6roA48vZmDgrQ==}
     engines: {node: '>=16'}
     cpu: [arm64]
     os: [darwin]
 
-  '@openai/codex@0.159.1-darwin-x64':
-    resolution: {integrity: sha512-aCcslg6PejQSE/FhEFNk5JMQuiUYYTwWK2W/kAIZ18qSHFV0UHqqmSnHDSPOx1xClUGc9RhtAB6y9TO99hHk2Q==}
+  '@openai/codex@0.160.0-darwin-x64':
+    resolution: {integrity: sha512-ir7cdsPrb9VkqNqpTECoTiomv04xws/FQ968mHQzuL+2J5Da0Dkh2Qlxp7sguDDZJab4YpYmNjQvBVMXbTeQaQ==}
     engines: {node: '>=16'}
     cpu: [x64]
     os: [darwin]
 
-  '@openai/codex@0.159.1-linux-arm64':
-    resolution: {integrity: sha512-SUuxUCTWkvmzrCPIpRHMlivwSsL2STeUv6Dqm/TkUwYFfaqAQqZ8uIq8+d3SnYJsXiz1bkoiIdy8CSuptfEBfQ==}
+  '@openai/codex@0.160.0-linux-arm64':
+    resolution: {integrity: sha512-VnVdsS06YlDsL8OwaJjQ3xdqdJNG4i+eBJBV3LytddknzSaF/urijLzVg3ptkwvoj8C7Gn7iWpVE+y8WEaPiCg==}
     engines: {node: '>=16'}
     cpu: [arm64]
     os: [linux]
 
-  '@openai/codex@0.159.1-linux-x64':
-    resolution: {integrity: sha512-NmXTe4LDsShovyGYH5Q5AP2S5kRtY6wEWkAMGm28pYGQsjUd1MMSPBK7obnepYgaqX774jDF0w8jpDPmOLSx3w==}
+  '@openai/codex@0.160.0-linux-x64':
+    resolution: {integrity: sha512-KI/73OqGrHmR18s7ya7E1NqV6rT0y3lxr0s8S1qR2m6zU6QRF/HlR529jALLh5vjdUnsRT4Ahoxt0axb4kY99g==}
     engines: {node: '>=16'}
     cpu: [x64]
     os: [linux]
 
-  '@openai/codex@0.159.1-win32-arm64':
-    resolution: {integrity: sha512-6CY7Vkp+2aSkRFIlLBsifbU/jf1s58k9C6FVsW2pk/EpQHT5fPpUWVZqVDxiIlp7EXnCz8eRdSmFNVNuILMfyQ==}
+  '@openai/codex@0.160.0-win32-arm64':
+    resolution: {integrity: sha512-tTvK9ZIGuj9WnYaYOAnfjJVSfPV7dKqWtDHqUPLf0Hadp6SgynTxx7S7iMXRieFeXVOI2XH76KxEHSOTOnz3zw==}
     engines: {node: '>=16'}
     cpu: [arm64]
     os: [win32]
 
-  '@openai/codex@0.159.1-win32-x64':
-    resolution: {integrity: sha512-BUNLYw3oqwnpdV9pWKPccJ7WlbYG36SGPyGBzbnayvEl6D4RwucN7GOl+Qe05WRXI5is+kveieX1pg5uyBSIrg==}
+  '@openai/codex@0.160.0-win32-x64':
+    resolution: {integrity: sha512-/gCFcuOmGlQkgGivWCtY8BNEDixh70Pue0HZOk9S8bj2vUIE1GLD9zcNB/KqqDJmn0S+lIttauLpzQnw6HOCHA==}
     engines: {node: '>=16'}
     cpu: [x64]
     os: [win32]
@@ -8837,8 +8851,8 @@ packages:
     resolution: {integrity: sha512-cPkT6zjEcE4qU5OW/SoDDuXEsdOLrXlAORhzmaguj5xZSPlgKvLhi27sFWhLKj07Y6WKNWxcwIbzm512FzTBNQ==}
     hasBin: true
 
-  openai@7.20.0:
-    resolution: {integrity: sha512-5x5ru4cKEvEqHqYZbdIbT57OE7KqmP9YYxZiUKuKng016grOHXqom1vmu34MTPPW30q+lcP9RhxAbaRse+Xlcw==}
+  openai@7.23.0:
+    resolution: {integrity: sha512-0ecOXnFSMNWZq6cUBcTV6Lf93y+fm8BH/+QzFvpoP1UGNOE5pnytRa6HAPGCw+3IS9SIAW7rc1M8yyzN1PiBAQ==}
     engines: {node: '>=22.0.0'}
     peerDependencies:
       '@aws-sdk/credential-provider-node': 3.972.83
@@ -10322,10 +10336,10 @@ snapshots:
       zod: 3.25.76
       zod-to-json-schema: 3.25.2(zod@3.25.76)
 
-  '@agentclientprotocol/claude-agent-acp@0.79.0(@anthropic-ai/sdk@0.127.0(zod@4.6.5))(@modelcontextprotocol/sdk@1.30.1(supports-color@10.2.2)(zod@4.6.5))':
+  '@agentclientprotocol/claude-agent-acp@0.79.0(@anthropic-ai/sdk@0.128.0(zod@4.6.5))(@modelcontextprotocol/sdk@1.30.1(supports-color@10.2.2)(zod@4.6.5))':
     dependencies:
       '@agentclientprotocol/sdk': 1.4.0(zod@4.6.5)
-      '@anthropic-ai/claude-agent-sdk': 0.3.274(@anthropic-ai/sdk@0.127.0(zod@4.6.5))(@modelcontextprotocol/sdk@1.30.1(supports-color@10.2.2)(zod@4.6.5))(zod@4.6.5)
+      '@anthropic-ai/claude-agent-sdk': 0.3.274(@anthropic-ai/sdk@0.128.0(zod@4.6.5))(@modelcontextprotocol/sdk@1.30.1(supports-color@10.2.2)(zod@4.6.5))(zod@4.6.5)
       zod: 4.6.5
     transitivePeerDependencies:
       - '@anthropic-ai/sdk'
@@ -10334,13 +10348,17 @@ snapshots:
   '@agentclientprotocol/codex-acp@1.12.0':
     dependencies:
       '@agentclientprotocol/sdk': 1.4.0(zod@4.6.5)
-      '@openai/codex': 0.159.1
+      '@openai/codex': 0.160.0
       diff: 9.0.0
       open: 11.0.4
       vscode-jsonrpc: 9.0.2
       zod: 4.6.5
 
   '@agentclientprotocol/sdk@1.4.0(zod@4.6.5)':
+    dependencies:
+      zod: 4.6.5
+
+  '@agentclientprotocol/sdk@1.5.0(zod@4.6.5)':
     dependencies:
       zod: 4.6.5
 
@@ -10373,9 +10391,9 @@ snapshots:
   '@anthropic-ai/claude-agent-sdk-win32-x64@0.3.274':
     optional: true
 
-  '@anthropic-ai/claude-agent-sdk@0.3.274(@anthropic-ai/sdk@0.127.0(zod@4.6.5))(@modelcontextprotocol/sdk@1.30.1(supports-color@10.2.2)(zod@4.6.5))(zod@4.6.5)':
+  '@anthropic-ai/claude-agent-sdk@0.3.274(@anthropic-ai/sdk@0.128.0(zod@4.6.5))(@modelcontextprotocol/sdk@1.30.1(supports-color@10.2.2)(zod@4.6.5))(zod@4.6.5)':
     dependencies:
-      '@anthropic-ai/sdk': 0.127.0(zod@4.6.5)
+      '@anthropic-ai/sdk': 0.128.0(zod@4.6.5)
       '@modelcontextprotocol/sdk': 1.30.1(supports-color@10.2.2)(zod@4.6.5)
       zod: 4.6.5
     optionalDependencies:
@@ -10388,7 +10406,7 @@ snapshots:
       '@anthropic-ai/claude-agent-sdk-win32-arm64': 0.3.274
       '@anthropic-ai/claude-agent-sdk-win32-x64': 0.3.274
 
-  '@anthropic-ai/sdk@0.127.0(zod@4.6.5)':
+  '@anthropic-ai/sdk@0.128.0(zod@4.6.5)':
     dependencies:
       json-schema-to-ts: 3.1.1
       standardwebhooks: 1.1.1
@@ -10397,7 +10415,7 @@ snapshots:
 
   '@anthropic-ai/vertex-sdk@0.19.10(supports-color@10.2.2)(zod@4.6.5)':
     dependencies:
-      '@anthropic-ai/sdk': 0.127.0(zod@4.6.5)
+      '@anthropic-ai/sdk': 0.128.0(zod@4.6.5)
       google-auth-library: 11.1.0(supports-color@10.2.2)
     transitivePeerDependencies:
       - supports-color
@@ -11604,7 +11622,7 @@ snapshots:
       '@github/copilot-sdk-win32-arm64': 1.0.14
       '@github/copilot-sdk-win32-x64': 1.0.14
 
-  '@google/genai@2.23.0(@modelcontextprotocol/sdk@1.30.1(supports-color@10.2.2)(zod@4.6.5))(supports-color@10.2.2)':
+  '@google/genai@2.24.0(@modelcontextprotocol/sdk@1.30.1(supports-color@10.2.2)(zod@4.6.5))(supports-color@10.2.2)':
     dependencies:
       google-auth-library: 10.9.1(supports-color@10.2.2)
       p-retry: 4.6.2
@@ -12280,31 +12298,31 @@ snapshots:
 
   '@npmcli/redact@5.0.0': {}
 
-  '@openai/codex@0.159.1':
+  '@openai/codex@0.160.0':
     optionalDependencies:
-      '@openai/codex-darwin-arm64': '@openai/codex@0.159.1-darwin-arm64'
-      '@openai/codex-darwin-x64': '@openai/codex@0.159.1-darwin-x64'
-      '@openai/codex-linux-arm64': '@openai/codex@0.159.1-linux-arm64'
-      '@openai/codex-linux-x64': '@openai/codex@0.159.1-linux-x64'
-      '@openai/codex-win32-arm64': '@openai/codex@0.159.1-win32-arm64'
-      '@openai/codex-win32-x64': '@openai/codex@0.159.1-win32-x64'
+      '@openai/codex-darwin-arm64': '@openai/codex@0.160.0-darwin-arm64'
+      '@openai/codex-darwin-x64': '@openai/codex@0.160.0-darwin-x64'
+      '@openai/codex-linux-arm64': '@openai/codex@0.160.0-linux-arm64'
+      '@openai/codex-linux-x64': '@openai/codex@0.160.0-linux-x64'
+      '@openai/codex-win32-arm64': '@openai/codex@0.160.0-win32-arm64'
+      '@openai/codex-win32-x64': '@openai/codex@0.160.0-win32-x64'
 
-  '@openai/codex@0.159.1-darwin-arm64':
+  '@openai/codex@0.160.0-darwin-arm64':
     optional: true
 
-  '@openai/codex@0.159.1-darwin-x64':
+  '@openai/codex@0.160.0-darwin-x64':
     optional: true
 
-  '@openai/codex@0.159.1-linux-arm64':
+  '@openai/codex@0.160.0-linux-arm64':
     optional: true
 
-  '@openai/codex@0.159.1-linux-x64':
+  '@openai/codex@0.160.0-linux-x64':
     optional: true
 
-  '@openai/codex@0.159.1-win32-arm64':
+  '@openai/codex@0.160.0-win32-arm64':
     optional: true
 
-  '@openai/codex@0.159.1-win32-x64':
+  '@openai/codex@0.160.0-win32-x64':
     optional: true
 
   '@openclaw/crabline@0.1.28':
@@ -14007,7 +14025,7 @@ snapshots:
 
   acpx@0.19.1:
     dependencies:
-      '@agentclientprotocol/sdk': 1.4.0(zod@4.6.5)
+      '@agentclientprotocol/sdk': 1.5.0(zod@4.6.5)
       '@openclaw/fs-safe': 0.12.0
       commander: 15.0.0
       skillflag: 0.2.1
@@ -16760,7 +16778,7 @@ snapshots:
       - encoding
     optional: true
 
-  openai@7.20.0(@aws-sdk/credential-provider-node@3.972.83)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.3)(undici@8.11.2)(ws@8.21.3)(zod@4.6.5):
+  openai@7.23.0(@aws-sdk/credential-provider-node@3.972.83)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.3)(undici@8.11.2)(ws@8.21.3)(zod@4.6.5):
     optionalDependencies:
       '@aws-sdk/credential-provider-node': 3.972.83
       '@smithy/hash-node': 4.5.2

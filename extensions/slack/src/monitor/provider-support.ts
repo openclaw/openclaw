@@ -263,9 +263,7 @@ function formatSlackSdkLogArgs(args: readonly unknown[]) {
     .join(" ");
 }
 
-function createSlackSocketModeLogger(
-  sink: Pick<typeof console, "debug" | "info" | "warn" | "error"> = console,
-): SlackSocketModeLogger {
+function createSlackSocketModeLogger(): SlackSocketModeLogger {
   let level = "info" as SlackSdkLogLevel;
   let name = "socket-mode";
   const prefix = () => `socket-mode:${name}`;
@@ -287,11 +285,11 @@ function createSlackSocketModeLogger(
         return;
       }
       remember(args);
-      sink.warn(prefix(), ...args);
+      console.warn(prefix(), ...args);
     },
     error: (...args: unknown[]) => {
       remember(args);
-      sink.error(prefix(), ...args);
+      console.error(prefix(), ...args);
     },
     setLevel: (nextLevel) => {
       level = nextLevel;

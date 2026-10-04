@@ -21,7 +21,6 @@ import {
   isRetryableNativeHookRelayBridgeLookupError,
 } from "./native-hook-relay-bridge.js";
 import {
-  codexNativeHookRelayProviderAdapter,
   normalizeNativeHookInvocation,
   normalizeNativeHookToolName,
   readNativeHookRelayApprovalMode,
@@ -501,7 +500,6 @@ export async function invokeNativeHookRelay(
     processNativeHookRelayInvocation({
       registration: effectiveRegistration,
       invocation: normalized,
-      adapter: codexNativeHookRelayProviderAdapter,
       executionAdmission: readRelayLifetime(registration)?.executionAdmission,
       assertExecutionAdmissionCurrent,
     }),

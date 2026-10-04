@@ -5,6 +5,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import { createSqliteSchemaEnsurer } from "../infra/sqlite-schema-ensure.js";
 import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import type { DB as OpenClawStateDatabase } from "../state/openclaw-state-db.generated.js";
@@ -30,7 +31,6 @@ import type { NodeWorkerProcessIdentity } from "./node-worker-process-identity.j
 type TurnDatabase = Pick<OpenClawStateDatabase, "node_worker_turns">;
 type TurnRow = Selectable<TurnDatabase["node_worker_turns"]>;
 
-const initializedDatabases = new WeakSet<DatabaseSync>();
 const TERMINAL_RECEIPT_RETENTION_MS = 24 * 60 * 60 * 1_000;
 const TERMINAL_PRUNE_BATCH_LIMIT = 256;
 
@@ -38,15 +38,12 @@ function query(database: DatabaseSync) {
   return getNodeSqliteKysely<TurnDatabase>(database);
 }
 
-function ensureTurnSchema(database: DatabaseSync): void {
-  // sqlite-allow-raw -- Canonical feature-local additive DDL only.
-  database.exec(
-    extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "node_worker_turns", {
-      endMarker: "\n  WHERE state = 'running';",
-      errorMessage: "OpenClaw node worker turn schema marker is missing.",
-    }),
-  );
-}
+const turnSchema = createSqliteSchemaEnsurer(() =>
+  extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "node_worker_turns", {
+    endMarker: "\n  WHERE state = 'running';",
+    errorMessage: "OpenClaw node worker turn schema marker is missing.",
+  }),
+);
 
 function readRow(database: DatabaseSync, turnId: string): TurnRow | undefined {
   return executeSqliteQueryTakeFirstSync(
@@ -129,15 +126,11 @@ function pruneTerminal(database: DatabaseSync, nowMs: number, excludeTurnId: str
 
 /** Immutable turn outcomes attached to a separately supervised physical worker. */
 export class NodeWorkerTurnKernel {
-  private readonly databaseOptions: OpenClawStateDatabaseOptions;
-
   constructor(
-    options: OpenClawStateDatabaseOptions & {
+    private readonly databaseOptions: OpenClawStateDatabaseOptions & {
       database: NonNullable<OpenClawStateDatabaseOptions["database"]>;
     },
-  ) {
-    this.databaseOptions = options;
-  }
+  ) {}
 
   private write<T>(operationLabel: string, operation: (database: DatabaseSync) => T): T {
     let initialized: DatabaseSync | undefined;
@@ -147,8 +140,7 @@ export class NodeWorkerTurnKernel {
           stage: "transaction",
           facts: { kind: "node-worker-journal" },
         });
-        if (!initializedDatabases.has(db)) {
-          ensureTurnSchema(db);
+        if (turnSchema.ensure(db)) {
           initialized = db;
         }
         return operation(db);
@@ -157,7 +149,7 @@ export class NodeWorkerTurnKernel {
       { operationLabel },
     );
     if (initialized) {
-      initializedDatabases.add(initialized);
+      turnSchema.recordCommitted(initialized);
     }
     return result;
   }

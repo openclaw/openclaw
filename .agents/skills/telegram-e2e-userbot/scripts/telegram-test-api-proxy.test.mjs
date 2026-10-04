@@ -363,6 +363,7 @@ test("getFile timing ends when the streamed response finishes", async (t) => {
 });
 
 test("records completion timing on upstream and response-stream errors", async (t) => {
+  t.mock.method(console, "error", () => {});
   for (const [expectedStatus, fetchImpl] of [
     [
       502,
@@ -392,7 +393,42 @@ test("records completion timing on upstream and response-stream errors", async (
   }
 });
 
-test("proxy close aborts the in-flight Test Server request", async () => {
+test("reports upstream failures without exposing exception details or bot tokens", async (t) => {
+  const privateDetail = "synthetic-private-upstream-detail";
+  const cause = Object.assign(new Error(privateDetail), { code: "ECONNRESET" });
+  const diagnostic = t.mock.method(console, "error", () => {});
+  const proxy = await startTelegramTestApiProxy({
+    fetchImpl: async () => {
+      throw new TypeError(privateDetail, { cause });
+    },
+  });
+  t.after(() => proxy.close());
+
+  const response = await fetch(`${proxy.apiRoot}/bot123:ABC/deleteWebhook`, {
+    method: "POST",
+    body: "{}",
+  });
+
+  assert.equal(response.status, 502);
+  assert.deepEqual(await response.json(), {
+    ok: false,
+    description: "Telegram Test Server proxy failed.",
+  });
+  assert.equal(diagnostic.mock.calls.length, 1);
+  const line = diagnostic.mock.calls[0]?.arguments[0];
+  assert.equal(typeof line, "string");
+  assert.deepEqual(JSON.parse(line), {
+    event: "telegram_test_api_proxy_failure",
+    phase: "upstream-fetch",
+    method: "deleteWebhook",
+    errorClass: "TypeError",
+    errorCode: "ECONNRESET",
+  });
+  assert.doesNotMatch(line, /123:ABC|synthetic-private/u);
+});
+
+test("proxy close aborts the in-flight Test Server request", async (t) => {
+  t.mock.method(console, "error", () => {});
   let upstreamStarted;
   let upstreamAborted = false;
   const started = new Promise((resolve) => {
@@ -424,6 +460,7 @@ test("proxy close aborts the in-flight Test Server request", async () => {
 });
 
 test("lease revocation blocks every later Bot API request", async (t) => {
+  t.mock.method(console, "error", () => {});
   const leaseError = new Error("lease revoked");
   let healthy = true;
   let revoke;

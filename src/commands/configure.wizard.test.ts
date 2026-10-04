@@ -17,8 +17,7 @@ import {
 const { configureCommandFromSectionsArg } = await import("./configure.commands.js");
 
 const written = () => mocks.writeConfigFile.mock.calls.at(-1)![0];
-const configureWeb = () =>
-  runConfigureWizard({ command: "configure", sections: ["web"] }, createRuntime());
+const configureWeb = () => runConfigureWizard({ sections: ["web"] }, createRuntime());
 const nativeSearchConfig: OpenClawConfig = {
   auth: { profiles: { "openai:default": { provider: "openai", mode: "oauth" } } },
 };
@@ -64,7 +63,7 @@ describe("runConfigureWizard", () => {
       issues: [{ path: "browser.actionTimeoutTypoMs", message: "Unknown key" }],
     });
     const runtime = createRuntime();
-    await runConfigureWizard({ command: "configure" }, runtime);
+    await runConfigureWizard({}, runtime);
     expect(mocks.clackOutro).toHaveBeenCalledWith(
       "Config invalid. Run `openclaw doctor --fix` to apply supported repairs, then re-run configure.",
     );
@@ -191,7 +190,7 @@ describe("runConfigureWizard", () => {
         await mocks.writeConfigFile(nextConfig);
         return committedConfigFiles.write(nextConfig);
       });
-    await runConfigureWizard({ command: "configure", sections: ["workspace"] }, createRuntime());
+    await runConfigureWizard({ sections: ["workspace"] }, createRuntime());
     expect(mocks.replaceConfigFile).toHaveBeenCalledTimes(2);
     expect(mocks.writeConfigFile).toHaveBeenCalledOnce();
     expect(mocks.readConfigFileSnapshot).toHaveBeenCalledTimes(3);
@@ -206,9 +205,9 @@ describe("runConfigureWizard", () => {
         retryable: false,
       });
     });
-    await expect(
-      runConfigureWizard({ command: "configure", sections: ["workspace"] }, createRuntime()),
-    ).rejects.toThrow("config path changed since last load");
+    await expect(runConfigureWizard({ sections: ["workspace"] }, createRuntime())).rejects.toThrow(
+      "config path changed since last load",
+    );
     expect(mocks.replaceConfigFile).toHaveBeenCalledOnce();
     expect(mocks.readConfigFileSnapshot).toHaveBeenCalledTimes(2);
     expect(mocks.writeConfigFile).not.toHaveBeenCalled();
@@ -229,7 +228,7 @@ describe("runConfigureWizard", () => {
       return config;
     });
     await runConfigureWizard(
-      { command: "configure", sections: ["workspace", "plugins", "skills", "channels"] },
+      { sections: ["workspace", "plugins", "skills", "channels"] },
       createRuntime(),
     );
     expect(written().agents).toEqual({
@@ -263,10 +262,7 @@ describe("runConfigureWizard", () => {
     agentConfig({ agents: { entries: { ops: { workspace: "/tmp/ops" } } } });
     mocks.ensureWorkspaceAndSessions.mockRejectedValueOnce(new Error("workspace is unwritable"));
     await expect(
-      runConfigureWizard(
-        { command: "configure", sections: ["workspace", "plugins", "skills"] },
-        createRuntime(),
-      ),
+      runConfigureWizard({ sections: ["workspace", "plugins", "skills"] }, createRuntime()),
     ).rejects.toThrow("workspace is unwritable");
     expect(mocks.setupPluginConfig).not.toHaveBeenCalled();
     expect(mocks.setupSkills).not.toHaveBeenCalled();
@@ -279,7 +275,7 @@ describe("runConfigureWizard", () => {
     };
     agentConfig(config);
     mocks.clackSelect.mockResolvedValueOnce("remove");
-    await runConfigureWizard({ command: "configure", sections: ["channels"] }, createRuntime());
+    await runConfigureWizard({ sections: ["channels"] }, createRuntime());
     expect(mocks.setupChannels).not.toHaveBeenCalled();
     expect(mocks.clackSelect).toHaveBeenCalledOnce();
     expect(written()).toEqual(config);

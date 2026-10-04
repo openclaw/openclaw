@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { performance } from "node:perf_hooks";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { createDeferredCore } from "./deferred.js";
+import { runInDetachedAsyncContext } from "./detached-async-context.js";
 import { resolveGlobalSingleton } from "./global-singleton.js";
 
 const MAX_WRITERS_PER_TURN = 4;
@@ -83,7 +84,7 @@ function claimStoreWriterTurn(immediate: boolean): Promise<void> | undefined {
   return undefined;
 }
 
-function isActiveStoreWriter(
+export function isActiveStoreWriter(
   queues: StoreWriterQueues,
   storePath: string,
   keys?: ReadonlySet<string>,
@@ -299,7 +300,7 @@ export async function runQueuedStoreWrite<T>(params: {
     queue.pending.push(task);
     queue.wake?.();
     params.signal?.addEventListener("abort", abort, { once: true });
-    void drainStoreWriterQueue(params.queues, params.storePath);
+    runInDetachedAsyncContext(() => void drainStoreWriterQueue(params.queues, params.storePath));
   });
   if (params.signal) {
     // Observe cleanup without adding a settlement hop to the writer's result.

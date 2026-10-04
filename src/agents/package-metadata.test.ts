@@ -13,17 +13,15 @@ afterEach(() => fixtures.cleanup());
 
 function writePackage(root: string, manifest: Record<string, unknown>) {
   mkdirSync(join(root, "docs"), { recursive: true });
-  mkdirSync(join(root, "examples"), { recursive: true });
   writeFileSync(join(root, "package.json"), JSON.stringify({ type: "module", ...manifest }));
   writeFileSync(join(root, "README.md"), "fixture readme");
   writeFileSync(join(root, "docs", "guide.md"), "fixture guide");
-  writeFileSync(join(root, "examples", "example.txt"), "fixture example");
 }
 
 function expectedAssets(root: string) {
   return {
-    paths: [join(root, "README.md"), join(root, "docs"), join(root, "examples")],
-    contents: ["fixture readme", "fixture guide", "fixture example"],
+    paths: [join(root, "README.md"), join(root, "docs")],
+    contents: ["fixture readme", "fixture guide"],
   };
 }
 
@@ -48,7 +46,7 @@ const snapshotScript = String.raw`
   import { join } from "node:path";
   const metadata = await import(process.argv[1]);
   function snapshot() {
-    const paths = [metadata.getReadmePath(), metadata.getDocsPath(), metadata.getExamplesPath()];
+    const paths = [metadata.getReadmePath(), metadata.getDocsPath()];
     return {
       appName: metadata.APP_NAME,
       configDir: metadata.CONFIG_DIR_NAME,
@@ -58,7 +56,6 @@ const snapshotScript = String.raw`
       contents: [
         readFileSync(paths[0], "utf8"),
         readFileSync(join(paths[1], "guide.md"), "utf8"),
-        readFileSync(join(paths[2], "example.txt"), "utf8"),
       ],
     };
   }

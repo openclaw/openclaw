@@ -1644,30 +1644,20 @@ describe("CLI attempt execution", () => {
     });
     clearSessionStoreCacheForTest();
 
-    const nowCalls: number[] = [];
-    let nextNow = 10_000;
-    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => {
-      nextNow += 1_000;
-      nowCalls.push(nextNow);
-      return nextNow;
-    });
-    let updatedEntry: SessionEntry | undefined;
-    try {
-      const result = makeCliResult("hello from cli");
-      if (!result.meta.agentMeta) {
-        throw new Error("expected agent metadata");
-      }
-      result.meta.agentMeta.usage = { input: 12, output: 4, cacheRead: 3, total: 19 };
-      result.meta.agentMeta.lastCallUsage = { input: 7, output: 4, cacheRead: 2, total: 13 };
-      updatedEntry = await persistCliTranscriptEntry({
-        body: "persist this",
-        result,
-        ...transcriptContext(sessionKey, sessionEntry),
-        sessionStore,
-      });
-    } finally {
-      nowSpy.mockRestore();
+    const result = makeCliResult("hello from cli");
+    if (!result.meta.agentMeta) {
+      throw new Error("expected agent metadata");
     }
+    result.meta.agentMeta.usage = { input: 12, output: 4, cacheRead: 3, total: 19 };
+    result.meta.agentMeta.lastCallUsage = { input: 7, output: 4, cacheRead: 2, total: 13 };
+    const beforePersist = Date.now();
+    const updatedEntry = await persistCliTranscriptEntry({
+      body: "persist this",
+      result,
+      ...transcriptContext(sessionKey, sessionEntry),
+      sessionStore,
+    });
+    const afterPersist = Date.now();
 
     expect(updatedEntry).not.toHaveProperty("sessionFile");
     const target = transcriptTarget(sessionKey, sessionEntry);
@@ -1709,7 +1699,8 @@ describe("CLI attempt execution", () => {
     const persisted = readSessionStore();
     expect(persisted[sessionKey]).not.toHaveProperty("sessionFile");
     expect(persisted[sessionKey]?.updatedAt).toBeGreaterThan(sessionEntry.updatedAt);
-    expect(persisted[sessionKey]?.updatedAt).toBeLessThanOrEqual(nowCalls.at(-1) ?? 0);
+    expect(persisted[sessionKey]?.updatedAt).toBeGreaterThanOrEqual(beforePersist);
+    expect(persisted[sessionKey]?.updatedAt).toBeLessThanOrEqual(afterPersist);
     expect(sessionStore[sessionKey]?.updatedAt).toBe(persisted[sessionKey]?.updatedAt);
   });
 

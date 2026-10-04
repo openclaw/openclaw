@@ -14,12 +14,14 @@ import {
 import type { ReplyDispatcherOptions } from "../../auto-reply/reply/reply-dispatcher.js";
 import type { ReplyDispatchOperation } from "../../auto-reply/reply/reply-dispatcher.types.js";
 import {
-  loadTranscriptEventRowsAfterSeqSync,
-  readActiveTranscriptEntryAnchor,
   readSessionTranscriptWatermark,
   resolveSessionTranscriptDatabasePath,
   waitForSessionTranscriptProjection,
 } from "../../config/sessions/session-accessor.js";
+import {
+  readActiveTranscriptEntryAnchorAsync,
+  readSessionTranscriptAnchorsAsync,
+} from "../../config/sessions/session-transcript-anchor-read.js";
 import {
   recordAssistantManagedMediaUrls,
   type PrepareAssistantTranscriptMessage,
@@ -70,9 +72,10 @@ import {
   type DeliveredChatSendReply,
 } from "./chat-send-command-replies.js";
 import { observeChatSendCommentaryMedia } from "./chat-send-commentary-media.js";
+import { resolveChatReplyDeliveryFromAnchors } from "./chat-send-reply-delivery.js";
 import type { PreparedChatSendSession } from "./chat-send-session.js";
+import { appendInjectedAssistantMessageToTranscript } from "./chat-transcript-inject.js";
 import {
-  appendAssistantTranscriptMessage,
   assistantTranscriptScope,
   publishAssistantTranscriptRewrite,
   rewriteAssistantTranscriptMessageByIdempotencyKey,
@@ -254,7 +257,14 @@ export function createChatSendReplyDispatch(params: {
     if (!isCurrent()) {
       return "missing";
     }
-    const input = readActiveTranscriptEntryAnchor(admission);
+    const initial = await readSessionTranscriptAnchorsAsync(scope, {
+      entryIds: [admission.entryId],
+      afterSeq: transcriptStart.afterSeq,
+    });
+    if (!isCurrent()) {
+      return "missing";
+    }
+    const input = initial.anchors[0];
     if (!input || input.rawSeq !== admission.rawSeq) {
       return "missing";
     }
@@ -263,20 +273,15 @@ export function createChatSendReplyDispatch(params: {
     const candidateIds: string[] = [];
     // Stream indices also advance between content blocks. Fence with committed input
     // identities instead of treating the number of persisted assistant rows as an index.
-    for (const { event } of loadTranscriptEventRowsAfterSeqSync(scope, transcriptStart.afterSeq)) {
-      const row = asOptionalRecord(event);
-      const message = asOptionalRecord(row?.message);
-      if (typeof row?.id !== "string") {
-        continue;
-      }
-      if (message?.role === "user") {
-        const anchor = readActiveTranscriptEntryAnchor({ ...scope, entryId: row.id });
+    for (const row of initial.tail?.entries ?? []) {
+      if (row.role === "user") {
+        const anchor = row.anchor;
         if (anchor && anchor.activeMessagePosition > latestInputPosition) {
           latestInputPosition = anchor.activeMessagePosition;
           latestInputId = anchor.entryId;
         }
-      } else if (message?.role === "assistant" && readSessionTranscriptRunId(message) === runId) {
-        candidateIds.push(row.id);
+      } else if (row.role === "assistant" && row.runId === runId) {
+        candidateIds.push(row.entryId);
       }
     }
     if (minimumAssistantMessageIndex > 0 && latestInputId === input.entryId) {
@@ -287,7 +292,8 @@ export function createChatSendReplyDispatch(params: {
         currentOnly: true,
         maxBytes: Number.MAX_SAFE_INTEGER,
       });
-      if (!isCurrent() || !readActiveTranscriptEntryAnchor(admission)) {
+      const admitted = await readActiveTranscriptEntryAnchorAsync(admission);
+      if (!isCurrent() || !admitted) {
         return "missing";
       }
       if (!stored.found) {
@@ -310,42 +316,38 @@ export function createChatSendReplyDispatch(params: {
         extractAssistantPhaseText(projectChatDisplayMessage(message))
       ) {
         const currentWatermark = await readSessionTranscriptWatermarkAsync(scope);
-        if (!isCurrent() || !readActiveTranscriptEntryAnchor(admission)) {
+        // Consume final facts inside the existing writer FIFO; projection repair and
+        // message restoration above must stay outside because they can need that writer.
+        let decision: ReplyDeliveryState | undefined = "pending";
+        await readSessionTranscriptAnchorsAsync(
+          scope,
+          {
+            entryIds: [admission.entryId, latestInputId, messageId],
+            afterSeq: transcriptStart.afterSeq,
+          },
+          undefined,
+          (facts) => {
+            if (!isCurrent()) {
+              decision = "missing";
+              return;
+            }
+            decision = resolveChatReplyDeliveryFromAnchors({
+              facts,
+              admissionId: admission.entryId,
+              inputId: latestInputId,
+              messageId,
+              afterSeq: transcriptStart.afterSeq,
+              watermark,
+              currentWatermark,
+            });
+          },
+        );
+        if (!isCurrent()) {
           return "missing";
         }
-        const currentInput = readActiveTranscriptEntryAnchor({ ...scope, entryId: latestInputId });
-        if (!currentInput) {
-          return "missing";
+        if (decision !== undefined) {
+          return decision;
         }
-        const anchor = readActiveTranscriptEntryAnchor({ ...scope, entryId: messageId });
-        if (
-          !anchor ||
-          anchor.rawSeq <= transcriptStart.afterSeq ||
-          anchor.activeMessagePosition <= currentInput.activeMessagePosition
-        ) {
-          continue;
-        }
-        const rows = loadTranscriptEventRowsAfterSeqSync(scope, transcriptStart.afterSeq);
-        // A worker snapshot can settle after a new input or branch has committed.
-        for (const { event } of rows) {
-          const row = asOptionalRecord(event);
-          if (asOptionalRecord(row?.message)?.role !== "user" || typeof row?.id !== "string") {
-            continue;
-          }
-          const newerInput = readActiveTranscriptEntryAnchor({ ...scope, entryId: row.id });
-          if (newerInput && newerInput.activeMessagePosition > anchor.activeMessagePosition) {
-            return "missing";
-          }
-        }
-        if (
-          currentWatermark.generation !== watermark.generation ||
-          currentWatermark.maxSeq !== watermark.maxSeq ||
-          anchor.generation !== currentWatermark.generation ||
-          rows.at(-1)?.seq !== currentWatermark.maxSeq
-        ) {
-          return "pending";
-        }
-        return "delivered";
       }
     }
     return "missing";
@@ -507,6 +509,8 @@ export function createChatSendReplyDispatch(params: {
         content: persistedContentForAppend,
         expectedGeneration: assistantTranscriptRewriteState.generation,
         mediaUrls: sourceMediaUrls,
+        rejectedMediaCount: mediaFailures.filter((failure) => failure.code === "invalid-reference")
+          .length,
         scope: transcriptScope,
       });
       if (indexedRewrite) {
@@ -562,14 +566,13 @@ export function createChatSendReplyDispatch(params: {
     const appendContent = isRuntimeMediaSupplement
       ? persistedContentForAppend.filter((block) => block.type !== "text")
       : persistedContentForAppend;
-    const appended = await appendAssistantTranscriptMessage({
+    const appended = await appendInjectedAssistantMessageToTranscript({
       sessionKey,
       message: isRuntimeMediaSupplement ? "" : transcriptReply,
       content: appendContent,
       sessionId,
       storePath: latestStorePath,
       agentId,
-      createIfMissing: true,
       // Runtime message identity is the dedupe boundary; distinct rows must not collapse
       // onto the single unkeyed media fallback used by tool/audio-only payloads.
       idempotencyKey:
@@ -577,7 +580,7 @@ export function createChatSendReplyDispatch(params: {
           ? `${clientRunId}:assistant-media:${assistantMessageIndex}`
           : `${clientRunId}:assistant-media`,
       ttsSupplement: ttsSupplementMarker,
-      cfg,
+      config: cfg,
       onMessageCommitted: (receipt, acceptCompletion) => {
         const blocks = readAssistantDisplayContent(receipt.message);
         if (hasManagedOutgoingAssistantContent(blocks)) {

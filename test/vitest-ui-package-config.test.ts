@@ -55,20 +55,25 @@ function requireTestConfig(config: unknown): ExpectedTestConfig {
   return config.test as ExpectedTestConfig;
 }
 
-function requireAlias(config: unknown, specifier: string): { find: string; replacement: string } {
+function requireAlias(
+  config: unknown,
+  specifier: string,
+): { find: string | RegExp; replacement: string } {
   const aliases = (config as { resolve?: { alias?: unknown } }).resolve?.alias;
   if (!Array.isArray(aliases)) {
     throw new Error("expected ui package vitest aliases");
   }
-  const alias = aliases.find((candidate): candidate is { find: string; replacement: string } =>
-    Boolean(
-      candidate &&
-      typeof candidate === "object" &&
-      "find" in candidate &&
-      candidate.find === specifier &&
-      "replacement" in candidate &&
-      typeof candidate.replacement === "string",
-    ),
+  const alias = aliases.find(
+    (candidate): candidate is { find: string | RegExp; replacement: string } =>
+      Boolean(
+        candidate &&
+        typeof candidate === "object" &&
+        "find" in candidate &&
+        (candidate.find === specifier ||
+          (candidate.find instanceof RegExp && candidate.find.test(specifier))) &&
+        "replacement" in candidate &&
+        typeof candidate.replacement === "string",
+      ),
   );
   if (!alias) {
     throw new Error(`missing ui package vitest alias ${specifier}`);
@@ -136,16 +141,6 @@ describe("ui package vitest config", () => {
         rows: Array<{
           original: string[];
           selected: Record<string, Array<{ runtime: string; files: string[] }>>;
-          receipts: Array<{
-            requestId: string;
-            value: {
-              version: number;
-              requestId: string;
-              config: string;
-              root: string;
-              files: string[];
-            };
-          }>;
         }>;
         empty: { modules: number; errors: number };
         emptyDiscoveryAllowed: boolean;
@@ -234,23 +229,11 @@ describe("ui package vitest config", () => {
           .toSorted(),
       ).toEqual(report.discovered);
       for (const row of report.rows) {
-        expect(row.receipts).toHaveLength(3);
-        for (const { requestId, value } of row.receipts) {
-          expect(value).toEqual({
-            version: 1,
-            requestId,
-            config: path.join(process.cwd(), "ui/vitest.config.ts").replaceAll("\\", "/"),
-            root: path.join(process.cwd(), "ui").replaceAll("\\", "/"),
-            files: expect.any(Array),
-          });
-          // Every runtime invocation must retain the complete native shard receipt.
-          expect(value.files.toSorted()).toEqual(row.original);
-        }
         const compatible = row.selected["bun-compatible"]!;
         expect(compatible).toEqual([{ runtime: "bun", files: row.original }]);
         expect(row.selected.dual).toEqual([
           { runtime: "node", files: row.original },
-          compatible[0],
+          { runtime: "bun", files: row.original },
         ]);
       }
     }));
@@ -599,9 +582,24 @@ describe("ui package vitest config", () => {
     expect(testConfig.clearMocks).toBe(false);
   });
 
+  it("keeps Node dependency shims out of standalone UI projects", () => {
+    const projects = requireTestConfig(uiConfig).projects ?? [];
+    for (const config of [uiConfig, ...projects]) {
+      for (const specifier of ["zod", "undici", "ws"]) {
+        expect(() => requireAlias(config, specifier)).toThrow(
+          `missing ui package vitest alias ${specifier}`,
+        );
+      }
+    }
+  });
+
   it.each([
     ["@openclaw/gateway-client/scope-upgrade", "packages/gateway-client/src/scope-upgrade.ts"],
+    ["@openclaw/worker-runtime", "packages/worker-runtime/src/index.ts"],
+    ["@openclaw/worker-runtime/worker", "packages/worker-runtime/src/worker.ts"],
+    ["@openclaw/worker-runtime/lifecycle", "packages/worker-runtime/src/lifecycle.ts"],
     ["openclaw/plugin-sdk/control-ui", "src/plugin-sdk/control-ui.ts"],
+    ["../logging/redact.js", "ui/src/lib/browser-redact.ts"],
   ])("aliases %s from source in every standalone UI project", (specifier, source) => {
     const projects = requireTestConfig(uiConfig).projects ?? [];
     for (const config of [uiConfig, ...projects]) {

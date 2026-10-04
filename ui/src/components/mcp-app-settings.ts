@@ -1,10 +1,7 @@
 import { html, nothing } from "lit";
 import { ifDefined } from "lit/directives/if-defined.js";
 import { live } from "lit/directives/live.js";
-import type {
-  McpAppSettings,
-  McpAppSettingSchema,
-} from "../../../src/shared/mcp-app-extensions.js";
+import type { McpAppSettings } from "../../../src/shared/mcp-app-extensions.js";
 import { t } from "../i18n/index.ts";
 import { registerMcpAppEnglish } from "../i18n/locales/en-mcp-app.ts";
 
@@ -24,7 +21,7 @@ export function renderMcpAppSettings(view: McpAppSettingsView) {
   const hasChanges = () =>
     Object.entries(values).some(([key, value]) => settings.values[key] !== value);
   const field = (key: string) => {
-    const schema: McpAppSettingSchema | undefined = settings.schema.properties[key];
+    const schema = settings.schema.properties[key];
     if (!schema) {
       return nothing;
     }

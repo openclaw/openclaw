@@ -105,6 +105,7 @@ internal class IncomingCallController(
   private var endpoints: List<CallEndpoint> = emptyList()
   private var currentRouteIsEarpiece = false
   private val proximity = IncomingCallProximity(context, scope)
+  private val reconnectTone = IncomingCallReconnectTone(scope)
   private val completed = LinkedHashMap<String, IncomingCallState>()
   private val notificationManager = context.getSystemService(NotificationManager::class.java)
 
@@ -359,6 +360,7 @@ internal class IncomingCallController(
       return false
     }
     if (recovering) {
+      reconnectTone.start()
       startRecoveryAttempt()
     } else {
       val generation = ++audioGeneration
@@ -424,6 +426,7 @@ internal class IncomingCallController(
           finish(IncomingCallStatus.Error, "Android could not keep the call active")
           return@launch
         }
+        reconnectTone.start()
       }
       startRecoveryAttempt()
     }
@@ -465,11 +468,13 @@ internal class IncomingCallController(
           authority = freshAuthority
           try {
             updateMute()
+            reconnectTone.stop()
             startAudio(id, call.invite.sessionKey, true)
             // Never let an old completion stop a newer attempt sharing the same call id.
             if (generation != audioGeneration) return@launch
             if (!isCurrent(id)) {
               stopAudio(id)
+              reconnectTone.start()
               continue
             }
             audioConnected()
@@ -484,12 +489,14 @@ internal class IncomingCallController(
           }
           if (generation != audioGeneration) return@launch
           stopAudio(id)
+          reconnectTone.start()
         }
       }
     audioJob?.start()
   }
 
   private fun audioConnected() {
+    reconnectTone.stop()
     recovering = false
     recoveryAttempt = 0
     recoveryDeadlineJob?.cancel()
@@ -554,6 +561,7 @@ internal class IncomingCallController(
   ) {
     val call = _state.value ?: return
     if (call.status.isTerminal) return
+    reconnectTone.stop()
     currentRouteIsEarpiece = false
     proximity.setEarpieceCallActive(false)
     expiryJob?.cancel()

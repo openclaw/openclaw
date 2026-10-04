@@ -1116,19 +1116,15 @@ extension OpenClawChatViewModel {
 
     private func scheduleOutboxRetry(afterAttempts attempts: Int) {
         let delays = self.outboxRetryDelaysMs
-        guard !delays.isEmpty else {
-            self.outboxRetryTask?.cancel()
-            self.outboxRetryTask = Task { [weak self] in
-                await Task.yield()
-                self?.flushOutboxIfNeeded()
-            }
-            return
-        }
-        let delayMs = delays[min(max(attempts - 1, 0), delays.count - 1)]
+        let delayMs = delays.isEmpty ? nil : delays[min(max(attempts - 1, 0), delays.count - 1)]
         self.outboxRetryTask?.cancel()
         self.outboxRetryTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: delayMs * 1_000_000)
-            guard !Task.isCancelled else { return }
+            if let delayMs {
+                try? await Task.sleep(nanoseconds: delayMs * 1_000_000)
+                guard !Task.isCancelled else { return }
+            } else {
+                await Task.yield()
+            }
             self?.flushOutboxIfNeeded()
         }
     }

@@ -1,4 +1,5 @@
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
+import { SqliteJsonlReadBudgetExceededError } from "../../infra/sqlite-jsonl-budget.js";
 import {
   encodeOpenClawStateWorkerError,
   hydrateOpenClawStateWorkerError,
@@ -32,6 +33,9 @@ export class SessionHistoryDeltaPreparationError extends Error {
 export function encodeSessionTranscriptWorkerError(
   error: unknown,
 ): SessionTranscriptWorkerReadError | undefined {
+  if (error instanceof SqliteJsonlReadBudgetExceededError) {
+    return { kind: "jsonl-budget", message: error.message };
+  }
   if (error instanceof SessionTranscriptStorageUnavailableError) {
     return { kind: "storage", reason: error.reason };
   }
@@ -69,6 +73,7 @@ export function encodeSessionTranscriptRequestError(
     request.kind === "history-page" &&
     (request.request.kind === "message-lookup" ||
       request.request.kind === "message-by-id" ||
+      request.request.kind === "rpc-message" ||
       request.request.kind === "message-count" ||
       request.request.kind === "artifacts" ||
       request.request.kind === "message-page" ||
@@ -97,6 +102,9 @@ export function unwrapSessionTranscriptWorkerReply<
 export function decodeSessionTranscriptWorkerReadError(
   failure: SessionTranscriptWorkerReadError,
 ): Error {
+  if (failure.kind === "jsonl-budget") {
+    return new SqliteJsonlReadBudgetExceededError(failure.message);
+  }
   if (failure.kind === "read-error") {
     const error = new Error(failure.message);
     retainOpenClawStateWorkerErrorPayload(error, failure.payload);

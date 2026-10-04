@@ -143,7 +143,7 @@ function shouldSkipRuntimeFile(filePath: string): boolean {
   ) {
     return true;
   }
-  return /(\.(test|spec|d)\.(ts|tsx|js|jsx|mjs|cjs)$|\/(test|tests|__tests__|test-support)\/|test-(helpers|support|harness|mocks|fixtures|runtime|shared|utils)|\.test-(helpers|support|harness|mocks|fixtures|runtime|shared|utils)|fixture-test-support|mock-setup|test-fixtures|test-runtime-mocks|\.harness\.|e2e-harness|\.mock\.|-mock\.|-mocks\.|mocks-test-support|\.fixture|\.fixtures)/.test(
+  return /(\.(test|spec|d)\.(ts|tsx|js|jsx|mjs|cjs)$|\/(test|tests|__tests__|test-support)\/|test-(api|helpers|support|harness|mocks|fixtures|runtime|shared|utils)|\.test-(api|helpers|support|harness|mocks|fixtures|runtime|shared|utils)|fixture-test-support|mock-setup|test-fixtures|test-runtime-mocks|\.harness\.|e2e-harness|\.mock\.|-mock\.|-mocks\.|mocks-test-support|\.fixture|\.fixtures)/.test(
     normalized,
   );
 }

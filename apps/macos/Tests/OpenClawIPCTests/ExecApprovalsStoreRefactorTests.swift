@@ -29,10 +29,10 @@ struct ExecApprovalsStoreRefactorTests {
     }
 
     @Test
-    func `ensure store reuses socket token when unchanged`() async throws {
+    func `resolving approvals reuses socket token when unchanged`() async throws {
         try await self.withTempStateDir { _ in
-            let first = ExecApprovalsStore.ensureFile()
-            let second = ExecApprovalsStore.ensureFile()
+            let first = ExecApprovalsStore.resolve(agentId: "main").file
+            let second = ExecApprovalsStore.resolve(agentId: "main").file
 
             #expect(first.socket?.token == "test-token")
             #expect(second.socket?.token == first.socket?.token)
@@ -276,7 +276,7 @@ struct ExecApprovalsStoreRefactorTests {
                 }
                 """)
 
-            _ = ExecApprovalsStore.ensureFile()
+            _ = ExecApprovalsStore.resolve(agentId: "main")
             let entry = try #require(Self.readStoredFile().agents?["main"]?.allowlist?.first)
             #expect(entry.id == "ts:approval/id")
             #expect(entry.pattern == "/usr/bin/python3")
@@ -886,12 +886,12 @@ struct ExecApprovalsStoreRefactorTests {
 
 extension ExecApprovalsStoreRefactorTests {
     @Test
-    func `ensure file migrates legacy pattern from resolved path`() async throws {
+    func `resolving approvals migrates legacy pattern from resolved path`() async throws {
         try await self.withTempStateDir { _ in
             try Self.replaceRawJSON(
                 #"{"version":1,"agents":{"main":{"allowlist":[{"pattern":"echo","lastResolvedPath":" /usr/bin/echo "}]}}}"#)
 
-            let ensured = ExecApprovalsStore.ensureFile()
+            let ensured = ExecApprovalsStore.resolve(agentId: "main").file
             #expect(ensured.agents?["main"]?.allowlist?.map(\.pattern) == ["/usr/bin/echo"])
             #expect(ExecApprovalsStore.resolve(agentId: "main").allowlist.map(\.pattern) == ["/usr/bin/echo"])
         }
@@ -903,7 +903,7 @@ extension ExecApprovalsStoreRefactorTests {
             try Self.replaceRawJSON(
                 #"{"version":1,"agents":{"main":{"allowlist":["/bin/echo"]}}}"#)
 
-            let first = try #require(ExecApprovalsStore.ensureFile().agents?["main"]?.allowlist?.first)
+            let first = try #require(ExecApprovalsStore.resolve(agentId: "main").file.agents?["main"]?.allowlist?.first)
             let second = try #require(Self.readStoredFile().agents?["main"]?.allowlist?.first)
 
             #expect(first.id == second.id)

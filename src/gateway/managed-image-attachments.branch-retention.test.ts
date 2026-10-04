@@ -54,7 +54,7 @@ beforeEach(() => {
   savedEnv = captureEnv(["OPENCLAW_STATE_DIR"]);
   stateDir = fs.realpathSync(tempDirs.make("managed-branch-retention-"));
   setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
-  setRuntimeConfigSnapshot({ agents: { list: [{ id: "main" }] } });
+  setRuntimeConfigSnapshot({ agents: { entries: { main: {} } } });
 });
 
 afterEach(async () => {

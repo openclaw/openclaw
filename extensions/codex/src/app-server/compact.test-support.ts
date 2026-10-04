@@ -20,6 +20,7 @@ import {
   writeCodexAppServerBinding,
 } from "./session-binding.test-helpers.js";
 import type { CodexAppServerClientFactory } from "./shared-client.js";
+import { createClientHarness } from "./test-support.js";
 import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
 let codexAppServerClientFactoryForTest: CodexAppServerClientFactory | undefined;
@@ -322,7 +323,7 @@ export function createFakeCodexCompactionClient(
 ): {
   client: CodexAppServerClient;
   request: ReturnType<typeof vi.fn<CodexAppServerClient["request"]>>;
-  close: ReturnType<typeof vi.fn>;
+  close: ReturnType<typeof vi.fn<CodexAppServerClient["close"]>>;
   closeAndWait: ReturnType<typeof vi.fn<CodexAppServerClient["closeAndWait"]>>;
   emit: (notification: CodexServerNotification) => void;
   completeCompaction: () => void;
@@ -500,7 +501,10 @@ export function createFakeCodexCompactionClient(
       return {};
     },
   );
+  const { client } = createClientHarness();
+  const closeTransport = client.close.bind(client);
   const close = vi.fn(() => {
+    closeTransport();
     for (const handler of closeHandlers) {
       handler();
     }
@@ -548,7 +552,7 @@ export function createFakeCodexCompactionClient(
       return () => handlers.delete(handler);
     },
   );
-  const client = {
+  Object.assign(client, {
     request,
     getInstanceId: vi.fn(() => "fake-compaction-client"),
     getTransportPid: () => undefined,
@@ -560,7 +564,7 @@ export function createFakeCodexCompactionClient(
       closeHandlers.add(handler);
       return () => closeHandlers.delete(handler);
     }),
-  } as unknown as CodexAppServerClient;
+  });
   ensureCodexAppServerClientRuntime(client, { agentDir: tempDir });
   addNotificationHandler.mockClear();
   if (retainedThreadId) {
@@ -579,4 +583,19 @@ export function createFakeCodexCompactionClient(
     emit,
     completeCompaction,
   };
+}
+
+export const compactUnboundedRequestOptions = {
+  assertCurrent: expect.any(Function),
+  withCurrent: expect.any(Function),
+  signal: expect.any(AbortSignal),
+};
+export const compactStartRequestOptions = { timeoutMs: 60_000, ...compactUnboundedRequestOptions };
+
+export function expectCompactStartRequest(
+  request: ReturnType<typeof createFakeCodexCompactionClient>["request"],
+  threadId: string,
+  options: typeof compactStartRequestOptions | typeof compactUnboundedRequestOptions,
+): void {
+  expect(request).toHaveBeenCalledWith("thread/compact/start", { threadId }, options);
 }

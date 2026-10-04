@@ -5,44 +5,33 @@ import { KEYBOARD_SHORTCUT_COMBOS } from "../lib/keyboard-shortcut-contract.ts";
 import { renderKbd, renderKeyboardShortcut, renderShortcutText } from "./kbd.ts";
 
 describe("shared keyboard hints", () => {
-  it("renders Apple modifiers as real SVG and retains the original platform shortcut text", () => {
-    const host = document.createElement("div");
-    render(
-      renderKeyboardShortcut(KEYBOARD_SHORTCUT_COMBOS.browserPanel, { applePlatform: true }),
-      host,
-    );
-    expect(host.querySelectorAll("kbd")).toHaveLength(1);
-    expect(host.querySelectorAll("svg")).toHaveLength(3);
-    expect(host.textContent?.replace(/\s+/gu, "")).toBe("⌘⌥⇧U");
-    for (const icon of host.querySelectorAll("svg")) {
-      expect(icon.querySelector("path")?.namespaceURI).toBe("http://www.w3.org/2000/svg");
-      expect(icon.closest('[aria-hidden="true"]')).not.toBeNull();
-    }
-    for (const symbol of host.querySelectorAll(".kbd__symbol")) {
-      expect(symbol.closest('[aria-hidden="true"]')).toBeNull();
-    }
-  });
-
-  it("keeps non-Apple labels and separate keycap grouping", () => {
-    const host = document.createElement("div");
-    render(
-      renderKeyboardShortcut(KEYBOARD_SHORTCUT_COMBOS.browserPanel, { applePlatform: false }),
-      host,
-    );
-    expect(host.textContent).toBe("Ctrl+Alt+Shift+U");
-    expect(host.querySelector("svg")).toBeNull();
-    render(
-      renderKeyboardShortcut(KEYBOARD_SHORTCUT_COMBOS.newline, {
-        applePlatform: true,
-        separateKeys: true,
-      }),
-      host,
-    );
-    expect(Array.from(host.querySelectorAll("kbd"), (key) => key.textContent?.trim())).toEqual([
-      "⇧",
-      "⏎",
-    ]);
-  });
+  it.each([
+    [KEYBOARD_SHORTCUT_COMBOS.browserPanel, true, false, ["⌘⌥⇧U"], 3],
+    [KEYBOARD_SHORTCUT_COMBOS.browserPanel, false, false, ["Ctrl+Alt+Shift+U"], 0],
+    [KEYBOARD_SHORTCUT_COMBOS.newline, true, true, ["⇧", "⏎"], 2],
+  ] as const)(
+    "renders platform labels and keycaps for %j (Apple: %s, separate: %s)",
+    (combo, applePlatform, separateKeys, labels, iconCount) => {
+      const host = document.createElement("div");
+      render(renderKeyboardShortcut(combo, { applePlatform, separateKeys }), host);
+      const keys = host.querySelectorAll("kbd");
+      expect(keys).toHaveLength(labels.length);
+      if (separateKeys) {
+        expect(Array.from(keys, (key) => key.textContent?.trim())).toEqual(labels);
+      }
+      expect(host.querySelectorAll("svg")).toHaveLength(iconCount);
+      expect(applePlatform ? host.textContent?.replace(/\s+/gu, "") : host.textContent).toBe(
+        labels.join(""),
+      );
+      for (const icon of host.querySelectorAll("svg")) {
+        expect(icon.querySelector("path")?.namespaceURI).toBe("http://www.w3.org/2000/svg");
+        expect(icon.closest('[aria-hidden="true"]')).not.toBeNull();
+      }
+      for (const symbol of host.querySelectorAll(".kbd__symbol")) {
+        expect(symbol.closest('[aria-hidden="true"]')).toBeNull();
+      }
+    },
+  );
 
   it("preserves caller slots, hidden state, literal labels and translated placement", () => {
     const host = document.createElement("div");

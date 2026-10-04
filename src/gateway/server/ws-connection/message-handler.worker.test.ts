@@ -10,11 +10,15 @@ import {
   WORKER_GATEWAY_TOOLS_PROTOCOL_FEATURE,
   WORKER_GATEWAY_TOOL_METHODS,
 } from "../../../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
-import { WORKER_INFERENCE_PROTOCOL_FEATURE } from "../../../../packages/gateway-protocol/src/schema/worker-inference.js";
+import {
+  WORKER_INFERENCE_PROTOCOL_FEATURE,
+  WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES,
+} from "../../../../packages/gateway-protocol/src/schema/worker-inference.js";
 import { createNoisyPngBuffer } from "../../../../test/helpers/image-fixtures.js";
 import { prepareSystemAgentRunAdmission } from "../../../agents/admitted-run-context.js";
 import { prepareCoreToolPolicy } from "../../../agents/prepared-tool-surface.js";
 import type { SessionPlacementTurnParams } from "../../../agents/session-placement-admission.js";
+import { createToolSurfacePresentationForTest } from "../../../agents/tool-surface-plan.test-support.js";
 import {
   beginGatewayRestartSignalAdmission,
   tryBeginGatewayRootWorkAdmission,
@@ -88,40 +92,50 @@ describe("dedicated worker websocket protocol", () => {
     },
   );
 
-  it.each([0, 1])(
-    "budgets the complete encoded hello at the control limit plus %s byte",
-    async (extra) => {
-      vi.useFakeTimers();
-      const harness = attachHarness({ identity: ATTACHED_IDENTITY });
-      const definition = { name: "read", label: "Read", description: "", parameters: {} };
-      const surface = {
-        generation: "surface",
-        tools: [{ id: "read", execution: "placement" as const, definition }],
-        policy: prepareCoreToolPolicy({}),
-      };
-      const frame = {
-        type: "res",
-        id: "connect-1",
-        ok: true,
-        payload: { ...buildWorkerHello(ATTACHED_IDENTITY), toolSurface: surface },
-      };
-      const available =
-        WORKER_PROTOCOL_MAX_PAYLOAD_BYTES - Buffer.byteLength(JSON.stringify(frame));
-      definition.description = "x".repeat(available + extra);
-      harness.service.getToolSurface.mockResolvedValue({ ok: true, result: surface });
-      harness.sendConnect();
-      await vi.advanceTimersByTimeAsync(0);
-      expect(harness.responses[0]).toMatchObject(
-        extra
-          ? {
-              ok: false,
-              error: { message: "Worker tool surface exceeds the admission frame limit" },
-            }
-          : { ok: true, payload: { toolSurface: surface } },
-      );
-      expect(harness.advanceHandshakePhase.mock.calls.flat().includes("ready")).toBe(extra === 0);
-    },
-  );
+  it.each([
+    WORKER_PROTOCOL_MAX_PAYLOAD_BYTES + 1,
+    WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES,
+    WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES + 1,
+  ])("budgets the authenticated tool catalog hello at %s encoded bytes", async (bytes) => {
+    vi.useFakeTimers();
+    const harness = attachHarness({ identity: ATTACHED_IDENTITY });
+    const definition = {
+      name: "read",
+      label: "Read",
+      description: "",
+      parameters: { description: "" },
+    };
+    const surface = {
+      generation: "surface",
+      presentation: createToolSurfacePresentationForTest(),
+      tools: [{ id: "read", execution: "placement" as const, definition }],
+      policy: prepareCoreToolPolicy({}),
+    };
+    const frame = {
+      type: "res",
+      id: "connect-1",
+      ok: true,
+      payload: { ...buildWorkerHello(ATTACHED_IDENTITY), toolSurface: surface },
+    };
+    const available = bytes - Buffer.byteLength(JSON.stringify(frame));
+    definition.parameters.description = "x".repeat(available);
+    const tooLarge = bytes > WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES;
+    harness.service.getToolSurface.mockResolvedValue({ ok: true, result: surface });
+    harness.sendConnect();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(harness.responses[0]).toMatchObject(
+      tooLarge
+        ? {
+            ok: false,
+            error: { message: "Worker tool surface exceeds the admission frame limit" },
+          }
+        : { ok: true, payload: { toolSurface: { generation: surface.generation } } },
+    );
+    if (!tooLarge) {
+      expect(Buffer.byteLength(JSON.stringify(harness.responses[0]))).toBe(bytes);
+    }
+    expect(harness.advanceHandshakePhase.mock.calls.flat().includes("ready")).toBe(!tooLarge);
+  });
 
   it("does not finish hello after its socket closes while preparing tools", async () => {
     vi.useFakeTimers();

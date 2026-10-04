@@ -8,10 +8,6 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveRealpathOrAbsolute as canonicalizePathForComparison } from "../../infra/boundary-path.js";
 import {
-  resolveTrajectoryFilePath,
-  resolveTrajectoryPointerFilePath,
-} from "../../trajectory/paths.js";
-import {
   isCompactionCheckpointTranscriptFileName,
   isPrimarySessionTranscriptFileName,
   isRetainedSessionTranscriptArchiveName,
@@ -19,6 +15,8 @@ import {
   isSessionStoreTempArtifactName,
   SESSION_STORE_TEMP_STALE_MS,
   isTrajectorySessionArtifactName,
+  resolveTrajectoryPath,
+  resolveTrajectoryPointerPath,
 } from "./artifacts.js";
 import {
   isSessionPromptBlobTempArtifactName,
@@ -58,28 +56,8 @@ type SessionDiskBudgetLogger = {
   info: (message: string, context?: Record<string, unknown>) => void;
 };
 
-const NOOP_LOGGER: SessionDiskBudgetLogger = {
-  warn: () => {},
-  info: () => {},
-};
-
 function measureStoreBytes(store: Record<string, SessionEntry>): number {
   return Buffer.byteLength(JSON.stringify(store, null, 2), "utf-8");
-}
-
-function measureStoreEntryChunkBytes(key: string, entry: SessionEntry): number {
-  const singleEntryStore = JSON.stringify({ [key]: entry }, null, 2);
-  if (!singleEntryStore.startsWith("{\n") || !singleEntryStore.endsWith("\n}")) {
-    return measureStoreBytes({ [key]: entry }) - 4;
-  }
-  const chunk = singleEntryStore.slice(2, -2);
-  return Buffer.byteLength(chunk, "utf-8");
-}
-
-function buildStoreEntryChunkSizeMap(store: Record<string, SessionEntry>): Map<string, number> {
-  return new Map(
-    Object.entries(store).map(([key, entry]) => [key, measureStoreEntryChunkBytes(key, entry)]),
-  );
 }
 
 function resolveProjectedPromptBlobHash(entry: SessionEntry | undefined): string | undefined {
@@ -102,13 +80,14 @@ function buildSessionEntryRefCounts(
   return counts;
 }
 
-function resolveSessionTranscriptPathForEntry(params: {
+function resolveSessionArtifactPathsForEntry(params: {
   sessionsDir: string;
   entry: SessionEntry;
-}): string | null {
+}): string[] {
   if (!params.entry.sessionId) {
-    return null;
+    return [];
   }
+  let transcriptPath: string;
   try {
     const resolved = resolveSessionFilePathCore(params.entry.sessionId, params.entry, {
       sessionsDir: params.sessionsDir,
@@ -119,34 +98,17 @@ function resolveSessionTranscriptPathForEntry(params: {
     // Cleanup only owns artifacts under the sessions directory; absolute/parent escapes are
     // ignored even if a stale entry points there.
     if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
-      return null;
+      return [];
     }
-    return resolvedPath;
+    transcriptPath = resolvedPath;
   } catch {
-    return null;
-  }
-}
-
-function resolveSessionArtifactPathsForEntry(params: {
-  sessionsDir: string;
-  entry: SessionEntry;
-}): string[] {
-  const transcriptPath = resolveSessionTranscriptPathForEntry(params);
-  if (!transcriptPath) {
     return [];
   }
-  const paths = [transcriptPath];
-  if (params.entry.sessionId) {
-    paths.push(resolveTrajectoryPointerFilePath(transcriptPath));
-    paths.push(
-      resolveTrajectoryFilePath({
-        env: {},
-        sessionFile: transcriptPath,
-        sessionId: params.entry.sessionId,
-      }),
-    );
-  }
-  return paths;
+  return [
+    transcriptPath,
+    resolveTrajectoryPointerPath(transcriptPath) ?? `${transcriptPath}.trajectory-path.json`,
+    resolveTrajectoryPath(transcriptPath) ?? `${transcriptPath}.trajectory.jsonl`,
+  ];
 }
 
 export function resolveSessionArtifactCanonicalPathsForEntry(params: {
@@ -462,7 +424,7 @@ export async function enforceSessionDiskBudget(params: {
   if (maxBytes == null || highWaterBytes == null) {
     return null;
   }
-  const log = params.log ?? NOOP_LOGGER;
+  const log = params.log;
   const dryRun = params.dryRun === true;
   const sessionsDir = resolveSessionArtifactDirectory(params.storePath);
   const files = await readSessionsDirFiles(sessionsDir);
@@ -511,7 +473,7 @@ export async function enforceSessionDiskBudget(params: {
   const overBudget = !(total <= maxBytes);
   if (!overBudget || params.warnOnly) {
     if (overBudget) {
-      log.warn("session disk budget exceeded (warn-only mode)", {
+      log?.warn("session disk budget exceeded (warn-only mode)", {
         sessionsDir,
         totalBytes: total,
         maxBytes,
@@ -605,7 +567,13 @@ export async function enforceSessionDiskBudget(params: {
       params.store,
       (entry) => entry?.sessionId,
     );
-    const entryChunkBytesByKey = buildStoreEntryChunkSizeMap(projectedStore);
+    // Exclude the pretty-printed object's enclosing "{\n" and "\n}" bytes.
+    const entryChunkBytesByKey = new Map(
+      Object.entries(projectedStore).map(([key, entry]) => [
+        key,
+        measureStoreBytes({ [key]: entry }) - 4,
+      ]),
+    );
     const keys = Object.keys(params.store)
       .filter((key) =>
         isSessionEntryDiskBudgetEvictable({
@@ -719,7 +687,7 @@ export async function enforceSessionDiskBudget(params: {
 
   if (!dryRun) {
     if (total > highWaterBytes) {
-      log.warn("session disk budget still above high-water target after cleanup", {
+      log?.warn("session disk budget still above high-water target after cleanup", {
         sessionsDir,
         totalBytes: total,
         maxBytes,
@@ -728,7 +696,7 @@ export async function enforceSessionDiskBudget(params: {
         removedEntries,
       });
     } else if (removedFiles > 0 || removedEntries > 0) {
-      log.info("applied session disk budget cleanup", {
+      log?.info("applied session disk budget cleanup", {
         sessionsDir,
         totalBytesBefore: totalBefore,
         totalBytesAfter: total,

@@ -1,6 +1,9 @@
 import { removeInternalSessionEffectsSession } from "../../internal-session-effects.js";
 import { shouldSuppressSubagentRecoverySessionEffects } from "./subagent-recovery-state.js";
-import { safeRemoveAttachmentsDir } from "./subagent-registry-helpers.js";
+import {
+  safeRemoveAttachmentsDir,
+  shouldRemoveSubagentAttachments,
+} from "./subagent-registry-helpers.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import {
@@ -70,7 +73,7 @@ export async function retireSupersededSubagentRun(params: {
       return;
     }
   }
-  if (params.entry.cleanup === "delete" || !params.entry.retainAttachmentsOnKeep) {
+  if (shouldRemoveSubagentAttachments(params.entry)) {
     await safeRemoveAttachmentsDir(params.entry, isCurrent);
   }
   if (!isCurrent()) {

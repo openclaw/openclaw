@@ -1,7 +1,7 @@
 import { captureOpenAIResponsesCompaction } from "@openclaw/ai/transports";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
-import type { Model } from "openclaw/plugin-sdk/llm";
+import type { AssistantMessage, Model } from "openclaw/plugin-sdk/llm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
 
@@ -39,7 +39,10 @@ const openAIModel = {
   baseUrl: "https://api.openai.com/v1",
 } satisfies Model;
 
-function createSession(sessionModel: Model = model) {
+function createSession(
+  sessionModel: Model = model,
+  providerReplay?: AssistantMessage["providerReplay"],
+) {
   const sessionManager = SessionManager.inMemory();
   sessionManager.appendMessage({ role: "user", content: "remember copper", timestamp: 1 });
   sessionManager.appendMessage({
@@ -48,6 +51,7 @@ function createSession(sessionModel: Model = model) {
     api: sessionModel.api,
     provider: sessionModel.provider,
     model: sessionModel.id,
+    providerReplay,
     usage: createZeroUsageFixture(),
     stopReason: "stop",
     timestamp: 2,
@@ -55,7 +59,7 @@ function createSession(sessionModel: Model = model) {
   const messages = sessionManager
     .getBranch()
     .filter((entry) => entry.type === "message")
-    .map((entry) => entry.message as AgentMessage);
+    .map((entry) => structuredClone(entry.message) as AgentMessage);
   return { sessionManager, messages };
 }
 
@@ -247,11 +251,7 @@ describe("attemptServerEndpointCompaction", () => {
   });
 
   it("leaves a missing canonical checkpoint window to client budget compaction", async () => {
-    const session = createSession();
-    const owner = session.messages.at(-1);
-    if (owner?.role !== "assistant") {
-      throw new Error("expected assistant checkpoint owner");
-    }
+    const owner: Pick<AssistantMessage, "providerReplay"> = {};
     captureOpenAIResponsesCompaction(
       owner,
       { type: "compaction", id: "cmp_legacy", encrypted_content: "opaque-legacy" },
@@ -259,6 +259,7 @@ describe("attemptServerEndpointCompaction", () => {
       model,
       testing.buildOpenAIResponsesReasoningReplayMetadata(model, { sessionId: "session-1" }),
     );
+    const session = createSession(model, owner.providerReplay);
     const before = structuredClone(session.sessionManager.getBranch());
     const { result } = attempt({
       trigger: "budget",

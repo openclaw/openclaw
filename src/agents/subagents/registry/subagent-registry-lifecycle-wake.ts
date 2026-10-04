@@ -1,7 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { runWithoutOwnedSessionTranscriptWrites } from "../../../config/sessions/transcript-write-context.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-contract.js";
-import { clearGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { isGatewayRestartDrainError } from "../../../process/gateway-work-admission.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
@@ -10,6 +9,7 @@ import type { SubagentAnnounceDeliveryResult } from "../announce/subagent-announ
 import { revokeRequesterCronAuthorityBatch } from "../requester-cron-authority.js";
 import { revokeRequesterFinalAttachment } from "../requester-final-attachment.js";
 import { isCompletedRequesterDeliveryBlocked } from "./subagent-delivery-state.js";
+import { retireSubagentGatewayBinding } from "./subagent-registry-execution-cleanup.js";
 import type {
   PendingRequesterSettleWakeCommit,
   SubagentLifecycleWakeContext,
@@ -38,7 +38,11 @@ import {
 } from "./subagent-registry-requester-wake-mutation.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { captureRequesterSettleRunIdentity } from "./subagent-requester-settle-identity.js";
-import { getSubagentRunRuntimeKey, isSameSubagentRunOwner } from "./subagent-run-generation.js";
+import {
+  currentSubagentRunOrObserved,
+  getSubagentRunRuntimeKey,
+  isSameSubagentRunOwner,
+} from "./subagent-run-generation.js";
 import { hasSubagentRunEnded } from "./subagent-run-liveness.js";
 
 const completeRequesterSettleWakeBatch = async (
@@ -88,10 +92,7 @@ function releaseRequesterSettleWakeBatch(
   settling?: PendingRequesterSettleWakeCommit,
 ): void {
   const params = context.options;
-  const entries = observedEntries.map((entry) => {
-    const current = params.runs.get(entry.runId);
-    return current && isSameSubagentRunOwner(current, entry) ? current : entry;
-  });
+  const entries = observedEntries.map((entry) => currentSubagentRunOrObserved(params.runs, entry));
   const requesterSessionKeys = new Set(entries.map((entry) => entry.requesterSessionKey));
   revokeRequesterCronAuthorityBatch(entries, rearmGeneration);
   const retiredEntries: SubagentRunRecord[] = [];
@@ -119,7 +120,7 @@ function releaseRequesterSettleWakeBatch(
       ) {
         context.pendingRequesterSettleWakeCommits.delete(getSubagentRunRuntimeKey(entry));
       }
-      clearGatewayContextResolver(entry);
+      retireSubagentGatewayBinding(entry);
       params.resumedRuns.delete(getSubagentRunRuntimeKey(entry));
       params.clearPendingLifecycleError(runId);
     }
@@ -214,6 +215,14 @@ export async function cancelRequesterSettleWake(
   }
 }
 
+/** The run still owns a durable or pending wake that this owner may continue. */
+function hasRetainedWake(context: SubagentLifecycleWakeContext, entry: SubagentRunRecord) {
+  return (
+    hasRequesterWakeOwner(context, entry) &&
+    Boolean(entry.requesterSettleWake || getPendingWakeCommit(context, entry))
+  );
+}
+
 // Once a child reaches a terminal settle, let the announce layer decide
 // whether its requester's batch has fully drained and, if so, wake the
 // registry-less top-level requester to synthesize. Settle bookkeeping never
@@ -272,10 +281,7 @@ function scheduleRequesterSettleWakeRetry(
         return;
       }
       context.scheduledRequesterSettleWakeTimers.delete(runId);
-      if (
-        hasRequesterWakeOwner(context, entry) &&
-        (entry.requesterSettleWake || getPendingWakeCommit(context, entry))
-      ) {
+      if (hasRetainedWake(context, entry)) {
         scheduleRequesterSettleWake(context, runId, entry, stateContext);
       }
     },
@@ -302,10 +308,7 @@ export function scheduleRequesterSettleWake(
   if (publishedAtAdmission && !isSameSubagentRunOwner(publishedAtAdmission, observedEntry)) {
     return;
   }
-  let entry =
-    publishedAtAdmission && isSameSubagentRunOwner(publishedAtAdmission, observedEntry)
-      ? publishedAtAdmission
-      : observedEntry;
+  let entry = publishedAtAdmission ?? observedEntry;
   if (context.cancelledRequesterSettleWakeRuns.has(getSubagentRunRuntimeKey(entry))) {
     return;
   }
@@ -341,10 +344,7 @@ export function scheduleRequesterSettleWake(
   const isSourceCurrent = () => {
     try {
       assertSubagentRegistryWriteSourceCurrent(stateContext);
-      const current = params.runs.get(runId);
-      if (current && isSameSubagentRunOwner(current, entry)) {
-        entry = current;
-      }
+      entry = currentSubagentRunOrObserved(params.runs, entry);
       return (
         !context.cancelledRequesterSettleWakeRuns.has(getSubagentRunRuntimeKey(entry)) &&
         isDeepStrictEqual(captureRequesterSettleRunIdentity(entry), admittedIdentity) &&
@@ -559,18 +559,12 @@ export function scheduleRequesterSettleWake(
         }
       })
       .finally(() => {
-        const current = params.runs.get(runId);
-        if (current && isSameSubagentRunOwner(current, entry)) {
-          entry = current;
-        }
+        entry = currentSubagentRunOrObserved(params.runs, entry);
         context.unmarkRequesterSettleWakeRunScheduled(entry);
         const wasRearmedWhileRunning = context.pendingRequesterSettleWakeRearms.delete(
           getSubagentRunRuntimeKey(entry),
         );
-        if (
-          hasRequesterWakeOwner(context, entry) &&
-          (entry.requesterSettleWake || getPendingWakeCommit(context, entry))
-        ) {
+        if (hasRetainedWake(context, entry)) {
           if (wasRearmedWhileRunning) {
             scheduleRequesterSettleWake(context, runId, entry, stateContext);
           } else {

@@ -226,11 +226,6 @@ vi.mock("../../../runtime.js", () => ({
   },
 }));
 
-vi.mock("../../../utils/delivery-context.shared.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../../utils/delivery-context.shared.js")>()),
-  normalizeDeliveryContext: (origin: unknown) => origin ?? "agent",
-}));
-
 vi.mock("../announce/subagent-announce.js", () => ({
   captureSubagentCompletionReply: vi.fn(async () => undefined),
   runSubagentAnnounceFlow: vi.fn(async () => "retryable" as const),
@@ -252,6 +247,8 @@ vi.mock("./subagent-registry-helpers.js", () => ({
   resolveAnnounceRetryDelayMs: (retryCount: number) =>
     Math.min(1_000 * 2 ** Math.max(0, retryCount - 1), 8_000),
   safeRemoveAttachmentsDir: helperMocks.safeRemoveAttachmentsDir,
+  shouldRemoveSubagentAttachments: (entry: SubagentRunRecord, cleanup = entry.cleanup) =>
+    cleanup === "delete" || !entry.retainAttachmentsOnKeep,
   updateSubagentArchiveAtMs: () => false,
 }));
 
@@ -1161,51 +1158,35 @@ describe("subagent registry lifecycle hardening", () => {
     waitForLifecycleState,
   });
 
-  it("retries a cleanup handoff rejected by restart drain", async () => {
-    vi.useFakeTimers();
+  it("settles admitted cleanup and resource retirement during restart drain", async () => {
+    const entry = createRunEntry({ expectsCompletionMessage: true });
+    const browserStarted = createDeferredCore();
+    const releaseBrowserCleanup = createDeferredCore();
+    browserLifecycleCleanupMocks.cleanupBrowserSessionsForLifecycleEnd.mockImplementationOnce(
+      async () => {
+        browserStarted.resolve();
+        await releaseBrowserCleanup.promise;
+      },
+    );
+    const runSubagentAnnounceFlow = vi.fn(async () => "delivered" as const);
+    const controller = createLifecycleController({ entry, runSubagentAnnounceFlow });
+    const completion = completeAndJoinCleanup(controller, entry, { triggerCleanup: true });
     try {
-      const entry = createRunEntry({ expectsCompletionMessage: true });
-      let releaseBrowserCleanup: (() => void) | undefined;
-      browserLifecycleCleanupMocks.cleanupBrowserSessionsForLifecycleEnd.mockImplementationOnce(
-        () =>
-          new Promise<void>((resolve) => {
-            releaseBrowserCleanup = resolve;
-          }),
-      );
-      const runSubagentAnnounceFlow = vi.fn(async () => "delivered" as const);
-      const resumeSubagentRun = vi.fn((runId: string) => {
-        controller.startSubagentAnnounceCleanupFlow(runId, entry);
-      });
-      const controller = createLifecycleController({
-        entry,
-        resumeSubagentRun,
-        runSubagentAnnounceFlow,
-      });
-
-      const completion = completeRun(controller, entry, { triggerCleanup: true });
-      await waitForLifecycleState(() => expect(releaseBrowserCleanup).toBeTypeOf("function"));
+      await browserStarted.promise;
       markGatewayRestartDraining();
-      releaseBrowserCleanup?.();
+      expect(tryBeginGatewayRootWorkAdmission()).toBeNull();
+      releaseBrowserCleanup.resolve();
       await completion;
-      await waitForLifecycleState(() =>
-        expect(runtimeMocks.log).toHaveBeenCalledWith(
-          expect.stringContaining("subagent cleanup admission failed"),
-        ),
-      );
-      expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
-      expect(readLifecycleRun(entry).cleanupHandled).not.toBe(true);
-
-      resetGatewayWorkAdmission();
-      await vi.advanceTimersByTimeAsync(1_000);
-      await waitForLifecycleState(() => expect(runSubagentAnnounceFlow).toHaveBeenCalledOnce());
-      await waitForLifecycleState(() =>
-        expect(readLifecycleRun(entry).cleanupCompletedAt).toBeTypeOf("number"),
-      );
-      expect(resumeSubagentRun).toHaveBeenCalledWith(entry.runId);
+      expect(runSubagentAnnounceFlow).toHaveBeenCalledOnce();
+      expect(readLifecycleRun(entry).cleanupCompletedAt).toBeTypeOf("number");
+      expect(bundleMcpRuntimeMocks.retireSessionMcpRuntimeForSessionKey).toHaveBeenCalled();
+      expect(controller.scheduledResumeTimers.size).toBe(0);
       expect(getActiveGatewayRootWorkCount()).toBe(0);
+      expect(tryBeginGatewayRootWorkAdmission()).toBeNull();
     } finally {
+      releaseBrowserCleanup.resolve();
+      await completion;
       resetGatewayWorkAdmission();
-      vi.useRealTimers();
     }
   });
 
@@ -3790,6 +3771,48 @@ describe("subagent registry lifecycle hardening", () => {
       }
     },
   );
+
+  it("retires delivery expiry when requester execution starts and records its eventual success", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(2_000_000);
+    const entry = createRunEntry({
+      endedAt: Date.now() - 30 * 60_000 + 1_000,
+      endedReason: SUBAGENT_ENDED_REASON_COMPLETE,
+      expectsCompletionMessage: true,
+      completion: { required: true, resultText: "final answer" },
+      delivery: { status: "pending" },
+      outcome: { status: "ok" },
+      retainAttachmentsOnKeep: true,
+    });
+    const requesterFinished = createDeferredCore<AnnounceFlowOutcome>();
+    let deliverySignal: AbortSignal | undefined;
+    const runSubagentAnnounceFlow = vi.fn<LifecycleControllerParams["runSubagentAnnounceFlow"]>(
+      (params) => {
+        deliverySignal = params.signal;
+        params.onExecutionStarted?.();
+        return requesterFinished.promise;
+      },
+    );
+    const controller = createLifecycleController({ entry, runSubagentAnnounceFlow });
+    try {
+      expect(controller.startSubagentAnnounceCleanupFlow(entry.runId, entry)).toBe(true);
+      await waitForLifecycleState(() => expect(runSubagentAnnounceFlow).toHaveBeenCalledOnce());
+      await vi.advanceTimersByTimeAsync(1_001);
+      expect(deliverySignal?.aborted).toBe(false);
+      expect(readLifecycleRun(entry).delivery?.status).toBe("pending");
+      requesterFinished.resolve("delivered");
+      await waitForLifecycleState(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+      expect(readLifecycleRun(entry).delivery?.status).toBe("delivered");
+      expect(readLifecycleRun(entry).delivery?.nextAttemptAt).toBeUndefined();
+      expect(runSubagentAnnounceFlow).toHaveBeenCalledOnce();
+      expect(completionDeliveryMocks.blockSubagentCompletionDelivery).not.toHaveBeenCalled();
+    } finally {
+      requesterFinished.resolve("delivered");
+      await vi.advanceTimersByTimeAsync(0);
+      controller.clearScheduledResumeTimers();
+      vi.useRealTimers();
+    }
+  });
 
   it("suspends successful keep-mode final delivery after its deadline", async () => {
     const beforeWrite = vi.fn();

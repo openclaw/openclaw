@@ -7,11 +7,13 @@ import type { SqliteWorkerStore } from "../infra/sqlite-worker-store.js";
 import type { OpenClawStateDatabase } from "../state/openclaw-state-db-contract.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
-import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
 import { runCronRuntimeMutation } from "./service/runtime-mutation.js";
+import { invalidateCronJobNames, publishCronJobNames } from "./store/job-name.js";
+import { readCronJobNamesInDatabase } from "./store/job-name.kernel.js";
 import { cronStoreKey } from "./store/key.js";
 import { restoreCronLoadError } from "./store/load-error.js";
 import { resolveCronJobsStorePath } from "./store/paths.js";
+import { runCronStoreAuthorityOperation } from "./store/receipt-authority-operation.js";
 import {
   assertCronStoreCanPersist,
   readCronJobsFingerprint,
@@ -57,6 +59,7 @@ export function getCronJobsStoreRevision(storePath: string): number {
 }
 
 export function noteCronJobsStoreCommit(storeKey: string): void {
+  invalidateCronJobNames(storeKey);
   // A bounded monotonic fact invalidates sibling service snapshots without
   // polling SQLite or discarding the current scheduler's transient run state.
   cronStoreRevisions.delete(storeKey);
@@ -70,7 +73,7 @@ export async function loadCronJobsStoreWithConfigJobs(storePath: string): Promis
   const context = captureOpenClawStateWorkerContext();
   let received = false;
   try {
-    return await runOpenClawStateWorkerOperation(context, async (scope) => {
+    return await runCronStoreAuthorityOperation(context, async (scope) => {
       const result = await scope.execute({ type: "cron.loadMutable", input: { storeKey } });
       received = true;
       for (let index = 0; index < result.repairCommits; index += 1) {
@@ -122,6 +125,14 @@ export async function removeStaleCronJobFamilyRows(
     prepare: () => ({ value: {}, assertCurrent() {} }),
     publish: (outcome) => {
       removed = outcome.removed;
+      if (removed > 0) {
+        invalidateCronJobNames();
+      }
+    },
+    onSettled(outcome) {
+      if (outcome === "unknown") {
+        invalidateCronJobNames();
+      }
     },
   });
   return removed;
@@ -163,6 +174,7 @@ function commitCronStoreNative<Value>(
   hooks: CronStoreTransactionHooks | undefined,
   operationLabel?: string,
 ): CronStoreCommit<Value> {
+  const context = captureOpenClawStateWorkerContext();
   const observedRevision = getCronJobsStoreRevision(storeKey);
   let committed = false;
   try {
@@ -175,13 +187,22 @@ function commitCronStoreNative<Value>(
         deferSqlitePostCommitPublication(database.db, () => {
           committed = true;
         });
-        return { value, ...readCronStoreFingerprints(database.db, storeKey) };
+        return {
+          value,
+          names: readCronJobNamesInDatabase(database.db, undefined, storeKey),
+          ...readCronStoreFingerprints(database.db, storeKey),
+        };
       },
       {},
       operationLabel ? { operationLabel } : undefined,
     );
+    const revision = publishCronStoreSaveRevision(storeKey, observedRevision);
+    // Nested Doctor transactions have no acknowledged commit until their outer scope settles.
+    if (committed && revision !== STALE_CRON_STORE_REVISION) {
+      publishCronJobNames(storeKey, context, result.names);
+    }
     hooks?.afterCommit?.();
-    return { ...result, revision: publishCronStoreSaveRevision(storeKey, observedRevision) };
+    return { ...result, revision };
   } catch (error) {
     if (committed) {
       noteCronJobsStoreCommit(storeKey);
@@ -200,7 +221,7 @@ async function saveCronStoreWithWorker<Value>(
   const context = captureOpenClawStateWorkerContext();
   let received = false;
   try {
-    return await runOpenClawStateWorkerOperation(context, async (scope) => {
+    return await runCronStoreAuthorityOperation(context, async (scope) => {
       const result = await operation(scope);
       received = true;
       const revision =
@@ -209,6 +230,9 @@ async function saveCronStoreWithWorker<Value>(
           : observedRevision;
       if (!result.ok) {
         throw restoreCronSaveError(result.error);
+      }
+      if (revision !== STALE_CRON_STORE_REVISION) {
+        publishCronJobNames(storeKey, context, result.names);
       }
       return {
         value: result.value,

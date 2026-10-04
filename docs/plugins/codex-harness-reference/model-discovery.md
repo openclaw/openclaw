@@ -40,8 +40,9 @@ require the native owner's supported reload/restart and a catalog refresh;
 OpenClaw does not poll native home files for readiness. Authored host routes and
 explicit profile selections retain their existing auth and compatibility checks.
 
-The composer shows **Ultrafast** only when authenticated account discovery
-advertises that service tier for the selected model, account, route, and runtime.
+For the Codex runtime, the composer shows **Ultrafast** only when authenticated
+account discovery advertises that service tier for the selected model, account,
+route, and runtime.
 The OpenAI provider's existing account-scoped discovery supplies this observation;
 static catalog hints and the native app-server's fallback list do not establish
 access. Selecting a managed personal account prepares that account's catalog
@@ -54,6 +55,14 @@ that cannot use model discovery, and catalogs without explicit service-tier
 metadata leave this capability unknown. The composer hides Ultrafast in those
 cases rather than offering a disabled option. Discovery support describes
 availability, not a guarantee that an upstream request will receive that tier.
+
+The embedded OpenClaw runtime uses the available API-key OpenAI Responses route
+to offer Ultrafast without catalog metadata, whether the key comes from an auth
+profile, environment, or provider config (including SecretRefs). This remains
+subject to observed provider downgrades for the selected credential and route;
+see [Fast mode](/providers/openai/advanced#fast-mode).
+Codex-runtime Ultrafast with API-key authentication still requires the native
+catalog, including a pinned `model_catalog_json`, to list the tier for that model.
 
 Native catalog identifiers are runtime identifiers, not privacy labels. A
 deployment using a broker-owned alias must supply an alias-safe native catalog
@@ -92,9 +101,9 @@ response remains authoritative even if it contains no visible models; HTTP
 `401` and `403` return an empty catalog rather than exposing fallback models.
 
 <Note>
-The current bundled harness is `@openai/codex` `0.159.1`. A `model/list`
+The current bundled harness is `@openai/codex` `0.160.0`. A `model/list`
 probe against that app-server in an isolated, unauthenticated Codex home returned
-these visible bundled catalog entries on September 29, 2026:
+these visible bundled catalog entries on October 2, 2026:
 
 | Model id        | Input modalities | Reasoning efforts                    | Default effort |
 | --------------- | ---------------- | ------------------------------------ | -------------- |
@@ -107,8 +116,7 @@ these visible bundled catalog entries on September 29, 2026:
 | `gpt-5.6-luna`  | text, image      | low, medium, high, xhigh, max        | medium         |
 | `gpt-5.5`       | text, image      | low, medium, high, xhigh             | medium         |
 
-The same isolated probe with `0.158.0` did not list `gpt-6.1-sol`.
-The new entry also advertises the `priority` service tier as Fast. This bundled
+The `gpt-6.1-sol` entry also advertises the `priority` service tier as Fast. This bundled
 snapshot does not establish account access: authenticated catalogs can differ,
 and native discovery still requires a current account. Run `/codex models`
 after starting or upgrading the gateway to inspect the actual public picker

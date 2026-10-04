@@ -23,6 +23,7 @@ import { installDistArtifactScripts as installScripts } from "./dist-artifact-fi
 import {
   materializeNativeCompiler,
   overrideNativeFixtureExecutable,
+  resolveInstalledNativeCompiler,
 } from "./native-boundary-fixture.js";
 import { createFixture as createDeclarationFixture } from "./tsdown-declaration-fixture.js";
 
@@ -97,11 +98,9 @@ function createCheckout(prefix = "openclaw-dist-owner-") {
   return root;
 }
 
-function installCompiler(root: string, afterEmit = "") {
+function installCompiler(root: string, afterEmit = "", native = resolveInstalledNativeCompiler()) {
   const launcher = path.join(root, "node_modules/.bin/tsgo");
   fs.rmSync(launcher, { force: true });
-  const native = materializeNativeCompiler(root);
-  fs.unlinkSync(launcher);
   const compiler = write(
     root,
     "node_modules/.bin/tsgo",
@@ -513,6 +512,20 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
       write(root, "dist/entry.js", "export {};\n");
       write(root, "dist/.buildstamp", JSON.stringify({ head: "fixture-head", inputsClean: true }));
       const marker = path.join(root, "dist/postbuild-finished");
+      const postbuildFixture = write(
+        root,
+        "fixture-postbuild.mjs",
+        `import fs from 'node:fs';
+        import { createRequire } from 'node:module';
+        const require = createRequire(import.meta.url);
+        export function runRuntimePostBuild() {
+          return new Promise(resolve => {
+            fs.writeFileSync(${JSON.stringify(marker)}, 'complete');
+            ${checkpoint("source-postbuild-ready")}
+            socket.on('close', resolve);
+          });
+        }`,
+      );
       const writerScript = write(
         root,
         "writer.mjs",
@@ -533,27 +546,32 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
         "source-runner.mjs",
         `
         import ${JSON.stringify(path.join(sourceRoot, "scripts/tsx.mjs"))};
-        import fs from 'node:fs';
-        import { createRequire } from 'node:module';
-        const require = createRequire(import.meta.url);
+        import childProcess from 'node:child_process';
+        import { registerHooks, syncBuiltinESMExports } from 'node:module';
         const { registerSourceRunnerServiceFixture } = await import(${JSON.stringify(path.join(sourceRoot, "test/scripts/fixtures/source-runner-service.mjs"))});
         registerSourceRunnerServiceFixture(${JSON.stringify(sourceRoot)});
+        const postbuildUrl = ${JSON.stringify(pathToFileURL(path.join(sourceRoot, "scripts/runtime-postbuild.mts")).href)};
+        registerHooks({
+          load(url, context, nextLoad) {
+            return url === postbuildUrl
+              ? { format: 'module', shortCircuit: true, source:
+                  'export { listCoreRuntimePostBuildOutputs } from ' + JSON.stringify(postbuildUrl + '?fixture-owner') + ';' +
+                  'export { runRuntimePostBuild } from ' + ${JSON.stringify(JSON.stringify(pathToFileURL(postbuildFixture).href))} + ';' }
+              : nextLoad(url, context);
+          },
+        });
+        childProcess.spawnSync = (_command, args) => ({ status: 0, stdout: args.includes('rev-parse') ? 'fixture-head' : '' });
+        childProcess.spawn = (_command, args) => {
+          if (args.includes('scripts/build-all.mts')) throw new Error('Expected postbuild-only path');
+          return { on: (event, listener) => {
+            if (event === 'exit') queueMicrotask(() => listener(0, null));
+          }};
+        };
+        syncBuiltinESMExports();
         const { runNodeMain } = await import(${JSON.stringify(path.join(sourceRoot, "scripts/run-node.mts"))});
         process.exitCode = await runNodeMain({
           cwd: process.cwd(), args: ['artifact-fixture'],
           env: { ...process.env, OPENCLAW_FORCE_BUILD: '0', OPENCLAW_BUILD_PRIVATE_QA: '0' },
-          spawnSync: (_command, args) => ({ status: 0, stdout: args.includes('rev-parse') ? 'fixture-head' : '' }),
-          spawn: (_command, args) => {
-            if (args.includes('scripts/build-all.mts')) throw new Error('Expected postbuild-only path');
-            return { on: (event, listener) => {
-              if (event === 'exit') queueMicrotask(() => listener(0, null));
-            }};
-          },
-          runRuntimePostBuild: () => new Promise(resolve => {
-            fs.writeFileSync(${JSON.stringify(marker)}, 'complete');
-            ${checkpoint("source-postbuild-ready")}
-            socket.on('close', resolve);
-          }),
         });
       `,
       );
@@ -806,7 +824,7 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
     async ({ owner, unjoined }, { signal }) => {
       await withProcesses(async ({ start }) => {
         const root = createCheckout();
-        materializeNativeCompiler(root);
+        materializeNativeCompiler(root, { javaScriptApi: false });
         const ownerPath = write(root, ".artifacts/dist-artifacts.lock/owner.json", owner);
         if (unjoined) {
           write(root, ".artifacts/dist-artifacts.lock/unjoined", "unverified cleanup");
@@ -1056,10 +1074,10 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
     await withProcesses(async ({ checkpoint, waitEvent, start }) => {
       const root = createCheckout();
       installScripts(root, ["run-tsgo-core-test-shards.mts", "run-tsgo.mts"], {
+        compiler: false,
         dependencies: ["@openclaw/fs-safe"],
       });
       fs.unlinkSync(path.join(root, "scripts/tsx.mjs"));
-      fs.unlinkSync(path.join(root, "node_modules/.bin/tsgo"));
       const compiler = write(
         root,
         "node_modules/.bin/tsgo",
@@ -1097,7 +1115,8 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
   }) => {
     await withProcesses(async ({ checkpoint, waitEvent, start }) => {
       const root = createCheckout();
-      installCompiler(root);
+      // Preparation hashes and loads the fixture's own compiler install.
+      installCompiler(root, "", materializeNativeCompiler(root));
       // Entrypoints resolve this fixture as their checkout. SDK and plugin
       // sources let the lint consumer distinguish the narrow preparation mode.
       installScripts(

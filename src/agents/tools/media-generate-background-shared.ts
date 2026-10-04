@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { computeBackoffSchedule, sleepWithAbort } from "@openclaw/retry";
 import { getRuntimeConfig } from "../../config/config.js";
 import { getCliSessionBinding } from "../../config/sessions/cli-session-binding.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
@@ -20,10 +21,8 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
 import { parseCronRunScopeSuffix } from "../../sessions/session-key-utils.js";
-import {
-  runInDetachedAsyncContext,
-  runOutsideAsyncWorkScope,
-} from "../../shared/async-work-scope.js";
+import { runOutsideAsyncWorkScope } from "../../shared/async-work-scope.js";
+import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import { captureAgentToolSourceExecutionGuard } from "../agent-tool-source-execution-guard.js";
 import {
@@ -130,13 +129,6 @@ type WakeMediaGenerationTaskCompletionParams = Omit<
   "eventSource" | "announceType" | "toolName" | "completionLabel"
 >;
 
-function waitForMediaGenerationCompletionHandoffRetry(delayMs: number): Promise<void> {
-  return new Promise((resolve) => {
-    const timer = setTimeout(resolve, delayMs);
-    timer.unref?.();
-  });
-}
-
 async function wakeMediaGenerationTaskCompletionWithRetry(params: {
   wake: () => Promise<MediaGenerationCompletionWakeOutcome>;
   beforeRetry?: () => void;
@@ -151,11 +143,11 @@ async function wakeMediaGenerationTaskCompletionWithRetry(params: {
     }
     // Queue admission and an owned continuation can both be transient. Keep the
     // operation live until delivery, permanent refusal, or the bounded deadline.
-    const delayMs =
-      MEDIA_GENERATION_COMPLETION_HANDOFF_RETRY_DELAYS_MS[
-        Math.min(retryIndex, MEDIA_GENERATION_COMPLETION_HANDOFF_RETRY_DELAYS_MS.length - 1)
-      ] ?? 2_000;
-    await waitForMediaGenerationCompletionHandoffRetry(Math.min(delayMs, remainingMs));
+    const delayMs = computeBackoffSchedule(
+      MEDIA_GENERATION_COMPLETION_HANDOFF_RETRY_DELAYS_MS,
+      retryIndex + 1,
+    );
+    await sleepWithAbort(Math.min(delayMs, remainingMs), undefined, { ref: false });
     params.beforeRetry?.();
     outcome = await params.wake();
     retryIndex += 1;

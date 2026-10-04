@@ -16,7 +16,7 @@ import {
   withPluginRuntimeGatewayRequestScope,
 } from "./runtime/gateway-request-scope.js";
 import { createPluginRuntime } from "./runtime/index.js";
-import { startPluginServices } from "./services.js";
+import { startPluginServices } from "./services.test-support.js";
 
 it("starts and reloads background services outside the RPC and tool authority", async () => {
   const runtime = createPluginRuntime();

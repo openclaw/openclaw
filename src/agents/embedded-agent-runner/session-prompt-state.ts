@@ -29,9 +29,8 @@ export type ToolResultPromptProjectionState = {
 type RestoredCacheTtlMark = { mode: "soft" } | { mode: "hard"; placeholder: string };
 
 type EmbeddedSessionPromptState = {
-  activeProjectKeys: string[];
+  activeAttempts: number;
   toolResults: ToolResultPromptProjectionState;
-  sentUserTurnIds: Set<string>;
   systemPrompt?: SystemPromptSeries;
   pendingSystemPrompt?: SystemPromptSeries;
   systemPromptRouteKey?: string;
@@ -153,6 +152,7 @@ export function prepareSessionSystemPrompt(params: {
           typeof data.permissionNotice === "string" ? data.permissionNotice : undefined,
         restart: false,
       };
+      params.state.persistedSystemPrompt = JSON.stringify(series);
     }
   }
   const restart = !series || series.routeKey !== params.routeKey || series.historyId !== historyId;
@@ -241,6 +241,10 @@ const SESSION_PROMPT_STATES_KEY = Symbol.for("openclaw.embeddedSessionPromptStat
 const sessionPromptStates = resolveGlobalSingleton(
   SESSION_PROMPT_STATES_KEY,
   () => new Map<string, EmbeddedSessionPromptState>(),
+);
+const sessionActiveProjects = resolveGlobalSingleton(
+  Symbol.for("openclaw.embeddedSessionActiveProjects"),
+  () => new Map<string, string[]>(),
 );
 
 export function createToolResultPromptProjectionState(): ToolResultPromptProjectionState {
@@ -332,13 +336,38 @@ export function getEmbeddedSessionPromptState(sessionId: string): EmbeddedSessio
     return existing;
   }
   const created: EmbeddedSessionPromptState = {
-    activeProjectKeys: [],
+    activeAttempts: 0,
     toolResults: createToolResultPromptProjectionState(),
-    sentUserTurnIds: new Set(),
   };
   sessionPromptStates.set(sessionId, created);
-  pruneMapToMaxSize(sessionPromptStates, MAX_SESSION_PROMPT_STATES);
+  for (const [key, state] of sessionPromptStates) {
+    if (sessionPromptStates.size <= MAX_SESSION_PROMPT_STATES) {
+      break;
+    }
+    if (key !== sessionId && state.activeAttempts === 0) {
+      sessionPromptStates.delete(key);
+    }
+  }
   return created;
+}
+
+/** Overlapping cleanup keeps the next attempt's state until its own settlement. */
+export function retainEmbeddedSessionPromptState(sessionId: string) {
+  const state = getEmbeddedSessionPromptState(sessionId);
+  state.activeAttempts++;
+  let active = true;
+  return {
+    state,
+    [Symbol.dispose]() {
+      if (!active) {
+        return;
+      }
+      active = false;
+      if (--state.activeAttempts === 0 && sessionPromptStates.get(sessionId) === state) {
+        sessionPromptStates.delete(sessionId);
+      }
+    },
+  };
 }
 
 export function recordRuntimeContextProjection(
@@ -389,19 +418,19 @@ export function prepareEmbeddedSessionActiveProjectKeys(
   sessionId: string,
   projectKey: string | null,
 ): readonly string[] {
-  const state = getEmbeddedSessionPromptState(sessionId);
+  const keys = sessionActiveProjects.get(sessionId) ?? [];
+  sessionActiveProjects.delete(sessionId);
+  sessionActiveProjects.set(sessionId, keys);
+  pruneMapToMaxSize(sessionActiveProjects, MAX_SESSION_PROMPT_STATES);
   if (projectKey) {
-    const existing = state.activeProjectKeys.indexOf(projectKey);
+    const existing = keys.indexOf(projectKey);
     if (existing >= 0) {
-      state.activeProjectKeys.splice(existing, 1);
+      keys.splice(existing, 1);
     }
-    state.activeProjectKeys.unshift(projectKey);
-    state.activeProjectKeys.length = Math.min(
-      state.activeProjectKeys.length,
-      MAX_ACTIVE_PROJECT_KEYS,
-    );
+    keys.unshift(projectKey);
+    keys.length = Math.min(keys.length, MAX_ACTIVE_PROJECT_KEYS);
   }
-  return [...state.activeProjectKeys];
+  return [...keys];
 }
 
 export function clearEmbeddedSessionPromptStates(sessionIds: Iterable<string | undefined>): void {
@@ -409,34 +438,7 @@ export function clearEmbeddedSessionPromptStates(sessionIds: Iterable<string | u
     const normalized = sessionId?.trim();
     if (normalized) {
       sessionPromptStates.delete(normalized);
+      sessionActiveProjects.delete(normalized);
     }
   }
-}
-
-export function markSessionUserTurnsSent(
-  state: EmbeddedSessionPromptState,
-  messages: AgentMessage[],
-): void {
-  for (const message of messages) {
-    if (message.role !== "user") {
-      continue;
-    }
-    const idempotencyKey = (message as { idempotencyKey?: unknown }).idempotencyKey;
-    if (typeof idempotencyKey === "string" && idempotencyKey.length > 0) {
-      state.sentUserTurnIds.add(idempotencyKey);
-    }
-  }
-}
-
-export function hasSessionUserTurnBeenSent(
-  state: EmbeddedSessionPromptState,
-  message: AgentMessage | undefined,
-): boolean | undefined {
-  if (!message || message.role !== "user") {
-    return undefined;
-  }
-  const idempotencyKey = (message as { idempotencyKey?: unknown }).idempotencyKey;
-  return typeof idempotencyKey === "string" && idempotencyKey.length > 0
-    ? state.sentUserTurnIds.has(idempotencyKey)
-    : undefined;
 }

@@ -1,13 +1,36 @@
 import { describe, expect, it } from "vitest";
 import { classifyGatewayStorageFailure } from "../../infra/sqlite-error-diagnostics.js";
 import { formatUserFacingAssistantErrorText } from "../embedded-agent-helpers/error-text.js";
+import { isNonProviderRuntimeCoordinationError } from "../failover-error.js";
 import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
-import { renderAssistantRequestFailureCopy } from "./assistant-request-failure-copy.js";
+import {
+  renderAssistantRequestFailureCopy,
+  renderRecordedAssistantFailureCopy,
+  renderRuntimeCoordinationFailureCopy,
+} from "./assistant-request-failure-copy.js";
+import { isAuthErrorMessage } from "./message-patterns.js";
 
 describe("renderAssistantRequestFailureCopy", () => {
   const target = { provider: "openai", model: "test-model" };
   const runFailure =
     "⚠️ OpenClaw couldn't finish this reply. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow` in your terminal.";
+
+  it.each(["", " | INVALID_REQUEST"])(
+    "preserves approval-expiry guidance in assistant history with suffix %j",
+    (suffix) => {
+      const message =
+        "Codex node execution approval expired before a decision. Retry the action and approve the new request.";
+      const errorMessage = message + suffix;
+      const assistant = makeAssistantMessageFixture({
+        ...target,
+        errorMessage,
+        errorCode: "INVALID_REQUEST",
+      });
+      expect(formatUserFacingAssistantErrorText(assistant)).toBe(`⚠️ ${message}`);
+      expect(renderRecordedAssistantFailureCopy(assistant)).toBe(`⚠️ ${message}`);
+      expect(isAuthErrorMessage(errorMessage)).toBe(false);
+    },
+  );
 
   it.each([
     [
@@ -68,6 +91,28 @@ describe("renderAssistantRequestFailureCopy", () => {
     expect(formatUserFacingAssistantErrorText(error)).toBe(
       "⚠️ The task couldn't finish. Some actions may have completed; check their results before continuing.",
     );
+  });
+
+  it.each([
+    [
+      "CodexNodeExecServerDisconnectedError",
+      "codex_node_disconnected",
+      "⚠️ Codex execution node disconnected. Start a fresh attempt.",
+    ],
+    [
+      "NodeRunnerUpdateRequiredError",
+      "node_runner_update_required",
+      "⚠️ The device worker requires an update before it can host sessions. Run `openclaw update`, reconnect it, then run `openclaw node restart` on a headless node before trying again.",
+    ],
+    [
+      "WorkerRunnerUnavailableError",
+      "runner-offline",
+      "⚠️ The device runner is offline. Reconnect it, retry later, or bring the session back to this gateway.",
+    ],
+  ])("renders bounded guidance for typed runtime code %s", (name, code, expected) => {
+    const error = Object.assign(new Error("private runtime diagnostic"), { name, code });
+    const runtimeCode = isNonProviderRuntimeCoordinationError(error) ? code : undefined;
+    expect(renderRuntimeCoordinationFailureCopy(runtimeCode)).toBe(expected);
   });
 
   it("gives recovery guidance after a tool-result request is rejected", () => {

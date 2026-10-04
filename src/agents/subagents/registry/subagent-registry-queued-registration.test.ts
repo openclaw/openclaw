@@ -1,5 +1,7 @@
+import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { resolveStateDir } from "../../../config/paths.js";
 import { replaceSessionEntry } from "../../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import {
@@ -9,8 +11,11 @@ import {
 import { SqliteWorkerError } from "../../../infra/sqlite-worker-contract.js";
 import * as operationAdmission from "../../../infra/sqlite-worker-operation-admission.js";
 import {
+  getActiveGatewayRootWorkCount,
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
+  runWithGatewayIndependentRootWorkAdmission,
+  tryBeginGatewaySuspendAdmission,
 } from "../../../process/gateway-work-admission.js";
 import { AsyncWorkScope } from "../../../shared/async-work-scope.js";
 import * as databaseLifecycle from "../../../state/openclaw-state-db-cache.js";
@@ -27,6 +32,8 @@ import { registerQueuedRegistrationClaimCases } from "./subagent-registry-queued
 import { withQueuedRegistrationFixture } from "./subagent-registry-queued-registration.test-support.js";
 import { registerQueuedUnknownKillAuthorityTest } from "./subagent-registry-queued-uncertain-kill.test-support.js";
 import type { SubagentLaunchManager } from "./subagent-registry-run-launch.js";
+import * as runManager from "./subagent-registry-run-manager.js";
+import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
 import type { SubagentCompletionRequest } from "./subagent-registry.types.js";
 
 afterEach(() => {
@@ -185,19 +192,20 @@ it("rejects and terminalizes an intent superseded while descriptor admission wai
   });
 });
 
-it.each(["recorded child", "configured default"] as const)(
+it.each(["recorded child", "persisted store owner"] as const)(
   "terminalizes a committed intent after a definite descriptor refusal using its %s usage",
   async (owner) => {
     await withQueuedRegistrationFixture(async (f) => {
       const recordedChild = owner === "recorded child";
-      const cfg: OpenClawConfig = {
+      const configuredStoreOwner = recordedChild ? "main" : "research";
+      const cfg = {
+        session: { store: path.join(resolveStateDir(), "queued-registration-sessions.sqlite") },
         agents: {
-          list: [
-            { id: "main", default: recordedChild },
-            { id: "research", default: !recordedChild },
-          ],
+          ownership: "explicit",
+          entries: { main: {}, research: {} },
+          defaults: { sessionStore: { agentId: configuredStoreOwner } },
         },
-      };
+      } satisfies OpenClawConfig;
       f.options.getRuntimeConfig = () => cfg;
       f.registration.childSessionKey = "global";
       f.registration.childAgentId = recordedChild ? "research" : undefined;
@@ -207,7 +215,12 @@ it.each(["recorded child", "configured default"] as const)(
         ["research", 101, 103],
       ] as const) {
         await replaceSessionEntry(
-          { agentId, sessionKey: "global" },
+          {
+            agentId,
+            sessionKey: "global",
+            storePath: cfg.session.store,
+            defaultAgentId: configuredStoreOwner,
+          },
           {
             sessionId: `${agentId}-collector-session`,
             lifecycleRevision: `${agentId}-collector-lifecycle`,
@@ -263,6 +276,86 @@ it("serializes Stop after a pending descriptor without losing either commit", as
   });
 });
 
+it.each(["open", "restart", "suspend"] as const)(
+  "owns lifecycle preservation before its first await with admission %s",
+  async (fence) => {
+    await withQueuedRegistrationFixture(async (f) => {
+      await f.register();
+      const release = createDeferred();
+      const preserve = runManager.preserveSubagentRunForRestart;
+      const preservation = vi
+        .spyOn(runManager, "preserveSubagentRunForRestart")
+        .mockImplementation((params) => f.track(release.promise.then(() => preserve(params))));
+      let emit: ((event: AgentEventPayload) => void) | undefined;
+      const complete = vi.fn(async () => {});
+      const warn = vi.fn();
+      const listener = createSubagentRegistryListener({
+        runs: f.runs,
+        pendingLifecycle: createPendingLifecycleScheduler({
+          runs: f.runs,
+          completeInBackground: vi.fn(),
+        }),
+        onAgentEvent: (handler) => {
+          emit = handler;
+          return () => {};
+        },
+        resumeRequesterSettleWake: vi.fn(),
+        adoptPausedSubagentRunIntoSuccessor: async () => false,
+        refreshFrozenResultFromSession: async () => {},
+        completeSubagentRunWithRecovery: complete,
+        warn,
+      });
+      const dispatch = async () => {
+        const settleRootWork = observeRootWork();
+        if (fence === "restart") {
+          markGatewayRestartDraining();
+        } else if (fence === "suspend") {
+          expect(tryBeginGatewaySuspendAdmission(() => {})?.drain()).toBe(true);
+        }
+        try {
+          emit?.({
+            runId: f.registration.runId,
+            seq: 1,
+            stream: "lifecycle",
+            ts: Date.now(),
+            data: {
+              phase: "end",
+              endedAt: Date.now(),
+              ...(fence === "restart" ? { aborted: true, stopReason: "restart" } : {}),
+            },
+          });
+          expect(preservation).toHaveBeenCalledOnce();
+          expect(getActiveGatewayRootWorkCount({ excludeCurrent: true })).toBe(1);
+        } finally {
+          release.resolve();
+          await settleRootWork();
+        }
+        expect(warn).not.toHaveBeenCalled();
+        expect(getActiveGatewayRootWorkCount({ excludeCurrent: true })).toBe(0);
+        if (fence === "restart") {
+          expect(f.current().execution.status).toBe("interrupted");
+          expect(complete).not.toHaveBeenCalled();
+        } else {
+          expect(complete).toHaveBeenCalledOnce();
+        }
+      };
+      listener.ensure();
+      try {
+        if (fence === "open") {
+          await dispatch();
+        } else {
+          await runWithGatewayIndependentRootWorkAdmission(dispatch, "test:lifecycle-parent");
+        }
+      } finally {
+        release.resolve();
+        listener.reset();
+        preservation.mockRestore();
+        resetGatewayWorkAdmission();
+      }
+    });
+  },
+);
+
 it.each([false, true])(
   "refuses delayed launch acceptance during a kill claim after start=%s",
   async (started) => {
@@ -280,6 +373,7 @@ it.each([false, true])(
           return () => {};
         },
         resumeRequesterSettleWake: vi.fn(),
+        adoptPausedSubagentRunIntoSuccessor: async () => false,
         refreshFrozenResultFromSession: async () => {},
         completeSubagentRunWithRecovery: async () => {},
         warn: vi.fn(),
@@ -351,6 +445,7 @@ it.each(["pending", "already dispatched", "next attempt"] as const)(
           return () => {};
         },
         resumeRequesterSettleWake: vi.fn(),
+        adoptPausedSubagentRunIntoSuccessor: async () => false,
         refreshFrozenResultFromSession: async () => {},
         completeSubagentRunWithRecovery: async () => {},
         warn,

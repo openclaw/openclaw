@@ -25,7 +25,6 @@ import {
   assertCurrentSessionTranscriptHeader,
   findSessionTranscriptHeader,
 } from "../../config/sessions/session-entry-codec.js";
-import { prepareSessionTranscriptHydration } from "../../config/sessions/session-transcript-hydration.js";
 import {
   resolveSessionTranscriptReadFence,
   withSessionContextAdmission,
@@ -45,10 +44,13 @@ import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
 import type { Message } from "../../llm/types.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
+import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import { isIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import type { BashExecutionMessage, CustomMessage } from "./messages.js";
 import { SessionManagerBranching } from "./session-manager-branching.js";
 import { sessionManagerReadInitialContext } from "./session-manager-current-turn.js";
+import { prepareSessionManagerHydration } from "./session-manager-incognito.js";
+import { receiveSessionManagerCommit } from "./session-manager-persistence-error.js";
 import type {
   SessionLeafControl,
   AppendPersistenceOptions,
@@ -132,6 +134,27 @@ export class SessionManager extends SessionManagerBranching {
     ) {
       throw new Error("Session manager changed during initial context read");
     }
+    for (const entry of context.fileEntries) {
+      if (entry.type !== "message") {
+        continue;
+      }
+      const stored = this.byId.get(entry.id);
+      if (stored?.type !== "message") {
+        continue;
+      }
+      // The worker projects private fields away; equal payloads can share immutable custody.
+      if (isDeepStrictEqual(entry.message, stored.message)) {
+        entry.message = freezeJsonSnapshot(stored.message);
+      } else {
+        for (const key of Object.keys(entry.message)) {
+          const value: unknown = Reflect.get(stored.message, key);
+          if (isDeepStrictEqual(Reflect.get(entry.message, key), value)) {
+            Reflect.set(entry.message, key, freezeJsonSnapshot(value));
+          }
+        }
+        freezeJsonSnapshot(entry.message);
+      }
+    }
     return context.buildSessionContext();
   }
 
@@ -179,11 +202,16 @@ export class SessionManager extends SessionManagerBranching {
 
   /** Preparation returns a detached branch; only its awaited commit publishes changes. */
   async prepareTranscriptRewriteAsync() {
-    return withSessionManagerWrite(this, async () => {
+    return withSessionManagerWrite(this, async (writeAdmission) => {
       this.assertTranscriptWriteActive();
       const assertNavigation = this.captureTranscriptNavigationAssertion();
       const target = this.persistenceTarget;
-      if (!target || isIncognitoSessionKey(target.sessionKey)) {
+      if (
+        !target ||
+        (isIncognitoSessionKey(target.sessionKey) &&
+          writeAdmission &&
+          "db" in writeAdmission.database)
+      ) {
         const detachedView = target ? undefined : structuredClone(this.captureTranscriptView());
         const assertPrepared = () => {
           assertNavigation();
@@ -224,6 +252,7 @@ export class SessionManager extends SessionManagerBranching {
       const appendParentId = this.appendParentId;
       const assertOwned = captureOwnedTranscriptWriteAssertion(identity);
       const assertCurrent = () => {
+        writeAdmission?.assertCurrent();
         this.assertTranscriptWriteActive();
         assertOwned();
         assertNavigation();
@@ -234,7 +263,7 @@ export class SessionManager extends SessionManagerBranching {
           throw new Error("Session transcript changed before rewrite publication");
         }
       };
-      const reader = prepareSessionTranscriptHydration(target);
+      const reader = prepareSessionManagerHydration(target);
       const facts = await reader.readMaintenance({ operation: "version" });
       reader.assertCurrent();
       assertCurrent();
@@ -256,6 +285,10 @@ export class SessionManager extends SessionManagerBranching {
             if (!admission) {
               throw new Error("Transcript rewrite lost its persistent owner");
             }
+            const assertCommitCurrent = () => {
+              admission.assertCurrent();
+              assertCurrent();
+            };
             for (const entry of entries) {
               if (entry.type === "message") {
                 entry.message = redactTranscriptMessageForStorage(entry.message, {});
@@ -263,32 +296,38 @@ export class SessionManager extends SessionManagerBranching {
             }
             const { withSessionMetadataWorker } =
               await import("./session-manager-metadata-runtime.js");
-            assertCurrent();
+            assertCommitCurrent();
             const { env: _env, ...scope } = withOwnedSessionTranscriptWriterFence(target);
-            const committed = await withSessionMetadataWorker(
-              admission.options,
-              admission.database,
-              assertCurrent,
-              (worker) =>
-                worker.execute({
-                  type: "session.transcript.rewrite",
-                  input: {
-                    scope: { ...scope, storePath: admission.database.path },
-                    appendParentId,
-                    version,
-                    entries,
-                    sources: [...sources],
-                  },
-                }),
+            const receipt = await receiveSessionManagerCommit("session.transcript.rewrite", () =>
+              withSessionMetadataWorker(
+                admission.options,
+                admission.database,
+                assertCommitCurrent,
+                (worker) =>
+                  worker.execute({
+                    type: "session.transcript.rewrite",
+                    input: {
+                      scope: { ...scope, storePath: admission.database.path },
+                      appendParentId,
+                      version,
+                      entries,
+                      sources: [...sources],
+                    },
+                  }),
+              ),
             );
-            if (committed.projectionNeedsReconcile) {
+            const committed = receipt.value;
+            if (committed.projectionNeedsReconcile && !receipt.failure) {
               startSessionTranscriptIndexReconcile({
                 ...admission.options,
                 preferredSessionId: identity.sessionId,
               });
             }
             try {
-              assertCurrent();
+              if (receipt.failure) {
+                throw receipt.failure;
+              }
+              assertCommitCurrent();
               for (const [index, entry] of committed.entries.entries()) {
                 Object.assign(entries[index]!, entry);
               }
@@ -337,14 +376,8 @@ export class SessionManager extends SessionManagerBranching {
         this: SessionManager,
         rewrittenEntryIds: ReadonlyMap<string, string>,
       ): Generator<SessionPersistenceStep, void, void> {
-        const publication = yield* sessionPersistenceStep(
-          () => prepared,
-          async () => {
-            const snapshot = SessionManager.inMemory(prepared.cwd);
-            Object.assign(snapshot, structuredClone(prepared.captureTranscriptView()));
-            return snapshot;
-          },
-        );
+        const publication = SessionManager.inMemory(prepared.cwd);
+        Object.assign(publication, structuredClone(prepared.captureTranscriptView()));
         const entries = publication.fileEntries
           .slice(initialEntryCount)
           .filter((entry) => entry.type !== "session");
@@ -420,7 +453,7 @@ export class SessionManager extends SessionManagerBranching {
         signal,
       });
     }
-    const hydration = prepareSessionTranscriptHydration(target, undefined, signal);
+    const hydration = prepareSessionManagerHydration(target, undefined, signal);
     const cwd = cwdOverride ?? process.cwd();
     const assertOwned = captureOwnedTranscriptWriteAssertion(hydration.target);
     assertOwned();
@@ -509,7 +542,7 @@ export class SessionManager extends SessionManagerBranching {
   ): Promise<SessionManager> {
     const { cwd, onTruncated, signal, ...limits } = options;
     const fallbackCwd = cwd ?? process.cwd();
-    const hydration = prepareSessionTranscriptHydration(target, limits, signal);
+    const hydration = prepareSessionManagerHydration(target, limits, signal);
     const assertOwned = captureOwnedTranscriptWriteAssertion(hydration.target);
     assertOwned();
     const prepared = await hydration.read().catch((error: unknown) => {

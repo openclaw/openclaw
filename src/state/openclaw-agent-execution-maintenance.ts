@@ -2,7 +2,7 @@ import { threadId } from "node:worker_threads";
 import { expectDefined } from "@openclaw/normalization-core";
 import type {
   ReclamationDatabaseOptions,
-  SessionEntryMaintenanceInput,
+  SessionMaintenanceMetadataCommand,
   SessionMaintenanceLiveProtection,
 } from "../config/sessions/session-accessor.sqlite-lifecycle-types.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -10,9 +10,12 @@ import { deferSqliteWorkerCommitReceipt } from "../infra/sqlite-worker-operation
 import type { OpenClawAgentDatabase } from "./openclaw-agent-db-contract.js";
 import type { WorkerOperations } from "./worker-operation-registry.js";
 
-type PreparationInput = { id: string; input: SessionEntryMaintenanceInput };
+type PreparationInput = Omit<
+  Extract<SessionMaintenanceMetadataCommand, { kind: "maintenance-plan" }>,
+  "kind"
+> & { id: string };
 type MetadataInput =
-  | { kind: "maintenance-statistics" }
+  | Exclude<SessionMaintenanceMetadataCommand, { kind: "maintenance-plan" }>
   | {
       kind: "maintenance-plan";
       preparationId: string;
@@ -63,6 +66,8 @@ export function createAgentDatabaseMaintenanceOwner(context: {
       const prepared = kernel.prepareSessionMaintenanceInWorker({
         kind: "maintenance-plan",
         input: input.input,
+        ageOwner: input.ageOwner,
+        ageChanges: input.ageChanges,
         databaseOptions: context.databaseOptions,
       });
       preparations.set(input.id, { plan: input, prepared });
@@ -84,9 +89,13 @@ export function createAgentDatabaseMaintenanceOwner(context: {
       if (preparation && input.kind === "maintenance-plan") {
         Object.assign(preparation.plan.input, input.protection);
       }
-      const plan = preparation
-        ? { kind: "maintenance-plan" as const, input: preparation.plan.input }
-        : { kind: "maintenance-statistics" as const };
+      const plan: SessionMaintenanceMetadataCommand =
+        input.kind === "maintenance-plan"
+          ? {
+              ...expectDefined(preparation, "Session maintenance preparation").plan,
+              kind: "maintenance-plan",
+            }
+          : input;
       const value = kernel.runSessionMaintenanceMetadataInTransaction(
         { ...plan, databaseOptions: context.databaseOptions },
         {
