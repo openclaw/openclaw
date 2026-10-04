@@ -949,6 +949,12 @@ const enSettings = {
       introIos: "App behavior and capabilities on this device.",
       permissionsIntro: "macOS access for notifications, capture, voice, and device context.",
       permissionsIntroIos: "Device access for notifications, capture, voice, and personal data.",
+      appTranslocationWarningTitle: "Running under App Translocation",
+      appTranslocationWarning:
+        "macOS launched OpenClaw from a temporary path, usually because com.apple.quarantine remains on the Applications install. Peekaboo Bridge and Screen Recording / Accessibility grants then fail to stick. Quit OpenClaw, run xattr -dr com.apple.quarantine /Applications/OpenClaw.app, reopen from Applications, and re-grant those permissions.",
+      bundleQuarantineWarningTitle: "Installed app still has a quarantine flag",
+      bundleQuarantineWarning:
+        "OpenClaw is running from Applications, but the bundle still has com.apple.quarantine. macOS can reset Accessibility on every launch even when the path is stable and the app is not under App Translocation. Screen Recording can stay granted. Quit OpenClaw, run xattr -dr com.apple.quarantine /Applications/OpenClaw.app, reopen it, and re-grant Accessibility. Nested resource files can keep the attribute; that does not cause this reset.",
       app: "App",
       nativeExperience: "Native experience (Experimental)",
       nativeExperienceHint:
