@@ -199,4 +199,45 @@ describe("incomplete-turn recovery policy", () => {
       }),
     ).toBe(REASONING_ONLY_RETRY_INSTRUCTION);
   });
+
+  it.each([
+    { name: "a collected collector", spawns: [{ runId: "run-a", collected: true }], silent: true },
+    { name: "an uncollected collector", spawns: [{ runId: "run-a" }], silent: false },
+    {
+      name: "one of two collectors collected",
+      spawns: [{ runId: "run-a", collected: true }, { runId: "run-b" }],
+      silent: false,
+    },
+    {
+      name: "a completion-message child",
+      spawns: [{ runId: "run-a", collected: true, expectsCompletionMessage: true }],
+      silent: false,
+    },
+  ] as const)("classifies optional NO_REPLY after $name", ({ spawns, silent }) => {
+    const assistant = emptyAssistant({ content: [{ type: "text", text: "NO_REPLY" }] });
+    const attempt = makeEmbeddedRunnerAttempt({
+      assistantTexts: ["NO_REPLY"],
+      lastAssistant: assistant,
+      currentAttemptAssistant: assistant,
+      toolMetas: [
+        ...spawns.map(() => ({ toolName: "sessions_spawn", replaySafe: false })),
+        { toolName: "agents_wait", replaySafe: true },
+      ],
+      acceptedSessionSpawns: spawns.map((spawn) => ({
+        childSessionKey: `agent:main:subagent:${spawn.runId}`,
+        expectsCompletionMessage: false,
+        ...spawn,
+      })),
+      replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
+      currentAttemptReplayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
+    });
+    const state = { payloadCount: 0, aborted: false, timedOut: false, attempt };
+
+    expect(
+      shouldTreatEmptyAssistantReplyAsSilent({ ...state, terminalReplyExpectation: "optional" }),
+    ).toBe(silent);
+    expect(
+      shouldTreatEmptyAssistantReplyAsSilent({ ...state, terminalReplyExpectation: "required" }),
+    ).toBe(false);
+  });
 });

@@ -65,3 +65,57 @@ describe("handleToolExecutionEnd sessions_spawn terminal success tracking", () =
     },
   );
 });
+
+describe("handleToolExecutionEnd agents_wait collector settlement", () => {
+  it("marks only collectors that agents_wait returned as done", async () => {
+    const { ctx } = createTestContext();
+    for (const runId of ["run-done", "run-failed", "run-pending"]) {
+      await endTool(ctx, {
+        toolName: "sessions_spawn",
+        toolCallId: `spawn-${runId}`,
+        result: resultWithDetails({
+          status: "accepted",
+          runId,
+          childSessionKey: `agent:main:subagent:${runId}`,
+          expectsCompletionMessage: false,
+        }),
+      });
+    }
+
+    await endTool(ctx, {
+      toolName: "agents_wait",
+      toolCallId: "wait-collectors",
+      result: resultWithDetails({
+        completed: [
+          { runId: "run-done", status: "done", result: "ok", sessionKey: "agent:main:subagent:a" },
+          {
+            runId: "run-failed",
+            status: "failed",
+            result: "",
+            sessionKey: "agent:main:subagent:b",
+          },
+        ],
+        pending: ["run-pending"],
+      }),
+    });
+    await endTool(ctx, {
+      toolName: "agents_wait",
+      toolCallId: "wait-error",
+      isError: true,
+      result: resultWithDetails({
+        completed: [
+          { runId: "run-pending", status: "done", result: "", sessionKey: "agent:main:subagent:c" },
+        ],
+        pending: [],
+      }),
+    });
+
+    expect(
+      ctx.state.acceptedSessionSpawns.map(({ runId, collected }) => ({ runId, collected })),
+    ).toEqual([
+      { runId: "run-done", collected: true },
+      { runId: "run-failed", collected: undefined },
+      { runId: "run-pending", collected: undefined },
+    ]);
+  });
+});
