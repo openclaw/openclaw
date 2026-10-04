@@ -83,9 +83,10 @@ export async function root(
 /**
  * True when a native copy failed because the kernel refused the FICLONE ioctl itself.
  * Seccomp policies (the default for unprivileged LXC containers, and hardened container
- * runtimes) answer that ioctl with EPERM before any filesystem sees it. fs-safe treats only
- * ENOTSUP as "clone unavailable", so this surfaces as a helper failure; nothing was
- * published, and a plain copy of the same file is unaffected. See openclaw#164113.
+ * runtimes) answer that ioctl with EPERM before any filesystem sees it. fs-safe 0.23 treats
+ * only ENOTSUP as "clone unavailable" and reports this as a helper failure whose cause carries
+ * the native "FICLONE: ..." message; nothing was published, and a plain copy of the same file
+ * is unaffected. Retire this once fs-safe classifies the denial itself. See #164113.
  */
 export function isCloneDeniedError(error: unknown): boolean {
   return (

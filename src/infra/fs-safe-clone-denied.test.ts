@@ -134,6 +134,34 @@ it.each([
   },
 );
 
+it.each([
+  { admission: false, first: "auto" },
+  { admission: true, first: "always" },
+])(
+  "does not retry or admit a byte copy for other SQLite copy failures (byte admission=$admission)",
+  async ({ admission, first }) => {
+    const directory = dirs.make("sqlite-clone-other-failure-");
+    const source = path.join(directory, "source");
+    await fs.writeFile(source, Buffer.alloc(4096, 7));
+    let admitted = 0;
+    const failure = nativeFailure("copy_file_range: Operation not permitted (os error 1)");
+    seccomp.failure = () => failure;
+
+    await expect(
+      copySqliteFile(
+        source,
+        path.join(directory, "target"),
+        await fs.stat(source, { bigint: true }),
+        admission ? () => void admitted++ : undefined,
+      ),
+    ).rejects.toBe(failure);
+
+    expect(seccomp.attempts).toEqual([first]);
+    expect(admitted).toBe(0);
+    expect(await fs.readdir(directory)).toEqual(["source"]);
+  },
+);
+
 it("does not retry permission failures that are not a denied clone", async () => {
   const f = await fixture();
   const failure = nativeFailure("copy_file_range: Operation not permitted (os error 1)");
