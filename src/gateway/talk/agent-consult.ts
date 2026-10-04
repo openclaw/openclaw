@@ -73,6 +73,12 @@ export async function joinOrStartTalkConsult(params: {
     }
   }
   const entry = { startedAt: Date.now(), start: params.start() };
+  // Entries past the join window are never joined; drop them so the map stays bounded.
+  for (const [key, stale] of inFlightConsults) {
+    if (entry.startedAt - stale.startedAt >= CONSULT_JOIN_WINDOW_MS) {
+      inFlightConsults.delete(key);
+    }
+  }
   inFlightConsults.set(params.key, entry);
   const result = await entry.start;
   if (!result.ok && inFlightConsults.get(params.key) === entry) {

@@ -247,8 +247,13 @@ function isReadOnlyFilterCommand(executable: string, args: readonly string[]): b
       // A second operand is the output file: admit the stdin form only.
       return args.every((arg) => /^--?[a-z]/i.test(arg));
     case "file":
-      // -C/--compile writes a compiled magic file.
-      return !args.some((arg) => /^-[^-]*C|^--($|c)/.test(arg));
+      // -C/--compile writes a compiled magic file; -z/-Z can run a decompressor and
+      // -S drops the sandbox around it. Only the named long options are admitted.
+      return !args.some(
+        (arg) =>
+          /^-[^-]*[CzZS]/.test(arg) ||
+          (arg.startsWith("--") && !/^--(brief|mime|mime-type|mime-encoding)$/.test(arg)),
+      );
     default:
       return undefined;
   }

@@ -20,7 +20,7 @@ describe("joinOrStartTalkConsult", () => {
           return ok(runId);
         },
       });
-    // 16 repeats while the first start is still unacknowledged, as in the 3 Oct storm.
+    // 16 repeats while the first start is still unacknowledged.
     const pending = Array.from({ length: 16 }, call);
     release();
     const results = await Promise.all(pending);
