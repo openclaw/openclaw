@@ -390,7 +390,7 @@ ${changeLock}
       const first = f.run("review-init");
       expect(first.status, first.stderr).toBe(0);
       const templates = join(f.canonical, ".worktrees", ".templates");
-      expect(existsSync(templates)).toBe(true);
+      expect(existsSync(templates), first.stderr).toBe(true);
       const templateNames = readdirSync(templates).toSorted();
       expect(templateNames.length).toBeGreaterThan(0);
       expect(first.stderr).toContain("PR source checkout: filesystem template clone.");

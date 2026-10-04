@@ -29,10 +29,8 @@ export type QaTransportFactoryContext = {
   state: QaBusState;
 };
 
-export type QaTransportAdapterFactoryResult<
-  TAdapter extends QaTransportAdapter = QaTransportAdapter,
-> = {
-  adapter: TAdapter;
+export type QaTransportAdapterFactoryResult = {
+  adapter: QaTransportAdapter;
   cleanupBeforeGatewayStop: () => Promise<void>;
   cleanupAfterGatewayStop: () => Promise<void>;
   cleanupWithoutGateway: () => Promise<void>;
@@ -78,17 +76,6 @@ export async function prepareQaTransportAdapterFactories(params: {
 }
 
 const DEFAULT_QA_TRANSPORT_ID: QaTransportId = "qa-channel";
-
-function requireQaTransportFactory(
-  factories: readonly QaTransportAdapterFactory[],
-  context: Pick<QaTransportFactoryContext, "channelId" | "driver">,
-) {
-  const factory = factories.find((candidate) => candidate.matches(context));
-  if (!factory) {
-    throw new Error(`no QA transport factory for ${context.driver}:${context.channelId}`);
-  }
-  return factory;
-}
 
 export function qaTransportSupportsModuleFlows(
   factories: readonly QaTransportAdapterFactory[] | undefined,
@@ -148,10 +135,12 @@ export async function createQaTransportAdapter(
     if (context.driver === "qa-channel" && context.channelId === "qa-channel") {
       adapter = createQaChannelTransport(context.state, context.adapterOptions?.transportPolicy);
     } else {
-      const factory = requireQaTransportFactory(
-        [...factories, createQaCrablineTransportAdapterFactory(context.state)],
-        context,
+      const factory = [...factories, createQaCrablineTransportAdapterFactory(context.state)].find(
+        (candidate) => candidate.matches(context),
       );
+      if (!factory) {
+        throw new Error(`no QA transport factory for ${context.driver}:${context.channelId}`);
+      }
       const definition = await factory.create({
         adapterOptions: context.adapterOptions,
         channelId: context.channelId,

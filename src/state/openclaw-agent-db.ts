@@ -3,6 +3,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { isMainThread } from "node:worker_threads";
 import { resolveStateDir } from "../config/paths.js";
 import { isGatewayExternallySupervised } from "../infra/gateway-supervision.js";
+import { registerNodeSqliteDisposeCallback } from "../infra/kysely-sync-cache-state.js";
 import { enableNodeSqliteKyselyStatementCache } from "../infra/kysely-sync.js";
 import {
   openNodeSqliteDatabase,
@@ -277,7 +278,7 @@ function* openOpenClawAgentDatabaseSteps(
     cache.unregisterExitClose ??= registerSqliteCacheExitClose(closeOpenClawAgentDatabases);
     cache.databases.set(pathname, database);
     cache.generation += 1;
-    retainIncognitoSharedState(db, options.env);
+    registerNodeSqliteDisposeCallback(db, retainIncognitoSharedState(options.env));
     getOpenClawDatabaseMaintenanceScope()?.own(database.db, "agent-handles", () =>
       closeMaintenanceAgentDatabase(database),
     );
@@ -422,7 +423,6 @@ function* openOpenClawAgentDatabaseSteps(
         diagnostics,
         verification,
         isValidatedReopen && reuseIntegrity,
-        true,
       );
       assertCurrent(validationDatabase);
       if (!diagnostics.integrityGateOutcome || diagnostics.integrityGateOutcome === "cached") {

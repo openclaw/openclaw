@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { Logger as TsLogger } from "tslog";
@@ -284,7 +283,7 @@ function resolveLogTraceContext(
 }
 
 function prepareFileLogRecord(logObj: TsLogRecord): {
-  fields: Record<string, string>;
+  fields: Record<string, string> & { hostname: string };
   messageParts: FileLogMessagePart[];
 } {
   const entries = getSortedNumericLogEntries(logObj);
@@ -559,10 +558,7 @@ function buildLogger(): TsLogger<LogObj> {
         const line = serializeRedactedFileLogRecord(
           {
             ...logObj,
-            _meta: withResolvedLogMetaHostname(
-              logObj["_meta"],
-              expectDefined(fields.hostname, "structured log hostname"),
-            ),
+            _meta: withResolvedLogMetaHostname(logObj["_meta"], fields.hostname),
             time,
             ...fields,
           },
@@ -573,7 +569,7 @@ function buildLogger(): TsLogger<LogObj> {
         );
         fileLogTransport.enqueue({
           file: activeFile,
-          hostname: expectDefined(fields.hostname, "structured log hostname"),
+          hostname: fields.hostname,
           maxFileBytes: settings.maxFileBytes,
           payload: `${line}\n`,
         });

@@ -34,7 +34,6 @@ import {
   type PluginVersionDriftReport,
   type PluginVersionRestartReadiness,
 } from "../../plugins/plugin-version-drift.js";
-import { createLazyPromise } from "../../shared/lazy-promise.js";
 import { VERSION } from "../../version.js";
 import { resolveGatewayLocalPortOverride } from "../gateway-port-option.js";
 import { parseTimeoutMsWithFallback } from "../parse-timeout.js";
@@ -59,14 +58,6 @@ type DaemonConfigContext = {
   daemonConfigSummary: ConfigSummary;
   configMismatch: boolean;
 };
-
-const loadGatewayProbeAuthModule = createLazyPromise(() => import("../../gateway/probe-auth.js"));
-const loadDaemonInspectModule = createLazyPromise(() => import("../../daemon/inspect.js"));
-const loadLaunchdDiagnosticsModule = createLazyPromise(() => import("./status.launchd.js"));
-const loadServiceAuditModule = createLazyPromise(() => import("../../daemon/service-audit.js"));
-const loadGatewayTlsModule = createLazyPromise(() => import("../../infra/tls/gateway.js"));
-const loadDaemonProbeModule = createLazyPromise(() => import("./probe.js"));
-const loadRestartHealthModule = createLazyPromise(() => import("./restart-health.js"));
 
 async function loadDaemonConfigContext(
   serviceEnv?: Record<string, string>,
@@ -209,7 +200,7 @@ async function gatherDaemonStatusImpl(
     }
   }
   const restartHandoff = opts.deep ? readGatewayRestartHandoffSync(serviceEnv) : null;
-  const configAudit: ServiceConfigAudit = await loadServiceAuditModule().then(
+  const configAudit: ServiceConfigAudit = await import("../../daemon/service-audit.js").then(
     ({ auditGatewayServiceConfig }) =>
       auditGatewayServiceConfig({
         env: process.env,
@@ -269,7 +260,7 @@ async function gatherDaemonStatusImpl(
   });
 
   const extraServices = opts.deep
-    ? await loadDaemonInspectModule()
+    ? await import("../../daemon/inspect.js")
         .then(({ findExtraGatewayServices }) =>
           findExtraGatewayServices(process.env, {
             deep: true,
@@ -287,7 +278,7 @@ async function gatherDaemonStatusImpl(
     : [];
   const launchdDiagnostics =
     process.platform === "darwin"
-      ? await loadLaunchdDiagnosticsModule().then(({ gatherLaunchdJobDiagnostics }) =>
+      ? await import("./status.launchd.js").then(({ gatherLaunchdJobDiagnostics }) =>
           gatherLaunchdJobDiagnostics(serviceEnv, Boolean(opts.deep)),
         )
       : {};
@@ -295,7 +286,7 @@ async function gatherDaemonStatusImpl(
   const tlsEnabled = daemonCfg.gateway?.tls?.enabled === true;
   const localCertificate =
     opts.probe && !probeUrlOverride && tlsEnabled
-      ? await loadGatewayTlsModule().then(({ inspectGatewayTlsCertificate }) =>
+      ? await import("../../infra/tls/gateway.js").then(({ inspectGatewayTlsCertificate }) =>
           inspectGatewayTlsCertificate(daemonCfg.gateway?.tls),
         )
       : undefined;
@@ -323,7 +314,7 @@ async function gatherDaemonStatusImpl(
       daemonProbeAuth = {};
     } else if (canResolveProbeAuth) {
       // Trusted-proxy probes still use the local-direct password owned by this resolver.
-      const probeAuthResolution = await loadGatewayProbeAuthModule().then(
+      const probeAuthResolution = await import("../../gateway/probe-auth.js").then(
         ({ resolveGatewayProbeAuthSafeWithSecretInputs }) =>
           resolveGatewayProbeAuthSafeWithSecretInputs({
             cfg: daemonCfg,
@@ -344,7 +335,7 @@ async function gatherDaemonStatusImpl(
   }
 
   const rpc = opts.probe
-    ? await loadDaemonProbeModule().then(({ probeGatewayStatus }) =>
+    ? await import("./probe.js").then(({ probeGatewayStatus }) =>
         probeGatewayStatus({
           url: probeUrl,
           ...(probeUrlOverride ? { urlOverride: probeUrlOverride } : {}),
@@ -368,7 +359,7 @@ async function gatherDaemonStatusImpl(
   }
   const health =
     opts.probe && serviceTargetsProbe && loaded && rpc?.ok !== true
-      ? await loadRestartHealthModule()
+      ? await import("./restart-health.js")
           .then(({ inspectGatewayRestart }) =>
             inspectGatewayRestart({
               service,

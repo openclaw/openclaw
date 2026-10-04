@@ -33,7 +33,7 @@ export async function withDelegatedUpdateCommandExecutor<T>(
   root: string,
   operation: (
     fence: UpdateRecoveryFence,
-    commandAuthority: ManagedCommandProcessAuthority | undefined,
+    commandAuthority: ManagedCommandProcessAuthority,
   ) => Promise<T>,
   options?: { activationTimeoutMs: number },
 ): Promise<T> {
@@ -177,19 +177,17 @@ export async function withDelegatedUpdateCommandExecutor<T>(
           let outcome: { result: T } | { error: unknown };
           try {
             fence.assertCurrent();
-            if (databaseIdentity) {
-              admittedAuthorities.set(fence, {
-                authority: Object.freeze({
-                  ...databaseIdentity,
-                  installKey: original.key,
-                  owner: original.owner,
-                }),
-                assertCurrent: assertBase,
-                managedHandoff,
-                runId,
-                retainedRoot: retained?.key,
-              });
-            }
+            admittedAuthorities.set(fence, {
+              authority: Object.freeze({
+                ...databaseIdentity,
+                installKey: original.key,
+                owner: original.owner,
+              }),
+              assertCurrent: assertBase,
+              managedHandoff,
+              runId,
+              retainedRoot: retained?.key,
+            });
             if (options) {
               activation.start(
                 new UpdateActivationTimeoutError(root, options.activationTimeoutMs),
@@ -197,21 +195,16 @@ export async function withDelegatedUpdateCommandExecutor<T>(
               );
             }
             outcome = {
-              result: await operation(
-                fence,
-                databaseIdentity
-                  ? {
-                      runId,
-                      databaseIdentity,
-                      parents: [
-                        originalChild,
-                        child,
-                        ...(retainedChild ? [retainedChild] : []),
-                        ...(slotChild ? [slotChild] : []),
-                      ],
-                    }
-                  : undefined,
-              ),
+              result: await operation(fence, {
+                runId,
+                databaseIdentity,
+                parents: [
+                  originalChild,
+                  child,
+                  ...(retainedChild ? [retainedChild] : []),
+                  ...(slotChild ? [slotChild] : []),
+                ],
+              }),
             };
           } catch (error) {
             outcome = { error };

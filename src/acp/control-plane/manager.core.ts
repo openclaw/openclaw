@@ -379,7 +379,6 @@ export class AcpSessionManager {
           input: acceptedInput,
           acceptedTurn,
           ...target,
-          deps: this.deps,
           runtimeHandles: this.runtimeHandles,
           activeTurnBySession: this.activeTurnBySession,
           resolveSession: this.resolveSessionAsync.bind(this),

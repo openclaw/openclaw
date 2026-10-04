@@ -38,7 +38,6 @@ describe.skipIf(!hasBrowserLayout)("dream diary browser layout", () => {
       promotedCount: 0,
       shortTermEntries: [],
       promotedEntries: [],
-      dreamingOf: null,
       nextCycle: null,
       timezone: null,
       statusError: null,

@@ -110,7 +110,6 @@ type DreamingProps = {
   };
   shortTermEntries: DreamingEntry[];
   promotedEntries: DreamingEntry[];
-  dreamingOf: string | null;
   nextCycle: string | null;
   timezone: string | null;
   statusError: string | null;
@@ -261,7 +260,7 @@ function renderDreamsCameo(agentId: string) {
 export function renderDreaming(props: DreamingProps) {
   const state = props.viewState;
   const idle = !props.active;
-  const dreamText = props.dreamingOf ?? currentDreamPhrase(state);
+  const dreamText = currentDreamPhrase(state);
 
   return html`
     <div class="dreams-page">

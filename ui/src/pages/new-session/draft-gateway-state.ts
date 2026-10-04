@@ -1,4 +1,5 @@
 import { initialState, Task, TaskStatus } from "@lit/task";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ReactiveControllerHost } from "lit";
 import { readOfflineStorageScope } from "../../app/boot-record.ts";
 import type { ApplicationContext } from "../../app/context.ts";
@@ -7,7 +8,7 @@ import { t } from "../../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
-import { canReadSystemInfo } from "../../lib/system-info.ts";
+import { canReadSystemInfo, readSystemInfo } from "../../lib/system-info.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import * as catalog from "./catalog-target.ts";
 import { CLOUD_PROFILE_RETRY_DELAYS_MS } from "./cloud-profile-discovery.ts";
@@ -17,7 +18,6 @@ import {
   DraftPreferenceState,
   type SubmittedWorktreePreference,
 } from "./draft-preference-state.ts";
-import { discoverGatewayName } from "./gateway-name-discovery.ts";
 import type { NewSessionRouteData } from "./location.ts";
 import {
   acquirePaletteIdentityPreferences,
@@ -125,8 +125,21 @@ export class DraftGatewayState {
             document.visibilityState !== "hidden",
           this.gatewayConnectionEpochValue,
         ] as const,
-      task: ([gateway, available, _connectionEpoch], { signal }) =>
-        discoverGatewayName(gateway, available, signal),
+      task: async ([gateway, available, _connectionEpoch], { signal }) => {
+        if (!gateway || !available) {
+          return "";
+        }
+        try {
+          const { value: result } = await readSystemInfo(gateway, signal, { fresh: true });
+          return (
+            normalizeOptionalString(result.machineName) ??
+            normalizeOptionalString(result.hostname)?.split(".", 1)[0] ??
+            ""
+          );
+        } catch {
+          return "";
+        }
+      },
     });
     // Shared system reads pause in background tabs; visibility must wake this one-shot task.
     new SubscriptionsController(host).watch(

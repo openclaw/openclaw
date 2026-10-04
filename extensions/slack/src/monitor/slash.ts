@@ -11,7 +11,13 @@ import {
   resolveDefaultModelForAgent,
 } from "openclaw/plugin-sdk/agent-runtime";
 import {
+  buildCommandTextFromArgs,
+  findCommandByNativeName,
   formatCommandArgMenuTitle,
+  listNativeCommandSpecsForConfig,
+  listSkillCommandsForAgents,
+  parseCommandArgs,
+  resolveCommandArgMenu,
   resolveEffectiveAgentRuntime,
   resolveStoredModelOverride,
   type CommandArgs,
@@ -97,10 +103,6 @@ type SlackArgActionHandlerArgs = Omit<SlackActionMiddlewareArgs<BlockAction>, "r
   };
 type SlackArgOptionsHandlerArgs = SlackOptionsMiddlewareArgs<"block_suggestion"> &
   Pick<AllMiddlewareArgs, "context" | "client">;
-
-const loadSlashCommandsRuntime = createLazyRuntimeModule(
-  () => import("openclaw/plugin-sdk/command-auth-native"),
-);
 
 const loadSlashDispatchRuntime = createLazyRuntimeModule(
   () => import("./slash-dispatch.runtime.js"),
@@ -573,7 +575,6 @@ export function createSlackCommandHandler(params: {
       };
 
       if (commandDefinition && supportsInteractiveArgMenus) {
-        const { resolveCommandArgMenu } = await loadSlashCommandsRuntime();
         const menuNeedsModelContext =
           !(commandArgs?.raw && !commandArgs.values) &&
           commandDefinition.args?.some(
@@ -932,7 +933,6 @@ export async function registerSlackMonitorSlashCommands(params: {
   };
 
   let nativeCommands: SlackNativeCommandSpec[] = [];
-  let slashCommandsRuntime: typeof import("openclaw/plugin-sdk/command-auth-native") | null = null;
   let pluginCommandRuntimeModule:
     | typeof import("openclaw/plugin-sdk/plugin-command-runtime")
     | null = null;
@@ -944,15 +944,14 @@ export async function registerSlackMonitorSlashCommands(params: {
       globalSetting: startupCfg.commands?.native,
     })
   ) {
-    slashCommandsRuntime = await loadSlashCommandsRuntime();
     const skillCommands = resolveNativeSkillsEnabled({
       providerId: "slack",
       providerSetting: account.config.commands?.nativeSkills,
       globalSetting: startupCfg.commands?.nativeSkills,
     })
-      ? slashCommandsRuntime.listSkillCommandsForAgents({ cfg: startupCfg })
+      ? listSkillCommandsForAgents({ cfg: startupCfg })
       : [];
-    nativeCommands = slashCommandsRuntime.listNativeCommandSpecsForConfig(startupCfg, {
+    nativeCommands = listNativeCommandSpecsForConfig(startupCfg, {
       skillCommands,
       provider: "slack",
     });
@@ -968,7 +967,7 @@ export async function registerSlackMonitorSlashCommands(params: {
   if (registration.mode === "single") {
     registerCommand(buildSlackSlashCommandMatcher(registration.name));
   } else if (registration.mode === "native") {
-    if (!slashCommandsRuntime || !pluginCommandRuntimeModule) {
+    if (!pluginCommandRuntimeModule) {
       throw new Error("Missing command runtimes for native Slack commands.");
     }
     for (const command of nativeCommands) {
@@ -976,17 +975,17 @@ export async function registerSlackMonitorSlashCommands(params: {
       registerCommand(`/${command.name}`, (cmd) => {
         const commandDefinition = pluginCommandCandidate
           ? undefined
-          : slashCommandsRuntime.findCommandByNativeName(command.name, "slack");
+          : findCommandByNativeName(command.name, "slack");
         const rawText = cmd.text?.trim() ?? "";
         const pluginCommandDispatch =
           pluginCommandCandidate?.prepareDispatch(rawText) ?? NON_PLUGIN_COMMAND_DISPATCH;
         const commandArgs = commandDefinition
-          ? slashCommandsRuntime.parseCommandArgs(commandDefinition, rawText)
+          ? parseCommandArgs(commandDefinition, rawText)
           : rawText
             ? ({ raw: rawText } satisfies CommandArgs)
             : undefined;
         const prompt = commandDefinition
-          ? slashCommandsRuntime.buildCommandTextFromArgs(commandDefinition, commandArgs)
+          ? buildCommandTextFromArgs(commandDefinition, commandArgs)
           : rawText
             ? `/${command.name} ${rawText}`
             : `/${command.name}`;
@@ -1119,7 +1118,6 @@ export async function registerSlackMonitorSlashCommands(params: {
       });
       return;
     }
-    const { buildCommandTextFromArgs, findCommandByNativeName } = await loadSlashCommandsRuntime();
     const commandDefinition = findCommandByNativeName(parsed.command, "slack");
     const commandArgs: CommandArgs = {
       values: { [parsed.arg]: parsed.value },

@@ -205,8 +205,6 @@ function renderSuggestions(props: SkillWorkshopProps, section: SkillWorkshopSect
         groups: section.groups,
         selected: section.selected,
         emptyText: queueEmptyText(props),
-        searchLabel: t("skillWorkshop.queue.suggestionsLabel"),
-        searchPlaceholder: t("skillWorkshop.queue.searchSuggestions"),
       })}
       ${renderQueueResizer(props)}
       ${

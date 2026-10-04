@@ -10,7 +10,7 @@ import { isNixMode } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
-import { createLazyPromise } from "../shared/lazy-runtime.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { getAgentDatabaseStartupAdmission } from "../state/agent-database-startup.js";
 import { resolveGatewayAuth } from "./auth.js";
 import { diffGatewayReloadPaths } from "./config-diff.js";
@@ -54,9 +54,6 @@ export async function finishGatewayStartup(params: {
   logChannels: GatewayLogger;
   logCron: GatewayLogger;
   logReload: GatewayLogger;
-  loadGatewayStartupPostAttachModule: () => Promise<
-    typeof import("./server-startup-post-attach.js")
-  >;
   waitForPostReadyWork: () => Promise<void>;
 }) {
   const {
@@ -71,7 +68,6 @@ export async function finishGatewayStartup(params: {
     logChannels,
     logCron,
     logReload,
-    loadGatewayStartupPostAttachModule,
   } = params;
   const {
     minimalTestGateway,
@@ -105,7 +101,6 @@ export async function finishGatewayStartup(params: {
     isGatewayStartupPending,
     attachedGatewayExtraHandlers,
     startListening,
-    loadStartupPluginsModule,
     gatewayPluginConfigAtStart,
     startupActivationSourceConfig,
     defaultWorkspaceDir,
@@ -149,10 +144,12 @@ export async function finishGatewayStartup(params: {
   } = runtime;
   const startupPluginRuntimeClaim = kernel.pluginRuntimeGeneration.currentClaim();
   const databaseStartupAdmission = getAgentDatabaseStartupAdmission();
+  const databasePreparationReady = createDeferredCore();
   const activateAgentDatabases = () => {
     if (databaseStartupAdmission && !opts.updateCanary && !lifecycle.closePreludeStarted) {
       activateGatewayAgentDatabaseStartup({
         admission: databaseStartupAdmission,
+        preparationReady: databasePreparationReady.promise,
         getConfig: getRuntimeConfig,
         getPluginRegistry: () => pluginRuntime.registry,
         getPluginMetadataSnapshot,
@@ -209,6 +206,7 @@ export async function finishGatewayStartup(params: {
   await startupTrace.measure("http.listen", () => startListening());
   kernel.setDispatchReady(true);
   startupTrace.mark("http.bound");
+  activateAgentDatabases();
   // Health can answer as soon as the listener binds. Discovery, remote-skill
   // setup, and maintenance do not determine liveness, so keep them off that
   // critical path while still completing before usable readiness.
@@ -216,10 +214,6 @@ export async function finishGatewayStartup(params: {
   const sessionDeliveryRecoveryMaxEnqueuedAt = Date.now();
   let postAttachRuntimeReturned = false;
   let scheduledServicesActivated = false;
-  const loadScheduledServicesModule = createLazyPromise(
-    () => import("./server-runtime-services.js"),
-    { cacheRejections: true },
-  );
   const activateScheduledServicesWhenReady = () => {
     if (
       opts.updateCanary ||
@@ -231,7 +225,7 @@ export async function finishGatewayStartup(params: {
       return;
     }
     scheduledServicesActivated = true;
-    void loadScheduledServicesModule().then((gatewayRuntimeServices) => {
+    void import("./server-runtime-services.js").then((gatewayRuntimeServices) => {
       if (lifecycle.closePreludeStarted) {
         return;
       }
@@ -260,7 +254,7 @@ export async function finishGatewayStartup(params: {
   };
   const postAttachHandles = await trackStartupWork(() =>
     startupTrace.measure("runtime.post-attach", () =>
-      loadGatewayStartupPostAttachModule().then(({ startGatewayPostAttachRuntime }) =>
+      import("./server-startup-post-attach.js").then(({ startGatewayPostAttachRuntime }) =>
         startGatewayPostAttachRuntime({
           scheduler: runtime.scheduler,
           minimalTestGateway,
@@ -296,7 +290,7 @@ export async function finishGatewayStartup(params: {
           unlockStartupMethods: kernel.unlockStartupMethods,
           refreshChatMetadata: chatMetadataLifecycle.refresh,
           loadStartupPlugins: async () => {
-            const { loadGatewayStartupPluginRuntime } = await loadStartupPluginsModule();
+            const { loadGatewayStartupPluginRuntime } = await import("./server-startup-plugins.js");
             return loadGatewayStartupPluginRuntime({
               cfg: gatewayPluginConfigAtStart,
               activationSourceConfig: startupActivationSourceConfig,
@@ -380,7 +374,7 @@ export async function finishGatewayStartup(params: {
             : {}),
           onSidecarsReady: () => {
             kernel.markSidecarsReady();
-            activateAgentDatabases();
+            databasePreparationReady.resolve();
             activateScheduledServicesWhenReady();
           },
           getReadiness,
@@ -395,7 +389,7 @@ export async function finishGatewayStartup(params: {
   );
   kernel.setPostAttachHandles(postAttachHandles);
   if (minimalTestGateway) {
-    activateAgentDatabases();
+    databasePreparationReady.resolve();
   }
   startupTrace.detail("memory.ready", [
     ...collectGatewayProcessMemoryUsageMb(),
@@ -623,7 +617,7 @@ export async function finishGatewayStartup(params: {
     log.warn(`gateway: failed to promote config last-known-good backup: ${String(err)}`);
   });
   if (!minimalTestGateway) {
-    const gatewayRuntimeServices = await loadScheduledServicesModule();
+    const gatewayRuntimeServices = await import("./server-runtime-services.js");
     gatewayRuntimeServices.scheduleGatewayPostReadyMaintenance({
       scheduler: runtime.scheduler,
       signal: runtime.connectionWork.signal,

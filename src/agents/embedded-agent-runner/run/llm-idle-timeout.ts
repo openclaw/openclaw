@@ -143,14 +143,8 @@ type LlmTimeoutParams = {
  */
 function resolveRuntimeModelLocality(params?: LlmTimeoutParams) {
   const baseUrl = params?.model?.baseUrl;
-  let hostname: string | undefined;
-  if (typeof baseUrl === "string" && baseUrl.length > 0) {
-    try {
-      hostname = new URL(baseUrl).hostname.toLowerCase();
-    } catch {
-      hostname = undefined;
-    }
-  }
+  const hostname =
+    typeof baseUrl === "string" ? URL.parse(baseUrl)?.hostname.toLowerCase() : undefined;
   const notCloudModel = !isCloudModelRef(params?.model?.id);
   return {
     isLocalRuntimeModel: Boolean(hostname && isLocalProviderHostname(hostname) && notCloudModel),

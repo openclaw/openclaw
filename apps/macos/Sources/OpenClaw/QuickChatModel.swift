@@ -113,7 +113,7 @@ private struct ControlPatchSettlement {
 
 private struct AgentsResolution {
     let displays: [QuickChatAgentDisplay]
-    let selectedID: String?
+    let selected: QuickChatAgentDisplay?
     let target: OpenClawChatSessionTarget?
 }
 
@@ -747,46 +747,31 @@ final class QuickChatModel {
 
     private func resolveAgents(_ result: AgentsListResult) -> AgentsResolution {
         let displays = result.agents.filter(\.isSelectableAgent).map(QuickChatAgentDisplay.init(summary:))
-        let selectedID: String? = if let selectedAgentID,
-                                     displays.contains(where: { $0.id == selectedAgentID })
-        {
-            selectedAgentID
-        } else if displays.contains(where: { $0.id == result.defaultid }) {
-            result.defaultid
-        } else {
-            displays.first?.id
-        }
+        let selected = displays.first { $0.id == self.selectedAgentID }
+            ?? displays.first { $0.id == result.defaultid }
+            ?? displays.first
 
-        let target = selectedID.map {
+        let target = selected.map {
             Self.routingTarget(
                 scope: result.scope.value as? String,
-                selectedAgentID: $0,
+                selectedAgentID: $0.id,
                 mainKey: result.mainkey)
         }
-        return AgentsResolution(displays: displays, selectedID: selectedID, target: target)
+        return AgentsResolution(displays: displays, selected: selected, target: target)
     }
 
     private func applyAgentsList(_ result: AgentsListResult, resolution: AgentsResolution) {
-        let displays = resolution.displays
-        let selectedID = resolution.selectedID
-
-        self.agents = displays
-        self.selectedAgentID = selectedID
+        self.agents = resolution.displays
+        self.selectedAgentID = resolution.selected?.id
         self.agentsScope = result.scope.value as? String
         self.agentsMainKey = result.mainkey
-
-        guard let selectedID,
-              let display = displays.first(where: { $0.id == selectedID })
-        else {
-            self.agentDisplay = .placeholder
-            self.baseRoutingTarget = nil
+        self.agentDisplay = resolution.selected ?? .placeholder
+        self.baseRoutingTarget = resolution.target
+        if resolution.target == nil {
             self.setRoutingTarget(nil)
-            return
+        } else {
+            self.applyRoutingTarget()
         }
-        self.agentDisplay = display
-        guard let target = resolution.target else { return }
-        self.baseRoutingTarget = target
-        self.applyRoutingTarget()
     }
 
     private func refreshFallbackIdentity(id: UUID) async {
@@ -909,9 +894,9 @@ final class QuickChatModel {
         }
         self.sendTask = task
         self.sendState = .sending
+        defer { self.sendTask = nil }
         do {
             let status = try await task.value
-            self.sendTask = nil
             switch ChatSendStatus.acceptance(of: status) {
             case .terminalFailure:
                 self.retryIdentity = nil
@@ -936,12 +921,10 @@ final class QuickChatModel {
                 return true
             }
         } catch is CancellationError {
-            self.sendTask = nil
             self.retryIdentity = nil
             self.sendState = .idle
             return false
         } catch {
-            self.sendTask = nil
             self.sendState = self.text == draft ? .failed(error.localizedDescription) : .idle
             return false
         }

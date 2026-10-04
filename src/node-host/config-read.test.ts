@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import { performance } from "node:perf_hooks";
 import { isMainThread } from "node:worker_threads";
 import { expect, it, vi } from "vitest";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
@@ -40,14 +39,12 @@ function seed(env: NodeJS.ProcessEnv) {
   });
 }
 
-async function withoutParentSql(operation: () => Promise<void>): Promise<number> {
+async function withoutParentSql(operation: () => Promise<void>): Promise<void> {
   requireNodeSqlite();
   const sql = observeMainThreadSql();
   try {
     await operation();
-    const count = sql.count();
-    expect(count).toBe(0);
-    return count;
+    expect(sql.count()).toBe(0);
   } finally {
     vi.restoreAllMocks();
   }
@@ -63,14 +60,8 @@ it.each(["cached", "fresh"] as const)(
     if (mode === "fresh") {
       await closeOpenClawStateDatabaseAsync();
     }
-    const startedAt = performance.now();
-    const parentSqlCalls = await withoutParentSql(async () => {
+    await withoutParentSql(async () => {
       expect(await loadNodeHostConfig(env)).toEqual(expected);
-    });
-    console.info("node-host configuration read", {
-      mode,
-      parentSqlCalls,
-      elapsedMs: Math.round(performance.now() - startedAt),
     });
     expect(source.db.isOpen).toBe(mode === "cached");
   },
@@ -120,11 +111,21 @@ it.each(["fresh", "cached"] as const)(
   },
 );
 
-it("leaves absent node-host configuration stores uncreated", async () => {
-  const { env, databasePath } = fixture();
-  expect(await loadNodeHostConfig(env)).toBeNull();
-  expect(fs.existsSync(databasePath)).toBe(false);
-});
+it.each([false, true])(
+  "reads an absent store only after the legacy gate (legacy=%s)",
+  async (legacy) => {
+    const { env, root, databasePath } = fixture();
+    const execute = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
+    if (legacy) {
+      fs.writeFileSync(path.join(root, "node.json"), "{}\n");
+      await expect(loadNodeHostConfig(env)).rejects.toThrow("openclaw doctor --fix");
+      expect(execute).not.toHaveBeenCalled();
+    } else {
+      expect(await loadNodeHostConfig(env)).toBeNull();
+    }
+    expect(fs.existsSync(databasePath)).toBe(false);
+  },
+);
 
 it("joins admitted node-host configuration reads before their disposable scope exits", async () => {
   const { env, databasePath } = fixture();
@@ -164,14 +165,6 @@ it.each([
   const failure = await loadNodeHostConfig(env).catch((error: unknown) => error);
   expect(failure).toBeInstanceOf(row.error);
   expect(failure).toMatchObject({ message: expect.stringMatching(row.message) });
-});
-
-it("refuses retired node-host files before admitting a read", async () => {
-  const { env, root } = fixture();
-  fs.writeFileSync(path.join(root, "node.json"), "{}\n");
-  const execute = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
-  await expect(loadNodeHostConfig(env)).rejects.toThrow("openclaw doctor --fix");
-  expect(execute).not.toHaveBeenCalled();
 });
 
 it.each([true, false])(

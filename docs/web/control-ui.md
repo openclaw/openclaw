@@ -110,7 +110,8 @@ and `/subagents log <id|#>` commands remain available.
 Open **Processes** from the chat header's **Panels** menu or the side-panel **+**
 menu to inspect the conversation's background exec commands. It is separate from
 **Subagents**. Running and retained finished processes show status and elapsed
-time; selecting a process opens its recent output. **Stop** targets that exact
+time. **Finished** starts collapsed; click its heading to expand or collapse the
+list. Selecting a process opens its recent output. **Stop** targets that exact
 process, not the parent conversation or another command with the same name.
 Hidden panels stop refreshing. Output follows the process owner's temporary
 retention limits; viewing it does not drain output waiting for the agent.

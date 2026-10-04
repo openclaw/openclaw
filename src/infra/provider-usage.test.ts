@@ -4,7 +4,8 @@ import {
   getProviderUsageSnapshotWithPluginMock,
   resetProviderUsageSnapshotWithPluginMock,
 } from "./provider-usage-plugin-runtime.test-mocks.js";
-import { formatUsageReportLines, loadProviderUsageSummary } from "./provider-usage.js";
+import { formatUsageReportLines } from "./provider-usage.format.js";
+import { loadProviderUsageSummary } from "./provider-usage.js";
 import { loadUsageWithAuth, usageNow } from "./provider-usage.test-support.js";
 import type { ProviderUsageSnapshot } from "./provider-usage.types.js";
 

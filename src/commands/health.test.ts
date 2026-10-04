@@ -18,14 +18,13 @@ import {
   GATEWAY_HEALTH_RATE_LIMITED_MESSAGE,
   GATEWAY_HEALTH_REACHABLE_LINE,
 } from "./gateway-health-auth-diagnostic.js";
-import { formatHealthCheckFailure } from "./health-format.js";
-import type { HealthSummary } from "./health.js";
 import {
   formatConfigReloadHealthLine,
   formatContextEngineHealthLine,
-  healthCommand,
-  healthCommandNonExiting,
-} from "./health.js";
+  formatHealthCheckFailure,
+} from "./health-format.js";
+import type { HealthSummary } from "./health.js";
+import { healthCommand, healthCommandNonExiting } from "./health.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const runtime = createTestRuntime();
