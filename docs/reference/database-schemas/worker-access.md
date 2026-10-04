@@ -2073,8 +2073,7 @@ with its shared resource owner. The close prelude seals new work before schedule
 and receipt finalizers retain their original source through settlement and
 publication. Stored grants survive restart; process-local observations do not.
 This publication foundation preserves receipt revisions, force-run eligibility,
-schemas, retention, and update behavior. Existing final message SQL guards
-remain until their separate consumer cutover.
+schemas, retention, and update behavior.
 Provider-library preparation after an SDK handoff remains inside that accepted
 operation; OpenClaw does not hold cron authority through the provider response.
 

@@ -147,7 +147,7 @@ export async function sendIrcMessages(
     const partial = isChannelPartialDeliveryError(error) ? error.deliveryResult : undefined;
     const receipt = createMessageReceiptFromOutboundResults({
       results: [
-        ...results.map(({ receipt }) => ({ receipt })),
+        ...results.map((result) => ({ receipt: result.receipt })),
         ...(partial?.receipt ? [{ receipt: partial.receipt }] : []),
         ...(partial?.messageIds ?? [])
           .filter((messageId) => !partial?.receipt?.platformMessageIds.includes(messageId))

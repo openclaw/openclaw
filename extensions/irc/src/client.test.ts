@@ -341,7 +341,7 @@ describe("irc client PRIVMSG chunking on the wire", () => {
       messageChunkMaxChars: 3,
     });
     const failure = new Error("socket write failed");
-    const originalWrite = net.Socket.prototype.write;
+    const originalWrite = net.Socket.prototype.write.call.bind(net.Socket.prototype.write);
     let sends = 0;
     const write = vi.spyOn(net.Socket.prototype, "write").mockImplementation(function (
       this: net.Socket,
@@ -352,12 +352,12 @@ describe("irc client PRIVMSG chunking on the wire", () => {
           throw failure;
         }
       }
-      return originalWrite.apply(this, args);
+      return originalWrite(this, ...args);
     });
     try {
       const error = await client
         .sendPrivmsg("#general", "abcdefghi")
-        .catch((error: unknown) => error);
+        .catch((caughtError: unknown) => caughtError);
       expect(isChannelPartialDeliveryError(error)).toBe(true);
       expect(error).toMatchObject({
         cause: failure,
