@@ -32,6 +32,18 @@ or the full `chat.history.sessionInfo` for details. Omitting `rowMode` preserves
 the full row contract. Title, preview, and Activity recap enrichment remain
 controlled by their existing include flags.
 
+Control UI list requests use compact rows and a bounded diagnostic `source`:
+`sidebar`, `dashboard`, `activity`, `sessions-page`, `chat-pane`, `agent-roster`,
+`command-palette`, or `skill-workshop`.
+The source does not change selection or access. List and event rows include
+`hasBoard`, the prepared dashboard-membership fact, so a dashboard gallery can
+apply row updates without enumerating its pages again. Expanding a compact row
+on the Sessions page reads its full details with `sessions.describe`.
+Rows also carry `childOwnerSessionKeys`, the current retained owners used by the
+Gateway's `spawnedBy` filter. These receipts include runtime-controller and
+navigation ownership, expire through that same owner, and let child windows
+apply events without reimplementing retention rules in the browser.
+
 The Gateway registers the subscription before projecting the list. Clients must
 listen for `sessions.changed` before making the request: events can arrive while
 the snapshot is being built. Reconcile those events with the response and issue
@@ -265,13 +277,24 @@ or protocol-version change.
   thinking-metadata preservation rules still apply.
   The Control UI coalesces an authoritative
   refresh for missing rows or snapshots, broad/keyless changes, `catalogChanged`,
-  membership filters, incomplete ancestor snapshots, and uncertain boundaries (including owner-first rows
+  filters whose membership cannot be established from row facts, incomplete ancestor snapshots, and uncertain boundaries (including owner-first rows
   promoted into the shared page). Events overlapping a roster read retain a
   trailing refresh so its response cannot lose an update. A retained list with a
   read error also refreshes on the next relevant event. Profile identity, runner
   availability, and loaded cron bindings can produce broad invalidations.
   Activity-summary-only publications update opted-in Activity consumers; shared
   session and agent rosters do not refetch for those recap-only changes.
+  Held row updates preserve unfiltered and dashboard-filtered windows without
+  refetching; title and preview enrichment flags do not change membership.
+  Healthy row traffic retains one fallback read after at least 60 seconds.
+  Dashboard pagination belongs to the shared roster window, which keeps loaded
+  pages across row updates and coalesces simultaneous reads for the same query.
+  Child windows use the Gateway's ownership receipts and complete parent child
+  lists. Certified excluded ancestor rows can be skipped; references require an
+  admitted current row from the connection's shared provenance owner.
+  The sidebar owner-count facet also retains its aggregate when admitted old and
+  new row facts prove unchanged contributions. Running state, ownership, sharing,
+  archive, or uncertain filter changes still require an authoritative count read.
   Prepared row publications yield between bounded slices during bursts. Pending
   activity-summary updates for the same session generation share the latest
   snapshot; lifecycle, capacity, transcript, deletion, and clearing receipts remain

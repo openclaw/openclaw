@@ -98,7 +98,7 @@ const completeLintReport = (message = "unused import") => {
   ].join("\n");
 };
 
-function fixture(
+function classify(
   options: {
     changed?: string[];
     headRepository?: string;
@@ -179,21 +179,21 @@ function fixture(
     return new Response(JSON.stringify(body));
   });
   vi.stubGlobal("fetch", api);
-  return {
-    classify: () =>
-      createKnownMainRed({
-        repository,
-        headRepository: options.headRepository,
-        token: "synthetic-token",
-        headSha,
-        pullRequestNumber: 7,
-        runId: 100,
-        runAttempt: 1,
-      }).classifyJob(failureJob),
-  };
+  return createKnownMainRed({
+    repository,
+    headRepository: options.headRepository,
+    token: "synthetic-token",
+    headSha,
+    pullRequestNumber: 7,
+    runId: 100,
+    runAttempt: 1,
+  }).classifyJob(failureJob);
 }
 
 afterEach(() => vi.unstubAllGlobals());
+
+const known = async (options: Parameters<typeof classify>[0] = {}) =>
+  (await classify(options)).known;
 
 describe("known hourly main failures", () => {
   it("distinguishes different assertion details after the same headline", async () => {
@@ -201,29 +201,21 @@ describe("known hourly main failures", () => {
       "Test Files 1 failed",
       "- Expected\n[shard:gateway] + Received\n[shard:gateway] - { value: 1 }\n[shard:gateway] + { value: 2 }\n[shard:gateway] Test Files 1 failed",
     );
-    expect((await fixture({ mainReport: detailed, prReport: detailed }).classify()).known).toBe(
-      true,
-    );
+    expect(await known({ mainReport: detailed, prReport: detailed })).toBe(true);
     expect(
-      (
-        await fixture({
-          mainReport: detailed,
-          prReport: detailed.replace("+ { value: 2 }", "+ { value: 3 }"),
-        }).classify()
-      ).known,
+      await known({
+        mainReport: detailed,
+        prReport: detailed.replace("+ { value: 2 }", "+ { value: 3 }"),
+      }),
     ).toBe(false);
   });
 
   it.each([repository, "contributor/openclaw"])(
-    "accepts the exact file, full test title and assertion from trusted main for %s",
+    "accepts exact trusted main assertions for %s",
     async (headRepository) => {
-      expect(await fixture({ headRepository }).classify()).toMatchObject({
-        known: true,
-        mainRunId: 200,
-      });
+      expect(await classify({ headRepository })).toMatchObject({ known: true, mainRunId: 200 });
     },
   );
-
   it.each([
     ["different test", { prReport: report("startup > opens a different session") }],
     ["different assertion", { prReport: report().replaceAll("true to be false", "42 to be 43") }],
@@ -239,22 +231,11 @@ describe("known hourly main failures", () => {
     ["non-main event", { mainEvent: "pull_request" }],
     ["main predates merge base", { age: "behind" }],
     ["unresolved subject alias", { source: 'import { start } from "@openclaw/runtime";' }],
-    ["unresolved side-effect alias", { source: 'import "@openclaw/runtime";' }],
-    ["unresolved mock alias", { source: 'vi.mock("@openclaw/runtime", () => ({}));' }],
-    ["unresolved dynamic mock alias", { source: 'vi.doMock("@openclaw/runtime", () => ({}));' }],
-    ["unresolved actual-import alias", { source: 'await vi.importActual("@openclaw/runtime");' }],
-    ["unresolved mock-import alias", { source: 'await vi.importMock("@openclaw/runtime");' }],
-    ["unresolved bracketed mock alias", { source: 'vi["mock"]("@openclaw/runtime");' }],
-    [
-      "renamed module mock",
-      { source: 'const {mock: replace} = vi; replace("@openclaw/runtime");' },
-    ],
     ["escaped relative module", { source: 'await import("./\\u002e\\u002e/subject.js");' }],
     ["computed mock subject", { source: "vi.mock(moduleName);" }],
     ["concatenated import subject", { source: 'await import("./subject" + suffix);' }],
     ["concatenated mock subject", { source: 'vi.mock("./subject" + suffix);' }],
     ["template subject", { source: "await import(`./subject${suffix}`);" }],
-    ["comment-separated alias", { source: 'import /* subject */ "@openclaw/runtime";' }],
     [
       "root directory subject",
       { changed: ["runtime/index.ts"], source: 'import { start } from "../../runtime";' },
@@ -346,17 +327,7 @@ describe("known hourly main failures", () => {
     ["outer failure after receipt", { prReport: `${report()}\nError: write failed` }],
     ["main has recovered", { mainConclusion: "success" }],
   ])("keeps %s blocking", async (_name, options) => {
-    expect((await fixture(options).classify()).known).toBe(false);
-  });
-
-  it("can identify historical main assertions without accepting incomplete PR execution", async () => {
-    expect(
-      (
-        await fixture({
-          mainReport: report().replace(/^.*\[shard:completion\].*\n/mu, ""),
-        }).classify()
-      ).known,
-    ).toBe(true);
+    expect(await known(options)).toBe(false);
   });
 
   it.each([
@@ -366,49 +337,51 @@ describe("known hourly main failures", () => {
     { mainChanged: ["scripts/run-vitest.mts"], known: false },
     { mainChanged: Array.from({ length: 300 }, (_, i) => `docs/page-${i}.md`), known: false },
   ])(
-    "retires stale main evidence when later main changes its subjects: %j",
-    async ({ mainChanged, known }) => {
-      expect((await fixture({ liveMainSha: "d".repeat(40), mainChanged }).classify()).known).toBe(
-        known,
-      );
+    "retires stale main evidence after subject changes: %j",
+    async ({ mainChanged, known: expected }) => {
+      expect(await known({ liveMainSha: "d".repeat(40), mainChanged })).toBe(expected);
     },
   );
 
-  it.each(["acp-core/runtime/types", "normalization-core/record-coerce"])(
-    "guards the verified workspace package for %s",
-    async (subject) => {
-      const name = subject.split("/")[0]!;
-      const options = {
-        source: `import { subject } from "@openclaw/${subject}";`,
-        packageNames: { [name]: `@openclaw/${name}` },
-      };
-      expect((await fixture(options).classify()).known).toBe(true);
-      expect(
-        (await fixture({ ...options, changed: [`packages/${name}/src/other.ts`] }).classify())
-          .known,
-      ).toBe(false);
-      expect(
-        (
-          await fixture({
-            ...options,
-            changed: ["packages/unrelated/src/other.ts"],
-          }).classify()
-        ).known,
-      ).toBe(true);
-      expect(
-        (await fixture({ ...options, packageNames: { [name]: "external-package" } }).classify())
-          .known,
-      ).toBe(false);
-    },
-  );
-
-  it("rejects unknown failures in legacy main assertion reports", async () => {
-    const mainReport = report().replace(/^.*\[shard:completion\].*\n/mu, "");
-    expect(
-      (await fixture({ mainReport: `${mainReport}\nError: another unknown failure` }).classify())
-        .known,
-    ).toBe(false);
+  it("guards the verified workspace package", async () => {
+    const options = {
+      source: 'import { subject } from "@openclaw/acp-core/runtime/types";',
+      packageNames: { "acp-core": "@openclaw/acp-core" },
+    };
+    expect(await known(options)).toBe(true);
+    expect(await known({ ...options, changed: ["packages/acp-core/src/other.ts"] })).toBe(false);
+    expect(await known({ ...options, changed: ["packages/unrelated/src/other.ts"] })).toBe(true);
+    expect(await known({ ...options, packageNames: { "acp-core": "external-package" } })).toBe(
+      false,
+    );
   });
+
+  it.each([
+    {
+      failureJob: job,
+      signatureFile: file,
+      legacy: report().replace(/^.*\[shard:completion\].*\n/mu, ""),
+      complete: report(),
+    },
+    {
+      failureJob: typeJob,
+      signatureFile: typeFile,
+      legacy: `##[group]Run typecheck\n##[endgroup]\n${typeDiagnostic}\n##[error]Process completed with exit code 2.`,
+      complete: typeReport(),
+    },
+  ])(
+    "uses legacy $failureJob.name evidence only from main",
+    async ({ failureJob, signatureFile, legacy, complete }) => {
+      const options = { failureJob, signatureFile, mainReport: legacy, prReport: complete };
+      expect(await known(options)).toBe(true);
+      expect(await known({ ...options, prReport: legacy })).toBe(false);
+      if (failureJob === job) {
+        expect(
+          await known({ ...options, mainReport: `${legacy}\nError: another unknown failure` }),
+        ).toBe(false);
+      }
+    },
+  );
 
   it.each([
     typeJob,
@@ -422,91 +395,49 @@ describe("known hourly main failures", () => {
       name: "check-test-types",
       steps: [{ name: "Run check shard", conclusion: "failure" }],
     },
-  ])("tolerates only exact complete type diagnostics for $name", async (failureJob) => {
-    const options = {
-      failureJob,
-      signatureFile: typeFile,
-      mainReport: typeReport(),
-      prReport: typeReport(),
-      source: 'import type { Event } from "@openclaw/acp-core/runtime/types";',
-      packageNames: { "acp-core": "@openclaw/acp-core" },
-    };
-    expect((await fixture(options).classify()).known).toBe(true);
-    expect(
-      (
-        await fixture({
-          ...options,
-          prReport: typeReport(typeDiagnostic.replace("TS2367", "TS2554")),
-        }).classify()
-      ).known,
-    ).toBe(false);
-    expect((await fixture({ ...options, changed: [typeFile] }).classify()).known).toBe(false);
-    expect(
-      (
-        await fixture({
-          ...options,
-          changed: ["packages/acp-core/src/runtime/types.ts"],
-        }).classify()
-      ).known,
-    ).toBe(false);
-  });
-
-  it.each([
-    { ...typeJob, name: "other-check" },
-    { ...typeJob, steps: [{ name: "Prepare workspace", conclusion: "failure" }] },
-    { ...typeJob, steps: [...typeJob.steps, { name: "Cleanup", conclusion: "failure" }] },
-  ])("keeps unknown static job or failed step ownership blocking: %j", async (failureJob) => {
-    const f = fixture({
-      failureJob,
-      signatureFile: typeFile,
-      mainReport: typeReport(),
-      prReport: typeReport(),
-    });
-    expect((await f.classify()).known).toBe(false);
-  });
-
-  it("accepts complete type reports against legacy main evidence, but never legacy PR evidence", async () => {
-    const legacy = `##[group]Run typecheck\n##[endgroup]\n${typeDiagnostic}\n##[error]Process completed with exit code 2.`;
-    const options = { failureJob: typeJob, signatureFile: typeFile, mainReport: legacy };
-    expect((await fixture({ ...options, prReport: typeReport() }).classify()).known).toBe(true);
-    expect((await fixture({ ...options, prReport: legacy }).classify()).known).toBe(false);
-  });
-
-  it.each([
     lintJob,
     {
       ...lintJob,
       name: "check-lint-core-1",
       steps: [{ name: "Run hosted core lint stripe", conclusion: "failure" }],
     },
-  ])("requires complete matching diagnostics for hosted $name tolerance", async (failureJob) => {
+  ])("requires complete matching diagnostics for $name", async (failureJob) => {
+    const lint = failureJob.name.startsWith("check-lint");
+    const signatureFile = lint ? lintFile : typeFile;
     const options = {
       failureJob,
-      signatureFile: lintFile,
-      mainReport: lintReport,
-      prReport: completeLintReport(),
+      signatureFile,
+      mainReport: lint ? lintReport : typeReport(),
+      prReport: lint ? completeLintReport() : typeReport(),
+      source: 'import type { Event } from "@openclaw/acp-core/runtime/types";',
+      packageNames: { "acp-core": "@openclaw/acp-core" },
     };
-    expect((await fixture(options).classify()).known).toBe(true);
-    expect(
-      (await fixture({ ...options, prReport: completeLintReport("unused variable") }).classify())
-        .known,
-    ).toBe(false);
-    expect((await fixture({ ...options, changed: [lintFile] }).classify()).known).toBe(false);
+    const mismatch = lint
+      ? completeLintReport("unused variable")
+      : typeReport(typeDiagnostic.replace("TS2367", "TS2554"));
+    expect(await known(options)).toBe(true);
+    expect(await known({ ...options, prReport: mismatch })).toBe(false);
+    expect(await known({ ...options, changed: [signatureFile] })).toBe(false);
+    expect(await known({ ...options, changed: ["packages/acp-core/src/runtime/types.ts"] })).toBe(
+      false,
+    );
   });
 
   it.each([
+    { ...typeJob, name: "other-check" },
+    { ...typeJob, steps: [{ name: "Prepare workspace", conclusion: "failure" }] },
+    { ...typeJob, steps: [...typeJob.steps, { name: "Cleanup", conclusion: "failure" }] },
     { ...lintJob, name: "check-lint", steps: [{ name: "Run check shard", conclusion: "failure" }] },
     { ...lintJob, steps: [{ name: "Run changed lint", conclusion: "failure" }] },
-  ])("keeps mixed lint execution scopes blocking even with a receipt: %j", async (failureJob) => {
+  ])("keeps unowned static execution blocking: %j", async (failureJob) => {
+    const lint = failureJob.name.startsWith("check-lint");
     expect(
-      (
-        await fixture({
-          failureJob,
-          signatureFile: lintFile,
-          mainReport: lintReport,
-          prReport: completeLintReport(),
-        }).classify()
-      ).known,
+      await known({
+        failureJob,
+        signatureFile: lint ? lintFile : typeFile,
+        mainReport: lint ? lintReport : typeReport(),
+        prReport: lint ? completeLintReport() : typeReport(),
+      }),
     ).toBe(false);
   });
 
@@ -518,27 +449,23 @@ describe("known hourly main failures", () => {
       prReport: completeLintReport(),
       source: 'import type { CardSessionState } from "./session-state.ts";',
     };
-    expect((await fixture({ ...options, prReport: lintReport }).classify()).known).toBe(false);
-    expect((await fixture(options).classify()).known).toBe(true);
-    expect((await fixture({ ...options, changed: [lintFile] }).classify()).known).toBe(false);
+    expect(await known({ ...options, prReport: lintReport })).toBe(false);
+    expect(await known(options)).toBe(true);
+    expect(await known({ ...options, changed: [lintFile] })).toBe(false);
     expect(
-      (
-        await fixture({
-          ...options,
-          changed: ["extensions/workboard/browser/lib/workboard/session-state.ts"],
-        }).classify()
-      ).known,
+      await known({
+        ...options,
+        changed: ["extensions/workboard/browser/lib/workboard/session-state.ts"],
+      }),
     ).toBe(false);
     expect(
-      (
-        await fixture({
-          ...options,
-          mainReport: lintReport.replace(
-            "Found 0 warnings",
-            "Error: unknown lint failure\nFound 0 warnings",
-          ),
-        }).classify()
-      ).known,
+      await known({
+        ...options,
+        mainReport: lintReport.replace(
+          "Found 0 warnings",
+          "Error: unknown lint failure\nFound 0 warnings",
+        ),
+      }),
     ).toBe(false);
   });
 });

@@ -1,6 +1,10 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { Insertable, Selectable } from "kysely";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import {
+  executeSqliteQuerySync,
+  getNodeSqliteKysely,
+  sqliteStringSet,
+} from "../../infra/kysely-sync.js";
 import {
   withExistingOpenClawStateDatabaseArtifactPreservingReadOnly,
   withExistingOpenClawStateDatabaseCurrentReadOnly,
@@ -35,8 +39,8 @@ import type {
 } from "./types.js";
 
 export { WorktreeRemovalContentionError } from "./run-lease-owner.js";
+export { clearRegistryWorktreeProvisionedChunks } from "./provisioned-snapshot-store.js";
 export {
-  getRegistryWorktreeProvisionedChunk,
   getRegistryWorktreeProvisionedPaths,
   getRegistryWorktreeProvisionedState,
 } from "./registry-read.js";
@@ -187,48 +191,6 @@ export function rewriteRegistryWorktreePathsForMigration(
           ),
         0,
       ),
-    { env },
-  );
-}
-
-export function clearRegistryWorktreeProvisionedChunks(
-  env: NodeJS.ProcessEnv,
-  worktreeId: string,
-): void {
-  runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      executeSqliteQuerySync(
-        db,
-        kyselyFor(db)
-          .deleteFrom("worktree_provisioned_file_chunks")
-          .where("worktree_id", "=", worktreeId),
-      );
-    },
-    { env },
-  );
-}
-
-export function insertRegistryWorktreeProvisionedChunk(
-  env: NodeJS.ProcessEnv,
-  params: {
-    worktreeId: string;
-    path: string;
-    chunkIndex: number;
-    data: Uint8Array;
-  },
-): void {
-  runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      executeSqliteQuerySync(
-        db,
-        kyselyFor(db).insertInto("worktree_provisioned_file_chunks").values({
-          worktree_id: params.worktreeId,
-          path: params.path,
-          chunk_index: params.chunkIndex,
-          data: params.data,
-        }),
-      );
-    },
     { env },
   );
 }
@@ -454,6 +416,7 @@ export function claimWorktreeRemovalRow(
         throw new WorktreeRemovalContentionError(
           "busy",
           `worktree is busy: locked by live pid ${livePids[0]}`,
+          { worktreeId: params.worktreeId, pid: livePids[0]! },
         );
       }
       // The removal claim is exclusive: a live marker owned by a different token means
@@ -492,27 +455,36 @@ export function claimWorktreeRemovalRow(
   );
 }
 
-/** Synchronous lock primitive: a lost removal claim must never be reacquired implicitly. */
-export function assertWorktreeRemovalClaim(
+/** Batch lock-primitive read: one JSON binding avoids per-claim SQL and SQLite bind limits. */
+export function createWorktreeRemovalClaimsGuard(
   env: NodeJS.ProcessEnv,
-  worktreeId: string,
+  worktreeIds: readonly string[],
   token: string,
-): void {
-  const db = dbFor(env);
-  const row = executeSqliteQuerySync(
-    db,
-    kyselyFor(db)
-      .selectFrom("state_leases")
-      .select("owner")
-      .where("scope", "=", worktreeRunLeaseScope(worktreeId))
-      .where("lease_key", "=", WORKTREE_REMOVING_LEASE_KEY),
-  ).rows[0];
-  if (row?.owner !== token) {
-    throw new WorktreeRemovalContentionError(
-      "busy",
-      "Worktree removal claim changed; checkout preserved",
-    );
-  }
+): () => void {
+  const ids = [...new Set(worktreeIds)];
+  const count = ids.length;
+  const scopes = sqliteStringSet(ids.map(worktreeRunLeaseScope));
+  return () => {
+    if (count === 0) {
+      return;
+    }
+    const db = dbFor(env);
+    const held = executeSqliteQuerySync(
+      db,
+      kyselyFor(db)
+        .selectFrom("state_leases")
+        .select((eb) => eb.fn.countAll<number>().as("held"))
+        .where("state_leases.scope", "in", scopes)
+        .where("state_leases.lease_key", "=", WORKTREE_REMOVING_LEASE_KEY)
+        .where("state_leases.owner", "=", token),
+    ).rows[0]?.held;
+    if (held !== count) {
+      throw new WorktreeRemovalContentionError(
+        "busy",
+        "Worktree removal claim changed; checkout preserved",
+      );
+    }
+  };
 }
 
 export function releaseWorktreeRunLeaseRow(

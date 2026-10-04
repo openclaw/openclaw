@@ -50,13 +50,13 @@ export type ProviderUsageModelBreakdown = Omit<ProviderUsageCostDaily, "date" | 
 };
 
 /** Aggregate provider billing category for the history window. */
-export type ProviderUsageCostBreakdown = {
+type ProviderUsageCostBreakdown = {
   name: string;
   amount: number;
 };
 
 /** Provider-reported cost history and attribution for one bounded UTC window. */
-export type ProviderUsageCostHistory = {
+type ProviderUsageCostHistory = {
   unit: string;
   periodDays: number;
   scope?: string;

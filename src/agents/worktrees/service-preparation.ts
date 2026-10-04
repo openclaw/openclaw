@@ -242,16 +242,19 @@ export async function cleanupFailedCreate(...args: Parameters<typeof removeFaile
 export async function removeFailedWorktree(
   repoRoot: string,
   worktreePath: string,
-  branch: string,
+  branch: string | undefined,
   rollbackGuard: () => void,
 ): Promise<Error | undefined> {
   const options = { beforeRun: rollbackGuard, killProcessTree: true };
   const removed = await runGit(repoRoot, ["worktree", "remove", "--force", worktreePath], options);
-  const deletedBranch = await runGit(repoRoot, ["branch", "-D", branch], options);
-  if (removed.code !== 0 || deletedBranch.code !== 0) {
-    return removed.code !== 0
-      ? commandError("git worktree remove", removed)
-      : commandError("git branch -D", deletedBranch);
+  const deletedBranch = branch
+    ? await runGit(repoRoot, ["branch", "-D", branch], options)
+    : undefined;
+  if (removed.code !== 0) {
+    return commandError("git worktree remove", removed);
+  }
+  if (deletedBranch && deletedBranch.code !== 0) {
+    return commandError("git branch -D", deletedBranch);
   }
   return undefined;
 }

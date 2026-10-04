@@ -77,7 +77,6 @@ export async function installCandidate(params: {
   timeoutMs?: number;
   workTimeoutMs?: number | null;
   mode?: "install" | "update";
-  preferNpm?: boolean;
   repairReason?: InstallCandidateRepairReason;
   onCapabilityConsent?: PluginCapabilityConsentHandler;
   beforePersistentEffect?: () => void | Promise<void>;

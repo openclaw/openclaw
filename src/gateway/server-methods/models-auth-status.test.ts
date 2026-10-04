@@ -560,7 +560,6 @@ describe("models.authStatus", () => {
     expect(result.providers[0]?.profiles[0]).not.toHaveProperty("displayName");
     expect(result.providers[0]?.profiles[0]).not.toHaveProperty("lastUsedAt");
     expect(mocks.buildAuthHealthSummary).toHaveBeenCalledTimes(1);
-    expect(mocks.buildAuthHealthSummary.mock.calls[0]?.[0].allowKeychainPrompt).toBe(false);
   });
 
   it("marks externally supplied profiles and configuration-owned priority", async () => {

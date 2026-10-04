@@ -159,7 +159,7 @@ export function registerPreActionHooks(program: Command, programVersion: string)
       startupPolicy,
       version: programVersion,
     });
-    const verbose = getVerboseFlag(argv, { includeDebug: true });
+    const verbose = getVerboseFlag(argv);
     setVerbose(verbose);
     const cliLogLevel = getCliLogLevel(actionCommand);
     if (cliLogLevel) {

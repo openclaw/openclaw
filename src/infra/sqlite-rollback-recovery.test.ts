@@ -97,6 +97,8 @@ describe.skipIf(process.platform === "win32")("explicit SQLite rollback recovery
         }),
       ).toThrow("executor revoked before pager access");
       expect(f.files()).toEqual(before);
+      const timestamp = fs.statSync(f.file);
+      fs.utimesSync(f.file, timestamp.atime, new Date(timestamp.mtimeMs + 1_000));
       admission.admit(() => {});
       const recovered = new DatabaseSync(f.file, { readOnly: true });
       try {
