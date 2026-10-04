@@ -48,15 +48,6 @@ type CronFailureSignal = {
   fatalForCron?: boolean;
 };
 
-function formatCronFailureSignal(signal: CronFailureSignal & { message: string }): string {
-  const kind = normalizeOptionalString(signal.kind) ?? "run";
-  const code = normalizeOptionalString(signal.code);
-  const source = normalizeOptionalString(signal.toolName) ?? normalizeOptionalString(signal.source);
-  return `cron classifier: ${kind} failure${source ? ` from ${source}` : ""}${
-    code ? ` (${code})` : ""
-  }: ${signal.message}`;
-}
-
 function formatCronRunLevelError(error: unknown): string | undefined {
   const direct = normalizeOptionalString(error);
   if (direct) {
@@ -344,7 +335,7 @@ export function resolveCronPayloadOutcome(params: {
     embeddedRunError: structuredErrorText
       ? structuredErrorText
       : failureSignal
-        ? formatCronFailureSignal(failureSignal)
+        ? failureSignal.message
         : (runLevelError ?? reportedFailure),
     ...(fatalDeliveryText === reportedFailure && reportedFailure !== undefined
       ? { agentReportedFailure: true as const }

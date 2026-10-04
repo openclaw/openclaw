@@ -118,6 +118,7 @@ const CronRunDiagnosticSchema = closedObject({
   severity: CronRunDiagnosticSeveritySchema,
   message: Type.String(),
   toolName: Type.Optional(Type.String()),
+  code: Type.Optional(Type.String()),
   exitCode: Type.Optional(Type.Union([Type.Number(), Type.Null()])),
   truncated: Type.Optional(Type.Boolean()),
 });

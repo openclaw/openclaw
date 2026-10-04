@@ -325,6 +325,8 @@ describe("cron execution diagnostics", { concurrent: false }, () => {
           entries: expect.arrayContaining([
             expect.objectContaining({
               source: "tool",
+              toolName: "exec",
+              code: "SYSTEM_RUN_DENIED",
               severity: "error",
               message: "SYSTEM_RUN_DENIED: approval required",
             }),

@@ -187,7 +187,11 @@ describe("cron run diagnostics", () => {
         ],
         meta: {
           error: { kind: "retry_limit", message: "retry limit exceeded" },
-          failureSignal: { message: "SYSTEM_RUN_DENIED" },
+          failureSignal: {
+            message: "SYSTEM_RUN_DENIED",
+            toolName: "exec",
+            code: "SYSTEM_RUN_DENIED",
+          },
         },
       },
       { nowMs: () => 123 },
@@ -206,6 +210,14 @@ describe("cron run diagnostics", () => {
       message: "stdout\nstderr failure",
       toolName: "exec",
       exitCode: 2,
+    });
+    expect(diagnostics?.entries[3]).toEqual({
+      ts: 123,
+      source: "tool",
+      severity: "error",
+      message: "SYSTEM_RUN_DENIED",
+      toolName: "exec",
+      code: "SYSTEM_RUN_DENIED",
     });
   });
 

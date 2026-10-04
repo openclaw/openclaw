@@ -328,9 +328,7 @@ describe("resolveCronPayloadOutcome", () => {
     });
 
     expect(result.hasFatalErrorPayload).toBe(true);
-    expect(result.embeddedRunError).toBe(
-      "cron classifier: execution_denied failure from exec (SYSTEM_RUN_DENIED): SYSTEM_RUN_DENIED: approval required",
-    );
+    expect(result.embeddedRunError).toBe("SYSTEM_RUN_DENIED: approval required");
     expect(result.summary).toBe("SYSTEM_RUN_DENIED: approval required");
     expect(result.outputText).toBe("SYSTEM_RUN_DENIED: approval required");
     expect(result.synthesizedText).toBe("SYSTEM_RUN_DENIED: approval required");
