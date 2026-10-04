@@ -3,7 +3,8 @@ import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/sc
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PairedDevice } from "../infra/device-pairing.js";
 import type { BoundWebPushSubscription } from "../infra/push-web.js";
-import { listCurrentWebPushTargets } from "./web-push-authority.js";
+import { isApprovalRecordVisibleToClient } from "./server-methods/approval-record-lookup.js";
+import { listCurrentWebPushTargets, webPushTargetClient } from "./web-push-authority.js";
 
 const OPERATOR_SCOPES = ["operator.read", "operator.write", "operator.approvals"] as const;
 
@@ -142,5 +143,59 @@ describe("web push recipient authority with gateway roles", () => {
     expect(owner.map((target) => target.subscription.subscriptionId)).toEqual([
       "subscription-owner-device",
     ]);
+  });
+});
+
+describe("web push target client authority with gateway roles", () => {
+  const pendingRecord = () => ({
+    id: "approval-proof",
+    request: {},
+    createdAtMs: 1,
+    expiresAtMs: Date.now() + 60_000,
+  });
+
+  it("mirrors the shared-secret owner connection for approval visibility", () => {
+    const cfg = rolesConfig();
+    const owner = targets({
+      cfg,
+      deviceId: "owner-device",
+      userProfileId: GATEWAY_OWNER_PROFILE_ID,
+      role: null,
+    })[0];
+    expect(owner).toBeDefined();
+    if (!owner) {
+      return;
+    }
+
+    const client = webPushTargetClient(owner);
+    expect(client.internal?.operatorRoleActor).toEqual({ kind: "system" });
+    expect(isApprovalRecordVisibleToClient({ record: pendingRecord(), client, cfg })).toBe(true);
+  });
+
+  it("leaves named-role targets on their derived operator actor", () => {
+    const cfg = rolesConfig();
+    const definitions = cfg.gateway?.roles?.definitions;
+    if (!definitions) {
+      throw new Error("roles config is missing definitions");
+    }
+    definitions.reviewer = {
+      sessions: { others: "view" },
+      agents: ["main"],
+      scopes: ["operator.read", "operator.write", "operator.approvals"],
+    };
+    const reviewer = targets({
+      cfg,
+      deviceId: "reviewer-device",
+      userProfileId: "reviewer-profile",
+      role: "reviewer",
+    })[0];
+    expect(reviewer).toBeDefined();
+    if (!reviewer) {
+      return;
+    }
+
+    const client = webPushTargetClient(reviewer);
+    expect(client.internal?.operatorRoleActor).toBeUndefined();
+    expect(isApprovalRecordVisibleToClient({ record: pendingRecord(), client, cfg })).toBe(true);
   });
 });

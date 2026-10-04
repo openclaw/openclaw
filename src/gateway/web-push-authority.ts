@@ -285,6 +285,12 @@ export function webPushTargetClient(target: CurrentWebPushTarget): GatewayClient
       role: OPERATOR_ROLE,
       scopes: target.scopes,
     },
+    // Mirror the real shared-secret owner connection (server/ws-connection/connect-session.ts):
+    // without the system actor, downstream visibility checks resolve the owner to the denied
+    // role under gateway.roles and exclude it a second time after target selection.
+    ...(target.userProfileId === GATEWAY_OWNER_PROFILE_ID
+      ? { internal: { operatorRoleActor: { kind: "system" as const } } }
+      : {}),
     ...(target.userProfileId
       ? {
           authenticatedUserProfile: {
