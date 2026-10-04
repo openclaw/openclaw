@@ -2875,7 +2875,7 @@ INSERT INTO device_identities VALUES (
       expect(repairOpenClawStateDatabaseSchema(options)).toEqual(refusal);
       const reads = observer.queries.length;
       expect.soft(reads).toBeGreaterThan(0);
-      expect.soft(reads).toBeLessThanOrEqual(850);
+      expect.soft(reads).toBeLessThanOrEqual(870);
     } finally {
       observer.restore();
     }

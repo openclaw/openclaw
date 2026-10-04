@@ -18,6 +18,24 @@ import {
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { getAuditEventQueries, type AuditEventInsert } from "./audit-event-queries.js";
 import {
+  corruptAuditRow,
+  optionalEnum,
+  optionalHmacRef,
+  optionalInteger,
+  optionalText,
+  parseAuditRecordBase,
+  requiredEnum,
+  requiredHmacRef,
+  requiredText,
+  requireNull,
+  requireNullColumns,
+} from "./audit-event-store.row-helpers.js";
+import {
+  pruneExpiredSkillSelectionAuditEvents,
+  recordSkillSelectionAuditEvent,
+} from "./audit-event-store.skill-selection-storage.js";
+import { parseSkillSelectionAuditRow } from "./audit-event-store.skill-selection.js";
+import {
   AUDIT_EVENT_SCHEMA_VERSION,
   AUDIT_INBOUND_MESSAGE_COMPLETED_REASONS,
   AUDIT_INBOUND_MESSAGE_SKIPPED_REASONS,
@@ -43,29 +61,23 @@ import {
   planMessageExecutionBinding,
   recordConfirmedTerminalMessageExecutionBinding,
 } from "./message-execution-binding.js";
-
 type AuditEventsTable = OpenClawStateKyselyDatabase["audit_events"];
 type AuditDatabase = Pick<OpenClawStateKyselyDatabase, "audit_events">;
 type AuditEventRow = Selectable<AuditEventsTable>;
-
 export const AUDIT_EVENT_RETENTION_MS = 30 * 24 * 60 * 60_000;
 const AUDIT_EVENT_MAX_ROWS = 100_000;
 const AUDIT_EVENT_PRUNE_BATCH_ROWS = 1_024;
 // The single audit writer owns one DB handle. Invalidate on out-of-band
 // maintenance or rollback so the hot path avoids a 100k-row scan per message.
 const auditEventRowCounts = new WeakMap<DatabaseSync, number>();
-
 function getAuditKysely(db: DatabaseSync) {
   return getNodeSqliteKysely<AuditDatabase>(db);
 }
-
 const RUN_ACTIONS = ["agent.run.started", "agent.run.finished"] as const;
 const TOOL_ACTIONS = ["tool.action.started", "tool.action.finished"] as const;
 const CONVERSATION_KINDS = ["direct", "group", "channel", "unknown"] as const;
 const DELIVERY_KINDS = ["text", "media", "other"] as const;
 const FAILURE_STAGES = ["platform_send", "queue", "unknown"] as const;
-const AUDIT_HMAC_REF_RE = /^hmac-sha256:v1:[a-f0-9]{32}:[a-f0-9]{64}$/u;
-
 const MESSAGE_COLUMNS = [
   "direction",
   "channel",
@@ -81,119 +93,6 @@ const MESSAGE_COLUMNS = [
   "message_ref",
   "target_ref",
 ] as const satisfies readonly (keyof AuditEventRow)[];
-
-function corruptAuditRow(row: AuditEventRow, problem: string): never {
-  const sequence = normalizeSqliteNumber(row.sequence);
-  const location = sequence === undefined ? "" : ` ${sequence}`;
-  throw new Error(`corrupt audit event row${location}: ${problem}`);
-}
-
-function requiredInteger(
-  row: AuditEventRow,
-  value: number | bigint | null,
-  field: string,
-  minimum: number,
-): number {
-  const normalized = normalizeSqliteNumber(value);
-  if (normalized === undefined || !Number.isSafeInteger(normalized) || normalized < minimum) {
-    corruptAuditRow(row, `invalid ${field}`);
-  }
-  return normalized;
-}
-
-function optionalInteger(
-  row: AuditEventRow,
-  value: number | bigint | null,
-  field: string,
-  minimum: number,
-): number | undefined {
-  if (value === null) {
-    return undefined;
-  }
-  return requiredInteger(row, value, field, minimum);
-}
-
-function requiredText(row: AuditEventRow, value: unknown, field: string): string {
-  if (typeof value !== "string" || value.length === 0) {
-    corruptAuditRow(row, `invalid ${field}`);
-  }
-  return value;
-}
-
-function optionalText(row: AuditEventRow, value: unknown, field: string): string | undefined {
-  if (value === null || value === undefined) {
-    return undefined;
-  }
-  return requiredText(row, value, field);
-}
-
-function requiredEnum<const Value extends string>(
-  row: AuditEventRow,
-  value: unknown,
-  field: string,
-  allowed: readonly Value[],
-): Value {
-  for (const candidate of allowed) {
-    if (value === candidate) {
-      return candidate;
-    }
-  }
-  return corruptAuditRow(row, `invalid ${field}`);
-}
-
-function optionalEnum<const Value extends string>(
-  row: AuditEventRow,
-  value: unknown,
-  field: string,
-  allowed: readonly Value[],
-): Value | undefined {
-  if (value === null || value === undefined) {
-    return undefined;
-  }
-  return requiredEnum(row, value, field, allowed);
-}
-
-function requiredHmacRef(row: AuditEventRow, value: unknown, field: string): string {
-  const ref = requiredText(row, value, field);
-  if (!AUDIT_HMAC_REF_RE.test(ref)) {
-    corruptAuditRow(row, `invalid ${field}`);
-  }
-  return ref;
-}
-
-function optionalHmacRef(row: AuditEventRow, value: unknown, field: string): string | undefined {
-  if (value === null || value === undefined) {
-    return undefined;
-  }
-  return requiredHmacRef(row, value, field);
-}
-
-function requireNull(row: AuditEventRow, field: keyof AuditEventRow): void {
-  if (row[field] !== null) {
-    corruptAuditRow(row, `unexpected ${field}`);
-  }
-}
-
-function requireNullColumns(row: AuditEventRow, fields: readonly (keyof AuditEventRow)[]): void {
-  for (const field of fields) {
-    requireNull(row, field);
-  }
-}
-
-function parseAuditRecordBase(row: AuditEventRow) {
-  const schemaVersion = requiredInteger(row, row.schema_version, "schemaVersion", 1);
-  if (schemaVersion !== AUDIT_EVENT_SCHEMA_VERSION) {
-    corruptAuditRow(row, `unsupported schemaVersion ${schemaVersion}`);
-  }
-  return {
-    schemaVersion,
-    sequence: requiredInteger(row, row.sequence, "sequence", 1),
-    eventId: requiredText(row, row.event_id, "eventId"),
-    sourceSequence: requiredInteger(row, row.source_sequence, "sourceSequence", 1),
-    occurredAt: requiredInteger(row, row.occurred_at, "occurredAt", 0),
-    redaction: "metadata_only" as const,
-  };
-}
 
 function parseAgentRecordFields(row: AuditEventRow) {
   requireNullColumns(row, MESSAGE_COLUMNS);
@@ -211,7 +110,6 @@ function parseAgentRecordFields(row: AuditEventRow) {
     runId: requiredText(row, row.run_id, "runId"),
   };
 }
-
 function parseAgentRunRow(row: AuditEventRow): AgentRunAuditEventRecord {
   requireNull(row, "tool_call_id");
   requireNull(row, "tool_name");
@@ -239,7 +137,6 @@ function parseAgentRunRow(row: AuditEventRow): AgentRunAuditEventRecord {
   requiredEnum(row, row.error_code, "errorCode", [terminal.errorCode]);
   return { ...common, action, ...terminal };
 }
-
 function parseToolActionRow(row: AuditEventRow): ToolActionAuditEventRecord {
   const toolCallId = optionalText(row, row.tool_call_id, "toolCallId");
   const toolName = optionalText(row, row.tool_name, "toolName");
@@ -274,7 +171,6 @@ function parseToolActionRow(row: AuditEventRow): ToolActionAuditEventRecord {
   requiredEnum(row, row.error_code, "errorCode", [terminal.errorCode]);
   return { ...common, action, ...terminal };
 }
-
 function parseMessageRecordFields(row: AuditEventRow) {
   requireNullColumns(row, ["session_key", "session_id", "tool_call_id", "tool_name"]);
   const agentId = optionalText(row, row.agent_id, "agentId");
@@ -305,7 +201,6 @@ function parseMessageRecordFields(row: AuditEventRow) {
     ...(targetRef ? { targetRef } : {}),
   };
 }
-
 function parseInboundMessageRow(row: AuditEventRow): InboundMessageAuditEventRecord {
   requiredEnum(row, row.action, "action", ["message.inbound.processed"]);
   requiredEnum(row, row.direction, "direction", ["inbound"]);
@@ -372,7 +267,6 @@ function parseInboundMessageRow(row: AuditEventRow): InboundMessageAuditEventRec
   }
   return corruptAuditRow(row, "invalid inbound status");
 }
-
 function parseOutboundMessageRow(row: AuditEventRow): OutboundMessageAuditEventRecord {
   const action = requiredEnum(row, row.action, "action", [
     "message.outbound.queued",
@@ -465,13 +359,15 @@ function parseOutboundMessageRow(row: AuditEventRow): OutboundMessageAuditEventR
   }
   return corruptAuditRow(row, "invalid outbound status");
 }
-
 export function rowToAuditEvent(row: AuditEventRow): AuditEventRecord {
   if (row.kind === "agent_run") {
     return parseAgentRunRow(row);
   }
   if (row.kind === "tool_action") {
     return parseToolActionRow(row);
+  }
+  if (row.kind === "skill_selection") {
+    return parseSkillSelectionAuditRow(row);
   }
   if (row.kind !== "message") {
     corruptAuditRow(row, "invalid kind");
@@ -484,7 +380,6 @@ export function rowToAuditEvent(row: AuditEventRow): AuditEventRecord {
   }
   return corruptAuditRow(row, "invalid message direction");
 }
-
 function projectMessageIdentities(db: DatabaseSync, input: MessageAuditEventInput) {
   const identity = loadOrCreateAuditIdentityKey(db);
   const conversationId =
@@ -512,7 +407,7 @@ function projectMessageIdentities(db: DatabaseSync, input: MessageAuditEventInpu
   };
 }
 
-function bindAuditEvent(db: DatabaseSync, input: AuditEventInput) {
+function bindAuditEvent(db: DatabaseSync, input: AuditEventInput): AuditEventInsert {
   const message =
     input.kind === AUDIT_ACTIVITY_MESSAGE_KIND ? projectMessageIdentities(db, input) : undefined;
   return {
@@ -532,7 +427,10 @@ function bindAuditEvent(db: DatabaseSync, input: AuditEventInput) {
     session_id: input.kind === AUDIT_ACTIVITY_MESSAGE_KIND ? null : (input.sessionId ?? null),
     run_id: input.runId ?? null,
     tool_call_id: input.kind === "tool_action" ? (input.toolCallId ?? null) : null,
-    tool_name: input.kind === "tool_action" ? input.toolName : null,
+    tool_name:
+      input.kind === "tool_action" || input.kind === "skill_selection"
+        ? (input.toolName ?? null)
+        : null,
     direction: input.kind === AUDIT_ACTIVITY_MESSAGE_KIND ? input.direction : null,
     channel: input.kind === AUDIT_ACTIVITY_MESSAGE_KIND ? input.channel : null,
     conversation_kind: input.kind === "message" ? input.conversationKind : null,
@@ -558,7 +456,6 @@ function countAuditEvents(db: DatabaseSync): number {
   );
   return normalizeSqliteNumber(row?.count ?? null) ?? 0;
 }
-
 function deleteExpiredAuditEvents(db: DatabaseSync, now: number) {
   const kysely = getAuditKysely(db);
   const expiredSequences = kysely
@@ -573,7 +470,6 @@ function deleteExpiredAuditEvents(db: DatabaseSync, now: number) {
     kysely.deleteFrom("audit_events").where("sequence", "in", expiredSequences),
   );
 }
-
 function pruneAuditEventsAfterInsert(db: DatabaseSync, now: number): void {
   const kysely = getAuditKysely(db);
   const expired = deleteExpiredAuditEvents(db, now);
@@ -626,6 +522,9 @@ export function recordAuditEventInDatabase(
   try {
     return runOpenClawStateWriteTransaction(({ db }) => {
       countCacheDatabase = db;
+      if (input.kind === "skill_selection") {
+        return recordSkillSelectionAuditEvent(input, db, Date.now() - AUDIT_EVENT_RETENTION_MS);
+      }
       // Read losslessly so Node's rowid decoding cannot preempt the safe-integer guard.
       const values = bindAuditEvent(db, input);
       const queries = getAuditEventQueries(db);
@@ -671,15 +570,17 @@ export async function listAuditEvents(
   const { executeOpenClawStateWorker } = await import("../state/openclaw-state-worker-store.js");
   return executeOpenClawStateWorker(context, { type: "audit.events.list", input });
 }
-
 /** Delete one bounded batch during Gateway startup and periodic audit maintenance. */
 export function pruneExpiredAuditEventsInDatabase(params: {
   now?: number;
   database: OpenClawStateDatabaseOptions & { database: OpenClawStateDatabase };
 }): number {
   return runOpenClawStateWriteTransaction(({ db }) => {
-    const deleted = deleteExpiredAuditEvents(db, params.now ?? Date.now());
+    const now = params.now ?? Date.now();
+    const deleted = deleteExpiredAuditEvents(db, now);
+    const retainedAfter = now - AUDIT_EVENT_RETENTION_MS;
+    const deletedSkillSelections = pruneExpiredSkillSelectionAuditEvents({ db, retainedAfter });
     auditEventRowCounts.delete(db);
-    return Number(deleted.numAffectedRows ?? 0n);
+    return Number(deleted.numAffectedRows ?? 0n) + deletedSkillSelections;
   }, params.database);
 }

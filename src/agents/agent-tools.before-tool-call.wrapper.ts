@@ -48,7 +48,7 @@ import {
   adjustedParamsByToolCallId,
   buildAdjustedParamsKey,
   clearTrackedToolExecution,
-  preExecutionBlockedToolCallIds,
+  recordPreExecutionBlockedToolCall,
   recordStructuredReplaySafeToolCall,
   recordToolExecutionStarted,
   recordToolExecutionTracked,
@@ -553,6 +553,9 @@ export function wrapToolWithBeforeToolCallHook(
         if (skillMatch && terminalDiagnostic.type === "tool.execution.completed") {
           recordRunSkillUsage({
             runId: ctx?.runId,
+            agentId: ctx?.agentId,
+            sessionKey: ctx?.sessionKey,
+            sessionId: ctx?.sessionId,
             name: skillMatch.skillName,
             source: skillMatch.skillSource,
             activation: skillMatch.activation,
@@ -698,18 +701,4 @@ export function rewrapToolWithBeforeToolCallHook(
     rebuilt = wrapExecution(rebuilt);
   }
   return rebuilt;
-}
-
-function recordPreExecutionBlockedToolCall(toolCallId?: string, runId?: string): void {
-  if (!toolCallId) {
-    return;
-  }
-  preExecutionBlockedToolCallIds.add(buildAdjustedParamsKey({ runId, toolCallId }));
-  while (preExecutionBlockedToolCallIds.size > MAX_TRACKED_ADJUSTED_PARAMS) {
-    const oldest = preExecutionBlockedToolCallIds.values().next().value;
-    if (!oldest) {
-      break;
-    }
-    preExecutionBlockedToolCallIds.delete(oldest);
-  }
 }
