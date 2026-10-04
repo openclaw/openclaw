@@ -44,13 +44,14 @@ it("resolves host SDK imports in a packaged discovery hook after leaving its inv
       },
     }),
   );
-  // tsx's Node hooks precede Bun's SDK resolver; use the native loader with the fixture paths.
-  const runtimeArgs = process.versions.bun
-    ? ["--no-install", "--tsconfig-override", tsconfig]
-    : ["--import", pathToFileURL(path.resolve("scripts/tsx.mjs")).href];
   const result = await promisify(execFile)(
     process.execPath,
-    [...runtimeArgs, packagedDiscoveryProbePath, root],
+    [
+      "--import",
+      pathToFileURL(path.resolve("scripts/tsx.mjs")).href,
+      packagedDiscoveryProbePath,
+      root,
+    ],
     {
       cwd: root,
       env: {
