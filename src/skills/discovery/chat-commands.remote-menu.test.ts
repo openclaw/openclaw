@@ -53,13 +53,22 @@ function menuNames(cfg: OpenClawConfig, workspace: string) {
 }
 
 describe("remote workspace native Skill menus", () => {
-  it.each([false, true])(
-    "keeps Gateway commands without remote reads (shadow workspace: %s)",
-    async (shadowWorkspace) => {
+  it.each([
+    { binding: "registered", shadowWorkspace: false },
+    { binding: "registered", shadowWorkspace: true },
+    { binding: "declared", shadowWorkspace: false },
+  ])(
+    "keeps Gateway commands without remote reads ($binding, shadow=$shadowWorkspace)",
+    async ({ binding, shadowWorkspace }) => {
       const { cfg, workspace } = await fixture(shadowWorkspace);
       const loadSkills = vi.fn(() => {
         throw new Error("Harness unavailable");
       });
+      if (binding === "declared") {
+        declareAgentWorkspaceAccess(workspace);
+        expect(menuNames(cfg, workspace)).toEqual(["gateway-command"]);
+        return;
+      }
       const release = registerAgentWorkspaceAccess(workspace, {
         bridge: { readFile: vi.fn(), writeFile: vi.fn(), stat: vi.fn() },
         loadSkills,
@@ -75,34 +84,27 @@ describe("remote workspace native Skill menus", () => {
     },
   );
 
-  it("does not wait for a declared remote workspace to connect", async () => {
-    const { cfg, workspace } = await fixture(false);
-    declareAgentWorkspaceAccess(workspace);
-    expect(menuNames(cfg, workspace)).toEqual(["gateway-command"]);
-  });
-
-  it.each([false, true])(
-    "preserves workspace commands for document-only adapters (stopped=%s)",
-    async (stopped) => {
+  it.each(["local", "active", "stopped"])(
+    "preserves workspace commands with %s workspace access",
+    async (state) => {
       const { cfg, workspace } = await fixture(true);
       const expected = menuNames(cfg, workspace);
-      const release = registerAgentWorkspaceAccess(workspace, {
-        bridge: { readFile: vi.fn(), writeFile: vi.fn(), stat: vi.fn() },
-      });
-      if (stopped) {
-        release();
+      expect(expected).toEqual(["gateway-command", "workspace-command"]);
+      const release =
+        state === "local"
+          ? undefined
+          : registerAgentWorkspaceAccess(workspace, {
+              bridge: { readFile: vi.fn(), writeFile: vi.fn(), stat: vi.fn() },
+            });
+      if (state === "stopped") {
+        release?.();
       }
       try {
         expect(menuNames(cfg, workspace)).toEqual(expected);
         expect(expected).toContain("workspace-command");
       } finally {
-        release();
+        release?.();
       }
     },
   );
-
-  it("preserves workspace commands in local storage mode", async () => {
-    const { cfg, workspace } = await fixture(true);
-    expect(menuNames(cfg, workspace)).toEqual(["gateway-command", "workspace-command"]);
-  });
 });

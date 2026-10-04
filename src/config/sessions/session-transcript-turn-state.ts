@@ -92,16 +92,15 @@ export function buildExpectedTranscriptTurnSessionPatch(params: {
   appendedMessages: readonly { appended: boolean }[];
   currentEntry: SessionEntry;
   expectedSessionState?: SessionTranscriptTurnExpectedState;
-  sessionFile: string;
   sessionLifecyclePatch?: SessionTranscriptTurnLifecyclePatch;
   touchSessionEntry?: boolean;
 }): Partial<SessionEntry> {
-  const appendedCount = params.appendedMessages.filter((message) => message.appended).length;
+  const hasAppendedMessage = params.appendedMessages.some((message) => message.appended);
   const acceptedMessage =
-    appendedCount > 0 ||
+    hasAppendedMessage ||
     (params.expectedSessionState !== undefined &&
       params.appendedMessages.some((message) => !message.appended));
-  const touchUpdatedAt = params.touchSessionEntry === true && appendedCount > 0 ? Date.now() : 0;
+  const touchUpdatedAt = params.touchSessionEntry === true && hasAppendedMessage ? Date.now() : 0;
   const restartRecoveryTerminalRunIds = params.sessionLifecyclePatch?.restartRecoveryTerminalRunIds
     ? mergeRestartRecoveryTerminalRunIds(
         params.currentEntry.restartRecoveryTerminalRunIds,

@@ -1,3 +1,4 @@
+import { seedCanonicalAcpSessionMeta } from "../acp/runtime/session-meta-fixture.test-support.js";
 // Install manager and runtime mocks before loading the reset implementation.
 // oxfmt-ignore
 import {
@@ -7,10 +8,7 @@ import {
 } from "./test/server-sessions.test-helpers.js";
 import { afterEach, expect, test, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import {
-  readAcpSessionMeta,
-  writeAcpSessionMetaForMigration,
-} from "../acp/runtime/session-meta.js";
+import { readAcpSessionMeta } from "../acp/runtime/session-meta.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
@@ -31,7 +29,7 @@ test.each(["already retired", "caller retired"] as const)(
     const { storePath } = await createSessionStoreDir();
     const sessionKey = "agent:main:main";
     await writeSessionStore({ entries: { main: sessionStoreEntry("sess-main") } });
-    writeAcpSessionMetaForMigration({
+    seedCanonicalAcpSessionMeta({
       sessionKey,
       meta: {
         backend: "acpx",

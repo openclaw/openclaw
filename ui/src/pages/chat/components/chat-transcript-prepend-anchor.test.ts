@@ -4,8 +4,8 @@ import type { Virtualizer } from "@tanstack/virtual-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TranscriptEndAnchor } from "./chat-transcript-end-anchor.ts";
 import {
-  createTranscriptOffsetState,
   observeTranscriptOffset,
+  TranscriptOffsetState,
 } from "./chat-transcript-offset-observer.ts";
 import { TranscriptPrependAnchor } from "./chat-transcript-prepend-anchor.ts";
 
@@ -147,7 +147,7 @@ describe("transcript prepend anchor", () => {
     let headerGrowth = 0;
     bubble.getBoundingClientRect = () => rect(290 + headerGrowth - scroller.scrollTop, 180);
     const owner = {
-      state: createTranscriptOffsetState(),
+      state: new TranscriptOffsetState(),
       getScrollElement: () => scroller,
       prependAnchor: anchor,
       endAnchor: new TranscriptEndAnchor(),

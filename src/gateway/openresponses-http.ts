@@ -337,8 +337,6 @@ export async function handleOpenResponsesHttpRequest(
       model,
       user,
       sessionPrefix: "openresponses",
-      defaultMessageChannel: "webchat",
-      useMessageChannelHeader: true,
     });
   } catch (err) {
     if (isGatewayRequestContextError(err)) {

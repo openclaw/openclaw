@@ -387,18 +387,44 @@ describe("admitted SQLite schema facts", () => {
     },
   );
 
-  it.each(["run", "get", "all", "iterate"] as const)(
-    "observes prepared DDL when executed through %s",
-    (method) => {
-      const database = openDatabase();
-      const create = database.prepare("CREATE TABLE prepared_table (id)");
-      expect(tableExists(database, "prepared_table")).toBe(false);
-      if (method === "iterate") {
-        expect([...create.iterate()]).toEqual([]);
-      } else {
-        create[method]();
+  it.each([
+    { method: "run", admitted: true, binding: undefined },
+    { method: "get", admitted: true, binding: undefined },
+    { method: "all", admitted: true, binding: undefined },
+    { method: "iterate", admitted: true, binding: undefined },
+    { method: "run", admitted: false, binding: undefined },
+    { method: "run", admitted: true, binding: "positional" },
+    { method: "run", admitted: true, binding: "named" },
+  ] as const)(
+    "tracks prepared DDL: $method, admitted=$admitted, binding=$binding",
+    ({ method, admitted, binding }) => {
+      const database = openDatabase(undefined, admitted);
+      const table = admitted ? "prepared_table" : "original";
+      const sql = !admitted
+        ? "DROP TABLE original"
+        : binding
+          ? `CREATE TABLE prepared_table AS SELECT ${binding === "named" ? "$id" : "?"} AS id`
+          : "CREATE TABLE prepared_table (id)";
+      const statement = database.prepare(sql);
+      if (!admitted) {
+        admitSqliteSchema(database);
       }
-      expect(tableExists(database, "prepared_table")).toBe(true);
+      expect(tableExists(database, table)).toBe(!admitted);
+      if (method === "iterate") {
+        expect([...statement.iterate()]).toEqual([]);
+      } else if (binding === "named") {
+        statement.run({ $id: 11 });
+      } else if (binding === "positional") {
+        statement.run(7);
+      } else {
+        statement[method]();
+      }
+      expect(tableExists(database, table)).toBe(admitted);
+      if (binding) {
+        expect(database.prepare("SELECT id FROM prepared_table").get()).toEqual({
+          id: binding === "named" ? 11 : 7,
+        });
+      }
       database.prepare("PRAGMA user_version = 5").run();
       expect(assertSupportedAgentSchemaVersion(database, ":memory:")).toBe(5);
     },
@@ -413,45 +439,15 @@ describe("admitted SQLite schema facts", () => {
     expect(assertSupportedAgentSchemaVersion(database, ":memory:")).toBe(6);
   });
 
-  it("tracks schema statements retained before admission", () => {
-    const database = openDatabase(undefined, false);
-    const drop = database.prepare("DROP TABLE original");
-    admitSqliteSchema(database);
-    expect(tableExists(database, "original")).toBe(true);
-    drop.run();
-    expect(tableExists(database, "original")).toBe(false);
-  });
-
-  it("preserves positional and named parameters for prepared DDL", () => {
-    const database = openDatabase();
-    database.prepare("CREATE TABLE positional AS SELECT ? AS id").run(7);
-    database.prepare("CREATE TABLE named AS SELECT $id AS id").run({ $id: 11 });
-    expect(tableExists(database, "positional")).toBe(true);
-    expect(tableExists(database, "named")).toBe(true);
-    expect(database.prepare("SELECT id FROM positional").get()).toEqual({ id: 7 });
-    expect(database.prepare("SELECT id FROM named").get()).toEqual({ id: 11 });
-  });
-
-  it.skipIf(typeof DatabaseSync.prototype.setAuthorizer !== "function")(
-    "retains authorizer policy installed before admission",
-    () => {
-      const database = openDatabase(undefined, false);
+  it.skipIf(typeof DatabaseSync.prototype.setAuthorizer !== "function").each([false, true])(
+    "honors dynamic authorizer policy installed with admitted=%s",
+    (admitted) => {
+      const database = openDatabase(undefined, admitted);
       let allowed = true;
       database.setAuthorizer(() => (allowed ? constants.SQLITE_OK : constants.SQLITE_DENY));
-      admitSqliteSchema(database);
-      expect(tableExists(database, "original")).toBe(true);
-      allowed = false;
-      expect(() => tableExists(database, "original")).toThrow(/not authorized/iu);
-      database.setAuthorizer(null);
-    },
-  );
-
-  it.skipIf(typeof DatabaseSync.prototype.setAuthorizer !== "function")(
-    "honors dynamic authorizer denials after admission and removal",
-    () => {
-      const database = openDatabase();
-      let allowed = true;
-      database.setAuthorizer(() => (allowed ? constants.SQLITE_OK : constants.SQLITE_DENY));
+      if (!admitted) {
+        admitSqliteSchema(database);
+      }
       expect(tableExists(database, "original")).toBe(true);
       expect(assertSupportedAgentSchemaVersion(database, ":memory:")).toBe(1);
       allowed = false;

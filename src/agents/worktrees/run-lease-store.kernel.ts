@@ -26,7 +26,7 @@ export function admitWorktreeRunLeaseInDatabase(
   if (!record || record.removed_at != null) {
     throw new Error(`managed worktree was removed: ${worktreePath}`);
   }
-  const { removingToken, liveCount, exclusive } = collectLiveRunLeases(db, k, scope, {});
+  const { removingToken, liveCount, exclusive } = collectLiveRunLeases(db, k, scope);
   if (removingToken !== undefined) {
     throw new Error(`managed worktree was removed: ${worktreePath}`);
   }

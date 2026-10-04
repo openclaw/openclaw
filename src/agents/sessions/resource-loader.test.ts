@@ -2,15 +2,13 @@
 import { chmod, mkdir, symlink, writeFile } from "node:fs/promises";
 import { join, relative } from "node:path";
 import { Type } from "typebox";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { withMockedWindowsPlatform } from "../../test-utils/vitest-spies.js";
 import darkTheme from "../modes/interactive/theme/dark.json" with { type: "json" };
 import type { ExtensionFactory } from "./extensions/types.js";
-import { DefaultPackageManager } from "./package-manager.js";
 import { loadPromptTemplates } from "./prompt-templates.js";
 import { DefaultResourceLoader } from "./resource-loader.js";
-import { SettingsManager } from "./settings-manager.js";
 import type { SourceScope } from "./source-info.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -35,17 +33,11 @@ describe("DefaultResourceLoader", () => {
       await writeFile(join(path, "shared.md"), `Prompt from ${path}`);
       await writeFile(join(path, "shared.json"), JSON.stringify({ ...darkTheme, name: "shared" }));
     }
-    const loader = createLoader(root, {
-      settingsManager: SettingsManager.inMemory(),
-    });
+    const loader = createLoader(root);
 
-    const resolvePackages = vi.spyOn(DefaultPackageManager.prototype, "resolve");
-    try {
-      await loader.reload();
-      expect(resolvePackages).not.toHaveBeenCalled();
-    } finally {
-      resolvePackages.mockRestore();
-    }
+    await loader.reload();
+    expect(loader.getPrompts()).toEqual({ prompts: [], diagnostics: [] });
+    expect(loader.getThemes()).toEqual({ themes: [], diagnostics: [] });
     loader.extendResources({
       promptPaths: paths.map((path) => ({
         path,
@@ -109,9 +101,7 @@ describe("DefaultResourceLoader", () => {
       await symlink(target, join(resources, `linked.${extension}`), "file");
       await symlink(join(root, "absent"), join(resources, `broken.${extension}`), "file");
     }
-    const loader = createLoader(root, {
-      settingsManager: SettingsManager.inMemory(),
-    });
+    const loader = createLoader(root, {});
 
     await loader.reload();
     const entry = { path: alias, metadata: sourceMetadata(alias, "extension", "temporary") };
@@ -157,9 +147,7 @@ describe("DefaultResourceLoader", () => {
       const root = tempDirs.make("openclaw-resource-unreadable-");
       const resources = join(root, "resources");
       await mkdir(resources);
-      const loader = createLoader(root, {
-        settingsManager: SettingsManager.inMemory(),
-      });
+      const loader = createLoader(root, {});
       await chmod(resources, 0);
       try {
         await loader.reload();
@@ -183,18 +171,19 @@ describe("DefaultResourceLoader", () => {
 
   it("reports tool and flag conflicts in extension order while retaining the first owner", async () => {
     const root = tempDirs.make("openclaw-resource-loader-conflicts-");
+    let description = "Initial registration";
     const factory: ExtensionFactory = (api) => {
       api.registerTool({
         name: "shared",
         label: "Shared",
-        description: "Synthetic conflict fixture",
+        description,
         parameters: Type.Object({}),
         execute: async () => ({ content: [], details: undefined }),
       });
       api.registerFlag("shared", { type: "boolean" });
+      api.registerCommand("shared", { handler: async () => {} });
     };
     const loader = createLoader(root, {
-      settingsManager: SettingsManager.inMemory(),
       extensionFactories: [factory, factory, factory],
     });
 
@@ -207,6 +196,24 @@ describe("DefaultResourceLoader", () => {
       { path: "<inline:3>", error: 'Flag "--shared" conflicts with <inline:1>' },
     ]);
     expect(loader.getExtensions().extensions).toHaveLength(3);
+
+    description = "Reloaded registration";
+    await loader.reload();
+    expect(loader.getExtensions().extensions).toHaveLength(3);
+    for (const [index, extension] of loader.getExtensions().extensions.entries()) {
+      const sourceInfo = {
+        path: `<inline:${index + 1}>`,
+        source: "inline",
+        scope: "temporary",
+        origin: "top-level",
+      };
+      expect(extension.sourceInfo).toMatchObject(sourceInfo);
+      expect(extension.tools.get("shared")).toMatchObject({
+        definition: { description: "Reloaded registration" },
+        sourceInfo,
+      });
+      expect(extension.commands.get("shared")).toMatchObject({ sourceInfo });
+    }
   });
 
   it("inherits Windows source metadata across case-variant resource roots", async () => {
@@ -229,7 +236,6 @@ describe("DefaultResourceLoader", () => {
     await withMockedWindowsPlatform(async () => {
       const loader = createLoader(root, {
         agentDir: variantAgentDir,
-        settingsManager: SettingsManager.inMemory(),
       });
       await loader.reload();
       loader.extendResources({

@@ -591,7 +591,7 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
       if (!runtime) {
         return { ok: false, reason: "invalid-context" };
       }
-      const tools = await runtime.getModelTools(identity);
+      const { tools } = await runtime.getPromptProjection(identity);
       source.receiptAuthority();
       if (JSON.stringify(request.context.tools) !== JSON.stringify(tools)) {
         return { ok: false, reason: "invalid-context" };

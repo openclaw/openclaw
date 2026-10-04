@@ -5,15 +5,15 @@ import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { createDeferredCore } from "../shared/deferred.js";
-import { requireNodeSqlite } from "./node-sqlite.js";
 import {
   createRetainedOperation,
   type RetainedOperation,
   type RetainedOutcome,
-} from "./retained-operation.js";
+} from "@openclaw/worker-runtime/lifecycle";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import { requireNodeSqlite } from "./node-sqlite.js";
 import { resolveRuntimeProcessEntrypointUrl } from "./runtime-process-url.js";
 import { withRuntimeWorkerGeneration } from "./runtime-worker-generation.js";
 import {
@@ -25,10 +25,8 @@ import {
 import type { RetainedPreparedSqliteReadOnlyLocation } from "./sqlite-readonly-location.types.js";
 import { captureSqliteReadOnlyWorkerLaunch } from "./sqlite-readonly-worker.js";
 import { startSqliteReadOnlyLocationAsync } from "./sqlite-snapshot-source.js";
-import {
-  allocateWorkerOwnedSqliteSnapshotDirectory,
-  captureSqliteSnapshotStagingOwner,
-} from "./sqlite-snapshot-staging-owner.js";
+import { allocateWorkerOwnedSqliteSnapshotDirectory } from "./sqlite-snapshot-staging-allocation.js";
+import { captureSqliteSnapshotStagingOwner } from "./sqlite-snapshot-staging-owner.js";
 import { holdNativeStop, waitForGate } from "./sqlite-snapshot-staging-owner.test-support.js";
 import { createSqliteSnapshotStagingDirectory } from "./sqlite-snapshot-staging.js";
 import type { RetainedNativeWorker } from "./worker-native-lifecycle.types.js";

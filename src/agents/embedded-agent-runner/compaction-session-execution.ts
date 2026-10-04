@@ -23,7 +23,6 @@ import {
 import { createPreparedEmbeddedAgentSettingsManager } from "../agent-project-settings.js";
 import {
   applyAgentAutoCompactionGuard,
-  applyAgentCompactionSettingsFromConfig,
   isSilentOverflowProneModel,
   resolveEffectiveCompactionMode,
 } from "../agent-settings.js";
@@ -39,7 +38,8 @@ import {
 } from "../sessions/agent-session-compaction.js";
 import { type AgentSession, estimateTokens, SessionManager } from "../sessions/index.js";
 import { getModelRegistryRuntime } from "../sessions/model-registry-runtime.js";
-import { createAgentSessionForEmbeddedRunner } from "../sessions/sdk.js";
+import { DefaultResourceLoader } from "../sessions/resource-loader.js";
+import { createAgentSession } from "../sessions/sdk.js";
 import { setSessionModelUsageSink } from "../sessions/session-model-usage.js";
 import { normalizeUsage, type UsageLike } from "../usage.js";
 import { resolveCompactionFailure } from "./compact-reasons.js";
@@ -65,12 +65,10 @@ import { log } from "./logger.js";
 import type { PreparedCompactionRuntime } from "./prepared-compaction-runtime.js";
 import { declarePromptHistoryRewrite } from "./prompt-cache-observability.js";
 import { sanitizeSessionHistory, validateReplayTurns } from "./replay-history.js";
-import { createEmbeddedAgentResourceLoader } from "./resource-loader.js";
 import { wrapStreamFnWithDiagnosticModelCallEvents } from "./run/attempt.model-diagnostic-events.js";
 import { readCompactionAccountingRecorder } from "./run/compaction-accounting-bridge.js";
 import { estimateLlmBoundaryTokenPressure } from "./run/preemptive-compaction.js";
 import { attemptServerEndpointCompaction } from "./server-endpoint-compaction.js";
-import { applySystemPromptToSession } from "./system-prompt.js";
 import { collectRegisteredToolNames, toSessionToolAllowlist } from "./tool-name-allowlist.js";
 import {
   mapThinkingLevel,
@@ -196,20 +194,12 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
       sessionKey: params.sessionKey ?? sandboxSessionKey,
       runId,
     });
-    const resourceLoader = createEmbeddedAgentResourceLoader({
+    const resourceLoader = new DefaultResourceLoader({
       cwd: effectiveCwd,
       agentDir,
-      settingsManager,
       extensionFactories,
     });
     await resourceLoader.reload();
-    // Reloading settings discards prepared compaction overrides and restores
-    // runtime auto-compaction, so reapply both guards after reload.
-    applyAgentCompactionSettingsFromConfig({
-      settingsManager,
-      cfg: params.config,
-      contextTokenBudget,
-    });
     // contextEngineInfo is intentionally omitted: this guard runs inside the
     // compaction LLM session, which is not the user-facing agent session and
     // has no associated context engine.
@@ -256,32 +246,26 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
       let diagnosticOwner: DiagnosticEmbeddedRunOwner | undefined;
       let resetCompactionTimeout: (() => void) | undefined;
       try {
-        const createdSession = await createAgentSessionForEmbeddedRunner(
-          {
-            cwd: effectiveCwd,
-            agentDir,
-            authStorage,
-            modelRegistry,
-            model: effectiveModel,
-            thinkingLevel: mapThinkingLevel(
-              mapThinkingLevelForProvider(thinkLevel, effectiveModel),
-            ),
-            tools: sessionToolAllowlist,
-            customTools,
-            sessionManager,
-            settingsManager,
-            resourceLoader,
-          },
-          {},
-        );
+        const createdSession = await createAgentSession({
+          cleanupProviderSessionResourcesOnDispose: false,
+          systemPrompt: systemPromptText,
+          cwd: effectiveCwd,
+          modelRegistry,
+          model: effectiveModel,
+          thinkingLevel: mapThinkingLevel(mapThinkingLevelForProvider(thinkLevel, effectiveModel)),
+          tools: sessionToolAllowlist,
+          customTools,
+          sessionManager,
+          settingsManager,
+          resourceLoader,
+        });
         session = createdSession.session;
         session[agentSessionSetContextReplacementHook](
           (tokensAfter, tokensBefore) =>
             recordCompaction({ tokensBefore, tokensAfter, compactionKind: "context-engine" }),
           assertActive,
         );
-        session.setActiveToolsByName(sessionToolAllowlist);
-        applySystemPromptToSession(session, systemPromptText);
+        session.setBaseSystemPrompt(systemPromptText.trim());
         // Compaction builds the same embedded system prompt, so it must flow
         // through the same transport/payload shaping stack as normal turns.
         const { effectiveExtraParams, transportApiKey } = await prepareCompactionSessionAgent({
@@ -301,18 +285,6 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
           effectiveWorkspace,
           agentDir,
           runtimePlan,
-          sessionKey: sandboxSessionKey,
-          sandboxToolPolicy: sandbox?.tools,
-          messageProvider: resolvedMessageProvider,
-          agentAccountId: params.agentAccountId,
-          groupId: params.groupId,
-          groupChannel: params.groupChannel,
-          groupSpace: params.groupSpace,
-          spawnedBy: params.spawnedBy,
-          senderId: params.senderId,
-          senderName: params.senderName,
-          senderUsername: params.senderUsername,
-          senderE164: params.senderE164,
         });
         const compactionReplayEnabled = resolveCompactionReplayEligibility(effectiveModel, {
           extraParams: effectiveExtraParams,

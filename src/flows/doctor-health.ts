@@ -40,15 +40,12 @@ import type { PluginDiagnostic } from "../plugins/manifest-types.js";
 import { withCommandProcessScope } from "../process/exec-spawn.js";
 import { withDeferredDebugProxyCapture } from "../proxy-capture/runtime-deferral.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { UpdateSchemaRefusalError } from "../state/openclaw-update-schema-refusal.js";
 import type { DoctorHealthFlowContext } from "./doctor-health-contributions.js";
 
 // Interactive doctor entrypoint; lazy imports keep normal CLI startup light.
 const intro = (message: string) => clackIntro(stylePromptTitle(message) ?? message);
 const outro = (message: string) => clackOutro(stylePromptTitle(message) ?? message);
-
-const loadConfigModule = createLazyRuntimeModule(() => import("../config/config.js"));
 
 /** Runs the full interactive doctor flow against the provided or default runtime. */
 export async function runDoctorHealthFlow(
@@ -393,7 +390,7 @@ async function runDoctorHealthFlowWithResult(
           ),
       );
       recordAgentDatabaseAdmissions(agentDatabaseRefusals);
-      const { CONFIG_PATH } = await loadConfigModule();
+      const { CONFIG_PATH } = await import("../config/config.js");
       const ctx: DoctorHealthFlowContext = {
         runtime: doctorRuntime,
         options,

@@ -25,7 +25,6 @@ import {
 import { LruCache } from "../infra/lru-cache.js";
 import { logWarn } from "../logger.js";
 import { registerExecApprovalFollowupRuntimeHandoff } from "./bash-tools.exec-approval-followup-state.js";
-import type { sendExecApprovalFollowup } from "./bash-tools.exec-approval-followup.js";
 import {
   type ExecApprovalRegistration,
   isExecApprovalRunAbortedError,
@@ -96,12 +95,6 @@ type ExecApprovalFollowupTarget = {
   turnSourceThreadId?: string | number;
   direct?: boolean;
   bashElevated?: ExecElevatedDefaults;
-};
-
-/** Test seam for follow-up delivery and warning logging. */
-type ExecApprovalFollowupResultDeps = {
-  sendExecApprovalFollowup?: typeof sendExecApprovalFollowup;
-  logWarn?: typeof logWarn;
 };
 
 /** Converts a raw approval decision plus fallback policy into execution state. */
@@ -378,15 +371,7 @@ export function buildHeadlessExecApprovalDeniedMessage(params: {
 export async function sendExecApprovalFollowupResult(
   target: ExecApprovalFollowupTarget,
   resultText: string,
-  deps: ExecApprovalFollowupResultDeps = {},
 ): Promise<void> {
-  const send: typeof sendExecApprovalFollowup =
-    deps.sendExecApprovalFollowup ??
-    (async (params) => {
-      const { sendExecApprovalFollowup } = await import("./bash-tools.exec-approval-followup.js");
-      return sendExecApprovalFollowup(params);
-    });
-  const warn = deps.logWarn ?? logWarn;
   const runtimeHandoff =
     target.direct === true || !target.sessionKey || isExecDeniedResultText(resultText)
       ? undefined
@@ -396,7 +381,7 @@ export async function sendExecApprovalFollowupResult(
           bashElevated: target.bashElevated,
           resultText,
         });
-  await send({
+  const followup = {
     approvalId: target.approvalId,
     ...(target.agentId ? { agentId: target.agentId } : {}),
     sessionKey: target.sessionKey,
@@ -414,7 +399,11 @@ export async function sendExecApprovalFollowupResult(
           idempotencyKey: runtimeHandoff.idempotencyKey,
         }
       : {}),
-  }).catch((error: unknown) => {
+  };
+  try {
+    const { sendExecApprovalFollowup } = await import("./bash-tools.exec-approval-followup.js");
+    await sendExecApprovalFollowup(followup);
+  } catch (error) {
     if (isApprovalNotFoundError(error)) {
       return;
     }
@@ -423,8 +412,8 @@ export async function sendExecApprovalFollowupResult(
     if (!rememberExecApprovalFollowupFailureKey(key)) {
       return;
     }
-    warn(`exec approval followup dispatch failed (id=${target.approvalId}): ${message}`);
-  });
+    logWarn(`exec approval followup dispatch failed (id=${target.approvalId}): ${message}`);
+  }
 }
 
 /** Renders an approval-pending or approval-unavailable exec tool result. */

@@ -15,7 +15,6 @@ import type { OpenClawConfigWithLegacyRoster } from "../../../config/legacy.rost
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { ToolPolicyConfig } from "../../../config/types.tools.js";
 import { collectChannelRouteTargets } from "../../../routing/channel-route-targets.js";
-import { createLazyImportLoader } from "../../../shared/lazy-promise.js";
 import { VERSION_BOUND_RUNTIME_PLUGIN_POLICY_IDS_BY_SURFACE } from "./configured-runtime-plugin-installs.js";
 import type { BlockedLegacyOpenAICodexProviderPlan } from "./legacy-config-migrations.runtime.models.js";
 import {
@@ -24,12 +23,6 @@ import {
   SOURCE_REPLY_RUNTIME_MESSAGE_ALLOW,
 } from "./preview-message-tool-policy.js";
 import { resolveDoctorPrimaryModelRef } from "./primary-model-ref.js";
-
-type ChannelDoctorModule = typeof import("./channel-doctor.js");
-
-const channelDoctorModuleLoader = createLazyImportLoader<ChannelDoctorModule>(
-  () => import("./channel-doctor.js"),
-);
 
 function listAgentRecords(cfg: OpenClawConfig) {
   return listAgentEntriesWithSource(cfg).map(({ entry }) => entry);
@@ -546,7 +539,7 @@ export async function collectDoctorPreviewNotes(params: {
       allowExec: params.allowExec,
     });
     warnings.push(...channelPreviewConfig.diagnostics);
-    const { collectChannelDoctorPreviewWarnings } = await channelDoctorModuleLoader.load();
+    const { collectChannelDoctorPreviewWarnings } = await import("./channel-doctor.js");
     const channelDoctorWarnings = await collectChannelDoctorPreviewWarnings({
       cfg: channelPreviewConfig.cfg,
       doctorFixCommand: params.doctorFixCommand,
@@ -629,7 +622,7 @@ export async function collectDoctorPreviewNotes(params: {
   }
 
   if (hasChannelConfig) {
-    const { createChannelDoctorEmptyAllowlistPolicyHooks } = await channelDoctorModuleLoader.load();
+    const { createChannelDoctorEmptyAllowlistPolicyHooks } = await import("./channel-doctor.js");
     const { scanEmptyAllowlistPolicyWarnings } = await import("./empty-allowlist-scan.js");
     const emptyAllowlistHooks = createChannelDoctorEmptyAllowlistPolicyHooks({
       cfg: params.cfg,

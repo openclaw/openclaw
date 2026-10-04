@@ -31,9 +31,7 @@ type LibraryOptions = GatewayRpcOpts & {
 function rpcOptions(command: Command): GatewayRpcOpts {
   const opts = command.opts<GatewayRpcOpts>();
   const value = <K extends keyof GatewayRpcOpts>(name: K): GatewayRpcOpts[K] =>
-    command.getOptionValueSource(name) !== "default" && opts[name] !== undefined
-      ? opts[name]
-      : (inheritOptionFromParent<GatewayRpcOpts[K]>(command, name) ?? opts[name]);
+    inheritOptionFromParent<GatewayRpcOpts[K]>(command, name) ?? opts[name];
   return {
     url: value("url"),
     port: value("port"),

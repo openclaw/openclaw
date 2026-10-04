@@ -75,12 +75,12 @@ export type SidebarNarrationSyncInput = {
   connected: boolean;
   connectionIdentity: object | null;
   source: NarrationSource | null;
-  rows: readonly SidebarRecentSession[];
+  rows: readonly Pick<SidebarRecentSession, "key" | "hasActiveRun" | "startedAt" | "updatedAt">[];
   openSessionKey: string;
   agentId: string;
 };
 
-function rowRecency(row: SidebarRecentSession): number {
+function rowRecency(row: Pick<SidebarRecentSession, "startedAt" | "updatedAt">): number {
   return row.startedAt ?? row.updatedAt ?? 0;
 }
 
@@ -104,6 +104,7 @@ export class SidebarSessionNarrationController {
   };
   private connectionIdentity: object | null = null;
   private connected = false;
+  private disposed = false;
   private enabled = false;
   private agentId = "main";
   private desiredKeys = new Set<string>();
@@ -128,6 +129,9 @@ export class SidebarSessionNarrationController {
   ) {}
 
   sync(input: SidebarNarrationSyncInput): void {
+    if (this.disposed) {
+      return;
+    }
     if (!this.input) {
       this.visibilityDocument = globalThis.document ?? null;
       this.visibilityDocument?.addEventListener("visibilitychange", this.handleVisibilityChange);
@@ -236,6 +240,15 @@ export class SidebarSessionNarrationController {
     this.syncReleases();
   }
 
+  /** Final teardown retains cleanup custody; no later sync will resume it. */
+  dispose(): void {
+    if (this.disposed) {
+      return;
+    }
+    this.disposed = true;
+    this.disconnect();
+  }
+
   private async subscribeKey(key: string): Promise<void> {
     const source = this.source;
     const connectionIdentity = this.connectionIdentity;
@@ -303,6 +316,8 @@ export class SidebarSessionNarrationController {
       retry.retryAt = 0;
       if (this.input) {
         this.sync(this.input);
+      } else {
+        this.syncReleases();
       }
     }, delay);
   }
@@ -366,7 +381,12 @@ export class SidebarSessionNarrationController {
 
   private syncReleases(): void {
     for (const [owned, retry] of this.pendingReleases) {
-      if (!this.connected || owned.connectionIdentity !== this.connectionIdentity) {
+      // Final cleanup uses the original handles even after presentation ends.
+      // Their coordinator owns connection retirement and shared-viewer safety.
+      if (
+        !this.disposed &&
+        (!this.connected || owned.connectionIdentity !== this.connectionIdentity)
+      ) {
         this.cancelRetry(retry);
         retry.retryAt = 0;
         // DOM detachment pauses cleanup without retiring the socket's leases.

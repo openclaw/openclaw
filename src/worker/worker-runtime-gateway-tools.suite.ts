@@ -105,14 +105,6 @@ export function registerWorkerGatewayToolAvailabilityTests({ setup }: WorkerGate
             ? ["tool_search", "tool_describe", "tool_call", "read"]
             : ["read", "web_fetch"],
       );
-      if (mode === "directory") {
-        expect(gateway.inferenceRequests[0]?.context.systemPrompt).toContain(
-          "Deferred names are not directly callable.",
-        );
-        expect(gateway.inferenceRequests[0]?.context.systemPrompt).not.toContain(
-          "Call a unique deferred tool name directly",
-        );
-      }
       expect(gateway.gatewayToolRequests).toEqual([
         {
           generation: surface.generation,

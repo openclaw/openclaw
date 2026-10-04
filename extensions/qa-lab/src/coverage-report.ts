@@ -48,18 +48,7 @@ type QaCoverageIdSummary = {
   scenarios: QaCoverageScenarioReference[];
 };
 
-type QaCoverageInventory = {
-  scenarioCount: number;
-  coverageIdCount: number;
-  primaryCoverageIdCount: number;
-  secondaryCoverageIdCount: number;
-  coverageIds: QaCoverageIdSummary[];
-  overlappingCoverage: QaCoverageIdSummary[];
-  missingCoverage: QaCoverageScenarioSummary[];
-  byTheme: Record<string, QaCoverageIdSummary[]>;
-  bySurface: Record<string, QaCoverageIdSummary[]>;
-  scorecardTaxonomy: QaScorecardTaxonomyReport;
-};
+type QaCoverageInventory = ReturnType<typeof buildQaCoverageInventory>;
 
 function assertUniqueQaScenarioIds(
   scenarios: readonly QaSeedScenarioWithSource[],
@@ -188,7 +177,7 @@ function sortCoverageIds(coverageIds: readonly QaCoverageIdSummary[]) {
 export function buildQaCoverageInventory(
   scenarios: readonly QaSeedScenarioWithSource[],
   params?: { nonYamlScenarios?: readonly { id: string; sourcePath: string }[] },
-): QaCoverageInventory {
+) {
   assertUniqueQaScenarioIds(scenarios, params?.nonYamlScenarios ?? []);
   const byCoverageId = new Map<string, QaCoverageIdSummary>();
   const primaryCoverageIds = new Set<string>();

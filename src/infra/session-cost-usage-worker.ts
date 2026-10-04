@@ -3,6 +3,7 @@ import {
   collectErrorGraphCandidates,
   toErrorObject,
 } from "@openclaw/normalization-core/error-coercion";
+import type { WorkerTaskControl } from "@openclaw/worker-runtime/worker";
 import { materializeSessionArchiveForRead } from "../config/sessions/archive-compression.js";
 import type { SqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import type { SessionTranscriptStats } from "../config/sessions/session-accessor.sqlite-contract.js";
@@ -57,7 +58,6 @@ import type {
   UsageCostWorkerResult,
 } from "./session-cost-usage-worker.types.js";
 import { isTransientSqliteError } from "./unhandled-rejections.js";
-import type { WorkerTaskControl } from "./worker-task-native-sections.js";
 import { WorkerTaskError } from "./worker-task-pool.js";
 import type { WorkerTaskChannel } from "./worker-task-server.js";
 

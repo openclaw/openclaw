@@ -610,6 +610,8 @@ export const databaseWorkerCoreTestFiles = [
   "src/auto-reply/reply/route-reply.prepared.test.ts",
   "src/auto-reply/reply/route-reply.recovery-owner.test.ts",
   "src/media/store.cleanup.test.ts",
+  "src/media/generated-html-provenance.test.ts",
+  "src/media/web-media.test.ts",
   "src/state/agent-provenance.test.ts",
   "src/state/user-profiles.avatar-worker.test.ts",
   "src/state/user-channel-identities.test.ts",
@@ -627,6 +629,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/state/openclaw-agent-execution.integrity.test.ts",
   "src/state/openclaw-agent-execution-incognito.test.ts",
   "src/state/openclaw-agent-execution-incognito.sessions.test.ts",
+  "src/state/openclaw-agent-execution-incognito.acp.test.ts",
   "src/state/openclaw-agent-execution-incognito.side-data.test.ts",
   "src/state/openclaw-agent-execution-incognito.reports.test.ts",
   "src/state/openclaw-agent-execution-incognito.outbox.test.ts",
@@ -858,7 +861,6 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/sandbox/registry.test.ts",
   "src/agents/sandbox/runtime-reservation.test.ts",
   "src/agents/sandbox.context.attachments.test.ts",
-  "src/commands/doctor-sandbox-legacy-registry.test.ts",
   "src/agents/tools/sessions-tool.batch.test.ts",
   "src/agents/subagents/announce/subagent-announce.requester-settle-cancel.test.ts",
   "src/agents/subagents/completion/subagent-completion-admission.store.test.ts",
@@ -946,6 +948,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/plugins/services.cron.test.ts",
   "test/plugins/dreaming-cron-doctor.integration.test.ts",
   "test/plugins/memory-dreaming-cron.test.ts",
+  "test/plugins/qwen-dashscope-throttle.integration.test.ts",
   "test/plugins/workboard-automation-authority.test.ts",
   "src/state/creator-namespace-migration.test.ts",
   "src/agents/auth-profiles/store-owner-publication.test.ts",
@@ -953,6 +956,8 @@ export const databaseWorkerCoreTestFiles = [
   "test/helpers/stage-live-auth-profiles.test.ts",
   "src/agents/embedded-agent-runner/run/failover-retry-controller.inline-auth.worker.test.ts",
   "src/agents/embedded-agent-runner/run/auth-profile-personal-usage.worker.test.ts",
+  "src/agents/embedded-agent-runner/run/auth-profile-shared-usage.worker.test.ts",
+  "src/agents/embedded-agent-runner/run/auth-controller.test.ts",
   "src/agents/auth-profiles.markauthprofilefailure.test.ts",
 
   "src/node-host/node-worker-launch-store.test.ts",
@@ -1030,6 +1035,7 @@ export const databaseWorkerCoreFormerFastKinds = new Map([
   ["src/plugin-sdk/outbound-media.bulk.test.ts", "unitFast"],
   ["src/agents/provider-transport-fetch.capture.test.ts", "unitFast"],
   ["src/proxy-capture/proxy-server.test.ts", "unitFast"],
+  ["test/plugins/qwen-dashscope-throttle.integration.test.ts", "unitFast"],
 ]);
 
 export const DATABASE_WORKER_WATCH_OWNER_ENV_KEY = "OPENCLAW_VITEST_DATABASE_WORKER_WATCH_OWNER";

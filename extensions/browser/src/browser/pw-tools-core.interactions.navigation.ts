@@ -185,15 +185,15 @@ function isHashOnlyNavigation(currentUrl: string, previousUrl: string): boolean 
     // fragment hop. Must run SSRF checks.
     return false;
   }
-  try {
-    const prev = new URL(previousUrl);
-    const curr = new URL(currentUrl);
-    return (
-      prev.origin === curr.origin && prev.pathname === curr.pathname && prev.search === curr.search
-    );
-  } catch {
-    return false;
-  }
+  const prev = URL.parse(previousUrl);
+  const curr = URL.parse(currentUrl);
+  return Boolean(
+    prev &&
+    curr &&
+    prev.origin === curr.origin &&
+    prev.pathname === curr.pathname &&
+    prev.search === curr.search,
+  );
 }
 
 function isMainFrameNavigation(page: NavigationObservablePage, frame: Frame): boolean {

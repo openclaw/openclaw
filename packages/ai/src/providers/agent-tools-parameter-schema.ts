@@ -280,19 +280,6 @@ const OPENAPI_SCHEMA_ANNOTATION_KEYS = new Set([
   "example",
 ]);
 
-function appendNullSchemaType(type: unknown): unknown {
-  if (type === "null") {
-    return type;
-  }
-  if (typeof type === "string") {
-    return [type, "null"];
-  }
-  if (Array.isArray(type)) {
-    return type.includes("null") ? type : [...type, "null"];
-  }
-  return type;
-}
-
 function isNullSchemaLike(schema: unknown): boolean {
   if (!isSchemaRecord(schema)) {
     return false;
@@ -307,28 +294,6 @@ function isNullSchemaLike(schema: unknown): boolean {
     return true;
   }
   return Array.isArray(schema.enum) && schema.enum.includes(null);
-}
-
-function hasOpenApiComposition(schema: Record<string, unknown>): boolean {
-  return ["allOf", "anyOf", "oneOf"].some((key) => Array.isArray(schema[key]));
-}
-
-function schemaCompositionAlreadyAllowsNull(schema: Record<string, unknown>): boolean {
-  return (
-    (Array.isArray(schema.anyOf) && schema.anyOf.some(isNullSchemaLike)) ||
-    (Array.isArray(schema.oneOf) && schema.oneOf.some(isNullSchemaLike))
-  );
-}
-
-function wrapNullableComposedSchema(schema: Record<string, unknown>): Record<string, unknown> {
-  if (schemaCompositionAlreadyAllowsNull(schema)) {
-    return schema;
-  }
-  const wrapped: Record<string, unknown> = {
-    anyOf: [schema, { type: "null" }],
-  };
-  copySchemaMeta(schema, wrapped);
-  return wrapped;
 }
 
 function normalizeOpenApiSchemaKeywords(schema: unknown): unknown {
@@ -386,14 +351,22 @@ function normalizeOpenApiSchemaKeywords(schema: unknown): unknown {
 
   if (nullable) {
     normalized ??= Object.fromEntries(entries);
-    if (hasOpenApiComposition(normalized)) {
-      return wrapNullableComposedSchema(normalized);
-    }
-    if ("type" in normalized) {
-      const nextType = appendNullSchemaType(normalized.type);
-      if (nextType !== normalized.type) {
-        normalized.type = nextType;
+    if ([normalized.allOf, normalized.anyOf, normalized.oneOf].some(Array.isArray)) {
+      if (
+        (Array.isArray(normalized.anyOf) && normalized.anyOf.some(isNullSchemaLike)) ||
+        (Array.isArray(normalized.oneOf) && normalized.oneOf.some(isNullSchemaLike))
+      ) {
+        return normalized;
       }
+      const wrapped = { anyOf: [normalized, { type: "null" }] };
+      copySchemaMeta(normalized, wrapped);
+      return wrapped;
+    }
+    const type = normalized.type;
+    if (typeof type === "string" && type !== "null") {
+      normalized.type = [type, "null"];
+    } else if (Array.isArray(type) && !type.includes("null")) {
+      normalized.type = [...type, "null"];
     }
     if (Array.isArray(normalized.enum) && !normalized.enum.includes(null)) {
       normalized.enum = [...normalized.enum, null];

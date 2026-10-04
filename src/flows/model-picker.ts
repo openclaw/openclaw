@@ -50,8 +50,6 @@ import {
   resolveProviderPluginSetupOptions,
 } from "./model-picker-provider-setup.js";
 
-export { applyPrimaryModel } from "../plugins/provider-model-primary.js";
-
 const KEEP_VALUE = "__keep__";
 const MANUAL_VALUE = "__manual__";
 const BROWSE_VALUE = "__browse__";

@@ -122,6 +122,11 @@ export type SqliteArchiveOperation =
   | { operation: "read-page"; plans: readonly TranscriptArchivePagePlan[] }
   | { operation: "read-final"; plans: readonly TranscriptArchiveReadPlan[] };
 
+export type SqliteArchiveOneShotWorkerData = Extract<
+  SqliteArchiveOperation,
+  { operation: "materialize" | "publish" }
+> & { type: "sqlite-transcript-archive-v2" };
+
 export type SqliteArchiveSessionRequest = SqliteArchiveOperation & {
   type: "archive-operation";
   operationId: number;

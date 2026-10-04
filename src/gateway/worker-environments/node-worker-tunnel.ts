@@ -37,6 +37,8 @@ import {
 } from "./node-launch-adapter.js";
 import { raceNodeWorkerOperation } from "./node-worker-abort.js";
 import { nodeWorkerGatewayNamespace } from "./node-worker-gateway-namespace.js";
+import { createNodeWorkerProcessObserver } from "./node-worker-process-observation.js";
+import { parseNodeWorkerResponse } from "./node-worker-response.js";
 import {
   createNodeWorkerWorkspaceActions,
   type NodeWorkerWorkspaceBinding,
@@ -104,17 +106,6 @@ type NodeTunnelEntry = NodeEnvironmentOwner & {
   nativeWorkspaceLeases: Set<string>;
   readiness: Deferred<WorkerTurnTunnelHandle>;
 };
-
-function payloadJson(value: string | null | undefined): unknown {
-  if (!value) {
-    throw new Error("node workspace command omitted its result");
-  }
-  try {
-    return JSON.parse(value) as unknown;
-  } catch {
-    throw new Error("node workspace command returned malformed JSON");
-  }
-}
 
 /** Owns node-channel handles without treating the persistent machine as a disposable lease. */
 export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOptions) {
@@ -297,7 +288,7 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
         );
       }
       const parsed = parseNodeWorkerWorkspaceExecResult(
-        payloadJson(result.payloadJSON),
+        parseNodeWorkerResponse(result.payloadJSON, "node workspace command"),
         command.argv,
       );
       if (!parsed) {
@@ -567,6 +558,7 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
   }
 
   return {
+    observeProcesses: createNodeWorkerProcessObserver({ ...options, gatewayNamespace }),
     async runSessionCommand(
       binding: { environmentId: string; ownerEpoch: number; sessionId: string; sessionKey: string },
       command: WorkerWorkspaceCommand,

@@ -79,6 +79,7 @@ import { reconcileListedWorktrees } from "./service-list.js";
 import {
   canResetFailedWorktreeAdd,
   cleanupFailedCreate,
+  createWithWorktreeAllocation,
   findWorktreeByName,
   generateName,
   resetFailedWorktreeAdd,
@@ -89,6 +90,7 @@ import {
   validateName,
   withWorktreeSource,
   type ResolvedRepository,
+  type WorktreeCreationPublication,
 } from "./service-preparation.js";
 import {
   exactStateRetirementSchema,
@@ -126,6 +128,8 @@ export {
 export const IDLE_GC_MS = 7 * 24 * 60 * 60 * 1000; // Idle worktrees remain restorable after automatic cleanup.
 export const SNAPSHOT_RETENTION_MS = 30 * 24 * 60 * 60 * 1000; // Snapshot refs expire with their registry affordance.
 export const WORKTREE_GC_INTERVAL_MS = 60 * 60 * 1000;
+// --auto is cheap below GC thresholds; a large clone's full repack must not be killed hourly.
+const WORKTREE_GIT_MAINTENANCE_TIMEOUT_MS = 30 * 60 * 1000;
 
 export { WorktreeRepositoryError } from "./errors.js";
 const log = createSubsystemLogger("agents/worktrees");
@@ -147,7 +151,6 @@ type ManagedWorktreeGcParams = WorktreeCleanupOwnerPolicy &
   };
 
 type WorktreeMutationGuard = Pick<CreateManagedWorktreeParams, "signal" | "commitGuard">;
-type WorktreeCreationPublication = { record?: ManagedWorktreeRecord };
 
 type RemoveWorktreeParams = WorktreeMutationGuard & {
   id: string;
@@ -313,24 +316,9 @@ export class ManagedWorktreeService {
       publication: WorktreeCreationPublication,
     ) => Promise<ManagedWorktreeCreationOutcome>,
   ): Promise<ManagedWorktreeCreationOutcome> {
-    const publication: WorktreeCreationPublication = {};
-    try {
-      return await this.withAllocationLease(params, (guard) => run(guard, publication));
-    } catch (error) {
-      const failures = [error];
-      // Source unwind can fail after publication or restoration, before the caller receives the record.
-      if (params.withSource && publication.record) {
-        try {
-          await this.rollbackPreparation(publication.record, params.withRollback);
-        } catch (cleanupError) {
-          failures.push(cleanupError);
-        }
-      }
-      if (failures.length > 1) {
-        throw new AggregateError(failures, failures.map(String).join("\n"), { cause: error });
-      }
-      throw error;
-    }
+    return await createWithWorktreeAllocation({ ...params, env: this.env }, run, (record) =>
+      this.rollbackPreparation(record, params.withRollback),
+    );
   }
 
   async rollbackPreparation(
@@ -462,6 +450,7 @@ export class ManagedWorktreeService {
           repository,
           inferredName,
           suppliedName,
+          publication,
         );
         prepared = created;
         return created;
@@ -527,6 +516,7 @@ export class ManagedWorktreeService {
     repository: ResolvedRepository,
     inferredName: string,
     suppliedName: string | undefined,
+    publication: WorktreeCreationPublication,
   ): Promise<MaterializedRepositoryWorktree> {
     const root = path.join(await this.worktreesRoot(), repository.fingerprint);
     const name =
@@ -646,6 +636,17 @@ export class ManagedWorktreeService {
         signal: params.signal,
         commitGuard: () => params.commitGuard?.(),
         rollbackGuard: params.rollbackGuard,
+        deferUnpreparedCleanup: (cleanup) => {
+          publication.cleanup = async (assertCurrent) => {
+            assertCurrent();
+            const live = await readRegistryWorktrees(this.env, { liveOnly: true });
+            assertCurrent();
+            if (live.some((record) => record.path === worktreePath)) {
+              throw new Error("Worktree was published before cleanup; checkout preserved.");
+            }
+            await cleanup(assertCurrent);
+          };
+        },
       });
     };
     let added = await addCheckout();
@@ -1408,6 +1409,35 @@ export class ManagedWorktreeService {
     }
     result.orphansDeleted = orphansDeleted;
     result.snapshotsPruned = snapshotsPruned;
+    assertCurrent();
+    // Cleanup has released allocation ownership and retired its refs before maintenance.
+    const live = await readRegistryWorktrees(this.env, { liveOnly: true }).catch(
+      (error: unknown) => {
+        assertCurrent();
+        log.warn(`worktree Git maintenance inventory failed: ${String(error)}`);
+        return [];
+      },
+    );
+    for (const repoRoot of new Set(live.map((record) => record.repoRoot))) {
+      assertCurrent();
+      try {
+        if (!(await worktreePathExists(repoRoot))) {
+          throw new Error("Repository path is missing");
+        }
+        const maintained = await runGit(repoRoot, ["maintenance", "run", "--auto"], {
+          killProcessTree: true,
+          signal: params.signal,
+          beforeRun: assertCurrent,
+          timeoutMs: WORKTREE_GIT_MAINTENANCE_TIMEOUT_MS,
+        });
+        if (maintained.termination !== "exit" || maintained.code !== 0) {
+          throw commandError("git maintenance run --auto", maintained);
+        }
+      } catch (error) {
+        assertCurrent();
+        log.warn(`worktree Git maintenance failed for ${repoRoot}: ${String(error)}`);
+      }
+    }
     assertCurrent();
     return result;
   }

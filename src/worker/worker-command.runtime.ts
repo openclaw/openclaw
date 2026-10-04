@@ -3,6 +3,10 @@ import type { Readable, Writable } from "node:stream";
 import { readByteStreamWithLimit } from "@openclaw/media-core/read-byte-stream-with-limit";
 import { WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
 import {
+  readBackgroundProcesses,
+  stopBackgroundProcess,
+} from "../agents/bash-process-observation.js";
+import {
   getActiveBackgroundExecSessionCount,
   waitForExecScope,
 } from "../agents/bash-process-registry.js";
@@ -46,6 +50,9 @@ async function runManagedWorkerCommand(
 ): Promise<void> {
   let environment: Awaited<ReturnType<typeof createWorkerRuntimeEnvironment>> | undefined;
   let binding: string | undefined;
+  let processBinding:
+    | { environmentId: string; sessionId: string; ownerEpoch: number; agentId: string }
+    | undefined;
   let lastTurnId: string | undefined;
   let active: { turnId: string; controller: AbortController } | undefined;
   let running: Promise<void> | undefined;
@@ -102,6 +109,33 @@ async function runManagedWorkerCommand(
           throw new Error("managed worker request is not valid JSON");
         }
         const request = parseWorkerProcessRequest(value);
+        if (request.type === "process") {
+          const owner = processBinding;
+          const matches =
+            owner &&
+            owner.environmentId === request.environmentId &&
+            owner.sessionId === request.sessionId &&
+            owner.ownerEpoch === request.ownerEpoch;
+          // Observation serves idle retained workers without creating a model turn or
+          // consuming the output and completion notifications still owed to the agent.
+          const scope = owner && {
+            scopeKeys: ["worker:" + owner.sessionId],
+            agentId: owner.agentId,
+          };
+          const response =
+            matches && scope
+              ? {
+                  result:
+                    request.operation.action === "list"
+                      ? { sessionId: owner.sessionId, ...readBackgroundProcesses(scope) }
+                      : stopBackgroundProcess(scope, request.operation),
+                }
+              : { error: "Worker process owner changed; refresh the process list." };
+          void write({ type: "process-result", requestId: request.requestId, ...response }).catch(
+            finish,
+          );
+          return;
+        }
         if (request.type === "cancel") {
           if (active?.turnId === request.turnId) {
             active.controller.abort(new Error("worker turn cancelled"));
@@ -134,6 +168,12 @@ async function runManagedWorkerCommand(
             throw new Error("managed worker environment binding changed; relaunch required");
           }
           binding = nextBinding;
+          processBinding = {
+            environmentId: descriptor.admission.environmentId,
+            sessionId: descriptor.admission.sessionId,
+            ownerEpoch: descriptor.admission.ownerEpoch,
+            agentId: descriptor.assignment.agentId,
+          };
           if (closed) {
             return;
           }

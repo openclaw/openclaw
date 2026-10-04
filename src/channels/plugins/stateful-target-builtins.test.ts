@@ -5,7 +5,6 @@ const mocks = vi.hoisted(() => ({
   driver: {
     id: "acp",
     ensureReady: vi.fn(),
-    ensureSession: vi.fn(),
   },
   register: vi.fn(),
 }));

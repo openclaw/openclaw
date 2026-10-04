@@ -39,6 +39,9 @@ describe("worker environment service", () => {
     } as unknown as WorkerTunnelManager;
     const nodeTunnelManager = {
       status: () => "stopped" as const,
+      observeProcesses: vi.fn(async () => {
+        throw new Error("Process observation is not configured in this fixture");
+      }),
       start: vi.fn(),
       stop: vi.fn(async () => {}),
       stopAll: vi.fn(async () => await nodeShutdown.promise),
@@ -348,6 +351,9 @@ describe("worker environment service", () => {
       } as unknown as WorkerTunnelManager;
       const nodeTunnelManager = {
         status: () => "connecting" as const,
+        observeProcesses: vi.fn(async () => {
+          throw new Error("Process observation is not configured in this fixture");
+        }),
         start,
         stop: vi.fn(async () => {}),
         stopAll: vi.fn(async () => {}),
@@ -436,6 +442,9 @@ describe("worker environment service", () => {
     });
     const tunnelManager = {
       status: () => "stopped" as const,
+      observeProcesses: vi.fn(async () => {
+        throw new Error("Process observation is not configured in this fixture");
+      }),
       start: vi.fn(async (request: Parameters<WorkerTunnelManager["start"]>[0]) => ({
         environmentId: request.environmentId,
         ownerEpoch: request.ownerEpoch,
@@ -828,6 +837,9 @@ describe("worker environment service", () => {
     const order: string[] = [];
     const tunnelManager = {
       status: () => "connecting" as const,
+      observeProcesses: vi.fn(async () => {
+        throw new Error("Process observation is not configured in this fixture");
+      }),
       start: vi.fn(() => pendingStart),
       stop: vi.fn(async () => {
         order.push("tunnel-stop");

@@ -240,7 +240,7 @@ async function allocateSqliteSnapshotStagingDirectory(
     return retainSnapshotWork(
       (async () => {
         const { allocateWorkerOwnedSqliteSnapshotDirectory } =
-          await import("./sqlite-snapshot-staging-owner.js");
+          await import("./sqlite-snapshot-staging-allocation.js");
         signal?.throwIfAborted();
         controller.signal.throwIfAborted();
         const owned = await allocateWorkerOwnedSqliteSnapshotDirectory(

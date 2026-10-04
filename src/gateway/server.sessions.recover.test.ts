@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, expect, test, vi } from "vitest";
+import { expect, test, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
 import {
@@ -22,7 +22,6 @@ import {
   runExclusiveSessionLifecycleMutation,
 } from "../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../state/user-profiles.js";
 import { createGatewayWorkerPlacementReclaimBarriers } from "./server-worker-placement-reclaim.js";
@@ -45,10 +44,6 @@ import {
 import type { WorkerSessionPlacementRecord } from "./worker-environments/placement-record.js";
 
 const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
-
-afterEach(() => {
-  closeOpenClawStateDatabaseForTest();
-});
 
 function recoveryWorkerPlacement(params: {
   sessionId: string;

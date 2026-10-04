@@ -36,13 +36,13 @@ export type ProviderUsageDisplayProps = {
   modelAuthStatusResult?: ModelAuthStatusResult | null;
 };
 
-export type QuotaLimitSummary = {
+type QuotaLimitSummary = {
   label: string;
   usedPercent: number;
   resetAt?: number;
 };
 
-export type QuotaBudgetSummary = {
+type QuotaBudgetSummary = {
   label?: string;
   used: number;
   limit: number;
