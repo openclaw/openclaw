@@ -4,6 +4,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/state/openclaw-agent-execution-incognito.compute.test.ts",
   "src/state/openclaw-agent-execution-incognito.lifecycle.test.ts",
   "src/state/openclaw-agent-execution-incognito.history.test.ts",
+  "src/state/openclaw-agent-execution-incognito.pending-history.test.ts",
   "src/state/openclaw-agent-pending-inputs-schema.test.ts",
   "src/agents/bash-tools.visible-subagent-notify.test.ts",
   "src/agents/live-model-switch.worker.test.ts",

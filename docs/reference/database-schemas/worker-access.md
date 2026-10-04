@@ -307,6 +307,27 @@ metadata, retention, durability, update behavior, or operator configuration and
 retires no T1 sites. The following audit is an activation checklist, not a claim
 that current production has already completed the cutover.
 
+### Incognito hydration and pending-input history (P7c, inactive)
+
+Hydration navigation now has typed actor reads for the current turn, maintenance
+facts, recent active events, and the latest active message. The bound hydration
+reader captures the actor and session generation before yielding and keeps the
+existing read fences and version checks. Full and bounded hydration retain their
+existing snapshot contracts.
+
+Pending-input pages and exact reads use the same bounded history kernel on the
+actor. Stale-input interruption rereads candidates inside the existing synchronous
+transaction and rechecks live host custody at transaction and commit admission.
+Its native receipt acknowledges the exact interrupted IDs together with session
+facts, so a lost ordinary reply does not cause replay. The outer composition
+retains actor lifetime without holding its FIFO across another actor request.
+
+Both compositions remain inactive. Production incognito stays host-owned until
+P7d switches all runtime callers and deletes the native arms. Durable flows,
+schemas, retention, permissions, and update behavior are unchanged; this stage
+retires no T1 sites. Pending-input staging, source, and withdrawal routing remain
+separate activation prerequisites.
+
 #### Remaining synchronous contracts before P7
 
 All synchronous kernels below must execute only inside the actor after activation,

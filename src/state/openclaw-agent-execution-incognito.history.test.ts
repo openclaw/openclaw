@@ -8,6 +8,7 @@ import { observeHostDataSql } from "../../test/helpers/sqlite-statement-executio
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { IncognitoSessionAuthority } from "../config/sessions/session-incognito-contract.js";
 import type { IncognitoLifecycleEntry } from "../config/sessions/session-incognito-lifecycle-contract.js";
+import { prepareIncognitoSessionTranscriptHydration } from "../config/sessions/session-transcript-hydration.js";
 import { SessionTranscriptReadFenceError } from "../config/sessions/session-transcript-read-fence.js";
 import {
   createIncognitoSessionComputeReader,
@@ -284,6 +285,88 @@ it("revalidates Codex history after asynchronous consumption and joins it before
     resume.resolve();
     await Promise.allSettled([work, borrowed.release()]);
   }
+});
+
+it("composes hydration navigation and maintenance on the captured actor", async () => {
+  const target = await create("hydration-navigation");
+  const reader = prepareIncognitoSessionTranscriptHydration({
+    actor,
+    authority,
+    target: targetInput(target),
+  });
+  const first = await append(target, "first hydration entry");
+  assert(first.ok && first.value.append);
+  const second = await append(target, "latest hydration entry");
+  assert(second.ok && second.value.append);
+  const snapshot = await reader.read();
+  assert(snapshot.kind === "full");
+  const entryId = second.value.append.messageId;
+  const current = await reader.readCurrentTurnEntry({
+    entryId,
+    version: snapshot.snapshot.version,
+    includeEntry: true,
+  });
+  expect(current.event).toEqual(message("latest hydration entry"));
+  expect(current.anchor?.entryId).toBe(entryId);
+  expect(await reader.readLatestActiveMessage()).toMatchObject({ event: { id: entryId } });
+  expect(await reader.readRecentActiveEvents(1)).toEqual([message("latest hydration entry")]);
+  const identity = await reader.readMaintenance({ operation: "identity", eventId: entryId });
+  assert(identity.seq !== undefined);
+  expect(
+    await reader.readMaintenance({ operation: "previous", beforeSeq: identity.seq }),
+  ).toMatchObject({
+    previous: { id: first.value.append.messageId },
+  });
+  expect(await reader.readMaintenance({ operation: "version" })).toMatchObject({
+    version: snapshot.snapshot.version,
+    lifecycleRevision: target.entry.lifecycleRevision,
+    appendParentId: entryId,
+  });
+  expect(
+    await reader.readMaintenance({
+      operation: "suffix",
+      startSeq: identity.seq,
+      maxBytes: 8192,
+      maxEvents: 5,
+      retainedCustomDataIds: [],
+    }),
+  ).toMatchObject({ events: [message("latest hydration entry")] });
+  await append(target, "changes replay admission");
+  await expect(
+    reader.readCurrentTurnEntry({
+      entryId,
+      version: snapshot.snapshot.version,
+      includeEntry: false,
+    }),
+  ).rejects.toThrow("changed before replay admission");
+});
+
+it("rechecks hydration authority after queue waits and refuses a mismatched generation", async () => {
+  const target = await create("hydration-revoked");
+  let revoked = false;
+  const reader = prepareIncognitoSessionTranscriptHydration({
+    actor,
+    target: targetInput(target),
+    authority: {
+      assertCurrent() {
+        if (revoked) {
+          throw new Error("hydration revoked");
+        }
+      },
+    },
+  });
+  const barrier = await hold();
+  const pending = reader.readLatestActiveMessage();
+  const rejected = expect(pending).rejects.toThrow("hydration revoked");
+  revoked = true;
+  barrier.release.resolve();
+  await Promise.all([rejected, barrier.held]);
+  const stale = prepareIncognitoSessionTranscriptHydration({
+    actor,
+    authority,
+    target: { ...targetInput(target), lifecycleRevision: "another-generation" },
+  });
+  await expect(stale.readRecentActiveEvents(1)).rejects.toThrow("generation is no longer current");
 });
 
 it("reads committed actor writes in FIFO order and retains the hydration snapshot", async () => {
