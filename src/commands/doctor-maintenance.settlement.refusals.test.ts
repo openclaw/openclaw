@@ -35,6 +35,7 @@ it("refuses an external active agent lease before serving-Gateway coordinator co
       owner_pid: 4242,
       owner_start_time: 123,
       opened_at: 1,
+      provenance: null,
       path: "/synthetic/private-state/private.db",
     },
   ]);

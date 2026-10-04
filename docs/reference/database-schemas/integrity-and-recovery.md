@@ -66,9 +66,13 @@ Native Gateway admission distinguishes two missing-receipt classes:
   gate. Other platforms, SQLite before 3.53 without `wal_checkpoint(NOOP)`, and
   non-native openers remain conservative.
 
-New opaque lease IDs bind the provenance above without adding columns or changing
-the lease schema. Old IDs remain valid ownership keys but cannot defer integrity
-verification. Newly created files without a prior physical identity also use the
+Lease IDs retain their UUID format. The nullable `agent_database_leases.provenance`
+column binds the provenance above separately from ownership identifiers. The
+lease owner adds this column on first use without changing the schema version;
+existing rows receive `NULL` and cannot defer integrity verification. Maintenance
+accepts an absent provenance column so it can claim stopped-writer ownership
+before migration without modifying the old schema. Older readers ignore this
+additive column. Newly created files without a prior physical identity also use the
 full gate. A new claim has `opened_at=0`; only successful admission publishes its
 opening timestamp. A process killed during a required full gate therefore cannot
 lend restart provenance, even when its host, boot, and WAL match. Updates, rollback, canaries, Doctor, and copied-file verification retain
@@ -110,8 +114,8 @@ Slow-open summaries include the same facts. A dirty receipt alone does not
 distinguish an incomplete checkpoint from a live lease; neither permits restart
 reuse. A process exiting with status zero after its shutdown deadline can still
 leave a stale lease and require the admission gate. Stale-lease diagnostics name
-`owner-pid-dead` or `owner-start-time-changed`; agent leases do not use an expiry,
-boot ID, or generation column; new lease keys carry boot/file provenance. A surviving stale lease means its release was not
+`owner-pid-dead` or `owner-start-time-changed`; agent leases do not use an expiry.
+Their provenance column carries the boot/file binding. A surviving stale lease means its release was not
 observed, rather than proving which signal ended the old process.
 
 The lease owner logs `agent database clean-close receipt` with `written` or the

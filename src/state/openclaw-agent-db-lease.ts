@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
@@ -22,7 +23,8 @@ import {
 import { withExistingAgentLeaseWrite } from "./openclaw-agent-db-existing-write.js";
 import {
   agentDatabaseLeaseStaleReason,
-  createAgentDatabaseLeaseId,
+  mayShareAgentDatabaseFile,
+  readAgentDatabaseLeaseProvenance,
   isSameBootAgentDatabaseLease,
 } from "./openclaw-agent-db-lease-provenance.js";
 import type { OpenClawAgentDatabaseValidation } from "./openclaw-agent-db-validation-cache.js";
@@ -159,7 +161,7 @@ export type OpenClawAgentIntegrityVerificationReceiver = (
 
 export function claimOpenClawAgentDatabaseLease(
   params: { agentId: string; path: string; env?: NodeJS.ProcessEnv },
-  leaseId: string = createAgentDatabaseLeaseId(params.path),
+  leaseId: string = randomUUID(),
   onVerification?: OpenClawAgentIntegrityVerificationReceiver,
 ): string {
   const agentId = normalizeAgentId(params.agentId);
@@ -172,7 +174,14 @@ export function claimOpenClawAgentDatabaseLease(
     (database) =>
       claimAgentDatabaseLeaseInDatabase(
         database,
-        { leaseId, agentId, path: params.path, ownerPid: process.pid, ownerStartTime },
+        {
+          leaseId,
+          agentId,
+          path: params.path,
+          ownerPid: process.pid,
+          ownerStartTime,
+          provenance: readAgentDatabaseLeaseProvenance(params.path),
+        },
         deletionFence,
         params.env,
         onVerification,
@@ -187,7 +196,7 @@ function claimAgentDatabaseLeaseInDatabase(
   owner: Pick<
     OpenClawAgentDatabaseWorkerLeaseReceipt,
     "leaseId" | "agentId" | "path" | "ownerPid" | "ownerStartTime"
-  >,
+  > & { provenance: string | null },
   deletionFence: ReturnType<typeof prepareAgentDeletionPathFence>,
   env?: NodeJS.ProcessEnv,
   onVerification?: OpenClawAgentIntegrityVerificationReceiver,
@@ -222,7 +231,7 @@ function claimAgentDatabaseLeaseInDatabase(
         held.opened_at > 0 &&
         held.owner_start_time !== null &&
         held.path === owner.path &&
-        isSameBootAgentDatabaseLease(held.lease_id, owner.path);
+        isSameBootAgentDatabaseLease(held.provenance, owner.path);
       log.info(`agent database stale lease: ${staleReason}; previous release not observed`, {
         agentId: held.agent_id,
         leaseId: held.lease_id,
@@ -258,6 +267,7 @@ function claimAgentDatabaseLeaseInDatabase(
     database.db,
     db.insertInto("agent_database_leases").values({
       lease_id: owner.leaseId,
+      provenance: owner.provenance,
       agent_id: owner.agentId,
       path: owner.path,
       owner_pid: owner.ownerPid,
@@ -369,20 +379,6 @@ function agentDatabaseLeasePaths(
   return executeSqliteQuerySync(database, query).rows.map((row) => row.path);
 }
 
-function mayShareAgentDatabaseFile(left: string, right: string): boolean {
-  if (left === right) {
-    return true;
-  }
-  try {
-    const first = fs.statSync(left, { bigint: true, throwIfNoEntry: false });
-    const second = fs.statSync(right, { bigint: true, throwIfNoEntry: false });
-    return !first || !second || (first.dev === second.dev && first.ino === second.ino);
-  } catch {
-    // An inaccessible or replaced lease path cannot prove exclusive ownership.
-    return true;
-  }
-}
-
 function hasAgentDatabasePathLease(
   database: DatabaseSync,
   pathname: string,
@@ -480,6 +476,7 @@ export function prepareOpenClawAgentDatabaseWorkerLease(
   leaseId: string,
 ): {
   receipt: OpenClawAgentDatabaseWorkerLeaseReceipt;
+  provenance: string | null;
   validation?: OpenClawAgentDatabaseValidation;
   claim(onVerification?: OpenClawAgentIntegrityVerificationReceiver): string;
 } {
@@ -496,6 +493,7 @@ export function prepareOpenClawAgentDatabaseWorkerLease(
   };
   assertCurrent();
   const ownerPid = process.pid;
+  const provenance = readAgentDatabaseLeaseProvenance(params.path);
   const receipt = Object.freeze({
     leaseId,
     agentId: normalizeAgentId(params.agentId),
@@ -512,6 +510,7 @@ export function prepareOpenClawAgentDatabaseWorkerLease(
   };
   return {
     receipt,
+    provenance,
     claim(onVerification) {
       assertCurrent();
       const deletionFence = prepareAgentDeletionPathFence(
@@ -522,7 +521,7 @@ export function prepareOpenClawAgentDatabaseWorkerLease(
         assertCurrent();
         claimAgentDatabaseLeaseInDatabase(
           current,
-          receipt,
+          { ...receipt, provenance },
           deletionFence,
           options.env,
           onVerification,

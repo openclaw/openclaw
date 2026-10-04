@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { MessagePort } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -30,7 +31,6 @@ import {
 import { captureAgentDatabasePreparationJournal } from "./agent-database-admission.js";
 import { getAgentDeletionDatabaseCleanup } from "./agent-deletion-cleanup.js";
 import type { OpenClawAgentDatabaseOptions } from "./openclaw-agent-db-contract.js";
-import { createAgentDatabaseLeaseId } from "./openclaw-agent-db-lease-provenance.js";
 import {
   hasAgentDatabaseMaintenanceAuthority,
   type OpenClawAgentDatabaseWorkerLeaseReceipt,
@@ -163,7 +163,7 @@ export function createAgentDatabaseNativeGeneration(
   creatingIdentity?: DatabasePathIdentity,
 ): AgentDatabaseNativeGeneration {
   const input: AgentDatabaseExecutionOpen = {
-    leaseId: createAgentDatabaseLeaseId(pathname),
+    leaseId: randomUUID(),
     agentId,
     databasePath: pathname,
     stateDatabasePath: context.admission.databasePath,

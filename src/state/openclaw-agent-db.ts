@@ -433,7 +433,7 @@ function* openOpenClawAgentDatabaseSteps(
         isValidatedReopen && reuseIntegrity,
         processDeath &&
           preparedLease !== undefined &&
-          isSameBootAgentDatabaseLease(preparedLease.receipt.leaseId, pathname),
+          isSameBootAgentDatabaseLease(preparedLease.provenance, pathname),
       );
       assertCurrent(validationDatabase);
       if (!diagnostics.integrityGateOutcome || diagnostics.integrityGateOutcome === "cached") {

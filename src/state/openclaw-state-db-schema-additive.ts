@@ -126,6 +126,7 @@ export function reconstructAgentDeletionJournalSchema(
 
 export function ensureAgentDatabaseLeaseSchema(database: DatabaseSync): void {
   ensureTable(database, "agent_database_leases");
+  ensureColumn(database, "agent_database_leases", "provenance TEXT");
 }
 
 /**

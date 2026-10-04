@@ -598,11 +598,12 @@ it.runIf(process.platform === "linux")(
       const deferred = agentId === "same-boot" && supportsNoop;
       const held = shared.db
         .prepare(
-          "SELECT lease_id, owner_pid, owner_start_time FROM agent_database_leases WHERE path=?",
+          "SELECT lease_id, provenance, owner_pid, owner_start_time FROM agent_database_leases WHERE path=?",
         )
         .get(pathname);
       expect(held).toMatchObject({
-        lease_id: expect.stringMatching(/^process-v1:/),
+        lease_id: expect.stringMatching(/^[a-f0-9-]+$/u),
+        provenance: expect.stringMatching(/^process-v1:[a-f0-9]{64}$/u),
         owner_pid: child.pid,
         owner_start_time: expect.any(Number),
       });
@@ -614,11 +615,11 @@ it.runIf(process.platform === "linux")(
       expect(fs.statSync(`${pathname}-wal`).size).toBeGreaterThan(32);
       if (agentId === "foreign-boot" || agentId === "corrupt-page") {
         shared.db
-          .prepare("UPDATE agent_database_leases SET lease_id=? WHERE path=?")
-          .run(`process-v1:${"0".repeat(64)}:foreign-owner`, pathname);
+          .prepare("UPDATE agent_database_leases SET provenance=? WHERE path=?")
+          .run(`process-v1:${"0".repeat(64)}`, pathname);
       } else if (agentId === "legacy-lease") {
         shared.db
-          .prepare("UPDATE agent_database_leases SET lease_id='legacy-owner' WHERE path=?")
+          .prepare("UPDATE agent_database_leases SET provenance=NULL WHERE path=?")
           .run(pathname);
       } else if (agentId === "pid-reused") {
         shared.db

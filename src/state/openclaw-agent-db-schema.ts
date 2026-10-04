@@ -13,6 +13,7 @@ import {
 } from "../infra/sqlite-index-schema.js";
 import {
   assertSqliteIntegrity,
+  canDeferSqliteIntegrityAfterProcessDeath,
   runSqliteIntegrityOperationSync,
   sqliteIntegrityCheckSteps,
   type SqliteIntegrityDiagnostics,
@@ -42,7 +43,6 @@ import {
   TRANSCRIPT_FTS_ROW_SCHEMA_VERSION,
   type OpenClawAgentDatabaseOptions,
 } from "./openclaw-agent-db-contract.js";
-import { canDeferAgentDatabaseIntegrity } from "./openclaw-agent-db-lease-provenance.js";
 import * as maintenanceAuthority from "./openclaw-agent-db-lease.js";
 import { migrateOpenClawAgentSchema } from "./openclaw-agent-db-legacy-schema.js";
 import { persistAgentSchemaMetadata } from "./openclaw-agent-db-metadata-write.js";
@@ -136,7 +136,7 @@ export function* agentDatabaseIntegrityBeforeMutationSteps(
     hasPendingCurrentVersionAgentDatabaseMigration(database);
   if (userVersion === OPENCLAW_AGENT_SCHEMA_VERSION && !hasPendingCurrentVersionMigration) {
     const startedAt = performance.now();
-    const deferred = processDeath && canDeferAgentDatabaseIntegrity(database, pathname);
+    const deferred = processDeath && canDeferSqliteIntegrityAfterProcessDeath(database, pathname);
     const reuseIntegrity =
       deferred ||
       reuseRuntimeIntegrity ||

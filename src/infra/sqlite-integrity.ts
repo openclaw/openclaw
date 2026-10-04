@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import { performance } from "node:perf_hooks";
 import type { DatabaseSync } from "node:sqlite";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
@@ -8,6 +9,39 @@ import {
   sameSqliteFileGeneration,
   type SqliteFileGeneration,
 } from "./sqlite-file-generation.js";
+import { readSqliteWalState } from "./sqlite-wal-checkpoint.js";
+
+/** SQLite recovers committed WAL frames; these checks do not scan table or index contents. */
+export function canDeferSqliteIntegrityAfterProcessDeath(
+  database: DatabaseSync,
+  pathname: string,
+): boolean {
+  try {
+    const wal = fs.statSync(`${pathname}-wal`, { throwIfNoEntry: false });
+    const journal = fs.statSync(`${pathname}-journal`, { throwIfNoEntry: false });
+    if (!wal?.isFile() || wal.size < 32 || (journal && journal.size > 0)) {
+      return false;
+    }
+    const pageSize = database.prepare("PRAGMA page_size").get()?.page_size;
+    const checkpoint = readSqliteWalState(database);
+    return (
+      typeof pageSize === "number" &&
+      pageSize >= 512 &&
+      pageSize <= 65536 &&
+      (pageSize & (pageSize - 1)) === 0 &&
+      typeof database.prepare("PRAGMA schema_version").get()?.schema_version === "number" &&
+      database.prepare("PRAGMA journal_mode").get()?.journal_mode === "wal" &&
+      checkpoint?.busy === 0 &&
+      typeof checkpoint.log === "number" &&
+      checkpoint.log >= 0 &&
+      typeof checkpoint.checkpointed === "number" &&
+      checkpoint.checkpointed >= 0 &&
+      checkpoint.checkpointed <= checkpoint.log
+    );
+  } catch {
+    return false;
+  }
+}
 
 type SqliteIntegrityChecks = {
   integrityCheck: "ok";
