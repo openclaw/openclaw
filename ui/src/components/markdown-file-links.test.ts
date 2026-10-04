@@ -9,6 +9,10 @@ function render(source: string, options: MarkdownRenderOptions = { fileLinks: tr
   return htmlFragment(toSanitizedMarkdownHtml(source, options));
 }
 
+function fileLinks(fragment: ParentNode) {
+  return [...fragment.querySelectorAll<HTMLAnchorElement>("a.markdown-file-link")];
+}
+
 describe("file links", () => {
   it("links multi-segment paths only when enabled", () => {
     const enabled = render("see src/lib/foo.ts for details");
@@ -37,51 +41,70 @@ describe("file links", () => {
     fragment.remove();
   });
 
-  it("links prefixed single-segment paths but not bare prose filenames", () => {
-    const fragment = render("~/notes.md ./x.ts ../y.ts foo.ts inventory.csv");
+  it.each<[string, string[], string[]]>([
+    [
+      "~/notes.md ./x.ts ../y.ts foo.ts inventory.csv",
+      ["~/notes.md", "./x.ts", "../y.ts"],
+      ["foo.ts", "inventory.csv"],
+    ],
+    ["rotated logs/app.log.1 but see src/lib/foo.ts.", ["src/lib/foo.ts"], ["logs/app.log.1"]],
+    [
+      "bumped 1.1/1.2 and `2026.9.2`, see v1.2/3.4 [part](assets/part.3mf)",
+      ["assets/part.3mf"],
+      [],
+    ],
+    [
+      "`src/lib/foo.ts` `navigation.ts` `inventory.csv` `foo.bar()` `notes.xyz123`",
+      ["src/lib/foo.ts", "navigation.ts", "inventory.csv"],
+      ["foo.bar()", "notes.xyz123"],
+    ],
+    [
+      "`re\u0301sume\u0301.md` and `C:\\文档\\café.md:9`",
+      ["re\u0301sume\u0301.md", "C:\\文档\\café.md"],
+      [],
+    ],
+    [
+      "`café note.md` `emoji-🌱.md` `100% ready.txt` `reader's [draft] (v2).md` Read the notes/readme.md now.",
+      ["notes/readme.md"],
+      [],
+    ],
+    ...["./portal.example/service.test", ".config/workflows/check.yml", "src.v2/app.ts"].map(
+      (path): [string, string[], string[]] => [path, [path], []],
+    ),
+  ])("recognizes workspace paths while preserving prose in %s", (input, paths, preserved) => {
+    const fragment = render(input);
+    expect(fileLinks(fragment).map((link) => link.dataset.filePath)).toEqual(paths);
+    expect(fragment.querySelectorAll("a[data-file-path]")).toHaveLength(paths.length);
+    for (const text of preserved) {
+      expect(fragment.textContent).toContain(text);
+    }
+  });
+
+  it.each<[string, { path: string; line: string; label?: string }[]]>([
+    [
+      "src/lib/foo.ts:42 and bar.ts:7:3",
+      [
+        { path: "src/lib/foo.ts", line: "42", label: "foo.ts:42" },
+        { path: "bar.ts", line: "7", label: "bar.ts:7:3" },
+      ],
+    ],
+    [
+      "`src/commands/auth-choice-options.static.ts:26-35`",
+      [{ path: "src/commands/auth-choice-options.static.ts", line: "26" }],
+    ],
+  ])("preserves line suffixes and targets their first line in %s", (input, expected) => {
     expect(
-      [...fragment.querySelectorAll<HTMLAnchorElement>("a.markdown-file-link")].map(
-        (link) => link.dataset.filePath,
-      ),
-    ).toEqual(["~/notes.md", "./x.ts", "../y.ts"]);
-    expect(fragment.textContent).toContain("foo.ts");
-    expect(fragment.textContent).toContain("inventory.csv");
-  });
-
-  it("keeps line suffixes on the label while storing the parsed line", () => {
-    const fragment = render("src/lib/foo.ts:42 and bar.ts:7:3");
-    const links = [...fragment.querySelectorAll<HTMLAnchorElement>("a.markdown-file-link")];
-    expect(links[0]?.dataset.filePath).toBe("src/lib/foo.ts");
-    expect(links[0]?.dataset.fileLine).toBe("42");
-    expect(links[0]?.textContent).toBe("foo.ts:42");
-    expect(links[1]?.dataset.filePath).toBe("bar.ts");
-    expect(links[1]?.dataset.fileLine).toBe("7");
-    expect(links[1]?.textContent).toBe("bar.ts:7:3");
-  });
-
-  it("targets the first line of a range suffix", () => {
-    const fragment = render("`src/commands/auth-choice-options.static.ts:26-35`");
-    const link = fragment.querySelector<HTMLAnchorElement>("a.markdown-file-link");
-    expect(link?.dataset.filePath).toBe("src/commands/auth-choice-options.static.ts");
-    expect(link?.dataset.fileLine).toBe("26");
-  });
-
-  it("does not link a shorter prefix of a numeric-suffix filename", () => {
-    const fragment = render("rotated logs/app.log.1 but see src/lib/foo.ts.");
-    const links = [...fragment.querySelectorAll<HTMLAnchorElement>("a[data-file-path]")];
-    expect(links.map((link) => link.dataset.filePath)).toEqual(["src/lib/foo.ts"]);
-    expect(fragment.textContent).toContain("logs/app.log.1");
-  });
-
-  it("does not link dotted version numbers but keeps authored digit-led extensions", () => {
-    const fragment = render("bumped 1.1/1.2 and `2026.9.2`, see v1.2/3.4 [part](assets/part.3mf)");
-    const links = [...fragment.querySelectorAll<HTMLAnchorElement>("a[data-file-path]")];
-    expect(links.map((link) => link.dataset.filePath)).toEqual(["assets/part.3mf"]);
+      fileLinks(render(input)).map((link) => ({
+        path: link.dataset.filePath,
+        line: link.dataset.fileLine,
+        label: link.textContent,
+      })),
+    ).toMatchObject(expected);
   });
 
   it("links Windows absolute paths", () => {
     const fragment = render("C:/repo/src/foo.ts:42 and `D:\\work\\bar.ts`");
-    const links = [...fragment.querySelectorAll<HTMLAnchorElement>("a.markdown-file-link")];
+    const links = fileLinks(fragment);
     expect(links.map((link) => link.dataset.filePath)).toEqual([
       "C:/repo/src/foo.ts",
       "D:\\work\\bar.ts",
@@ -89,22 +112,9 @@ describe("file links", () => {
     expect(links[0]?.dataset.fileLine).toBe("42");
   });
 
-  it("links inline-code paths and conservative bare filenames", () => {
-    const fragment = render(
-      "`src/lib/foo.ts` `navigation.ts` `inventory.csv` `foo.bar()` `notes.xyz123`",
-    );
-    expect(
-      [...fragment.querySelectorAll<HTMLAnchorElement>("a.markdown-file-link")].map(
-        (link) => link.dataset.filePath,
-      ),
-    ).toEqual(["src/lib/foo.ts", "navigation.ts", "inventory.csv"]);
-    expect(fragment.textContent).toContain("foo.bar()");
-    expect(fragment.textContent).toContain("notes.xyz123");
-  });
-
   it("converts explicit relative and absolute local file links", () => {
     const fragment = render("[foo.ts](src/utils/foo.ts:42) [x](/Users/a/b.ts)");
-    const links = [...fragment.querySelectorAll<HTMLAnchorElement>("a.markdown-file-link")];
+    const links = fileLinks(fragment);
     expect(links).toHaveLength(2);
     expect(links[0]?.dataset).toMatchObject({
       filePath: "src/utils/foo.ts",
@@ -157,15 +167,6 @@ describe("file links", () => {
     },
   );
 
-  it("recognizes Unicode bare and Windows filenames without normalizing their spelling", () => {
-    const fragment = render("`re\u0301sume\u0301.md` and `C:\\文档\\café.md:9`");
-    expect(
-      [...fragment.querySelectorAll<HTMLAnchorElement>("a.markdown-file-link")].map(
-        (link) => link.dataset.filePath,
-      ),
-    ).toEqual(["re\u0301sume\u0301.md", "C:\\文档\\café.md"]);
-  });
-
   it.each(["family-👩‍👩‍👧.md", "100% ready.txt", "reader's [draft] (v2).md", "literal%20name.txt"])(
     "preserves authored filename %s without treating its punctuation as prose",
     (name) => {
@@ -181,17 +182,6 @@ describe("file links", () => {
       }
     },
   );
-
-  it("keeps code and prose filename scanning conservative", () => {
-    const fragment = render(
-      "`café note.md` `emoji-🌱.md` `100% ready.txt` `reader's [draft] (v2).md` Read the notes/readme.md now.",
-    );
-    expect(
-      [...fragment.querySelectorAll("a[data-file-path]")].map((link) =>
-        link.getAttribute("data-file-path"),
-      ),
-    ).toEqual(["notes/readme.md"]);
-  });
 
   it("keeps authored URL and session destinations out of workspace file handling", () => {
     const destinations = [
@@ -229,80 +219,58 @@ describe("file links", () => {
     }
   });
 
-  it.each(["./portal.example/service.test", ".config/workflows/check.yml", "src.v2/app.ts"])(
-    "keeps the local path %s addressable",
-    (path) => {
-      const fragment = render(path);
-      expect(fragment.querySelector<HTMLAnchorElement>("a[data-file-path]")?.dataset.filePath).toBe(
-        path,
-      );
-    },
-  );
-
   it("does not link paths inside fenced code blocks", () => {
     const fragment = render("```ts\nsrc/lib/foo.ts:42\n```");
     expect(fragment.querySelector("a[data-file-path]")).toBeNull();
     expect(fragment.querySelector("code")?.textContent).toContain("src/lib/foo.ts:42");
   });
 
-  it("labels a file link with its basename and keeps the path addressable", () => {
-    const fragment = render("see src/components/Button.tsx for details");
-    const link = fragment.querySelector<HTMLAnchorElement>("a.markdown-file-link");
-    expect(link?.textContent).toBe("Button.tsx");
-    expect(link?.dataset.filePath).toBe("src/components/Button.tsx");
-    expect(link?.getAttribute("title")).toBe("src/components/Button.tsx");
-  });
-
-  it("adds no tooltip when the label is already the whole reference", () => {
-    const fragment = render("`README.md`");
-    const link = fragment.querySelector<HTMLAnchorElement>("a.markdown-file-link");
-    expect(link?.textContent).toBe("README.md");
-    expect(link?.hasAttribute("title")).toBe(false);
-  });
-
-  it("adds no tooltip when an explicit label already repeats the reference", () => {
-    const fragment = render("[src/lib/foo.ts](src/lib/foo.ts) and [go](src/lib/bar.ts)");
-    const links = [...fragment.querySelectorAll<HTMLAnchorElement>("a.markdown-file-link")];
-    expect(links.map((link) => link.getAttribute("title"))).toEqual([null, "src/lib/bar.ts"]);
-  });
-
-  it("shortens inline-code paths and keeps author labels on explicit links", () => {
-    const fragment = render("`src/lib/foo.ts` and [the button](src/ui/Button.tsx:12)");
-    const links = [...fragment.querySelectorAll<HTMLAnchorElement>("a.markdown-file-link")];
-    expect(links.map((link) => link.textContent)).toEqual(["foo.ts", "the button"]);
-    expect(links.map((link) => link.getAttribute("title"))).toEqual([
-      "src/lib/foo.ts",
-      "src/ui/Button.tsx:12",
-    ]);
-  });
-
-  it("grows the label only far enough to tell equal basenames apart", () => {
-    const fragment = render("ui/src/app.ts and api/src/app.ts and `D:\\work\\app.ts`");
-    const links = [...fragment.querySelectorAll<HTMLAnchorElement>("a.markdown-file-link")];
-    // The Windows path is unique one segment up, so it stops there while the
-    // other two grow to three — and it keeps its own separator.
-    expect(links.map((link) => link.textContent)).toEqual([
-      "ui/src/app.ts",
-      "api/src/app.ts",
-      "work\\app.ts",
-    ]);
-  });
-
-  it.each([
-    ["plain text", "/tmp/qa/src/file.ts:7 and tmp/qa/src/file.ts:7"],
-    ["inline code", "`/tmp/qa/src/file.ts:7` and `tmp/qa/src/file.ts:7`"],
-  ])("keeps absolute and relative file labels distinct in %s", (_kind, input) => {
-    const fragment = render(input);
-    const links = [...fragment.querySelectorAll<HTMLAnchorElement>("a.markdown-file-link")];
-    expect(links.map((link) => link.dataset.filePath)).toEqual([
-      "/tmp/qa/src/file.ts",
-      "tmp/qa/src/file.ts",
-    ]);
-    expect(links.map((link) => link.dataset.fileLine)).toEqual(["7", "7"]);
-    expect(links.map((link) => link.textContent)).toEqual([
-      "/tmp/qa/src/file.ts:7",
-      "tmp/qa/src/file.ts:7",
-    ]);
+  it.each<[string, { path?: string; line?: string; label?: string; title?: string | null }[]]>([
+    [
+      "see src/components/Button.tsx for details",
+      [
+        {
+          path: "src/components/Button.tsx",
+          label: "Button.tsx",
+          title: "src/components/Button.tsx",
+        },
+      ],
+    ],
+    ["`README.md`", [{ label: "README.md", title: null }]],
+    [
+      "[src/lib/foo.ts](src/lib/foo.ts) and [go](src/lib/bar.ts)",
+      [{ title: null }, { title: "src/lib/bar.ts" }],
+    ],
+    [
+      "`src/lib/foo.ts` and [the button](src/ui/Button.tsx:12)",
+      [
+        { label: "foo.ts", title: "src/lib/foo.ts" },
+        { label: "the button", title: "src/ui/Button.tsx:12" },
+      ],
+    ],
+    [
+      "ui/src/app.ts and api/src/app.ts and `D:\\work\\app.ts`",
+      [{ label: "ui/src/app.ts" }, { label: "api/src/app.ts" }, { label: "work\\app.ts" }],
+    ],
+    ...[
+      "/tmp/qa/src/file.ts:7 and tmp/qa/src/file.ts:7",
+      "`/tmp/qa/src/file.ts:7` and `tmp/qa/src/file.ts:7`",
+    ].map((input): [string, { path: string; line: string; label: string }[]] => [
+      input,
+      [
+        { path: "/tmp/qa/src/file.ts", line: "7", label: "/tmp/qa/src/file.ts:7" },
+        { path: "tmp/qa/src/file.ts", line: "7", label: "tmp/qa/src/file.ts:7" },
+      ],
+    ]),
+  ])("keeps file labels unambiguous and tooltips nonredundant in %s", (input, expected) => {
+    expect(
+      fileLinks(render(input)).map((link) => ({
+        path: link.dataset.filePath,
+        line: link.dataset.fileLine,
+        label: link.textContent,
+        title: link.getAttribute("title"),
+      })),
+    ).toMatchObject(expected);
   });
 
   it("keeps per-path lookup cost linear as path count grows (performance contract)", () => {
@@ -329,44 +297,26 @@ describe("file links", () => {
     expect(large).toBeLessThan(small * 16);
   });
 
-  it.each([
-    ["C:\\skills\\review\\skill.MD", "skill"],
-    ["skills/review/SKILL.markdown", "markdown"],
-    ["skills/review/other-skill.md", "markdown"],
-    ["package.json", "package"],
-    ["src/components/Button.tsx", "component"],
-    ["notes/todo.txt", "file"],
-  ])("classifies %s as the %s glyph kind", (path, kind) => {
-    const fragment = render(`\`${path}\``);
-    const link = fragment.querySelector<HTMLAnchorElement>("a.markdown-file-link");
+  it.each<[string, string, string, string?]>([
+    ["`C:\\skills\\review\\skill.MD`", "C:\\skills\\review\\skill.MD", "skill"],
+    ["`skills/review/SKILL.markdown`", "skills/review/SKILL.markdown", "markdown"],
+    ["`skills/review/other-skill.md`", "skills/review/other-skill.md", "markdown"],
+    ["`package.json`", "package.json", "package"],
+    ["`src/components/Button.tsx`", "src/components/Button.tsx", "component"],
+    ["`notes/todo.txt`", "notes/todo.txt", "file"],
+    ["[Read file](/tmp/constructor)", "/tmp/constructor", "file"],
+    ["[Read file](/tmp/notes.__proto__)", "/tmp/notes.__proto__", "file"],
+    ["skills/review/SKILL.md:12", "skills/review/SKILL.md", "skill", "12"],
+    ["[Review skill](skills/review/SKILL.md:12)", "skills/review/SKILL.md", "skill", "12"],
+  ])("classifies %s without changing workspace navigation", (input, path, kind, line) => {
+    const link = render(input).querySelector<HTMLAnchorElement>("a.markdown-file-link");
     expect(link?.dataset.filePath).toBe(path);
     expect(link?.dataset.fileKind).toBe(kind);
+    expect(link?.dataset.fileLine).toBe(line);
+    expect(link?.getAttribute("role")).toBe("button");
+    expect(link?.getAttribute("tabindex")).toBe("0");
+    expect(link?.hasAttribute("href")).toBe(false);
   });
-
-  it.each(["constructor", "notes.__proto__"])(
-    "uses the generic file glyph for the prototype-shaped filename %s",
-    (name) => {
-      const path = `/tmp/${name}`;
-      const fragment = render(`[Read file](${path})`);
-      const link = fragment.querySelector<HTMLAnchorElement>("a.markdown-file-link");
-      expect(link?.dataset.filePath).toBe(path);
-      expect(link?.dataset.fileKind).toBe("file");
-    },
-  );
-
-  it.each(["skills/review/SKILL.md:12", "[Review skill](skills/review/SKILL.md:12)"])(
-    "uses the skill kind without changing file navigation for %s",
-    (input) => {
-      const fragment = render(input);
-      const link = fragment.querySelector<HTMLAnchorElement>("a.markdown-file-link");
-      expect(link?.dataset.fileKind).toBe("skill");
-      expect(link?.dataset.filePath).toBe("skills/review/SKILL.md");
-      expect(link?.dataset.fileLine).toBe("12");
-      expect(link?.getAttribute("role")).toBe("button");
-      expect(link?.getAttribute("tabindex")).toBe("0");
-      expect(link?.hasAttribute("href")).toBe(false);
-    },
-  );
 
   it("keeps GitHub-hosted skill files owned by the external-link renderer", () => {
     const url = "https://github.com/openclaw/openclaw/blob/main/skills/github/SKILL.md";

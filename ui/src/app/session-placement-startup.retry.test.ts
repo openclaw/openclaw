@@ -192,6 +192,7 @@ describe("initial turn Retry after slow placement recovery", () => {
   );
 
   it.each([
+    { state: "missing", released: true },
     { state: undefined, released: true },
     { state: "local", released: true },
     { state: "reclaimed", released: true },
@@ -202,7 +203,15 @@ describe("initial turn Retry after slow placement recovery", () => {
     async ({ state, released }) => {
       const request = vi.fn(async (method: string) => {
         if (method === "sessions.describe") {
-          return { session: { placement: state ? createStartupPlacement(state, 1) : undefined } };
+          return {
+            session:
+              state === "missing"
+                ? null
+                : { placement: state ? createStartupPlacement(state, 1) : undefined },
+          };
+        }
+        if (state === "missing") {
+          throw new Error(`Unexpected ${method}`);
         }
         if (method === "sessions.dispatch") {
           if (!released) {
@@ -236,32 +245,18 @@ describe("initial turn Retry after slow placement recovery", () => {
         });
         expect(request.mock.calls.map(([method]) => method)).toEqual([
           "sessions.describe",
-          "sessions.dispatch",
-          ...(released ? ["sessions.send"] : []),
+          ...(state === "missing"
+            ? []
+            : ["sessions.dispatch", ...(released ? ["sessions.send"] : [])]),
         ]);
+        if (state === "missing") {
+          expect(sessionStorage.length).toBe(0);
+        }
       } finally {
         startup.dispose();
       }
     },
   );
-
-  it("retires a removed session without recreating it", async () => {
-    const request = vi.fn(async (method: string) => {
-      if (method === "sessions.describe") {
-        return { session: null };
-      }
-      throw new Error(`Unexpected ${method}`);
-    });
-    const { startup, input } = await restorePausedStartup(request);
-    try {
-      startup.retry(input.recovery.sessionKey);
-      await vi.waitFor(() => expect(startup.get(input.recovery.sessionKey)).toBeNull());
-      expect(request.mock.calls.map(([method]) => method)).toEqual(["sessions.describe"]);
-      expect(sessionStorage.length).toBe(0);
-    } finally {
-      startup.dispose();
-    }
-  });
 
   it.each([undefined, "reclaimed", "failed"])(
     "does not allocate during passive recovery of %s placement",

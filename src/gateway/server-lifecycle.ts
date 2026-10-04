@@ -6,6 +6,7 @@ import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.
 import { listLoadedChannelPluginsForRegistry } from "../channels/plugins/registry-loaded.js";
 import { getRuntimeConfig } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { beginCronReceiptAuthorityClose } from "../cron/store/receipt-authority-owner.js";
 import {
   isDiagnosticsEnabled,
   setDiagnosticsEnabledForProcess,
@@ -394,6 +395,9 @@ export async function prepareGatewayLifecycle(params: {
     markGatewaySuspendExiting();
     authRateLimiter.dispose();
     browserAuthRateLimiter.dispose();
+    if (prelude) {
+      beginCronReceiptAuthorityClose();
+    }
     void stopModelAccountsForClose();
     void closeAuthProfileUsage(params.sdkResourceHost);
     runtime.scheduler.beginClose();

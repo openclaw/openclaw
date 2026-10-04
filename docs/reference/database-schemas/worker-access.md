@@ -465,11 +465,26 @@ Embedded writer claims, live-model-switch consolidation, and pending-final deliv
 preparation, settlement, and cleanup explicitly select that worker patch path.
 Their reducers prepare outside the transaction; the worker rereads the selected
 rows before applying the patch and publishes acknowledged results before releasing
-the existing writer queue. Uncertain writes never replay. Writer-claim admission
-reads retain their current owner. Lifecycle-event persistence, cron preparation,
-and opaque SDK updaters retain their existing native routes; these callers do not
-change the default patch contract. Schemas, retention, durability, and update
-behavior are unchanged.
+the existing writer queue. Uncertain writes never replay. Lifecycle-event
+persistence, cron preparation, and opaque SDK updaters retain their existing native
+routes; these callers do not change the default patch contract. Schemas, retention,
+durability, and update behavior are unchanged.
+
+Per-turn model selection, harness admission, local-turn placement preparation,
+skill-snapshot refresh, dispatch, plugin injection probes, completion metadata,
+and diff-baseline selection read durable entries through the existing session
+readers. Exact candidate projections validate only the selected rows, preserving
+isolation from unrelated damaged rows.
+Sandbox preparation retains its physical reader through workspace
+preparation and rechecks the caller before returning. Gateway reply finalization
+and GitHub publication discovery prepare full entries through the same ordered
+store lookup used by worker metadata reads. Live delivery and publication guards
+still recheck their current owners; prepared metadata never grants authority.
+Source assertions that can read their own session store run before and after
+preparation, outside worker grants. Accepted writer settlement keeps its existing
+transaction-local predicates and does not inherit scheduler cancellation.
+Process-held incognito retains its native reader. No schema, retention,
+durability, or update migration is required.
 
 Durable transcript turns append messages, consume pending inputs, evaluate typed
 latest-assistant and active-entry predicates, update entries, and commit goal
@@ -1210,6 +1225,15 @@ plan. Each actor retains at most two preparations, allowing a revoked
 predecessor to finish cleanup alongside the coalesced planner. Cleanup of the exact
 operation and native close release those readers. Planning preserves age facts and
 the preservation-required rollback before retrying with current protection facts.
+Automatic maintenance prepares subagent protection through its existing
+read worker outside agent writer admission. The retained provider capture checks
+live ownership and publication changes through commit, then releases its custody
+after settlement. Cold protection never reloads the subagent registry on the
+Gateway main thread; no-op planning still avoids that preparation entirely.
+A publication during preparation revokes the capture instead of starting another
+read; the automatic maintenance owner retains its existing bounded retry policy.
+Slow native transaction diagnostics identify the executing worker; metadata
+requests do not log caller-side elapsed time as reclamation execution time.
 Commit receipts publish archived-entry facts before releasing
 the writer, including when the ordinary result is lost. Archive materialization,
 finalization, and cold restoration keep their global memory bound and foreground
@@ -1771,6 +1795,15 @@ opening settles. The remaining native Cron transitions still need migration.
 This cutover preserves schemas, stored bytes, retention, configuration, and update
 behavior.
 
+GitHub publication preparation and per-turn tool availability read the selected
+live worktree through the existing worktree reader and shared-state worker. They
+capture the physical store before yielding, recheck session identity after the
+read, and refresh worktree facts after identity or repository preparation. Those
+facts select inputs; existing synchronous transaction and Git-effect guards still
+check current publication authority. Creation, placement, and those live guards
+remain separate host-read migration debt. Schemas, branch identity, stored bytes,
+retention, public coordinator signatures, and update behavior are unchanged.
+
 Cron receipt guards use the current read-only owner without initializing storage
 or waiting for the worker's writer transaction. They read deletion authority
 through the admitted connection. Synchronous current-authority readers may reuse that
@@ -1779,6 +1812,27 @@ ordinary discovery reads retain committed-state isolation. This avoids preparing
 a child-process snapshot while holding the shared-state write transaction. Agent
 database admission refusals remain with their in-memory admission owner. Schemas,
 retention, configuration, and update behavior are unchanged.
+
+Cron mutations share host-owned receipt-authority custody for the physical shared
+database, across store partitions and approval writers. Runtime mutations, raw
+saves, mutable-load repairs, native grant consumption, and agent-deletion
+authority changes suspend observations before transaction admission. Native
+COMMIT receipts install canonical facts before ordinary replies and business
+notifications. Native compatibility writes publish committed invalidation and
+rebuild through the existing reader before returning. Rollback removes only its
+own barrier; it never fabricates a committed revocation. Lost replies never
+replay writes. Reconciliation requires confirmed native settlement or worker
+exit, and failed retirement retains unavailable custody.
+
+There is one live authority host per physical database. Cron writes use the
+serving Gateway; concurrent direct SQLite mutation is unsupported. Existing
+offline routing and exclusive Doctor maintenance remain unchanged. The close
+prelude seals new work before scheduler cancellation, while accepted persistence
+and receipt finalizers retain their original source through settlement and
+publication. Stored grants survive restart; process-local observations do not.
+This publication foundation preserves receipt revisions, force-run eligibility,
+schemas, retention, and update behavior. Existing final message and execution
+SQL guards remain until their separate consumer cutovers.
 
 Cron display names are prepared through the existing shared-state and history workers.
 Live resolvers retain their physical database generation; cron's mutation owner

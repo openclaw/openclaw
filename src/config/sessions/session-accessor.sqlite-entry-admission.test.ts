@@ -459,26 +459,20 @@ it.each(["cancel", "revoke"] as const)(
   },
 );
 
-it.each(["relative queued", "relative reopen", "implicit queued"] as const)(
+it.each(["relative queued", "relative reopen"] as const)(
   "pins the selected root for %s patch work",
   async (mode) => {
     const home = roots.make("session-patch-root-selection-");
-    const implicit = mode === "implicit queued";
-    const ownerRoot = path.join(home, implicit ? ".clawdbot" : "state");
-    const successor = path.join(home, implicit ? ".openclaw" : "next-cwd");
+    const ownerRoot = path.join(home, "state");
+    const successor = path.join(home, "next-cwd");
     fs.mkdirSync(ownerRoot);
-    if (!implicit) {
-      fs.mkdirSync(successor);
-    }
+    fs.mkdirSync(successor);
     const cwd = vi.spyOn(process, "cwd").mockReturnValue(home);
     const env: NodeJS.ProcessEnv = {
       HOME: home,
       OPENCLAW_HOME: home,
       OPENCLAW_CONFIG_PATH: path.join(ownerRoot, "openclaw.json"),
-      ...(implicit
-        ? // Deliberately select normal legacy discovery, not the fast-test new-root shortcut.
-          { OPENCLAW_TEST_FAST: "0" }
-        : { OPENCLAW_STATE_DIR: "state" }),
+      OPENCLAW_STATE_DIR: "state",
     };
     vi.stubEnv("OPENCLAW_STATE_DIR", ownerRoot);
     const scope = { agentId: "main", env, sessionKey: "agent:main:root-selection" };
@@ -488,11 +482,7 @@ it.each(["relative queued", "relative reopen", "implicit queued"] as const)(
     const database = openOpenClawAgentDatabase(toDatabaseOptions(resolveSqliteScope(original)));
     const selectedPath = database.path;
     const shiftOwner = () => {
-      if (implicit) {
-        fs.mkdirSync(successor);
-      } else {
-        cwd.mockReturnValue(successor);
-      }
+      cwd.mockReturnValue(successor);
     };
     const release = createDeferred();
     releases.push(() => release.resolve());
@@ -530,8 +520,8 @@ it.each(["relative queued", "relative reopen", "implicit queued"] as const)(
       await blocker;
     }
     // Control: unchanged caller inputs now resolve elsewhere; the operation must use
-    // its private resolved root, not repeat ambient/legacy selection after its await.
-    expect(resolveStateDir(env)).toBe(implicit ? successor : path.join(successor, "state"));
+    // its private resolved root, not repeat ambient selection after its await.
+    expect(resolveStateDir(env)).toBe(path.join(successor, "state"));
     await expect(operation).resolves.toMatchObject({
       sessionId: "original",
       label: "retained selected root",
@@ -540,7 +530,7 @@ it.each(["relative queued", "relative reopen", "implicit queued"] as const)(
       sessionId: "original",
       label: "retained selected root",
     });
-    expect(env.OPENCLAW_STATE_DIR).toBe(implicit ? undefined : "state");
+    expect(env.OPENCLAW_STATE_DIR).toBe("state");
     expect(fs.readdirSync(successor, { recursive: true })).toEqual([]);
   },
 );

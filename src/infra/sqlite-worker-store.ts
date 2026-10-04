@@ -111,6 +111,7 @@ export function runSqliteWorkerStoreWrite<Operations extends SqliteWorkerOperati
 export function createSqliteWorkerWriteAdmission(
   assertCurrent: (request: SqliteWorkerAdmissionRequest) => void,
   nativeLocations: readonly string[],
+  attachment?: unknown,
 ): SqliteWorkerAdmissionFactory {
   return () => {
     let phase: "waiting" | "transaction" | "commit" = "waiting";
@@ -130,7 +131,7 @@ export function createSqliteWorkerWriteAdmission(
           throw new Error("SQLite worker write authority expired");
         }
         phase = phase === "waiting" ? "transaction" : "commit";
-      }),
+      }, attachment),
     };
   };
 }

@@ -2,6 +2,10 @@ import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import { closePreparedModelRuntimeSnapshots } from "../agents/prepared-model-runtime.lifecycle.js";
 import { isNixMode, resolveIsConfigReadOnly } from "../config/paths.js";
+import {
+  beginCronReceiptAuthorityClose,
+  startCronReceiptAuthorityHost,
+} from "../cron/store/receipt-authority-owner.js";
 import { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { clearGatewayAgentCliShim } from "../infra/openclaw-cli-shim.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
@@ -148,6 +152,7 @@ async function createGatewayKernelWithSdkHost(
   let closeStartupTrace: (() => void) | undefined;
   let startupError: unknown;
   try {
+    startCronReceiptAuthorityHost();
     const bootstrap = await pluginMetadata.runBootstrap(() =>
       prepareGatewayServerBootstrap({
         port,
@@ -243,8 +248,12 @@ async function createGatewayKernelWithSdkHost(
     startupError = error;
   }
   return await rethrowGatewayStartupError(startupError, async () => {
+    const prelude = pluginMetadata.beginClose();
+    if (prelude) {
+      beginCronReceiptAuthorityClose();
+    }
     scheduler.beginClose();
-    await pluginMetadata.beginClose();
+    await prelude;
     if (lifecycleRuntime) {
       // The lifecycle releases metadata only after its required joins succeed.
       await lifecycleRuntime.closeOnStartupFailure();

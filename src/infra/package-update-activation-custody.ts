@@ -10,6 +10,7 @@ import {
   resolvePackageActivationControl,
   type PackageActivationJournal,
   type PackageActivationRecord,
+  type PackageActivationIntent,
 } from "./package-update-activation-journal.js";
 
 export function packageActivationIdentityOrAbsent(file: string, directory: boolean | "launcher") {
@@ -186,12 +187,16 @@ export async function supersedePackageActivationCustody(
   journal: PackageActivationJournal,
   initial: PackageActivationRecord,
   assertion: () => void,
+  reason: Extract<PackageActivationIntent, { replacementIdentity: string }>["kind"],
 ) {
   let record = initial;
   const descriptor = record.descriptor;
   const live = descriptor.authority.installKey;
   const replacementIdentity = packageActivationIdentity(live, true);
-  if ([descriptor.previous.identity, descriptor.candidate.identity].includes(replacementIdentity)) {
+  if (
+    reason === "superseded-by-manual-install" &&
+    [descriptor.previous.identity, descriptor.candidate.identity].includes(replacementIdentity)
+  ) {
     throw new Error("A recorded package generation still requires its original recovery.");
   }
   const retained = `${anchor}.superseded-${descriptor.operationId}`;
@@ -199,7 +204,7 @@ export async function supersedePackageActivationCustody(
     assertion();
     journal.assertCurrent(record);
     if (packageActivationIdentity(live, true) !== replacementIdentity) {
-      throw new Error("The manually installed package changed during recovery settlement.");
+      throw new Error("The installed package changed during recovery settlement.");
     }
   };
   const transfers = [
@@ -235,7 +240,7 @@ export async function supersedePackageActivationCustody(
       record,
       "superseded",
       {
-        kind: "superseded-by-manual-install",
+        kind: reason,
         replacementIdentity,
         settled: false,
       },
@@ -256,7 +261,10 @@ export async function supersedePackageActivationCustody(
     assertSupersession();
     inspectTransfer(entry);
   }
-  if (record.intent?.kind !== "superseded-by-manual-install") {
+  if (
+    record.intent?.kind !== "superseded-by-manual-install" &&
+    record.intent?.kind !== "recovery-lease-identity-changed"
+  ) {
     throw new Error("Package supersession fact is missing.");
   }
   record = journal.transition(

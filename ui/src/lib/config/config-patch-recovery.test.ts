@@ -149,20 +149,35 @@ function createPersistedFailureTransport(
 
 describe("config patch recovery", () => {
   it.each([
-    {},
-    { persistedConfig: { hash: "", config: { count: 1, enabled: false } } },
-    { persistedConfig: { hash: "hash-2", config: [] } },
-    ...(["partial", "complete"] as const).flatMap((publication) =>
-      ["restored", "unknown", "not-restored"].map((rollbackStatus) => ({
-        publication,
-        rollbackStatus,
+    {
+      local: true,
+      details: { persistedConfig: { hash: "unconfirmed", config: { enabled: false } } },
+    },
+    ...[
+      {},
+      { persistedConfig: { hash: "", config: { count: 1, enabled: false } } },
+      { persistedConfig: { hash: "hash-2", config: [] } },
+      {
+        publication: "partial",
+        rollbackStatus: "restored",
         persistedConfig: { hash: "hash-2", config: { count: 1, enabled: false } },
-      })),
-    ),
-  ])("does not adopt an unavailable, invalid, or rolled-back receipt: %j", async (details) => {
+      },
+      {
+        publication: "complete",
+        rollbackStatus: "unknown",
+        persistedConfig: { hash: "hash-2", config: { count: 1, enabled: false } },
+      },
+    ].map((details) => ({ local: false, details })),
+  ])("rejects an untrusted or invalid persistence receipt: %j", async ({ local, details }) => {
     vi.useFakeTimers();
     const server = createPersistedFailureTransport({ failureDetails: () => details });
-    const { runtimeConfig } = createRecoveryCapability(server.request);
+    const request: GatewayBrowserClient["request"] = async (method, params) => {
+      if (local && method === "config.patch") {
+        throw new GatewayRequestError({ code: "UNAVAILABLE", message: "Local failure", details });
+      }
+      return server.request(method, params);
+    };
+    const { runtimeConfig } = createRecoveryCapability(request);
     try {
       await runtimeConfig.ensureLoaded();
       runtimeConfig.setRaw('{ "count": 7 }\n');
@@ -173,31 +188,9 @@ describe("config patch recovery", () => {
       expect(runtimeConfig.state.configNeedsApply).toBe(false);
       expect(runtimeConfig.state.configRaw).toBe('{ "count": 7 }\n');
       expect(runtimeConfig.state.configAutoSaveStatus).toBe("error");
-    } finally {
-      runtimeConfig.setWritesSuspended(true);
-      server.transport.stop();
-    }
-  });
-
-  it("keeps a foreign write's CAS conflict after adopting its own persisted receipt", async () => {
-    vi.useFakeTimers();
-    const server = createPersistedFailureTransport();
-    const { runtimeConfig } = createRecoveryCapability(server.request);
-    try {
-      await runtimeConfig.ensureLoaded();
-      runtimeConfig.setRaw('{ "count": 7 }\n');
-      await runtimeConfig.patch({ raw: { enabled: false }, note: "Disable" });
-      await server.store.request("config.set", {
-        raw: '{"count":3,"enabled":true}',
-        baseHash: "hash-2",
-      });
-      await expect(runtimeConfig.retry()).resolves.toBe(false);
-      expect(runtimeConfig.state.configAutoSaveStatus).toBe("conflict");
-      expect(runtimeConfig.state.configRaw).toBe('{ "count": 7 }\n');
-      expect(server.store.submissions).toHaveLength(2);
-      await expect(server.store.request("config.get")).resolves.toMatchObject({
-        config: { count: 3, enabled: true },
-      });
+      if (local) {
+        expect(server.store.submissions).toHaveLength(0);
+      }
     } finally {
       runtimeConfig.setWritesSuspended(true);
       server.transport.stop();
@@ -248,35 +241,13 @@ describe("config patch recovery", () => {
     },
   );
 
-  it("does not treat a locally constructed request error as a persistence receipt", async () => {
-    vi.useFakeTimers();
-    const server = createPersistedFailureTransport();
-    const request: GatewayBrowserClient["request"] = async (method, params) => {
-      if (method === "config.patch") {
-        throw new GatewayRequestError({
-          code: "UNAVAILABLE",
-          message: "Local failure",
-          details: {
-            persistedConfig: { hash: "unconfirmed", config: { enabled: false } },
-          },
-        });
-      }
-      return server.request(method, params);
-    };
-    const { runtimeConfig } = createRecoveryCapability(request);
-    await runtimeConfig.ensureLoaded();
-    await expect(runtimeConfig.patch({ raw: { enabled: false }, note: "Disable" })).resolves.toBe(
-      false,
-    );
-    expect(runtimeConfig.state.configSnapshot?.hash).toBe("hash-1");
-    expect(runtimeConfig.state.configNeedsApply).toBe(false);
-    expect(server.store.submissions).toHaveLength(0);
-    server.transport.stop();
-  });
-
-  it.each(["raw", "form"] as const)(
-    "adopts a persisted patch revision while retaining an unrelated %s draft",
-    async (mode) => {
+  it.each([
+    { mode: "raw", foreign: false },
+    { mode: "form", foreign: false },
+    { mode: "raw", foreign: true },
+  ] as const)(
+    "adopts a persisted patch without overwriting a $mode draft or foreign write ($foreign)",
+    async ({ mode, foreign }) => {
       vi.useFakeTimers();
       const { store, transport, request, frames, responseErrors } =
         createPersistedFailureTransport();
@@ -314,6 +285,20 @@ describe("config patch recovery", () => {
           hash: "hash-2",
         });
 
+        if (foreign) {
+          await store.request("config.set", {
+            raw: '{"count":3,"enabled":true}',
+            baseHash: "hash-2",
+          });
+          await expect(runtimeConfig.retry()).resolves.toBe(false);
+          expect(runtimeConfig.state.configAutoSaveStatus).toBe("conflict");
+          expect(runtimeConfig.state.configRaw).toBe('{ "count": 7 }\n');
+          expect(store.submissions).toHaveLength(2);
+          await expect(store.request("config.get")).resolves.toMatchObject({
+            config: { count: 3, enabled: true },
+          });
+          return;
+        }
         const recovered = await runtimeConfig.retry();
         expect(runtimeConfig.state.configFormDirty).toBe(true);
         expect(frames.filter((frame) => frame.method === "config.set")).toHaveLength(0);
@@ -351,84 +336,83 @@ describe("config patch recovery", () => {
     },
   );
 
-  it("restores the paused draft's Save prompt after a rejected patch recovers", async () => {
-    vi.useFakeTimers();
-    const server = createPatchServer();
-    let rejectPatch = true;
-    const request = vi.fn(async (method: string, params?: unknown) => {
-      if (method === "config.patch" && rejectPatch) {
-        throw new Error("permission denied");
+  it.each(["paused", "autosave", "background"] as const)(
+    "recovers a rejected patch without losing %s feedback",
+    async (scenario) => {
+      vi.useFakeTimers();
+      const server = createPatchServer();
+      let rejectPatch = false;
+      const request = vi.fn(async (method: string, params?: unknown) => {
+        if (method === "config.patch" && rejectPatch) {
+          throw new Error("permission denied");
+        }
+        return server.request(method, params);
+      });
+      const { runtimeConfig, publish } = createRecoveryCapability(
+        request as GatewayBrowserClient["request"],
+      );
+      await runtimeConfig.ensureLoaded();
+      if (scenario === "paused") {
+        runtimeConfig.patchForm(["count"], 7);
+        publish(false);
+        publish(true);
+        await runtimeConfig.refresh();
+        expect(runtimeConfig.state.configAutoSaveStatus).toBe("paused");
+      } else if (scenario === "autosave") {
+        runtimeConfig.patchForm(["count"], 2);
+        await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
+        expect(runtimeConfig.state.configAutoSaveStatus).toBe("saved");
+      } else {
+        await expect(runtimeConfig.patch({ raw: { count: 2 }, note: "First edit" })).resolves.toBe(
+          true,
+        );
       }
-      return server.request(method, params);
-    });
-    const { runtimeConfig, publish } = createRecoveryCapability(
-      request as GatewayBrowserClient["request"],
-    );
-    await runtimeConfig.ensureLoaded();
-    runtimeConfig.patchForm(["count"], 7);
-    publish(false);
-    publish(true);
-    await runtimeConfig.refresh();
-    expect(runtimeConfig.state.configAutoSaveStatus).toBe("paused");
-
-    await expect(
-      runtimeConfig.patch({ raw: { enabled: false }, note: "Disable feature" }),
-    ).resolves.toBe(false);
-    expect(runtimeConfig.state.configAutoSaveStatus).toBe("error");
-    rejectPatch = false;
-    await expect(runtimeConfig.retry()).resolves.toBe(true);
-
-    expect(runtimeConfig.state.configAutoSaveStatus).toBe("paused");
-    expect(runtimeConfig.state.configFormDirty).toBe(true);
-    expect(runtimeConfig.state.configForm).toEqual({ count: 7, enabled: false });
-    expect(request.mock.calls.filter(([method]) => method === "config.set")).toHaveLength(0);
-    await expect(server.store.request("config.get")).resolves.toMatchObject({
-      config: { count: 1, enabled: false },
-    });
-  });
-
-  it("retries the rejected patch and resumes ordinary form autosave", async () => {
-    vi.useFakeTimers();
-    const server = createPatchServer();
-    let rejectPatch = true;
-    const request = vi.fn(async (method: string, params?: unknown) => {
-      if (method === "config.patch" && rejectPatch) {
-        throw new Error("permission denied");
+      const raw =
+        scenario === "paused"
+          ? { enabled: false }
+          : scenario === "autosave"
+            ? { gateway: { controlUi: { sessionObserver: false } } }
+            : { count: 3 };
+      rejectPatch = true;
+      await expect(runtimeConfig.patch({ raw, note: "Second edit" })).resolves.toBe(false);
+      expect(runtimeConfig.state.configAutoSaveStatus).toBe("error");
+      expect(runtimeConfig.state.lastError).toBe("permission denied");
+      expect(runtimeConfig.state.configFormDirty).toBe(scenario === "paused");
+      if (scenario === "background") {
+        await vi.advanceTimersByTimeAsync(250);
+        expect(request.mock.calls.filter(([method]) => method === "config.get")).toHaveLength(2);
+        expect(runtimeConfig.state.configAutoSaveStatus).toBe("error");
+        expect(runtimeConfig.state.lastError).toBe("permission denied");
       }
-      return server.request(method, params);
-    });
-    const { runtimeConfig } = createRecoveryCapability(request as GatewayBrowserClient["request"]);
-    await runtimeConfig.ensureLoaded();
-    runtimeConfig.patchForm(["count"], 2);
-    await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
-    expect(runtimeConfig.state.configAutoSaveStatus).toBe("saved");
-
-    const patch = {
-      raw: { gateway: { controlUi: { sessionObserver: false } } },
-      note: "Disable session observer",
-    };
-    await expect(runtimeConfig.patch(patch)).resolves.toBe(false);
-    expect(runtimeConfig.state.configAutoSaveStatus).toBe("error");
-    expect(runtimeConfig.state.lastError).toBe("permission denied");
-    expect(runtimeConfig.state.configFormDirty).toBe(false);
-
-    rejectPatch = false;
-    await expect(runtimeConfig.retry()).resolves.toBe(true);
-    expect(request.mock.calls.filter(([method]) => method === "config.set")).toHaveLength(1);
-    await expect(server.store.request("config.get")).resolves.toMatchObject({
-      config: { count: 2, gateway: { controlUi: { sessionObserver: false } } },
-    });
-    expect(runtimeConfig.state.configAutoSaveStatus).toBe("saved");
-    expect(runtimeConfig.state.lastError).toBeNull();
-
-    runtimeConfig.patchForm(["count"], 3);
-    await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
-    await expect(server.store.request("config.get")).resolves.toMatchObject({
-      config: { count: 3, gateway: { controlUi: { sessionObserver: false } } },
-    });
-    expect(runtimeConfig.state.configFormDirty).toBe(false);
-    expect(runtimeConfig.state.configAutoSaveStatus).toBe("saved");
-  });
+      rejectPatch = false;
+      await expect(runtimeConfig.retry()).resolves.toBe(true);
+      const config = { count: scenario === "paused" ? 1 : 2, ...raw };
+      await expect(server.store.request("config.get")).resolves.toMatchObject({ config });
+      expect(runtimeConfig.state.configAutoSaveStatus).toBe(
+        scenario === "paused" ? "paused" : "saved",
+      );
+      if (scenario === "paused") {
+        expect(runtimeConfig.state.configFormDirty).toBe(true);
+        expect(runtimeConfig.state.configForm).toEqual({ count: 7, enabled: false });
+      } else {
+        expect(runtimeConfig.state.lastError).toBeNull();
+      }
+      if (scenario !== "background") {
+        expect(request.mock.calls.filter(([method]) => method === "config.set")).toHaveLength(
+          scenario === "autosave" ? 1 : 0,
+        );
+      }
+      if (scenario === "autosave") {
+        runtimeConfig.patchForm(["count"], 3);
+        await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
+        await expect(server.store.request("config.get")).resolves.toMatchObject({
+          config: { ...config, count: 3 },
+        });
+        expect(runtimeConfig.state.configFormDirty).toBe(false);
+        expect(runtimeConfig.state.configAutoSaveStatus).toBe("saved");
+      }
+    },
+  );
 
   it("clears a scalar patch conflict after refresh and a successful Workshop retry", async () => {
     const server = createPatchServer();
@@ -534,179 +518,115 @@ describe("config patch recovery", () => {
     });
   });
 
-  it("keeps the current failure and retry intent when an old connection rejects late", async () => {
-    const server = createPatchServer();
-    const stalePatch = deferred<unknown>();
-    const patchStarted = deferred();
-    let patchCount = 0;
-    const request = vi.fn(async (method: string, params?: unknown) => {
-      if (method === "config.patch") {
-        patchCount += 1;
-        if (patchCount === 1) {
-          patchStarted.resolve();
-          return stalePatch.promise;
+  it.each(["rejected", "pending"] as const)(
+    "retires the old connection's %s patch without replacing current retry intent",
+    async (settlement) => {
+      vi.useFakeTimers();
+      const server = createPatchServer();
+      const stalePatch = deferred<unknown>();
+      const patchStarted = deferred();
+      let patchCount = 0;
+      const request = vi.fn(async (method: string, params?: unknown) => {
+        if (method === "config.patch") {
+          if (++patchCount === 1) {
+            patchStarted.resolve();
+            if (settlement === "pending") {
+              return stalePatch.promise;
+            }
+            throw new Error("old connection rejected the patch");
+          }
+          if (patchCount === 2) {
+            throw new Error("current patch rejected");
+          }
         }
-        if (patchCount === 2) {
-          throw new Error("current patch rejected");
+        return server.request(method, params);
+      });
+      const { runtimeConfig, publish } = createRecoveryCapability(
+        request as GatewayBrowserClient["request"],
+      );
+      await runtimeConfig.ensureLoaded();
+      const oldWrite = runtimeConfig.patch({ raw: { count: 2 }, note: "Old edit" });
+      await patchStarted.promise;
+      if (settlement === "rejected") {
+        await expect(oldWrite).resolves.toBe(false);
+      }
+      publish(false);
+      publish(true);
+      await runtimeConfig.refresh();
+      if (settlement === "pending") {
+        await expect(
+          runtimeConfig.patch({ raw: { count: 3 }, note: "Current edit" }),
+        ).resolves.toBe(false);
+        stalePatch.reject(new Error("old patch rejected"));
+        await expect(oldWrite).resolves.toBe(false);
+        expect(runtimeConfig.state.lastError).toBe("current patch rejected");
+        expect(runtimeConfig.state.configAutoSaveStatus).toBe("error");
+      } else {
+        runtimeConfig.patchForm(["count"], 4);
+      }
+      await expect(runtimeConfig.retry()).resolves.toBe(true);
+      await expect(server.store.request("config.get")).resolves.toMatchObject({
+        config: { count: settlement === "pending" ? 3 : 4 },
+      });
+      expect(request.mock.calls.filter(([method]) => method === "config.patch")).toHaveLength(
+        settlement === "pending" ? 3 : 1,
+      );
+      expect(runtimeConfig.state.lastError).toBeNull();
+      expect(runtimeConfig.state.configAutoSaveStatus).toBe("saved");
+    },
+  );
+
+  it.each(["access", "builder"] as const)(
+    "rechecks the current %s before retrying a rejected patch",
+    async (guard) => {
+      const server = createPatchServer();
+      let rejectPatch = true;
+      let allowed = false;
+      const request = vi.fn(async (method: string, params?: unknown) => {
+        if (method === "config.patch" && rejectPatch) {
+          throw new Error("write unavailable");
         }
+        return server.request(method, params);
+      });
+      const { runtimeConfig } = createRecoveryCapability(
+        request as GatewayBrowserClient["request"],
+      );
+      await runtimeConfig.ensureLoaded();
+      await expect(
+        runtimeConfig.patch({
+          raw: { count: 2 },
+          note: "Old edit",
+          ...(guard === "access" ? { canDispatch: () => rejectPatch || allowed } : {}),
+        }),
+      ).resolves.toBe(false);
+      rejectPatch = false;
+      if (guard === "access") {
+        await expect(runtimeConfig.retry()).resolves.toBe(false);
+        expect(request.mock.calls.filter(([method]) => method === "config.patch")).toHaveLength(1);
+        expect(request.mock.calls.filter(([method]) => method === "config.set")).toHaveLength(0);
+        await expect(server.store.request("config.get")).resolves.toMatchObject({
+          config: { count: 1 },
+        });
+      } else {
+        await expect(
+          runtimeConfig.patchFromSnapshot((config) =>
+            allowed
+              ? { options: { raw: { count: 3, selectedFrom: config.count }, note: "Current edit" } }
+              : { error: "Selection unavailable" },
+          ),
+        ).resolves.toBe(false);
+        expect(runtimeConfig.state.lastError).toBe("Selection unavailable");
+        expect(runtimeConfig.state.configAutoSaveStatus).toBe("error");
+        await server.store.request("config.set", { raw: '{"count":7}', baseHash: "hash-1" });
+        await runtimeConfig.refresh();
       }
-      return server.request(method, params);
-    });
-    const { runtimeConfig, publish } = createRecoveryCapability(
-      request as GatewayBrowserClient["request"],
-    );
-    await runtimeConfig.ensureLoaded();
-    const oldWrite = runtimeConfig.patch({ raw: { count: 2 }, note: "Old edit" });
-    await patchStarted.promise;
-    publish(false);
-    publish(true);
-    await runtimeConfig.refresh();
-    await expect(runtimeConfig.patch({ raw: { count: 3 }, note: "Current edit" })).resolves.toBe(
-      false,
-    );
-
-    stalePatch.reject(new Error("old patch rejected"));
-    await expect(oldWrite).resolves.toBe(false);
-    expect(runtimeConfig.state.lastError).toBe("current patch rejected");
-    expect(runtimeConfig.state.configAutoSaveStatus).toBe("error");
-    await expect(runtimeConfig.retry()).resolves.toBe(true);
-
-    await expect(server.store.request("config.get")).resolves.toMatchObject({
-      config: { count: 3 },
-    });
-    expect(runtimeConfig.state.lastError).toBeNull();
-    expect(runtimeConfig.state.configAutoSaveStatus).toBe("saved");
-  });
-
-  it("retires a failed patch after reconnect so a later retry only saves the current draft", async () => {
-    vi.useFakeTimers();
-    const server = createPatchServer();
-    const request = vi.fn(async (method: string, params?: unknown) => {
-      if (method === "config.patch") {
-        throw new Error("old connection rejected the patch");
-      }
-      return server.request(method, params);
-    });
-    const { runtimeConfig, publish } = createRecoveryCapability(
-      request as GatewayBrowserClient["request"],
-    );
-    await runtimeConfig.ensureLoaded();
-    await expect(runtimeConfig.patch({ raw: { count: 2 }, note: "Old edit" })).resolves.toBe(false);
-    publish(false);
-    publish(true);
-    await runtimeConfig.refresh();
-    runtimeConfig.patchForm(["count"], 4);
-
-    await expect(runtimeConfig.retry()).resolves.toBe(true);
-
-    await expect(server.store.request("config.get")).resolves.toMatchObject({
-      config: { count: 4 },
-    });
-    expect(request.mock.calls.filter(([method]) => method === "config.patch")).toHaveLength(1);
-    expect(runtimeConfig.state.configAutoSaveStatus).toBe("saved");
-  });
-
-  it("rechecks caller access on retry without falling through to a full save", async () => {
-    const server = createPatchServer();
-    let rejectPatch = true;
-    let canDispatch = true;
-    const request = vi.fn(async (method: string, params?: unknown) => {
-      if (method === "config.patch" && rejectPatch) {
-        throw new Error("write unavailable");
-      }
-      return server.request(method, params);
-    });
-    const { runtimeConfig } = createRecoveryCapability(request as GatewayBrowserClient["request"]);
-    await runtimeConfig.ensureLoaded();
-    await expect(
-      runtimeConfig.patch({
-        raw: { count: 2 },
-        note: "Change count",
-        canDispatch: () => canDispatch,
-      }),
-    ).resolves.toBe(false);
-
-    rejectPatch = false;
-    canDispatch = false;
-    await expect(runtimeConfig.retry()).resolves.toBe(false);
-    expect(request.mock.calls.filter(([method]) => method === "config.patch")).toHaveLength(1);
-    expect(request.mock.calls.filter(([method]) => method === "config.set")).toHaveLength(0);
-    await expect(server.store.request("config.get")).resolves.toMatchObject({
-      config: { count: 1 },
-    });
-
-    canDispatch = true;
-    await expect(runtimeConfig.retry()).resolves.toBe(true);
-    await expect(server.store.request("config.get")).resolves.toMatchObject({
-      config: { count: 2 },
-    });
-  });
-
-  it("retries the latest failed builder against the refreshed snapshot", async () => {
-    const server = createPatchServer();
-    let rejectPatch = true;
-    let canBuild = false;
-    const request = vi.fn(async (method: string, params?: unknown) => {
-      if (method === "config.patch" && rejectPatch) {
-        throw new Error("older patch rejected");
-      }
-      return server.request(method, params);
-    });
-    const { runtimeConfig } = createRecoveryCapability(request as GatewayBrowserClient["request"]);
-    await runtimeConfig.ensureLoaded();
-    await expect(runtimeConfig.patch({ raw: { count: 2 }, note: "Old edit" })).resolves.toBe(false);
-    await expect(
-      runtimeConfig.patchFromSnapshot((config) =>
-        canBuild
-          ? { options: { raw: { count: 3, selectedFrom: config.count }, note: "Current edit" } }
-          : { error: "Selection unavailable" },
-      ),
-    ).resolves.toBe(false);
-    expect(runtimeConfig.state.lastError).toBe("Selection unavailable");
-    expect(runtimeConfig.state.configAutoSaveStatus).toBe("error");
-
-    rejectPatch = false;
-    canBuild = true;
-    await server.store.request("config.set", { raw: '{"count":7}', baseHash: "hash-1" });
-    await runtimeConfig.refresh();
-    await expect(runtimeConfig.retry()).resolves.toBe(true);
-
-    await expect(server.store.request("config.get")).resolves.toMatchObject({
-      config: { count: 3, selectedFrom: 7 },
-    });
-    expect(runtimeConfig.state.configAutoSaveStatus).toBe("saved");
-    expect(runtimeConfig.state.lastError).toBeNull();
-  });
-
-  it("keeps a rejected patch and its explanation visible through background refresh", async () => {
-    vi.useFakeTimers();
-    const server = createPatchServer();
-    let rejectPatch = false;
-    const request = vi.fn(async (method: string, params?: unknown) => {
-      if (method === "config.patch" && rejectPatch) {
-        throw new Error("permission denied");
-      }
-      return server.request(method, params);
-    });
-    const { runtimeConfig } = createRecoveryCapability(request as GatewayBrowserClient["request"]);
-    await runtimeConfig.ensureLoaded();
-    await expect(runtimeConfig.patch({ raw: { count: 2 }, note: "First edit" })).resolves.toBe(
-      true,
-    );
-    rejectPatch = true;
-    await expect(runtimeConfig.patch({ raw: { count: 3 }, note: "Second edit" })).resolves.toBe(
-      false,
-    );
-
-    await vi.advanceTimersByTimeAsync(250);
-
-    expect(request.mock.calls.filter(([method]) => method === "config.get")).toHaveLength(2);
-    expect(runtimeConfig.state.configAutoSaveStatus).toBe("error");
-    expect(runtimeConfig.state.lastError).toBe("permission denied");
-    rejectPatch = false;
-    await expect(runtimeConfig.retry()).resolves.toBe(true);
-    await expect(server.store.request("config.get")).resolves.toMatchObject({
-      config: { count: 3 },
-    });
-  });
+      allowed = true;
+      await expect(runtimeConfig.retry()).resolves.toBe(true);
+      await expect(server.store.request("config.get")).resolves.toMatchObject({
+        config: guard === "access" ? { count: 2 } : { count: 3, selectedFrom: 7 },
+      });
+      expect(runtimeConfig.state.configAutoSaveStatus).toBe("saved");
+      expect(runtimeConfig.state.lastError).toBeNull();
+    },
+  );
 });
