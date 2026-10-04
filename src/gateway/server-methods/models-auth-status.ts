@@ -23,6 +23,7 @@ import {
   resolveAuthProfileMetadata,
   resolveExplicitAuthOrderSelection,
 } from "../../agents/auth-profiles.js";
+import type { RuntimeAuthProfileStore } from "../../agents/auth-profiles/types.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { providerUsageLabel, resolveUsageProviderId } from "../../infra/provider-usage.shared.js";
@@ -349,7 +350,8 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
         return;
       }
       cfg = preparedSnapshot.config;
-      const { agentId, agentDir, authStore: store } = preparedSnapshot;
+      const { agentId, agentDir } = preparedSnapshot;
+      const store: RuntimeAuthProfileStore = preparedSnapshot.authStore;
       const {
         authAliasLookupParams,
         apiKeys,
