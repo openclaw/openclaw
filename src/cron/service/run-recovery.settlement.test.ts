@@ -15,9 +15,11 @@ import {
 } from "../store/run-receipt-store.test-support.js";
 import { stop } from "./ops-lifecycle.js";
 import { ensureLoadedForRead } from "./ops-shared.js";
+import { recoverCronRunProposals } from "./run-recovery.js";
 import {
   claimCronRecoveryReceipt,
   makeCronRecoveryState,
+  observeCronRecoveryForTest,
   observeCronTimerAdmissions,
 } from "./run-recovery.test-support.js";
 import { recomputeUnownedCronSchedules } from "./schedule-maintenance.js";
@@ -26,7 +28,7 @@ import { onTimer } from "./timer.test-support.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({ prefix: "cron-recovery-settlement-" });
 
-it("publishes a committed repair once after reply loss and leaves the remaining batch for the next tick", async () => {
+it("publishes every committed batch repair once after reply loss", async () => {
   const { storePath } = await makeStorePath();
   const nowMs = Date.now();
   const jobs = ["first", "second"].map((id, index) => {
@@ -84,23 +86,19 @@ it("publishes a committed repair once after reply loss and leaves the remaining 
   await reply.waitForExit();
   expect(reply.wasDropped()).toBe(true);
   expect(reply.attempts).toEqual(["first"]);
-  expect(finishedIds()).toEqual(["first"]);
-  expect(notificationKeys()).toEqual(["cron:first:failure-alert"]);
+  expect(finishedIds()).toEqual(["first", "second"]);
+  expect(notificationKeys()).toEqual(["cron:first:failure-alert", "cron:second:failure-alert"]);
   const afterLoss = await loadCronStore(storePath);
   expect(afterLoss.jobs[0]?.state).toMatchObject({ lastRunStatus: "error", consecutiveErrors: 1 });
   expect(afterLoss.jobs[0]?.state.runningAtMs).toBeUndefined();
-  expect(afterLoss.jobs[1]?.state.runningAtMs).toBe(jobs[1]!.state.runningAtMs);
-  expect(inspectActiveCronRunReceipt({ storePath, jobId: "first" })).toBeUndefined();
-  expect(inspectActiveCronRunReceipt({ storePath, jobId: "second" })?.receiptId).toBe(
-    jobs[1]!.state.runningReceiptId,
-  );
+  expect(afterLoss.jobs[1]?.state).toMatchObject({ lastRunStatus: "error", consecutiveErrors: 1 });
+  expect(afterLoss.jobs[1]?.state.runningAtMs).toBeUndefined();
   expect(history("first")).toEqual([expect.objectContaining({ jobId: "first", status: "error" })]);
-  expect(history("second")).toEqual([]);
 
   const secondTick = onTimer(state);
   pending.push(secondTick);
   await secondTick;
-  expect(reply.attempts).toEqual(["first", "second"]);
+  expect(reply.attempts).toEqual(["first"]);
   expect(finishedIds()).toEqual(["first", "second"]);
   expect(notificationKeys()).toEqual(["cron:first:failure-alert", "cron:second:failure-alert"]);
   for (const job of jobs) {
@@ -178,3 +176,102 @@ it("rolls schedule maintenance back when process ownership changes before commit
     stop(state);
   }
 });
+
+it("commits a recovery batch before publishing its first result", async () => {
+  const { storePath } = await makeStorePath();
+  const startedAtMs = Date.parse("2026-08-13T14:00:00.000Z");
+  const jobs = [
+    makeCronRecoveryJob("batch-first", startedAtMs),
+    makeCronRecoveryJob("batch-second", startedAtMs + 1),
+  ];
+  await writeCronStoreSnapshot({ storePath, jobs });
+  const receipts = jobs.map((job, index) =>
+    claimCronRecoveryReceipt(storePath, job, startedAtMs + index),
+  );
+  for (const receipt of receipts) {
+    releaseLocalCronRunReceiptOwnership(receipt);
+  }
+  const state = makeCronRecoveryState(logger, storePath, startedAtMs + 30_000);
+  const proposals = await Promise.all(
+    jobs.map((job, index) =>
+      observeCronRecoveryForTest(state, job.id, undefined, startedAtMs + index),
+    ),
+  );
+  const results: string[] = [];
+
+  await recoverCronRunProposals(state, proposals, {
+    mode: "startup",
+    onRecovery(proposal, result) {
+      results.push(`${proposal.jobId}:${result.kind}`);
+      // A published batch is already durable: a listener may inspect either job.
+      expect(inspectActiveCronRunReceipt({ storePath, jobId: jobs[1]!.id })).toBeUndefined();
+    },
+  });
+
+  expect(results).toEqual(["batch-first:repaired", "batch-second:repaired"]);
+  const persisted = await loadCronStore(storePath);
+  expect(persisted.jobs.map((job) => job.state.lastRunStatus)).toEqual(["error", "error"]);
+});
+
+it.each(["listener", "logger"] as const)(
+  "publishes every committed batch result before surfacing a %s failure",
+  async (failing) => {
+    const { storePath } = await makeStorePath();
+    const startedAtMs = Date.parse("2026-08-13T14:00:00.000Z");
+    const jobs = [
+      makeCronRecoveryJob("batch-first", startedAtMs),
+      makeCronRecoveryJob("batch-second", startedAtMs + 1),
+    ];
+    await writeCronStoreSnapshot({ storePath, jobs });
+    const receipts = jobs.map((job, index) =>
+      claimCronRecoveryReceipt(storePath, job, startedAtMs + index),
+    );
+    for (const receipt of receipts) {
+      releaseLocalCronRunReceiptOwnership(receipt);
+    }
+    const state = makeCronRecoveryState(logger, storePath, startedAtMs + 30_000);
+    const proposals = await Promise.all(
+      jobs.map((job, index) =>
+        observeCronRecoveryForTest(state, job.id, undefined, startedAtMs + index),
+      ),
+    );
+    const results: string[] = [];
+    const failure = new Error(`recovery ${failing} failed`);
+    // Arm after the first result is published so the throw lands in that result's log replay.
+    let loggerArmed = false;
+    const levels = ["debug", "info", "warn", "error"] as const;
+    if (failing === "logger") {
+      for (const level of levels) {
+        logger[level].mockImplementation(() => {
+          if (loggerArmed) {
+            loggerArmed = false;
+            throw failure;
+          }
+        });
+      }
+    }
+
+    try {
+      await expect(
+        recoverCronRunProposals(state, proposals, {
+          mode: "startup",
+          onRecovery(proposal, result) {
+            results.push(`${proposal.jobId}:${result.kind}`);
+            if (results.length === 1 && failing === "listener") {
+              throw failure;
+            }
+            loggerArmed = results.length === 1;
+          },
+        }),
+      ).rejects.toBe(failure);
+    } finally {
+      for (const level of levels) {
+        logger[level].mockReset();
+      }
+    }
+
+    expect(results).toEqual(["batch-first:repaired", "batch-second:repaired"]);
+    const persisted = await loadCronStore(storePath);
+    expect(persisted.jobs.map((job) => job.state.lastRunStatus)).toEqual(["error", "error"]);
+  },
+);

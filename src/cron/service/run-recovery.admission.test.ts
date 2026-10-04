@@ -86,7 +86,7 @@ it("lists behind healthy recovery while a writer is held, and retires a waiting 
   ) {
     if (request.type === "execute") {
       const command: unknown = deserialize(request.input);
-      if (isRecord(command) && command.type === "cron.repairRun") {
+      if (isRecord(command) && command.type === "cron.repairRuns") {
         posted.resolve();
       }
     }

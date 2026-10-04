@@ -24,7 +24,7 @@ export function observeCronStoreCommits(storePath: string, observer: () => void)
   return () => publication.mockRestore();
 }
 
-export function loseFirstCronMutationReply(type: CronRuntimeMutationType = "cron.repairRun") {
+export function loseFirstCronMutationReply(type: CronRuntimeMutationType = "cron.repairRuns") {
   let target: { worker: Worker; requestId: number; nonce: string } | undefined;
   let stopped: Promise<number> | undefined;
   let dropped = false;
@@ -47,8 +47,12 @@ export function loseFirstCronMutationReply(type: CronRuntimeMutationType = "cron
         typeof command.input.nonce === "string"
       ) {
         attempts.push(
-          isRecord(command.input.proposal) && typeof command.input.proposal.jobId === "string"
-            ? command.input.proposal.jobId
+          // Repairs record their first job; other batch operations record their type.
+          command.type === "cron.repairRuns" &&
+            Array.isArray(command.input.proposals) &&
+            isRecord(command.input.proposals[0]) &&
+            typeof command.input.proposals[0].jobId === "string"
+            ? command.input.proposals[0].jobId
             : type,
         );
         target ??= { worker: this, requestId: request.id, nonce: command.input.nonce };
