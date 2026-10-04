@@ -1,3 +1,4 @@
+import { isAbortError } from "../infra/abort-signal.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import {
   getGatewayRestartDrainSignal,
@@ -18,7 +19,7 @@ export function scheduleGatewayIdleTask(params: {
   repeatDelayMs?: number;
   isClosing: () => boolean;
   isBusy: () => boolean;
-  run: () => Promise<void>;
+  run: (signal: AbortSignal) => Promise<void>;
   log: { warn: (message: string) => void };
   errorMessage: string;
 }): GatewayIdleTaskHandle {
@@ -33,7 +34,7 @@ export function scheduleGatewayIdleTask(params: {
     if (params.isBusy()) {
       schedule(params.retryDelayMs);
     } else {
-      await params.run();
+      await params.run(AbortSignal.any([scheduler.signal, getGatewayRestartDrainSignal()]));
       if (params.repeatDelayMs !== undefined) {
         schedule(params.repeatDelayMs);
       }
@@ -62,7 +63,10 @@ export function scheduleGatewayIdleTask(params: {
         return Promise.resolve()
           .then(() => admission.run(run))
           .catch((error: unknown) => {
-            if (!isGatewayRestartDrainError(error)) {
+            if (
+              !isGatewayRestartDrainError(error) &&
+              !(scheduler.signal.aborted && isAbortError(error))
+            ) {
               params.log.warn(`${params.errorMessage}: ${String(error)}`);
             }
           })
