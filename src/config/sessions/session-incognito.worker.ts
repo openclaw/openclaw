@@ -48,6 +48,11 @@ import {
   isIncognitoTranscriptWrite,
 } from "./session-incognito-transcript-contract.js";
 import { createIncognitoTranscriptWorker } from "./session-incognito-transcript.worker.js";
+import { interruptPendingInputHistoryInDatabase } from "./session-pending-input-history-reconcile.js";
+import type {
+  PendingInputHistoryGrant,
+  PendingInputHistoryReceipt,
+} from "./session-pending-input-history.types.js";
 import { listSessionMembersInDatabase } from "./session-sharing-store.kernel.js";
 
 /** Connection-bound kernels: no namespace lookup, second connection, or shared-state write. */
@@ -87,7 +92,11 @@ export function createIncognitoSessionWorker(
       throw new Error("Incognito actor requires an incognito session key");
     }
   };
-  const admit = (stage: "transaction" | "commit", keys: readonly string[]) => {
+  const admit = (
+    stage: "transaction" | "commit",
+    keys: readonly string[],
+    pendingHistory?: { custody: PendingInputHistoryGrant; receipt?: PendingInputHistoryReceipt },
+  ) => {
     keys.forEach(assertKey);
     const facts = keys.flatMap((key) => read(key).facts);
     if (stage === "commit") {
@@ -102,9 +111,15 @@ export function createIncognitoSessionWorker(
           revision = nextRevision;
         },
       });
-      deferSqliteWorkerCommitReceipt(database.db, facts);
+      deferSqliteWorkerCommitReceipt(
+        database.db,
+        pendingHistory?.receipt ? { value: pendingHistory.receipt, facts } : facts,
+      );
     }
-    requestSqliteWorkerOperationAdmission({ stage, facts: { identity, sessions: facts } });
+    requestSqliteWorkerOperationAdmission({
+      stage,
+      facts: { identity, sessions: facts, pendingHistory: pendingHistory?.custody },
+    });
   };
   const sideData = createIncognitoSideDataWorker(database, env, admit);
   const transcript = createIncognitoTranscriptWorker(database, env, admit);
@@ -134,6 +149,7 @@ export function createIncognitoSessionWorker(
         await outbox.prepare(command);
       } else if (
         !isIncognitoLifecycleCommand(command) &&
+        command.type !== "session.pendingInputs.interruptHistory" &&
         command.type !== "session.entry.create" &&
         command.type !== "session.entry.read"
       ) {
@@ -141,6 +157,27 @@ export function createIncognitoSessionWorker(
       }
     },
     execute(command: SqliteWorkerCommand<IncognitoSessionOperations>) {
+      if (command.type === "session.pendingInputs.interruptHistory") {
+        const { sessionKey, sessionId, lifecycleRevision, ids } = command.input;
+        assertKey(sessionKey);
+        let receipt: PendingInputHistoryReceipt | undefined;
+        const value = interruptPendingInputHistoryInDatabase(
+          database,
+          { agentId: database.agentId, path: database.path, env },
+          { sessionKey, sessionId, ids },
+          (stage, custody) => {
+            const entry = readExactSessionEntryRow(database, sessionKey)?.entry;
+            if (entry?.sessionId !== sessionId || entry.lifecycleRevision !== lifecycleRevision) {
+              throw new Error("Incognito pending input session generation is no longer current");
+            }
+            admit(stage, [sessionKey], { custody, receipt });
+          },
+          (committed) => {
+            receipt = committed;
+          },
+        );
+        return { value, facts: read(sessionKey).facts };
+      }
       if (isIncognitoComputeCommand(command)) {
         assertKey(command.input.sessionKey);
         const execute = () => {

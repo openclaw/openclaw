@@ -6,6 +6,7 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import * as temporaryRoot from "../../infra/tmp-openclaw-dir.js";
 import { resetLogger, setLoggerOverride } from "../../logging/logger.js";
 import { loggingState } from "../../logging/state.js";
+import { escapeSkillXml, formatSkillsCompactForPrompt } from "../loading/skill-contract.js";
 import { loadWorkspaceSkills } from "../loading/workspace-skill-loader.js";
 import { buildSkillSnapshot } from "../loading/workspace-skill-prompt.js";
 import { SkillResourceDeliveryLimitError } from "./resource-delivery-error.js";
@@ -48,23 +49,45 @@ describe("prepared workspace skill resources", () => {
 
   it("recreates stable session paths and prompt bytes independent of delivery order", async () => {
     const workspace = await fs.realpath(temps.make("skill-stable-workspace-"));
-    const root = temps.make("skill-stable-inputs-");
+    const root = temps.make("skill-stable-inputs-&-");
     const resolveRoot = vi
       .spyOn(temporaryRoot, "resolvePreferredOpenClawTmpDir")
       .mockReturnValue(root);
     const scope = { sessionId: "stable-session", workspaceDir: workspace };
     await writeSkill(workspace, "beta");
-    const alpha = await writeSkill(workspace, "alpha");
+    const alpha = await writeSkill(workspace, "alpha&tools");
     const support = path.join(alpha, "reference.md");
     await fs.writeFile(support, "original reference");
     const snapshot = await loadSnapshot(workspace);
     const delivery = (await prepareSkillResourceDelivery(snapshot, () => {}))!;
+    const gatewaySkills = snapshot.resolvedSkills!.toReversed().map((skill) =>
+      Object.assign({}, skill, {
+        filePath: skill.name === "beta" ? "~/gateway/skills/beta/SKILL.md" : skill.filePath,
+      }),
+    );
+    const gatewayPrompt = [
+      "System instructions before the catalog.",
+      "Skills catalog using compact format (descriptions shortened).",
+      formatSkillsCompactForPrompt(gatewaySkills, { descriptionMaxChars: 8 }),
+      "System instructions after the catalog.",
+    ].join("\n");
     try {
       const first = await materializeSkillResources(delivery, () => {}, scope);
       const previousPrompt = first.snapshot.prompt;
+      const previousRewrittenPrompt = first.rewriteReferences(gatewayPrompt);
+      let expectedPrompt = gatewayPrompt;
+      for (const source of gatewaySkills) {
+        const target = first.snapshot.resolvedSkills.find((skill) => skill.name === source.name)!;
+        expectedPrompt = expectedPrompt.replace(
+          `<location>${escapeSkillXml(source.filePath)}</location>`,
+          `<location>${escapeSkillXml(target.filePath)}</location>`,
+        );
+      }
+      expect(previousRewrittenPrompt).toBe(expectedPrompt);
+      expect(previousRewrittenPrompt).not.toContain("~/gateway/");
       const previousReference = first.rewriteReferences(support);
       expect(path.basename(first.directory)).toMatch(/^skill-resources-[a-f0-9]{16}$/);
-      expect(path.basename(path.dirname(previousReference))).toMatch(/^alpha-[a-f0-9]{12}$/);
+      expect(path.basename(path.dirname(previousReference))).toMatch(/^alphatools-[a-f0-9]{12}$/);
       await first.cleanup();
       expect(existsSync(first.directory)).toBe(false);
 
@@ -75,6 +98,7 @@ describe("prepared workspace skill resources", () => {
       );
       try {
         expect(second.snapshot.prompt).toBe(previousPrompt);
+        expect(second.rewriteReferences(gatewayPrompt)).toBe(previousRewrittenPrompt);
         expect(second.rewriteReferences(support)).toBe(previousReference);
         expect(await fs.readFile(previousReference, "utf8")).toBe("original reference");
         // A retained cleanup handle must never delete a later turn's files.
@@ -98,6 +122,50 @@ describe("prepared workspace skill resources", () => {
       }
     } finally {
       resolveRoot.mockRestore();
+    }
+  });
+
+  it("rewrites unambiguous XML catalog locations without choosing between same-named sources", async () => {
+    const workspace = temps.make("skill-names-");
+    await writeSkill(workspace, "guide");
+    const delivery = (await prepareSkillResourceDelivery(await loadSnapshot(workspace), () => {}))!;
+    const name = "Review & Guide";
+    const materialized = await materializeSkillResources(
+      {
+        ...delivery,
+        skills: [
+          { ...delivery.skills[0]!, name, displayName: "first", sourcePath: "/first/SKILL.md" },
+          {
+            ...delivery.skills[0]!,
+            name,
+            displayName: "second",
+            sourcePath: "/second&source/SKILL.md",
+          },
+          { ...delivery.skills[0]!, name: name.toLowerCase(), sourcePath: "/first/SKILL.md" },
+        ],
+      },
+      () => {},
+    );
+    try {
+      const skills = materialized.snapshot.resolvedSkills!;
+      const second = skills.find((skill) => skill.displayName === "second")!;
+      const prompt = formatSkillsCompactForPrompt([
+        { ...second, filePath: "~/shared/SKILL.md" },
+        {
+          ...second,
+          filePath: `workspace-skill://workspace/${encodeURIComponent(name.trim())}/SKILL.md`,
+        },
+        { ...second, filePath: "/second&source/SKILL.md" },
+        { ...second, name: name.toLowerCase(), filePath: "/external/SKILL.md" },
+      ]);
+      expect(materialized.rewriteReferences(prompt)).toBe(
+        prompt.replace(
+          "<location>/second&amp;source/SKILL.md</location>",
+          `<location>${escapeSkillXml(second.filePath)}</location>`,
+        ),
+      );
+    } finally {
+      await materialized.cleanup();
     }
   });
 

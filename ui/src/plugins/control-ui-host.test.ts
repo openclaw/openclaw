@@ -105,6 +105,8 @@ describe("native UI roster refresh", () => {
     expect(request.mock.calls[1]).toEqual([
       "sessions.list",
       {
+        rowMode: "compact",
+        source: "chat-pane",
         includeGlobal: true,
         includeUnknown: true,
         configuredAgentsOnly: false,

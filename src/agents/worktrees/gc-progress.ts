@@ -2,6 +2,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { OpenClawStateLeaseError } from "../../state/openclaw-state-lease.js";
 import { classifyWorktreeRemovalError, WorktreeBranchMovedError } from "./removal-errors.js";
+import { WorktreeRemovalContentionError } from "./run-lease-owner.js";
 import type { ManagedWorktreeGcResult } from "./types.js";
 
 const MAX_WORKTREE_GC_ISSUES = 64;
@@ -72,6 +73,20 @@ export class WorktreeGcProgress {
     error: unknown,
     id?: string,
   ): void {
+    if (
+      stage === "limits" &&
+      id &&
+      error instanceof WorktreeRemovalContentionError &&
+      error.blockedByRun
+    ) {
+      this.protect(
+        stage,
+        id,
+        "live-refused",
+        `Worktree ${error.blockedByRun.worktreeId} has an active run in pid ${error.blockedByRun.pid}`,
+      );
+      return;
+    }
     if (
       error instanceof WorktreeBranchMovedError &&
       id &&

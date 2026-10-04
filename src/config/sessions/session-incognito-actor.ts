@@ -33,6 +33,7 @@ import {
   type IncognitoLifecycleOperations,
 } from "./session-incognito-lifecycle-contract.js";
 import type { IncognitoOutboxOperations } from "./session-incognito-outbox-contract.js";
+import type { IncognitoPendingInputOperations } from "./session-incognito-pending-input-contract.js";
 import {
   isIncognitoSideDataWrite,
   type IncognitoSideDataOperations,
@@ -41,6 +42,7 @@ import {
   isIncognitoTranscriptWrite,
   type IncognitoTranscriptOperations,
 } from "./session-incognito-transcript-contract.js";
+import type { PendingInputHistoryGrant } from "./session-pending-input-history.types.js";
 
 type Scope = Pick<SqliteWorkerStore<AgentDatabaseIncognitoOperations>, "execute">;
 type LifecycleSettlement = {
@@ -176,6 +178,10 @@ export function createIncognitoSessionFacts(
         signal?: AbortSignal,
         companion?: LifecycleSettlement,
         cleanup = false,
+        publication?: {
+          authorize(stage: "transaction" | "commit", facts: unknown): void;
+          decodeReceipt(facts: unknown): IncognitoSessionOperations[Key]["output"];
+        },
       ) => {
         // Capture caller-owned input before queue waits.
         const captured = structuredClone(command);
@@ -210,7 +216,10 @@ export function createIncognitoSessionFacts(
             try {
               if (native) {
                 const settlement = await native.retained.settled;
-                const receipt = native.admission.committed?.facts;
+                const committed = native.admission.committed?.facts;
+                const recovered =
+                  committed !== undefined ? publication?.decodeReceipt(committed) : undefined;
+                const receipt = recovered?.facts ?? committed;
                 // Native callbacks stay with the lifecycle owner. Only its SQL receipt
                 // decides compensation, even when disclosure or publication subsequently fails.
                 const receiptMatches =
@@ -242,6 +251,9 @@ export function createIncognitoSessionFacts(
                   ) {
                     unknownOutcome("Incognito session native settlement is unknown");
                   }
+                  if (recovered && receiptMatches) {
+                    outcome = { ok: true, value: recovered };
+                  }
                 } finally {
                   companion?.settle(companionOutcome);
                 }
@@ -249,25 +261,26 @@ export function createIncognitoSessionFacts(
               if (!outcome.ok) {
                 throw outcome.error;
               }
+              const value = outcome.value;
               if (!changing) {
                 // Read results carry current worker facts, never authority captured before a wait.
                 withGrant(() => {
                   authority.assertCurrent();
                   assertActorCurrent();
-                  for (const facts of outcome.value.facts) {
+                  for (const facts of value.facts) {
                     authorizeSessionFacts(authority, "commit", facts);
                   }
                   authority.assertCurrent();
                   assertActorCurrent();
                 });
-                outcome.value.facts.forEach(install);
+                value.facts.forEach(install);
               }
               for (const key of targets) {
                 pending.delete(key);
               }
               authority.assertCurrent();
               assertActorCurrent();
-              return receive(outcome.value);
+              return receive(value);
             } finally {
               for (const key of targets) {
                 pending.delete(key);
@@ -344,6 +357,10 @@ export function createIncognitoSessionFacts(
                       entry,
                     );
                   }
+                  publication?.authorize(
+                    request.stage === "prepare" ? "transaction" : request.stage,
+                    request.facts.pendingHistory,
+                  );
                   if (request.stage === "commit") {
                     postimage = facts;
                     companion?.beforeCommit();
@@ -485,6 +502,61 @@ export function createIncognitoSessionFacts(
           signal?: AbortSignal,
         ): Promise<IncognitoHistoryOperations[Key]["output"]> =>
           perform(authority, command, false, (result) => result.value, signal),
+        interruptPendingInputHistory(
+          authority: IncognitoSessionAuthority,
+          input: IncognitoPendingInputOperations["session.pendingInputs.interruptHistory"]["input"],
+          admitCustody: (stage: "transaction" | "commit", facts: PendingInputHistoryGrant) => void,
+        ) {
+          const captured = structuredClone(input);
+          const ids = new Set(captured.ids);
+          return perform(
+            authority,
+            { type: "session.pendingInputs.interruptHistory", input: captured },
+            true,
+            (result) => result.value,
+            undefined,
+            undefined,
+            false,
+            {
+              authorize(stage, facts) {
+                if (
+                  !isRecord(facts) ||
+                  facts.kind !== "pending-input-history-custody" ||
+                  !Array.isArray(facts.candidates) ||
+                  facts.candidates.some(
+                    (row: unknown) =>
+                      !isRecord(row) ||
+                      typeof row.input_id !== "string" ||
+                      !ids.has(row.input_id) ||
+                      row.session_key !== captured.sessionKey ||
+                      row.session_id !== captured.sessionId,
+                  )
+                ) {
+                  throw new Error("Incognito pending input history omitted its custody facts");
+                }
+                // SAFETY: The paired bounded kernel owns this validated custody envelope.
+                admitCustody(stage, facts as PendingInputHistoryGrant);
+              },
+              decodeReceipt(receipt) {
+                if (
+                  !isRecord(receipt) ||
+                  !Array.isArray(receipt.facts) ||
+                  !isRecord(receipt.value) ||
+                  receipt.value.kind !== "pending-input-history-interrupted" ||
+                  !Array.isArray(receipt.value.ids) ||
+                  receipt.value.ids.some((id: unknown) => typeof id !== "string" || !ids.has(id))
+                ) {
+                  throw new SqliteWorkerError(
+                    "Incognito pending input history omitted its committed receipt",
+                    "outcome-unknown",
+                  );
+                }
+                // SAFETY: Session facts are compared with the exact commit grant before publication.
+                return receipt as IncognitoSessionOperations["session.pendingInputs.interruptHistory"]["output"];
+              },
+            },
+          );
+        },
         transcript: <Key extends keyof IncognitoTranscriptOperations>(
           authority: IncognitoSessionAuthority,
           command: { type: Key; input: IncognitoTranscriptOperations[Key]["input"] },

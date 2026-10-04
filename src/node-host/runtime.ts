@@ -124,14 +124,10 @@ export async function prepareNodeHostRuntime(params?: {
   env?: NodeJS.ProcessEnv;
   /** The embedded app worker never advertises native agent runs. */
   enableAgentRuns?: boolean;
-  /** The embedded app worker never advertises full worker session hosting. */
-  enableWorkerRuns?: boolean;
   /** Process-scoped worker hosting for environment-managed disposable nodes. */
   forceWorkerRuns?: boolean;
   /** Disposable cloud nodes expose computer control only through the private carrier. */
   ephemeral?: boolean;
-  /** Embedded workers may still host long-lived plugin commands over the app-owned socket. */
-  enableDuplexPluginCommands?: boolean;
   installedAppsSharingEnabled?: boolean;
   desktopSharingEnabled?: boolean;
   commands?: readonly string[];
@@ -146,8 +142,6 @@ export async function prepareNodeHostRuntime(params?: {
   await ensureNodeHostPluginRegistry({ config, env, commandAllowlist });
   const pathEnv = ensureNodePathEnv();
   env.PATH = pathEnv;
-  const duplexEnabled =
-    params?.enableAgentRuns === true || params?.enableDuplexPluginCommands === true;
   const platform = params?.platform ?? process.platform;
   const installedAppsSharingEnabled =
     platform === "darwin" && params?.installedAppsSharingEnabled === true;
@@ -159,10 +153,10 @@ export async function prepareNodeHostRuntime(params?: {
   });
   const availabilityContext = { config, env };
   const resolvePluginNodeHost = () =>
-    listRegisteredNodeHostCapsAndCommands(availabilityContext, {
-      includeDuplex: duplexEnabled,
-      ...(commandAllowlist ? { commandAllowlist } : {}),
-    });
+    listRegisteredNodeHostCapsAndCommands(
+      availabilityContext,
+      commandAllowlist ? { commandAllowlist } : {},
+    );
   const pluginNodeHost = resolvePluginNodeHost();
   // Opt-in and binary resolution are node-local enforcement points. A Gateway
   // cannot advertise or enable this command on the host's behalf.
@@ -172,8 +166,7 @@ export async function prepareNodeHostRuntime(params?: {
       : null;
   let workerRunsEnabled =
     !commandAllowlist &&
-    params?.enableWorkerRuns === true &&
-    (params.forceWorkerRuns === true || config.nodeHost?.workerRuns?.enabled === true);
+    (params?.forceWorkerRuns === true || config.nodeHost?.workerRuns?.enabled === true);
   const workspaceOptions = { env, ephemeral: params?.ephemeral };
   let preparedWorkerWorkspace: NodeWorkerWorkspaceRuntime | undefined;
   let preparedContainerSupervisor: ReturnType<typeof createNodeWorkerSupervisor> | undefined;
@@ -471,8 +464,7 @@ export async function prepareNodeHostRuntime(params?: {
             const claudeSkills =
               frame.command === NODE_AGENT_CLI_CLAUDE_RUN_COMMAND &&
               requestsClaudeNodeSkillRuntime(frame.paramsJSON);
-            const duplexCommand =
-              duplexEnabled && (claudeSkills || isRegisteredNodeHostCommandDuplex(frame.command));
+            const duplexCommand = claudeSkills || isRegisteredNodeHostCommandDuplex(frame.command);
             const progressEnabled = duplexCommand || frame.command === NODE_DESKTOP_STREAM_COMMAND;
             const controller = new AbortController();
             // Every command must remain cancellable after dispatch; only duplex

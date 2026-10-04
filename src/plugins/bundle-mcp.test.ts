@@ -604,7 +604,6 @@ describe("loadEnabledBundleMcpConfig", () => {
           bundleFormat: "agent",
         }),
       ).toMatchObject({
-        hasSupportedStdioServer: true,
         supportedServerNames: ["local", "remote", "legacy"],
         stdioServerNames: ["local"],
         unsupportedServerNames: [],

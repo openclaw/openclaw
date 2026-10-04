@@ -212,6 +212,9 @@ describe("SQLite session entry patch commit revalidation", () => {
               : /closed|replaced|not open/,
         );
         expect(updates).toBe(1);
+        if (changed === "connection") {
+          await closeOpenClawAgentDatabaseByPathAsync(database.path);
+        }
         expect(loadExactSessionEntry(scope)?.entry.label).toBe(
           changed === "row" ? "foreign" : "original",
         );
@@ -491,8 +494,8 @@ describe("SQLite session entry patch commit revalidation", () => {
   });
 
   it("commits an unchanged persisted row after reopening during preparation", async () => {
-    const persisted = await patchEntry("ordinary", () => {
-      expect(closeOpenClawAgentDatabaseByPath(database.path)).toBe(true);
+    const persisted = await patchEntry("ordinary", async () => {
+      expect(await closeOpenClawAgentDatabaseByPathAsync(database.path)).toBe(true);
       return { label: "renamed" };
     });
     expect(persisted).toMatchObject({ label: "renamed", sessionId: "session-1" });
@@ -603,10 +606,10 @@ describe("SQLite session entry patch commit revalidation", () => {
         { sessionId: "main-session", updatedAt: 10 },
       );
       await expect(
-        patchEntry(route, () => {
+        patchEntry(route, async () => {
           setCanonicalSqliteSessionMainKey(database, "work");
           setUnrelatedParent(database.db, "agent:main:unrecorded-parent");
-          expect(closeOpenClawAgentDatabaseByPath(database.path)).toBe(true);
+          expect(await closeOpenClawAgentDatabaseByPathAsync(database.path)).toBe(true);
           return null;
         }),
       ).rejects.toThrow("openclaw doctor --fix");
@@ -688,7 +691,7 @@ describe("SQLite session entry patch commit revalidation", () => {
         return { label: "with participants" };
       });
       expect(persisted).toMatchObject({ sessionId: "session-1", label: "with participants" });
-      expect(closeOpenClawAgentDatabaseByPath(database.path)).toBe(true);
+      expect(await closeOpenClawAgentDatabaseByPathAsync(database.path)).toBe(true);
       expect(loadExactSessionEntry(scope)?.entry).toMatchObject({
         label: "with participants",
         participantCount: 2,

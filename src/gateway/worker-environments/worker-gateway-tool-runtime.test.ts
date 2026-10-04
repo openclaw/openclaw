@@ -103,6 +103,32 @@ function request(
 }
 
 describe("worker Gateway tool runtime", () => {
+  it("prepares deferred discovery guidance with the model tool projection", async () => {
+    const { runtime } = fixture([], async () => ({
+      tools: [tool("web_fetch")],
+      policy,
+      presentation: createToolSurfacePresentationForTest({
+        tools: { codeMode: false, toolSearch: { enabled: true, mode: "directory" } },
+      }),
+    }));
+    try {
+      const projection = await runtime.getPromptProjection(identity);
+      expect(projection.tools.map(({ name }) => name)).toEqual([
+        "tool_search",
+        "tool_describe",
+        "tool_call",
+      ]);
+      expect(projection.toolSchemaDirectoryPrompt).toContain(
+        "Deferred names are not directly callable.",
+      );
+      expect(projection.toolSchemaDirectoryPrompt).not.toContain(
+        "Call a unique deferred tool name directly",
+      );
+    } finally {
+      await runtime.close();
+    }
+  });
+
   it("issues one finite surface and invokes only an issued Gateway handle with valid arguments", async () => {
     const execute = vi.fn(async () => success);
     const remote = tool("remote", execute);

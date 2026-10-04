@@ -88,6 +88,7 @@ export function resolveCliRunQueueKey(params: {
 }
 
 export function buildCliAgentSystemPrompt(params: {
+  preparedTtsPreferences?: import("../../tts/tts-preferences.js").PreparedTtsPreferences;
   requesterProfileId?: string;
   workspaceDir: string;
   cwd?: string;
@@ -147,6 +148,7 @@ export function buildCliAgentSystemPrompt(params: {
   return buildConfiguredAgentSystemPrompt({
     config: params.config,
     preparedModelRuntime: params.preparedModelRuntime,
+    preparedTtsPreferences: params.preparedTtsPreferences,
     agentId: params.agentId,
     workspaceDir: params.workspaceDir,
     runtimeCwd,

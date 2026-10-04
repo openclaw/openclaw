@@ -245,20 +245,16 @@ export function loadTranscriptHeaderSync(scope: SessionTranscriptReadScope): unk
 export function loadTranscriptEventRowsAfterSeqSync(
   scope: SessionTranscriptReadScope,
   afterSeq: number,
-  throughSeq?: number,
 ): SessionTranscriptEventRow[] {
   const resolved = resolveSqliteTranscriptReadScope(scope);
   const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
   return readHotSessionTranscriptSnapshot(database, resolved.sessionId, "incremental", () => {
     const db = getSessionKysely(database.db);
-    let query = db
+    const query = db
       .selectFrom("transcript_events")
       .select([transcriptEventJsonSql(database.db).as("event_json"), "seq"])
       .where("session_id", "=", resolved.sessionId)
       .where("seq", ">", afterSeq);
-    if (throughSeq !== undefined) {
-      query = query.where("seq", "<=", throughSeq);
-    }
     return executeSqliteQuerySync(database.db, query.orderBy("seq", "asc")).rows.map((row) => ({
       event: JSON.parse(row.event_json) as TranscriptEvent,
       seq: sqliteNumber(row.seq),
@@ -475,11 +471,10 @@ export function readTranscriptStatsBatchReadOnlySync(
 /** Reads the latest visible assistant text from SQLite transcript rows in reverse order. */
 export function loadLatestAssistantText(
   scope: SessionTranscriptReadScope,
-  options: { includeTranscriptOnlyOpenClawAssistant?: boolean } = {},
 ): LatestTranscriptAssistantText | undefined {
   const resolved = resolveSqliteTranscriptReadScope(scope);
   const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
-  return readLatestAssistantTextFromDatabase(database, resolved, options);
+  return readLatestAssistantTextFromDatabase(database, resolved);
 }
 
 /** Checks physical message history without loading payloads covered by the identity index. */

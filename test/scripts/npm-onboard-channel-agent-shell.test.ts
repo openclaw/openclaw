@@ -230,40 +230,6 @@ openclaw_e2e_stop_process() { if [ -n "$1" ]; then "$FIXTURE_CLI" gateway-stop; 
 }
 
 describe("npm onboarding fixture consent", () => {
-  it("inspects the admitted local turn with the installed CLI across Gateway restart", () => {
-    const { result, events, detail } = runScenario();
-    expect(result.status, detail).toBe(0);
-    const optIn = events.findIndex(
-      (args) => args.join(" ") === "config set logging.audit.executionIdentity true",
-    );
-    const turn = events.findIndex((args) => args[0] === "agent");
-    expect(optIn).toBeGreaterThanOrEqual(0);
-    expect(optIn).toBeLessThan(turn);
-    expect(events.filter((args) => args[0] === "agent")).toHaveLength(1);
-    expect(
-      events
-        .slice(turn + 1)
-        .filter((args) =>
-          ["gateway-start", "gateway-stop", "audit"].some((name) => name === args[0]),
-        )
-        .map((args) => args.slice(0, 3)),
-    ).toEqual([
-      ["gateway-start"],
-      ["audit", "--run", "admitted-run-fixture"],
-      ["gateway-stop"],
-      ["gateway-start"],
-      ["audit", "--execution", "execution-fixture"],
-      ["gateway-stop"],
-    ]);
-  });
-
-  it("rejects inherited state before installing or admitting a turn", () => {
-    const { result, events, detail } = runScenario({ dirtyState: true });
-    expect(result.status).not.toBe(0);
-    expect(detail).toContain("package proof inherited existing state");
-    expect(events).toEqual([]);
-  });
-
   it("does not load the redactor for empty failure logs", () => {
     const root = tempDirs.make("openclaw-onboard-empty-log-");
     const logPath = join(root, "onboard.json");
@@ -286,48 +252,80 @@ describe("npm onboarding fixture consent", () => {
     expect(result.stdout).toBe(`--- ${logPath} ---\n`);
   });
 
-  it.each([false, true])("selects the reviewed Codex source with registry=%s", (registry) => {
-    const { result, events, installs, detail } = runScenario({ registry });
-    expect(result.status, detail).toBe(0);
-    expect(installs).toEqual([
-      registry
-        ? ["plugins", "install", `npm:@openclaw/codex@${version}`, "--pin", "--accept-capabilities"]
-        : ["plugins", "install", "codex", "--accept-capabilities"],
-    ]);
-    const onboard = events.find((args) => args[0] === "onboard");
-    expect(onboard).toEqual([
-      "onboard",
-      "--non-interactive",
-      "--accept-risk",
-      "--mode",
-      "local",
-      "--auth-choice",
-      "openai-api-key",
-      "--secret-input-mode",
-      "ref",
-      "--gateway-port",
-      "18789",
-      "--gateway-bind",
-      "loopback",
-      "--skip-daemon",
-      "--skip-ui",
-      "--skip-skills",
-      "--skip-health",
-      "--json",
-    ]);
-    const stages = events.filter((args) => args[0] === "assertion").map((args) => args[1]);
-    expect(stages).toEqual([
-      "assert-onboard-state",
-      "assert-channel-config",
-      "assert-status-surfaces",
-      "configure-mock-model",
-      "assert-mock-model-config",
-      "assert-agent-turn",
-    ]);
-    expect(events.indexOf(onboard!)).toBeLessThan(
-      events.findIndex((args) => args[1] === "configure-mock-model"),
-    );
-  });
+  it.each([false, true])(
+    "onboards the reviewed Codex source and audits the turn across restart (registry=%s)",
+    (registry) => {
+      const { result, events, installs, detail } = runScenario({ registry });
+      expect(result.status, detail).toBe(0);
+      expect(installs).toEqual([
+        registry
+          ? [
+              "plugins",
+              "install",
+              `npm:@openclaw/codex@${version}`,
+              "--pin",
+              "--accept-capabilities",
+            ]
+          : ["plugins", "install", "codex", "--accept-capabilities"],
+      ]);
+      const onboard = events.find((args) => args[0] === "onboard");
+      expect(onboard).toEqual([
+        "onboard",
+        "--non-interactive",
+        "--accept-risk",
+        "--mode",
+        "local",
+        "--auth-choice",
+        "openai-api-key",
+        "--secret-input-mode",
+        "ref",
+        "--gateway-port",
+        "18789",
+        "--gateway-bind",
+        "loopback",
+        "--skip-daemon",
+        "--skip-ui",
+        "--skip-skills",
+        "--skip-health",
+        "--json",
+      ]);
+      const stages = events.filter((args) => args[0] === "assertion").map((args) => args[1]);
+      expect(stages).toEqual([
+        "assert-onboard-state",
+        "assert-channel-config",
+        "assert-status-surfaces",
+        "configure-mock-model",
+        "assert-mock-model-config",
+        "assert-agent-turn",
+      ]);
+      expect(events.indexOf(onboard!)).toBeLessThan(
+        events.findIndex((args) => args[1] === "configure-mock-model"),
+      );
+      const optIn = events.findIndex(
+        (args) => args.join(" ") === "config set logging.audit.executionIdentity true",
+      );
+      const turn = events.findIndex((args) => args[0] === "agent");
+      expect(optIn).toBeGreaterThanOrEqual(0);
+      expect(optIn).toBeLessThan(turn);
+      expect(events.filter((args) => args[0] === "agent")).toHaveLength(1);
+      expect(
+        events
+          .slice(turn + 1)
+          .filter((args) =>
+            ["gateway-start", "gateway-stop", "audit"].some((name) => name === args[0]),
+          )
+          .map((args) => args.slice(0, 3)),
+      ).toEqual([
+        ["gateway-start"],
+        ["audit", "--run", "admitted-run-fixture"],
+        ["gateway-stop"],
+        ["gateway-start"],
+        ["audit", "--execution", "execution-fixture"],
+        ["gateway-stop"],
+        ...(registry ? [["gateway-stop"]] : []),
+      ]);
+    },
+  );
 
   it.each([
     { registry: false, channel: "telegram" as const },
@@ -362,58 +360,49 @@ describe("npm onboarding fixture consent", () => {
     );
   });
 
-  it("rejects source fixtures without a verified registry", () => {
-    const { result, events, detail } = runScenario({
-      channel: "discord",
-      consent: true,
-      sourcePlugin: true,
-    });
+  it.each<{ scenario: Scenario; error: string }>([
+    { scenario: { dirtyState: true }, error: "package proof inherited existing state" },
+    {
+      scenario: { channel: "discord", consent: true, sourcePlugin: true },
+      error: "source channel fixture requires OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR",
+    },
+    {
+      scenario: { channel: "discord", companion: "missing", registry: true, sourcePlugin: true },
+      error: "missing Docker-plan package",
+    },
+    {
+      scenario: {
+        channel: "slack",
+        companion: "wrong-identity",
+        registry: true,
+        sourcePlugin: true,
+      },
+      error: "tarball identity mismatch",
+    },
+    {
+      scenario: { registry: true, corruptRegistry: true },
+      error: "manifest SHA-256 differs from the immutable tuple",
+    },
+  ])("rejects invalid fixture admission before any CLI call: $error", ({ scenario, error }) => {
+    const { result, events, detail } = runScenario(scenario);
     expect(result.status, detail).not.toBe(0);
-    expect(detail).toContain(
-      "source channel fixture requires OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR",
-    );
+    expect(detail).toContain(error);
     expect(events).toEqual([]);
   });
 
-  it.each([
-    { channel: "discord" as const, companion: "missing" as const },
-    { channel: "slack" as const, companion: "wrong-identity" as const },
-  ])("verifies the selected companion before any CLI call: %j", (scenario) => {
-    const { result, events, detail } = runScenario({
-      ...scenario,
-      registry: true,
-      sourcePlugin: true,
-    });
-    expect(result.status, detail).not.toBe(0);
-    expect(detail).toContain(
-      scenario.companion === "missing"
-        ? "missing Docker-plan package"
-        : "tarball identity mismatch",
-    );
-    expect(events).toEqual([]);
-  });
-
-  it.each(["exit", "timeout"] as const)("stops before mutation on help %s", (helpFailure) => {
-    const { result, events, detail } = runScenario({ helpFailure });
-    expect(result.status, detail).toBe(helpFailure === "timeout" ? 124 : 29);
-    expect(events).toEqual([["plugins", "install", "--help"]]);
-  });
-
-  it.each([2, 3])("stops at the shared helper's failed probe %s", (failProbe) => {
-    const { result, events, installs, detail } = runScenario({
-      channel: "discord",
-      helpFailure: "exit",
-      failProbe,
-    });
-    expect(result.status, detail).toBe(29);
-    expect(installs).toHaveLength(failProbe === 2 ? 0 : 1);
-    expect(events.some((args) => args[0] === "channels" && args[1] === "add")).toBe(false);
-  });
-
-  it("rejects a mismatched registry artifact before any CLI call", () => {
-    const { result, events, detail } = runScenario({ registry: true, corruptRegistry: true });
-    expect(result.status, detail).not.toBe(0);
-    expect(detail).toContain("manifest SHA-256 differs from the immutable tuple");
-    expect(events).toEqual([]);
+  it.each<Scenario>([
+    { helpFailure: "exit" },
+    { helpFailure: "timeout" },
+    { channel: "discord", helpFailure: "exit", failProbe: 2 },
+    { channel: "discord", helpFailure: "exit", failProbe: 3 },
+  ])("stops at a failed help probe: %j", (scenario) => {
+    const { result, events, installs, detail } = runScenario(scenario);
+    expect(result.status, detail).toBe(scenario.helpFailure === "timeout" ? 124 : 29);
+    if (scenario.failProbe) {
+      expect(installs).toHaveLength(scenario.failProbe === 2 ? 0 : 1);
+      expect(events.some((args) => args[0] === "channels" && args[1] === "add")).toBe(false);
+    } else {
+      expect(events).toEqual([["plugins", "install", "--help"]]);
+    }
   });
 });

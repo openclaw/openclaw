@@ -9,6 +9,7 @@ import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
 import { RUN_STALE_TAKEOVER_MS } from "../../logging/diagnostic-run-activity.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { shouldAttemptTtsPayload } from "../../tts/tts-config.js";
+import type { PreparedTtsPreferences } from "../../tts/tts-preferences.js";
 import {
   copyReplyPayloadMetadata,
   getReplyPayloadMetadata,
@@ -144,7 +145,7 @@ export function formatSuppressedReplyPayloadForLog(reply: ReplyPayload): string 
 async function maybeApplyTtsToReplyPayload(
   params: Parameters<
     Awaited<ReturnType<typeof ttsRuntimeLoader.load>>["maybeApplyTtsToPayload"]
-  >[0],
+  >[0] & { preparedTtsPreferences: PreparedTtsPreferences },
 ) {
   if (isReplyPayloadStatusNotice(params.payload)) {
     return params.payload;
@@ -152,6 +153,7 @@ async function maybeApplyTtsToReplyPayload(
   if (
     !shouldAttemptTtsPayload({
       cfg: params.cfg,
+      preparedTtsPreferences: params.preparedTtsPreferences,
       ttsAuto: params.ttsAuto,
       agentId: params.agentId,
       channelId: params.channel,
@@ -168,11 +170,15 @@ async function maybeApplyTtsToReplyPayload(
 }
 
 export function createFinalizationAwareTtsPayloadApplier(params: {
+  preparedTtsPreferences: PreparedTtsPreferences;
   getReplyOperation: () => ReplyOperation | undefined;
   hasInboundAudio: () => boolean;
 }) {
   return async (
-    ttsParams: Omit<Parameters<typeof maybeApplyTtsToReplyPayload>[0], "inboundAudio">,
+    ttsParams: Omit<
+      Parameters<typeof maybeApplyTtsToReplyPayload>[0],
+      "inboundAudio" | "preparedTtsPreferences"
+    >,
   ) => {
     const replyOperation = params.getReplyOperation();
     // Provider fallbacks can outlive the default lease, but remain bounded by
@@ -183,6 +189,7 @@ export function createFinalizationAwareTtsPayloadApplier(params: {
     try {
       return await maybeApplyTtsToReplyPayload({
         ...ttsParams,
+        preparedTtsPreferences: params.preparedTtsPreferences,
         inboundAudio: params.hasInboundAudio(),
       });
     } finally {

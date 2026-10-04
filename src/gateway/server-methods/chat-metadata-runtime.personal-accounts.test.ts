@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
+import * as accountOperations from "../../state/user-model-account-operations.js";
 import {
   clearUserProfileAuthLink,
   listUserProfileAuthLinks,
@@ -15,6 +16,37 @@ import {
 import { WITHOUT_OPENAI_ENV_AUTH } from "./models-list-result.openai-routes.test-support.js";
 
 describe("gateway chat metadata personal accounts", () => {
+  test("refuses a private account summary when its startup requester changes during the read", async () => {
+    await withOpenClawTestState({ layout: "state-only" }, async () => {
+      const harness = createChatMetadataHarness();
+      const owner = ensureProfileForEmail("owner@example.test");
+      const viewer = ensureProfileForEmail("viewer@example.test");
+      const authProfileId = connectChatMetadataAccount(owner.id);
+      let requesterProfileId = owner.id;
+      const readSummary = accountOperations.readUserModelAccountSummaryAsync;
+      const summaryRead = vi
+        .spyOn(accountOperations, "readUserModelAccountSummaryAsync")
+        .mockImplementationOnce(async (...args) => {
+          const summary = await readSummary(...args);
+          requesterProfileId = viewer.id;
+          return summary;
+        });
+      try {
+        await harness.runtime.refresh();
+        await expect(
+          harness.runtime.readStartup({
+            agentId: "main",
+            sessionEntry: { authProfileOverride: authProfileId, authProfileOverrideSource: "user" },
+            readRequesterProfileId: () => requesterProfileId,
+          }),
+        ).rejects.toThrow("Personal account changed while preparing its metadata");
+      } finally {
+        summaryRead.mockRestore();
+        await harness.runtime.stop();
+      }
+    });
+  });
+
   test("reads the startup requester after personal metadata preparation", async () => {
     await withOpenClawTestState({ layout: "state-only" }, async () => {
       const harness = createChatMetadataHarness();

@@ -567,11 +567,6 @@ export abstract class MemoryManagerDatabaseContext {
       : await database.withPrivateAccess(run, { reentrant: true });
   }
 
-  protected async withDatabaseRead<T>(read: () => T): Promise<T> {
-    const database = this.database;
-    return database.isShadow ? database.withPrivateAccess(read) : read();
-  }
-
   protected get database(): MemoryIndexDatabase {
     const context = reindexDatabase.getStore();
     const shadow = context?.manager === this ? context.database : undefined;

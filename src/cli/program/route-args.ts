@@ -104,7 +104,7 @@ export function parseHealthRouteArgs(argv: string[]) {
   }
   return {
     json: hasFlag(argv, "--json"),
-    verbose: getVerboseFlag(argv, { includeDebug: true }),
+    verbose: getVerboseFlag(argv),
     timeoutMs,
   };
 }
@@ -130,7 +130,7 @@ export function parseStatusRouteArgs(argv: string[]) {
     all: hasFlag(argv, "--all"),
     usage: hasFlag(argv, "--usage"),
     ...(agent !== undefined ? { agent } : {}),
-    verbose: getVerboseFlag(argv, { includeDebug: true }),
+    verbose: getVerboseFlag(argv),
     timeoutMs,
   };
 }

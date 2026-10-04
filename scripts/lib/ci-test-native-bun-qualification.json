@@ -372,7 +372,6 @@
     "src/shared/operator-scope-compat.test.ts": "e0003ff949e13ad1ac7613bc08e79bc2dff3270df48ef4540fc76dda63df25fa",
     "src/shared/path-array-index.test.ts": "583340ccb38f01d405a684c1bf83093fc5ed585eac3f9b13d728c8ab6408ca31",
     "src/shared/requirements.test.ts": "2fe0160d9a1343b5f0cd6cdaa8acc3c1640a8a1e53f58a7ee93d7c35b1489415",
-    "src/shared/scoped-expiring-id-cache.test.ts": "75a1ca2ddb8590fabfaf89ec05d63d46b833847f1069eedd18e1aeaf1cf81567",
     "src/shared/session-list-visibility.test.ts": "9b76729ac9c4c3ff7c4956a6d3701e798620805c28524198220cd415bbaf4825",
     "src/shared/silent-reply-policy.test.ts": "2e9d64c1c2a8bcceea51873257028816183d7164a494b76ede8d2675d0cc3cf0",
     "src/shared/sort-and-limit.test.ts": "7bc01b05fa0df254c5d3a5321ed03a90960f21acaf039b6f557c06991fea7083",

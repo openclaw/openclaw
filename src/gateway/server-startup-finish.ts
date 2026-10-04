@@ -628,7 +628,7 @@ export async function finishGatewayStartup(params: {
         if (lifecycle.closePreludeStarted) {
           return null;
         }
-        return earlyRuntime.startMaintenance(activeWorkInspectors);
+        return earlyRuntime.startMaintenance(activeWorkInspectors, resolvePluginGatewayContext);
       },
       applyMaintenance: async (maintenance) => {
         if (lifecycle.closePreludeStarted) {
