@@ -26,13 +26,13 @@ import { listBundledPluginBuildEntries } from "../../scripts/lib/bundled-plugin-
 import * as liveGatewayDistFence from "../../scripts/lib/live-gateway-dist-fence.mts";
 import { createManagedCommandInvocation } from "../../scripts/lib/managed-child-process.mts";
 import { TSDOWN_UNIFIED_CONFIG_GROUP } from "../../scripts/lib/tsdown-config-groups.mts";
-import { runNodeMain } from "../../scripts/run-node.mts";
 import {
   resolveRuntimeWorkerArgv,
   resolveRuntimeWorkerUrl,
 } from "../../src/infra/runtime-worker-url.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { runNodeMain } from "./run-node-boundary.test-support.js";
 import { toolingProbeRuntimeEntrypoints } from "./tooling-probe-runtime.test-support.mts";
 
 beforeEach(() => {

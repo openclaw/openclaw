@@ -1,3 +1,4 @@
+import type { TranscriptRedactionSnapshot } from "../../agents/transcript-redact-text.js";
 import type {
   SessionArtifactReadQuery,
   SessionArtifactReadResult,
@@ -45,7 +46,6 @@ export type ChatHistoryResponsePage<Messages extends unknown[] | Uint8Array = un
   nextOffset?: number;
   hasMore?: boolean;
   totalMessages?: number;
-  completeSnapshot?: true;
 };
 
 export type ChatHistoryPage = {
@@ -56,7 +56,6 @@ export type ChatHistoryPage = {
   messages: unknown[];
   activity?: AgentHistoryActivity[];
   responseOffset?: number;
-  completeCliImport?: true;
   // Absent only for anchored (messageId) reads: the anchor may resolve a
   // reset-archive transcript that numeric offset cursors cannot address, so
   // anchored responses expose no paging metadata.
@@ -64,7 +63,7 @@ export type ChatHistoryPage = {
     offset: number;
     totalMessages: number;
     rawPageMessages: number;
-    exhausted?: true;
+    messageSequences?: Record<string, number>;
   };
 };
 
@@ -83,6 +82,8 @@ export type ChatHistoryPageParams = {
   offset: number | undefined;
   messageId: string | undefined;
   ignoreCliSessionImports?: boolean;
+  cliHistoryHomeDir?: string;
+  cliHistoryRedaction?: TranscriptRedactionSnapshot;
 };
 
 type SessionHistoryTranscriptMeta = {

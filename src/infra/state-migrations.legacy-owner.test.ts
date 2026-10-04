@@ -4,6 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { migrateLegacyConfig } from "../commands/doctor/shared/legacy-config-migrate.js";
+import type { OpenClawConfigWithLegacyRoster } from "../config/legacy.roster.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
 import { recordCompletedLegacyAgentDirMigration } from "./state-migrations.agent-dir-receipt.js";
@@ -35,7 +36,7 @@ describe("legacy owner advisories", () => {
         OPENCLAW_AGENT_DIR: undefined,
         PI_CODING_AGENT_DIR: undefined,
       };
-      const source: OpenClawConfig = {
+      const source: OpenClawConfigWithLegacyRoster = {
         plugins: { enabled: false },
         agents: {
           defaults: {

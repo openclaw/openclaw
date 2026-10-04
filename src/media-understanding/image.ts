@@ -8,8 +8,8 @@ import { resolveProviderRequestCapabilities } from "../agents/provider-attributi
 import {
   getModelProviderRequestRouteFacts,
   getModelProviderRequestTransport,
-  type ModelProviderRequestTransportOverrides,
 } from "../agents/provider-request-config.js";
+import type { ModelProviderRequestTransportOverrides } from "../agents/provider-request-config.types.js";
 import {
   unwrapModelHeaderSentinelsForProviderEgress,
   unwrapSecretSentinelsForProviderEgress,

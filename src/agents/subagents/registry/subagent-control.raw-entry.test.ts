@@ -17,7 +17,7 @@ import {
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { clearCommandLane, enqueueCommandInLane } from "../../../process/command-queue.js";
 import { beginSessionWorkAdmission } from "../../../sessions/session-lifecycle-admission.js";
-import { resolveSessionAgentId } from "../../agent-scope.js";
+import { AgentSelectionRequiredError, resolveSessionAgentId } from "../../agent-scope.js";
 import { resolveEmbeddedSessionLane } from "../../embedded-agent-runner/lanes.js";
 import { clearActiveEmbeddedRun, setActiveEmbeddedRun } from "../../embedded-agent-runner/runs.js";
 import { createEmbeddedRunHandle } from "../../embedded-agent-runner/runs.test-support.js";
@@ -43,7 +43,8 @@ it.each(["main", "research"] as const)(
     const foreignId = `${foreignAgent}-global-session`;
     const cfg: OpenClawConfig = {
       agents: {
-        list: [{ id: "main", default: true }, { id: "research" }],
+        ownership: "explicit",
+        entries: { main: {}, research: {} },
         defaults: { workspace: fixture.stateDir },
       },
       tools: { sessions: { visibility: "all" }, agentToAgent: { enabled: true } },
@@ -110,7 +111,9 @@ it.each(["main", "research"] as const)(
       requesterSessionKey: parentKey,
       requesterAgentId: owner,
     });
-    expect(resolveSessionAgentId({ config: cfg, sessionKey: "global" })).toBe("main");
+    expect(() => resolveSessionAgentId({ config: cfg, sessionKey: "global" })).toThrow(
+      AgentSelectionRequiredError,
+    );
 
     const foreignAbort = vi.fn();
     const foreignHandle = createEmbeddedRunHandle({ runId: "foreign-run", abort: foreignAbort });
@@ -191,7 +194,8 @@ it.each(["main", "research"] as const)(
 async function prepareWatchedRawChildren() {
   const cfg: OpenClawConfig = {
     agents: {
-      list: [{ id: "main", default: true }, { id: "research" }],
+      ownership: "explicit",
+      entries: { main: {}, research: {} },
       defaults: { workspace: fixture.stateDir },
     },
     tools: { sessions: { visibility: "all" }, agentToAgent: { enabled: true } },
@@ -348,19 +352,21 @@ it("keeps a watched registration current while the other raw owner commits", asy
 it.each(["admin", "bulk"] as const)(
   "%s cancellation keeps legacy raw children separated by requester agent",
   async (action) => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        list: [{ id: "main", default: true }, { id: "research" }],
-        defaults: { workspace: fixture.stateDir },
-      },
-    };
-    setRuntimeConfigSnapshot(cfg);
-    await writeSubagentSessionEntry({
+    const storePath = await writeSubagentSessionEntry({
       stateDir: fixture.stateDir,
       sessionKey: "global",
       agentId: "main",
       defaultSessionId: "legacy-global",
     });
+    const cfg: OpenClawConfig = {
+      session: { store: storePath },
+      agents: {
+        ownership: "explicit",
+        entries: { main: {}, research: {} },
+        defaults: { workspace: fixture.stateDir, sessionStore: { agentId: "main" } },
+      },
+    };
+    setRuntimeConfigSnapshot(cfg);
     for (const owner of ["research", "main"]) {
       await registerSubagentRun({
         runId: `${owner}-legacy`,

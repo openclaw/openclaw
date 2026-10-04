@@ -2,6 +2,22 @@ import { describe, expect, it } from "vitest";
 import { formatNativeToolOutput, NativeToolOutputAccumulator } from "./projection-tool-output.js";
 
 describe("native tool output accumulation", () => {
+  it("tracks per-item echo lengths across leading, trailing, and interleaved whitespace", () => {
+    const output = new NativeToolOutputAccumulator("Codex");
+    expect(output.append("a", " \n").normalizedLength).toBe(0);
+    expect(output.append("b", "second ").normalizedLength).toBe(6);
+    expect(output.append("a", " first \t").normalizedLength).toBe(5);
+    expect(output.append("a", " \n").normalizedLength).toBe(5);
+    expect(output.append("b", "item\n").normalizedLength).toBe(11);
+    const result = output.append("a", "next  ");
+    expect(result).toMatchObject({
+      originalLength: 18,
+      normalizedLength: 13,
+      rawPrefix: " \n first \t \nnext  ",
+    });
+    expect(output.isTruncated("a")).toBe(false);
+  });
+
   it.each(["split surrogate", "literal notice", "notice across cap"])(
     "accumulates %s without corrupting process output",
     (mode) => {

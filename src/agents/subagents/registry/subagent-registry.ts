@@ -718,7 +718,7 @@ export function activateSubagentRegistry(resolveGatewayContext: GatewayContextRe
 }
 export const settleRequesterAfterSessionSpawns = publicApi.settleRequesterAfterSessionSpawns;
 export const markRequesterTurnYielded = publicApi.markRequesterTurnYielded;
-export const markSubagentMessageWait = publicApi.markSubagentMessageWait;
+export const claimSubagentYield = publicApi.claimSubagentYield;
 export const listUnsettledRequesterChildren = publicApi.listUnsettledRequesterChildren;
 export type { UnsettledRequesterChild } from "./subagent-registry-requester-yield.js";
 

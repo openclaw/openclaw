@@ -2265,6 +2265,18 @@ select.input {
   font-size: 13px;
 }
 
+.agent-startup-state {
+  margin: auto;
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  padding: 32px 24px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+  text-align: center;
+}
+
 /* Lazy route load failure — a centered panel state, not a stretched callout. */
 .lazy-view-error {
   margin: auto;

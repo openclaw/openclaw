@@ -9,6 +9,7 @@ packages/acp-core/package.json
 packages/acp-core/src/structured-auth-redaction.ts
 packages/agent-core/package.json
 packages/agent-core/src/harness/env/kill-tree.ts
+packages/agent-core/src/harness/messages.ts
 packages/agent-core/src/harness/session/tool-result-pairing.ts
 packages/agent-core/src/operator-messages.ts
 packages/gateway-client/package.json
@@ -42,8 +43,15 @@ packages/gateway-protocol/src/update-run-vocabulary.ts
 packages/gateway-protocol/src/validation-errors.ts
 packages/gateway-protocol/src/worker-capacity.ts
 packages/llm-core/package.json
+packages/llm-core/src/index.ts
+packages/llm-core/src/model-contracts/anthropic.ts
 packages/llm-core/src/model-data.ts
 packages/llm-core/src/types.ts
+packages/llm-core/src/usage-cost.ts
+packages/llm-core/src/utils/diagnostics.ts
+packages/llm-core/src/utils/event-stream.ts
+packages/llm-core/src/utils/provider-refusal.ts
+packages/llm-core/src/validation.ts
 packages/media-core/src/constants.ts
 packages/media-core/src/file-name.ts
 packages/media-core/src/mime.ts
@@ -122,6 +130,20 @@ packages/terminal-core/src/progress-line.ts
 packages/terminal-core/src/restore.ts
 packages/terminal-core/src/safe-text.ts
 packages/terminal-core/src/theme.ts
+packages/worker-runtime/package.json
+packages/worker-runtime/src/index.ts
+packages/worker-runtime/src/lifecycle.ts
+packages/worker-runtime/src/retained-operation.ts
+packages/worker-runtime/src/worker-task-capacity.ts
+packages/worker-runtime/src/worker-task-native-sections.ts
+packages/worker-runtime/src/worker-task-pool-completion.ts
+packages/worker-runtime/src/worker-task-pool-core.ts
+packages/worker-runtime/src/worker-task-pool-owned.ts
+packages/worker-runtime/src/worker-task-pool-resources.ts
+packages/worker-runtime/src/worker-task-pool-retirement.ts
+packages/worker-runtime/src/worker-task-pool-worker.ts
+packages/worker-runtime/src/worker-task-server.ts
+packages/worker-runtime/src/worker.ts
 scripts/changed-lanes.mts
 scripts/check-changelog-attributions.mjs
 scripts/check-changelog-attributions.mts
@@ -289,6 +311,8 @@ src/agents/worktrees/service-preparation.ts
 src/agents/worktrees/snapshot-exact-state.ts
 src/agents/worktrees/snapshot-index-objects.ts
 src/agents/worktrees/snapshot-inventory.ts
+src/agents/worktrees/template-cache.ts
+src/agents/worktrees/template-registry-async.ts
 src/agents/worktrees/template-registry.ts
 src/auto-reply/reply/delivery-hints.ts
 src/auto-reply/reply/display-text-sanitize.ts
@@ -558,6 +582,7 @@ src/config/sessions/session-sqlite-target.ts
 src/config/sessions/session-store-config.ts
 src/config/sessions/session-store-owner.ts
 src/config/sessions/session-store-read-candidates.ts
+src/config/sessions/supported-session-store.ts
 src/config/sessions/session-transcript-projection-error.ts
 src/config/sessions/session-transcript-read-fence.ts
 src/config/sessions/session-transcript-read-worker-runtime.ts
@@ -603,6 +628,7 @@ src/config/zod-schema.agents.ts
 src/config/zod-schema.allowdeny.ts
 src/config/zod-schema.approvals.ts
 src/config/zod-schema.channel-bot-loop.ts
+src/config/zod-schema.channel-messaging-common.ts
 src/config/zod-schema.channels-config.ts
 src/config/zod-schema.channels.ts
 src/config/zod-schema.cloud-workers.ts
@@ -864,7 +890,6 @@ src/infra/private-mode.ts
 src/infra/process-env.ts
 src/infra/prototype-keys.ts
 src/infra/restart-stale-pids.ts
-src/infra/retained-operation.ts
 src/infra/root-walk.ts
 src/infra/runtime-process-entrypoints.ts
 src/infra/runtime-process-url.ts
@@ -929,6 +954,7 @@ src/infra/sqlite-snapshot-policy.ts
 src/infra/sqlite-snapshot-retirement.ts
 src/infra/sqlite-snapshot-single-flight.ts
 src/infra/sqlite-snapshot-source.ts
+src/infra/sqlite-snapshot-staging-error.ts
 src/infra/sqlite-snapshot-staging-owner.ts
 src/infra/sqlite-snapshot-staging.ts
 src/infra/sqlite-snapshot-wal-prefix.ts
@@ -1026,14 +1052,8 @@ src/infra/worker-native-lifecycle.ts
 src/infra/worker-native-port.ts
 src/infra/worker-native-resource.ts
 src/infra/worker-task-capacity.ts
-src/infra/worker-task-native-sections.ts
-src/infra/worker-task-pool-completion.ts
-src/infra/worker-task-pool-core.ts
-src/infra/worker-task-pool-owned.ts
+src/infra/worker-task-host.ts
 src/infra/worker-task-pool-registry.ts
-src/infra/worker-task-pool-resources.ts
-src/infra/worker-task-pool-retirement.ts
-src/infra/worker-task-pool-worker.ts
 src/infra/worker-task-pool.ts
 src/infra/worker-task-server.ts
 src/infra/worker-transfer-bytes.ts
@@ -1050,7 +1070,6 @@ src/logging/log-file-path.ts
 src/logging/log-file-shared.ts
 src/logging/logger-file-message.ts
 src/logging/logger-file-transport.ts
-src/logging/logger-hostname-state.ts
 src/logging/logger-settings-internal.ts
 src/logging/logger.ts
 src/logging/redact-bounded.ts
@@ -1070,6 +1089,7 @@ src/logging/state.ts
 src/logging/structured-authorization-code.ts
 src/logging/subsystem.ts
 src/logging/timestamps.ts
+src/llm/types.ts
 src/media/media-facts.ts
 src/media/staged-inputs.ts
 src/memory-host-sdk/host/config-utils.ts
@@ -1081,6 +1101,7 @@ src/model-catalog/remote-bundle.ts
 src/model-catalog/remote-config.ts
 src/model-catalog/remote-overlay.ts
 src/model-catalog/remote-store.ts
+src/plugin-sdk/channel-route.ts
 src/plugin-sdk/doctor-migration-plan-adapter.ts
 src/plugin-sdk/facade-loader.ts
 src/plugin-sdk/facade-resolution-shared.ts
@@ -1108,6 +1129,7 @@ src/plugins/channel-presence-policy.ts
 src/plugins/channel-startup-policy.ts
 src/plugins/clawhub-error-codes.ts
 src/plugins/command-execution-lock.ts
+src/plugins/compat/agent-list-runtime-projection-records.ts
 src/plugins/compat/deprecation-marking.ts
 src/plugins/compat/media-legacy-projection.ts
 src/plugins/compat/mention-inbox-record.ts
@@ -1277,6 +1299,7 @@ src/plugins/plugin-sdk-native-resolver.ts
 src/plugins/plugin-setup-module.ts
 src/plugins/plugin-shared-module-loader.ts
 src/plugins/plugin-source-admission-store.ts
+src/plugins/plugin-source-admission.types.ts
 src/plugins/plugin-source-build.ts
 src/plugins/plugin-source-capture-context.ts
 src/plugins/plugin-source-capture-directory.ts
@@ -1629,8 +1652,11 @@ src/test-utils/bun-process.ts
 src/utils.ts
 src/utils/boolean.ts
 src/utils/delivery-context.read.ts
+src/utils/delivery-context.shared.ts
 src/utils/fetch-timeout.ts
 src/utils/github-login.ts
+src/utils/message-channel-constants.ts
+src/utils/message-channel-core.ts
 src/utils/parse-json-compat.ts
 src/utils/run-with-concurrency.ts
 src/utils/shell-argv.ts
@@ -1702,8 +1728,3 @@ scripts/github/security-sensitive-guard.mjs
 scripts/lib/bounded-response.mjs
 scripts/pr-lib/merge-prior-ci-cancellation.mjs
 scripts/pr-lib/merge-prior-ci-security.mjs
-src/config/sessions/supported-session-store.ts
-src/plugin-sdk/channel-route.ts
-src/utils/delivery-context.shared.ts
-src/utils/message-channel-constants.ts
-src/utils/message-channel-core.ts

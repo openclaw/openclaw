@@ -66,7 +66,7 @@ beforeAll(async () => {
   cfg = {
     session: { store: await prepareManagedSessionStore(stateDir) },
     tools: { allow: ["read"] },
-    agents: { list: [{ id: "main", workspace: path.join(stateDir, "workspace") }] },
+    agents: { entries: { main: { workspace: path.join(stateDir, "workspace") } } },
   };
   getRuntimeConfig.mockReturnValue(cfg);
 });

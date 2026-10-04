@@ -198,6 +198,12 @@ describe("OpenAI Responses provider prompt observer", () => {
         throw new Error("missing tool-output fixture");
       }
       toolOutput.content = [{ type: "text", text: "large historical tool output\n".repeat(8_000) }];
+      context.messages.push({
+        role: "user",
+        content: "OpenClaw runtime context:\ncurrent runtime facts",
+        timestamp: 2,
+        runtimeContext: {},
+      });
       const run = async (rewriteInput: boolean) => {
         sdkState.outcomes = [completedSdkResponse(`resp_usage_${transport}`)];
         vi.stubGlobal(

@@ -69,20 +69,7 @@ export {
   resolveProfileUnusableUntilForDisplay,
 } from "./usage-state.js";
 
-const authProfileUsageDeps = {
-  updateAuthProfileStoreWithLock,
-};
-
-/** Test-only dependency injection for usage persistence hooks. */
 const testing = {
-  setDepsForTest(
-    overrides: Partial<{
-      updateAuthProfileStoreWithLock: typeof updateAuthProfileStoreWithLock;
-    }> | null,
-  ) {
-    authProfileUsageDeps.updateAuthProfileStoreWithLock =
-      overrides?.updateAuthProfileStoreWithLock ?? updateAuthProfileStoreWithLock;
-  },
   resetWhamReprobeStateForTest() {
     whamReprobesInFlight.clear();
   },
@@ -109,7 +96,7 @@ async function updateOwnedAuthProfileUsage(
   // Inherited credentials exist only in the owner's SQLite store. A child lock
   // cannot persist their health state, so resolve the owner before the write.
   let changed = false;
-  const updated = await authProfileUsageDeps.updateAuthProfileStoreWithLock({
+  const updated = await updateAuthProfileStoreWithLock({
     ...update,
     profileId,
     agentDir: resolvePersistedAuthProfileOwnerAgentDir({

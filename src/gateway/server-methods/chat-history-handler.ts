@@ -22,7 +22,7 @@ import { scopeLegacySessionKeyToAgent } from "../../routing/session-key.js";
 import { resolveInFlightRunSnapshot } from "../chat-abort.js";
 import { resolveEffectiveChatHistoryMaxChars } from "../chat-display-projection.js";
 import { isQueuedChatTurnForSession } from "../chat-queued-turns.js";
-import { resolveClaudeCliBindingSessionId } from "../cli-session-history.js";
+import { resolveClaudeCliBindingSessionId } from "../cli-session-history.claude.js";
 import { projectOperatorModelRead } from "../operator-model-presentation.js";
 import { SerializedJsonArray } from "../serialized-json.js";
 import { getMaxChatHistoryMessagesBytes } from "../server-constants.js";
@@ -600,7 +600,6 @@ export async function handleChatHistoryRequest({
 
 export const chatHistoryHandlers: GatewayRequestHandlers = {
   "chat.history": (opts) => handleChatHistoryRequest({ ...opts, method: "chat.history" }),
-  "chat.startup": (opts) =>
-    handleChatStartupRequest(opts, handleChatHistoryRequest, respondChatHistoryUnavailable),
+  "chat.startup": (opts) => handleChatStartupRequest(opts, handleChatHistoryRequest),
   "chat.metadata": handleChatMetadataRequest,
 };

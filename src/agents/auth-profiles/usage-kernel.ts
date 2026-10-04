@@ -45,7 +45,7 @@ export function recordAuthProfileUsageInDatabase(
   if (!profile) {
     return receipt;
   }
-  if (!isDeepStrictEqual(credentials, input.expectedCredentials)) {
+  if (!isDeepStrictEqual(local.profiles[input.profileId], input.expectedCredential)) {
     throw new Error("Auth credentials changed during usage preparation");
   }
   const previous = store.usageStats?.[input.profileId];

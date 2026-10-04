@@ -137,16 +137,6 @@ let schemaValidatorModulePromise:
   | Promise<typeof import("../plugins/schema-validator.js")>
   | undefined;
 
-function getCatalogSchemaCacheKey(
-  entry: ToolSearchCatalogEntry,
-  schemaName: CatalogSchemaName,
-  schema: unknown,
-): string {
-  const prefix = `tool-${schemaName === "inputSchema" ? "input" : "output"}:${entry.id}`;
-  // Content keys reuse rebuilt tool schemas while invalidating in-place constraint changes.
-  return `${prefix}:${JSON.stringify(schema)}`;
-}
-
 async function validateCatalogSchemaValue(
   entry: ToolSearchCatalogEntry,
   schemaName: CatalogSchemaName,
@@ -180,7 +170,6 @@ async function validateCatalogSchemaValue(
     const { validateJsonSchemaValue } = await schemaValidatorModulePromise;
     return validateJsonSchemaValue({
       schema: schema as never,
-      cacheKey: getCatalogSchemaCacheKey(entry, schemaName, schema),
       value,
     });
   } catch (error) {

@@ -128,6 +128,13 @@ export function createReadonlySessionHistoryReader(
     return result.value;
   };
   return {
+    readHistoryRevision: () =>
+      readSnapshot((projection) => ({
+        database: projection.database.db,
+        generation: projection.generation,
+        indexedSeq: projection.state.indexedSeq,
+        leafEventId: projection.state.leafEventId,
+      })),
     readTranscriptAccounting: (options: SessionTranscriptAccountingOptions) =>
       readSnapshot((projection) =>
         readSessionTranscriptAccountingFromProjection(projection, options),

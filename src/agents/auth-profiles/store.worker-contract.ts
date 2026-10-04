@@ -1,5 +1,10 @@
 import type { OpenClawStateWorkerErrorPayload } from "../../state/openclaw-state-worker-error.js";
-import type { AuthProfileRowRead, AuthProfileStore, UserModelAuthProfile } from "./types.js";
+import type {
+  AuthProfileCredential,
+  AuthProfileRowRead,
+  AuthProfileStore,
+  UserModelAuthProfile,
+} from "./types.js";
 import type {
   PersonalAuthProfileUsageReduction,
   PersonalAuthProfileUsageResult,
@@ -11,7 +16,7 @@ export type AuthProfileUsageInput = {
   inherited: boolean;
   providerKey?: string;
   providerAliases?: Record<string, string>;
-  expectedCredentials: unknown;
+  expectedCredential: AuthProfileCredential | undefined;
   scopedSharedStore?: AuthProfileStore;
 };
 

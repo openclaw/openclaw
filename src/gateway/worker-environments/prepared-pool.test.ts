@@ -6,6 +6,7 @@ import {
   createTestGatewayScheduler,
 } from "../../test-utils/gateway-scheduler-clock.js";
 import { createWorkerCredentialBroker } from "./credential-broker.js";
+import { WorkerEnvironmentServiceError } from "./environment-errors.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import type { WorkerProviderPreparedIntent } from "./preparation-identity.js";
 import {
@@ -19,17 +20,7 @@ import {
 import { createWorkerProviderLifecycle } from "./provider-lifecycle.js";
 import type { WorkerProviderLifecycleOptions } from "./provider-lifecycle.types.js";
 import { createWorkerEnvironmentService, type WorkerEnvironmentService } from "./service.js";
-import type { WorkerEnvironmentState } from "./state.js";
 import type { WorkerEnvironmentRecord } from "./store.js";
-
-class TestWorkerServiceError extends Error {
-  constructor(
-    readonly code: string,
-    message: string,
-  ) {
-    super(message);
-  }
-}
 
 describe("prepared worker reserve lifecycle", () => {
   const fixture = usePreparedPoolFixture();
@@ -613,20 +604,10 @@ describe("prepared worker reserve lifecycle", () => {
             error: String(error),
           }),
         withLock: async (_environmentId, task) => await task(),
-        serviceError: (code, message) => new TestWorkerServiceError(code, message),
         isStopping: () => false,
-        inState: (record: WorkerEnvironmentRecord, ...states: WorkerEnvironmentState[]) =>
-          states.includes(record.state),
       } satisfies Pick<
         WorkerProviderLifecycleOptions,
-        | "store"
-        | "callProvider"
-        | "move"
-        | "saveError"
-        | "withLock"
-        | "serviceError"
-        | "isStopping"
-        | "inState"
+        "store" | "callProvider" | "move" | "saveError" | "withLock" | "isStopping"
       >;
       const prepareInstallation = async () => ({
         install: "bundle" as const,
@@ -652,8 +633,6 @@ describe("prepared worker reserve lifecycle", () => {
         }),
         callBootstrap: unexpectedLifecycleOperation,
         bootstrapWorker: unexpectedLifecycleOperation,
-        isServiceError: (error, code) =>
-          error instanceof TestWorkerServiceError && error.code === code,
       });
       fixture.provider.supportedExecutionModes = ["worker-turn"];
       fixture.provider.supportsProjectPreparation = () => true;
@@ -667,7 +646,7 @@ describe("prepared worker reserve lifecycle", () => {
       });
       const assertCurrent = () => {
         if (intentChanged) {
-          throw new TestWorkerServiceError(
+          throw new WorkerEnvironmentServiceError(
             "invalid_profile",
             "Worker profile changed during preparation",
           );

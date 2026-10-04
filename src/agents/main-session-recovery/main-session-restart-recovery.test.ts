@@ -622,7 +622,7 @@ describe("main-session-restart-recovery", () => {
     });
 
     const cfg = {
-      agents: { list: [{ id: "main", default: true }] },
+      agents: { entries: { main: {} } },
     } as OpenClawConfig;
     const observer = observeParentSqlite();
     try {
@@ -679,7 +679,7 @@ describe("main-session-restart-recovery", () => {
         await expect(
           markRestartAbortedMainSessions({
             resolveGatewayContext,
-            cfg: { agents: { list: [{ id: "main", default: true }] } },
+            cfg: { agents: { entries: { main: {} } } },
             stateDir: tmpDir,
             activeRuns: [],
           }),
@@ -747,7 +747,7 @@ describe("main-session-restart-recovery", () => {
     await writeMainSession({ sessionsDir, sessionKey: "agent:old:main" });
 
     const cfg = {
-      agents: { list: [{ id: "main", default: true }] },
+      agents: { entries: { main: {} } },
       session: { store: storePath },
     } as OpenClawConfig;
 
@@ -2990,7 +2990,7 @@ describe("main-session-restart-recovery", () => {
     const lateSessionsDir = path.join(tmpDir, "agents", "late", "sessions");
     const lateStorePath = path.join(lateSessionsDir, "sessions.json");
     const cfg = {
-      agents: { list: [{ id: "main", default: true }, { id: "late" }] },
+      agents: { entries: { main: {}, late: {} } },
     } as OpenClawConfig;
     const originalApply = sessionAccessor.applySessionEntryReplacements;
     let restoredLateStore = false;
@@ -3177,7 +3177,7 @@ describe("main-session-restart-recovery", () => {
       { role: "toolResult", content: "done" },
     ]);
     let currentConfig = {
-      agents: { list: [{ id: "main", default: true }] },
+      agents: { entries: { main: {} } },
     } as OpenClawConfig;
 
     const recovery = scheduleRestartAbortedMainSessionRecovery({
@@ -3188,7 +3188,7 @@ describe("main-session-restart-recovery", () => {
     });
     await Promise.resolve();
     currentConfig = {
-      agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+      agents: { entries: { main: {}, work: {} } },
     } as OpenClawConfig;
     releaseStartup.resolve();
 
@@ -3397,7 +3397,7 @@ describe("main-session-restart-recovery", () => {
   it.each([false, true])(
     "resumes healthy stores when another startup marker fails (transient=%s)",
     async (transient) => {
-      const cfg = { agents: { entries: { main: { default: true }, worker: {} } } };
+      const cfg = { agents: { entries: { main: {}, worker: {} } } };
       for (const agentId of ["main", "worker"]) {
         const sessionsDir = await makeSessionsDir(agentId);
         await writeStore(sessionsDir, {

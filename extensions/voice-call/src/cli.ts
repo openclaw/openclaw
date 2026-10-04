@@ -37,17 +37,6 @@ import {
   setupTailscaleExposureRoutes,
 } from "./webhook/tailscale.js";
 
-type SetupCheck = {
-  id: string;
-  ok: boolean;
-  message: string;
-};
-
-type SetupStatus = {
-  ok: boolean;
-  checks: SetupCheck[];
-};
-
 function resolveMode(input: string): "off" | "serve" | "funnel" {
   const raw = normalizeOptionalLowercaseString(input) ?? "";
   if (raw === "serve" || raw === "off") {
@@ -63,10 +52,10 @@ function resolveDefaultStorePath(config: VoiceCallConfig): string {
   return path.join(base, "calls.jsonl");
 }
 
-function buildSetupStatus(config: VoiceCallConfig, coreConfig: OpenClawConfig): SetupStatus {
+function buildSetupStatus(config: VoiceCallConfig, coreConfig: OpenClawConfig) {
   const validation = validateProviderConfig(config);
   const webhookExposure = resolveWebhookExposureStatus(config);
-  const checks: SetupCheck[] = [
+  const checks = [
     {
       id: "plugin-enabled",
       ok: config.enabled,
@@ -118,7 +107,7 @@ function buildSetupStatus(config: VoiceCallConfig, coreConfig: OpenClawConfig): 
   };
 }
 
-function writeSetupStatus(status: SetupStatus): void {
+function writeSetupStatus(status: ReturnType<typeof buildSetupStatus>): void {
   writeCliLine("Voice Call setup: %s", status.ok ? "OK" : "needs attention");
   for (const check of status.checks) {
     writeCliLine("%s %s: %s", check.ok ? "OK" : "FAIL", check.id, check.message);
@@ -267,6 +256,21 @@ export function registerVoiceCallCli(params: {
         }),
     );
 
+  const callAction =
+    (method: "voicecall.initiate" | "voicecall.start") =>
+    async (options: { to?: string; message?: string; mode?: string }) =>
+      runWithStandaloneRuntime(createRuntime, async (ensureRuntime) => {
+        const callId = await initiateVoiceCall({
+          ensureRuntime,
+          config,
+          method,
+          to: options.to,
+          message: options.message,
+          mode: options.mode,
+        });
+        writeCliJson({ callId });
+      });
+
   root
     .command("call")
     .description("Initiate an outbound voice call")
@@ -280,19 +284,7 @@ export function registerVoiceCallCli(params: {
       "Call mode: notify (hangup after message) or conversation (stay open)",
       "conversation",
     )
-    .action(async (options: { message: string; to?: string; mode?: string }) =>
-      runWithStandaloneRuntime(createRuntime, async (ensureRuntime) => {
-        const callId = await initiateVoiceCall({
-          ensureRuntime,
-          config,
-          method: "voicecall.initiate",
-          to: options.to,
-          message: options.message,
-          mode: options.mode,
-        });
-        writeCliJson({ callId });
-      }),
-    );
+    .action(callAction("voicecall.initiate"));
 
   root
     .command("start")
@@ -304,19 +296,7 @@ export function registerVoiceCallCli(params: {
       "Call mode: notify (hangup after message) or conversation (stay open)",
       "conversation",
     )
-    .action(async (options: { to: string; message?: string; mode?: string }) =>
-      runWithStandaloneRuntime(createRuntime, async (ensureRuntime) => {
-        const callId = await initiateVoiceCall({
-          ensureRuntime,
-          config,
-          method: "voicecall.start",
-          to: options.to,
-          message: options.message,
-          mode: options.mode,
-        });
-        writeCliJson({ callId });
-      }),
-    );
+    .action(callAction("voicecall.start"));
 
   root
     .command("continue")

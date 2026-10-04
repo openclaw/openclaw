@@ -525,3 +525,11 @@ export type SessionTranscriptReader = Omit<
 > & {
   subagentCoordination?: SubagentCoordinationDisplayResolver;
 };
+
+export type SessionTranscriptPageReader = Pick<
+  SessionTranscriptReader,
+  | "readRecentSessionMessagesWithStatsAsync"
+  | "readSessionMessagesPageWithStatsAsync"
+  | "readSessionMessagesAroundIdWithStatsAsync"
+  | "subagentCoordination"
+>;

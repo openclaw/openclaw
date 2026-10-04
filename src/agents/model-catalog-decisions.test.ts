@@ -117,7 +117,15 @@ describe("captured model decisions", () => {
     const retirement = new AbortController();
     const owner = createPreparedAccountCatalogAccess(() => true, retirement.signal);
     const credential = { type: "api_key", provider: "openai", key: "synthetic-key" } as const;
-    const account = { profileId: "openai:account", credential };
+    const account = {
+      profileId: "openai:account",
+      credential,
+      selectedCredential: {
+        source: "profile" as const,
+        profileId: "openai:account",
+        identityKey: "profile:openai:account",
+      },
+    };
     const observation = {
       modelId: "fixture-model",
       runtimeId: "openclaw",
@@ -125,13 +133,13 @@ describe("captured model decisions", () => {
       baseUrl: "https://api.openai.com/v1/",
       serviceTiers: ["priority"],
     };
-    const route = { ...observation, profileId: account.profileId };
+    const route = { ...observation, identityKey: account.selectedCredential.identityKey };
     const record = owner.prepareServiceTierObserver(account);
     expect(record(observation)).toBe(true);
     expect(record({ ...observation, baseUrl: "https://api.openai.com/v1" })).toBe(false);
     expect(owner.readServiceTiers(route)).toEqual(["priority"]);
     for (const mismatch of [
-      { profileId: "openai:other" },
+      { identityKey: "profile:openai:other" },
       { modelId: "other-model" },
       { runtimeId: "codex" },
       { api: "openai-chatgpt-responses" },
@@ -183,10 +191,15 @@ describe("captured model decisions", () => {
     const owner = createPreparedAccountCatalogAccess(() => current);
     const account = {
       profileId: "openai:account",
+      selectedCredential: {
+        source: "profile" as const,
+        profileId: "openai:account",
+        identityKey: "profile:openai:account",
+      },
       credential: { type: "api_key", provider: "openai", key: "synthetic-key" } as const,
     };
     const route = {
-      profileId: account.profileId,
+      identityKey: account.selectedCredential.identityKey,
       modelId: "model-0",
       runtimeId: "openclaw",
       api: "openai-responses",

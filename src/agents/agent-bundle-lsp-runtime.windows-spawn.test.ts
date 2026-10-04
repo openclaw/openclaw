@@ -1,18 +1,15 @@
 /** Tests LSP server spawning with Windows shim and sanitized env handling. */
-import { describe, expect, it, vi, beforeEach } from "vitest";
-import type { sanitizeHostExecEnv } from "../infra/host-env-security.js";
-import {
-  materializeWindowsSpawnProgram,
-  resolveWindowsSpawnProgram,
-  type WindowsSpawnProgram,
-} from "../plugin-sdk/windows-spawn.js";
-import { createOwnedStdioProcess } from "../process/owned-stdio.js";
+import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
+import * as hostEnvSecurity from "../infra/host-env-security.js";
+import * as windowsSpawn from "../plugin-sdk/windows-spawn.js";
+import type { WindowsSpawnProgram } from "../plugin-sdk/windows-spawn.js";
+import * as ownedStdio from "../process/owned-stdio.js";
 import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
 import { spawnLspServerProcess } from "./agent-bundle-lsp-process.js";
 
-const resolveWindowsSpawnProgramMock = vi.fn<typeof resolveWindowsSpawnProgram>();
-const sanitizeHostExecEnvMock = vi.fn<typeof sanitizeHostExecEnv>();
-const spawnMock = vi.fn<typeof createOwnedStdioProcess>();
+const resolveWindowsSpawnProgramMock = vi.fn<typeof windowsSpawn.resolveWindowsSpawnProgram>();
+const sanitizeHostExecEnvMock = vi.fn<typeof hostEnvSecurity.sanitizeHostExecEnv>();
+const spawnMock = vi.fn<typeof ownedStdio.createOwnedStdioProcess>();
 const { spawnWithFallbackMock } = vi.hoisted(() => ({ spawnWithFallbackMock: vi.fn() }));
 
 vi.mock("../process/spawn-utils.js", () => ({ spawnWithFallback: spawnWithFallbackMock }));
@@ -20,9 +17,11 @@ vi.mock("../process/spawn-utils.js", () => ({ spawnWithFallback: spawnWithFallba
 describe("spawnLspServerProcess Windows .cmd shim handling", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.spyOn(hostEnvSecurity, "sanitizeHostExecEnv").mockImplementation(sanitizeHostExecEnvMock);
     spawnMock.mockRejectedValue(new Error("stop after spawn"));
     spawnWithFallbackMock.mockRejectedValue(new Error("captured Windows spawn"));
   });
+  afterEach(() => vi.restoreAllMocks());
 
   const directProgram: WindowsSpawnProgram = {
     command: "typescript-language-server",
@@ -65,6 +64,10 @@ describe("spawnLspServerProcess Windows .cmd shim handling", () => {
       expectedArgv: ["cmd.exe", "/c", "typescript-language-server.cmd", "--stdio"],
     },
   ])("$name", async ({ configEnv, sanitizedEnv, program, expectedArgv }) => {
+    vi.spyOn(windowsSpawn, "resolveWindowsSpawnProgram").mockImplementation(
+      resolveWindowsSpawnProgramMock,
+    );
+    vi.spyOn(ownedStdio, "createOwnedStdioProcess").mockImplementation(spawnMock);
     sanitizeHostExecEnvMock.mockReturnValue(sanitizedEnv);
     resolveWindowsSpawnProgramMock.mockReturnValue(program);
     const abortSignal = new AbortController().signal;
@@ -76,15 +79,7 @@ describe("spawnLspServerProcess Windows .cmd shim handling", () => {
           args: ["--stdio"],
           ...(configEnv ? { env: configEnv } : {}),
         },
-        {
-          abortSignal,
-          dependencies: {
-            resolveWindowsSpawnProgram: resolveWindowsSpawnProgramMock,
-            materializeWindowsSpawnProgram,
-            sanitizeHostExecEnv: sanitizeHostExecEnvMock,
-            spawn: spawnMock,
-          },
-        },
+        { abortSignal },
       ),
     ).rejects.toThrow("stop after spawn");
 
@@ -112,20 +107,10 @@ describe("spawnLspServerProcess Windows .cmd shim handling", () => {
 
     await expect(
       withMockedWindowsPlatform(() =>
-        spawnLspServerProcess(
-          {
-            command: "C:\\Program Files\\language-server.cmd",
-            args: ["--stdio", "two words", "%LSP_ARGUMENT%", "echo ready & exit /b"],
-          },
-          {
-            dependencies: {
-              sanitizeHostExecEnv: sanitizeHostExecEnvMock,
-              resolveWindowsSpawnProgram,
-              materializeWindowsSpawnProgram,
-              spawn: createOwnedStdioProcess,
-            },
-          },
-        ),
+        spawnLspServerProcess({
+          command: "C:\\Program Files\\language-server.cmd",
+          args: ["--stdio", "two words", "%LSP_ARGUMENT%", "echo ready & exit /b"],
+        }),
       ),
     ).rejects.toThrow("captured Windows spawn");
 

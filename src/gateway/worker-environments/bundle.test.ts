@@ -44,6 +44,7 @@ async function writeFixture(
     "utf8",
   );
   for (const [artifactName, contents] of [
+    ["code-mode-node.worker.mjs", "export const codeModeNode = true;\n"],
     ["file-tool-planning.worker.mjs", "export const fileToolPlanning = true;\n"],
     ["github-exec-launcher.mjs", "export const launcher = true;\n"],
     ["image-processor.worker.mjs", "export const imageProcessor = true;\n"],
@@ -208,6 +209,7 @@ describe("worker bundle producer", () => {
       expect(first.tarballBytes).toBe(compressed.byteLength);
       const entries = await listTarball(first.tarballPath);
       expect(entries).toEqual([
+        "code-mode-node.worker.mjs",
         "file-tool-planning.worker.mjs",
         "github-exec-launcher.mjs",
         "image-processor.worker.mjs",
@@ -683,6 +685,7 @@ describe("worker bundle producer", () => {
 
       expect(repaired.bundleHash).toBe(first.bundleHash);
       await expect(listTarball(repaired.tarballPath)).resolves.toEqual([
+        "code-mode-node.worker.mjs",
         "file-tool-planning.worker.mjs",
         "github-exec-launcher.mjs",
         "image-processor.worker.mjs",

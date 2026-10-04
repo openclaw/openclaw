@@ -1,3 +1,4 @@
+import { raceWithTimeout } from "../../../packages/retry/src/index.js";
 import { flushDiagnosticsTimeline } from "../../infra/diagnostics-timeline.js";
 import {
   GATEWAY_SIGNAL_REPEAT_WINDOW_MS,
@@ -11,14 +12,11 @@ export async function flushGatewayLogsBeforeExit(
   timeoutMs = 4_000,
 ) {
   flushDiagnosticsTimeline();
-  let flushTimer: ReturnType<typeof setTimeout> | undefined;
-  const flushed = await Promise.race([
+  const flushed = await raceWithTimeout(
     flushLogger().then(() => true),
-    new Promise<false>((resolve) => {
-      flushTimer = setTimeout(() => resolve(false), timeoutMs);
-    }),
-  ]);
-  clearTimeout(flushTimer);
+    timeoutMs,
+    () => false,
+  );
   if (!flushed) {
     logger.warn(`log flush did not settle within ${timeoutMs}ms; continuing shutdown`);
   }

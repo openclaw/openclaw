@@ -143,6 +143,8 @@ describe("detectChangedScope", () => {
       { runNode: true, runMacos: true, runMacosNode: true, runIosBuild: true },
     ],
     [["scripts/package-mac-app.sh"], { runNode: true, runMacos: true, runMacosNode: true }],
+    [["scripts/lib/openclaw-bun.json"], { runNode: true, runMacos: true, runMacosNode: true }],
+    [["scripts/stage-openclaw-bun.sh"], { runNode: true, runMacos: true, runMacosNode: true }],
     [
       ["skills/skill-creator/scripts/test_quick_validate.py"],
       { runNode: true, runSkillsPython: true },

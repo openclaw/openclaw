@@ -199,7 +199,6 @@ export async function withAuthProfileUsage<T>(
     const observed = scopedSharedStore
       ? mergeAuthProfileStores(scopedSharedStore, selected)
       : selected;
-    const rows = useShared ? sharedRows! : localRows!;
     const inherited = useShared && !main;
     const owner = {
       databasePath,
@@ -286,7 +285,7 @@ export async function withAuthProfileUsage<T>(
           providerKey,
           providerAliases,
           scopedSharedStore,
-          expectedCredentials: rows.store.status === "readable" ? rows.store.raw : null,
+          expectedCredential: selected.profiles[profileId],
         });
         let receipt: AuthProfileUsageReceipt | undefined;
         const publish = async (

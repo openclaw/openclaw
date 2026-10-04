@@ -20,7 +20,7 @@ function countRosterReads(config: OpenClawConfig): () => number {
 }
 
 function collectConfiguredAgentHarnessRuntimes(
-  config: OpenClawConfig,
+  config: unknown,
   options?: Parameters<typeof collectConfiguredAgentHarnessRuntimesBase>[1],
 ) {
   return collectConfiguredAgentHarnessRuntimesBase(
@@ -103,21 +103,20 @@ describe("collectConfiguredAgentHarnessRuntimes", () => {
   });
 
   it("requires Codex for selectable per-agent OpenAI models", () => {
-    const config = {
+    const config: OpenClawConfig = {
       agents: {
         defaults: {
           model: { primary: "anthropic/claude-sonnet-4-6" },
         },
-        list: [
-          {
-            id: "worker",
+        entries: {
+          worker: {
             models: {
               "openai/gpt-5.5": {},
             },
           },
-        ],
+        },
       },
-    } as OpenClawConfig;
+    };
 
     expect(collectConfiguredAgentHarnessRuntimes(config)).toEqual(["codex"]);
   });
@@ -173,7 +172,7 @@ describe("collectConfiguredAgentHarnessRuntimes", () => {
             },
           },
         },
-        entries: { main: { default: true } },
+        entries: { main: {} },
         list: {
           ops: {
             id: "ops",
@@ -181,7 +180,7 @@ describe("collectConfiguredAgentHarnessRuntimes", () => {
           },
         },
       },
-    } as unknown as OpenClawConfig;
+    };
 
     expect(collectConfiguredAgentHarnessRuntimes(config)).toEqual(["claude"]);
   });

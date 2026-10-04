@@ -13,6 +13,7 @@ import {
 import { runExec } from "../process/exec.js";
 import { signalProcessTree } from "../process/kill-tree.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { settlesWithin } from "../shared/settle-within.js";
 import { extractTailscaleServeGatewayUrls } from "../shared/tailscale-status.js";
 import { isVitestRuntimeEnv } from "./env.js";
 import { toErrorObject } from "./errors.js";
@@ -192,18 +193,6 @@ function routeClaimError(message: TailscaleRouteOwnerFailure, serveStatus: strin
   });
 }
 
-function waitWithTimeout(promise: Promise<void>, timeoutMs: number): Promise<boolean> {
-  return new Promise((resolve) => {
-    const timer = setTimeout(() => resolve(false), timeoutMs);
-    timer.unref?.();
-    const settled = () => {
-      clearTimeout(timer);
-      resolve(true);
-    };
-    void promise.then(settled, settled);
-  });
-}
-
 async function startTailscaleRouteOwner(
   argv: string[],
   serveStatus: string,
@@ -306,7 +295,7 @@ async function startTailscaleRouteOwner(
     } else {
       worker.kill("SIGTERM");
     }
-    if (await waitWithTimeout(exited, TAILSCALE_ROUTE_STOP_TIMEOUT_MS)) {
+    if (await settlesWithin(exited, TAILSCALE_ROUTE_STOP_TIMEOUT_MS)) {
       return;
     }
     if (routePid) {

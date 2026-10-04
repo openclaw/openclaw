@@ -39,21 +39,25 @@ function fixture() {
 }
 
 describe("optional Codex Ultrafast", () => {
-  it.each(["priority", undefined] as const)(
-    "restores baseline %s after a prior upgrade before an unsupported retry",
-    async (tier) => {
+  it.each([
+    { tier: "priority", expected: "priority" },
+    { tier: undefined, expected: null },
+    { tier: "ultrafast", expected: "priority" },
+  ] as const)(
+    "restores baseline $expected after explicit Ultrafast with configured tier $tier",
+    async ({ tier, expected }) => {
       const baseline = { ...resolveCodexAppServerRuntimeOptions({ env: {} }), serviceTier: tier };
       const restored = withCodexAppServerFastModeServiceTier(
         { ...baseline, serviceTier: "ultrafast" },
         { fastMode: undefined },
         baseline,
       );
-      expect(restored.serviceTier).toBe(tier ?? null);
+      expect(restored.serviceTier).toBe(expected);
       const { params, request } = fixture();
       request.mockResolvedValue({ data: [{ ...supportedModel, serviceTiers: [] }] });
       expect(
         await resolveCodexUltrafastServiceTier({ ...params, serviceTier: restored.serviceTier }),
-      ).toBe(tier ?? null);
+      ).toBe(expected);
     },
   );
   it("bounds all catalog pages by one optional discovery budget", async () => {

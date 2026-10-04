@@ -8,6 +8,7 @@ import {
   resolveEmbeddedRunAbandonment,
   type EmbeddedAgentQueueMessageOutcome,
 } from "../../embedded-agent-runner/runs.js";
+import type { CurrentInboundPromptContext } from "../../internal-runtime-context.js";
 import { waitForAnnounceRetryDelay } from "./subagent-announce-delivery-retry.js";
 import {
   getSubagentRequesterSessionActivity as resolveRequesterSessionActivity,
@@ -152,6 +153,7 @@ export async function maybeSteerSubagentAnnounce(params: {
   requesterSessionKey: string;
   requesterAgentId?: string;
   steerMessage: string;
+  currentInboundContext?: CurrentInboundPromptContext;
   createUserTurnTranscriptRecorder?: (sessionId: string) => UserTurnTranscriptRecorder;
   signal?: AbortSignal;
   isSourceSessionEffectsAllowed?: () => boolean;
@@ -189,6 +191,9 @@ export async function maybeSteerSubagentAnnounce(params: {
     steeringMode: "all",
     ...(queueSettings.debounceMs !== undefined ? { debounceMs: queueSettings.debounceMs } : {}),
     waitForTranscriptCommit: true,
+    ...(params.currentInboundContext
+      ? { currentInboundContext: params.currentInboundContext }
+      : {}),
     ...(params.createUserTurnTranscriptRecorder
       ? { userTurnTranscriptRecorder: params.createUserTurnTranscriptRecorder(sessionId) }
       : {}),

@@ -3,6 +3,7 @@ import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/config-contracts
 import { drainPendingDeliveries } from "openclaw/plugin-sdk/delivery-queue-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { formatDurationPrecise, sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { createTelegramBot } from "./bot.js";
 import type { TelegramTransport } from "./fetch.js";
@@ -42,20 +43,7 @@ function normalizeTelegramAccountId(accountId?: string | null): string {
 type TelegramBot = Awaited<ReturnType<typeof createTelegramBot>>;
 
 const waitForGracefulStop = async (stop: () => Promise<void>) => {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    await Promise.race([
-      stop(),
-      new Promise<void>((resolve) => {
-        timer = setTimeout(resolve, POLL_STOP_GRACE_MS);
-        timer.unref?.();
-      }),
-    ]);
-  } finally {
-    if (timer) {
-      clearTimeout(timer);
-    }
-  }
+  await raceWithTimeout(stop(), POLL_STOP_GRACE_MS, () => undefined, { ref: false });
 };
 
 const resolvePollingStallThresholdMs = (value: number | undefined): number => {

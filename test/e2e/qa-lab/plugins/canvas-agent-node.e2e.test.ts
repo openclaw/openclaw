@@ -24,7 +24,6 @@ import {
   restoreActivePluginRegistrySnapshot,
   setActivePluginRegistry,
 } from "../../../../src/plugins/runtime.js";
-import { createCanonicalAgentConfigFixture } from "../../../../src/test-utils/config-roster.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -114,7 +113,7 @@ describe("Canvas agent tool over a paired macOS node", () => {
       // Released here until the started Gateway owns the claim.
       let unstartedPortClaim: typeof portClaim | undefined = portClaim;
       const gatewayToken = "qa-canvas-agent-node-token";
-      const config: OpenClawConfig = createCanonicalAgentConfigFixture({
+      const config: OpenClawConfig = {
         gateway: {
           mode: "local",
           port,
@@ -124,13 +123,13 @@ describe("Canvas agent tool over a paired macOS node", () => {
         },
         agents: {
           defaults: { heartbeat: { every: "0m" }, skipBootstrap: true },
-          entries: { main: { default: true, tools: { allow: ["canvas"] } } },
+          entries: { main: { tools: { allow: ["canvas"] } } },
         },
         plugins: {
           allow: ["canvas"],
           entries: { canvas: { enabled: true } },
         },
-      }).config;
+      };
       await state.writeConfig(config);
 
       const invocations: CapturedInvocation[] = [];

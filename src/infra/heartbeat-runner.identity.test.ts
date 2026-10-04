@@ -62,7 +62,7 @@ describe("runHeartbeatOnce identity", () => {
             heartbeat: { every: "5m", target: "last", isolatedSession: true },
           },
           entries: {
-            main: { default: true },
+            main: {},
             historian2: { identity: { name: "Pulse", emoji: "📟" } },
           },
         },
@@ -136,7 +136,7 @@ describe("runHeartbeatOnce identity", () => {
       const cfg: OpenClawConfig = {
         agents: {
           defaults: { workspace: tmpDir },
-          entries: { main: { default: true }, alpha: {}, beta: {} },
+          entries: { main: {}, alpha: {}, beta: {} },
         },
         session: { scope: "global", store: storeTemplate },
       };

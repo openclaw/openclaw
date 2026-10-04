@@ -378,11 +378,13 @@ export async function assertTelegramRichObservationFlow(
               args: {
                 message?: string;
                 action?: string;
+                conversationReadOrigin?: string;
                 params?: { messageId?: number; content?: string };
               },
             ) => {
               if (method === "message.action") {
                 assert.equal(args.action, "edit");
+                assert.equal(args.conversationReadOrigin, "direct-operator");
                 assert.equal(args.params?.messageId, 1);
                 edits += 1;
                 const firstMarker = [...markers][0];

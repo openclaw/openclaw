@@ -253,7 +253,14 @@ export function registerSessionsSendRequesterRetirementTests({
         await settleSessionWork();
         expect(requesterCalls()).toHaveLength(1);
         expect(requesterCalls()[0]?.params).toMatchObject({
-          message: expect.stringContaining(terminalReply.text),
+          message: "Continue the OpenClaw runtime event.",
+          internalEvents: [
+            {
+              type: "task_completion",
+              childSessionKey,
+              result: expect.stringContaining(terminalReply.text),
+            },
+          ],
           inputProvenance: { sourceTool: "subagent_announce" },
         });
         emitAgentEvent({

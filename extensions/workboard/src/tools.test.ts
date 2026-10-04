@@ -239,7 +239,7 @@ describe("workboard tools", () => {
       config: {
         agents: {
           defaults: { sandbox: { mode: "all", workspaceAccess: "ro" } },
-          list: [{ id: "main", default: true, workspace: "/workspace" }],
+          entries: { main: { workspace: "/workspace" } },
         },
       },
     };

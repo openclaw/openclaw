@@ -17,8 +17,8 @@ import {
 import {
   buildProviderRequestDispatcherPolicy,
   resolveProviderRequestPolicyConfig,
-  type ModelProviderRequestTransportOverrides,
 } from "../agents/provider-request-config.js";
+import type { ModelProviderRequestTransportOverrides } from "../agents/provider-request-config.types.js";
 import type { GuardedFetchMode, GuardedFetchResult } from "../infra/net/fetch-guard.js";
 import { fetchWithSsrFGuard, GUARDED_FETCH_MODE } from "../infra/net/fetch-guard.js";
 import { shouldUseEnvHttpProxyForUrl } from "../infra/net/proxy-env.js";

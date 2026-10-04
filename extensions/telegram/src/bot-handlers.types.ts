@@ -33,6 +33,8 @@ type TelegramMessageProcessorTurnContext = {
   cfg: OpenClawConfig;
   telegramCfg: TelegramAccountConfig;
   onDispatchStart?: () => Promise<void> | void;
+  /** The turn holds its FIFO slot in the session lane while it waits for adoption. */
+  onTurnDeferred?: () => void;
   spooledReplayAbortSignal?: AbortSignal;
   spooledReplayParticipant?: TelegramSpooledReplayDeferredParticipant;
   finalizeSpooledReplayResult?: (

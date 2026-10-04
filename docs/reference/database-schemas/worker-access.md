@@ -31,6 +31,13 @@ reviewed overrides instead of shadowing them with worker-module entries. The
 ratchet applies the same classification rules to the base and candidate sources,
 so metadata corrections alone do not offset unrelated T1 growth.
 
+Maintenance overrides require actual boot or one-shot caller evidence. Lazy
+database admission, idle-close cleanup, restart signal/retry paths, and CLI
+commands reused inside a running Gateway remain T1 when runtime-reachable.
+Tests are excluded by path; test-only helpers in production modules have no
+separate tier and retain their conservative classification. Branch-specific
+exceptions that cannot be expressed by an operation or initializer stay T1.
+
 Canonical-repair mutations are T2 Doctor work, but its exact-row reader remains
 runtime debt through the Gateway's legacy-main agent-creation check. Claw
 provenance's counted CLI writes do not cover its raw Gateway SQL reads. Shared
@@ -54,8 +61,9 @@ Web Push reads, approval delivery operations, and current-subscription cleanup
 have exact worker-only entries; native preferences, subscription upsert/deletion,
 and their shared schema helper remain T1. Prepared-workspace list and mutation
 operations are worker-only, while the synchronous `find` compatibility query
-remains T1. Terminal approval history uses the read worker; native approval
-operations retain their existing tiers. Offline full-store reset inventory and
+remains T1. Approval history and unguarded insert, pending-list, expiry, and
+allow-once consumption have exact worker-only entries; guarded native
+compatibility operations retain their existing tiers. Offline full-store reset inventory and
 archive-reset operations are T3 CLI one-shots, including dev bootstrap; Gateway
 session reset and other archive lifecycle operations are classified separately.
 
@@ -692,6 +700,16 @@ and update behavior are unchanged.
 
 ## Carry facts, publish after commit
 
+Durable progress-card replacements and conditional clears use a narrow adapter
+on the canonical agent writer. The host captures the session, physical store, and
+input before waiting; the worker rereads the current revision and preserves clear
+tombstones in one synchronous transaction. Transaction and commit grants recheck
+current caller authority. Only acknowledged results reach the Gateway broadcast;
+unknown outcomes never replay or fall back to host SQL. The request lifecycle joins
+accepted persistence before database teardown, independently of scheduler
+cancellation. Incognito and atomic reset retain their existing row kernel. No
+schema, SDK, retention, durability, or update migration is required.
+
 Native creation, compaction, and child-spawn signals use the existing shared-state
 writer. Their callers join recording before releasing their lifecycle; embedded
 compaction joins through its subscription event chain. Acknowledged notices precede
@@ -1097,6 +1115,16 @@ lifecycle filtering, complete entry metadata, and missing-store behavior. Cold
 configuration reads also use their asynchronous owner. Process-held incognito
 stores retain their existing native reader and remain separate migration work.
 Schemas, stored bytes, retention, public APIs, and update behavior are unchanged.
+
+Durable ACP parent-stream diagnostics use the canonical agent writer. The relay
+captures its child, run, and physical store before delayed flushes, serializes
+events before dispatch, and keeps one batch in flight beside its bounded buffer.
+The worker allocates sequences and inserts the ordered batch atomically, with
+current source checks at transaction and commit admission. Confirmed rollback
+retains bounded retry; uncertain completion never replays a batch. Gateway close
+seals the relay and joins accepted persistence before retiring database workers.
+Diagnostic failures remain isolated from child execution and parent progress.
+Schemas, stored bytes, retention, and update behavior are unchanged.
 
 TUI remembered-session reads and retired-pointer scans use the shared-state
 read worker; writes and per-pointer compare-and-delete transactions use the

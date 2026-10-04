@@ -34,6 +34,7 @@ type SidebarSessionListOwner = {
   sessionsResult: SessionListSnapshot["result"];
   sessionsAgentId: SessionListSnapshot["agentId"];
   sessionsLoading: boolean;
+  sessionsStartupPending?: boolean;
   sessionMutationError: string | null;
   expandedAgentId(): string;
   sessionListQuery(agentId: string): SessionListOptions;
@@ -116,6 +117,7 @@ export function sidebarSessionListQuery(owner: SidebarSessionQueryOwner, agentId
     agentId,
     archivedFilter: owner.sidebarSessionStatusFilter(),
     limit: SIDEBAR_SESSION_ROSTER_LIMIT,
+    rowMode: "compact",
     includeDerivedTitles: true,
     includeLastMessage: true,
   } as const;
@@ -127,6 +129,7 @@ export function publishSidebarSessionList(
 ): void {
   owner.sessionsResult = snapshot.result;
   owner.sessionsAgentId = snapshot.agentId;
+  owner.sessionsStartupPending = snapshot.startupPending === true;
   if (snapshot.result && snapshot.agentId) {
     const agentId = normalizeAgentId(snapshot.agentId);
     if (owner.sessionResultsByAgent[agentId] !== snapshot.result) {
@@ -158,6 +161,7 @@ export function subscribeFilteredSidebarSessions(
   apply(sessions.listSnapshot(scope));
   return () => {
     unsubscribe();
+    owner.sessionsStartupPending = false;
     publishSidebarSessionError(owner, null, "list");
   };
 }

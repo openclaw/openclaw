@@ -1,3 +1,4 @@
+import { racePromiseWithAbortSignal } from "@openclaw/retry";
 import { t } from "../../../i18n/index.ts";
 
 export type RealtimeTalkInputDevice = {
@@ -191,19 +192,10 @@ async function awaitRealtimeTalkMediaRequest(
     throw realtimeTalkAbortReason(signal);
   }
   const request = startRequest();
-  if (!signal) {
-    return await request;
-  }
-  let removeAbortListener: () => void = () => undefined;
-  const aborted = new Promise<never>((_resolve, reject) => {
-    const onAbort = () => reject(realtimeTalkAbortReason(signal));
-    signal.addEventListener("abort", onAbort, { once: true });
-    removeAbortListener = () => signal.removeEventListener("abort", onAbort);
-  });
   try {
-    return await Promise.race([request, aborted]);
+    return await racePromiseWithAbortSignal(request, signal, realtimeTalkAbortReason);
   } catch (error) {
-    if (signal.aborted) {
+    if (signal?.aborted) {
       // Browser permission prompts are not cancellable. Release any stream that
       // arrives after the lifecycle owner has already moved on.
       void request.then(
@@ -213,8 +205,6 @@ async function awaitRealtimeTalkMediaRequest(
       throw realtimeTalkAbortReason(signal);
     }
     throw error;
-  } finally {
-    removeAbortListener();
   }
 }
 

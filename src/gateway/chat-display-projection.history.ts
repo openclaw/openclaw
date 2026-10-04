@@ -3,7 +3,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE } from "../agents/internal-runtime-context.js";
+import { isOpenClawRuntimeContextCustomMessage } from "../agents/internal-runtime-context.js";
 import { isHeartbeatOkResponse, isHeartbeatUserMessage } from "../auto-reply/heartbeat-filter.js";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
 import { prepareCronJobNameResolver } from "../cron/store/job-name.js";
@@ -330,7 +330,7 @@ function isDisplayHiddenProjectedMessage(message: Record<string, unknown>): bool
   if (message.display === false) {
     return true;
   }
-  return message.role === "custom" && message.customType === OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE;
+  return isOpenClawRuntimeContextCustomMessage(message);
 }
 
 function shouldHideProjectedHistoryMessage(

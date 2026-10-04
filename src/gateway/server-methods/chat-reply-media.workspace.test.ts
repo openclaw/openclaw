@@ -48,13 +48,12 @@ describe("WebChat reply media workspace ownership", () => {
     const cfg: OpenClawConfig = {
       tools: params.allowRead ? { allow: ["read"] } : { fs: { workspaceOnly: true } },
       agents: {
-        list: [
-          {
-            id: "main",
+        entries: {
+          main: {
             agentDir: testState.statePath("agents", "main", "agent"),
             workspace: workspaceDir,
           },
-        ],
+        },
       },
     };
     return { cfg, workspaceDir };

@@ -391,7 +391,7 @@ describe("dreaming service reconciliation", () => {
     const runtimeCurrentConfig = vi.fn(() =>
       createDreamingConfig(
         { enabled: true, frequency: "15 4 * * *", timezone: "UTC", limit: 0 },
-        { agents: { list: [{ id: "main", default: true, workspace: workspaceDir }] } },
+        { agents: { entries: { main: { workspace: workspaceDir } } } },
       ),
     );
     const { api, harness, logger } = createDreamingTestContext({
@@ -1167,7 +1167,7 @@ describe("dreaming service reconciliation", () => {
         ({
           agents: {
             defaults: { workspace: workspaceDir },
-            list: [{ id: "main", default: true, workspace: workspaceDir }],
+            entries: { main: { workspace: workspaceDir } },
           },
         }) as OpenClawConfig,
     );

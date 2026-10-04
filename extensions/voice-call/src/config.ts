@@ -747,48 +747,35 @@ export function validateProviderConfig(config: VoiceCallConfig): {
     );
   }
 
+  const requireCredential = (
+    field: string,
+    value: string | boolean | undefined,
+    envName: string,
+  ) => {
+    if (!value) {
+      errors.push(
+        `plugins.entries.voice-call.config.${config.provider}.${field} is required (or set ${envName} env)`,
+      );
+    }
+  };
   if (config.provider === "telnyx") {
-    if (!config.telnyx?.apiKey) {
-      errors.push(
-        "plugins.entries.voice-call.config.telnyx.apiKey is required (or set TELNYX_API_KEY env)",
-      );
-    }
-    if (!config.telnyx?.connectionId) {
-      errors.push(
-        "plugins.entries.voice-call.config.telnyx.connectionId is required (or set TELNYX_CONNECTION_ID env)",
-      );
-    }
-    if (!config.skipSignatureVerification && !config.telnyx?.publicKey) {
-      errors.push(
-        "plugins.entries.voice-call.config.telnyx.publicKey is required (or set TELNYX_PUBLIC_KEY env)",
-      );
+    requireCredential("apiKey", config.telnyx?.apiKey, "TELNYX_API_KEY");
+    requireCredential("connectionId", config.telnyx?.connectionId, "TELNYX_CONNECTION_ID");
+    if (!config.skipSignatureVerification) {
+      requireCredential("publicKey", config.telnyx?.publicKey, "TELNYX_PUBLIC_KEY");
     }
   }
-
   if (config.provider === "twilio") {
-    if (!config.twilio?.accountSid) {
-      errors.push(
-        "plugins.entries.voice-call.config.twilio.accountSid is required (or set TWILIO_ACCOUNT_SID env)",
-      );
-    }
-    if (!hasConfiguredSecretInput(config.twilio?.authToken)) {
-      errors.push(
-        "plugins.entries.voice-call.config.twilio.authToken is required (or set TWILIO_AUTH_TOKEN env)",
-      );
-    }
+    requireCredential("accountSid", config.twilio?.accountSid, "TWILIO_ACCOUNT_SID");
+    requireCredential(
+      "authToken",
+      hasConfiguredSecretInput(config.twilio?.authToken),
+      "TWILIO_AUTH_TOKEN",
+    );
   }
-
   if (config.provider === "plivo") {
-    if (!config.plivo?.authId) {
-      errors.push(
-        "plugins.entries.voice-call.config.plivo.authId is required (or set PLIVO_AUTH_ID env)",
-      );
-    }
-    if (!config.plivo?.authToken) {
-      errors.push(
-        "plugins.entries.voice-call.config.plivo.authToken is required (or set PLIVO_AUTH_TOKEN env)",
-      );
-    }
+    requireCredential("authId", config.plivo?.authId, "PLIVO_AUTH_ID");
+    requireCredential("authToken", config.plivo?.authToken, "PLIVO_AUTH_TOKEN");
   }
 
   if (config.realtime.enabled && config.inboundPolicy === "disabled") {

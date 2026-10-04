@@ -113,7 +113,7 @@ export async function readCodexPluginInventory(
 
   const appInventory = readCachedAppInventory(params);
   const installedPlugins = await readInstalledCodexPluginMetadata({ ...params, policy });
-  const pluginCatalogs = new Map<string, Promise<v2.PluginListResponse>>();
+  const pluginCatalogs = new Map<string | undefined, v2.PluginListResponse>();
 
   const diagnostics: CodexPluginInventoryDiagnostic[] = [];
   const records: CodexPluginInventoryRecord[] = [];
@@ -143,17 +143,13 @@ export async function readCodexPluginInventory(
       // Installed snapshots exclude uninstalled plugins. Read only the
       // explicitly configured marketplace; non-curated packages still require
       // an owner-issued install command before they can be activated.
-      const requestParams = buildPluginCatalogRequestParams(params, pluginPolicy.marketplaceName);
-      const catalogKey = JSON.stringify([
-        requestParams,
-        pluginMetadataCatalogScope(pluginPolicy.marketplaceName),
-      ]);
+      const catalogKey = pluginMetadataCatalogScope(pluginPolicy.marketplaceName);
       let catalog = pluginCatalogs.get(catalogKey);
       if (!catalog) {
-        catalog = listCodexPluginMetadata(params, pluginPolicy.marketplaceName);
+        catalog = await listCodexPluginMetadata(params, pluginPolicy.marketplaceName);
         pluginCatalogs.set(catalogKey, catalog);
       }
-      listed = await catalog;
+      listed = catalog;
       resolvedPlugin = findConfiguredMarketplacePlugin(listed, pluginPolicy);
     }
     const hasMarketplace = listed.marketplaces.some((marketplace) =>
@@ -199,11 +195,7 @@ export async function readCodexPluginInventory(
       summary,
       diagnostics,
     );
-    const ownedAppIds =
-      detail?.apps
-        .map((app) => app.id)
-        .filter(Boolean)
-        .toSorted() ?? [];
+    const ownedAppIds = detail?.apps.map((app) => app.id).filter(Boolean) ?? [];
     const appOwnership = detail?.apps.length
       ? "proven"
       : appInventory?.snapshot?.apps.some((app) => app.pluginDisplayNames.includes(summary.name))
@@ -302,13 +294,7 @@ export function resolveRecoverableCodexPluginConfigKeys(params: {
   return params.policy.pluginPolicies
     .filter(
       (pluginPolicy) =>
-        pluginPolicy.enabled &&
-        !isSettledMissingPluginPolicy({
-          pluginPolicy,
-          metadataCache: params.metadataCache,
-          appCacheKey: params.appCacheKey,
-          configCwd: params.configCwd,
-        }),
+        pluginPolicy.enabled && !isSettledMissingPluginPolicy({ ...params, pluginPolicy }),
     )
     .map((pluginPolicy) => pluginPolicy.configKey)
     .toSorted();

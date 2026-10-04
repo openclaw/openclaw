@@ -302,7 +302,7 @@ describe("doctor Skill Workshop SQLite migration", () => {
         config: {
           agents: {
             entries: {
-              main: { default: true, workspace: workspaceDir },
+              main: { workspace: workspaceDir },
             },
           },
         },
@@ -411,7 +411,7 @@ describe("doctor Skill Workshop SQLite migration", () => {
         config: {
           agents: {
             entries: {
-              main: { default: true, workspace: workspaceDir },
+              main: { workspace: workspaceDir },
             },
           },
         },

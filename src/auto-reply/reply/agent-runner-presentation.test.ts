@@ -429,4 +429,34 @@ describe("agent runner streaming presentation", () => {
       }
     }
   });
+
+  it("holds punctuation-prefixed silent previews until they diverge or finish", () => {
+    const presentation = createPresentation();
+
+    for (const text of [".N", ". N", "- N", ".NO", ".NO_", ".NO_REPL", "*NO_", '"NO_', "（NO_"]) {
+      expect(presentation.classifyStreamingPartial({ text })).toEqual({ skip: true });
+    }
+    for (const text of [
+      ".NOTE: real content",
+      "- Note: real content",
+      ".No, that is wrong.",
+      "💬NO_REPLY",
+      "NO_REPLY👍",
+      ".NO_REPLY: explanation",
+      ".",
+      "*",
+    ]) {
+      expect(presentation.classifyStreamingPartial({ text })).toEqual({ text, skip: false });
+    }
+    for (const text of [".NO", ".N", ". N", "- N", "*NO_", '"NO_', "（NO_", ".", "*"]) {
+      expect(presentation.normalizeStreamingText({ text })).toEqual({ text, skip: false });
+    }
+  });
+
+  it("keeps large ordinary previews visible after a punctuation prefix", () => {
+    const presentation = createPresentation();
+    const text = `.NOTE: ${"ordinary text ".repeat(10_000)}`;
+
+    expect(presentation.classifyStreamingPartial({ text })).toEqual({ text, skip: false });
+  });
 });

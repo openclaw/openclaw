@@ -22,6 +22,8 @@ For unmatched HTTP paths, the app-shell fallback respects the request's `Accept`
 
 It speaks **directly to the Gateway WebSocket** on the same port.
 
+After a Gateway restart, an agent may need a few minutes to prepare its database. The chat view shows "Starting up" and the sidebar stays quiet while preparation is pending. Both reload automatically when the agent is ready; an actual preparation failure still shows its diagnostic and repair instructions.
+
 If the Gateway's request queue is full, automatic sidebar session discovery keeps the current rows and retries up to three times, respecting the server's retry delay. A persistent failure shows "The server is busy. Please try again in a moment." Other actions can show this message immediately; wait briefly, then retry the action.
 
 While the initial connection or a route loads, shimmer placeholders reserve the chat layout. Home and System busyness open directly in their destination panels, with working headers and Close controls while the content loads. Brief loads do not flash placeholders; slower loads show placeholders inside the panel, and load errors offer Retry in the same place. The rest of the page stays usable. Drag the System busyness title bar to move the panel; its position is remembered in this browser. You can also focus the title bar and use the arrow keys (Shift moves farther). Compact/expanded transitions animate briefly, respect reduced motion, and keep the panel inside the window. Loading indicators respect your theme and reduced-motion preference; Gateway startup progress remains visible when available.
@@ -74,11 +76,12 @@ a separate status for execution, startup, or approval. **Keep commentary** in
 the chat view menu controls whether commentary stays visible after the run,
 not whether the active run’s narration survives a history refresh. Completed
 dashboard turns collapse their narration and tool activity under **Worked for …**
-above the answer. Expanding it restores the sequence with the existing tool-call
-groups. When no run duration is available, the heading reads **Worked**.
-The heading includes the total tool-call count followed by any failures, such as
-**Worked · 200 tool calls · 20 failed**. Calls without failures still show the
-total; turns without tool calls omit it.
+above the answer, with durations such as **Worked for 2 minutes, 3 seconds**.
+Expanding it restores the sequence with the existing tool-call groups and shows
+the total tool-call count. When no run duration is available, the heading reads
+**Worked** rather than estimating from message timestamps. Failures and other
+non-success outcomes remain visible even when collapsed, such as
+**Worked for 2 minutes, 3 seconds · 2 failed**.
 
 Consecutive tool activity shares one expandable log, including when background
 work resumes in a new run. Visible messages, media, and conversation markers

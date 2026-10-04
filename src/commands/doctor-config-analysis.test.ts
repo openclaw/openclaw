@@ -18,7 +18,7 @@ const noteMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: noteMock }));
 
-function collectImplicitFallbackClobberWarnings(cfg: OpenClawConfig): string[] {
+function collectImplicitFallbackClobberWarnings(cfg: unknown): string[] {
   noteMock.mockClear();
   noteImplicitFallbackClobberWarnings(cfg);
   const body = noteMock.mock.calls.at(-1)?.[0];
@@ -263,13 +263,13 @@ describe("collectImplicitFallbackClobberWarnings", () => {
     },
   );
 
-  function buildConfig(overrides: { defaults?: unknown; list?: unknown[] }): OpenClawConfig {
+  function buildConfig(overrides: { defaults?: unknown; list?: unknown[] }) {
     return {
       agents: {
         defaults: { model: overrides.defaults },
         list: overrides.list,
       },
-    } as unknown as OpenClawConfig;
+    };
   }
 
   it("returns empty when defaults has no fallbacks", () => {
@@ -294,7 +294,7 @@ describe("collectImplicitFallbackClobberWarnings", () => {
         defaults: { model: { primary: "openai/gpt-5.5", fallbacks: ["openai/gpt-5.4"] } },
         list: { ops: { id: "ops", model: "openai/gpt-5.3" } },
       },
-    } as unknown as OpenClawConfig;
+    };
 
     expect(collectImplicitFallbackClobberWarnings(cfg)).toEqual([]);
   });
