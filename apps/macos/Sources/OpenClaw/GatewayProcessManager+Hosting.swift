@@ -94,8 +94,6 @@ extension GatewayProcessManager {
                     guard self.isCurrentGatewayStart(generation) else { throw CancellationError() }
                 },
                 resolveLegacyCLI: { try self.retainedServiceIntent() },
-                allowNamedServiceRetry: candidate.allowsNamedServiceRetry,
-                coreRepairVerifiedCLI: candidate.hasVerifiedCoreRepair ? candidate.cli : nil,
                 verifyHealth: {
                     await (self.connection).shutdown()
                     let pid = await GatewayLaunchAgentManager.reusableLoadedGatewayPID(

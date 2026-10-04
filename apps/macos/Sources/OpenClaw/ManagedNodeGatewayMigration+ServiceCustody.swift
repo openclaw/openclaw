@@ -113,7 +113,9 @@ extension ManagedNodeGatewayMigration {
                   snapshot: snapshot, environmentFile: artifacts.environment, environmentWrapper: artifacts.wrapper),
               cli.prefix.first == runtime.bun.path,
               let entrypoint = cli.prefix.last,
-              Self.bundledEntrypoints(runtime: runtime).contains(entrypoint),
+              ["openclaw.mjs", "dist/index.js", "dist/index.mjs", "dist/entry.js", "dist/entry.mjs"].contains(where: {
+                  runtime.packageRoot.appendingPathComponent($0).path == entrypoint
+              }),
               snapshot.environment["OPENCLAW_SQLITE_LIBRARY"] == runtime.sqliteLibrary.path,
               snapshot.port == port,
               snapshot.programArguments.contains("--allow-unconfigured") == allowUnconfigured
@@ -150,11 +152,5 @@ extension ManagedNodeGatewayMigration {
         guard let pin = try? JSONDecoder().decode(RuntimePin.self, from: Data(record.value.utf8)) else { return false }
         return pin.version == 1 && pin.pin.runtime == "bun" && pin.pin.path == runtime.bun.path &&
             pin.definition == definition
-    }
-
-    private static func bundledEntrypoints(runtime: BundledRuntime) -> Set<String> {
-        Set(["openclaw.mjs", "dist/index.js", "dist/index.mjs", "dist/entry.js", "dist/entry.mjs"].map {
-            runtime.packageRoot.appendingPathComponent($0).path
-        })
     }
 }
