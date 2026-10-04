@@ -5,6 +5,7 @@ import { PassThrough, Writable } from "node:stream";
 import { createContext, Script } from "node:vm";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
+  convertMeetingTtsAudioForBridge,
   createLocalMeetingRealtimeAudioTransport,
   createMeetingRealtimeEngineBindings,
   createNodeMeetingRealtimeAudioTransport,
@@ -3166,6 +3167,40 @@ describe("google-meet plugin", () => {
       return call.command === "browser.proxy" && params.path === "/tabs/open";
     });
     expect(openCalls).toHaveLength(1);
+  });
+
+  it("preserves telephony TTS output formats when routing Google Meet agent audio", () => {
+    const ulaw = Buffer.from([0xff, 0x7f, 0x00]);
+    const pcmBridgeConfig = resolveGoogleMeetConfig({ chrome: { audioFormat: "pcm16-24khz" } });
+    const ulawBridgeConfig = resolveGoogleMeetConfig({ chrome: { audioFormat: "g711-ulaw-8khz" } });
+
+    expect(
+      convertMeetingTtsAudioForBridge(
+        ulaw,
+        8_000,
+        ulawBridgeConfig.chrome.audioFormat,
+        "raw-8khz-8bit-mono-mulaw",
+        "Google Meet",
+      ),
+    ).toEqual(ulaw);
+    const pcmForMeet = convertMeetingTtsAudioForBridge(
+      ulaw,
+      8_000,
+      pcmBridgeConfig.chrome.audioFormat,
+      "ulaw_8000",
+      "Google Meet",
+    );
+    expect(pcmForMeet.byteLength).toBe(18);
+    expect(pcmForMeet).not.toEqual(ulaw);
+    expect(() =>
+      convertMeetingTtsAudioForBridge(
+        Buffer.from([1, 2, 3]),
+        8_000,
+        pcmBridgeConfig.chrome.audioFormat,
+        "mp3",
+        "Google Meet",
+      ),
+    ).toThrow("Unsupported telephony TTS output format");
   });
 
   it("defaults Chrome command-pair realtime to agent-driven talk-back", async () => {
