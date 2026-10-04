@@ -37,6 +37,7 @@ export function resolveSessionSearchScope(cfg: OpenClawConfig, params: SessionsS
       !rosterAgentIds.has(requestedAgentId) &&
       isConfiguredSessionStoreAgentId(cfg, requestedAgentId) &&
       storeOwnerAgentId === requestedAgentId &&
+      parsedKey !== null &&
       parsedKey.rest !== "main" &&
       storedSessionKey &&
       storedSessionKey !== "global" &&
