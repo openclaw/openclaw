@@ -6262,7 +6262,6 @@
 ["src/commands/doctor.e2e-harness.ts","../infra/state-migrations.config-machine-state.js","6e0734d7445fd348d7063d2d3acf9cec0d702756dfd6a0a8b520d0ec5d12d431",1]
 ["src/commands/doctor.e2e-harness.ts","../infra/state-migrations.doctor.js","d8d4e3c179395da102a6b6edfac21f35d0c1d0dab108e0c6f9700bb006499dc5",1]
 ["src/commands/doctor.e2e-harness.ts","../infra/state-migrations.plugin-doctor.js","b7e343058f2ce689b129e72efee6054c39a7f0ac7a7de4ac104a72172eb13252",1]
-["src/commands/doctor.e2e-harness.ts","../infra/state-migrations.state-dir.js","f80c1a961d77cdd71687c8fcfe46a6244f36cba5f0c3b3d337c39f9dff0c03b8",1]
 ["src/commands/doctor.e2e-harness.ts","../pairing/pairing-store.js","a39ce14d386e5e03fc612a403327c0c2e26530b172a7cf57c7e1cd544a4f341c",1]
 ["src/commands/doctor.e2e-harness.ts","../plugins/doctor-contract-registry.js","86632816c35f1340597ee8de0fd1012d307f3eb9ba3bc3b45061a664217fad65",1]
 ["src/commands/doctor.e2e-harness.ts","../plugins/loader.js","ef1fa7a7169b8dce41b813a0d7275f2aec75357b56219255735fb9eff89acdf3",1]
