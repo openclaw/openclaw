@@ -36,6 +36,7 @@ export function createLazyExecTool(
   // Native tool callbacks can arrive outside the scope that constructed this lazy tool.
   const installationTarget = getInstallationTarget();
   const processToolAvailabilityRef = defaults?.processToolAvailabilityRef ?? {};
+  const fileWriteToolAvailabilityRef = defaults?.fileWriteToolAvailabilityRef ?? {};
   let loadedTool: LoadedExecTool | undefined;
   let loadingTool: Promise<LoadedExecTool> | undefined;
   const loadTool = () => {
@@ -44,7 +45,7 @@ export function createLazyExecTool(
     }
     loadingTool ??= bashToolsModuleLoader.load().then(({ createExecTool }) => {
       loadedTool = withInstallationTarget(installationTarget, () =>
-        createExecTool({ ...defaults, processToolAvailabilityRef }),
+        createExecTool({ ...defaults, processToolAvailabilityRef, fileWriteToolAvailabilityRef }),
       );
       return loadedTool;
     });
@@ -63,6 +64,7 @@ export function createLazyExecTool(
           describeExecTool({
             hasCronTool: defaults?.hasCronTool === true,
             hasProcessTool: processToolAvailabilityRef.value,
+            hasFileWriteTool: fileWriteToolAvailabilityRef.value,
             autoReview: defaults?.mode === "auto",
           })
         );
@@ -89,6 +91,10 @@ export function createLazyExecTool(
       prepareBeforeNormalization: true,
       prepare: (_tool, callableTools) => {
         processToolAvailabilityRef.value = callableTools.has("process");
+        fileWriteToolAvailabilityRef.value =
+          callableTools.has("write") ||
+          callableTools.has("edit") ||
+          callableTools.has("apply_patch");
       },
     },
   );
