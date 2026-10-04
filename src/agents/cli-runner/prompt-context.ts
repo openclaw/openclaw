@@ -6,7 +6,7 @@ import {
 import { labelRuntimeContextText } from "../../llm/types.js";
 import type { CliBackendConfig, CliBackendPromptContext } from "../../plugins/cli-backend.types.js";
 import { prepareTtsPreferences } from "../../tts/tts-preferences.js";
-import { buildCliSessionDriftNote } from "../cli-session.js";
+import { buildCliSessionDriftNote, buildCliSessionUnseenTurnsContext } from "../cli-session.js";
 import type { ResolvedPromptBuildHookResult } from "../embedded-agent-runner/run/attempt-prompt-helpers.js";
 import { composeSystemPromptWithHookContext } from "../embedded-agent-runner/run/attempt-thread-helpers.js";
 import { buildRuntimeContextCustomMessage } from "../embedded-agent-runner/run/runtime-context-prompt.js";
@@ -166,14 +166,28 @@ export async function prepareCliSystemPrompt(
   });
 }
 
-export function prependCliSessionDriftUserContext(
-  context: RunCliAgentParams["currentInboundContext"],
+/** Resume notes lead the current turn: the drift note, then exchanges the session missed. */
+export function prependCliSessionResumeUserContext(
+  run: Pick<RunCliAgentParams, "currentInboundContext" | "cliSessionBinding">,
   reusableCliSession: CliReusableSession,
 ): RunCliAgentParams["currentInboundContext"] {
-  if (reusableCliSession.mode !== "reuse-with-drift") {
+  const context = run.currentInboundContext;
+  const unseenTurns =
+    (reusableCliSession.mode === "reuse" || reusableCliSession.mode === "reuse-with-drift") &&
+    reusableCliSession.sessionId === run.cliSessionBinding?.sessionId
+      ? run.cliSessionBinding.unseenTurns
+      : undefined;
+  const note = [
+    reusableCliSession.mode === "reuse-with-drift"
+      ? buildCliSessionDriftNote(reusableCliSession.drift.reasons)
+      : undefined,
+    unseenTurns ? buildCliSessionUnseenTurnsContext(unseenTurns) : undefined,
+  ]
+    .filter((value): value is string => Boolean(value))
+    .join("\n\n");
+  if (!note) {
     return context;
   }
-  const note = buildCliSessionDriftNote(reusableCliSession.drift.reasons);
   if (!context) {
     return { text: note };
   }

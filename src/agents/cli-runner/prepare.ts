@@ -153,7 +153,7 @@ import * as mcp from "./prepare-mcp.js";
 import { resolveCliRuntimeToolPolicy } from "./prepare-tool-policy.js";
 import {
   composeCliPromptContext,
-  prependCliSessionDriftUserContext,
+  prependCliSessionResumeUserContext,
   prepareCliSystemPrompt,
   prepareCliTurnPromptContext,
 } from "./prompt-context.js";
@@ -1710,10 +1710,7 @@ async function prepareCliRunContextWithinReadFence(
     }
     let historyPromptCurrentTurn = preparedPrompt;
     if (!skipsTurnPreparation) {
-      const currentInboundContext = prependCliSessionDriftUserContext(
-        params.currentInboundContext,
-        reusableCliSession,
-      );
+      const currentInboundContext = prependCliSessionResumeUserContext(params, reusableCliSession);
       const renderCurrentPrompt = (prompt: string, preferResumableText = false) =>
         annotateInterSessionPromptText(
           buildCurrentInboundPrompt({

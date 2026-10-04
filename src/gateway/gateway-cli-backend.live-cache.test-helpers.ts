@@ -8,6 +8,7 @@ import { expect } from "vitest";
 import { resolveAgentDir } from "../agents/agent-scope.js";
 import { saveAuthProfileStore } from "../agents/auth-profiles/store-runtime.js";
 import { loadCliSessionHistoryMessages } from "../agents/cli-runner/session-history.js";
+import { getCliSessionBinding } from "../agents/cli-session.js";
 import { computeCacheHitRate } from "../agents/live-cache-test-support.js";
 import { listSubagentRunsForRequester } from "../agents/subagents/registry/subagent-registry.test-helpers.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -15,6 +16,7 @@ import { resolveSessionTranscriptRuntimeTarget } from "../config/sessions/sessio
 import { loadOpenClawPlugins } from "../plugins/loader.js";
 import { extractTextFromChatContent } from "../shared/chat-content.js";
 import { sleep } from "../utils/sleep.js";
+import { resolveClaudeCliSessionFilePathAsync } from "./cli-session-history.claude.js";
 import type { GatewayClient } from "./client.js";
 import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
 import { extractPayloadText } from "./test-helpers.agent-results.js";
@@ -352,7 +354,7 @@ export async function verifyCliBackendAnnounceOrdering({
     sessionId: announceEntry.sessionId,
     sessionKey: announceSessionKey,
   });
-  const { parentReplyIndex, completionReplyIndex } = await waitFor(async () => {
+  const { parentReplyIndex, completionReplyIndex, completionReply } = await waitFor(async () => {
     const announceHistory = await loadCliSessionHistoryMessages({ sessionTarget });
     const assistantReplies = announceHistory.flatMap((message) => {
       const record = message as { role?: unknown; content?: unknown };
@@ -370,6 +372,7 @@ export async function verifyCliBackendAnnounceOrdering({
       ? {
           parentReplyIndex: observedParentReplyIndex,
           completionReplyIndex: observedCompletionReplyIndex,
+          completionReply: assistantReplies[observedCompletionReplyIndex] ?? "",
         }
       : undefined;
   });
@@ -382,4 +385,68 @@ export async function verifyCliBackendAnnounceOrdering({
   });
   expect(parentReplyIndex).toBeGreaterThanOrEqual(0);
   expect(completionReplyIndex).toBeGreaterThan(parentReplyIndex);
+  return { sessionKey: announceSessionKey, completionReply };
+}
+
+/**
+ * A restricted completion turn runs in its own Claude session. The requester's next
+ * turn resumes its bound session, which must then hold that exchange as quoted context.
+ * Read from Claude's own transcript for that session, the record the model resumes.
+ */
+export async function verifyCliBackendAnnounceContinuity({
+  client,
+  announce,
+  requestTimeoutMs,
+  logStep,
+}: {
+  client: GatewayClient;
+  announce: { sessionKey: string; completionReply: string };
+  requestTimeoutMs: number;
+  logStep: (step: string, details?: Record<string, unknown>) => void;
+}) {
+  const boundCliSessionId = () =>
+    getCliSessionBinding(loadGatewaySessionEntryReadOnly(announce.sessionKey).entry, "claude-cli")
+      ?.sessionId;
+  const boundBefore = boundCliSessionId();
+  if (!boundBefore) {
+    throw new Error("CLI announce probe has no bound Claude session");
+  }
+  const followUp = await client.request(
+    "agent",
+    {
+      sessionKey: announce.sessionKey,
+      idempotencyKey: `cli-announce-continuity-${randomUUID()}`,
+      deliver: false,
+      timeout: 240,
+      message: "Do not call any tools. Quote, verbatim, the last update you sent me.",
+    },
+    { expectFinal: true, timeoutMs: requestTimeoutMs },
+  );
+  expect(boundCliSessionId()).toBe(boundBefore);
+  const transcriptPath = await resolveClaudeCliSessionFilePathAsync({ cliSessionId: boundBefore });
+  if (!transcriptPath) {
+    throw new Error(`Claude transcript for bound session ${boundBefore} was not found`);
+  }
+  const userTexts = (await fs.readFile(transcriptPath, "utf8")).split("\n").flatMap((line) => {
+    const record = line.trim()
+      ? (JSON.parse(line) as { type?: unknown; message?: { content?: unknown } })
+      : undefined;
+    return record?.type === "user"
+      ? [extractTextFromChatContent(record.message?.content, { joinWith: "" }) ?? ""]
+      : [];
+  });
+  const carried = userTexts.find((text) => text.includes("sourceTool=subagent_announce"));
+  logStep("announce-continuity:resumed", {
+    boundCliSessionId: boundBefore,
+    userTurns: userTexts.length,
+    carriedCompletion: carried !== undefined,
+    followUpReply: extractPayloadText(followUp.result),
+  });
+  // The completion turn never ran in the bound session itself.
+  expect(userTexts.some((text) => text.startsWith("[Inter-session message]"))).toBe(false);
+  expect(carried, "resumed Claude session lacks the completion exchange").toBeDefined();
+  // Quoted context is JSON, so the relayed reply appears in its escaped form.
+  expect(carried).toContain(
+    JSON.stringify(announce.completionReply.trim().slice(0, 48)).slice(1, -1),
+  );
 }

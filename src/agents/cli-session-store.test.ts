@@ -8,6 +8,7 @@ import {
   buildCliSessionForkRunParams,
   persistCliSessionBindingResult,
   restoreCliSessionForkInStore,
+  settlePreservedCliSessionTurn,
 } from "./cli-session-store.js";
 import { resolveCliSessionReuse } from "./cli-session.js";
 import {
@@ -262,6 +263,74 @@ describe("CLI binding settlement", () => {
       });
     },
   );
+});
+
+describe("preserved CLI turn settlement", () => {
+  const sessionKey = "agent:main:explicit:preserved-cli-turn";
+  const bound = {
+    sessionId: "native-bound",
+    authProfileId: "anthropic:work",
+    authEpoch: "epoch-a",
+    authEpochVersion: 4,
+    mcpResumeHash: "requester-topology",
+  };
+  const unseenTurn = { prompt: "Child finished: CHILD_RESULT", reply: "Relayed the result." };
+
+  async function settle(params: {
+    stored: typeof bound & { unseenTurns?: (typeof unseenTurn)[] };
+    ran: Partial<typeof bound>;
+  }) {
+    return await withTempSessionStore(async ({ storePath }) => {
+      const sessionStore = await seedSessionFixture(storePath, sessionKey, {
+        sessionId: "local-session",
+        updatedAt: 1,
+        cliSessionBindings: { "claude-cli": params.stored },
+      });
+      const ran = { ...bound, sessionId: "native-isolated", ...params.ran };
+      await settlePreservedCliSessionTurn({
+        agentId: "main",
+        provider: "claude-cli",
+        sessionKey,
+        storePath,
+        sessionStore,
+        expectedSession: sessionStore[sessionKey],
+        boundCliSessionId: bound.sessionId,
+        assertSettlementCurrent: () => {},
+        result: createRunResult({
+          sessionId: ran.sessionId,
+          provider: "claude-cli",
+          model: "opus",
+          cliSessionBinding: ran,
+          ...(ran.sessionId === bound.sessionId ? {} : { cliUnseenTurn: unseenTurn }),
+        }),
+      });
+      return loadPersistedSessionEntry(storePath, sessionKey)?.cliSessionBindings?.["claude-cli"];
+    });
+  }
+
+  it("keeps an isolated exchange on the bound native session", async () => {
+    await expect(settle({ stored: bound, ran: {} })).resolves.toEqual({
+      ...bound,
+      unseenTurns: [unseenTurn],
+    });
+  });
+
+  it.each([
+    { name: "another auth profile", ran: { authProfileId: "anthropic:personal" } },
+    { name: "another auth epoch", ran: { authEpoch: "epoch-b" } },
+    { name: "a replaced binding", ran: {}, stored: { ...bound, sessionId: "native-newer" } },
+  ])("leaves the binding unchanged for $name", async ({ ran, stored }) => {
+    await expect(settle({ stored: stored ?? bound, ran })).resolves.toEqual(stored ?? bound);
+  });
+
+  it("retires carried exchanges once the bound session resumes", async () => {
+    await expect(
+      settle({
+        stored: { ...bound, unseenTurns: [unseenTurn] },
+        ran: { sessionId: bound.sessionId },
+      }),
+    ).resolves.toEqual(bound);
+  });
 });
 
 describe("CLI session binding mutations", () => {

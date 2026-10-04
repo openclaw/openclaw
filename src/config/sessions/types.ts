@@ -146,6 +146,14 @@ export type CliSessionBinding = {
   mcpResumeHash?: string;
   /** Identifies one synthetic history prompt and the trusted local handling of its user turn. */
   reseedReceipt?: CliSessionReseedReceipt;
+  /** Bounded exchanges this native session has not seen; the next resume prepends them once. */
+  unseenTurns?: CliSessionUnseenTurn[];
+};
+
+/** One preserved turn that ran outside the bound native session, as its model saw it. */
+export type CliSessionUnseenTurn = {
+  prompt: string;
+  reply: string;
 };
 
 type AcpSessionBinding = {

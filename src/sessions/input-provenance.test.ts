@@ -4,7 +4,9 @@ import {
   annotateInterSessionPromptText,
   INTER_SESSION_PROMPT_PREFIX_BASE,
   isAgentMediatedCompletionSourceTool,
+  isPreservedConversationTurnInputProvenance,
   normalizeInputProvenance,
+  PROGRESS_CARD_REFRESH_SOURCE_TOOL,
   shouldPreserveUserFacingSessionStateForInputProvenance,
   stripInterSessionPromptPrefixForDisplay,
 } from "./input-provenance.js";
@@ -161,5 +163,28 @@ describe("shouldPreserveUserFacingSessionStateForInputProvenance", () => {
         sourceTool: "sessions_send",
       }),
     ).toBe(false);
+  });
+});
+
+describe("isPreservedConversationTurnInputProvenance", () => {
+  it.each([
+    {
+      name: "a completion handoff",
+      sourceTool: "subagent_announce",
+      preserves: true,
+      carries: true,
+    },
+    {
+      name: "a progress card refresh",
+      kind: "internal_system",
+      sourceTool: PROGRESS_CARD_REFRESH_SOURCE_TOOL,
+      preserves: true,
+      carries: false,
+    },
+    { name: "user input", kind: "external_user", preserves: false, carries: false },
+  ])("separates $name from preserved state alone", ({ kind, sourceTool, preserves, carries }) => {
+    const provenance = { kind: kind ?? "inter_session", sourceTool };
+    expect(shouldPreserveUserFacingSessionStateForInputProvenance(provenance)).toBe(preserves);
+    expect(isPreservedConversationTurnInputProvenance(provenance)).toBe(carries);
   });
 });
