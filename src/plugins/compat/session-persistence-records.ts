@@ -2,6 +2,30 @@ import type { PluginCompatRecord } from "./types.js";
 
 export const SESSION_PERSISTENCE_COMPAT_RECORDS = [
   {
+    code: "reply-run-start-unprepared-transcript",
+    status: "deprecated",
+    owner: "agent-runtime",
+    introduced: "2026-10-04",
+    deprecated: "2026-10-04",
+    warningStarts: "2026-10-04",
+    removalGate: "next-plugin-sdk-major",
+    replacement:
+      "Forward every onAgentRunStart argument and its synchronous return value through the current runtime helper. Bundled producers supply prepared transcript facts in the optional fourth argument; retain the released three-argument callback and synchronous transcript-read fallback until the next Plugin SDK major and explicit breaking-release approval.",
+    docsPath: "/plugins/sdk-migration/compatibility-policy#reply-run-start-transcript-facts",
+    surfaces: [
+      "openclaw/plugin-sdk/reply-runtime.GetReplyOptions.onAgentRunStart",
+      "PluginHookReplyDispatchContext.onAgentRunStart",
+    ],
+    diagnostics: ["plugin compatibility registry and migration documentation; no runtime warnings"],
+    tests: [
+      "src/plugin-sdk/reply-runtime.contract.test.ts",
+      "src/gateway/server-methods/chat-send-reply-dispatch.test.ts",
+      "src/plugins/compat/registry.test.ts",
+    ],
+    releaseNote:
+      "Reply runtimes can pass prepared transcript boundaries without Gateway-thread reads. Released plugin callbacks keep their arguments and synchronous completion acknowledgment; stored data and update behavior are unchanged.",
+  },
+  {
     code: "agent-end-sync-side-effects",
     status: "deprecated",
     owner: "agent-runtime",

@@ -40,7 +40,7 @@ export const execSchema = Type.Object({
       description: "Milliseconds before backgrounding; default 10000.",
     }),
   ),
-  required: Type.Optional(
+  awaitResults: Type.Optional(
     Type.Boolean({
       description:
         "Result required to finish the task; wait for terminal collection. Not for detached servers.",

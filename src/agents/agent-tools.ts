@@ -664,14 +664,20 @@ export async function createOpenClawCodingToolsInternalAsync(
 
 /** @deprecated Use createOpenClawCodingToolsAsync to prepare policy through the worker. */
 export function createOpenClawCodingTools(
-  options?: Omit<OpenClawCodingToolsOptions, "sessionReadScopeKey" | "onProgressCardPlanSaved">,
+  options?: Omit<
+    OpenClawCodingToolsOptions,
+    "sessionReadScopeKey" | "onProgressCardPlanSaved" | "authProfileStoreSource"
+  >,
 ): AnyAgentTool[] {
   return createOpenClawCodingToolsInternal(options);
 }
 
 /** Build the SDK tool list with a fresh, source-bound exec policy. */
 export function createOpenClawCodingToolsAsync(
-  options?: Omit<OpenClawCodingToolsOptions, "sessionReadScopeKey" | "onProgressCardPlanSaved">,
+  options?: Omit<
+    OpenClawCodingToolsOptions,
+    "sessionReadScopeKey" | "onProgressCardPlanSaved" | "authProfileStoreSource"
+  >,
 ): Promise<AnyAgentTool[]> {
   return createOpenClawCodingToolsInternalAsync(options);
 }

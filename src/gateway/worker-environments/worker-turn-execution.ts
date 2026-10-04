@@ -261,13 +261,14 @@ export async function executeWorkerTurn(
   });
   const { browser, computer, preparedComputer } = desktop;
   const {
+    authProfileStoreSource,
     capabilityProfile,
     policy: toolPolicy,
     exec,
     execUnavailable,
     presentation,
     installedSkills,
-  } = resolveWorkerToolAuthority({
+  } = await resolveWorkerToolAuthority({
     modelRef,
     model,
     placement,
@@ -381,6 +382,7 @@ export async function executeWorkerTurn(
               const prepared = await createOpenClawCodingToolsInternalAsync(
                 {
                   ...turn,
+                  authProfileStoreSource,
                   agentId: placement.agentId,
                   conversationCapabilityProfile: capabilityProfile,
                   preparedModelRuntime: preparedRuntime.snapshot,

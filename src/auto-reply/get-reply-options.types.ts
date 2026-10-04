@@ -36,6 +36,16 @@ export type ReplyDispatchRun = {
   };
 };
 
+/** Prepared transcript boundary; current run and writer authority remain caller-owned. */
+export type PreparedReplyTranscriptStart = {
+  agentId: string;
+  sessionId: string;
+  sessionKey: string;
+  storePath: string;
+  generation: string | null;
+  maxSeq: number | null;
+};
+
 export type BlockReplyContext = {
   abortSignal?: AbortSignal;
   timeoutMs?: number;
@@ -170,6 +180,7 @@ export type GetReplyOptions = {
     runId: string,
     executionIdentityToken?: ExecutionIdentityAdmissionToken,
     options?: ReplyDispatchRun,
+    transcriptStart?: PreparedReplyTranscriptStart | null,
   ) => unknown;
   /** Reports the terminal agent-run classification to the shared dispatch owner. */
   onAgentRunTerminalOutcome?: (outcome: "completed" | "failed") => void;

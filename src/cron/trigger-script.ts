@@ -16,9 +16,10 @@ import {
   type HookContext,
 } from "../agents/agent-tools.before-tool-call.js";
 import {
-  createOpenClawCodingToolsAsync,
+  createOpenClawCodingToolsInternalAsync,
   resolveToolLoopDetectionConfig,
 } from "../agents/agent-tools.js";
+import { hasAnyAuthProfileStoreSourceAsync } from "../agents/auth-profiles/source-check.js";
 import { createHeadlessDeadlineScope } from "../agents/code-mode-headless.js";
 import type {
   CodeModeNamespaceDescriptor,
@@ -231,6 +232,9 @@ async function prepareTriggerRuntime(
       toolsEnabled: true,
       toolsAllow: params.toolsAllow,
     });
+    const authProfileStoreSource =
+      toolPlan.constructTools && (await hasAnyAuthProfileStoreSourceAsync(agentDir));
+    preparationSignal?.throwIfAborted();
     const scheduledToolPolicy = resolveScheduledToolPolicyContext({
       toolsAllow: params.toolsAllow,
       scheduledToolPolicy: params.scheduledToolPolicy,
@@ -268,7 +272,7 @@ async function prepareTriggerRuntime(
       messageActionTurnCapability,
     ) => {
       const allTools = toolPlan.constructTools
-        ? await createOpenClawCodingToolsAsync({
+        ? await createOpenClawCodingToolsInternalAsync({
             agentId,
             runId: admitted.operationalRunInstance.runId,
             operationalRunInstance: admitted.operationalRunInstance,
@@ -280,6 +284,7 @@ async function prepareTriggerRuntime(
             trigger: "cron",
             jobId: params.jobId,
             agentDir,
+            authProfileStoreSource,
             cwd: effectiveWorkspace,
             workspaceDir: effectiveWorkspace,
             spawnWorkspaceDir: workspaceDir,

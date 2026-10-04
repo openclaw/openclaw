@@ -557,7 +557,7 @@ failures. A rejected launch or failed child must not discard results from other
 accepted children. Keep the returned run IDs for recovery. Do not repeat
 successful launches or automatically rerun failed work.
 
-Each `agents_wait` call accepts 1–1000 run ids. Use `required: true` to keep
+Each `agents_wait` call accepts 1–1000 run ids. Use `awaitResults: true` to keep
 collection owned until **all** authorized requested collectors settle, without
 an observer polling timeout. It is mutually exclusive with `timeoutSeconds`;
 child and agent-run deadlines, tool watchdogs, cancellation, and ownership

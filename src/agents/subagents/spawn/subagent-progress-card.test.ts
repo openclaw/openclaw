@@ -12,6 +12,11 @@ vi.mock("../../../infra/device-pairing.js", () => ({
   hasPairedCardRenderer: async () => true,
 }));
 
+// mock-isolation: Progress-card availability uses synthetic sessions without auth database admission.
+vi.mock("../../auth-profiles/source-check.js", () => ({
+  hasAnyAuthProfileStoreSourceAsync: async () => false,
+}));
+
 describe("subagent progress-card availability", () => {
   let tempDir: string;
   let config: OpenClawConfig;

@@ -94,14 +94,10 @@ type DispatchProcessedRecorder = InboundMessageAuditTerminalRecorder["note"];
 
 function resolveAcpRequestId(ctx: FinalizedRuntimeMsgContext): string {
   const id = ctx.MessageSidFull ?? ctx.MessageSid ?? ctx.MessageSidFirst ?? ctx.MessageSidLast;
-  const normalizedId = normalizeOptionalString(id);
-  if (normalizedId) {
-    return normalizedId;
-  }
-  if (typeof id === "number" || typeof id === "bigint") {
-    return String(id);
-  }
-  return generateSecureUuid();
+  return (
+    normalizeOptionalString(id) ??
+    (typeof id === "number" || typeof id === "bigint" ? String(id) : generateSecureUuid())
+  );
 }
 
 function isRestrictiveRuntimeToolsAllow(toolsAllow: string[] | undefined): boolean {
@@ -178,7 +174,7 @@ export async function tryDispatchAcpReplyCore(
     inputRecorder?.withPendingInput?.(() => {});
   };
 
-  const { getAcpSessionManager, maybeUnbindStaleBoundConversations } =
+  const { getAcpSessionManager, maybeUnbindStaleBoundConversations, prepareAcpDispatchStart } =
     await loadDispatchAcpManagerRuntime();
   const acpManager = getAcpSessionManager();
   const acpResolution = await acpManager.resolveSessionAsync({
@@ -404,6 +400,14 @@ export async function tryDispatchAcpReplyCore(
   let runtimeTurnWasCancelled = false;
   let assistantTranscript: ReplyDispatchAssistantTranscript | undefined;
   let terminalOutcome: ReturnType<ReplyDispatchRun["getResult"]>["terminalOutcome"];
+  const notifyDispatchStart = await prepareAcpDispatchStart({
+    scope: participantTarget,
+    sessionId: transcriptSessionId,
+    runId: auditRunId,
+    onAgentRunStart: params.onAgentRunStart,
+    getResult: () => ({ assistantTranscript, terminalOutcome }),
+  });
+  assertInputCurrent();
   let auditEndFields: ReturnType<typeof auditRuntime.resolveAcpLifecycleEndFields> | undefined;
   const resolveAuditEndFields = () =>
     (auditEndFields ??= auditRuntime.resolveAcpLifecycleEndFields(
@@ -416,13 +420,7 @@ export async function tryDispatchAcpReplyCore(
       return;
     }
     auditStarted = true;
-    const completionOwner = params.onAgentRunStart?.(auditRunId, undefined, {
-      completionSource: "reply-dispatch",
-      getResult: () => ({ assistantTranscript, terminalOutcome }),
-    });
-    // Observers and channel wrappers also install this callback. Only an explicit
-    // synchronous acknowledgement transfers chat completion away from lifecycle events.
-    completionSource = completionOwner === "reply-dispatch" ? completionOwner : undefined;
+    completionSource = notifyDispatchStart();
     auditRuntime.emitAcpLifecycleStart({
       runId: auditRunId,
       sessionKey: canonicalSessionKey,

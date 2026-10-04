@@ -423,6 +423,21 @@ describe("Activity recap lifecycle with the canonical session store", () => {
       queries.restore();
       completion.resolve(result("Completed the requested work."));
     }
+    const committed = createDeferred();
+    changed.mockImplementation(() => committed.resolve());
+    const settlementReads = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
+    try {
+      await withinTest(committed.promise, testSignal);
+      expect(
+        settlementReads.queries.filter((sql) =>
+          /transcript_events|transcript_rewrite_watermarks|session_transcript_cold_archives/i.test(
+            sql,
+          ),
+        ),
+      ).toEqual([]);
+    } finally {
+      settlementReads.restore();
+    }
     // Transcript notifications defer the dirty follow-up until the refresh interval;
     // the terminal event requests its immediate completion without another model call.
     expect(view()?.state).toBe("updating");

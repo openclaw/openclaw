@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import "./test-helpers/fast-bash-tools.js";
 import "./test-helpers/fast-coding-tools.js";
 import "./test-helpers/fast-openclaw-tools.js";
@@ -9,6 +9,11 @@ import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { resolveConversationCapabilityProfile } from "./conversation-capability-profile.js";
 import { resolveConfiguredToolAccess } from "./tool-access-diagnostics.js";
 import { resolveEffectiveToolInventory } from "./tools-effective-inventory.js";
+
+// mock-isolation: Policy fixtures use synthetic agents and mocked tools without auth database admission.
+vi.mock("./auth-profiles/source-check.js", () => ({
+  hasAnyAuthProfileStoreSourceAsync: async () => false,
+}));
 
 function messagingAgentConfig(tools: OpenClawConfig["tools"] = {}): OpenClawConfig {
   return {
@@ -107,8 +112,8 @@ describe("tool access diagnostics", () => {
   });
 
   it("observes actual inventory filtering and explicit profile repair", async () => {
-    const inventory = async (cfg: OpenClawConfig) =>
-      await resolveEffectiveToolInventory({
+    const inventory = (cfg: OpenClawConfig) =>
+      resolveEffectiveToolInventory({
         cfg,
         agentId: "assistant",
         sessionKey: "agent:assistant:main",

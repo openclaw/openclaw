@@ -68,6 +68,11 @@ vi.mock("./agent-tools.js", () => ({
   ) => effectiveInventoryState.createToolsMock(options),
 }));
 
+// mock-isolation: Inventory metadata fixtures require storage-free tool construction for synthetic agent paths.
+vi.mock("./auth-profiles/source-check.js", () => ({
+  hasAnyAuthProfileStoreSourceAsync: async () => false,
+}));
+
 vi.mock("./channel-tools.js", () => ({
   getChannelAgentToolMeta: (tool: { name: string }) =>
     effectiveInventoryState.channelMeta[tool.name],
@@ -118,18 +123,8 @@ async function loadHarness(options?: {
 }
 
 describe("resolveEffectiveToolInventory", () => {
-  beforeEach(() => {
-    effectiveInventoryState.tools = [
-      mockTool({ name: "exec", label: "Exec", description: "Run shell commands" }),
-      mockTool({ name: "docs_lookup", label: "Docs Lookup", description: "Search docs" }),
-    ];
-    effectiveInventoryState.channelMeta = {};
-    effectiveInventoryState.normalizeToolsMock = vi.fn((options) => options.tools);
-    effectiveInventoryState.staticCatalogModelMock = vi.fn((_options: unknown) => undefined);
-    effectiveInventoryState.normalizeTransportMock = vi.fn((_options: unknown) => undefined);
-    effectiveInventoryState.createToolsMock = vi.fn<typeof createOpenClawCodingToolsInternal>(
-      (_options) => effectiveInventoryState.tools,
-    );
+  beforeEach(async () => {
+    await loadHarness();
     setActivePluginRegistry(createEmptyPluginRegistry());
   });
 
