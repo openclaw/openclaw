@@ -6,7 +6,7 @@ import { setImmediate as yieldToGateway, setTimeout as delay } from "node:timers
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { computeBackoffSchedule } from "../../../packages/retry/src/index.js";
-import { createAbortError, racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
+import { createAbortError } from "../../infra/abort-signal.js";
 import { isGatewayExternallySupervised } from "../../infra/gateway-supervision.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
@@ -14,7 +14,6 @@ import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
-import { captureAgentDatabaseCloseFence } from "../../state/openclaw-agent-db-resources.js";
 import {
   borrowOpenClawAgentDatabase,
   getOpenClawAgentDatabaseIfOpen,
@@ -38,6 +37,7 @@ import {
   resolveSqliteTranscriptReadScope,
   runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
+  type ResolvedTranscriptReadScope,
 } from "./session-accessor.sqlite-scope.js";
 import {
   withIncognitoProjection,
@@ -49,9 +49,9 @@ import {
   hasOrphanedTranscriptIndexRows,
   hasSessionsNeedingTranscriptIndexReconcile,
   listSessionsNeedingTranscriptIndexReconcile,
-  sessionTranscriptIndexNeedsReconcile,
 } from "./session-transcript-index.js";
 import type { TranscriptProjectionPublicationOperations } from "./session-transcript-projection-publication.worker.js";
+import { createSessionProjectionReadinessProbe } from "./session-transcript-projection-readiness.js";
 import {
   appendPreparedProjectionChunk,
   claimPreparedSessionTranscriptProjection,
@@ -665,48 +665,28 @@ export async function waitForSessionTranscriptProjection(
   scope: SessionTranscriptReadScope,
   abortSignal?: AbortSignal,
 ): Promise<void> {
-  const resolved = resolveSqliteTranscriptReadScope(scope);
+  await waitForPreparedSessionTranscriptProjection(
+    resolveSqliteTranscriptReadScope(scope),
+    abortSignal,
+  );
+}
+
+export async function waitForPreparedSessionTranscriptProjection(
+  resolved: ResolvedTranscriptReadScope,
+  abortSignal?: AbortSignal,
+): Promise<void> {
   const databaseOptions = prepareReconcileParams(toDatabaseOptions(resolved));
   const key = reconcileKey(databaseOptions);
   let running = runningReconciles.get(key);
   if (!running) {
     return;
   }
-  let needsReconcile: () => Promise<boolean>;
-  if (supportsOpenClawAgentDatabaseExecution(databaseOptions)) {
-    needsReconcile = async () => {
-      const closing = captureAgentDatabaseCloseFence({
-        agentId: databaseOptions.agentId,
-        path: key,
-      });
-      if (closing) {
-        await racePromiseWithAbortSignal(closing, abortSignal);
-        if (!isSessionTranscriptReconcileGenerationCurrent(databaseOptions.generation)) {
-          return false;
-        }
-      }
-      const execution = captureOpenClawAgentDatabaseExecution(databaseOptions);
-      try {
-        execution.assertCurrent();
-        return await withSessionHistoryWorkerDatabase(databaseOptions, (owner) =>
-          owner.readProjectionStatus(
-            { env: databaseOptions.env, sessionId: resolved.sessionId },
-            abortSignal,
-          ),
-        );
-      } finally {
-        await execution.release();
-      }
-    };
-  } else {
-    needsReconcile = async () => {
-      const pending = withOpenClawAgentDatabaseReadOnly(
-        ({ db }) => sessionTranscriptIndexNeedsReconcile(db, resolved.sessionId),
-        databaseOptions,
-      );
-      return pending.found && pending.value;
-    };
-  }
+  const needsReconcile = createSessionProjectionReadinessProbe({
+    databaseOptions,
+    databasePath: key,
+    sessionId: resolved.sessionId,
+    abortSignal,
+  });
   try {
     while (running) {
       abortSignal?.throwIfAborted();

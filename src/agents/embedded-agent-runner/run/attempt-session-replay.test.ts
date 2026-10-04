@@ -4,7 +4,9 @@ import {
   loadTranscriptEventsSync,
   upsertSessionEntryCore,
 } from "../../../config/sessions/session-accessor.js";
+import { SessionTranscriptProjectionUnavailableError } from "../../../config/sessions/session-transcript-projection-error.js";
 import { resolveSessionTranscriptReadFence } from "../../../config/sessions/session-transcript-read-fence.js";
+import { waitForSessionTranscriptIndexReconcile } from "../../../config/sessions/session-transcript-reconcile.js";
 import type { ContextEngine } from "../../../context-engine/types.js";
 import type { ImageContent } from "../../../llm/types.js";
 import { finalizeRuntimePromptImages } from "../../../media/runtime-prompt-image-provenance.js";
@@ -14,6 +16,7 @@ import {
   type PersistedUserTurnMessage,
 } from "../../../sessions/user-turn-transcript.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
+import { openOpenClawAgentDatabase } from "../../../state/openclaw-agent-db.js";
 import { observeMainThreadSql } from "../../../test-utils/main-thread-sql-spies.test-support.js";
 import { createAgentRunRestartAbortError } from "../../run-termination.js";
 import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
@@ -27,6 +30,7 @@ import {
   testModel,
 } from "../../sessions/agent-session-loop-correctness.test-support.js";
 import type { AgentSession } from "../../sessions/agent-session.js";
+import { isSessionFileEntry } from "../../sessions/session-file-parser.js";
 import { sessionManagerPrepareCurrentTurnReplay } from "../../sessions/session-manager-current-turn.js";
 import { SessionManager } from "../../sessions/session-manager.js";
 import {
@@ -39,6 +43,90 @@ import { cleanupEmbeddedAttemptResources } from "./attempt-subscription-cleanup.
 import { buildRuntimeContextCustomMessage } from "./runtime-context-prompt.js";
 
 registerAgentSessionLoopTestLifecycle();
+
+it("recovers a fresh admitted turn when its active projection is rebuilding", async () => {
+  await withInterruptedTurn(
+    false,
+    async ({ target, prepare }) => {
+      await waitForSessionTranscriptIndexReconcile({ agentId: target.agentId });
+      const database = openOpenClawAgentDatabase({ agentId: target.agentId });
+      const invalidated = database.db
+        .prepare("UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = ?")
+        .run(target.sessionId);
+      expect(invalidated.changes).toBe(1);
+
+      const prepared = await prepare();
+      expect(
+        prepared.sessionManager
+          .getBranch()
+          .some((entry) => entry.type === "message" && entry.message.role === "user"),
+      ).toBe(true);
+      expect(
+        loadTranscriptEventsSync(target).filter(
+          (event) =>
+            isSessionFileEntry(event) && event.type === "message" && event.message.role === "user",
+        ),
+      ).toHaveLength(1);
+    },
+    { interruptedTurn: false },
+  );
+});
+
+it.each(["window-changed", "other-session", "read-failure"])(
+  "does not retry fresh-turn hydration for %s",
+  async (failure) => {
+    await withInterruptedTurn(
+      false,
+      async ({ target, prepare }) => {
+        const error =
+          failure === "read-failure"
+            ? new Error("read failed")
+            : new SessionTranscriptProjectionUnavailableError(
+                failure === "other-session" ? "different-session" : target.sessionId,
+                failure === "window-changed" ? "window-changed" : "rebuilding",
+              );
+        const open = vi.spyOn(SessionManager, "openAsync").mockRejectedValueOnce(error);
+        try {
+          await expect(prepare()).rejects.toBe(error);
+          expect(open).toHaveBeenCalledTimes(1);
+        } finally {
+          open.mockRestore();
+        }
+      },
+      { interruptedTurn: false },
+    );
+  },
+);
+
+it("publishes an opened manager for cleanup before rejecting a revoked writer", async () => {
+  await withInterruptedTurn(
+    false,
+    async ({ prepare, revoke }) => {
+      const original = SessionManager.openAsync.bind(SessionManager);
+      const open = vi.spyOn(SessionManager, "openAsync").mockImplementation(async (...args) => {
+        const manager = await original(...args);
+        revoke();
+        return manager;
+      });
+      let created: SessionManager | undefined;
+      try {
+        await expect(
+          prepare((manager) => {
+            created = manager;
+          }),
+        ).rejects.toThrow("original writer closed");
+        expect(created).toBeDefined();
+      } finally {
+        open.mockRestore();
+        await cleanupEmbeddedAttemptResources({
+          sessionManager: created,
+          flushPendingToolResultsAfterIdle: async () => {},
+        });
+      }
+    },
+    { interruptedTurn: false },
+  );
+});
 
 describe("context engine bootstrap", () => {
   it("bootstraps the context engine under the admitted user turn's read fence", async () => {

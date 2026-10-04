@@ -1,6 +1,11 @@
 import { isAnthropicOAuthApiKey, isDirectAnthropicModel } from "@openclaw/ai/internal/anthropic";
 import { supportsClaudeInHistorySystemMessages } from "@openclaw/llm-core";
-import type { SessionTranscriptRuntimeTarget } from "../../../config/sessions/session-accessor.js";
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
+import {
+  recoverSessionTranscriptProjection,
+  type SessionTranscriptRuntimeTarget,
+} from "../../../config/sessions/session-accessor.js";
+import { isSessionTranscriptProjectionUnavailableError } from "../../../config/sessions/session-transcript-projection-error.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../../context-engine/host-compat.js";
 import type { ContextEngine } from "../../../context-engine/types.js";
 import {
@@ -33,6 +38,7 @@ import {
 import { createAgentSessionForEmbeddedRunner } from "../../sessions/sdk.js";
 import { withSessionManagerWrite } from "../../sessions/session-manager-write-admission.js";
 import { wrapToolDefinition } from "../../sessions/tools/tool-definition-wrapper.js";
+import { DEFAULT_AGENT_TIMEOUT_MS } from "../../timeout.js";
 import { resolveToolSearchCatalogTool } from "../../tool-search.js";
 import { runContextEngineMaintenance } from "../context-engine-maintenance.js";
 import { buildEmbeddedExtensionFactories } from "../extensions.js";
@@ -462,11 +468,13 @@ export async function prepareEmbeddedAttemptSessionManager(input: {
   attempt: EmbeddedRunAttemptParams;
   activeContextEngine?: ContextEngine;
   agentDir: string;
+  assertCurrent: () => void;
   effectiveCwd: string;
   effectiveWorkspace: string;
   onSessionManagerCreated: (sessionManager: AttemptSessionManager) => void;
   replayAllowedToolNames: ReadonlySet<string>;
   resolveActiveContextEnginePluginId: () => string | undefined;
+  runAbortSignal: AbortSignal;
   sessionAgentId: string;
   withOwnedTranscriptWrite: WithOwnedTranscriptWrite;
 }) {
@@ -511,19 +519,74 @@ export async function prepareEmbeddedAttemptSessionManager(input: {
   let latestRuntimeUserMessage: AgentMessage | undefined;
   let latestUserTurnTranscriptRecorder = attempt.userTurnTranscriptRecorder;
   const userTranscriptContextRegistry = createUserTranscriptContextRegistry();
+  const openSignal = attempt.abortSignal
+    ? AbortSignal.any([attempt.abortSignal, input.runAbortSignal])
+    : input.runAbortSignal;
+  const openSessionManager = () =>
+    SessionManager.openAsync(
+      attempt.sessionTarget as SessionTranscriptRuntimeTarget,
+      input.effectiveCwd,
+      resolveEmbeddedSessionContextLimits(attempt.contextTokenBudget),
+      openSignal,
+    );
+  let openedSessionManager: SessionManager | undefined;
+  if (!attempt.sessionManager && attempt.sessionTarget) {
+    openSignal.throwIfAborted();
+    try {
+      openedSessionManager = await openSessionManager();
+    } catch (error) {
+      if (
+        !isSessionTranscriptProjectionUnavailableError(error) ||
+        error.reason !== "rebuilding" ||
+        error.sessionId !== attempt.sessionTarget.sessionId
+      ) {
+        throw error;
+      }
+      input.assertCurrent();
+      openSignal.throwIfAborted();
+      const recoveryTarget = { ...attempt.sessionTarget, sessionId: error.sessionId };
+      // Session execution timers start only after AgentSession exists. Bound this
+      // preparation and its store discovery separately without cancelling the shared reconcile owner.
+      const deadline = new AbortController();
+      const recoveryBudgetMs =
+        attempt.timeoutMs >= MAX_TIMER_TIMEOUT_MS
+          ? DEFAULT_AGENT_TIMEOUT_MS
+          : Math.max(1, attempt.timeoutMs);
+      const timer = setTimeout(() => deadline.abort(error), recoveryBudgetMs);
+      timer.unref();
+      try {
+        await recoverSessionTranscriptProjection(
+          recoveryTarget,
+          AbortSignal.any([openSignal, deadline.signal]),
+          input.assertCurrent,
+        );
+      } catch (waitError) {
+        input.assertCurrent();
+        openSignal.throwIfAborted();
+        if (
+          waitError === error ||
+          (waitError instanceof Error &&
+            waitError.name === "AbortError" &&
+            waitError.cause === error)
+        ) {
+          throw error;
+        }
+        throw waitError;
+      } finally {
+        clearTimeout(timer);
+      }
+      input.assertCurrent();
+      openSignal.throwIfAborted();
+      openedSessionManager = await openSessionManager();
+    }
+  }
   const unguardedSessionManager =
-    attempt.sessionManager ??
-    (attempt.sessionTarget
-      ? await SessionManager.openAsync(
-          attempt.sessionTarget as SessionTranscriptRuntimeTarget,
-          input.effectiveCwd,
-          resolveEmbeddedSessionContextLimits(attempt.contextTokenBudget),
-          attempt.abortSignal,
-        )
-      : SessionManager.inMemory(input.effectiveCwd));
+    attempt.sessionManager ?? openedSessionManager ?? SessionManager.inMemory(input.effectiveCwd);
   // Publish ownership before awaiting preparation; outer cleanup must receive
   // this same manager even when replay validation or bootstrap fails.
   input.onSessionManagerCreated(unguardedSessionManager);
+  input.assertCurrent();
+  openSignal.throwIfAborted();
   const prepareInitialUserTurnReplay = await input.withOwnedTranscriptWrite(() =>
     preparePersistedCurrentUserTurn({
       sessionManager: unguardedSessionManager,
