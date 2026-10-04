@@ -166,9 +166,10 @@ describe("Synology Chat TLS verification defaults", () => {
   installFakeTimerHarness();
 
   it.each(
-    tlsVerificationDefaultCases.flatMap((testCase) =>
-      [false, true].map((refused) => ({ ...testCase, refused })),
-    ),
+    tlsVerificationDefaultCases.flatMap(({ name, invoke }) => [
+      { name, invoke, refused: false },
+      { name, invoke, refused: true },
+    ]),
   )(
     "prepares $name webhook POST before handoff (refused=$refused)",
     async ({ name, invoke, refused }) => {
