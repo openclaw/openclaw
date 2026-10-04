@@ -2,7 +2,6 @@
 
 export {
   createOpenAiCompatibleImageGenerationProvider,
-  type OpenAiCompatibleImageProviderOptions,
   type OpenAiCompatibleImageProviderRequestBody,
   type OpenAiCompatibleImageProviderRequestParams,
   type OpenAiCompatibleImageRequestMode,
@@ -14,10 +13,8 @@ export {
   generatedImageAssetFromOpenAiCompatibleEntry,
   imageFileExtensionForMimeType,
   imageSourceUploadFileName,
-  parseImageDataUrl,
   parseOpenAiCompatibleImageResponse,
   resolveInlineImageJsonResponseMaxBytes,
-  sniffImageMimeType,
   toImageDataUrl,
   type ImageMimeTypeDetection,
   type OpenAiCompatibleImageResponseEntry,
@@ -26,16 +23,10 @@ export {
 
 export type {
   GeneratedImageAsset,
-  ImageGenerationBackground,
   ImageGenerationOpenAIBackground,
-  ImageGenerationOpenAIModeration,
-  ImageGenerationOpenAIOptions,
   ImageGenerationOutputFormat,
   ImageGenerationProvider,
   ImageGenerationProviderConfiguredContext,
-  ImageGenerationProviderOptions,
-  ImageGenerationQuality,
-  ImageGenerationResolution,
   ImageGenerationRequest,
   ImageGenerationResult,
   ImageGenerationSourceImage,

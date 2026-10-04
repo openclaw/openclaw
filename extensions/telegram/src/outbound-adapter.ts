@@ -27,7 +27,7 @@ import {
 import { registerTelegramQuestionDelivery } from "./question-finalization.js";
 import { resolveTelegramRichMessages } from "./rich-messages-config.js";
 import type { TelegramSendOpts } from "./send-message-types.js";
-import { loadTelegramSendModule, type TelegramSendModule } from "./send-runtime.js";
+import { loadTelegramSendModule } from "./send-runtime.js";
 import { normalizeTelegramOutboundTarget, parseTelegramTarget } from "./targets.js";
 import { resolveTelegramTextChunkLimit, TELEGRAM_TEXT_CHUNK_LIMIT } from "./text-chunk-limit.js";
 
@@ -39,7 +39,6 @@ type TelegramSendFn = typeof import("./send.js").sendMessageTelegram;
 type TelegramReactionFn = typeof import("./send.js").reactMessageTelegram;
 type TelegramLocationFn = typeof import("./send.js").sendLocationTelegram;
 type ResolveTelegramSendFn = (deps?: OutboundSendDeps) => Promise<TelegramSendFn>;
-type LoadTelegramSendModuleFn = () => Promise<TelegramSendModule>;
 
 type TelegramPayloadData = {
   buttons?: TelegramInlineButtons;
@@ -108,7 +107,6 @@ type CreateTelegramOutboundAdapterOptions = Pick<
   | "preferFinalAssistantVisibleText"
 > & {
   resolveSend?: ResolveTelegramSendFn;
-  loadSendModule?: LoadTelegramSendModuleFn;
 };
 
 function normalizeTelegramMetadataOnlyPayload(payload: ReplyPayload): ReplyPayload | null {
@@ -331,7 +329,6 @@ export function createTelegramOutboundAdapter(
   options: CreateTelegramOutboundAdapterOptions = {},
 ): ChannelOutboundAdapter {
   const resolveSend = options.resolveSend ?? resolveDefaultTelegramSend;
-  const loadSendModule = options.loadSendModule ?? loadTelegramSendModule;
 
   return {
     deliveryMode: "direct",
@@ -430,7 +427,7 @@ export function createTelegramOutboundAdapter(
         text,
         textLimit: isCaptionDelivery ? TELEGRAM_MAX_CAPTION_LENGTH : TELEGRAM_TEXT_CHUNK_LIMIT,
         clearButtons: async () => {
-          const { editMessageReplyMarkupTelegram } = await loadSendModule();
+          const { editMessageReplyMarkupTelegram } = await loadTelegramSendModule();
           await editMessageReplyMarkupTelegram(chatId, messageId, [], {
             cfg,
             accountId,
@@ -438,7 +435,7 @@ export function createTelegramOutboundAdapter(
           });
         },
         annotate: async (finalText) => {
-          const { editMessageTelegram } = await loadSendModule();
+          const { editMessageTelegram } = await loadTelegramSendModule();
           await editMessageTelegram(chatId, messageId, finalText, {
             cfg,
             accountId,
@@ -456,7 +453,7 @@ export function createTelegramOutboundAdapter(
       gatewayClientScopes,
       assertDirectAdapterHandoff,
     }) => {
-      const { pinMessageTelegram } = await loadSendModule();
+      const { pinMessageTelegram } = await loadTelegramSendModule();
       const outboundTo = normalizeTelegramOutboundTarget(target.to);
       const pinTarget = parseTelegramTarget(outboundTo);
       await pinMessageTelegram(pinTarget.chatId, messageId, {
@@ -503,7 +500,7 @@ export function createTelegramOutboundAdapter(
         ...params,
         resolveSend,
       });
-      const { reactMessageTelegram, sendLocationTelegram } = await loadSendModule();
+      const { reactMessageTelegram, sendLocationTelegram } = await loadTelegramSendModule();
       const result = await sendTelegramPayloadMessages({
         send,
         sendLocation: sendLocationTelegram,
@@ -533,7 +530,7 @@ export function createTelegramOutboundAdapter(
       assertDirectAdapterHandoff,
     }) => {
       const outboundTo = normalizeTelegramOutboundTarget(to);
-      const { sendPollTelegram } = await loadSendModule();
+      const { sendPollTelegram } = await loadTelegramSendModule();
       return await sendPollTelegram(outboundTo, poll, {
         cfg,
         accountId: accountId ?? undefined,

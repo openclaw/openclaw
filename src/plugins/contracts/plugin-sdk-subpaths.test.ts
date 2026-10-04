@@ -1220,7 +1220,7 @@ describe("plugin-sdk subpath exports", () => {
       omits: ["applyOpenAIConfig", "buildKilocodeModelDefinition", "discoverHuggingfaceModels"],
     });
     expectSourceContract("provider-catalog-shared", {
-      mentions: ["buildSingleProviderApiKeyCatalog", "buildPairedProviderApiKeyCatalog"],
+      mentions: ["buildSingleProviderApiKeyCatalog", "buildManifestProviderCatalogFamily"],
       omits: ["buildDeepSeekProvider", "buildVeniceProvider"],
     });
 

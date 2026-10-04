@@ -27,10 +27,7 @@ export type {
   VideoGenerationModelCapabilitiesContext,
   VideoGenerationRequest,
   VideoGenerationResult,
-  VideoGenerationMode,
-  VideoGenerationProviderOptionType,
   VideoGenerationModeCapabilities,
-  VideoGenerationTransformCapabilities,
   VideoGenerationProviderCapabilities,
   VideoGenerationCatalogModelEntry,
   VideoGenerationProvider,
@@ -141,13 +138,7 @@ export {
   DEFAULT_VIDEO_GENERATION_DURATION_SECONDS,
   DEFAULT_VIDEO_GENERATION_TIMEOUT_MS,
   DEFAULT_VIDEO_RESOLUTION_TO_SIZE,
-  buildDashscopeVideoGenerationInput,
-  buildDashscopeVideoGenerationParameters,
-  downloadDashscopeGeneratedVideos,
   extractDashscopeVideoUrls,
-  pollDashscopeVideoTaskUntilComplete,
   resolveVideoGenerationReferenceUrls,
   runDashscopeVideoGenerationTask,
 } from "../video-generation/dashscope-compatible.js";
-
-export type { DashscopeVideoGenerationResponse } from "../video-generation/dashscope-compatible.js";
