@@ -9,6 +9,7 @@ import {
 import {
   resolveNormalizedXaiToolModel,
   resolvePositiveIntegerToolConfig,
+  type XaiSearchNetworkPolicy,
 } from "./tool-config-shared.js";
 import { buildXaiWebSearchPayload, type XaiWebSearchResponse } from "./web-search-shared.js";
 
@@ -84,6 +85,7 @@ export function buildXaiXSearchPayload(params: {
 export async function requestXaiXSearch(params: {
   apiKey: string;
   endpoint: string;
+  networkPolicy?: XaiSearchNetworkPolicy;
   model: string;
   timeoutSeconds: number;
   inlineCitations: boolean;

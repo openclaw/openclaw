@@ -71,6 +71,8 @@ export type GuardedFetchOptions = {
         sensitiveRequestHeaderNames?: readonly string[];
       };
   maxRedirects?: number;
+  /** Limit redirects to the initial request's exact HTTP origin. Defaults to false. */
+  requireSameOriginRedirects?: boolean;
   /**
    * Allow replaying unsafe request methods and bodies across cross-origin redirects.
    * Sensitive cross-origin headers (for example Authorization/Cookie) are still stripped.
@@ -690,6 +692,9 @@ async function fetchWithSsrFGuardInternal(
           throw new Error(`Redirect missing location header (${response.status})`);
         }
         const nextParsedUrl = new URL(location, parsedUrl);
+        if (params.requireSameOriginRedirects && nextParsedUrl.origin !== parsedUrl.origin) {
+          throw new SsrFBlockedError("Blocked: redirect leaves the configured endpoint origin");
+        }
         const nextUrl = nextParsedUrl.toString();
         const retainedAuthorization = resolveRetainedAuthorizationForRedirect({
           init: currentInit,
