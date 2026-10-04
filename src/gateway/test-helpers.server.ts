@@ -150,7 +150,7 @@ async function persistTestSessionConfig(): Promise<void> {
         config = parsed.parsed as Record<string, unknown>;
       }
     } catch {
-      config = {};
+      // Fixture setup accepts absent or malformed files.
     }
     parsedConfigs.set(configPath, config);
     const session =
@@ -407,27 +407,16 @@ async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
     });
     await fs.mkdir(stateDir, { recursive: true });
   }
-  if (options.uniqueConfigRoot) {
-    const suiteRoot = path.join(tempHome, ".openclaw-test-suite");
-    await fs.mkdir(suiteRoot, { recursive: true });
-    tempConfigRoot = path.join(suiteRoot, `case-${suiteConfigRootSeq++}`);
-    await fs.rm(tempConfigRoot, {
-      recursive: true,
-      force: true,
-      maxRetries: 20,
-      retryDelay: 25,
-    });
-    await fs.mkdir(tempConfigRoot, { recursive: true });
-  } else {
-    tempConfigRoot = path.join(tempHome, ".openclaw-test");
-    await fs.rm(tempConfigRoot, {
-      recursive: true,
-      force: true,
-      maxRetries: 20,
-      retryDelay: 25,
-    });
-    await fs.mkdir(tempConfigRoot, { recursive: true });
-  }
+  tempConfigRoot = options.uniqueConfigRoot
+    ? path.join(tempHome, ".openclaw-test-suite", `case-${suiteConfigRootSeq++}`)
+    : path.join(tempHome, ".openclaw-test");
+  await fs.rm(tempConfigRoot, {
+    recursive: true,
+    force: true,
+    maxRetries: 20,
+    retryDelay: 25,
+  });
+  await fs.mkdir(tempConfigRoot, { recursive: true });
   setTestConfigRoot(tempConfigRoot);
   tempControlUiRoot = path.join(tempHome, ".openclaw-test-control-ui");
   await fs.rm(tempControlUiRoot, {
@@ -442,7 +431,6 @@ async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
     "<!doctype html><title>openclaw-test-control-ui</title>\n",
     "utf-8",
   );
-  setTestConfigRoot(tempConfigRoot);
   resetConfigRuntimeState();
   invalidateSessionSharingSnapshot();
   resetTestPluginRegistry();
@@ -650,8 +638,7 @@ const CONNECT_CHALLENGE_TRACKED_KEY = "__openclawTestConnectChallengeTracked";
 type TrackedWs = WebSocket & Record<string, unknown>;
 
 export function getTrackedConnectChallengeNonce(ws: WebSocket): string | undefined {
-  const tracked = (ws as TrackedWs)[CONNECT_CHALLENGE_NONCE_KEY];
-  return typeof tracked === "string" && tracked.trim().length > 0 ? tracked.trim() : undefined;
+  return normalizeOptionalString((ws as TrackedWs)[CONNECT_CHALLENGE_NONCE_KEY]);
 }
 
 export function trackConnectChallengeNonce(ws: WebSocket): void {
@@ -959,23 +946,14 @@ export async function readConnectChallengeNonce(
       (o) => o.type === "event" && o.event === "connect.challenge",
       timeoutMs,
     );
-    const nonce = (evt.payload as { nonce?: unknown } | undefined)?.nonce;
-    if (typeof nonce === "string" && nonce.trim().length > 0) {
-      (ws as TrackedWs)[CONNECT_CHALLENGE_NONCE_KEY] = nonce.trim();
-      return nonce.trim();
+    const nonce = normalizeOptionalString(evt.payload?.nonce);
+    if (nonce) {
+      (ws as TrackedWs)[CONNECT_CHALLENGE_NONCE_KEY] = nonce;
     }
-    return undefined;
+    return nonce;
   } catch {
     return undefined;
   }
-}
-
-function resolveAuthTokenForSignature(opts?: {
-  token?: string;
-  bootstrapToken?: string;
-  deviceToken?: string;
-}) {
-  return opts?.token ?? opts?.bootstrapToken ?? opts?.deviceToken;
 }
 
 type ConnectReqClient = {
@@ -1123,11 +1101,7 @@ export async function connectReq(
   const bootstrapToken = normalizeOptionalString(opts?.bootstrapToken);
   const deviceToken = normalizeOptionalString(opts?.deviceToken);
   const password = opts?.password ?? defaultPassword;
-  const authTokenForSignature = resolveAuthTokenForSignature({
-    token,
-    bootstrapToken,
-    deviceToken,
-  });
+  const authTokenForSignature = token ?? bootstrapToken ?? deviceToken;
   const requestedScopes = Array.isArray(opts?.scopes)
     ? opts.scopes
     : role === "operator"
