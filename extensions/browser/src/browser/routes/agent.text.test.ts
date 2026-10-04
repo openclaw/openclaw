@@ -6,6 +6,7 @@ import {
   startServerAndBase,
 } from "../server.agent-contract.test-harness.js";
 import {
+  getChromeMcpMocks,
   getPwMocks,
   setBrowserControlServerProfiles,
   setBrowserControlServerSsrFPolicy,
@@ -15,9 +16,9 @@ import { getBrowserTestFetch } from "../test-support/fetch.js";
 
 describe("browser page text route", () => {
   installAgentContractHooks();
+  const chromeMcpMocks = getChromeMcpMocks();
   const pwMocks = getPwMocks();
   const pageText = expectDefined(pwMocks.getPageTextViaPlaywright, "page text mock");
-  const networkRequests = expectDefined(pwMocks.getNetworkRequestsViaPlaywright, "requests mock");
 
   it("returns page text, truncation, and the resolved tab through the control service", async () => {
     pageText.mockResolvedValueOnce({ text: "Selected text", truncated: true });
@@ -64,17 +65,60 @@ describe("browser page text route", () => {
     expect(pageText).not.toHaveBeenCalled();
   });
 
-  it("rejects existing-session text with a supported alternative", async () => {
+  it("extracts page text through Chrome MCP for existing-session profiles", async () => {
     setBrowserControlServerProfiles(
       { user: { driver: "existing-session", color: "#FF4500" } },
       "user",
     );
+    const document = expectDefined(chromeMcpMocks.withChromeMcpDocument, "Chrome MCP document");
+    const evaluate = expectDefined(chromeMcpMocks.evaluateChromeMcpScript, "Chrome MCP evaluate");
+    evaluate.mockResolvedValueOnce({
+      url: "https://example.com",
+      text: "Existing session text",
+      truncated: false,
+    });
+    const base = await startServerAndBase();
+    const response = await getBrowserTestFetch()(
+      `${base}/text?profile=user&selector=article&maxChars=21`,
+    );
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      ok: true,
+      targetId: "7",
+      url: "https://example.com",
+      text: "Existing session text",
+      truncated: false,
+    });
+    expect(document).toHaveBeenCalledWith(
+      expect.objectContaining({ profileName: "user", targetId: "7" }),
+      expect.any(Function),
+    );
+    expect(evaluate).toHaveBeenCalledWith(expect.stringContaining("boundDocument"));
+  });
+
+  it("rejects text from a forbidden evaluated document when the tab listing is stale", async () => {
+    setBrowserControlServerProfiles(
+      { user: { driver: "existing-session", color: "#FF4500" } },
+      "user",
+    );
+    setBrowserControlServerSsrFPolicy({
+      dangerouslyAllowPrivateNetwork: false,
+      allowedHostnames: ["example.com"],
+    });
+    setBrowserControlServerTabUrl("https://example.com");
+    const evaluate = expectDefined(chromeMcpMocks.evaluateChromeMcpScript, "Chrome MCP evaluate");
+    evaluate.mockResolvedValueOnce({
+      url: "http://127.0.0.1:8080/forbidden",
+      text: "must not be returned",
+      truncated: false,
+    });
     const base = await startServerAndBase();
     const response = await getBrowserTestFetch()(`${base}/text?profile=user`);
-    expect(response.status).toBe(501);
-    expect(await response.json()).toMatchObject({ error: expect.stringContaining("snapshot") });
-    expect(pageText).not.toHaveBeenCalled();
-    expect(networkRequests).not.toHaveBeenCalled();
-    expect(pwMocks.getPageErrorsViaPlaywright).not.toHaveBeenCalled();
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({
+      error: "browser navigation blocked by policy",
+      reason: "navigation_blocked",
+    });
+    expect(evaluate).toHaveBeenCalledWith(expect.stringContaining("boundDocument"));
   });
 });

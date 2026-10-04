@@ -426,6 +426,9 @@ const chromeMcpMocks = vi.hoisted(() => ({
   dragChromeMcpElement: vi.fn(async () => {}),
   ensureChromeMcpAvailable: vi.fn(async () => {}),
   evaluateChromeMcpScript: vi.fn(async () => true),
+  withChromeMcpDocument: vi.fn(async (_params: unknown, task: (document: unknown) => unknown) =>
+    task({ evaluate: chromeMcpMocks.evaluateChromeMcpScript }),
+  ),
   fillChromeMcpElement: vi.fn(async () => {}),
   fillChromeMcpForm: vi.fn(async () => {}),
   focusChromeMcpTab: vi.fn(async () => {}),
@@ -452,6 +455,11 @@ const chromeMcpMocks = vi.hoisted(() => ({
   })),
   uploadChromeMcpFile: vi.fn(async () => {}),
 }));
+
+/** Returns mocked Chrome MCP operations for route-level contract tests. */
+export function getChromeMcpMocks(): Record<string, MockFn> {
+  return chromeMcpMocks as unknown as Record<string, MockFn>;
+}
 
 const chromeUserDataDir = vi.hoisted(() => ({ dir: "/tmp/openclaw" }));
 installChromeUserDataDirHooks(chromeUserDataDir);

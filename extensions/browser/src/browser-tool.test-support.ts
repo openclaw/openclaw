@@ -319,7 +319,7 @@ vi.mock("./browser-tool.runtime.js", async () => {
         supportsPdf: !existingSession,
         supportsRequests: !existingSession,
         supportsErrors: !existingSession,
-        supportsPageText: !existingSession,
+        supportsPageText: true,
         supportsEmulation: !existingSession,
       };
     },

@@ -52,7 +52,7 @@ export const EXISTING_SESSION_LIMITS = {
     "errors is not supported for existing-session profiles; use a managed browser profile to collect page errors, or snapshot to inspect the current page.",
   requests:
     "requests is not supported for existing-session profiles; use a managed browser profile to collect network requests, or snapshot to inspect the current page.",
-  text: "text is not supported for existing-session profiles; use snapshot to read the page, or switch to a managed browser profile for text extraction.",
+  text: "use action=text with optional selector and maxChars to read visible page text; use snapshot for controls.",
   emulation:
     "emulate is not supported for existing-session profiles; use a managed browser profile for device, media, timezone, or locale settings.",
 } as const;

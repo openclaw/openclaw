@@ -22,7 +22,8 @@ export const chromiumEngine: BrowserEngineAdapter = {
       supportsPdf: profile.driver !== "existing-session",
       supportsRequests: profile.driver !== "existing-session",
       supportsErrors: profile.driver !== "existing-session",
-      supportsPageText: profile.driver !== "existing-session",
+      // Chrome MCP exposes the same bounded page-text route as managed sessions.
+      supportsPageText: true,
       supportsEmulation: profile.driver !== "existing-session",
       supportsScreenshots: true,
       supportsVisualActions: true,
