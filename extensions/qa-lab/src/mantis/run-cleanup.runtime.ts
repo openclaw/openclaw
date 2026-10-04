@@ -152,9 +152,7 @@ async function normalizeWorktreePath(
   repoRoot: string,
   deadline: MantisCleanupDeadline,
 ): Promise<string> {
-  const resolvedPath = path.isAbsolute(filePath)
-    ? path.resolve(filePath)
-    : path.resolve(repoRoot, filePath);
+  const resolvedPath = path.resolve(repoRoot, filePath);
   try {
     return await runBeforeMantisCleanupDeadline(
       deadline,
@@ -177,23 +175,6 @@ async function normalizeWorktreePath(
     return resolvedPath;
   }
   return path.join(canonicalRepoRoot, path.relative(resolvedRepoRoot, resolvedPath));
-}
-
-async function parseRegisteredWorktreePaths(
-  stdout: string,
-  repoRoot: string,
-  nulTerminated: boolean,
-  deadline: MantisCleanupDeadline,
-): Promise<string[]> {
-  const fields = nulTerminated
-    ? stdout.split("\0")
-    : stdout.split("\n").map((field) => (field.endsWith("\r") ? field.slice(0, -1) : field));
-  const entries = fields
-    .filter((entry) => entry.startsWith("worktree "))
-    .map((entry) => entry.slice("worktree ".length));
-  return await Promise.all(
-    entries.map((entry) => normalizeWorktreePath(entry, repoRoot, deadline)),
-  );
 }
 
 async function listRegisteredWorktreePaths(params: {
@@ -239,23 +220,17 @@ async function listRegisteredWorktreePaths(params: {
       `${params.lane} worktree cleanup truncated registration output for ${params.worktreeDir}`,
     );
   }
-  return await parseRegisteredWorktreePaths(
-    listResult.stdout,
-    params.repoRoot,
-    nulTerminated,
-    params.deadline,
-  );
-}
-
-function createCleanupVerificationAggregate(params: {
-  errors: [unknown, unknown];
-  lane: "baseline" | "candidate";
-  worktreeDir: string;
-}): AggregateError {
-  return new AggregateError(
-    params.errors,
-    `${params.lane} worktree cleanup could not verify complete registration state for ${params.worktreeDir}`,
-    { cause: params.errors[0] },
+  const fields = nulTerminated
+    ? listResult.stdout.split("\0")
+    : listResult.stdout
+        .split("\n")
+        .map((field) => (field.endsWith("\r") ? field.slice(0, -1) : field));
+  return Promise.all(
+    fields
+      .filter((entry) => entry.startsWith("worktree "))
+      .map((entry) =>
+        normalizeWorktreePath(entry.slice("worktree ".length), params.repoRoot, params.deadline),
+      ),
   );
 }
 
@@ -376,11 +351,12 @@ async function removeMantisWorktreeBeforeDeadline(
     registeredWorktreePaths = await listRegisteredPaths();
   } catch (listError) {
     rethrowMantisCleanupBoundaryError(listError);
-    throw createCleanupVerificationAggregate({
-      errors: [removeError ?? new Error("Git worktree removal completed"), listError],
-      lane: params.lane,
-      worktreeDir: params.worktreeDir,
-    });
+    const removalOutcome = removeError ?? new Error("Git worktree removal completed");
+    throw new AggregateError(
+      [removalOutcome, listError],
+      `${params.lane} worktree cleanup could not verify complete registration state for ${params.worktreeDir}`,
+      { cause: removalOutcome },
+    );
   }
   if (registeredWorktreePaths.includes(normalizedWorktreeDir)) {
     throw new Error(`${params.lane} worktree cleanup left registered path ${params.worktreeDir}`, {

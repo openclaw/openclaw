@@ -56,10 +56,6 @@ type ExecFileOptions = {
 
 type QaMultipassPlan = ReturnType<typeof createQaMultipassPlan>;
 
-type RenderGuestScriptOptions = {
-  redactSecrets?: boolean;
-};
-
 function createOutputStamp() {
   return new Date().toISOString().replaceAll(":", "").replaceAll(".", "").replace("T", "-");
 }
@@ -247,17 +243,13 @@ function createQaMultipassPlan(params: {
   };
 }
 
-function renderQaMultipassGuestScript(
-  plan: QaMultipassPlan,
-  options: RenderGuestScriptOptions = {},
-) {
+function renderQaMultipassGuestScript(plan: QaMultipassPlan, redactSecrets = false) {
   const nodeVersionCheck = [
     `import { isSupportedOpenClawNodeVersion } from ${JSON.stringify(
       `file://${plan.guestMountedRepoPath}/node-version.mjs`,
     )};`,
     "process.exit(isSupportedOpenClawNodeVersion(process.versions.node) ? 0 : 1);",
   ].join(" ");
-  const redactSecrets = options.redactSecrets ?? false;
   const rsyncCommand = [
     "rsync -a --delete",
     ...MULTIPASS_REPO_SYNC_EXCLUDES.flatMap((value) => ["--exclude", shellQuote(value)]),
@@ -444,14 +436,10 @@ export async function runQaMultipass(
     `# OpenClaw QA Multipass host log\nvmName=${plan.vmName}\noutputDir=${plan.outputDir}\n\n`,
     "utf8",
   );
-  await writeFile(
-    plan.hostGuestScriptPath,
-    renderQaMultipassGuestScript(plan, { redactSecrets: true }),
-    {
-      encoding: "utf8",
-      mode: 0o600,
-    },
-  );
+  await writeFile(plan.hostGuestScriptPath, renderQaMultipassGuestScript(plan, true), {
+    encoding: "utf8",
+    mode: 0o600,
+  });
 
   try {
     await execFileAsync("multipass", ["version"]);

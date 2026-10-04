@@ -394,12 +394,6 @@ export type QaScenarioPack = z.infer<typeof qaScenarioPackSchema> & {
   scenarios: QaSeedScenarioWithSource[];
 };
 
-export type QaBootstrapScenarioCatalog = {
-  agentIdentityMarkdown: string;
-  kickoffTask: string;
-  scenarios: QaSeedScenarioWithSource[];
-};
-
 export function resolveQaScenarioRequiredProviderMode(
   scenario: Pick<QaSeedScenarioWithSource, "id" | "execution">,
 ) {
@@ -568,7 +562,7 @@ function listQaScenarioYamlPaths(): string[] {
   return qaScenarioYamlPathsCache;
 }
 
-export function readQaBootstrapScenarioCatalog(): QaBootstrapScenarioCatalog {
+export function readQaBootstrapScenarioCatalog() {
   const pack = readQaScenarioPack();
   return {
     agentIdentityMarkdown: pack.agent.identityMarkdown,

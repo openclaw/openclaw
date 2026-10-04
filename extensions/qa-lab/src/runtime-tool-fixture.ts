@@ -34,7 +34,12 @@ import {
   runCodexNativeWorkspaceFixture,
 } from "./runtime-tool-native-workspace.js";
 import * as searchEvidence from "./runtime-tool-search-evidence.js";
-import { readRawQaSessionStore } from "./suite-runtime-agent-session.js";
+import type { runAgentPrompt } from "./suite-runtime-agent-process.js";
+import {
+  type createSession,
+  type readEffectiveTools,
+  readRawQaSessionStore,
+} from "./suite-runtime-agent-session.js";
 import type { QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
 
 type QaRuntimeToolFixtureConfig = Record<string, unknown>;
@@ -56,25 +61,9 @@ const RUNTIME_PATCH_DENIED_FILENAME = "runtime-tool-fixture-denied.txt";
 const RUNTIME_PATCH_DENIED_CONTENTS = "runtime-tool-fixture-denied-original\n";
 
 type QaRuntimeToolFixtureDeps = {
-  createSession: (
-    env: Pick<QaSuiteRuntimeEnv, "gateway" | "primaryModel" | "alternateModel" | "providerMode">,
-    label: string,
-    key?: string,
-  ) => Promise<string>;
-  readEffectiveTools: (
-    env: Pick<QaSuiteRuntimeEnv, "gateway" | "primaryModel" | "alternateModel" | "providerMode">,
-    sessionKey: string,
-  ) => Promise<Set<string>>;
-  runAgentPrompt: (
-    env: Pick<QaSuiteRuntimeEnv, "gateway" | "transport">,
-    params: {
-      sessionKey: string;
-      message: string;
-      timeoutMs?: number;
-      transcriptToolName?: string;
-      requireSuccessfulTranscriptToolResult?: boolean;
-    },
-  ) => Promise<unknown>;
+  createSession: typeof createSession;
+  readEffectiveTools: typeof readEffectiveTools;
+  runAgentPrompt: (...args: Parameters<typeof runAgentPrompt>) => Promise<unknown>;
   fetchJson: (url: string) => Promise<unknown>;
   ensureImageGenerationConfigured: (env: QaSuiteRuntimeEnv) => Promise<unknown>;
 };
