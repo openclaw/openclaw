@@ -24,6 +24,15 @@ Use `Package Acceptance` when the question is "does this installable OpenClaw pa
 
 ### Installed package tree budget
 
+The `Installed package budget` workflow runs on every `main` push, including
+docs-only pushes, independently of the main CI enable switch and concurrency
+groups. It builds a full release-style package (including SDK declarations),
+installs it globally in the Docker E2E `bare` image using the published updater’s
+staging arguments, and enforces the same budget as Package Acceptance. Reduced
+`build:ci-artifacts` output is not a release-size measurement. A failed check
+keeps its measured totals and largest contributors in the workflow summary and
+artifact; it does not downgrade the failure or raise the budget.
+
 `scripts/check-openclaw-installed-package-budget.mts` measures the npm-installed
 package tree, including dependencies that the tarball check cannot see. It counts
 the root and every directory entry without following symlinks, and sums every

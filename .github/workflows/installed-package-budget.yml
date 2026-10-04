@@ -1,0 +1,79 @@
+name: Installed package budget
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Every pushed tree needs a measurement, including docs-only pushes. Do not
+# coalesce pending runs or inherit CI's path filters and push-disable switch.
+jobs:
+  installed-package-budget:
+    runs-on: ${{ github.repository == 'openclaw/openclaw' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
+    # Full package builds have taken 75 minutes on loaded hosts. Allow two
+    # hours for the build plus installation, measurement, and diagnostics.
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: ./.github/actions/setup-node-env
+        with:
+          node-version: "24.21.0"
+          install-bun: "false"
+          cache-mode: "restore"
+
+      - name: Build full release-style package
+        env:
+          OPENCLAW_CONTROL_UI_RELEASE_BUILD: "1"
+          OPENCLAW_DOCKER_PACKAGE_BUILD_TIMEOUT_MS: "7200000"
+        run: |
+          set -euo pipefail
+          node scripts/package-openclaw-for-docker.mjs \
+            --allow-unreleased-changelog \
+            --output-dir "$RUNNER_TEMP/installed-package-budget" \
+            --output-name openclaw-candidate.tgz
+
+      - name: Install and enforce shipped-updater headroom
+        run: |
+          set -euo pipefail
+          source scripts/lib/docker-e2e-image.sh
+          package="$RUNNER_TEMP/installed-package-budget/openclaw-candidate.tgz"
+          report="$RUNNER_TEMP/installed-package-budget/measurement.log"
+          image=$(docker_e2e_resolve_image openclaw-installed-package-budget)
+          docker_e2e_build_or_reuse "$image" installed-package-budget "$PWD/scripts/e2e/Dockerfile" "$PWD" bare
+          docker_e2e_package_mount_args "$package"
+          # Mirror the published 2026.9.7/2026.9.8 driver's global staging install.
+          # A tarball listing or ci-artifacts build misses installed entries.
+          docker_e2e_run_with_harness --init \
+            -e GITHUB_ACTIONS=true \
+            -v "$PWD/scripts/check-openclaw-installed-package-budget.mts:/app/scripts/check-openclaw-installed-package-budget.mts:ro" \
+            "${DOCKER_E2E_PACKAGE_ARGS[@]}" "$image" bash -c '
+              set -euo pipefail
+              prefix=$(mktemp -d)
+              npm i -g --allow-scripts=openclaw --prefix "$prefix" /tmp/openclaw-current.tgz \
+                --no-fund --no-audit --loglevel=error --min-release-age=0
+              node scripts/check-openclaw-installed-package-budget.mts "$prefix/lib/node_modules/openclaw"
+            ' 2>&1 | tee "$report"
+
+      - name: Preserve installed-tree measurement
+        if: always()
+        run: |
+          report="$RUNNER_TEMP/installed-package-budget/measurement.log"
+          if [ -f "$report" ]; then
+            printf '### Installed package budget\n\n```text\n' >> "$GITHUB_STEP_SUMMARY"
+            cat "$report" >> "$GITHUB_STEP_SUMMARY"
+            printf '\n```\n' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Upload installed-tree measurement
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: installed-package-budget-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/installed-package-budget/measurement.log
+          if-no-files-found: ignore
+          retention-days: 7
