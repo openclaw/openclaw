@@ -1,7 +1,7 @@
 // Memory Core tests cover MMR behavior through the production result adapter.
 import { describe, expect, it } from "vitest";
 import { applyMMRToHybridResults, DEFAULT_MMR_CONFIG } from "./mmr.js";
-import { jaccardSimilarity, textSimilarity, tokenize } from "./tokenize.js";
+import { prepareSimilarityText, preparedTextSimilarity } from "./tokenize.js";
 
 describe("memory MMR", () => {
   it.each([
@@ -19,13 +19,15 @@ describe("memory MMR", () => {
     { text: "🙂\uFE0F \u0301 !!!", expected: [] },
     { text: "中文🙂今天", expected: ["中文", "今天", "中", "文", "今", "天"] },
   ])("tokenizes $text in stable term order", ({ text, expected }) => {
-    expect([...tokenize(text)]).toEqual(expected);
+    expect([...prepareSimilarityText(text).tokens]).toEqual(expected);
   });
 
   it("compares token sets and falls back to literal equality for empty token sets", () => {
-    expect(jaccardSimilarity(new Set(["a", "b"]), new Set(["b", "c"]))).toBeCloseTo(1 / 3);
-    expect(textSimilarity("Привет мир", "Доброе утро")).toBe(0);
-    expect(textSimilarity("🦞🦞", "🦞🦞")).toBe(1);
+    const similarity = (a: string, b: string) =>
+      preparedTextSimilarity(prepareSimilarityText(a), prepareSimilarityText(b));
+    expect(similarity("a b", "b c")).toBeCloseTo(1 / 3);
+    expect(similarity("Привет мир", "Доброе утро")).toBe(0);
+    expect(similarity("🦞🦞", "🦞🦞")).toBe(1);
   });
 
   it.each([
@@ -158,7 +160,9 @@ describe("memory MMR", () => {
     // production path must produce an identical ranking.
     type Ref = { id: string; score: number; content: string };
     const referenceMmrRerank = (items: Ref[], lambda: number): Ref[] => {
-      const tokenCache = new Map(items.map((item) => [item.id, tokenize(item.content)]));
+      const tokenCache = new Map(
+        items.map((item) => [item.id, prepareSimilarityText(item.content)]),
+      );
       const maxScore = Math.max(...items.map((item) => item.score));
       const minScore = Math.min(...items.map((item) => item.score));
       const scoreRange = maxScore - minScore;
@@ -173,7 +177,10 @@ describe("memory MMR", () => {
           for (const selectedItem of selected) {
             maxSimilarity = Math.max(
               maxSimilarity,
-              jaccardSimilarity(tokenCache.get(candidate.id)!, tokenCache.get(selectedItem.id)!),
+              preparedTextSimilarity(
+                tokenCache.get(candidate.id)!,
+                tokenCache.get(selectedItem.id)!,
+              ),
             );
           }
           const normalizedScore = scoreRange === 0 ? 1 : (candidate.score - minScore) / scoreRange;

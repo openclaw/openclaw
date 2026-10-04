@@ -38,6 +38,7 @@ import {
   runDreamNarrative,
 } from "./dreaming-narrative.js";
 import { formatErrorMessage } from "./dreaming-shared.js";
+import { dedupeEntries, prioritizeLightEntriesByDiaryCoverage } from "./dreaming-snippet-dedupe.js";
 import { normalizeMemoryCoreWorkspaceKey } from "./dreaming-state.js";
 import { listMemorySessionTombstones } from "./memory-entry-origins.js";
 import {
@@ -46,7 +47,6 @@ import {
   readWorkspaceText,
 } from "./memory-workspace-files.js";
 import { withMemoryWorkspaceLock } from "./memory-workspace-lock.js";
-import { textSimilarity as snippetSimilarity } from "./memory/tokenize.js";
 import {
   appendSessionCorpusLines,
   mergeTrackedMessageHashes,
@@ -96,7 +96,6 @@ const DAILY_INGESTION_MIN_SNIPPET_CHARS = 8;
 const DAILY_INGESTION_MAX_CHUNK_LINES = 4;
 const SESSION_CHECKPOINT_TRANSCRIPT_FILENAME_RE = /\.checkpoint\..+\.jsonl$/i;
 const LIGHT_DIARY_HISTORY_LIMIT = 4;
-const LIGHT_DIARY_SNIPPET_SIMILARITY_THRESHOLD = 0.35;
 const MANAGED_DAILY_DREAMING_BLOCKS = [
   {
     heading: "## Light Sleep",
@@ -974,85 +973,6 @@ function entryAverageScore(entry: ShortTermRecallEntry): number {
       Math.floor(entry.groundedCount ?? 0),
   );
   return signalCount > 0 ? Math.max(0, Math.min(1, entry.totalScore / signalCount)) : 0;
-}
-
-function dedupeEntries(
-  entries: ShortTermRecallEntry[],
-  threshold: number,
-): Array<ShortTermRecallEntry & { sourceEntryKeys: string[] }> {
-  const deduped: Array<ShortTermRecallEntry & { sourceEntryKeys: string[] }> = [];
-  for (const entry of entries) {
-    const duplicate = deduped.find(
-      (candidate) =>
-        candidate.path === entry.path &&
-        snippetSimilarity(candidate.snippet, entry.snippet) >= threshold,
-    );
-    if (duplicate) {
-      // Merged tags also become narrative input, so retain their source keys.
-      duplicate.sourceEntryKeys.push(entry.key);
-      if (entry.recallCount > duplicate.recallCount) {
-        duplicate.recallCount = entry.recallCount;
-      }
-      duplicate.totalScore = Math.max(duplicate.totalScore, entry.totalScore);
-      duplicate.maxScore = Math.max(duplicate.maxScore, entry.maxScore);
-      duplicate.queryHashes = uniqueStrings([...duplicate.queryHashes, ...entry.queryHashes]);
-      duplicate.userQueryHashes = uniqueStrings([
-        ...(duplicate.userQueryHashes ?? []),
-        ...(entry.userQueryHashes ?? []),
-      ]);
-      duplicate.recallDays = [
-        ...new Set([...duplicate.recallDays, ...entry.recallDays]),
-      ].toSorted();
-      duplicate.conceptTags = uniqueStrings([...duplicate.conceptTags, ...entry.conceptTags]);
-      duplicate.lastRecalledAt =
-        compareStoreTimestampDesc(entry.lastRecalledAt, duplicate.lastRecalledAt) < 0
-          ? entry.lastRecalledAt
-          : duplicate.lastRecalledAt;
-      continue;
-    }
-    deduped.push({ ...entry, sourceEntryKeys: [entry.key] });
-  }
-  return deduped;
-}
-
-function normalizeDiaryCoverageText(text: string): string {
-  return text.toLowerCase().replace(/\s+/g, " ").trim();
-}
-
-function isEntryCoveredByRecentDiary(
-  entry: ShortTermRecallEntry,
-  recentDiaryEntries: readonly string[],
-): boolean {
-  const snippet = normalizeDiaryCoverageText(entry.snippet);
-  if (!snippet) {
-    return false;
-  }
-  return recentDiaryEntries.some((diaryEntry) => {
-    const diaryText = normalizeDiaryCoverageText(diaryEntry);
-    return (
-      diaryText.includes(snippet) ||
-      snippetSimilarity(entry.snippet, diaryEntry) >= LIGHT_DIARY_SNIPPET_SIMILARITY_THRESHOLD
-    );
-  });
-}
-
-function prioritizeLightEntriesByDiaryCoverage<T extends ShortTermRecallEntry>(
-  entries: T[],
-  recentDiaryEntries: readonly string[],
-): T[] {
-  if (recentDiaryEntries.length === 0) {
-    return entries;
-  }
-  const fresh: T[] = [];
-  const covered: T[] = [];
-  for (const entry of entries) {
-    if (isEntryCoveredByRecentDiary(entry, recentDiaryEntries)) {
-      covered.push(entry);
-    } else {
-      fresh.push(entry);
-    }
-  }
-  return [...fresh, ...covered];
 }
 
 function buildLightDreamingBody(entries: ShortTermRecallEntry[]): string[] {
