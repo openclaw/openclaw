@@ -2,6 +2,7 @@
 cli-root-options.mjs
 config/ci-test-timings.json
 node-compile-cache.mjs
+node-runtime-env.mjs
 node-sqlite.mjs
 node-version.mjs
 package.json

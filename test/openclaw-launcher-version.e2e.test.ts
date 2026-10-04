@@ -51,6 +51,10 @@ async function makeLauncherVersionFixture(
     path.join(fixtureRoot, "node-runtime-recovery.mjs"),
   );
   await fs.copyFile(
+    path.resolve(process.cwd(), "node-runtime-env.mjs"),
+    path.join(fixtureRoot, "node-runtime-env.mjs"),
+  );
+  await fs.copyFile(
     path.resolve(process.cwd(), "cli-root-options.mjs"),
     path.join(fixtureRoot, "cli-root-options.mjs"),
   );
