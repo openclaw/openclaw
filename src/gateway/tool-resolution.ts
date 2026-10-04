@@ -367,6 +367,7 @@ export async function resolveGatewayScopedTools(
   const openClawToolOptions: Parameters<typeof createOpenClawToolsAsync>[0] = {
     sessionPortalTarget,
     gatewayConfigReadAllowed,
+    requesterIsSubagent: subagentPolicy !== undefined,
     agentSessionKey: params.sessionKey,
     messageToolTurnCapability:
       surface === "loopback" && params.messageActionTurnCapability

@@ -29,6 +29,8 @@ export type SpawnedToolContext = {
   requesterThinkingLevel?: ThinkLevel;
   /** Effective parent-turn model; saved preferences may describe a later turn. */
   requesterModel?: ModelRef;
+  /** Prepared by tool-policy resolution so building the spawn schema reads no session store; unset uses session-key shape. */
+  requesterIsSubagent?: boolean;
   sessionPermissionPolicy?: PreparedSessionPermissionPolicy;
   inheritedToolAllowlist?: string[];
   inheritedToolDenylist?: string[];

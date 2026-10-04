@@ -1086,6 +1086,62 @@ describe("sessions_spawn tool", () => {
     expect(fields.content).not.toHaveProperty("maxLength");
   });
 
+  it("registers requester target guidance in the description, not the agentId schema", () => {
+    registerAcpBackendForTest();
+    const config = {
+      acp: { defaultAgent: "codex" },
+      tools: { swarm: { defaultAgentId: "planner" } },
+      agents: {
+        defaults: { subagents: { allowAgents: ["main", "planner"] } },
+        entries: { main: {}, planner: {} },
+      },
+    };
+    const tool = makeTool({ config });
+    expect(tool.description).toContain(
+      'With runtime="subagent" (default): Configured agent to target: main, planner.',
+    );
+    expect(tool.description).toContain(
+      'With collect=true, omit to target tools.swarm.defaultAgentId ("planner")',
+    );
+    expect(tool.description).toContain('With runtime="acp": ACP harness id');
+    // Codex strips schema descriptions on large tool schemas; guidance must not ride on them.
+    const schema = requireRecord(tool.parameters, "schema");
+    expect(requireRecord(schema.properties, "properties").agentId).not.toHaveProperty(
+      "description",
+    );
+    const swarmOff = makeTool({
+      config: { ...config, tools: { swarm: { enabled: false, defaultAgentId: "planner" } } },
+    });
+    expect(swarmOff.description).not.toContain("collect=true");
+  });
+
+  it("narrows ACP guidance from the prepared requester fact, never a store read", async () => {
+    registerAcpBackendForTest();
+    const dir = sessionDirs.make();
+    const storePath = path.join(dir, "sessions.json");
+    const config = {
+      session: { store: storePath },
+      acp: { defaultAgent: "codex" },
+      agents: {
+        entries: { main: { subagents: { allowAgents: ["codex"], requireAgentId: true } } },
+      },
+    };
+    const narrowed = 'With runtime="acp": ACP harness id from: codex. agentId is required.';
+    const omitDefault = 'Omit to use the configured ACP default ("codex")';
+    const descriptionFor = (agentSessionKey: string, requesterIsSubagent?: boolean) =>
+      makeTool({ agentSessionKey, config, requesterIsSubagent }).description;
+    // A stored subagent envelope on a non-subagent key must not narrow guidance.
+    const storedKey = "agent:main:acp:child";
+    await upsertSessionEntryCore(
+      { agentId: "main", sessionKey: storedKey, storePath },
+      { sessionId: storedKey, updatedAt: 1, spawnedBy: "agent:main:subagent:parent" },
+    );
+    expect(descriptionFor(storedKey)).toContain(omitDefault);
+    expect(descriptionFor(storedKey, true)).toContain(narrowed);
+    expect(descriptionFor("agent:main:subagent:child")).toContain(narrowed);
+    expect(descriptionFor("agent:main:main")).toContain(omitDefault);
+  });
+
   it("rejects an unsupported visible model before creation or registration", async () => {
     hoisted.prepareModelChoiceMock.mockResolvedValue({
       kind: "unavailable",
