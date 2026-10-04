@@ -225,7 +225,7 @@ export async function readSessionTranscriptWatermarkAsync(
   );
 }
 
-/** Keep exact membership and its full-history validation in the admitted history worker. */
+/** Keep exact membership and selected payload reads in the admitted history worker. */
 export const readSessionMessagesMatchingIdAsync = createHistoryPageReader(
   sessionTranscriptReader.readSessionMessagesMatchingIdAsync,
   (read, target, messageId) => read({ kind: "message-lookup", params: { target, messageId } }),

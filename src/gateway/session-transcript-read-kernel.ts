@@ -488,7 +488,7 @@ export function createSessionTranscriptReader(access: SessionTranscriptReadAcces
     );
   }
 
-  /** Read exact membership while retaining full-history validity and empty-only archive fallback. */
+  /** Read exact membership with current visibility and empty-only archive fallback. */
   async function readSessionMessagesMatchingIdAsync(
     scope: SessionTranscriptReadScope,
     messageId: string,
