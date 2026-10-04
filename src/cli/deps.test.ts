@@ -20,9 +20,12 @@ vi.mock("../channels/plugins/index.js", () => ({
     ),
 }));
 
-vi.mock("./send-runtime/channel-outbound-send.js", () => {
+vi.mock("./send-runtime/channel-outbound-send.js", async (importOriginal) => {
   mocks.runtimeLoaded();
-  return { sendChannelOutboundMessage: mocks.sendMessage };
+  return {
+    ...(await importOriginal<typeof import("./send-runtime/channel-outbound-send.js")>()),
+    sendChannelOutboundMessage: mocks.sendMessage,
+  };
 });
 
 describe("createDefaultDeps", () => {

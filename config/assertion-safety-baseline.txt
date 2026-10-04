@@ -195,7 +195,7 @@ extensions/copilot/src/workspace-bootstrap.ts	1
 extensions/cua-computer/src/commands.ts	2
 extensions/cua-computer/src/driver-artifact-verification.ts	1
 extensions/cua-computer/src/driver-artifacts.ts	1
-extensions/cua-computer/src/driver-client.ts	10
+extensions/cua-computer/src/driver-client.ts	9
 extensions/cua-computer/src/driver-result.ts	4
 extensions/cua-computer/src/mcp-driver-client.ts	3
 extensions/cua-computer/src/window-actions.ts	3
@@ -883,7 +883,7 @@ extensions/slack/src/reply-blocks.ts	7
 extensions/slack/src/secret-contract.ts	1
 extensions/slack/src/security-audit.ts	6
 extensions/slack/src/send.ts	3
-extensions/slack/src/setup-core.ts	5
+extensions/slack/src/setup-core.ts	4
 extensions/slack/src/setup-surface.ts	1
 extensions/slack/src/streaming.ts	3
 extensions/slack/src/target-parsing.ts	1
