@@ -11,6 +11,10 @@ import {
   loadTranscriptEventsSync,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import {
+  historyLane,
+  rotateDatabaseWorkers,
+} from "../../config/sessions/session-transcript-worker-resources.js";
 import type { CronJob } from "../../cron/types.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
 import {
@@ -76,13 +80,24 @@ function isWholeSessionStoreProjection(normalizedSql: string): boolean {
 }
 
 test.each([{ pinned: true }, { label: "Renamed" }, { label: " Taken " }])(
-  "sessions.patch %j avoids unrelated hydration and host ACP reads",
+  "sessions.patch %j avoids transcript-worker startup, unrelated hydration, and host ACP reads",
   async (patch) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const targetKey = "agent:main:single-patch-target";
+      const snapshots = {
+        skillsSnapshot: { prompt: "synthetic skill instructions ".repeat(1_000), skills: [] },
+        systemPromptReport: {
+          source: "run" as const,
+          generatedAt: 1,
+          systemPrompt: { chars: 30_000, projectContextChars: 0, nonProjectContextChars: 30_000 },
+          injectedWorkspaceFiles: [],
+          skills: { promptChars: 30_000, entries: [] },
+          tools: { listChars: 0, schemaChars: 0, entries: [] },
+        },
+      };
       await upsertSessionEntryCore(
         { agentId: "main", sessionKey: targetKey },
-        { sessionId: "session-single-patch-target", updatedAt: 1 },
+        { sessionId: "session-single-patch-target", updatedAt: 1, ...snapshots },
       );
       await upsertAcpSessionMeta({
         cfg: {},
@@ -108,6 +123,9 @@ test.each([{ pinned: true }, { label: "Renamed" }, { label: " Taken " }])(
         );
       }
 
+      await rotateDatabaseWorkers(historyLane);
+      const historySequence = historyLane.nativeSequence;
+      expect(historySequence).toBe(historyLane.retiredSequence);
       const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
       const statements = trackSqliteStatementExecutions(
         database.db,
@@ -137,6 +155,7 @@ test.each([{ pinned: true }, { label: "Renamed" }, { label: " Taken " }])(
           } as unknown as GatewayRequestContext,
           client: humanClient(),
         } as never);
+        expect(historyLane.nativeSequence).toBe(historySequence);
       } finally {
         hostSql.restore();
         statements.restore();
@@ -147,10 +166,14 @@ test.each([{ pinned: true }, { label: "Renamed" }, { label: " Taken " }])(
       expect(statements.counts["whole-store-projection"]).toBe(0);
       expect(hostSql.queries.filter((sql) => /\bacp_sessions\b/i.test(sql))).toEqual([]);
       const target = loadSessionEntry({ agentId: "main", sessionKey: targetKey });
+      expect(target).toMatchObject(snapshots);
       if (labelConflict) {
         expect(respond.mock.calls[0]?.[2]).toHaveProperty("message", "label already in use: Taken");
         expect(target?.label).toBeUndefined();
       } else {
+        const receipt = respond.mock.calls[0]?.[1];
+        expect(receipt.entry).not.toHaveProperty("skillsSnapshot");
+        expect(receipt.entry).not.toHaveProperty("systemPromptReport");
         expect(respond.mock.calls[0]?.[1]).toMatchObject({
           resolved: { runtimeSelectionLocked: true, agentRuntime: { id: "acpx" } },
         });
