@@ -155,20 +155,6 @@ async function clearTelegramAccountRuntimeCache(accountId: string): Promise<void
   ]);
 }
 
-function resolveTelegramAuditCollector() {
-  return (
-    getOptionalTelegramRuntime()?.channel?.telegram?.collectTelegramUnmentionedGroupIds ??
-    auditModule.collectTelegramUnmentionedGroupIds
-  );
-}
-
-function resolveTelegramAuditMembership() {
-  return (
-    getOptionalTelegramRuntime()?.channel?.telegram?.auditTelegramGroupMembership ??
-    auditModule.auditTelegramGroupMembership
-  );
-}
-
 function formatTelegramUnauthorizedTokenError(
   account: ResolvedTelegramAccount,
   status: 401 | 404,
@@ -873,8 +859,11 @@ export const telegramPlugin = createChatChannelPlugin({
         const groups =
           cfg.channels?.telegram?.accounts?.[account.accountId]?.groups ??
           cfg.channels?.telegram?.groups;
+        const collectGroupIds =
+          getOptionalTelegramRuntime()?.channel?.telegram?.collectTelegramUnmentionedGroupIds ??
+          auditModule.collectTelegramUnmentionedGroupIds;
         const { groupIds, unresolvedGroups, hasWildcardUnmentionedGroups } =
-          resolveTelegramAuditCollector()(groups);
+          collectGroupIds(groups);
         if (!groupIds.length && unresolvedGroups === 0 && !hasWildcardUnmentionedGroups) {
           return undefined;
         }
@@ -889,7 +878,10 @@ export const telegramPlugin = createChatChannelPlugin({
             elapsedMs: 0,
           };
         }
-        const audit = await resolveTelegramAuditMembership()({
+        const auditMembership =
+          getOptionalTelegramRuntime()?.channel?.telegram?.auditTelegramGroupMembership ??
+          auditModule.auditTelegramGroupMembership;
+        const audit = await auditMembership({
           token: account.token,
           botId,
           groupIds,
