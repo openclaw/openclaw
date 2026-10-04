@@ -97,6 +97,52 @@ describe("ManagedWorktreeService allocation and orphan preservation", () => {
     ).toHaveLength(1);
   });
 
+  it.each(["clean", "dirty"] as const)(
+    "rejects a changed base when reusing a %s card worktree and preserves its contents",
+    async (state) => {
+      const baseRef = await git(repo, "rev-parse", "HEAD");
+      const request = {
+        repoRoot: repo,
+        name: "card-worktree",
+        baseRef,
+        ownerKind: "workboard" as const,
+        ownerId: "card-1",
+      };
+      const created = await service.create(request);
+      await fs.writeFile(path.join(repo, "README.md"), "new base\n");
+      await git(repo, "commit", "-am", "advance source");
+      const requestedBase = await git(repo, "rev-parse", "HEAD");
+      if (state === "dirty") {
+        await fs.writeFile(path.join(created.path, "README.md"), "local changes\n");
+        await fs.writeFile(path.join(created.path, "draft.txt"), "unfinished work\n");
+      }
+
+      await expect(service.create({ ...request, baseRef: requestedBase })).rejects.toThrow(
+        `already uses base ref ${baseRef}; requested ${requestedBase}`,
+      );
+
+      expect(await git(created.path, "rev-parse", "HEAD")).toBe(baseRef);
+      expect(await git(created.path, "branch", "--show-current")).toBe(created.branch);
+      expect(await fs.readFile(path.join(created.path, "README.md"), "utf8")).toBe(
+        state === "dirty" ? "local changes\n" : "base\n",
+      );
+      if (state === "dirty") {
+        expect(await fs.readFile(path.join(created.path, "draft.txt"), "utf8")).toBe(
+          "unfinished work\n",
+        );
+      }
+      expect(await service.listRegistryRecords()).toEqual([created]);
+      await expect(service.createWithOutcome(request)).resolves.toEqual({
+        record: created,
+        materialized: false,
+      });
+      await expect(service.createWithOutcome({ ...request, baseRef: undefined })).resolves.toEqual({
+        record: created,
+        materialized: false,
+      });
+    },
+  );
+
   it("numbers a generated name colliding with the owner's removed record", async () => {
     const owner = {
       repoRoot: repo,

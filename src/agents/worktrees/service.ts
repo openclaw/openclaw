@@ -43,7 +43,7 @@ import {
   resolveManagedWorktreePathKeys,
   shouldPreserveOrphanCandidate,
 } from "./orphan-paths.js";
-import { worktreeOwnerMatches } from "./owner.js";
+import { assertOwnerWorktreeReuse, worktreeOwnerMatches } from "./owner.js";
 import { provisionIncludedFiles } from "./provisioned-files.js";
 import { readRegistryWorktrees, readWorktreeCleanupState } from "./registry-read.js";
 import { retireMissingRegistryWorktree } from "./registry-retirement.js";
@@ -284,11 +284,7 @@ export class ManagedWorktreeService {
       if (existing && (await worktreePathExists(existing.path))) {
         return await withWorktreeSource(params, async (current) => {
           const validated = await this.rebindLiveRepository(existing, current);
-          if (validated.repoRoot !== repository.repoRoot) {
-            throw new Error(
-              `worktree owner ${params.ownerKind ?? "manual"} ${params.ownerId} is already bound to another repository`,
-            );
-          }
+          assertOwnerWorktreeReuse(validated, current, repository.repoRoot);
           current.commitGuard?.();
           return { record: validated, materialized: false };
         });
