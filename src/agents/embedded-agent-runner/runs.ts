@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { createMessageInjectionAuthority } from "../../auto-reply/reply/message-injection-authority.js";
 import type { ReplyMessageInjectionOptions } from "../../auto-reply/reply/reply-run-registry.contracts.js";
@@ -21,7 +20,6 @@ import {
   supersedeReplyRunByRunId,
   type ReplyOperation,
   waitForReplyOperationOwnerSettlement,
-  waitForReplyRunEndBySessionId,
 } from "../../auto-reply/reply/reply-run-registry.js";
 import { getAttachedBackend } from "../../auto-reply/reply/reply-run-registry.state.js";
 import { getRuntimeConfig } from "../../config/io.js";
@@ -85,6 +83,7 @@ import {
   isEmbeddedRunHandleAbortable,
   isEmbeddedRunHandleSupersedable,
 } from "./runs.probes.js";
+import { waitForCurrentEmbeddedAgentRunEnd } from "./runs.wait.js";
 
 export type {
   EmbeddedAgentQueueHandle,
@@ -854,19 +853,22 @@ function revokeCompletionClaim(sessionId: string, runId?: string): void {
  * - With a sessionId, aborts that single run.
  * - With no sessionId, supports targeted abort modes (for example, compacting runs only).
  */
-export function abortEmbeddedAgentRun(sessionId: string): boolean;
+export function abortEmbeddedAgentRun(
+  sessionId: string,
+  opts?: { preserveReplyRun?: ReplyOperation },
+): boolean;
 export function abortEmbeddedAgentRun(
   sessionId: undefined,
   opts: { mode: "all" | "compacting"; reason?: "restart" },
 ): boolean;
 export function abortEmbeddedAgentRun(
   sessionId?: string,
-  opts?: { mode?: "all" | "compacting"; reason?: "restart" },
+  opts?: { mode?: "all" | "compacting"; reason?: "restart"; preserveReplyRun?: ReplyOperation },
 ): boolean {
   if (typeof sessionId === "string" && sessionId.length > 0) {
     const handle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
     if (!handle) {
-      if (abortReplyRunBySessionId(sessionId)) {
+      if (abortReplyRunBySessionId(sessionId, opts?.preserveReplyRun)) {
         return true;
       }
       diag.debug(`abort failed: sessionId=${sessionId} reason=no_active_run`);
@@ -935,8 +937,13 @@ export async function preemptAndDrainEmbeddedHeartbeatRun(
   return (await drainPromise) ? "drained" : "timed-out";
 }
 
-export function isEmbeddedAgentRunActive(sessionId: string): boolean {
-  const active = ACTIVE_EMBEDDED_RUNS.has(sessionId) || isReplyRunActiveForSessionId(sessionId);
+export function isEmbeddedAgentRunActive(
+  sessionId: string,
+  preserveReplyRun?: ReplyOperation,
+): boolean {
+  const active =
+    ACTIVE_EMBEDDED_RUNS.has(sessionId) ||
+    isReplyRunActiveForSessionId(sessionId, preserveReplyRun);
   if (active) {
     diag.debug(`run active check: sessionId=${sessionId} active=true`);
   }
@@ -1275,69 +1282,28 @@ export function getActiveEmbeddedRunSnapshot(
   return ACTIVE_EMBEDDED_RUN_SNAPSHOTS.get(sessionId);
 }
 
-function waitForCurrentEmbeddedAgentRunEnd(
-  sessionId: string,
-  timeoutMs: number | null,
-  handle?: EmbeddedAgentQueueHandle,
-): Promise<boolean> {
-  const isHandleActive = () =>
-    handle ? ACTIVE_EMBEDDED_RUNS.get(sessionId) === handle : ACTIVE_EMBEDDED_RUNS.has(sessionId);
-  if (!isHandleActive()) {
-    if (handle) {
-      return Promise.resolve(true);
-    }
-    return waitForReplyRunEndBySessionId(sessionId, timeoutMs);
-  }
-  const timeoutLabel = timeoutMs === null ? "none" : String(timeoutMs);
-  diag.debug(`waiting for run end: sessionId=${sessionId} timeoutMs=${timeoutLabel}`);
-  return new Promise((resolve) => {
-    const waiters = EMBEDDED_RUN_WAITERS.get(sessionId) ?? new Set();
-    const waiter: EmbeddedRunWaiter = {
-      resolve,
-      handle,
-    };
-    if (timeoutMs !== null) {
-      waiter.timer = setTimeout(
-        () => {
-          waiters.delete(waiter);
-          if (waiters.size === 0) {
-            EMBEDDED_RUN_WAITERS.delete(sessionId);
-          }
-          diag.warn(`wait timeout: sessionId=${sessionId} timeoutMs=${timeoutMs}`);
-          resolve(false);
-        },
-        resolveTimerTimeoutMs(timeoutMs, 100, 100),
-      );
-    }
-    waiters.add(waiter);
-    EMBEDDED_RUN_WAITERS.set(sessionId, waiters);
-    if (!isHandleActive()) {
-      waiters.delete(waiter);
-      if (waiters.size === 0) {
-        EMBEDDED_RUN_WAITERS.delete(sessionId);
-      }
-      if (waiter.timer) {
-        clearTimeout(waiter.timer);
-      }
-      resolve(true);
-    }
-  });
-}
-
 export async function waitForEmbeddedAgentRunEnd(
   sessionId: string,
   timeoutMs: number | null = 15_000,
+  preserveReplyRun?: ReplyOperation,
 ): Promise<boolean> {
   if (!sessionId) {
     return true;
   }
   const deadline = timeoutMs === null ? undefined : Date.now() + timeoutMs;
-  while (isEmbeddedAgentRunActive(sessionId)) {
+  while (isEmbeddedAgentRunActive(sessionId, preserveReplyRun)) {
     const remainingMs = deadline === undefined ? null : deadline - Date.now();
     if (remainingMs !== null && remainingMs <= 0) {
       return false;
     }
-    if (!(await waitForCurrentEmbeddedAgentRunEnd(sessionId, remainingMs))) {
+    if (
+      !(await waitForCurrentEmbeddedAgentRunEnd(
+        sessionId,
+        remainingMs,
+        undefined,
+        preserveReplyRun,
+      ))
+    ) {
       return false;
     }
   }
