@@ -14,10 +14,6 @@ import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pair
 import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import {
-  createLazyRuntimeModule,
-  createLazyRuntimeNamedExport,
-} from "openclaw/plugin-sdk/lazy-runtime";
-import {
   deliverTextOrMediaReply,
   resolveSendableOutboundReplyParts,
   type OutboundReplyPayload,
@@ -122,19 +118,6 @@ function resolveZaloTimestampMs(date: number | undefined): number | undefined {
   }
   return date >= UNIX_MILLISECONDS_THRESHOLD ? date : date * 1000;
 }
-
-const loadZaloWebhookRuntime = createLazyRuntimeNamedExport(
-  () => import("./monitor.webhook.js"),
-  "zaloWebhookRuntime",
-);
-const loadZaloWebhookIngressRuntime = createLazyRuntimeNamedExport(
-  () => import("./webhook-spool.js"),
-  "zaloWebhookIngressRuntime",
-);
-const loadZaloWebhookModule = createLazyRuntimeModule(async () => ({
-  ...(await loadZaloWebhookRuntime()),
-  ...(await loadZaloWebhookIngressRuntime()),
-}));
 
 function registerSharedHostedMediaRoute(params: {
   path: string;
@@ -843,8 +826,11 @@ export async function monitorZaloProvider(options: ZaloMonitorOptions): Promise<
     }
 
     if (useWebhook) {
-      const { createZaloWebhookIngress, registerZaloWebhookTarget, handleZaloWebhookRequest } =
-        await loadZaloWebhookModule();
+      const { registerZaloWebhookTarget, handleZaloWebhookRequest } = (
+        await import("./monitor.webhook.js")
+      ).zaloWebhookRuntime;
+      const { createZaloWebhookIngress } = (await import("./webhook-spool.js"))
+        .zaloWebhookIngressRuntime;
       if (!effectiveWebhookUrl || !webhookSecret) {
         throw new Error("Zalo webhookUrl and webhookSecret are required for webhook mode");
       }

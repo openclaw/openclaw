@@ -22,6 +22,13 @@ working directory. Their process callbacks and idle queue tail must not retain
 the first read's async context. Each read keeps its own admission, cancellation,
 and deadline scope until settlement; completed operation promises are released.
 
+Snapshot staging owners and native-source completion promises use the same
+lifecycle context. Staging preparations keep their individual authority until
+cleanup completes. Shared-state opening releases its caller admission callback
+after native settlement; reusable writer slots retain prepared launch facts
+instead of the opening caller's options. These changes preserve FIFO admission,
+joins of pending opens, schemas, stored bytes, configuration, and update behavior.
+
 Inventory classifications describe counted operations, not whole-module runtime
 safety. Reviewed mixed modules use named operation paths, optionally narrowed to
 a variable initializer, rather than line numbers. Initializer exceptions exclude
@@ -732,6 +739,17 @@ revision within the writer FIFO, including after lost replies; unknown outcomes
 never replay. Database close joins accepted mutations. Workspace authoring guards
 retain their existing owner. Schemas, quotas, retention, publication security checks,
 and update behavior are unchanged.
+
+Channel pairing allowlist preparation uses the existing shared-state reader.
+The async SDK reader captures the physical store before yielding and reads current
+rows outside inherited discovery snapshots. Ingress retains its channel and
+message authority checks after preparation. The reader preserves account
+normalization and entry order, propagates admission failures, and joins accepted
+read cleanup before its transport closes. Missing state grants no permission and
+does not initialize a database; boot and Doctor retain initialization. The
+released synchronous SDK reader and pairing request/approval mutations retain
+their native paths, so their shared SQL sites remain T1. No schema, retention,
+durability, or update migration changes.
 
 ## Carry facts, publish after commit
 
@@ -1812,3 +1830,15 @@ Discord SDK's synchronous list, touch, lifecycle setter, and unbind compatibilit
 paths remain under the same owner, deprecated for removal at the next Plugin SDK
 major. Bundled callers use the awaited variants. ACP startup session reads are a
 separate worker migration.
+
+Shared and per-agent auth-profile success and failure bookkeeping use the existing
+auth-profile shared-state domain and canonical agent executor. The caller captures
+the physical stores and execution authority before preparing inherited ownership
+and provider observations. Workers reread the current rows and apply the same health
+reducers used for personal model accounts; inherited success clears health without
+changing the shared owner's last-good selection or rotation time. Committed facts
+update the existing runtime snapshot owner. Gateway close refuses new bookkeeping
+and joins accepted operations before closing worker transports. Uncertain outcomes
+are never replayed. Schemas, stored bytes, retention, and update behavior are
+unchanged. The released synchronous auth-store save SDK remains available; quota
+reprobe and explicit block mutations retain their existing owners.

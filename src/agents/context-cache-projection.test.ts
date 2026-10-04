@@ -5,7 +5,7 @@ import {
   lookupCachedContextWindow,
   replaceContextWindowCaches,
 } from "./context-cache.js";
-import { resetContextWindowCacheForTest } from "./context-runtime-state.js";
+import { resetContextWindowCacheForTest } from "./context.test-support.js";
 
 function publishConfiguredModel(model: string, contextWindow: number): void {
   replaceContextWindowCaches({

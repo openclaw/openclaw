@@ -614,6 +614,12 @@
       "@openclaw/llm-core/*": [
         "../../packages/plugin-sdk/dist/packages/llm-core/src/*.d.ts"
       ],
+      "@openclaw/gateway-protocol": [
+        "../../packages/plugin-sdk/dist/packages/gateway-protocol/src/index.d.ts"
+      ],
+      "@openclaw/gateway-protocol/*": [
+        "../../packages/plugin-sdk/dist/packages/gateway-protocol/src/*.d.ts"
+      ],
       "@openclaw/model-catalog-core": [
         "../../packages/plugin-sdk/dist/packages/model-catalog-core/src/index.d.ts"
       ],

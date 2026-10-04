@@ -23,13 +23,13 @@ import {
 } from "../../project-memory-bootstrap.js";
 import { resolveAgentPromptSurfaceForSessionKey } from "../../prompt-surface.js";
 import { resolveAgentRuntimePrompt } from "../../runtime-prompt.js";
+import type { AgentTool } from "../../runtime/index.js";
 import { buildSystemPromptReport } from "../../system-prompt-report.js";
 import { toolPolicyRestrictsTools } from "../../tool-policy.js";
 import type { ToolSearchCatalogRef } from "../../tool-search.js";
 import { buildToolSchemaDirectoryPrompt } from "../../tool-search.js";
 import { prepareWatchedSessionsPromptAsync } from "../../watched-sessions-prompt.js";
 import { buildEmbeddedSandboxInfo, resolveEmbeddedSandboxInfoExecPolicy } from "../sandbox-info.js";
-import { buildEmbeddedSystemPrompt } from "../system-prompt.js";
 import type { prepareEmbeddedAttemptBootstrap } from "./attempt-bootstrap-prepare.js";
 import { resolvePromptModeForSession } from "./attempt-prompt-helpers.js";
 import type { EmbeddedAttemptSetup } from "./attempt-setup.js";
@@ -37,7 +37,7 @@ import { buildAttemptSystemPrompt, type SystemPromptRefresh } from "./attempt-sy
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type PreparedBootstrap = Awaited<ReturnType<typeof prepareEmbeddedAttemptBootstrap>>;
-type PromptTools = Parameters<typeof buildEmbeddedSystemPrompt>[0]["tools"];
+type PromptTools = AgentTool[];
 
 export async function prepareEmbeddedAttemptSystemPrompt(params: {
   activeContextEngine: EmbeddedRunAttemptParams["contextEngine"];

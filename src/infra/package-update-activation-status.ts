@@ -25,12 +25,12 @@ export function readReleasedPackageActivationReceipt(installKey: string) {
   }
   const anchorIdentity = privatePackageActivationIdentity(anchor, true);
   const journalIdentity = privatePackageActivationIdentity(journal, false);
-  const parentIdentity = packageActivationIdentity(path.dirname(anchor), true);
+  const parentIdentity = packageActivationIdentity(path.dirname(anchor), "parent");
   const assertIdentity = () => {
     if (
       privatePackageActivationIdentity(anchor, true) !== anchorIdentity ||
       privatePackageActivationIdentity(journal, false) !== journalIdentity ||
-      packageActivationIdentity(path.dirname(anchor), true) !== parentIdentity ||
+      packageActivationIdentity(path.dirname(anchor), "parent") !== parentIdentity ||
       fs.realpathSync(anchor) !== anchor
     ) {
       throw new Error("Released package activation journal identity changed.");

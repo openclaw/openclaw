@@ -41,7 +41,6 @@ import {
 import { renderChatResizableDivider } from "./chat-resizable-divider.ts";
 import type {
   SidebarPanelDefinition,
-  SidebarPanelTemplates,
   SidebarRegionCallbacks,
 } from "./chat-sidebar-region-types.ts";
 
@@ -84,12 +83,6 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
   @property({ attribute: false }) conversationTab?: Pick<SidebarPanelDefinition, "label" | "icon">;
   @property({ attribute: false }) layout: SidebarLayout = { columns: [] };
   @property({ attribute: false }) panelDefinitions = sidebarPanelDefinitions();
-  @property({ attribute: false }) panelTemplates: SidebarPanelTemplates = {};
-  // Header actions owned by the active panel. The tabbed model gives a panel no
-  // header of its own, so an action on its content (open externally, clear the
-  // thread) is only reachable if the panel contributes it to the shared header.
-  @property({ attribute: false }) panelActions: SidebarPanelTemplates = {};
-  @property({ attribute: false }) availableSlots: SidebarSlotId[] = [];
   @property({ attribute: false }) fetchFavicon?: LinkFaviconFetcher;
   @property({ attribute: false }) callbacks: SidebarRegionCallbacks | null = null;
   @property({ type: Boolean }) narrow = false;
@@ -225,7 +218,7 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
   }
 
   private panelTypes(): SidebarPanelDefinition[] {
-    return this.availableSlots.map((slot) => panelType(this.panelDefinitions, slot));
+    return this.panelDefinitions.filter((definition) => definition.available);
   }
 
   private renderTypeMenu() {
@@ -370,7 +363,9 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
       ? `hosted:${activeHosted.panel.id}:${activeHosted.element.activeHostedTabId}`
       : (active?.id ?? null);
     const activePanel = column.panels.find((panel) => panel.id === active?.id);
-    const activeActions = (activePanel ? this.panelActions[activePanel.slot] : null) ?? null;
+    const activeActions =
+      (activePanel ? panelType(this.panelDefinitions, activePanel.slot).headerAction : null) ??
+      null;
     return html`
       <header
         class="rail-header side-panel__header"
@@ -513,7 +508,7 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
           data-region=${panel.id === this.layout.mainPanelId ? "main" : "side"}
           ?hidden=${!isSidebarSlotVisible(this.layout, panel.slot)}
         >
-          ${this.panelTemplates[panel.slot] ?? this.renderEmpty(panel)}
+          ${panelType(this.panelDefinitions, panel.slot).content ?? this.renderEmpty(panel)}
         </div>`,
       )}
       ${

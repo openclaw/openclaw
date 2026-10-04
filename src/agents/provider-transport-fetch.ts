@@ -472,16 +472,10 @@ function buildManagedResponse(
 
 function resolveModelRequestPolicy(model: Model) {
   const debugProxy = resolveDebugProxySettings();
-  let explicitDebugProxyUrl: string | undefined;
-  if (debugProxy.enabled && debugProxy.proxyUrl) {
-    try {
-      if (new URL(model.baseUrl).protocol === "https:") {
-        explicitDebugProxyUrl = debugProxy.proxyUrl;
-      }
-    } catch {
-      // Non-URL provider base URLs cannot use the debug proxy override safely.
-    }
-  }
+  const explicitDebugProxyUrl =
+    debugProxy.enabled && debugProxy.proxyUrl && URL.parse(model.baseUrl)?.protocol === "https:"
+      ? debugProxy.proxyUrl
+      : undefined;
   const request = mergeModelProviderRequestOverrides(getModelProviderRequestTransport(model), {
     proxy: explicitDebugProxyUrl
       ? {

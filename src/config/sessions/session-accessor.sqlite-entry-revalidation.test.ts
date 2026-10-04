@@ -611,7 +611,7 @@ describe("SQLite session entry patch commit revalidation", () => {
         }),
       ).rejects.toThrow("openclaw doctor --fix");
       // Test cleanup must not depend on admitting the deliberately invalid store.
-      closeOpenClawAgentDatabaseByPath(database.path);
+      await closeOpenClawAgentDatabaseByPathAsync(database.path);
       const cleanup = new DatabaseSync(database.path);
       try {
         setUnrelatedParent(cleanup, null);

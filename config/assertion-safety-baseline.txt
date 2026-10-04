@@ -1096,19 +1096,19 @@ packages/ai/src/providers/anthropic-tool-projection.ts	2
 packages/ai/src/providers/anthropic-usage.ts	3
 packages/ai/src/providers/anthropic.ts	3
 packages/ai/src/providers/azure-openai-responses.ts	1
-packages/ai/src/providers/clean-for-gemini.ts	8
+packages/ai/src/providers/clean-for-gemini.ts	6
 packages/ai/src/providers/google-shared.ts	2
-packages/ai/src/providers/mistral.ts	5
+packages/ai/src/providers/mistral.ts	3
 packages/ai/src/providers/openai-chatgpt-responses-protocol.ts	1
 packages/ai/src/providers/openai-chatgpt-responses.ts	19
-packages/ai/src/providers/openai-completions-tool-calls.ts	5
+packages/ai/src/providers/openai-completions-tool-calls.ts	3
 packages/ai/src/providers/openai-completions.ts	1
 packages/ai/src/providers/openai-reasoning-effort.ts	6
 packages/ai/src/providers/openai-responses-shared.ts	6
 packages/ai/src/providers/openai-responses-tools.ts	2
 packages/ai/src/providers/openai-responses.ts	1
 packages/ai/src/providers/openai-tool-schema-compat.ts	3
-packages/ai/src/providers/openai-tool-schema.ts	4
+packages/ai/src/providers/openai-tool-schema.ts	3
 packages/ai/src/providers/schema-keyword-strip.ts	2
 packages/ai/src/providers/simple-options.ts	1
 packages/ai/src/providers/tool-result-text.ts	2
@@ -1129,11 +1129,11 @@ packages/ai/src/transports/openai-responses-compact-request.ts	2
 packages/ai/src/transports/openai-responses-continuation.ts	2
 packages/ai/src/transports/openai-responses-contracts.ts	1
 packages/ai/src/transports/openai-responses-debug.ts	10
-packages/ai/src/transports/openai-responses-params-internal.ts	5
+packages/ai/src/transports/openai-responses-params-internal.ts	2
 packages/ai/src/transports/openai-responses-payload-policy.ts	3
 packages/ai/src/transports/openai-responses-prompt-observer-internal.ts	2
 packages/ai/src/transports/openai-responses-replay-internal.ts	10
-packages/ai/src/transports/openai-responses-replay-messages-internal.ts	14
+packages/ai/src/transports/openai-responses-replay-messages-internal.ts	8
 packages/ai/src/transports/openai-responses-stream-internal.ts	2
 packages/ai/src/transports/openai-responses-stream-observer-internal.ts	1
 packages/ai/src/transports/openai-responses-stream-slots-internal.ts	2
@@ -1183,7 +1183,7 @@ packages/memory-host-sdk/src/host/memory-schema.ts	7
 packages/memory-host-sdk/src/host/multimodal.ts	1
 packages/memory-host-sdk/src/host/read-retry.ts	1
 packages/memory-host-sdk/src/host/session-files.ts	8
-packages/memory-host-sdk/src/host/session-reset-recall.ts	3
+packages/memory-host-sdk/src/host/session-reset-recall.ts	1
 packages/memory-host-sdk/src/host/sqlite-vec.ts	3
 packages/memory-host-sdk/src/host/sqlite.ts	1
 packages/model-catalog-core/src/model-catalog-normalize.ts	5
@@ -1228,7 +1228,7 @@ src/agents/agent-bundle-mcp-runtime-shared.ts	2
 src/agents/agent-bundle-mcp-runtime.ts	3
 src/agents/agent-command-restart-recovery.ts	1
 src/agents/agent-command.ts	1
-src/agents/agent-hooks/compaction-safeguard.ts	13
+src/agents/agent-hooks/compaction-safeguard.ts	12
 src/agents/agent-project-settings-snapshot.ts	5
 src/agents/agent-run-terminal-delivery.ts	1
 src/agents/agent-run-terminal-outcome.ts	2
@@ -1252,7 +1252,7 @@ src/agents/apply-patch-targets.ts	1
 src/agents/apply-patch.ts	2
 src/agents/auth-profiles/clone.ts	1
 src/agents/auth-profiles/external-auth.ts	1
-src/agents/auth-profiles/oauth-refresh-failure.ts	2
+src/agents/auth-profiles/oauth-refresh-failure.ts	1
 src/agents/auth-profiles/oauth-refresh-lock-errors.ts	1
 src/agents/auth-profiles/oauth.ts	2
 src/agents/auth-profiles/persisted.ts	2
@@ -1264,7 +1264,7 @@ src/agents/auth-profiles/usage.ts	1
 src/agents/bash-process-registry.ts	1
 src/agents/bash-tools.exec-approval-followup.ts	5
 src/agents/bash-tools.exec-approval-request.ts	2
-src/agents/bash-tools.exec-host-node-phases.ts	3
+src/agents/bash-tools.exec-host-node-phases.ts	1
 src/agents/bash-tools.exec-host-node.ts	2
 src/agents/bash-tools.exec-request-preparation.ts	6
 src/agents/bash-tools.exec-run.ts	1
@@ -1486,7 +1486,6 @@ src/agents/sessions/extensions/runner.ts	14
 src/agents/sessions/extensions/types.ts	1
 src/agents/sessions/keybindings.ts	2
 src/agents/sessions/model-registry.ts	9
-src/agents/sessions/package-manager.ts	2
 src/agents/sessions/resolve-config-value.ts	1
 src/agents/sessions/sdk.ts	1
 src/agents/sessions/session-manager-codec.ts	5
@@ -1544,7 +1543,7 @@ src/agents/tools/cron-tool-context.ts	1
 src/agents/tools/cron-tool-schema.ts	1
 src/agents/tools/cron-tool-write.ts	2
 src/agents/tools/cron-tool.ts	5
-src/agents/tools/dashboard-tool.ts	2
+src/agents/tools/dashboard-tool.ts	1
 src/agents/tools/embedded-gateway-stub.ts	7
 src/agents/tools/gateway-tool.ts	3
 src/agents/tools/goal-tools.ts	2
@@ -2000,7 +1999,6 @@ src/config/zod-schema.channels-config.ts	3
 src/config/zod-schema.ts	1
 src/context-engine/delegate.ts	1
 src/context-engine/registry.ts	4
-src/context-engine/runtime-settings.ts	2
 src/cron/delivery-channel-validation.ts	2
 src/cron/delivery-context.ts	1
 src/cron/delivery-target-validation.ts	3
@@ -2375,7 +2373,7 @@ src/infra/windows-shell-command.ts	1
 src/interactive/payload.ts	1
 src/llm/providers/stream-wrappers/google-thinking-payload.ts	3
 src/llm/providers/stream-wrappers/moonshot-thinking.ts	2
-src/llm/providers/stream-wrappers/openai.ts	8
+src/llm/providers/stream-wrappers/openai.ts	5
 src/llm/providers/stream-wrappers/stream-payload-utils.ts	1
 src/llm/utils/node-http-proxy.ts	1
 src/llm/utils/oauth/anthropic.ts	2
@@ -2528,7 +2526,7 @@ src/plugins/dev-source-root.ts	1
 src/plugins/discovery.ts	1
 src/plugins/doctor-contract-module.ts	3
 src/plugins/doctor-contract-registry-loader-state.ts	1
-src/plugins/doctor-contract-registry.ts	2
+src/plugins/doctor-contract-registry.ts	1
 src/plugins/gateway-events.ts	1
 src/plugins/gateway-startup-plugin-activation.ts	1
 src/plugins/gateway-startup-plugin-config.ts	1
@@ -2553,7 +2551,7 @@ src/plugins/installed-plugin-index-store.ts	1
 src/plugins/interactive-state.ts	2
 src/plugins/interactive.ts	4
 src/plugins/lazy-service-module.ts	1
-src/plugins/legacy-session-surfaces.ts	3
+src/plugins/legacy-session-surfaces.ts	2
 src/plugins/loader-channel-runtime.ts	1
 src/plugins/loader-channel-setup.ts	12
 src/plugins/loader-discovery.ts	1
@@ -2735,7 +2733,7 @@ src/talk/consult-question.ts	2
 src/talk/exact-speech-protocol.ts	1
 src/talk/provider-internal.ts	2
 src/talk/turn-context-tracker.ts	2
-src/trajectory/export.ts	9
+src/trajectory/export.ts	8
 src/trajectory/runtime-store.sqlite.ts	1
 src/trajectory/runtime.ts	4
 src/transcripts/config.ts	2

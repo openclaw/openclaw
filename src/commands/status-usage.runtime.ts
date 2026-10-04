@@ -10,7 +10,6 @@ import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../agents/openai-routing.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import {
   buildCodexSyntheticUsageAuth,
   mergeUsageSummaries,
@@ -18,8 +17,6 @@ import {
   resolveUsageCredentialType,
 } from "../status/codex-synthetic-usage.js";
 import { resolveStatusGatewayProbeTimeoutMs } from "./status.gateway-probe-budget.js";
-
-const providerUsageLoader = createLazyImportLoader(() => import("../infra/provider-usage.js"));
 
 function shouldUseConfiguredCodexSyntheticUsage(params: {
   config: OpenClawConfig;
@@ -69,7 +66,7 @@ export type StatusUsageSummaryOptions = {
 
 /** Loads provider usage for status output from an explicit or ambient system-agent scope. */
 export async function resolveStatusUsageSummary(params: StatusUsageSummaryOptions) {
-  const { loadProviderUsageSummary } = await providerUsageLoader.load();
+  const { loadProviderUsageSummary } = await import("../infra/provider-usage.js");
   const rawAgentId = params.agentId?.trim();
   if (params.agentId !== undefined && !rawAgentId) {
     throw new Error("--agent must not be blank");

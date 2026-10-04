@@ -108,32 +108,24 @@ describe("createWorkerPlacementRedispatch", () => {
     },
   );
 
-  it("rejects nodes without a runtime requirement owner", async () => {
-    const dispatch = vi.fn();
-    const redispatch = createWorkerPlacementRedispatch({
-      placements: reader(placement, {
+  it.each([
+    {
+      environment: {
         ...ready,
         environmentId: placement.environmentId,
         providerId: "device",
         nodeDeviceId: "paired-node",
-      }),
-      dispatch,
-    });
-    await expect(redispatch(placement, dispatchOptions)).rejects.toThrow(
-      "authoritative runtime requirement",
-    );
-    expect(dispatch).not.toHaveBeenCalled();
-  });
-
-  it("rejects a missing prior environment", async () => {
+      },
+      reason: "authoritative runtime requirement",
+    },
+    { environment: undefined, reason: "has no environment record" },
+  ])("rejects redispatch without $reason", async ({ environment, reason }) => {
     const dispatch = vi.fn();
     const redispatch = createWorkerPlacementRedispatch({
-      placements: reader(placement, undefined),
+      placements: reader(placement, environment),
       dispatch,
     });
-    await expect(redispatch(placement, dispatchOptions)).rejects.toThrow(
-      "has no environment record",
-    );
+    await expect(redispatch(placement, dispatchOptions)).rejects.toThrow(reason);
     expect(dispatch).not.toHaveBeenCalled();
   });
 });

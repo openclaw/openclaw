@@ -286,8 +286,6 @@ export function resolveGatewayRequestContext(params: {
   model: string | undefined;
   user?: string | undefined;
   sessionPrefix: string;
-  defaultMessageChannel: string;
-  useMessageChannelHeader?: boolean;
 }): { agentId: string; sessionKey: string; messageChannel: string } {
   const agentId = resolveAgentIdForRequest({ req: params.req, model: params.model });
   const sessionKey = resolveSessionKey({
@@ -297,10 +295,8 @@ export function resolveGatewayRequestContext(params: {
     prefix: params.sessionPrefix,
   });
 
-  const messageChannel = params.useMessageChannelHeader
-    ? (normalizeMessageChannel(getHeader(params.req, "x-openclaw-message-channel")) ??
-      params.defaultMessageChannel)
-    : params.defaultMessageChannel;
+  const messageChannel =
+    normalizeMessageChannel(getHeader(params.req, "x-openclaw-message-channel")) ?? "webchat";
 
   return { agentId, sessionKey, messageChannel };
 }

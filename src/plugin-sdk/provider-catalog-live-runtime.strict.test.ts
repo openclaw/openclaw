@@ -489,64 +489,49 @@ describe("strict catalog acquisition", () => {
     );
   });
 
-  it("reprojects cached raw rows with the current fallback", async () => {
-    const rows = [{ id: "known" }];
-    fetchGuard.mockImplementation(async ({ url }) => ({
-      response: Response.json({ data: rows }),
-      finalUrl: url,
-      release: async () => {},
-    }));
-    const params = {
-      ...catalogParams,
-      discoveryMode: "strict" as const,
-      projectRows: (candidateRows: readonly unknown[], fallback: ModelProviderConfig) => {
-        expect(candidateRows).toEqual(rows);
-        return fallback.models;
-      },
-    };
-    await expect(buildLiveModelProviderConfig(params)).resolves.toMatchObject({
-      models: seed.models,
-    });
-    const models = seed.models.map((model) => ({
-      ...model,
-      name: "Updated",
-      contextWindow: 256_000,
-    }));
-    await expect(buildLiveModelProviderConfig({ ...params, models })).resolves.toMatchObject({
-      models,
-    });
-    expect(fetchGuard).toHaveBeenCalledOnce();
-  });
-
-  it("does not retain rows when the strict projector throws", async () => {
-    const failure = new Error("catalog projection failed");
-    fetchGuard
-      .mockResolvedValueOnce({
-        response: Response.json({ data: [] }),
-        finalUrl: catalogParams.endpoint,
-        release: async () => {},
-      })
-      .mockImplementation(async ({ url }) => ({
-        response: Response.json({ data: [{ id: "known" }] }),
+  it.each(["refresh", "reject"] as const)(
+    "projects cached rows against the current fallback (%s)",
+    async (mode) => {
+      const rows = [{ id: "known" }];
+      const failure = new Error("catalog projection failed");
+      if (mode === "reject") {
+        fetchGuard.mockResolvedValueOnce({
+          response: Response.json({ data: [] }),
+          finalUrl: catalogParams.endpoint,
+          release: async () => {},
+        });
+      }
+      fetchGuard.mockImplementation(async ({ url }) => ({
+        response: Response.json({ data: rows }),
         finalUrl: url,
         release: async () => {},
       }));
-    const acquire = () =>
-      buildLiveModelProviderConfig({
-        ...catalogParams,
-        discoveryMode: "strict",
-        projectRows: (rows, fallback) => {
-          if (rows.length === 0) {
-            throw failure;
-          }
-          return fallback.models;
-        },
-      });
-    await expect(acquire()).rejects.toBe(failure);
-    await expect(acquire()).resolves.toMatchObject({ models: seed.models });
-    await expect(acquire()).resolves.toMatchObject({ models: seed.models });
-    expect(fetchGuard).toHaveBeenCalledTimes(2);
-  });
+      const acquire = (models = seed.models) =>
+        buildLiveModelProviderConfig({
+          ...catalogParams,
+          models,
+          discoveryMode: "strict",
+          projectRows: (candidateRows, fallback) => {
+            if (mode === "refresh") {
+              expect(candidateRows).toEqual(rows);
+            } else if (candidateRows.length === 0) {
+              throw failure;
+            }
+            return fallback.models;
+          },
+        });
+      if (mode === "reject") {
+        await expect(acquire()).rejects.toBe(failure);
+      }
+      await expect(acquire()).resolves.toMatchObject({ models: seed.models });
+      const models =
+        mode === "refresh"
+          ? seed.models.map((model) => ({ ...model, name: "Updated", contextWindow: 256_000 }))
+          : seed.models;
+      await expect(acquire(models)).resolves.toMatchObject({ models });
+      expect(fetchGuard).toHaveBeenCalledTimes(mode === "reject" ? 2 : 1);
+    },
+  );
 
   it.each([401, 503])(
     "HTTP %s preserves a healthy family sibling and captured auth",

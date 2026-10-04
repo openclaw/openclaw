@@ -2,12 +2,11 @@
 import { chmod, mkdir, symlink, writeFile } from "node:fs/promises";
 import { join, relative } from "node:path";
 import { Type } from "typebox";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { withMockedWindowsPlatform } from "../../test-utils/vitest-spies.js";
 import darkTheme from "../modes/interactive/theme/dark.json" with { type: "json" };
 import type { ExtensionFactory } from "./extensions/types.js";
-import { DefaultPackageManager } from "./package-manager.js";
 import { loadPromptTemplates } from "./prompt-templates.js";
 import { DefaultResourceLoader } from "./resource-loader.js";
 import { SettingsManager } from "./settings-manager.js";
@@ -36,16 +35,16 @@ describe("DefaultResourceLoader", () => {
       await writeFile(join(path, "shared.json"), JSON.stringify({ ...darkTheme, name: "shared" }));
     }
     const loader = createLoader(root, {
-      settingsManager: SettingsManager.inMemory(),
+      settingsManager: SettingsManager.inMemory({
+        packages: [paths[0]],
+        prompts: [paths[0]],
+        themes: [paths[0]],
+      }),
     });
 
-    const resolvePackages = vi.spyOn(DefaultPackageManager.prototype, "resolve");
-    try {
-      await loader.reload();
-      expect(resolvePackages).not.toHaveBeenCalled();
-    } finally {
-      resolvePackages.mockRestore();
-    }
+    await loader.reload();
+    expect(loader.getPrompts()).toEqual({ prompts: [], diagnostics: [] });
+    expect(loader.getThemes()).toEqual({ themes: [], diagnostics: [] });
     loader.extendResources({
       promptPaths: paths.map((path) => ({
         path,

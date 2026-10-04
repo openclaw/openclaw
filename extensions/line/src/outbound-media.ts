@@ -16,10 +16,8 @@ const LINE_OUTBOUND_MEDIA_SSRF_POLICY: SsrFPolicy = {
 };
 
 async function validateLineMediaUrl(url: string): Promise<void> {
-  let parsed: URL;
-  try {
-    parsed = new URL(url);
-  } catch {
+  const parsed = URL.parse(url);
+  if (!parsed) {
     throw new Error("LINE outbound media URL must be a valid URL");
   }
   if (parsed.protocol !== "https:") {
@@ -95,14 +93,8 @@ export async function buildLineMediaMessage(
 ): Promise<messagingApi.Message> {
   const trimmedUrl = mediaUrl.trim();
   if (!isHttpsUrl(trimmedUrl)) {
-    let parsed: URL | undefined;
-    try {
-      parsed = new URL(trimmedUrl);
-    } catch {
-      // Local paths reach the generic public-HTTPS error below.
-    }
     throw new Error(
-      parsed
+      URL.canParse(trimmedUrl)
         ? "LINE outbound media URL must use HTTPS"
         : "LINE outbound media currently requires a public HTTPS URL",
     );

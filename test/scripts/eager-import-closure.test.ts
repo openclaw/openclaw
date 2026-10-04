@@ -78,11 +78,12 @@ it("keeps the PR wrapper inventory closed over runtime imports", () => {
   expect({ missing, stale }, diagnostic).toEqual({ missing: [], stale: [] });
 });
 
-it("acquires and releases wrapper leases without the application command runtime", async () => {
+it("acquires wrapper leases and manages templates without the application command runtime", async () => {
   const root = tempDirs.make("openclaw-pr-lease-bootstrap-");
   copyPrWrapperSources(root);
   linkPrWrapperDependencies(root);
   await prepareCopiedSourceModules(root, [
+    "src/agents/worktrees/template-registry-async.ts",
     "src/state/openclaw-state-lease.ts",
     "src/state/openclaw-state-db.ts",
     "src/state/openclaw-state.worker.ts",
@@ -100,6 +101,10 @@ it("acquires and releases wrapper leases without the application command runtime
       "-e",
       `
         import assert from "node:assert/strict";
+        import {
+          deleteTemplateAsync, hasTemplatesAsync, listTemplatesAsync,
+          markTemplateReadyAsync, readTemplateAsync, reserveTemplateAsync, touchTemplateAsync,
+        } from "./src/agents/worktrees/template-registry-async.js";
         import { withOpenClawStateLease } from "./src/state/openclaw-state-lease.js";
         import {
           closeOpenClawStateDatabaseAsync,
@@ -115,6 +120,26 @@ it("acquires and releases wrapper leases without the application command runtime
         for (let grant = 0; grant < 2; grant += 1) {
           await withOpenClawStateLease(options, async (lease) => lease.assertOwned());
         }
+        await withOpenClawStateLease(options, async (lease) => {
+          const guard = () => lease.assertOwned();
+          const template = {
+            cacheKey: "wrapper-template", id: "generation-1",
+            repoRoot: process.cwd(), commonDir: process.cwd() + "/.git",
+            worktreeRoot: process.cwd() + "/worktrees", path: process.cwd() + "/template",
+            backend: "apfs", sourceCommit: "a".repeat(40), contentKey: "source",
+            status: "preparing", createdAt: 1, lastUsedAt: 1,
+          };
+          assert.equal(await hasTemplatesAsync(process.env), false);
+          await reserveTemplateAsync(process.env, template, guard);
+          assert.deepEqual(await readTemplateAsync(process.env, template.cacheKey), template);
+          assert.equal(await markTemplateReadyAsync(process.env, template.id, 2, guard), true);
+          assert.equal(await touchTemplateAsync(process.env, template.id, 3, guard), true);
+          assert.deepEqual(await listTemplatesAsync(process.env), [
+            { ...template, status: "ready", lastUsedAt: 3 },
+          ]);
+          assert.equal(await deleteTemplateAsync(process.env, template.id, guard), true);
+          assert.equal(await hasTemplatesAsync(process.env), false);
+        });
         const database = openOpenClawStateDatabase({ env: process.env });
         const row = database.db.prepare(
           "SELECT COUNT(*) AS count FROM state_leases WHERE scope = ? AND lease_key = ?",

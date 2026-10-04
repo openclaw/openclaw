@@ -152,30 +152,6 @@ export async function updateSessionGroupDefaults(
   return result.changed ? result.snapshot.defaults : null;
 }
 
-/**
- * Bulk-updates member session categories across every agent store without
- * bumping updatedAt: group maintenance must not reshuffle recency ordering.
- */
-async function updateMemberCategories(
-  cfg: OpenClawConfig,
-  from: string,
-  to: string | undefined,
-  env: NodeJS.ProcessEnv,
-  assertTargetCurrent?: (target: { agentId: string; sessionKey: string }) => void,
-): Promise<number> {
-  let updated = 0;
-  const { stores } = await readSessionGroupMembershipInWorker(cfg, env);
-  for (const target of stores) {
-    updated += await updateSessionGroupCategoriesInWorker({
-      scope: { ...target, sessionKey: "", env },
-      from,
-      to,
-      assertTargetCurrent,
-    });
-  }
-  return updated;
-}
-
 type SessionGroupMutationParams = {
   cfg: OpenClawConfig;
   name: string;
@@ -212,13 +188,16 @@ async function mutateSessionGroup(
     }
     const source = prepared.source;
     try {
-      updatedSessions = await updateMemberCategories(
-        params.cfg,
-        from,
-        to,
-        env,
-        params.assertTargetCurrent,
-      );
+      const { stores } = await readSessionGroupMembershipInWorker(params.cfg, env);
+      // Category updates preserve updatedAt so group maintenance cannot reorder sessions.
+      for (const target of stores) {
+        updatedSessions += await updateSessionGroupCategoriesInWorker({
+          scope: { ...target, sessionKey: "", env },
+          from,
+          to,
+          assertTargetCurrent: params.assertTargetCurrent,
+        });
+      }
       params.assertCurrent?.();
       // The state worker rereads all stores in the retirement transaction so late assignments retain the source.
       const retired = await mutateSessionGroupCatalog(

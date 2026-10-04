@@ -604,8 +604,6 @@ export async function handleOpenAiHttpRequest(
       model,
       user,
       sessionPrefix: "openai",
-      defaultMessageChannel: "webchat",
-      useMessageChannelHeader: true,
     }));
   } catch (err) {
     if (isGatewayRequestContextError(err)) {

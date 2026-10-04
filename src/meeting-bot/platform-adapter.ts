@@ -250,14 +250,7 @@ function parseMeetingTranscript<Transcript extends MeetingTranscriptSnapshot>(
   if (!parsed || typeof parsed !== "object") {
     throw new Error(options.invalidTranscriptMessage);
   }
-  const payload = parsed as {
-    droppedLines?: unknown;
-    epoch?: unknown;
-    lines?: unknown;
-    pendingLines?: unknown;
-    sessionMatched?: unknown;
-    urlMatched?: unknown;
-  };
+  const payload = parsed as Record<string, unknown>;
   const droppedLines =
     typeof payload.droppedLines === "number" && Number.isSafeInteger(payload.droppedLines)
       ? Math.max(0, payload.droppedLines)

@@ -495,6 +495,7 @@ export const gatewayServerIsolatedTestFiles = [
   "src/gateway/server-close.progress-card.test.ts",
   "src/gateway/server-close.question-publication.test.ts",
   "src/gateway/server-close.session-signals.test.ts",
+  "src/gateway/server-close.channel-pairing.test.ts",
   "src/gateway/server-close.acp-diagnostics.test.ts",
   "src/gateway/server.chat.canonical-publication.test.ts",
   "src/gateway/server-chat.retired-projection.test.ts",

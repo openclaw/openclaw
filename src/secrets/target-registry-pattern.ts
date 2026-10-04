@@ -13,9 +13,7 @@ type PathPatternToken =
 /** Registry entry with compiled path/ref pattern tokens. */
 export type CompiledTargetRegistryEntry = SecretTargetRegistryEntry & {
   pathTokens: PathPatternToken[];
-  pathDynamicTokenCount: number;
   refPathTokens?: PathPatternToken[];
-  refPathDynamicTokenCount: number;
 };
 
 /** Concrete config value matched by expanding a path pattern. */
@@ -70,9 +68,7 @@ export function compileTargetRegistryEntry(
   return {
     ...entry,
     pathTokens,
-    pathDynamicTokenCount,
     refPathTokens,
-    refPathDynamicTokenCount,
   };
 }
 

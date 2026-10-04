@@ -60,7 +60,10 @@ import type { TranscriptReportWorkerTarget } from "./session-accessor.sqlite-tra
 import { resolveTranscriptAppendRefusal } from "./session-accessor.sqlite-transcript-write-guard.js";
 import { assertSessionEntryCurrentAdmission } from "./session-entry-current-admission.js";
 import type { SessionEntryCurrentCheck } from "./session-entry-current.types.js";
-import { assertSessionStoreReadCandidate } from "./session-store-read-candidates.js";
+import {
+  assertSessionStoreReadCandidate,
+  captureSessionStoreCandidateIdentities,
+} from "./session-store-read-candidates.js";
 import { captureSessionStoreReadCandidates } from "./session-store-target-inventory.js";
 import { startSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
 import { applyAssistantDeliveryDirectives } from "./transcript-assistant-delivery.js";
@@ -176,14 +179,7 @@ async function withReportWorker<T>(
     fenced.storePath ??
     resolveOpenClawAgentSqlitePath(toDatabaseOptions(resolveSqliteScope(fenced)));
   const candidates = captureSessionStoreReadCandidates(storePath);
-  const identities = new Map(
-    candidates
-      .filter((candidate) => !candidate.scope)
-      .map((candidate) => {
-        const identity = readDatabasePathIdentitySync(candidate.path);
-        return [identity.canonicalPath, identity] as const;
-      }),
-  );
+  const identities = captureSessionStoreCandidateIdentities(candidates);
   const sourceIdentity = source ? readDatabasePathIdentitySync(source.path) : undefined;
   const assertSourceCurrent = () => {
     if (!source) {

@@ -28,12 +28,12 @@ import {
   type McpAppContextState,
   type McpAppContextEventDetail,
   MCP_APP_VIEW_EXPIRED_EVENT,
-  resolveMcpAppSandboxUrl,
   type McpAppHostSandboxCsp,
 } from "./mcp-app-security.ts";
 import { collectMcpAppStyleVariables } from "./mcp-app-theme.ts";
 import { mcpAppViewStyles } from "./mcp-app-view-styles.ts";
 import { promoteToPopoverTopLayer } from "./menu-surface.ts";
+import { resolveSandboxHostUrl } from "./sandbox-host.ts";
 
 registerMcpAppEnglish();
 
@@ -416,12 +416,13 @@ export class McpAppView extends LitElement {
         });
         window.addEventListener("message", onMessage);
       });
-      iframe.src = resolveMcpAppSandboxUrl(
+      iframe.src = resolveSandboxHostUrl(
         payload.sandboxUrl,
         payload.sandboxPort,
         payload.sandboxOrigin,
         this.context?.gateway.connection.gatewayUrl ?? "",
         window.location.origin,
+        t("mcpApp.errors.invalidSandboxUrl"),
       );
       await proxyReady;
       signal.throwIfAborted();
@@ -475,9 +476,7 @@ export class McpAppView extends LitElement {
           payload.csp,
           payload.messageSupported === true,
           payload.updateModelContextSupported === true,
-          payload.messageSupported === true,
           {
-            richMessage: payload.messageSupported === true,
             richModelContext: payload.richModelContextSupported === true,
             fileResources: payload.fileResourcesSupported === true,
             openFiles: payload.openFilesSupported === true,

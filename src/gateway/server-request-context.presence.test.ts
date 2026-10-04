@@ -74,6 +74,11 @@ describe("createGatewayRequestContext presence", () => {
   it.each(["email", "owner", "tailscale"] as const)(
     "refreshes every live profile connection with %s identity",
     async (identity) => {
+      let now = Date.now();
+      const clock = vi.spyOn(Date, "now").mockImplementation(() => now++);
+      onTestFinished(() => {
+        clock.mockRestore();
+      });
       const profileId = `profile-${identity}`;
       const emails =
         identity === "email"
@@ -149,8 +154,12 @@ describe("createGatewayRequestContext presence", () => {
       expect(unrelated.authenticatedUserProfile.displayName).toBe("Grace");
       const rows = listSystemPresence().filter((entry) => entry.user?.id === profileId);
       expect(rows).toHaveLength(clients.length);
+      const newestFirstEmails = emails.toReversed();
       for (const [index, row] of rows.entries()) {
-        expect(row.user).toEqual(expectedUser(emails[index], revisions.at(-1)!));
+        expect(row.user).toEqual(expectedUser(newestFirstEmails[index], revisions.at(-1)!));
+      }
+      if (identity === "email") {
+        expect(rows[0]!.ts).toBeGreaterThan(rows[1]!.ts);
       }
       if (identity === "owner") {
         expect(params.runtime.broadcast).toHaveBeenCalledExactlyOnceWith(

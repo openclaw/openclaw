@@ -27,14 +27,10 @@ function validateGatewayUrl(gatewayUrl: string): void {
   ) {
     invalidResumeHandoff();
   }
-  let parsed: URL;
-  try {
-    parsed = new URL(gatewayUrl);
-  } catch {
-    invalidResumeHandoff();
-  }
+  const parsed = URL.parse(gatewayUrl);
   const authority = gatewayUrl.slice(gatewayUrl.indexOf("://") + 3).split("/", 1)[0] ?? "";
   if (
+    !parsed ||
     (parsed.protocol !== "ws:" && parsed.protocol !== "wss:") ||
     gatewayUrl.includes("?") ||
     gatewayUrl.includes("#") ||

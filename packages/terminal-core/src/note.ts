@@ -97,9 +97,6 @@ function coerceNoteMessage(message: unknown): string {
   if (typeof message === "string") {
     return message;
   }
-  if (message == null) {
-    return "";
-  }
   if (typeof message === "number" || typeof message === "boolean" || typeof message === "bigint") {
     return String(message);
   }

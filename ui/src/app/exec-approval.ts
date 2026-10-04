@@ -41,13 +41,6 @@ export type ExecApprovalRequest = {
   expiresAtMs: number;
 };
 
-type ExecApprovalResolved = {
-  id: string;
-  decision?: string | null;
-  resolvedBy?: string | null;
-  ts?: number | null;
-};
-
 export type ExecApprovalPromptState = {
   client: {
     request(method: string, params?: unknown): Promise<unknown>;
@@ -223,10 +216,7 @@ function parseApprovalRequested(
   };
 }
 
-export function parseApprovalResolvedEvent(
-  event: string,
-  payload: unknown,
-): ExecApprovalResolved | null {
+export function parseApprovalResolvedEvent(event: string, payload: unknown): { id: string } | null {
   if (
     (event !== "exec.approval.resolved" &&
       event !== "plugin.approval.resolved" &&
@@ -239,12 +229,7 @@ export function parseApprovalResolvedEvent(
   if (!id) {
     return null;
   }
-  return {
-    id,
-    decision: typeof payload.decision === "string" ? payload.decision : null,
-    resolvedBy: typeof payload.resolvedBy === "string" ? payload.resolvedBy : null,
-    ts: typeof payload.ts === "number" ? payload.ts : null,
-  };
+  return { id };
 }
 
 export function parseApprovalRequestedEvent(
