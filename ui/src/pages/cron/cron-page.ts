@@ -55,6 +55,7 @@ import {
   resolveConversationTargetSuggestions,
   THINKING_SUGGESTIONS,
 } from "./form-suggestions.ts";
+import { CronRepairActions, openCronRepairDraft } from "./repair-actions.ts";
 import { resolveCronRouteData } from "./route-model.ts";
 import { CronRunTranscript } from "./run-transcript.ts";
 import type { CronDetailTab, CronListTab } from "./view-types.ts";
@@ -79,6 +80,11 @@ class CronPage extends OpenClawLightDomElement {
   @state() private listTab: CronListTab = "tasks";
   @state() private detailTab: CronDetailTab = "settings";
   @state() private heartbeatScratch = "";
+  private readonly repairActions = new CronRepairActions(
+    () => this.cron.cronRuns,
+    () => this.requestUpdate(),
+    (draft) => openCronRepairDraft(this.context, draft, this.cron.cronAgentId),
+  );
 
   private readonly runTranscript = new CronRunTranscript(this, () => {
     const scope = this.gateway.capture();
@@ -192,6 +198,7 @@ class CronPage extends OpenClawLightDomElement {
   }
 
   private resetGatewayState(snapshot?: ApplicationContext["gateway"]["snapshot"]) {
+    this.repairActions.reset();
     this.runTranscript.close();
     this.clearHeartbeatScratch();
     invalidateCronRefresh(this.cron);
@@ -752,6 +759,7 @@ class CronPage extends OpenClawLightDomElement {
               await loadCronRuns(cronState);
             }),
           onViewRunTranscript: (entry, trigger) => void this.runTranscript.open(entry, trigger),
+          ...this.repairActions.viewProps(),
         }),
       )}
     `;

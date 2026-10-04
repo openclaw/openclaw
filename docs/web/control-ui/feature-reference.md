@@ -128,6 +128,7 @@ Control UI capabilities grouped by area, each with the Gateway RPC methods behin
   </Accordion>
   <Accordion title="Automations panel notes">
     - Scheduler status, automation lists, and run history pause background refreshes while the browser tab is hidden and catch up when you return. Your current filters and unsaved draft stay in place; saves and runs already submitted continue.
+    - Run-history entries with execution or delivery errors offer **Fix error**, which opens a reviewable OpenClaw chat draft tied to that run, and **Copy agent prompt**, which copies redacted, bounded diagnostics for another coding agent. Neither action reruns the automation or changes its saved definition.
     - A pending edit save can finish after you navigate away without replacing the current editor or showing that save's errors in it.
     - Keyboard navigation keeps automation form controls visible above the sticky save actions, including when the actions wrap on narrow screens.
     - Selecting a row opens a full-page detail view with an Active/Paused switch and Run now in the header (run-if-due, clone, and remove in its menu); the Settings tab edits the automation inline (prompt, details, frequency, advanced overrides) and the Run history tab shows that automation's runs. Switching tasks while Run now is pending keeps history attached to the selected task. If an earlier run, pause/resume, or removal reports feedback after you select another automation, the message names the automation you acted on.

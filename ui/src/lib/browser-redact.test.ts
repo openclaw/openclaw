@@ -1,7 +1,11 @@
 // @vitest-environment node
 // Control UI tests cover browser redact behavior.
 import { describe, expect, it } from "vitest";
-import { redactToolDetail, redactToolPayloadText } from "./browser-redact.ts";
+import {
+  redactToolDetail,
+  redactToolDetailFully,
+  redactToolPayloadText,
+} from "./browser-redact.ts";
 
 describe("browser tool detail redaction", () => {
   it("redacts credentials while preserving diagnostic paths", () => {
@@ -79,6 +83,16 @@ describe("browser tool detail redaction", () => {
 
     expect(redacted).not.toContain(httpPassword);
     expect(redacted).not.toContain(databasePassword);
+  });
+
+  it("fully masks secret values when diagnostics leave the UI", () => {
+    const redacted = redactToolDetailFully(
+      "https://alice:abcdefghijk@example.test/?token=abcdefghijk API_KEY=abcdefghijk",
+    );
+    expect(redacted).toContain("https://alice:[redacted]@example.test/");
+    expect(redacted).toContain("token=[redacted]");
+    expect(redacted).toContain("API_KEY=[redacted]");
+    expect(redacted).not.toContain("abcdef");
   });
 
   it("redacts AWS secret-access-key fields", () => {

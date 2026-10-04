@@ -62,6 +62,7 @@ function createCronViewProps(overrides: Partial<CronProps> = {}): CronProps {
     runsDeliveryStatuses: [],
     runsQuery: "",
     runsSortDir: "desc",
+    repairCopyStatus: null,
     agentSuggestions: [],
     modelSuggestions: [],
     thinkingSuggestions: [],
@@ -87,6 +88,8 @@ function createCronViewProps(overrides: Partial<CronProps> = {}): CronProps {
     onJobsFiltersReset: () => undefined,
     onLoadMoreRuns: () => undefined,
     onRunsFiltersChange: () => undefined,
+    onFixRunError: () => undefined,
+    onCopyRunRepairPrompt: () => undefined,
     ...overrides,
   };
 }
