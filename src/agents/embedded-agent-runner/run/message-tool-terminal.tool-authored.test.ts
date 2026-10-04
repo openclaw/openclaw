@@ -208,7 +208,9 @@ function delayedTool(name: string, delayMs: number, details: unknown, executed: 
     description: name,
     parameters: Type.Object({}, { additionalProperties: false }),
     execute: async () => {
-      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      await new Promise((resolve) => {
+        setTimeout(resolve, delayMs);
+      });
       executed.push(name);
       return { content: [{ type: "text", text: `${name} done` }], details };
     },
