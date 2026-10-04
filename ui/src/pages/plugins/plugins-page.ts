@@ -223,6 +223,14 @@ class PluginsPage extends OpenClawLightDomElement {
     ) {
       return;
     }
+    if (
+      event.target instanceof Node &&
+      event.target !== document &&
+      event.target !== document.body &&
+      !this.contains(event.target)
+    ) {
+      return;
+    }
     const progress = this.querySelector<HTMLElementTagNameMap["openclaw-plugin-install-action"]>(
       "openclaw-plugin-install-action[open]",
     );
