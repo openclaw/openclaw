@@ -427,7 +427,10 @@ function createServerMcpRuntime(
     }
     catalogInvalidationGeneration += 1;
     catalog = {
-      ...currentCatalog,
+      version: 1,
+      generatedAt: Date.now(),
+      servers: {},
+      tools: [],
       diagnostics: [diagnostic],
     };
     catalogRetryAfterMs = Date.now();

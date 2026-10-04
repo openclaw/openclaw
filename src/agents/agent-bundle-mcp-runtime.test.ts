@@ -1303,6 +1303,7 @@ describe("session MCP runtime", () => {
       logPath,
       pidPath,
       listToolsReleasePath,
+      capabilities: { tools: {}, resources: {}, prompts: {} },
     });
     await writeListToolsMcpServer({ filePath: healthyServerPath, logPath: healthyLogPath });
 
@@ -1347,6 +1348,15 @@ describe("session MCP runtime", () => {
         /^bundle-mcp server "child" is (?:not connected|disconnected: mcp transport closed)$/,
       );
       await withinTest(receipts.waitFor(logPath, "recv tools/list", 2), signal);
+      const recoveringTools = await materializeBundleMcpToolsForRun({ runtime });
+      try {
+        expect(recoveringTools.tools.map((tool) => tool.name)).toEqual(["healthy__slow_tool"]);
+        expect(recoveringTools.diagnostics).toEqual([
+          expect.objectContaining({ serverName: "child", message: "mcp transport closed" }),
+        ]);
+      } finally {
+        await recoveringTools.dispose();
+      }
       await expect(
         withinTest(runtime.callTool("healthy", "slow_tool", {}), signal),
       ).resolves.toMatchObject({ isError: false });
