@@ -20,12 +20,14 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
   const namespaceDescriptors = Array.isArray(globalThis.__openclawNamespaces) ? globalThis.__openclawNamespaces : [];
   const hostRequest = globalThis.__openclawHostRequest;
   const hostCancelRequest = globalThis.__openclawHostCancelRequest;
+  const hostTakeBridgeReply = globalThis.__openclawHostTakeBridgeReply;
   const hostObserveNetworkContent = globalThis.__openclawHostObserveNetworkContent;
   const hostOutput = globalThis.__openclawHostOutput;
   delete globalThis.__openclawHostOutput;
   delete globalThis.__openclawHostObserveNetworkContent;
   delete globalThis.__openclawHostRequest;
   delete globalThis.__openclawHostCancelRequest;
+  delete globalThis.__openclawHostTakeBridgeReply;
   delete globalThis.__openclawCatalog;
   delete globalThis.__openclawApiFiles;
   delete globalThis.__openclawNamespaces;
@@ -235,11 +237,12 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
     return true;
   }
 
-  function settleBatch(json) {
-    const replies = parseJson(json);
-    for (let index = 0; index < replies.length; index++) {
-      const reply = replies[index];
-      settle(reply.id, reply.ok, reply.json);
+  function settleHostReplies() {
+    // Reply data comes only from the host, so guest calls cannot forge settlement or provenance.
+    for (;;) {
+      const reply = hostTakeBridgeReply();
+      if (reply === undefined || reply === null) return;
+      settle(reply.id, reply.ok === true, reply.json);
     }
   }
 
@@ -527,8 +530,7 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
     text: { value: (value) => emitOutput({ type: "text", text: asText(value) }), enumerable: true },
     json: { value: (value) => emitOutput({ type: "json", value: safe(value, true) }), enumerable: true },
     yield_control: { value: (reason) => request("yield", [reason]), enumerable: true },
-    __openclawSettleBridge: { value: settle },
-    __openclawSettleBridgeBatch: { value: settleBatch },
+    __openclawSettleBridge: { value: settleHostReplies },
     __openclawBridgeFailureCode: { value: bridgeFailureCode },
     __openclawDrainQueuedRequests: { value: drainQueuedRequests },
     __openclawAdmissionError: { value: () => admissionError },

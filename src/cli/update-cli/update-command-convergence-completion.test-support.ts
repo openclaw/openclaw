@@ -113,7 +113,7 @@ export function registerConvergenceCompletionTests({
       expect(completePostCorePluginUpdate).toHaveBeenCalledOnce();
       expect(completePostCorePluginUpdate).toHaveBeenCalledWith(
         expect.objectContaining({
-          freshDoctorRequired: false,
+          pluginUpdate: expect.objectContaining({ changed: false }),
           nodeRunner: "/selected/node",
           opts,
         }),

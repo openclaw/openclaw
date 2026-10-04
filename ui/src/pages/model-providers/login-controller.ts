@@ -104,7 +104,6 @@ export class ModelProviderLoginController implements ReactiveController {
 
   get pageActions() {
     return {
-      selectedAgentId: this.options.getScope().agentId,
       onConnect: () => this.open(),
       connectDisabled: !this.options.canStart() || this.busy,
       login: this.render(),

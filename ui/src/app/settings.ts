@@ -141,9 +141,9 @@ export function normalizeAccentColor(value: unknown): string | undefined {
   return normalizeUiAppearancePreference("ui.accent", value);
 }
 
-export function normalizeTextScale(value: unknown, fallback: TextScaleStop = 100): TextScaleStop {
+export function normalizeTextScale(value: unknown): TextScaleStop {
   if (typeof value !== "number" || !Number.isFinite(value)) {
-    return fallback;
+    return 100;
   }
   let best: TextScaleStop = TEXT_SCALE_STOPS[0];
   let bestDist = Math.abs(value - best);

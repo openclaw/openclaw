@@ -25,7 +25,6 @@ async function resolveAuthChoiceModelSelectionPolicy(params: {
   authChoice: string;
   config: OpenClawConfig;
   workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
   resolvePreferredProviderForAuthChoice: (typeof import("../plugins/provider-auth-choice-preference.js"))["resolvePreferredProviderForAuthChoice"];
 }): Promise<{
   preferredProvider?: string;
@@ -36,7 +35,6 @@ async function resolveAuthChoiceModelSelectionPolicy(params: {
     choice: params.authChoice,
     config: params.config,
     workspaceDir: params.workspaceDir,
-    env: params.env,
   });
 
   const [{ resolveManifestProviderAuthChoice }, { resolvePluginSetupProviderCore }] =
@@ -47,7 +45,6 @@ async function resolveAuthChoiceModelSelectionPolicy(params: {
   const manifestChoice = resolveManifestProviderAuthChoice(params.authChoice, {
     config: params.config,
     workspaceDir: params.workspaceDir,
-    env: params.env,
     includeUntrustedWorkspacePlugins: false,
   });
   if (manifestChoice) {
@@ -55,7 +52,6 @@ async function resolveAuthChoiceModelSelectionPolicy(params: {
       provider: manifestChoice.providerId,
       config: params.config,
       workspaceDir: params.workspaceDir,
-      env: params.env,
       pluginIds: [manifestChoice.pluginId],
     });
     const setupMethod = setupProvider?.auth.find(
@@ -75,7 +71,6 @@ async function resolveAuthChoiceModelSelectionPolicy(params: {
   const providers = resolvePluginProviders({
     config: params.config,
     workspaceDir: params.workspaceDir,
-    env: params.env,
     mode: "setup",
   });
   const resolvedChoice = resolveProviderPluginChoice({
@@ -219,7 +214,6 @@ export async function runSetupModelAuthStep(params: {
           config: nextConfig,
           prompter,
           allowKeep: true,
-          ignoreAllowlist: true,
           includeProviderPluginSetups: false,
           loadCatalog: false,
           agentId: target.agentId,
@@ -324,7 +318,6 @@ export async function runSetupModelAuthStep(params: {
         config: nextConfig,
         prompter,
         allowKeep: authChoiceModelSelectionPolicy.allowKeepCurrent,
-        ignoreAllowlist: true,
         includeProviderPluginSetups: true,
         preferredProvider: authChoiceModelSelectionPolicy.preferredProvider,
         browseCatalogOnDemand: true,

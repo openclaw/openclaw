@@ -15,7 +15,7 @@ export function buildPlatformRuntimeLogHints(params: {
   const platform = params.platform ?? process.platform;
   const env = { ...process.env, ...params.env };
   if (platform === "darwin") {
-    const logs = resolveGatewaySupervisorLogPaths(env, { platform });
+    const logs = resolveGatewaySupervisorLogPaths(env);
     // Preserve the writer's path bytes; backslashes can be literal POSIX filename characters.
     return [
       `Launchd stdout and stderr (if installed): ${logs.stdoutPath}`,

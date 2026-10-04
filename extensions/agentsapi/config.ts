@@ -29,6 +29,7 @@ export const agentsApiConfigSchema = z.strictObject({
     })
     .optional(),
   environment: z.enum(["openai_hosted", "self_hosted"]).default("openai_hosted"),
+  executorController: z.string().trim().min(1).optional(),
   openai_host: z
     .strictObject({
       network: z

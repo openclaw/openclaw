@@ -374,7 +374,7 @@ export async function proveStartupFallbackGatewayControl(params: {
   expectGatewayTaskSupervisorProcessAlive(processes.supervisorPid, params.probe.probePath);
   const runtime = await resolveFallbackRuntime(params.env, params.command, "control");
   expect(runtime).toMatchObject({ status: "running", pid: run.pid });
-  await terminateGatewayProcessTree(run.pid, 300);
+  await terminateGatewayProcessTree(run.pid);
   await Promise.all([waitForProcessExit(run.pid), waitForGatewayTaskSupervisorExit(processes)]);
   await params.clearActivePid(params.activePidPath, run.pid);
   await params.waitForLoopbackPortRelease(params.gatewayPort);

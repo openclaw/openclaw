@@ -538,10 +538,7 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
           ${renderAppSidebarBrand(
             this,
             this.sidebarAgentsMode === "roster"
-              ? this.rosterRenderer?.renderSidebarNewSessionMenu(
-                  this,
-                  "sidebar-brand__icon sidebar-brand__header-control sidebar-brand__new-thread",
-                )
+              ? this.rosterRenderer?.renderSidebarNewSessionMenu(this)
               : nothing,
           )}
           <div class="sidebar-shell__content">

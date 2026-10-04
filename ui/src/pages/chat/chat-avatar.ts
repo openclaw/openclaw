@@ -187,7 +187,6 @@ export function renderForwardedAvatar(agentId: string | undefined, opts: Forward
 type ChatAvatarHost = {
   assistantAgentId?: string | null;
   agentsList?: { defaultId?: string | null; agents?: AgentsListResult["agents"] } | null;
-  resourceBasePath: string;
   chatAvatarReason?: string | null;
   chatAvatarSource?: string | null;
   chatAvatarStatus?: "none" | "local" | "remote" | "data" | null;
@@ -197,9 +196,7 @@ type ChatAvatarHost = {
   connected: boolean;
   connectionEpoch?: number;
   hello: GatewayHelloOk | null;
-  password?: string | null;
   sessionKey: string;
-  settings?: { token?: string | null } | null;
   requestUpdate?: () => void;
 };
 

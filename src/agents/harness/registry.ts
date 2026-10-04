@@ -17,6 +17,7 @@ import {
   resolveDirectPluginRegistrationOwner,
 } from "../../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
+import { AgentHarnessSessionCleanupError } from "./errors.js";
 import type {
   AgentHarness,
   AgentHarnessNativeCompaction,
@@ -147,6 +148,7 @@ export async function resetRegisteredAgentHarnessSessions(
   const current = getPluginRegistryForContext();
   const registries = new Set([...executionRegistries, ...(current ? [current] : [])]);
   const visited = new Set<AgentHarness>();
+  let cleanupError: AgentHarnessSessionCleanupError | undefined;
   for (const registry of registries) {
     await withPluginRuntimeRegistryScope(registry, async () => {
       await Promise.all(
@@ -158,6 +160,10 @@ export async function resetRegisteredAgentHarnessSessions(
           try {
             await entry.harness.reset(params);
           } catch (error) {
+            if (error instanceof AgentHarnessSessionCleanupError) {
+              cleanupError ??= error;
+              return;
+            }
             if (!warnedResetHarnessIds.has(entry.harness.id)) {
               warnedResetHarnessIds.add(entry.harness.id);
               log.warn(`${entry.harness.label} session reset hook failed`, {
@@ -169,6 +175,10 @@ export async function resetRegisteredAgentHarnessSessions(
         }),
       );
     });
+  }
+  // Join every started cleanup before releasing the caller's mutation admission.
+  if (cleanupError) {
+    throw cleanupError;
   }
 }
 

@@ -31,7 +31,6 @@ export function resolveMediaGeometryOverrides<TResolution extends string>(params
   resolution?: TResolution;
   capabilities?: MediaGeometryCapabilities<TResolution>;
   fallbackSizes?: readonly string[];
-  resolutionOrder?: readonly TResolution[];
   reportUnrecognizedOverrides?: boolean;
   useAspectRatioForRequestedSize?: boolean;
 }): {
@@ -116,7 +115,6 @@ export function resolveMediaGeometryOverrides<TResolution extends string>(params
     const normalizedResolution = resolveClosestResolution({
       requestedResolution: resolution,
       supportedResolutions: caps.resolutions,
-      order: params.resolutionOrder,
     });
     if (normalizedResolution && normalizedResolution !== resolution) {
       normalization.resolution = { requested: resolution, applied: normalizedResolution };

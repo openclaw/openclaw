@@ -369,7 +369,7 @@ describe("SystemAgentChatEngine operations", () => {
         readConfigFileSnapshot: vi.fn(async () => configSnapshot(config)) as never,
         loadAuthProfileStoreForRuntime: vi.fn(() => {
           authReads += 1;
-          // Turn start, overview, and post-agent checks see the verified grant.
+          // Turn start, dispatch, and post-agent checks see the verified grant.
           // The fourth read is the last-moment guard inside applyPersistentOperation.
           if (authReads === 4) {
             credential = { ...credential, access: "access-b", refresh: "refresh-b" };

@@ -92,12 +92,12 @@ class SecretsPage extends OpenClawLightDomElement {
     }
   }
 
-  private async runStoreTask<T>(task: (store: SecretsStoreState) => Promise<T>): Promise<T> {
+  private async runStoreTask(task: (store: SecretsStoreState) => Promise<unknown>): Promise<void> {
     const store = this.store;
     try {
       const result = task(store);
       this.requestUpdate();
-      return await result;
+      await result;
     } finally {
       if (this.store === store) {
         this.requestUpdate();

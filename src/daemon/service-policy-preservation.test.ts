@@ -40,7 +40,7 @@ it.each(["linux", "darwin", "win32"] as const)(
         }
         return Promise.resolve(decodeLaunchAgentPlistFixture(options.input, args[1]));
       });
-      const { stdoutPath } = resolveGatewaySupervisorLogPaths(f.env, { platform });
+      const { stdoutPath } = resolveGatewaySupervisorLogPaths(f.env);
       original = buildLaunchAgentPlist({
         ...f.command,
         label: resolveLaunchAgentLabel(f.env),

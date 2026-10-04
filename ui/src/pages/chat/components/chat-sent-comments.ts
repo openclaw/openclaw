@@ -1,4 +1,4 @@
-import { html, nothing, type PropertyValues } from "lit";
+import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import { t } from "../../../i18n/index.ts";
 import { OpenClawLightDomContentsElement } from "../../../lit/openclaw-element.ts";
@@ -78,7 +78,7 @@ class ChatSentComments extends OpenClawLightDomContentsElement {
     super.disconnectedCallback();
   }
 
-  protected override willUpdate(_changed: PropertyValues<this>) {
+  protected override willUpdate() {
     const key = JSON.stringify([
       this.scope,
       this.sources.map(({ fallback: _fallback, ...source }) => source),
@@ -134,7 +134,6 @@ class ChatSentComments extends OpenClawLightDomContentsElement {
               this.revealed = true;
               this.admission?.onAdmit();
             },
-            true,
             undefined,
             this.admission?.observeElement,
           )

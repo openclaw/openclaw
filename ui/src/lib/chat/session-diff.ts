@@ -22,7 +22,6 @@ export type ParsedFilePatch = {
 export function parseSessionDiffPatch(
   patch: string,
   formatGap: (count: number) => string,
-  maxLines = MAX_SESSION_DIFF_FILE_LINES,
 ): ParsedFilePatch {
   const lines: DiffLine[] = [];
   let truncated = false;
@@ -62,7 +61,7 @@ export function parseSessionDiffPatch(
       // Header lines before the first hunk and "\ No newline at end of file".
       continue;
     }
-    if (lines.length >= maxLines) {
+    if (lines.length >= MAX_SESSION_DIFF_FILE_LINES) {
       truncated = true;
       break;
     }

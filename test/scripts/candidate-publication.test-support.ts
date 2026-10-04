@@ -184,8 +184,10 @@ export function candidatePublicationFixture(
     trustedWorkflow: tooling,
   });
   plan.children = plan.children.filter((child) => child.selected);
+  const qualificationBaselines = JSON.parse(qualificationBaselinesJson);
   Object.assign(expectDefined(plan.candidateRequest, "candidate request"), {
-    upgradeSurvivorBaselines: JSON.parse(qualificationBaselinesJson).upgradeSurvivorBaselines,
+    upgradeBaseline: qualificationBaselines.upgradeBaseline,
+    upgradeSurvivorBaselines: qualificationBaselines.upgradeSurvivorBaselines,
   });
   const jobsFor = (requestedRunId: string) => {
     const child = plan.children.find((entry) => entry.runId === requestedRunId);

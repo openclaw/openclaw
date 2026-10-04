@@ -6,7 +6,7 @@ import {
   uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
-import { buildMatchQueryFromTerms } from "./keyword-query.js";
+import { bm25RankToScore, buildFtsQuery, buildMatchQueryFromTerms } from "./keyword-query.js";
 import {
   projectMemorySearchRow,
   resolveSnippetProjection,
@@ -221,12 +221,11 @@ function buildExactPathCandidatePatterns(query: string): string[] {
 function planKeywordSearch(params: {
   query: string;
   ftsTokenizer?: "unicode61" | "trigram";
-  buildFtsQuery: (raw: string) => string | null;
   includeCombiningMarks?: boolean;
 }): { matchQuery: string | null; substringTerms: string[] } {
   if (params.ftsTokenizer !== "trigram") {
     return {
-      matchQuery: params.buildFtsQuery(params.query),
+      matchQuery: buildFtsQuery(params.query),
       substringTerms: [],
     };
   }
@@ -257,7 +256,6 @@ function planKeywordSearch(params: {
 function planPathKeywordSearch(params: {
   query: string;
   ftsTokenizer?: "unicode61" | "trigram";
-  buildFtsQuery: (raw: string) => string | null;
 }): Array<{ query: string; matchQuery: string | null; substringTerms: string[] }> {
   const forms =
     params.ftsTokenizer === "trigram"
@@ -306,8 +304,6 @@ export async function searchKeyword(params: {
   limit: number;
   snippetMaxChars: number;
   sourceFilter: { sql: string; params: MemorySource[] };
-  buildFtsQuery: (raw: string) => string | null;
-  bm25RankToScore: (rank: number) => number;
   boostFallbackRanking?: boolean;
   rankingQuery?: string;
 }): Promise<Array<SearchRowResult & { textScore: number; hasBodyMatch: true }>> {
@@ -317,7 +313,6 @@ export async function searchKeyword(params: {
   const plan = planKeywordSearch({
     query: params.query,
     ftsTokenizer: params.ftsTokenizer,
-    buildFtsQuery: params.buildFtsQuery,
   });
   if (!plan.matchQuery && plan.substringTerms.length === 0) {
     return [];
@@ -377,7 +372,7 @@ export async function searchKeyword(params: {
     // signal so only the vector score contributes to contentScore; boost mode
     // still derives a lexicalBoost from query/text overlap via
     // scoreFallbackKeywordResult below.
-    const textScore = usedMatch ? params.bm25RankToScore(row.rank) : 0;
+    const textScore = usedMatch ? bm25RankToScore(row.rank) : 0;
     const score = params.boostFallbackRanking
       ? scoreFallbackKeywordResult({
           queryMatchers,
@@ -403,8 +398,6 @@ export async function searchPathKeyword(params: {
   limit: number;
   snippetMaxChars: number;
   sourceFilter: { sql: string; params: MemorySource[] };
-  buildFtsQuery: (raw: string) => string | null;
-  bm25RankToScore: (rank: number) => number;
 }): Promise<PathKeywordSearchResult[]> {
   if (params.limit <= 0) {
     return [];
@@ -414,7 +407,6 @@ export async function searchPathKeyword(params: {
   const pathPlans = planPathKeywordSearch({
     query: params.query,
     ftsTokenizer: params.ftsTokenizer,
-    buildFtsQuery: params.buildFtsQuery,
   });
   const plan = pathPlans[0] ?? { query: params.query, matchQuery: null, substringTerms: [] };
   const planSubstringFilter = buildSubstringFilter(plan.substringTerms, pathColumn);
@@ -589,7 +581,7 @@ export async function searchPathKeyword(params: {
     }
     const { rows, usedMatch } = loadLexicalRows(lexicalPlan);
     for (const row of rows) {
-      const pathScore = usedMatch ? params.bm25RankToScore(row.rank) : 1;
+      const pathScore = usedMatch ? bm25RankToScore(row.rank) : 1;
       const exactPathSpecificity = matchExactPath(row.path);
       const result: PathKeywordSearchResult = Object.assign(
         projectMemorySearchRow(row, params.snippetMaxChars, pathScore),
