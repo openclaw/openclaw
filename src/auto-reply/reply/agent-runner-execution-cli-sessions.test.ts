@@ -52,42 +52,51 @@ function rejectUnexpectedCompactionSuccessor(): never {
 }
 
 describe("executeAgentTurn: CLI session routing", () => {
-  it("carries prepared model and thread context facts into CLI execution", async () => {
-    const followupRun = createCliRun("claude-cli", "claude-sonnet-4-6");
-    state.runCliAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "done" }],
-      meta: {},
-    });
-    followupRun.originatingThreadId = 42;
-    followupRun.run.thinkingCatalog = [
-      {
-        provider: "claude-cli",
-        id: "claude-sonnet-4-6",
-        contextWindow: 400_000,
-        contextTokens: 321_000,
-        input: ["text", "image"],
-      },
-    ];
+  it.each([
+    { provider: "telegram", messageId: "42", currentMessageId: "42" },
+    { provider: "webchat", messageId: "rpc-run-id", currentMessageId: undefined },
+  ])(
+    "carries prepared route facts without leaking $provider identity into replies",
+    async ({ provider, messageId, currentMessageId }) => {
+      const followupRun = createCliRun("claude-cli", "claude-sonnet-4-6");
+      state.runCliAgentMock.mockResolvedValueOnce({
+        payloads: [{ text: "done" }],
+        meta: {},
+      });
+      followupRun.originatingThreadId = 42;
+      followupRun.run.thinkingCatalog = [
+        {
+          provider: "claude-cli",
+          id: "claude-sonnet-4-6",
+          contextWindow: 400_000,
+          contextTokens: 321_000,
+          input: ["text", "image"],
+        },
+      ];
 
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    const result = await executeAgentTurn(
-      createMinimalRunAgentTurnParams({
-        followupRun,
-        sessionCtx: {
-          Provider: "telegram",
-          MessageSid: "msg",
-          MessageThreadId: "stale-topic",
-        } as unknown as TemplateContext,
-      }),
-    );
+      const executeAgentTurn = await getExecuteAgentTurnForTest();
+      const result = await executeAgentTurn(
+        createMinimalRunAgentTurnParams({
+          followupRun,
+          sessionCtx: {
+            Provider: provider,
+            OriginatingChannel: "telegram",
+            OriginatingTo: "12345",
+            MessageSid: messageId,
+            MessageThreadId: "stale-topic",
+          } as unknown as TemplateContext,
+        }),
+      );
 
-    expect(result.kind).toBe("success");
-    expectMockCallArgFields(state.runCliAgentMock, 0, "CLI run params", {
-      modelContextWindow: 400_000,
-      modelContextTokens: 321_000,
-      currentThreadTs: "42",
-    });
-  });
+      expect(result.kind).toBe("success");
+      expectMockCallArgFields(state.runCliAgentMock, 0, "CLI run params", {
+        modelContextWindow: 400_000,
+        modelContextTokens: 321_000,
+        currentThreadTs: "42",
+        currentMessageId,
+      });
+    },
+  );
 
   async function runSlackCliTurn(sessionCtx: Record<string, unknown>) {
     // Mirrors Slack's adapter contract: a thread-originated turn requires its
