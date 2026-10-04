@@ -149,6 +149,7 @@ export function resolveExecNotificationDefaults(defaults?: ExecToolDefaults) {
       const read = await readSessionEntriesFromStoreInWorker({
         agentId: notifyAgentSession.agentId,
         sessionKeys: [notifySessionKey],
+        snapshotFields: [],
         storePath: resolveSessionStorePathCore(defaults.config.session?.store, {
           agentId: notifyAgentSession.agentId,
         }),

@@ -29,7 +29,10 @@ export async function loadSessionDiff(
     deletions: 0,
     ...(unavailableReason ? { unavailableReason } : {}),
   });
-  const loaded = loadGatewaySessionEntryReadOnly(params.sessionKey, { agentId: params.agentId });
+  const loaded = loadGatewaySessionEntryReadOnly(params.sessionKey, {
+    agentId: params.agentId,
+    projection: ["sessionDiffBaseline"],
+  });
   const { cfg, agentId, entry, storePath } = loaded;
   // Same session scoping as sessions.files.*: an unknown session must not fall
   // back to some agent workspace and surface another checkout's diff.
