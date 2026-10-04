@@ -18,10 +18,7 @@ import {
   createGatewayWorkerPlacementChangePublisher,
   subscribeGatewayWorkerPlacementMetadataChanges,
 } from "../server-worker-placement-change-events.js";
-import {
-  createWorkerPlacementRunnerAvailabilityReader,
-  readWorkerPlacementIdentity,
-} from "./placement-projector.js";
+import { readWorkerPlacementIdentity } from "./placement-projector.js";
 import type { WorkerSessionPlacementChangeSnapshot } from "./placement-record.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import { seedAttachedPlacementEnvironment } from "./placement-test-fixtures.js";
@@ -124,10 +121,7 @@ it("coalesces machine metadata bursts off thread and selects only correlated pro
     const warn = vi.fn();
     const changes = subscribeGatewayWorkerPlacementMetadataChanges({
       placements: store,
-      runnerAvailability: createWorkerPlacementRunnerAvailabilityReader({
-        environments,
-        hasCurrentDeviceRunner: () => false,
-      }),
+      runnerAvailability: { read: () => undefined, version: () => 0 },
       environments: {
         subscribeMachineShapeChanged: (listener) => {
           changed = listener;
