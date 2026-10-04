@@ -392,6 +392,8 @@ export async function consultRealtimeVoiceAgent(params: {
   contextMode?: RealtimeVoiceAgentConsultContextMode;
   provider?: RunEmbeddedAgentParams["provider"];
   model?: RunEmbeddedAgentParams["model"];
+  /** Chat-backed callers inherit their current session selection unless a route is explicit. */
+  useSessionModelSelection?: boolean;
   thinkLevel?: RunEmbeddedAgentParams["thinkLevel"];
   fastMode?: RunEmbeddedAgentParams["fastMode"];
   timeoutMs?: number;
@@ -406,10 +408,12 @@ export async function consultRealtimeVoiceAgent(params: {
   }) => RealtimeVoiceAgentConsultRunRegistration | void;
 }): Promise<RealtimeVoiceAgentConsultResult> {
   params.abortSignal?.throwIfAborted();
-  const [{ beginSessionWorkAdmission }, { resolveSessionWorkStartError }] = await Promise.all([
-    import("../sessions/session-lifecycle-admission.js"),
-    import("../config/sessions/lifecycle.js"),
-  ]);
+  const [{ beginSessionWorkAdmission }, { resolveSessionWorkStartError }, sessionModelSelection] =
+    await Promise.all([
+      import("../sessions/session-lifecycle-admission.js"),
+      import("../config/sessions/lifecycle.js"),
+      params.useSessionModelSelection ? import("./agent-consult-model-selection.js") : undefined,
+    ]);
   params.abortSignal?.throwIfAborted();
   const {
     agentId,
@@ -503,6 +507,18 @@ export async function consultRealtimeVoiceAgent(params: {
       const sessionId = sessionEntry.sessionId;
       assertRealtimeVoiceAgentConsultModelSelectionUnlocked(modelLockParams);
 
+      // Keep phone/meeting callers' explicit route semantics unchanged. Resolve only after
+      // the session update, so a new chat selection takes effect on the next voice turn.
+      const modelSelection =
+        sessionModelSelection && !params.provider && !params.model
+          ? sessionModelSelection.resolveConsultSessionModelSelection({
+              cfg: params.cfg,
+              agentId,
+              sessionKey: params.sessionKey,
+              sessionEntry,
+            })
+          : { provider: params.provider, model: params.model };
+
       const runId = `${params.runIdPrefix}-${randomUUID()}`;
       const timeoutMs =
         params.timeoutMs ?? params.agentRuntime.resolveAgentTimeoutMs({ cfg: params.cfg });
@@ -544,8 +560,7 @@ export async function consultRealtimeVoiceAgent(params: {
           assistantLabel: params.assistantLabel,
           questionSourceLabel: params.questionSourceLabel,
         }),
-        provider: params.provider,
-        model: params.model,
+        ...modelSelection,
         thinkLevel: params.thinkLevel ?? "high",
         fastMode: params.fastMode,
         verboseLevel: "off",
