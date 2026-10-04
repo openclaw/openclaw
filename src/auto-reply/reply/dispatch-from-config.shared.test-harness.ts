@@ -406,7 +406,7 @@ vi.mock("../../config/sessions/session-entry-read-runtime.js", async (importOrig
     assertCurrent?: () => void,
   ) => {
     assertCurrent?.();
-    const entry = await sessionStoreMocks.loadSessionStoreEntry(scope);
+    const entry = await Promise.resolve(sessionStoreMocks.loadSessionStoreEntry(scope));
     assertCurrent?.();
     return entry;
   },

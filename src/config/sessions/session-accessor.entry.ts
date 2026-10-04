@@ -212,7 +212,8 @@ export async function readResolvedSessionEntryInWorker(
     }
     return withSessionEntriesFromStoresInWorker(
       [...candidates.values()].map((target) => ({
-        ...target,
+        agentId: target.agentId,
+        storePath: target.storePath,
         sessionKeys,
         projection: "exact" as const,
         env: inventory.env,
