@@ -24,6 +24,7 @@ import {
 } from "../../infra/agent-events.js";
 import {
   createAgentRunStaleLifecycleError,
+  createRestartRecoveryClaimChangedError,
   isAgentRunStaleLifecycleError,
 } from "../../infra/agent-lifecycle-error.js";
 import type {
@@ -169,7 +170,7 @@ export function createReplyRestartRecoveryClaimController(params: {
           : null,
     );
     if (!persisted) {
-      throw new Error("restart recovery claim changed before agent adoption");
+      throw createRestartRecoveryClaimChangedError();
     }
     return persisted;
   };
@@ -284,7 +285,7 @@ export function createReplyRestartRecoveryClaimController(params: {
     }
     if (isExactRecoveryClaim) {
       if (entry.status !== "running" || entry.abortedLastRun === true) {
-        throw new Error("restart recovery claim changed before agent adoption");
+        throw createRestartRecoveryClaimChangedError();
       }
       // Clear the retry verifier as the exact admitted claim crosses into execution.
       const preservesTerminalReceipt =
@@ -333,13 +334,25 @@ export function createReplyRestartRecoveryClaimController(params: {
       return "admitted";
     }
     const updatedAt = Date.now();
+    const canTransferAbortedControlUiClaim = Boolean(
+      admissionRunId &&
+      activeClaimRunId &&
+      admissionRunId !== activeClaimRunId &&
+      entry.abortedLastRun === true &&
+      entry.status === "running" &&
+      entry.pendingFinalDelivery === undefined &&
+      entry.restartRecoveryBeforeAgentReplyState === undefined &&
+      entry.restartRecoveryDeliveryReceiptState === undefined &&
+      entry.restartRecoverySourceIngress === "control-ui",
+    );
     if (
       activeClaimRunId &&
+      !canTransferAbortedControlUiClaim &&
       (entry.abortedLastRun === true ||
         entry.status === "running" ||
         entry.restartRecoveryDeliveryReceiptState === "terminal-pending")
     ) {
-      throw new Error("restart recovery claim changed before agent adoption");
+      throw createRestartRecoveryClaimChangedError();
     }
     const retiredClaim = activeClaimRunId
       ? buildRestartRecoveryClaimCleanupPatch({
@@ -348,6 +361,9 @@ export function createReplyRestartRecoveryClaimController(params: {
           terminalSourceRunId: normalizeOptionalString(entry.restartRecoveryDeliverySourceRunId),
         })
       : {};
+    const successorRecoveryRunId = canTransferAbortedControlUiClaim
+      ? (admissionRunId ?? recoveryRunId)
+      : recoveryRunId;
     const patch: SessionTranscriptTurnLifecyclePatch = recoverableDeliveryContext
       ? {
           ...retiredClaim,
@@ -371,7 +387,29 @@ export function createReplyRestartRecoveryClaimController(params: {
           status: "running",
           updatedAt,
         }
-      : { ...retiredClaim, updatedAt };
+      : canTransferAbortedControlUiClaim
+        ? {
+            ...retiredClaim,
+            abortedLastRun: false,
+            endedAt: undefined,
+            restartRecoveryBeforeAgentReplyState: undefined,
+            restartRecoveryDeliveryReceiptState: undefined,
+            restartRecoveryDeliveryToolCallId: undefined,
+            restartRecoveryDeliveryContext: undefined,
+            restartRecoveryDeliveryRequestFingerprint: undefined,
+            restartRecoveryDeliveryRunId: successorRecoveryRunId,
+            restartRecoveryDeliverySourceRunId: successorRecoveryRunId,
+            restartRecoveryRequesterAccountId: undefined,
+            restartRecoveryRequesterSenderId: undefined,
+            restartRecoverySameChannelThreadRequired: undefined,
+            restartRecoverySourceIngress: "control-ui",
+            restartRecoverySourceReplyDeliveryMode: undefined,
+            runtimeMs: undefined,
+            startedAt: updatedAt,
+            status: "running",
+            updatedAt,
+          }
+        : { ...retiredClaim, updatedAt };
     const persisted = await persistAdmissionPatch({
       entry,
       patch,
@@ -381,6 +419,7 @@ export function createReplyRestartRecoveryClaimController(params: {
       storePath: params.storePath,
     });
     params.setEntry(persisted);
+    recoveryRunId = successorRecoveryRunId;
     recoverySourceRunId = normalizeOptionalString(persisted.restartRecoveryDeliverySourceRunId);
     tracked = persisted.restartRecoveryDeliveryRunId === recoveryRunId;
     trackedSessionId = tracked ? persisted.sessionId : undefined;
