@@ -356,14 +356,22 @@ describe("session activity semantics", () => {
       render(
         surface === "activity"
           ? renderSessionActivityView(input)
-          : renderDashboards({
-              result: input.result!,
-              error: null,
-              basePath: "",
-              fallbackAgentId: "main",
-              mainKey: "main",
-              globalScope,
-            }),
+          : renderDashboards(
+              {
+                result: input.result!,
+                error: null,
+                basePath: "",
+                fallbackAgentId: "main",
+                mainKey: "main",
+                globalScope,
+              },
+              { query: "", ownerId: "", sort: "updated" },
+              {
+                onQueryChange: vi.fn(),
+                onOwnerChange: vi.fn(),
+                onSortChange: vi.fn(),
+              },
+            ),
         surfaceContainer,
       );
       const item = surfaceContainer.querySelector<HTMLElement>(

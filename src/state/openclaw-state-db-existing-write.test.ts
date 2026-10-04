@@ -287,40 +287,25 @@ describe("retained existing-state writer", () => {
     },
   );
 
-  it.each(["foreign schema", "foreign version"] as const)(
-    "rejects %s before a retained write callback",
-    (change) => {
-      const options = fixture();
-      const writer = openExistingOpenClawStateWriter(options, contract);
-      try {
-        writer.run(() => undefined, options);
-        const external = new DatabaseSync(options.path);
-        try {
-          external.exec(
-            change === "foreign schema"
-              ? "ALTER TABLE records ADD COLUMN foreign_value TEXT"
-              : `PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1}`,
-          );
-        } finally {
-          external.close();
-        }
-        const mutate = vi.fn(({ db }: { db: DatabaseSync }) =>
-          db.prepare("INSERT INTO records (id, value) VALUES (?, ?)").run(1, "refused"),
-        );
-        expect(() => writer.run(mutate, options)).toThrow(
-          change === "foreign schema"
-            ? /column definitions differ for records/iu
-            : /newer schema version/iu,
-        );
-        expect(mutate).not.toHaveBeenCalled();
-        expect(readValues(options.path)).toEqual([]);
-      } finally {
-        writer.close();
-      }
-    },
-  );
-
   it.each([
+    {
+      change: "foreign schema",
+      sql: "ALTER TABLE records ADD COLUMN foreign_value TEXT",
+      error: /column definitions differ for records/iu,
+      markersChange: true,
+    },
+    {
+      change: "foreign version",
+      sql: `PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1}`,
+      error: /newer schema version/iu,
+      markersChange: true,
+    },
+    {
+      change: "deferred content marker removed",
+      sql: "DELETE FROM config_machine_state WHERE state_key = 'state.schema.contentVersion'",
+      error: /requires schema migration by its owning installation/iu,
+      deferred: true,
+    },
     {
       change: "role changed",
       sql: "UPDATE schema_meta SET role = 'agent' WHERE meta_key = 'primary'",
@@ -346,75 +331,56 @@ describe("retained existing-state writer", () => {
       sql: "INSERT INTO config_machine_state VALUES ('state.schema.contentVersion', '{', 1)",
       error: /invalid shared state schema content version/iu,
     },
-  ])("rejects $change despite unchanged SQLite schema markers", ({ sql, error }) => {
-    const options = fixture();
-    const writer = openExistingOpenClawStateWriter(options, contract);
-    try {
-      writer.run(() => undefined, options);
-      writer.run(() => undefined, options);
-      const external = new DatabaseSync(options.path);
+  ])("rejects $change before a retained write", ({ sql, error, markersChange, deferred }) => {
+    const options = fixture(deferred);
+    if (deferred) {
+      const setup = new DatabaseSync(options.path);
       try {
-        const before = readSchemaMarkers(external);
-        external.exec(sql);
-        expect(readSchemaMarkers(external)).toEqual(before);
+        setup.exec(`
+          PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION - 1};
+          UPDATE schema_meta SET schema_version = ${OPENCLAW_STATE_SCHEMA_VERSION - 1}
+            WHERE meta_key = 'primary';
+          INSERT INTO config_machine_state VALUES
+            ('state.schema.contentVersion', '${OPENCLAW_STATE_SCHEMA_VERSION}', 1);
+        `);
       } finally {
-        external.close();
+        setup.close();
       }
-      const mutate = vi.fn(({ db }: { db: DatabaseSync }) => {
-        db.exec("INSERT INTO records VALUES (1, 'refused')");
-      });
-      expect(() => writer.run(mutate, options)).toThrow(error);
-      expect(mutate).not.toHaveBeenCalled();
-      expect(readValues(options.path)).toEqual([]);
-    } finally {
-      writer.close();
     }
-  });
-
-  it("refuses an existing-schema write after the deferred content marker is removed", () => {
-    const options = fixture(true);
-    const setup = new DatabaseSync(options.path);
-    try {
-      setup.exec(`
-        PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION - 1};
-        UPDATE schema_meta SET schema_version = ${OPENCLAW_STATE_SCHEMA_VERSION - 1}
-          WHERE meta_key = 'primary';
-        INSERT INTO config_machine_state VALUES
-          ('state.schema.contentVersion', '${OPENCLAW_STATE_SCHEMA_VERSION}', 1);
-      `);
-    } finally {
-      setup.close();
-    }
-    withExistingOpenClawStateSchema(options, () => {
+    const run = () => {
       const writer = openExistingOpenClawStateWriter(options, contract);
       try {
-        writer.run(
-          ({ db }) => db.exec("INSERT INTO records VALUES (1, 'before removal')"),
-          options,
-        );
+        writer.run(({ db }) => {
+          if (deferred) {
+            db.exec("INSERT INTO records VALUES (1, 'before removal')");
+          }
+        }, options);
         writer.run(() => undefined, options);
         const external = new DatabaseSync(options.path);
         try {
           const before = readSchemaMarkers(external);
-          external.exec(
-            "DELETE FROM config_machine_state WHERE state_key = 'state.schema.contentVersion'",
-          );
-          expect(readSchemaMarkers(external)).toEqual(before);
+          external.exec(sql);
+          if (!markersChange) {
+            expect(readSchemaMarkers(external)).toEqual(before);
+          }
         } finally {
           external.close();
         }
         const mutate = vi.fn(({ db }: { db: DatabaseSync }) => {
           db.exec("INSERT INTO records VALUES (2, 'refused')");
         });
-        expect(() => writer.run(mutate, options)).toThrow(
-          /requires schema migration by its owning installation/iu,
-        );
+        expect(() => writer.run(mutate, options)).toThrow(error);
         expect(mutate).not.toHaveBeenCalled();
-        expect(readValues(options.path)).toEqual([{ value: "before removal" }]);
+        expect(readValues(options.path)).toEqual(deferred ? [{ value: "before removal" }] : []);
       } finally {
         writer.close();
       }
-    });
+    };
+    if (deferred) {
+      withExistingOpenClawStateSchema(options, run);
+    } else {
+      run();
+    }
   });
 
   it.each(["CREATE TABLE forbidden (id INTEGER)", "PRAGMA user_version = 1"])(

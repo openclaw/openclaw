@@ -22,15 +22,16 @@ import {
   createNodeWorkerSupervisorFixture,
   waitForNodeWorkerTerminal as waitForTerminal,
 } from "./node-worker-supervisor.fixture.test-support.js";
-import type { createNodeWorkerSupervisor } from "./node-worker-supervisor.js";
+import { createNodeWorkerSupervisor } from "./node-worker-supervisor.js";
 import {
   TEST_WORKER_ENDPOINT,
   testNodeWorkerEnvironmentIdentity,
   testNodeWorkerLaunchIdentity,
   testWorkerLaunchInput,
+  writeNodeWorkerFixture,
 } from "./node-worker-supervisor.test-support.js";
 import { NodeWorkerTurnStore } from "./node-worker-turn-store.js";
-import { NodeWorkerWorkspaceProcesses } from "./node-worker-workspace-processes.js";
+import { NodeWorkerWorkspaceRuntime } from "./node-worker-workspace.js";
 
 type NodeWorkerSupervisor = ReturnType<typeof createNodeWorkerSupervisor>;
 
@@ -453,7 +454,14 @@ describe("node worker environment lifetime", () => {
     "%s aborts stalled admission and retires workers despite workspace cleanup failure",
     async (operation) => {
       const capacitySnapshots: Array<{ total: number; available: number }> = [];
-      const { env, supervisor, workspaceDir } = fixture({
+      const { bundleRoot, env, workspaceDir } = writeNodeWorkerFixture(
+        tempDirs.make("node-worker-supervisor-"),
+      );
+      const workspace = new NodeWorkerWorkspaceRuntime({ root: bundleRoot, env });
+      const supervisor = createNodeWorkerSupervisor({
+        bundleRoot,
+        env,
+        workspace,
         capacity: 2,
         onCapacityChanged: (capacity) => capacitySnapshots.push(capacity),
       });
@@ -486,10 +494,18 @@ describe("node worker environment lifetime", () => {
           }),
         );
         readOwner.mockRestore();
-        vi.spyOn(
-          NodeWorkerWorkspaceProcesses.prototype,
-          operation === "environment stop" ? "stopEnvironment" : "close",
-        ).mockRejectedValueOnce(cleanupError);
+        if (operation === "environment stop") {
+          const stop = workspace.processes.stopEnvironment.bind(workspace.processes);
+          vi.spyOn(workspace.processes, "stopEnvironment").mockImplementationOnce(
+            (environment, stopExecution) =>
+              stop(environment, async () => {
+                await stopExecution?.();
+                throw cleanupError;
+              }),
+          );
+        } else {
+          vi.spyOn(workspace.processes, "close").mockRejectedValueOnce(cleanupError);
+        }
         const stopping =
           operation === "environment stop"
             ? supervisor.stopEnvironment(testNodeWorkerEnvironmentIdentity(first))
@@ -532,6 +548,8 @@ describe("node worker environment lifetime", () => {
           expect(capacitySnapshots.at(-1)).toEqual({ total: 2, available: 1 });
           expect(inspectNodeWorkerProcessIdentity(unrelated.worker!)).toBe("live");
           expect(await supervisor.status(sibling.launchId)).toMatchObject({ state: "running" });
+          await expect(supervisor.launch(next, TEST_WORKER_ENDPOINT)).rejects.toThrow("retired");
+          await supervisor.stopEnvironment(testNodeWorkerEnvironmentIdentity(first));
           await expect(supervisor.launch(next, TEST_WORKER_ENDPOINT)).resolves.toMatchObject({
             state: "running",
           });

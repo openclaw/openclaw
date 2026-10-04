@@ -401,7 +401,12 @@ if (kind === "late-unrelated") {
 if (kind === "held-unrelated") await waitForControl(controlUrl + "/wait");
 if (kind === "unrelated" || kind === "held-unrelated") { process.stderr.write("unrelated startup failure\\n"); process.exit(1); }
 const server = createServer(async (req, res) => {
-  if (req.url === "/readyz" && kind === "held-ready") await waitForControl(controlUrl + "/wait");
+  if (req.url === "/startupz") {
+    if (kind === "held-ready") await waitForControl(controlUrl + "/wait");
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ ok: true, status: "started" }));
+    return;
+  }
   res.writeHead(req.url === "/readyz" ? 200 : 404, { "content-type": "application/json" });
   res.end(JSON.stringify({ ready: req.url === "/readyz" && kind !== "never-ready" }));
 });
@@ -1095,7 +1100,9 @@ describe("openclaw test instance", () => {
     },
   );
 
-  it("joins concurrent starts until the real readiness response arrives", async ({ signal }) => {
+  it("joins concurrent starts until startup settles after readiness is healthy", async ({
+    signal,
+  }) => {
     const control = await createGatewayControl();
     const { instance } = await createFakeGateway("held-ready", 1_000, 1_500, control);
     // Startup ordering must not depend on native bootstrap consuming the readiness budget.
@@ -1116,7 +1123,9 @@ describe("openclaw test instance", () => {
           secondSettled = true;
         }),
       );
-      // Observe at a real HTTP boundary before the child's held /readyz can reply.
+      const response = await fetch(`http://127.0.0.1:${instance.port}/readyz`);
+      expect(await response.json()).toEqual({ ready: true });
+      // Healthy readiness cannot settle startup while its admission response is held.
       control.observers.beforeRelease = () => {
         settledBeforeReady = secondSettled;
       };
@@ -1128,8 +1137,6 @@ describe("openclaw test instance", () => {
       expect(instance.child?.pid).toBe(
         (process.platform === "win32" ? control.parents : control.launches)[0],
       );
-      const response = await fetch(`http://127.0.0.1:${instance.port}/readyz`);
-      expect(await response.json()).toEqual({ ready: true });
     } finally {
       restoreClock();
       signal.removeEventListener("abort", restoreClock);
@@ -2385,13 +2392,16 @@ describe("openclaw test instance", () => {
     });
   });
 
-  it("waits until the gateway readiness probe reports ready", async () => {
+  it("waits for startup admission after the gateway readiness probe reports ready", async () => {
     const fetchImpl = vi
       .fn<typeof fetch>()
       .mockResolvedValueOnce(
         new Response('{"ready":false,"failing":["startup-sidecars"]}', { status: 503 }),
       )
-      .mockResolvedValueOnce(new Response('{"ready":true,"failing":[]}', { status: 200 }));
+      .mockResolvedValueOnce(new Response('{"ready":true,"failing":[]}', { status: 200 }))
+      .mockResolvedValueOnce(new Response('{"ok":false,"status":"starting"}', { status: 503 }))
+      .mockResolvedValueOnce(new Response('{"ready":true,"failing":[]}', { status: 200 }))
+      .mockResolvedValueOnce(new Response('{"ok":true,"status":"started"}', { status: 200 }));
 
     const record = vi.fn<(diagnostic: GatewayReadinessDiagnostic) => void>();
     await expect(
@@ -2409,13 +2419,32 @@ describe("openclaw test instance", () => {
     expect(record).toHaveBeenCalledWith(
       expect.objectContaining({
         outcome: "ready",
-        lastProbe: expect.objectContaining({ attempt: 2, status: 200, ready: true }),
-        lastFailedResponse: expect.objectContaining({ attempt: 1, status: 503, ready: false }),
+        probe: "GET /readyz",
+        settlementProbe: "GET /startupz",
+        lastProbe: expect.objectContaining({
+          attempt: 3,
+          status: 200,
+          ready: true,
+          endpoint: "/startupz",
+          startupStatus: "started",
+        }),
+        lastFailedResponse: expect.objectContaining({
+          attempt: 2,
+          status: 503,
+          ready: true,
+          endpoint: "/startupz",
+          startupStatus: "starting",
+        }),
       }),
     );
 
-    expect(fetchImpl).toHaveBeenCalledTimes(2);
-    expect(fetchImpl.mock.calls[0]?.[0]).toBe("http://127.0.0.1:12345/readyz");
+    expect(fetchImpl.mock.calls.map(([url]) => url)).toEqual([
+      "http://127.0.0.1:12345/readyz",
+      "http://127.0.0.1:12345/readyz",
+      "http://127.0.0.1:12345/startupz",
+      "http://127.0.0.1:12345/readyz",
+      "http://127.0.0.1:12345/startupz",
+    ]);
   });
 
   it("bounds not-ready diagnostics without exposing response details", async () => {

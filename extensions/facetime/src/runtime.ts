@@ -39,7 +39,6 @@ import {
   retainOutboundDialHelperPeers,
   readOutboundCallUUID,
   readOutboundProxyIdentifier,
-  retainHelperResultPeers,
 } from "./runtime-helper-results.js";
 import type { ActiveFaceTimeCall, FaceTimeRuntimeStatus } from "./runtime-state.js";
 import { buildFaceTimeRuntimeStatus } from "./runtime-status.js";
@@ -334,7 +333,6 @@ export async function createFaceTimeRuntime(params: {
     captureBinary,
     isStopping: () => stopping,
     getHelperTopologyVersion: () => helperTopologyVersion,
-    retainHelperResultPeers,
   });
   const { attemptCarrierHangup, stopCall } = callControl;
   const callEvents = createFaceTimeCallEventHandler({

@@ -157,7 +157,7 @@
 }
 
 .session-progress-card__refresh[data-state="pending"] svg {
-  animation: session-progress-refresh-spin 1.2s linear infinite;
+  animation: btn-spinner-spin 1.2s linear infinite;
 }
 
 .session-progress-card__refresh[data-state="updated"] {
@@ -188,12 +188,6 @@
   height: 1px;
   overflow: hidden;
   clip-path: inset(50%);
-}
-
-@keyframes session-progress-refresh-spin {
-  to {
-    transform: rotate(360deg);
-  }
 }
 
 @media (prefers-reduced-motion: reduce) {

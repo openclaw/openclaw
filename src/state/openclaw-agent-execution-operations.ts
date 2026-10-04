@@ -154,6 +154,11 @@ export async function loadAgentCompoundOperations() {
   } satisfies Handlers;
 }
 
+export async function loadAgentMessageCutOperations() {
+  const kernel = await import("../config/sessions/session-message-cut.worker.js");
+  return { "session.messageCut.commit": kernel.commitSessionMessageCut } satisfies Handlers;
+}
+
 export async function loadAgentNativeBindingOperations() {
   const kernel = await import("../config/sessions/session-native-binding.worker.js");
   return {
@@ -162,7 +167,7 @@ export async function loadAgentNativeBindingOperations() {
 }
 
 export async function prepareAgentNativeBindingOperation(
-  input: import("../config/sessions/session-native-binding.types.js").SessionNativeBindingDeletion,
+  input: import("../config/sessions/session-native-binding.types.js").SessionNativeBindingParticipants,
   env?: NodeJS.ProcessEnv,
 ) {
   const kernel = await import("../config/sessions/session-native-binding.worker.js");
@@ -383,6 +388,7 @@ export type RegisteredAgentWorkerOperations = WorkerOperations<
     Awaited<ReturnType<typeof loadAgentEntryPatchOperations>> &
     Awaited<ReturnType<typeof loadAgentCompoundOperations>> &
     Awaited<ReturnType<typeof loadAgentNativeBindingOperations>> &
+    Awaited<ReturnType<typeof loadAgentMessageCutOperations>> &
     Awaited<ReturnType<typeof loadAgentRestartRecoveryOperations>> &
     Awaited<ReturnType<typeof loadAgentTrajectoryOperations>> &
     Awaited<ReturnType<typeof loadAgentArchiveOperations>> &

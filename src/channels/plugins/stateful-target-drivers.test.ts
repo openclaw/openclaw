@@ -15,7 +15,6 @@ describe("stateful target driver registry", () => {
     const driver: StatefulBindingTargetDriver = {
       id: "duplicate-module-test",
       ensureReady: async () => ({ ok: true }),
-      ensureSession: async () => ({ ok: true, sessionKey: "agent:test:shared" }),
     };
 
     const unregister = first.registerStatefulBindingTargetDriver(driver);

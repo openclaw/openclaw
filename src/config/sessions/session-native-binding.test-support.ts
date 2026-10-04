@@ -22,6 +22,10 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { readExactSessionEntryRow } from "./session-accessor.sqlite-entry-store.js";
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import { deleteSessionEntryLifecycle } from "./session-accessor.sqlite-lifecycle.js";
+import {
+  rewindSessionToMessage,
+  switchSessionBranch,
+} from "./session-accessor.sqlite-message-cut.js";
 import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcript-write.js";
 
 type NativeBindingTestApi = {
@@ -142,6 +146,12 @@ async function createFixture(
     bindingStore: native.store,
     readEntry: () => readExactSessionEntryRow(database, scope.sessionKey)?.entry,
     readBinding: () => native.store.lookup(native.key),
+    cut: (cutMode: "rewind" | "switch", entryId: string) =>
+      withPluginRuntimeRegistryScope(registry, () =>
+        cutMode === "rewind"
+          ? rewindSessionToMessage({ ...scope, entryId })
+          : switchSessionBranch({ ...scope, leafEntryId: entryId }),
+      ),
     remove: (
       options: { archiveTranscript?: boolean; descendantRunBasis?: SubagentRunsDurableBasis } = {},
     ) =>

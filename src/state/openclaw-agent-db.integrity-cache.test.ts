@@ -160,6 +160,65 @@ it("retains integrity verification until durable evidence is invalidated", () =>
   );
 });
 
+it.each([
+  { damage: "duplicate page ownership", expected: /2nd reference to page/iu },
+  { damage: "orphan allocated page", expected: /never used/iu },
+])("refuses $damage before admitting a dirty database", async ({ damage, expected }) => {
+  const options = {
+    agentId: "integrity-pages",
+    env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-integrity-pages-") },
+  };
+  const pathname = openOpenClawAgentDatabase(options).path;
+  closeOpenClawAgentDatabasesForTest();
+  clearOpenClawAgentIntegrityVerification(pathname, options.env);
+  const database = sqlite.openNodeSqliteDatabase(pathname);
+  try {
+    database.enableDefensive?.(false);
+    database.exec(`
+      CREATE TABLE page_owner_a (value INTEGER);
+      CREATE TABLE page_owner_b (value INTEGER);
+      INSERT INTO page_owner_a VALUES (1);
+      INSERT INTO page_owner_b VALUES (2);
+      PRAGMA writable_schema = ON;
+    `);
+    if (damage === "duplicate page ownership") {
+      database.exec(`
+        UPDATE sqlite_schema
+        SET rootpage = (SELECT rootpage FROM sqlite_schema WHERE name = 'page_owner_a')
+        WHERE name = 'page_owner_b';
+      `);
+    } else {
+      database.exec("DELETE FROM sqlite_schema WHERE name = 'page_owner_b';");
+    }
+    const version = Number(database.prepare("PRAGMA schema_version").get()?.schema_version);
+    database.exec(`PRAGMA writable_schema = OFF; PRAGMA schema_version = ${version + 1};`);
+
+    // Every table can be sound while global page ownership is corrupt.
+    const tables = database.prepare("SELECT name FROM sqlite_schema WHERE type = 'table'").all();
+    for (const table of [{ name: "sqlite_schema" }, ...tables]) {
+      const name = String(table.name).replaceAll("'", "''");
+      expect(database.prepare(`PRAGMA integrity_check('${name}')`).all()).toEqual([
+        { integrity_check: "ok" },
+      ]);
+    }
+    expect(database.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+    expect(String(database.prepare("PRAGMA integrity_check").get()?.integrity_check)).toMatch(
+      expected,
+    );
+  } finally {
+    database.close();
+  }
+
+  const admitted = vi.fn();
+  await expect(
+    withOpenClawAgentDatabaseAdmission(options, (run) => Promise.resolve(run(() => {})), admitted),
+  ).rejects.toMatchObject({
+    name: "SqliteIntegrityError",
+    message: expect.stringMatching(expected),
+  });
+  expect(admitted).not.toHaveBeenCalled();
+});
+
 it("does not lend remembered integrity to another file at the same path", () => {
   const options = {
     agentId: "integrity-cache",

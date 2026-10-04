@@ -53,6 +53,8 @@ export function createSessionRowRefresh(
   let exactPreparations = 0;
   let exactPreparationsIdle: Deferred | undefined;
   let selectionPreparation: Promise<void> | undefined;
+  // Admission and the background drain must share each pending database acquisition.
+  let refreshing: Promise<void> | undefined;
   function releaseExactRead(id: string, read: ExactRowPreparation) {
     exactReads.delete(id);
     exactReadBytes -= read.bytes;
@@ -401,7 +403,11 @@ export function createSessionRowRefresh(
   }
   return {
     refresh: materializer.refresh,
-    refreshBatch,
+    refreshBatch(this: void) {
+      return (refreshing ??= refreshBatch().finally(() => {
+        refreshing = undefined;
+      }));
+    },
     prepareExactRows,
     prepareSelection,
     selectionNeedsPreparation,

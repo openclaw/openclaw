@@ -110,8 +110,6 @@ type InstallPolicyRequest = {
   };
 };
 
-type InstallPolicyExecConfig = NonNullable<NonNullable<SecurityConfig["installPolicy"]>["exec"]>;
-
 type InstallPolicyValidationIssue = { severity: "error" | "warning"; message: string };
 
 export type InstallPolicyStaticValidation = {
@@ -145,47 +143,6 @@ function isPolicyScriptArg(value: string): boolean {
     value.includes("\\") ||
     POLICY_SCRIPT_ARG_PATTERN.test(value)
   );
-}
-
-function resolvePolicyScriptArg(params: {
-  command: string;
-  args: string[];
-}):
-  | { kind: "scripts"; scripts: Array<{ index: number; path: string }> }
-  | { kind: "unsupported"; message: string }
-  | undefined {
-  const interpreterName = executableName(params.command);
-  if (interpreterName === "env") {
-    return {
-      kind: "unsupported",
-      message:
-        "security.installPolicy.exec.command must not use env; configure the policy executable directly.",
-    };
-  }
-  if (!POLICY_INTERPRETER_NAMES.has(interpreterName)) {
-    return undefined;
-  }
-  const scripts: Array<{ index: number; path: string }> = [];
-  for (let index = 0; index < params.args.length; index += 1) {
-    const arg = params.args[index];
-    if (!arg) {
-      continue;
-    }
-    if (arg.startsWith("-")) {
-      const equalsIndex = arg.indexOf("=");
-      if (equalsIndex > 0) {
-        const optionValue = arg.slice(equalsIndex + 1);
-        if (isPolicyScriptArg(optionValue)) {
-          scripts.push({ index, path: optionValue });
-        }
-      }
-      continue;
-    }
-    if (isPolicyScriptArg(arg)) {
-      scripts.push({ index, path: arg });
-    }
-  }
-  return scripts.length > 0 ? { kind: "scripts", scripts } : undefined;
 }
 
 async function readFileStatOrThrow(pathname: string, label: string) {
@@ -305,14 +262,27 @@ async function assertSecurePolicyScriptArg(params: {
   args: string[];
   trustedDirs?: string[];
 }): Promise<void> {
-  const scriptArg = resolvePolicyScriptArg({ command: params.command, args: params.args });
-  if (!scriptArg) {
+  const interpreterName = executableName(params.command);
+  if (interpreterName === "env") {
+    throw new Error(
+      "security.installPolicy.exec.command must not use env; configure the policy executable directly.",
+    );
+  }
+  if (!POLICY_INTERPRETER_NAMES.has(interpreterName)) {
     return;
   }
-  if (scriptArg.kind === "unsupported") {
-    throw new Error(scriptArg.message);
-  }
-  for (const script of scriptArg.scripts) {
+  const scripts = params.args.flatMap((arg, index) => {
+    if (!arg) {
+      return [];
+    }
+    const equalsIndex = arg.startsWith("-") ? arg.indexOf("=") : -1;
+    if (arg.startsWith("-") && equalsIndex <= 0) {
+      return [];
+    }
+    const scriptPath = equalsIndex > 0 ? arg.slice(equalsIndex + 1) : arg;
+    return isPolicyScriptArg(scriptPath) ? [{ index, path: scriptPath }] : [];
+  });
+  for (const script of scripts) {
     await assertSecureCommandPath({
       targetPath: script.path,
       label: `security.installPolicy.exec.args[${script.index}]`,
@@ -329,42 +299,6 @@ function readPassEnvValue(env: NodeJS.ProcessEnv, key: string): string | undefin
   const lowerKey = key.toLowerCase();
   const matchedKey = Object.keys(env).find((candidate) => candidate.toLowerCase() === lowerKey);
   return matchedKey ? env[matchedKey] : undefined;
-}
-
-function isTargetEnabled(params: {
-  policy: NonNullable<SecurityConfig["installPolicy"]>;
-  targetType: InstallPolicyTarget;
-}): boolean {
-  const targets = params.policy.targets;
-  if (!targets || targets.length === 0) {
-    return true;
-  }
-  return targets.includes(params.targetType);
-}
-
-function resolvePolicy(
-  config: OpenClawConfig | undefined,
-  targetType: InstallPolicyTarget,
-):
-  | { kind: "disabled" }
-  | { kind: "configured"; exec: InstallPolicyExecConfig }
-  | { kind: "failure"; result: InstallPolicyResult } {
-  const policy = config?.security?.installPolicy;
-  if (!policy || policy.enabled !== true) {
-    return { kind: "disabled" };
-  }
-  if (!isTargetEnabled({ policy, targetType })) {
-    return { kind: "disabled" };
-  }
-  if (!policy.exec) {
-    return {
-      kind: "failure",
-      result: createInstallPolicyFailure(
-        "security.installPolicy is enabled but security.installPolicy.exec is not configured",
-      ),
-    };
-  }
-  return { kind: "configured", exec: policy.exec };
 }
 
 function resolveConfiguredTargets(
@@ -455,13 +389,20 @@ export async function runInstallPolicy(params: {
     }
   }
 
-  const policy = resolvePolicy(config, params.request.targetType);
-  if (policy.kind === "disabled") {
+  const policy = config?.security?.installPolicy;
+  if (!policy || policy.enabled !== true) {
     return undefined;
   }
-  if (policy.kind === "failure") {
-    return logBlocked(policy.result);
+  const targets = policy.targets;
+  if (targets && targets.length !== 0 && !targets.includes(params.request.targetType)) {
+    return undefined;
   }
+  if (!policy.exec) {
+    return failClosed(
+      "security.installPolicy is enabled but security.installPolicy.exec is not configured",
+    );
+  }
+  const exec = policy.exec;
 
   const input = JSON.stringify({
     protocolVersion: 1,
@@ -472,7 +413,7 @@ export async function runInstallPolicy(params: {
     return failClosed(`policy request exceeded maxInputBytes (${DEFAULT_MAX_REQUEST_BYTES})`);
   }
 
-  const commandPath = policy.exec.command;
+  const commandPath = exec.command;
   if (!isAbsolutePathname(commandPath)) {
     return failClosed("security.installPolicy.exec.command must be an absolute path.");
   }
@@ -481,12 +422,12 @@ export async function runInstallPolicy(params: {
     secureCommandPath = await assertSecureCommandPath({
       targetPath: commandPath,
       label: "security.installPolicy.exec.command",
-      trustedDirs: policy.exec.trustedDirs,
+      trustedDirs: exec.trustedDirs,
     });
     await assertSecurePolicyScriptArg({
       command: secureCommandPath,
-      args: policy.exec.args ?? [],
-      trustedDirs: policy.exec.trustedDirs,
+      args: exec.args ?? [],
+      trustedDirs: exec.trustedDirs,
     });
   } catch (err) {
     return failClosed(formatErrorMessage(err));
@@ -494,23 +435,23 @@ export async function runInstallPolicy(params: {
 
   const env = params.env ?? process.env;
   const childEnv: NodeJS.ProcessEnv = {};
-  for (const key of policy.exec.passEnv ?? []) {
+  for (const key of exec.passEnv ?? []) {
     const value = readPassEnvValue(env, key);
     if (value !== undefined) {
       childEnv[key] = value;
     }
   }
-  for (const [key, value] of Object.entries(policy.exec.env ?? {})) {
+  for (const [key, value] of Object.entries(exec.env ?? {})) {
     childEnv[key] = value;
   }
 
-  const timeoutMs = normalizePositiveTimerMs(policy.exec.timeoutMs, DEFAULT_TIMEOUT_MS);
-  const noOutputTimeoutMs = normalizePositiveTimerMs(policy.exec.noOutputTimeoutMs, timeoutMs);
-  const maxOutputBytes = normalizePositiveInt(policy.exec.maxOutputBytes, DEFAULT_MAX_OUTPUT_BYTES);
+  const timeoutMs = normalizePositiveTimerMs(exec.timeoutMs, DEFAULT_TIMEOUT_MS);
+  const noOutputTimeoutMs = normalizePositiveTimerMs(exec.noOutputTimeoutMs, timeoutMs);
+  const maxOutputBytes = normalizePositiveInt(exec.maxOutputBytes, DEFAULT_MAX_OUTPUT_BYTES);
   const cwd = path.dirname(secureCommandPath);
   let result: Awaited<ReturnType<typeof runCommandWithTimeout>>;
   try {
-    result = await runCommandWithTimeout([secureCommandPath, ...(policy.exec.args ?? [])], {
+    result = await runCommandWithTimeout([secureCommandPath, ...(exec.args ?? [])], {
       baseEnv: {},
       cwd,
       env: childEnv,

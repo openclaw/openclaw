@@ -29,6 +29,7 @@ import {
   SecretStoreValidationError,
   isSecretStoreValidationCode,
 } from "../secrets/store/secret-store-validation-error.js";
+import { ModelSelectionLockedError } from "../sessions/model-selection-error.js";
 import { SkillUploadRequestError } from "../skills/lifecycle/upload-store-error.js";
 import { SkillLibraryError, type SkillLibraryErrorCode } from "../skills/skill-library-error.js";
 import { OpenClawAgentDatabaseMediaMigrationRequiredError } from "./openclaw-agent-db-migration-required.js";
@@ -47,6 +48,7 @@ type StateMigrationKind = ConstructorParameters<
 
 const MESSAGE_ONLY_ERRORS = {
   "duplicate-agent": DuplicateAgentError,
+  "model-selection-locked": ModelSelectionLockedError,
   "session-pending-input-custody": SessionPendingInputCustodyError,
   "skill-upload-request": SkillUploadRequestError,
   coordinator: SqliteCoordinatorError,
