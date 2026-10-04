@@ -131,7 +131,7 @@ describe("trusted P qualification admission", () => {
     },
   );
 
-  it("removes only the self-referential locator and retains unknown semantic fields", () => {
+  it("normalizes omitted empty inputs and the self-referential locator", () => {
     const original = request().inputs;
     const envelope = JSON.parse(
       expectDefined(original.trusted_workflow_json, "trusted workflow envelope"),
@@ -144,6 +144,7 @@ describe("trusted P qualification admission", () => {
       }),
     };
     expect(semanticQualificationInputs(withLocator)).toEqual(original);
+    expect(semanticQualificationInputs({ ...withLocator, optional_spec: "" })).toEqual(original);
     expect(
       semanticQualificationInputs({
         ...withLocator,

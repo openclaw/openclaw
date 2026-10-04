@@ -144,6 +144,13 @@ export function semanticQualificationInputs(inputs) {
           (typeof value === "number" && Number.isFinite(value))),
       "Invalid qualification input value",
     );
+    // GitHub omits optional workflow_dispatch string inputs whose submitted
+    // value is empty from the child run's inputs context. Bind the admission
+    // to that effective wire shape so preparation and qualification compare
+    // the same operator request.
+    if (value === "") {
+      continue;
+    }
     wire[key] = String(value);
   }
   requireValue(
