@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFailed, onTestFinished, vi } from "vitest";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
@@ -75,6 +75,52 @@ describe("Gateway startup catalog", () => {
   });
 });
 
+type StartupPhase = { phase: string; elapsedMs: number };
+
+// Issue #156539: this case owns a single deadline over state creation, Gateway startup,
+// readiness, close and cleanup, so a CI timeout names none of the phases it covers.
+// Record the phase each awaited step enters and repeat the unjoined phase in the receipt,
+// so a recurrence localizes itself instead of reporting an anonymous deadline.
+function createStartupPhaseTrace(intervalMs = 15_000) {
+  const startedAt = performance.now();
+  const phases: StartupPhase[] = [];
+  let pending: { phase: string; since: number } | undefined;
+  let ticker: ReturnType<typeof setInterval> | undefined;
+  const stopTicker = () => {
+    if (ticker) {
+      clearInterval(ticker);
+    }
+    ticker = undefined;
+  };
+  return {
+    phase(phase: string) {
+      stopTicker();
+      const since = performance.now();
+      pending = { phase, since };
+      phases.push({ phase, elapsedMs: Math.round(since - startedAt) });
+      console.warn(
+        `[catalog-startup] awaiting phase "${phase}" at +${Math.round(since - startedAt)}ms`,
+      );
+      ticker = setInterval(() => {
+        console.warn(
+          `[catalog-startup] still awaiting phase "${phase}" after ${Math.round(performance.now() - since)}ms`,
+        );
+      }, intervalMs);
+      ticker.unref();
+    },
+    reportPendingPhase() {
+      stopTicker();
+      console.error("Provider settings startup phases", {
+        phases,
+        elapsedMs: Math.round(performance.now() - startedAt),
+        pendingPhase: pending?.phase ?? null,
+        pendingForMs: pending ? Math.round(performance.now() - pending.since) : null,
+      });
+    },
+    stop: stopTicker,
+  };
+}
+
 describe("Gateway provider settings startup", () => {
   const startupFixture = createFixtureLifetime();
 
@@ -87,7 +133,11 @@ describe("Gateway provider settings startup", () => {
     "starts with provider settings without model rows when a channel is auto-enabled",
     () =>
       startupFixture.run(async () => {
+        const trace = createStartupPhaseTrace();
+        onTestFailed(() => trace.reportPendingPhase());
+        onTestFinished(() => trace.stop());
         const token = "provider-overlay-startup-token";
+        trace.phase("create-isolated-state");
         const state = await createOpenClawTestState({
           label: "provider-overlay-startup",
           env: {
@@ -102,7 +152,9 @@ describe("Gateway provider settings startup", () => {
         });
         let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
         try {
+          trace.phase("reserve-port");
           const port = await getFreePort();
+          trace.phase("write-config");
           await state.writeConfig({
             agents: { entries: { main: {} } },
             models: { providers: { openai: { apiKey: "synthetic-provider-key" }, codex: {} } },
@@ -110,18 +162,23 @@ describe("Gateway provider settings startup", () => {
             gateway: { auth: { mode: "token", token } },
           });
           state.applyEnv();
+          trace.phase("gateway-startup");
           server = await startGatewayServer(port, {
             bind: "loopback",
             auth: { mode: "token", token },
             controlUiEnabled: false,
           });
+          trace.phase("startup-settled");
           await server.startupSettled;
           expect(getRuntimeConfigSnapshot()?.channels?.telegram).toMatchObject({ enabled: true });
+          trace.phase("readyz-probe");
           const readiness = await fetch(`http://127.0.0.1:${port}/readyz`);
           expect(readiness.status).toBe(200);
           await expect(readiness.json()).resolves.toMatchObject({ ready: true });
         } finally {
+          trace.phase("gateway-close");
           await server?.close({ reason: "provider overlay startup test complete" });
+          trace.phase("state-cleanup");
           await state.cleanup();
         }
       }),
