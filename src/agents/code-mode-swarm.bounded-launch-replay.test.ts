@@ -8,21 +8,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
-import { resetTaskFlowRegistryForTests } from "../tasks/task-flow-registry.test-support.js";
-import {
-  configureInMemoryTaskStoresForTests,
-  resetTaskRegistryForTests,
-} from "../tasks/task-registry.test-support.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 import { codeModeSwarmHandlers } from "./code-mode-swarm.runtime.js";
 import { applyCodeModeCatalog, createCodeModeTools } from "./code-mode.js";
 import { loadAgentRuntimePluginRegistryHandle } from "./runtime-plugins.js";
+import {
+  configureMockSubagentRegistryPersistence,
+  type MockSubagentRegistryRows,
+} from "./subagent-test-fixtures.test-helpers.js";
 import { subagentRuns } from "./subagents/registry/subagent-registry-memory.js";
-import { SubagentRegistryWriteError } from "./subagents/registry/subagent-registry-persistence.js";
-import * as registryState from "./subagents/registry/subagent-registry-state.js";
-import { restoreSubagentRunsFromDisk } from "./subagents/registry/subagent-registry-state.js";
+import { restoreSubagentRunsFromDisk } from "./subagents/registry/subagent-registry-persistence.js";
+import type { SubagentRunRecord } from "./subagents/registry/subagent-registry.types.js";
 import { resetSubagentRegistryForTests } from "./subagents/registry/subagent-registry.test-helpers.js";
 import { spawnSubagentDirect } from "./subagents/spawn/subagent-spawn.js";
 import { testing as subagentSpawnTesting } from "./subagents/spawn/subagent-spawn.test-support.js";
@@ -39,7 +37,7 @@ vi.mock("./runtime-plugins.js", () => ({
     vi.fn<typeof import("./runtime-plugins.js").loadAgentRuntimePluginRegistryHandle>(),
 }));
 
-vi.mock("./subagents/registry/subagent-registry-state.js", { spy: true });
+vi.mock("./subagents/registry/subagent-registry-persistence.js", { spy: true });
 
 const envSnapshot = captureEnv(["OPENCLAW_CONFIG_PATH", "OPENCLAW_STATE_DIR"]);
 const task = "Verify the frozen candidate against the acceptance criteria.";
@@ -49,6 +47,17 @@ const codeModeRunId = "code-run";
 const requestId = "bridge:1";
 const groupId = `swarm:${sessionKey}:${parentRunId}`;
 const replayKey = `${codeModeRunId}:${requestId}`;
+const persistedRows = new Map<string, SubagentRunRecord>();
+const persistRegistryRows = vi.fn<MockSubagentRegistryRows>((rows, runIds) => {
+  for (const runId of runIds) {
+    const row = rows.get(runId);
+    if (row) {
+      persistedRows.set(runId, structuredClone(row));
+    } else {
+      persistedRows.delete(runId);
+    }
+  }
+});
 
 type DispatchGatewayMethodInProcess = NonNullable<
   NonNullable<
@@ -134,38 +143,31 @@ async function writeConfig(): Promise<OpenClawConfig> {
   return config;
 }
 
-function installInProcessRegistryPersistenceForTests(): void {
-  const persist = vi.mocked(registryState.persistSubagentRunsToDiskOrThrow);
-  const persistAsync = vi.mocked(registryState.persistSubagentRunsToDiskAsyncOrThrow);
-  // Queued registration awaits the async owner. In agents-core worker threads the shared-state
-  // SQLite broker refuses non-main-thread writers, so bridge to the sync owner that still
-  // commits the production SQLite snapshot used by restoreSubagentRunsFromDisk.
-  persistAsync.mockReset().mockImplementation(async (runs, ids, options) => {
-    const snapshot = structuredClone(runs);
-    await Promise.resolve();
-    let committed = false;
-    try {
-      options.assertCurrent?.();
-      persist(snapshot, ids);
-      committed = true;
-      options.onCommitted?.();
-    } catch (error) {
-      throw new SubagentRegistryWriteError(committed ? "committed" : "not-committed", error);
-    }
-  });
-}
-
 describe("Code Mode bounded launch native replay", () => {
   beforeEach(async () => {
     resetGatewayWorkAdmission();
     swarmSchedulerTesting.reset();
-    resetSubagentRegistryForTests({ persist: false });
-    resetTaskRegistryForTests({ persist: false });
-    resetTaskFlowRegistryForTests({ persist: false });
-    // Queued subagent admission creates its task through the real registry; keep that
-    // owner in-process so the suite never depends on a host SQLite broker.
-    configureInMemoryTaskStoresForTests();
-    installInProcessRegistryPersistenceForTests();
+    await resetSubagentRegistryForTests({ persist: false });
+    persistedRows.clear();
+    persistRegistryRows.mockReset();
+    persistRegistryRows.mockImplementation((rows, runIds) => {
+      for (const runId of runIds) {
+        const row = rows.get(runId);
+        if (row) {
+          persistedRows.set(runId, structuredClone(row));
+        } else {
+          persistedRows.delete(runId);
+        }
+      }
+    });
+    await configureMockSubagentRegistryPersistence({ persistRegistryRows });
+    vi.mocked(restoreSubagentRunsFromDisk).mockImplementation(async ({ runs }) => {
+      runs.clear();
+      for (const [runId, row] of persistedRows) {
+        runs.set(runId, structuredClone(row));
+      }
+      return persistedRows.size;
+    });
     stateDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-bounded-launch-replay-"));
     setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
     setTestEnvValue("OPENCLAW_CONFIG_PATH", path.join(stateDir, "openclaw.json"));
@@ -175,9 +177,11 @@ describe("Code Mode bounded launch native replay", () => {
   afterEach(async () => {
     resetGatewayWorkAdmission();
     swarmSchedulerTesting.reset();
-    resetSubagentRegistryForTests({ persist: false });
-    resetTaskRegistryForTests({ persist: false });
-    resetTaskFlowRegistryForTests({ persist: false });
+    await resetSubagentRegistryForTests({ persist: false });
+    vi.mocked(loadAgentRuntimePluginRegistryHandle).mockReset();
+    persistedRows.clear();
+    persistRegistryRows.mockReset();
+    vi.mocked(restoreSubagentRunsFromDisk).mockReset();
     subagentSpawnTesting.setDepsForTest();
     clearRuntimeConfigSnapshot();
     clearConfigCache();
@@ -225,10 +229,10 @@ describe("Code Mode bounded launch native replay", () => {
     );
 
     // Simulate a cold process boundary: discard the resident registry and hydrate the
-    // collector from the production SQLite owner before asking Code Mode to replay it.
+    // collector through the current durable-registry persistence contract.
     swarmSchedulerTesting.reset();
-    resetSubagentRegistryForTests({ persist: false });
-    expect(restoreSubagentRunsFromDisk({ runs: subagentRuns })).toBe(1);
+    await resetSubagentRegistryForTests({ persist: false });
+    expect(await restoreSubagentRunsFromDisk({ runs: subagentRuns })).toBe(1);
     // Caller-facing collector identity is swarmRunId; entry.runId is the Gateway child run.
     expect(
       [...subagentRuns.values()].find((entry) => entry.swarmLaunchReplayKey === replayKey),

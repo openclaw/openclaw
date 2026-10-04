@@ -152,25 +152,41 @@ describe("bounded launch through the actual native spawn bridge", () => {
     expect(input.task).toContain("artifact:a");
   });
 
-  it("preserves heterogeneous per-lane reasoning levels through native spawn", async () => {
+  it("composes with heterogeneous target agents, models, and reasoning levels", async () => {
     const cheap = setup(
       { boundary: "isolated" },
-      { label: "cheap-explorer", thinking: "low", fastMode: true },
+      {
+        label: "cheap-explorer",
+        agentId: "explorer",
+        model: "provider/fast-model",
+        thinking: "low",
+        fastMode: true,
+      },
     );
     await codeModeSwarmHandlers.agentSpawn(cheap.params);
     expect(cheap.callExactId.mock.calls[0]![1]).toMatchObject({
       label: "cheap-explorer",
+      agentId: "explorer",
+      model: "provider/fast-model",
       thinking: "low",
       fastMode: true,
     });
 
     const deep = setup(
       { boundary: "evidence-only" },
-      { label: "deep-discriminator", thinking: "high", fastMode: false },
+      {
+        label: "deep-discriminator",
+        agentId: "verifier",
+        model: "provider/deep-model",
+        thinking: "high",
+        fastMode: false,
+      },
     );
     await codeModeSwarmHandlers.agentSpawn(deep.params);
     expect(deep.callExactId.mock.calls[0]![1]).toMatchObject({
       label: "deep-discriminator",
+      agentId: "verifier",
+      model: "provider/deep-model",
       thinking: "high",
       fastMode: false,
     });

@@ -31,6 +31,8 @@ describe("exact candidate binding", () => {
     expect(() => candidateBindingIdentity({ ...binding, version: 2 } as never)).toThrow(
       "unsupported candidate binding version",
     );
-    expect(() => candidateBindingIdentity({ ...binding, sourceDigest: "" })).toThrow("sourceDigest");
+    expect(() => candidateBindingIdentity({ ...binding, sourceDigest: "" })).toThrow(
+      "sourceDigest",
+    );
   });
 });

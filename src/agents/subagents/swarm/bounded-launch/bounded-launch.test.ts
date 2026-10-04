@@ -24,7 +24,9 @@ const verifier = {
 
 describe("native bounded launch preparation", () => {
   it("leaves calls without bounded launch unchanged", () => {
-    expect(prepareBoundedLaunch({ ...base, boundedLaunch: undefined })).toEqual({ task: base.task });
+    expect(prepareBoundedLaunch({ ...base, boundedLaunch: undefined })).toEqual({
+      task: base.task,
+    });
   });
 
   it("filters an artifact-only handoff and requests the existing sandbox owner", () => {
@@ -50,8 +52,14 @@ describe("native bounded launch preparation", () => {
       ["candidate:matrix", "evidence:matrix"],
       ["artifact:matrix", "summary:matrix"],
     ],
-    ["summary-only", ["summary:matrix"], ["candidate:matrix", "artifact:matrix", "evidence:matrix"]],
-  ] as const)("projects %s handoff to only its allowed information class", (boundary, kept, dropped) => {
+    [
+      "summary-only",
+      ["summary:matrix"],
+      ["candidate:matrix", "artifact:matrix", "evidence:matrix"],
+    ],
+  ] as const)(
+    "projects %s handoff to only its allowed information class",
+    (boundary, kept, dropped) => {
     const result = prepareBoundedLaunch({
       ...base,
       boundedLaunch: {
@@ -70,11 +78,14 @@ describe("native bounded launch preparation", () => {
     for (const value of dropped) {
       expect(result.task).not.toContain(value);
     }
-  });
+    },
+  );
 
   it("binds the generic contract and host-owned lineage into reproducible task bytes", () => {
     const first = prepareBoundedLaunch({ ...base, boundedLaunch: { boundary: "isolated" } });
-    expect(first).toEqual(prepareBoundedLaunch({ ...base, boundedLaunch: { boundary: "isolated" } }));
+    expect(first).toEqual(
+      prepareBoundedLaunch({ ...base, boundedLaunch: { boundary: "isolated" } }),
+    );
     expect(first.task).not.toBe(
       prepareBoundedLaunch({ ...base, boundedLaunch: { boundary: "summary-only" } }).task,
     );

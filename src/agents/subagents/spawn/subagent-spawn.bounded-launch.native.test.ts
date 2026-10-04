@@ -7,17 +7,15 @@ import { stableStringify } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../../../config/config.js";
 import { resetGatewayWorkAdmission } from "../../../process/gateway-work-admission.js";
-import { resetTaskFlowRegistryForTests } from "../../../tasks/task-flow-registry.test-support.js";
-import {
-  configureInMemoryTaskStoresForTests,
-  resetTaskRegistryForTests,
-} from "../../../tasks/task-registry.test-support.js";
 import { createTestRegistry } from "../../../test-utils/channel-plugins.js";
 import { captureEnv, setTestEnvValue } from "../../../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../../../test-utils/session-state-cleanup.js";
 import { loadAgentRuntimePluginRegistryHandle } from "../../runtime-plugins.js";
-import { SubagentRegistryWriteError } from "../registry/subagent-registry-persistence.js";
-import * as registryState from "../registry/subagent-registry-state.js";
+import {
+  configureMockSubagentRegistryPersistence,
+  type MockSubagentRegistryRows,
+} from "../../subagent-test-fixtures.test-helpers.js";
+import { restoreSubagentRunsFromDisk } from "../registry/subagent-registry-persistence.js";
 import { resetSubagentRegistryForTests } from "../registry/subagent-registry.test-helpers.js";
 import { prepareBoundedLaunch } from "../swarm/bounded-launch/bounded-launch.js";
 import { testing as swarmSchedulerTesting } from "../swarm/swarm-scheduler.test-support.js";
@@ -30,9 +28,10 @@ vi.mock("../../runtime-plugins.js", () => ({
     vi.fn<typeof import("../../runtime-plugins.js").loadAgentRuntimePluginRegistryHandle>(),
 }));
 
-vi.mock("../registry/subagent-registry-state.js", { spy: true });
+vi.mock("../registry/subagent-registry-persistence.js", { spy: true });
 
 const envSnapshot = captureEnv(["OPENCLAW_CONFIG_PATH", "OPENCLAW_STATE_DIR"]);
+const persistRegistryRows = vi.fn<MockSubagentRegistryRows>();
 let stateDir = "";
 
 async function writeConfig(sandboxMode: "off" | "all"): Promise<void> {
@@ -104,35 +103,14 @@ async function launchPreparedVerifier() {
   );
 }
 
-function installInProcessRegistryPersistenceForTests(): void {
-  const persist = vi.mocked(registryState.persistSubagentRunsToDiskOrThrow);
-  const persistAsync = vi.mocked(registryState.persistSubagentRunsToDiskAsyncOrThrow);
-  persistAsync.mockReset().mockImplementation(async (runs, ids, options) => {
-    const snapshot = structuredClone(runs);
-    await Promise.resolve();
-    let committed = false;
-    try {
-      options.assertCurrent?.();
-      persist(snapshot, ids);
-      committed = true;
-      options.onCommitted?.();
-    } catch (error) {
-      throw new SubagentRegistryWriteError(committed ? "committed" : "not-committed", error);
-    }
-  });
-}
-
 describe("native bounded launch spawn boundary", () => {
   beforeEach(async () => {
     resetGatewayWorkAdmission();
     swarmSchedulerTesting.reset();
-    resetSubagentRegistryForTests({ persist: false });
-    resetTaskRegistryForTests({ persist: false });
-    resetTaskFlowRegistryForTests({ persist: false });
-    // Queued subagent admission creates its task through the real registry; keep that
-    // owner in-process so the suite never depends on a host SQLite broker.
-    configureInMemoryTaskStoresForTests();
-    installInProcessRegistryPersistenceForTests();
+    await resetSubagentRegistryForTests({ persist: false });
+    persistRegistryRows.mockReset();
+    await configureMockSubagentRegistryPersistence({ persistRegistryRows });
+    vi.mocked(restoreSubagentRunsFromDisk).mockResolvedValue(0);
     stateDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-bounded-launch-native-"));
     setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
     setTestEnvValue("OPENCLAW_CONFIG_PATH", path.join(stateDir, "openclaw.json"));
@@ -143,9 +121,10 @@ describe("native bounded launch spawn boundary", () => {
   afterEach(async () => {
     resetGatewayWorkAdmission();
     swarmSchedulerTesting.reset();
-    resetSubagentRegistryForTests({ persist: false });
-    resetTaskRegistryForTests({ persist: false });
-    resetTaskFlowRegistryForTests({ persist: false });
+    await resetSubagentRegistryForTests({ persist: false });
+    vi.mocked(loadAgentRuntimePluginRegistryHandle).mockReset();
+    persistRegistryRows.mockReset();
+    vi.mocked(restoreSubagentRunsFromDisk).mockReset();
     subagentSpawnTesting.setDepsForTest();
     clearRuntimeConfigSnapshot();
     clearConfigCache();

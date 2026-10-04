@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   candidateBindingIdentity,
   type BoundedLaunchCandidateBinding,
@@ -22,10 +23,10 @@ const DEFAULT_REQUIREMENTS: BoundedLaunchRequirements = {
 };
 
 function readRecord(value: unknown, name: string): Record<string, unknown> {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+  if (!isRecord(value)) {
     throw new Error(`${name} must be an object`);
   }
-  return value as Record<string, unknown>;
+  return value;
 }
 
 function readText(value: unknown, name: string, maxLength: number): string {
@@ -98,7 +99,9 @@ function validateContract(
   requirements: BoundedLaunchRequirements,
 ): void {
   if (requirements.artifactRefs === "required" && boundary !== "artifact-only") {
-    throw new Error("boundedLaunch requires artifact references across a boundary that drops artifacts");
+    throw new Error(
+      "boundedLaunch requires artifact references across a boundary that drops artifacts",
+    );
   }
   if (
     requirements.candidateDigest === "required" &&

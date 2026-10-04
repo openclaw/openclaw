@@ -1,8 +1,4 @@
-export type BoundedLaunchBoundary =
-  | "isolated"
-  | "artifact-only"
-  | "evidence-only"
-  | "summary-only";
+export type BoundedLaunchBoundary = "isolated" | "artifact-only" | "evidence-only" | "summary-only";
 
 export type BoundedLaunchRequirement = "optional" | "required";
 
