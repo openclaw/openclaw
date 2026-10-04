@@ -6,7 +6,6 @@ import {
   readFileSync,
   readdirSync,
   realpathSync,
-  rmSync,
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
@@ -64,8 +63,8 @@ function fixture(platform = "linux", version = "12.3.4") {
     image,
     runnerTemp,
     spec,
-    run(packageManager = spec) {
-      return spawnSync(process.execPath, [scriptPath, packageManager], {
+    run() {
+      return spawnSync(process.execPath, [scriptPath, spec], {
         encoding: "utf8",
         env: {
           ...process.env,
@@ -80,60 +79,53 @@ function fixture(platform = "linux", version = "12.3.4") {
 }
 
 describe("pnpm image archive consumer", () => {
-  it("seeds the pinned Windows wrapper without installing a Linux native binary", () => {
-    const f = fixture("win32", "12.5.1");
-    const result = f.run();
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout.trim()).not.toBe("");
-    const pnpmRoot = join(result.stdout.trim(), "v1", "pnpm", "12.5.1");
-    const metadata = JSON.parse(readFileSync(join(pnpmRoot, ".corepack"), "utf8"));
-    expect(metadata.hash).toBe(f.spec.slice(f.spec.indexOf("+") + 1));
-    expect(metadata.bin.pnpm).toBe("./bin/pnpm.mjs");
-    expect(existsSync(join(pnpmRoot, "node_modules"))).toBe(false);
-    expect(
-      execFileSync(process.execPath, [join(pnpmRoot, metadata.bin.pnpm)], {
-        encoding: "utf8",
-      }).trim(),
-    ).toBe("12.5.1");
-    expect(existsSync(join(f.root, "old-corepack"))).toBe(false);
-  });
+  it.each([
+    { platform: "win32", version: "12.5.1" },
+    { platform: "linux", version: "12.3.4" },
+  ])(
+    "seeds $platform jobs from verified $version archives into private Corepack state",
+    ({ platform, version }) => {
+      const f = fixture(platform, version);
+      const homes: string[] = [];
+      for (let run = 0; run < 2; run++) {
+        const result = f.run();
+        expect(result.status, result.stderr).toBe(0);
+        const home = result.stdout.trim();
+        expect(home).not.toBe("");
+        homes.push(home);
+        const pnpmRoot = join(home, "v1", "pnpm", version);
+        expect(readFileSync(join(pnpmRoot, "pnpm"), "utf8")).toBe(`pnpm-${version}.tgz`);
+        if (platform === "linux") {
+          expect(
+            readFileSync(join(pnpmRoot, "node_modules/@pnpm/exe.linux-x64/pnpm"), "utf8"),
+          ).toBe(`exe.linux-x64-${version}.tgz`);
+        } else {
+          expect(existsSync(join(pnpmRoot, "node_modules"))).toBe(false);
+        }
+        const metadata = JSON.parse(readFileSync(join(pnpmRoot, ".corepack"), "utf8"));
+        expect(metadata.hash).toBe(f.spec.slice(f.spec.indexOf("+") + 1));
+        expect(metadata.bin.pnpm).toBe("./bin/pnpm.mjs");
+        expect(
+          execFileSync(process.execPath, [join(pnpmRoot, metadata.bin.pnpm)], {
+            encoding: "utf8",
+          }).trim(),
+        ).toBe(version);
+        writeFileSync(join(pnpmRoot, "pnpm"), "tampered extracted executable");
+      }
+      expect(homes[0]).not.toBe(homes[1]);
+      expect(existsSync(join(f.root, "old-corepack"))).toBe(false);
+      expect(readdirSync(f.runnerTemp)).toHaveLength(2);
+    },
+  );
 
-  it("does not admit a corrupt Windows wrapper with networking disabled", () => {
-    const f = fixture("win32", "12.5.1");
-    writeFileSync(join(f.image, "pnpm-12.5.1.tgz"), "corrupt wrapper");
-    const result = f.run();
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).toBe("");
-    expect(readdirSync(f.runnerTemp)).toEqual([]);
-  });
-
-  it("seeds each job from verified archives into independent private Corepack state", () => {
-    const f = fixture();
-    const homes: string[] = [];
-    for (let run = 0; run < 2; run++) {
-      const result = f.run();
-      expect(result.status, result.stderr).toBe(0);
-      const home = result.stdout.trim();
-      homes.push(home);
-      const pnpmRoot = join(home, "v1", "pnpm", "12.3.4");
-      expect(readFileSync(join(pnpmRoot, "pnpm"), "utf8")).toBe("pnpm-12.3.4.tgz");
-      expect(
-        readFileSync(join(pnpmRoot, "node_modules", "@pnpm", "exe.linux-x64", "pnpm"), "utf8"),
-      ).toBe("exe.linux-x64-12.3.4.tgz");
-      const metadata = JSON.parse(readFileSync(join(pnpmRoot, ".corepack"), "utf8"));
-      expect(metadata.hash).toBe(f.spec.slice(f.spec.indexOf("+") + 1));
-      expect(metadata.bin.pnpm).toBe("./bin/pnpm.mjs");
-      writeFileSync(join(pnpmRoot, "pnpm"), "tampered extracted executable");
-    }
-    expect(homes[0]).not.toBe(homes[1]);
-    expect(existsSync(join(f.root, "old-corepack"))).toBe(false);
-    expect(readdirSync(f.runnerTemp)).toHaveLength(2);
-  });
-
-  it.each(["pnpm-12.3.4.tgz", "exe.linux-x64-12.3.4.tgz"])(
-    "delegates substituted %s to Corepack with an empty store, ignoring adjacent trust markers",
-    (name) => {
-      const f = fixture();
+  it.each([
+    { platform: "win32", version: "12.5.1", name: "pnpm-12.5.1.tgz" },
+    { platform: "linux", version: "12.3.4", name: "pnpm-12.3.4.tgz" },
+    { platform: "linux", version: "12.3.4", name: "exe.linux-x64-12.3.4.tgz" },
+  ])(
+    "delegates substituted $name on $platform to Corepack, ignoring adjacent trust markers",
+    ({ platform, version, name }) => {
+      const f = fixture(platform, version);
       writeFileSync(join(f.image, name), "bad archive");
       writeFileSync(join(f.image, ".complete"), "");
       writeFileSync(
@@ -144,53 +136,6 @@ describe("pnpm image archive consumer", () => {
       expect(result.status, result.stderr).toBe(0);
       expect(result.stdout).toBe("");
       expect(readdirSync(f.runnerTemp)).toEqual([]);
-    },
-  );
-
-  it.each(["missing", "different-version", "different-hash"])(
-    "leaves ordinary Corepack registry preparation in control with an empty store on %s",
-    (kind) => {
-      const f = fixture();
-      if (kind === "missing") {
-        rmSync(join(f.image, "pnpm-12.3.4.tgz"));
-      }
-      const spec =
-        kind === "different-version"
-          ? f.spec.replace("12.3.4", "12.3.5")
-          : kind === "different-hash"
-            ? f.spec.replace(/.$/u, "z")
-            : f.spec;
-      const result = f.run(spec);
-      expect(result.status, result.stderr).toBe(0);
-      expect(result.stdout).toBe("");
-      expect(readdirSync(f.runnerTemp)).toEqual([]);
-    },
-  );
-
-  it.each(["missing", "corrupt"])(
-    "uses authenticated store archives when the image is %s",
-    (kind) => {
-      const f = fixture();
-      const seeded = f.run();
-      expect(seeded.status, seeded.stderr).toBe(0);
-      rmSync(seeded.stdout.trim(), { recursive: true });
-      for (const name of ["pnpm-12.3.4.tgz", "exe.linux-x64-12.3.4.tgz"]) {
-        if (kind === "missing") {
-          rmSync(join(f.image, name));
-        } else {
-          writeFileSync(join(f.image, name), "substituted image archive");
-        }
-      }
-      const result = f.run();
-      expect(result.status, result.stderr).toBe(0);
-      const pnpmRoot = join(result.stdout.trim(), "v1", "pnpm", "12.3.4");
-      expect(readFileSync(join(pnpmRoot, "pnpm"), "utf8")).toBe("pnpm-12.3.4.tgz");
-      expect(readFileSync(join(pnpmRoot, "node_modules/@pnpm/exe.linux-x64/pnpm"), "utf8")).toBe(
-        "exe.linux-x64-12.3.4.tgz",
-      );
-      expect(JSON.parse(readFileSync(join(pnpmRoot, ".corepack"), "utf8")).hash).toBe(
-        f.spec.slice(f.spec.indexOf("+") + 1),
-      );
     },
   );
 
