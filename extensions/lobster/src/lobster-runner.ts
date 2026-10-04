@@ -6,6 +6,7 @@ import {
   toErrorObject as toLintErrorObject,
 } from "openclaw/plugin-sdk/error-runtime";
 import { isPathInside } from "openclaw/plugin-sdk/file-access-runtime";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import {
   deleteCheckpointProvenance,
@@ -233,11 +234,6 @@ type LobsterRegistry = {
 export type LobsterReplayRequest = { provider: string; command: string };
 
 const LLM_COMMANDS = new Set(["llm.invoke", "llm_task.invoke"]);
-
-/** True for a non-null, non-array object, so field access is safe without a cast. */
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
 
 /**
  * Whether a stage explicitly chose the embedded route, by its own provider

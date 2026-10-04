@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 /** The authority of the caller whose embedded LLM stage produced checkpointed output. */
 export type LobsterCheckpointCaller = {
@@ -42,11 +43,6 @@ const RECORD_DIR = "openclaw-llm-checkpoints";
 function lobsterStateDir(env: Env): string {
   const configured = env.LOBSTER_STATE_DIR?.trim();
   return configured || path.join(os.homedir(), ".lobster", "state");
-}
-
-/** True for a non-null, non-array object, so field access is safe without a cast. */
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 function isStringArray(value: unknown): value is string[] {
