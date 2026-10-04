@@ -8,6 +8,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { validatePreviousConnectParams } from "../../../packages/gateway-protocol/src/connect-compatibility.test-support.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { createRequireRecord } from "../../../test/helpers/record.js";
 import {
   loadDeviceAuthToken as loadScopedDeviceAuthToken,
   storeDeviceAuthToken as storeScopedDeviceAuthToken,
@@ -24,6 +25,7 @@ import {
   writeSessionPlacementRecovery,
 } from "../lib/sessions/session-placement-recovery.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
+import { registerGatewayPayloadLimitNodeTests } from "./gateway-payload-limit.node.test-support.ts";
 import { expectSignedPayloadFields } from "./gateway-signature.test-support.ts";
 import {
   getLatestWebSocket,
@@ -190,10 +192,14 @@ type ConnectTimingPayload = Parameters<
   NonNullable<GatewayBrowserClientOptions["onConnectTiming"]>
 >[0];
 
+const requireRecord = createRequireRecord("record", "expected-label");
+
 function connectTimingPayloads(
   mock: ReturnType<typeof vi.fn<(timing: ConnectTimingPayload) => void>>,
-) {
-  return mock.mock.calls.map(([payload]) => payload);
+): ConnectTimingPayload[] {
+  return mock.mock.calls.map(
+    ([payload]) => requireRecord(payload, "connect timing") as ConnectTimingPayload,
+  );
 }
 
 function stubInsecureCrypto() {
@@ -278,6 +284,13 @@ function emitAuthFailure(
 }
 
 describe("GatewayBrowserClient", () => {
+  registerGatewayPayloadLimitNodeTests({
+    defaultGatewayUrl: DEFAULT_GATEWAY_URL,
+    getLatestWebSocket,
+    startConnect,
+    continueConnect,
+    useNodeFakeTimers,
+  });
   beforeEach(() => {
     vi.spyOn(Math, "random").mockReturnValue(0);
     vi.spyOn(nodes, "loadOrCreateDeviceIdentity").mockImplementation(
@@ -682,7 +695,7 @@ describe("GatewayBrowserClient", () => {
     const sentBefore = ws.sent.length;
     const request = client.request(method, params);
     if (delta < 0) {
-      await expect(request).rejects.toThrow("Request exceeds the Gateway payload limit");
+      await expect(request).rejects.toThrow("exceeds negotiated max payload");
       expect(ws.sent).toHaveLength(sentBefore);
     } else {
       const frame = JSON.parse(ws.sent.at(-1) ?? "{}") as { id?: string; method?: string };
@@ -694,6 +707,55 @@ describe("GatewayBrowserClient", () => {
     expect(maxPayload).toBeGreaterThan(
       JSON.stringify({ type: "req", id: REQUEST_FRAME_ID, method, params }).length + delta,
     );
+  });
+
+  it("reports failed connect timing when the socket closes before hello", async () => {
+    const onConnectTiming = vi.fn();
+    const client = new GatewayBrowserClient({
+      url: "ws://127.0.0.1:18789",
+      token: "shared-auth-token",
+      onConnectTiming,
+    });
+
+    const { ws } = await startConnect(client);
+    ws.emitClose(1006, "socket lost");
+
+    await vi.waitFor(() => {
+      expect(connectTimingPayloads(onConnectTiming).at(-1)).toMatchObject({
+        phase: "failed",
+        errorCode: "SOCKET_CLOSED",
+      });
+    });
+
+    client.stop();
+  });
+
+  it("keeps hello callback errors inside connect dispatch", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const onHello = vi.fn(() => {
+      throw new Error("hello callback failed");
+    });
+    const client = new GatewayBrowserClient({
+      url: "ws://127.0.0.1:18789",
+      token: "shared-auth-token",
+      onHello,
+    });
+
+    try {
+      const { ws, connectFrame } = await startConnect(client);
+      emitHello(ws, connectFrame.id, { role: "operator", scopes: [] });
+
+      await vi.waitFor(() => expect(onHello).toHaveBeenCalledOnce());
+      await Promise.resolve();
+      expect(ws.lastClose).toBeNull();
+      expect(consoleError).toHaveBeenCalledWith(
+        "[gateway] hello handler error:",
+        expect.any(Error),
+      );
+    } finally {
+      client.stop();
+      consoleError.mockRestore();
+    }
   });
 
   it("does not let a stale hello runtime import publish or migrate recovery", async () => {
