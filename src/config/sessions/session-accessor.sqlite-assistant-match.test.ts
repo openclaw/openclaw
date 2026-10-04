@@ -1,7 +1,11 @@
 import type { DatabaseSync } from "node:sqlite";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
+import { resolveZstdCodec } from "../../infra/zstd-codec.js";
 import { findAssistantTranscriptEventInDatabase } from "./session-accessor.sqlite-read.js";
+import type { SessionTranscriptEventMatch } from "./session-history-read.types.js";
+import { findTranscriptEventMatchingInDatabase } from "./session-transcript-match.js";
 import { prepareTranscriptPayload, type TranscriptPayloadRecord } from "./transcript-payload.js";
 
 describe("persisted assistant transcript matching", () => {
@@ -40,6 +44,12 @@ describe("persisted assistant transcript matching", () => {
     return payload;
   };
 
+  const find = (match: SessionTranscriptEventMatch) =>
+    findTranscriptEventMatchingInDatabase(
+      { db, path: ":memory:" },
+      { target: { agentId: "main", sessionId }, match },
+    );
+
   const answer = {
     id: "answer",
     message: { role: "assistant", idempotencyKey: "wanted", content: "complete answer" },
@@ -58,7 +68,7 @@ describe("persisted assistant transcript matching", () => {
       compress,
     };
   });
-  it.each([
+  const duplicateCases = [
     {
       name: "duplicate root message envelopes",
       json: '{"id":"answer","message":{"role":"user","idempotencyKey":"other"},"message":{"role":"assistant","idempotencyKey":"wanted","content":"complete answer"}}',
@@ -71,6 +81,15 @@ describe("persisted assistant transcript matching", () => {
       event: answer,
       compress: false,
     },
+  ];
+  it.each([
+    ...duplicateCases,
+    ...duplicateCases.map((entry) => ({
+      name: `compressed ${entry.name}`,
+      compress: true,
+      json: entry.json.replace("complete answer", "complete answer ".repeat(256)),
+      event: { ...answer, message: { ...answer.message, content: "complete answer ".repeat(256) } },
+    })),
     ...encodedCases,
   ])("retains complete JavaScript matches for $name", ({ json, event, compress }) => {
     const payload = insert(0, json, compress);
@@ -81,7 +100,85 @@ describe("persisted assistant transcript matching", () => {
       findAssistantTranscriptEventInDatabase({ db }, sessionId, event.message.idempotencyKey),
     ).toEqual({ event });
     expect(findAssistantTranscriptEventInDatabase({ db }, sessionId, "other")).toBeUndefined();
+    expect(
+      find({ kind: "idempotency", key: event.message.idempotencyKey, assistant: true }),
+    ).toEqual({ event });
+    expect(find({ kind: "idempotency", key: "other" })).toBeUndefined();
   });
+
+  it.each([false, true])(
+    "decodes only selected canonical candidates (compressed: %s)",
+    (compress) => {
+      const codec = resolveZstdCodec();
+      if (!codec) {
+        throw new Error("Transcript matching regression requires native zstd support");
+      }
+      const event = {
+        id: "old-answer",
+        message: {
+          role: "assistant",
+          idempotencyKey: "wanted",
+          __openclaw: { runId: "wanted-run" },
+          content: "complete answer ".repeat(256),
+          provider: "openclaw",
+          model: "delivery-mirror",
+        },
+      };
+      expect(insert(0, JSON.stringify(event), compress).event_zstd !== null).toBe(compress);
+      for (let seq = 1; seq <= 12; seq++) {
+        insert(
+          seq,
+          JSON.stringify({
+            ...event,
+            id: `unrelated-${seq}`,
+            message: {
+              ...event.message,
+              role: seq % 2 ? "toolResult" : "assistant",
+              idempotencyKey: "other",
+              __openclaw: { runId: "other-run" },
+            },
+          }),
+          compress,
+        );
+      }
+      const decode = vi.spyOn(codec, "decompress");
+      const sql = trackSqliteStatementExecutions(db, ["transcript"], (query) =>
+        query.includes('from "transcript_events"') ? "transcript" : null,
+      );
+      try {
+        for (const match of [
+          { kind: "visible-final", runId: "missing" },
+          { kind: "idempotency", key: "missing" },
+          { kind: "active-assistant", runId: "missing" },
+        ] satisfies SessionTranscriptEventMatch[]) {
+          decode.mockClear();
+          sql.counts.transcript = 0;
+          expect(find(match)).toBeUndefined();
+          expect(decode).not.toHaveBeenCalled();
+          expect(sql.counts.transcript).toBe(1);
+        }
+        for (const match of [
+          { kind: "visible-final", runId: "wanted-run" },
+          { kind: "idempotency", key: "wanted", assistant: true, runId: "wanted-run" },
+          { kind: "idempotency", key: "wanted", deliveryMirror: true },
+        ] satisfies SessionTranscriptEventMatch[]) {
+          decode.mockClear();
+          sql.counts.transcript = 0;
+          expect(find(match)).toEqual({ event });
+          expect(decode).toHaveBeenCalledTimes(compress ? 1 : 0);
+          expect(sql.counts.transcript).toBe(compress ? 2 : 1);
+        }
+        decode.mockClear();
+        sql.counts.transcript = 0;
+        expect(find({ kind: "latest" })).toMatchObject({ event: { id: "unrelated-12" } });
+        expect(decode).toHaveBeenCalledTimes(compress ? 1 : 0);
+        expect(sql.counts.transcript).toBe(1);
+      } finally {
+        sql.restore();
+        decode.mockRestore();
+      }
+    },
+  );
 
   it("selects the last matching assistant despite newer user and duplicate-key collisions", () => {
     insert(0, '{"id":"older","message":{"role":"assistant","idempotencyKey":"wanted"}}');
@@ -127,6 +224,9 @@ describe("persisted assistant transcript matching", () => {
       insert(index + 1, value);
     }
     expect(findAssistantTranscriptEventInDatabase({ db }, sessionId, "wanted")).toMatchObject({
+      event: { id: "deep", message: { role: "assistant", idempotencyKey: "wanted" } },
+    });
+    expect(find({ kind: "idempotency", key: "wanted", assistant: true })).toMatchObject({
       event: { id: "deep", message: { role: "assistant", idempotencyKey: "wanted" } },
     });
   });
