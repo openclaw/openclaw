@@ -113,29 +113,34 @@ export async function buildCommandsListResult(params: {
       acceptsArgs: Boolean(cmd.acceptsArgs),
       ...(includeArgs && cmd.acceptsArgs && cmd.args?.length
         ? {
-            args: cmd.args.slice(0, COMMAND_ARGS_MAX_ITEMS).map((arg) => ({
-              name: truncateUtf16Safe(arg.name, COMMAND_ARG_NAME_MAX_LENGTH),
-              description: truncateUtf16Safe(arg.description, COMMAND_ARG_DESCRIPTION_MAX_LENGTH),
-              type: arg.type,
-              ...(arg.required ? { required: true } : {}),
-              ...(Array.isArray(arg.choices)
-                ? {
-                    choices: arg.choices
-                      .slice(0, COMMAND_ARG_CHOICES_MAX_ITEMS)
-                      .map((choice: CommandArgChoice) => ({
-                        value: truncateUtf16Safe(
-                          typeof choice === "string" ? choice : choice.value,
-                          COMMAND_CHOICE_VALUE_MAX_LENGTH,
-                        ),
-                        label: truncateUtf16Safe(
-                          typeof choice === "string" ? choice : choice.label,
-                          COMMAND_CHOICE_LABEL_MAX_LENGTH,
-                        ),
-                      })),
-                  }
-                : {}),
-              ...(typeof arg.choices === "function" ? { dynamic: true } : {}),
-            })),
+            args: cmd.args.slice(0, COMMAND_ARGS_MAX_ITEMS).map((arg) => {
+              const projected: NonNullable<CommandEntry["args"]>[number] = {
+                name: truncateUtf16Safe(arg.name, COMMAND_ARG_NAME_MAX_LENGTH),
+                description: truncateUtf16Safe(arg.description, COMMAND_ARG_DESCRIPTION_MAX_LENGTH),
+                type: arg.type,
+              };
+              if (arg.required) {
+                projected.required = true;
+              }
+              if (Array.isArray(arg.choices)) {
+                projected.choices = arg.choices
+                  .slice(0, COMMAND_ARG_CHOICES_MAX_ITEMS)
+                  .map((choice: CommandArgChoice) => ({
+                    value: truncateUtf16Safe(
+                      typeof choice === "string" ? choice : choice.value,
+                      COMMAND_CHOICE_VALUE_MAX_LENGTH,
+                    ),
+                    label: truncateUtf16Safe(
+                      typeof choice === "string" ? choice : choice.label,
+                      COMMAND_CHOICE_LABEL_MAX_LENGTH,
+                    ),
+                  }));
+              }
+              if (typeof arg.choices === "function") {
+                projected.dynamic = true;
+              }
+              return projected;
+            }),
           }
         : {}),
       ...(skill

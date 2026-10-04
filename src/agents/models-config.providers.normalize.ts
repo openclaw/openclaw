@@ -124,12 +124,12 @@ export function normalizeProviders(params: {
       secretRefManagedProviders: params.secretRefManagedProviders,
       providerApiKeyResolver:
         runtimeProviderKey !== undefined
-          ? (env) =>
+          ? (providerEnv) =>
               resolveProviderConfigApiKeyWithPlugin({
                 provider: runtimeProviderKey,
                 allowRuntimePluginLoad: false,
                 ...(params.manifestRegistry ? { manifestRegistry: params.manifestRegistry } : {}),
-                context: { provider: normalizedKey, env },
+                context: { provider: normalizedKey, env: providerEnv },
               })
           : undefined,
     });

@@ -127,10 +127,11 @@ function buildApprovalActionDescriptors(
   ];
   return decisions
     .filter((descriptor) => allowedDecisions.includes(descriptor.decision))
-    .map((descriptor) => ({
-      ...descriptor,
-      command: `/approve ${approvalCommandId} ${descriptor.decision}`,
-    }));
+    .map((descriptor) =>
+      Object.assign(descriptor, {
+        command: `/approve ${approvalCommandId} ${descriptor.decision}`,
+      }),
+    );
 }
 
 export function buildExecApprovalActionDescriptors(
@@ -153,15 +154,15 @@ export function buildTypedApprovalActionDescriptors(
     return [];
   }
   return buildApprovalActionDescriptors(approvalId, resolveAllowedDecisions(params)).map(
-    (descriptor) => ({
-      ...descriptor,
-      action: {
-        type: "approval",
-        approvalId,
-        approvalKind: params.approvalKind,
-        decision: descriptor.decision,
-      },
-    }),
+    (descriptor) =>
+      Object.assign(descriptor, {
+        action: {
+          type: "approval",
+          approvalId,
+          approvalKind: params.approvalKind,
+          decision: descriptor.decision,
+        } satisfies TypedApprovalActionDescriptor["action"],
+      }),
   );
 }
 

@@ -21,39 +21,6 @@ import { resolveConversationRouteEligibilityForAgent } from "./conversation-rout
 
 const log = createSubsystemLogger("gateway/conversations");
 
-type ConversationListDeps = {
-  listConversations: typeof listConversations;
-  registerConversationAddresses: typeof registerConversationAddresses;
-  resolveOutboundChannelPlugin: typeof resolveOutboundChannelPlugin;
-  resolveOutboundSessionRoute: typeof resolveOutboundSessionRoute;
-};
-
-const defaultDeps: ConversationListDeps = {
-  listConversations,
-  registerConversationAddresses,
-  resolveOutboundChannelPlugin,
-  resolveOutboundSessionRoute,
-};
-
-async function listLiveDirectoryEntries(params: {
-  channel: string;
-  accountId: string;
-  kind: "peers" | "groups";
-  run: () => Promise<ChannelDirectoryEntry[]>;
-}): Promise<ChannelDirectoryEntry[]> {
-  try {
-    return await params.run();
-  } catch (error) {
-    log.warn("live directory discovery failed; using configured entries", {
-      channel: params.channel,
-      accountId: params.accountId,
-      kind: params.kind,
-      error: formatErrorMessage(error),
-    });
-    return [];
-  }
-}
-
 /** Lists persisted and channel-directory addresses from the Gateway's live plugin runtime. */
 export async function runGatewayConversationList(
   params: {
@@ -64,7 +31,12 @@ export async function runGatewayConversationList(
     query?: string;
     limit: number;
   },
-  deps: ConversationListDeps = defaultDeps,
+  deps = {
+    listConversations,
+    registerConversationAddresses,
+    resolveOutboundChannelPlugin,
+    resolveOutboundSessionRoute,
+  },
 ): Promise<ConversationListResult> {
   const scope = await prepareConversationRegistryScope(params);
   const query = params.query?.trim() || undefined;
@@ -101,25 +73,27 @@ export async function runGatewayConversationList(
         const directory = plugin.directory;
         const listPeersLive = directory?.listPeersLive;
         const listGroupsLive = directory?.listGroupsLive;
+        const listLiveDirectoryEntries = async (
+          kind: "peers" | "groups",
+          run: () => Promise<ChannelDirectoryEntry[]>,
+        ): Promise<ChannelDirectoryEntry[]> => {
+          try {
+            return await run();
+          } catch (error) {
+            log.warn("live directory discovery failed; using configured entries", {
+              channel: plugin.id,
+              accountId,
+              kind,
+              error: formatErrorMessage(error),
+            });
+            return [];
+          }
+        };
         const [configuredPeers, livePeers, configuredGroups, liveGroups] = await Promise.all([
           directory?.listPeers?.(input) ?? [],
-          listPeersLive
-            ? listLiveDirectoryEntries({
-                channel: plugin.id,
-                accountId,
-                kind: "peers",
-                run: () => listPeersLive(input),
-              })
-            : [],
+          listPeersLive ? listLiveDirectoryEntries("peers", () => listPeersLive(input)) : [],
           directory?.listGroups?.(input) ?? [],
-          listGroupsLive
-            ? listLiveDirectoryEntries({
-                channel: plugin.id,
-                accountId,
-                kind: "groups",
-                run: () => listGroupsLive(input),
-              })
-            : [],
+          listGroupsLive ? listLiveDirectoryEntries("groups", () => listGroupsLive(input)) : [],
         ]);
         const entries = new Map<string, ChannelDirectoryEntry>();
         for (const entry of [
@@ -174,7 +148,7 @@ export async function runGatewayConversationList(
           }
         }
       }
-      const eligibleIdentities = await runConversationDatabaseWrite(scope, (scope) => {
+      const eligibleIdentities = await runConversationDatabaseWrite(scope, (writeScope) => {
         const currentConfig = params.readCurrentConfig?.() ?? params.config;
         const eligible = [...identities.values()].filter((identity) => {
           const eligibility = resolveConversationRouteEligibilityForAgent({
@@ -187,7 +161,7 @@ export async function runGatewayConversationList(
           }
           return eligibility === "eligible";
         });
-        deps.registerConversationAddresses(scope, eligible);
+        deps.registerConversationAddresses(writeScope, eligible);
         return eligible;
       });
       for (const identity of eligibleIdentities) {
@@ -228,16 +202,27 @@ export async function runGatewayConversationList(
     })
     .slice(0, params.limit);
   return {
-    conversations: selected.map((conversation) => ({
-      conversationRef: conversation.conversationRef,
-      channel: conversation.channel,
-      accountId: conversation.accountId,
-      kind: conversation.kind,
-      target: conversation.target,
-      ...(conversation.threadId ? { threadId: conversation.threadId } : {}),
-      ...(conversation.label ? { label: conversation.label } : {}),
-      firstSeenAt: conversation.firstSeenAt,
-      lastSeenAt: conversation.lastSeenAt,
-    })),
+    conversations: selected.map((conversation) => {
+      const row: Omit<
+        ConversationListResult["conversations"][number],
+        "firstSeenAt" | "lastSeenAt"
+      > = {
+        conversationRef: conversation.conversationRef,
+        channel: conversation.channel,
+        accountId: conversation.accountId,
+        kind: conversation.kind,
+        target: conversation.target,
+      };
+      if (conversation.threadId) {
+        row.threadId = conversation.threadId;
+      }
+      if (conversation.label) {
+        row.label = conversation.label;
+      }
+      return Object.assign(row, {
+        firstSeenAt: conversation.firstSeenAt,
+        lastSeenAt: conversation.lastSeenAt,
+      });
+    }),
   };
 }
