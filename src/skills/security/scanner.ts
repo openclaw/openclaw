@@ -356,8 +356,8 @@ function isBenignDangerousExecMatch(
   }
   return (
     command === "exec" &&
-    !namespaceAliases.has(memberReceiver) &&
-    !LITERAL_NAMESPACE_RECEIVERS.has(memberReceiver)
+    (!memberReceiver ||
+      (!namespaceAliases.has(memberReceiver) && !LITERAL_NAMESPACE_RECEIVERS.has(memberReceiver)))
   );
 }
 
