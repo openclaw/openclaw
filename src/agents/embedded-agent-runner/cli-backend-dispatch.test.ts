@@ -299,6 +299,13 @@ describe("runEmbeddedAgentViaCliBackendIfEligible gate", () => {
       );
       const dispatched = runCliAgent.mock.calls[0]?.[0];
       expect(dispatched).toMatchObject({ provider: "claude-cli" });
+      // The hook surface routes on the caller's logical provider; passing the
+      // backend name there would make same-backend overrides self-reject.
+      expect(dispatched.hookModelProvider).toBe("anthropic");
+      // modelProvider is the preparation policy input; replacing the backend
+      // with the logical provider would drop backend-keyed tools.byProvider
+      // restrictions before the child reaches the restricted tool.
+      expect(dispatched.modelProvider).toBeUndefined();
       expect(dispatched.requesterModel).toEqual(
         requestedRouteResolution === "resolved"
           ? { provider: "anthropic", model: "claude-opus-4-8" }
@@ -306,6 +313,18 @@ describe("runEmbeddedAgentViaCliBackendIfEligible gate", () => {
       );
     },
   );
+
+  it("keeps the runner's backend fallback when the caller resolved no provider", async () => {
+    resolveCliRuntimeExecutionProvider.mockReturnValue("claude-cli");
+    expect(
+      await runGate({ provider: undefined, model: undefined, requestedRouteResolution: undefined }),
+    ).toBeDefined();
+    expect(runCliAgent.mock.calls[0]?.[0]).toMatchObject({
+      provider: "claude-cli",
+      hookModelProvider: undefined,
+    });
+    expect(runCliAgent.mock.calls[0]?.[0].modelProvider).toBeUndefined();
+  });
 
   it("keeps the passthrough for canonical refs without a claude-cli runtime", async () => {
     resolveCliRuntimeExecutionProvider.mockReturnValue(undefined);

@@ -58,6 +58,7 @@ import {
 } from "./cli-runner/delivery-evidence.js";
 import { createCliFailoverError } from "./cli-runner/exit-error.js";
 import { cliBackendLog } from "./cli-runner/log.js";
+import { applyCliModelResolveHookForRun } from "./cli-runner/model-resolve-hook.js";
 import {
   runClaudeCliAgentTurnWithDiagnostics,
   type ClaudeCliRunDiagnosticLifecycle,
@@ -166,6 +167,10 @@ async function runCliAgentInternal(
     if (hookResult) {
       return hookResult;
     }
+    // before_model_resolve must run before preparation normalizes the model for the
+    // child process; the embedded runner emits it in model setup, the CLI path
+    // returns before that setup, so it is emitted here (see model-resolve-hook).
+    await applyCliModelResolveHookForRun(params);
     modelExecution = bindOperatorModelExecution(
       readRunOperatorAuthority(params),
       params.requesterModel,
