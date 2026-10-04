@@ -6,7 +6,9 @@ import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { rosterActivityStore } from "../lib/agents/roster-activity-store.ts";
 import {
   mountRoster,
+  roster,
   selectFilter,
+  session,
 } from "../test-helpers/app-sidebar-cases/roster.test-support.ts";
 import {
   catalogPage,
@@ -54,6 +56,26 @@ async function useSidebarMode(
 }
 
 describe("sidebar session feedback", () => {
+  it("shows unread activity for an agent that has not been opened in chip mode", async () => {
+    const now = Date.now();
+    const { sidebar, context, result } = await mountRoster(roster, [
+      session("main", now),
+      session("recent", now - 1, { unread: true }),
+      session("working", now - 2, { unread: true, archived: true }),
+    ]);
+    await vi.dynamicImportSettled();
+    await vi.waitFor(() => expect(rosterActivityStore(context).snapshot.result).not.toBeNull());
+    await sidebar.updateComplete;
+    await vi.waitFor(() =>
+      expect(sidebar.querySelectorAll(".sidebar-agent-card__menu-unread")).toHaveLength(1),
+    );
+    result.sessions[1] = { ...result.sessions[1]!, unread: false };
+    await rosterActivityStore(context).refresh();
+    await sidebar.updateComplete;
+    await vi.waitFor(() =>
+      expect(sidebar.querySelector(".sidebar-agent-card__menu-unread")).toBeNull(),
+    );
+  });
   it("shows pending append, blocks repeated activation, and recovers after failure and retry", async () => {
     const keys = Array.from(
       { length: SIDEBAR_SESSION_PAGE_SIZE + 1 },
