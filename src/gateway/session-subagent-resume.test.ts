@@ -16,7 +16,7 @@ import { markSubagentRunPausedAfterYield } from "../agents/subagents/registry/su
 import { registerSubagentRun } from "../agents/subagents/registry/subagent-registry.js";
 import { writeSubagentSessionEntry } from "../agents/subagents/registry/subagent-registry.persistence.test-support.js";
 import { bindSubagentRunRecord } from "../agents/subagents/registry/subagent-registry.store.codec.js";
-import { upsertSubagentRunRowInDatabase } from "../agents/subagents/registry/subagent-registry.store.kernel.js";
+import { writeSubagentRunValuesInDatabase } from "../agents/subagents/registry/subagent-registry.store.kernel.js";
 import { loadSubagentRegistryFromSqlite } from "../agents/subagents/registry/subagent-registry.store.sqlite.js";
 import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
 import { getRuntimeConfig } from "../config/config.js";
@@ -276,7 +276,11 @@ it("rejects a foreign task replacement instead of accepting untracked work", asy
     task: "replacement task",
   };
   // An independent writer changes execution ownership before the worker's version check.
-  upsertSubagentRunRowInDatabase(openOpenClawStateDatabase(), bindSubagentRunRecord(replacement));
+  writeSubagentRunValuesInDatabase(
+    openOpenClawStateDatabase(),
+    [bindSubagentRunRecord(replacement)],
+    [],
+  );
   await expect(adopt()).rejects.toThrow(/changed/);
   expect(subagentRuns.has(nextRunId)).toBe(false);
   expect(subagentRuns.get(previousRunId)).toEqual(replacement);
