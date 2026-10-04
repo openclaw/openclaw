@@ -472,15 +472,6 @@ export async function monitorWebChannel(
       );
 
       const { e164: selfE164 } = readWebSelfId(account.authDir);
-      const connectRoute = resolveAgentRoute({
-        cfg,
-        channel: "whatsapp",
-        accountId: account.accountId,
-      });
-      enqueueSystemEvent(`WhatsApp gateway connected${selfE164 ? ` as ${selfE164}` : ""}.`, {
-        sessionKey: connectRoute.sessionKey,
-      });
-
       const normalizedAccountId = normalizeReconnectAccountId(account.accountId);
       const drainDeliveries = (mode: "reconnect" | "periodic") => {
         void drainPendingDeliveries({
@@ -554,14 +545,18 @@ export async function monitorWebChannel(
         "web reconnect: connection closed",
       );
 
-      enqueueSystemEvent(
-        `WhatsApp gateway disconnected (status ${decision.normalized.statusLabel})`,
-        {
-          sessionKey: connectRoute.sessionKey,
-        },
-      );
-
       if (decision.action === "stop") {
+        // Retried closes recover on their own; only tell the agent when monitoring stops.
+        enqueueSystemEvent(
+          `WhatsApp gateway disconnected (status ${decision.normalized.statusLabel})`,
+          {
+            sessionKey: resolveAgentRoute({
+              cfg,
+              channel: "whatsapp",
+              accountId: account.accountId,
+            }).sessionKey,
+          },
+        );
         await controller.closeCurrentConnection();
         statusController.noteClose({
           statusCode: decision.normalized.statusCode,
