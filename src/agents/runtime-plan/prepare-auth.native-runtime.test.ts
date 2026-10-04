@@ -4,7 +4,8 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { AuthProfileStore } from "../auth-profiles.js";
 import { prepareAgentRuntimeAuthPlan } from "./prepare-auth.test-support.js";
 
-vi.mock("../../plugins/provider-runtime.js", () => ({
+vi.mock("../../plugins/provider-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../plugins/provider-runtime.js")>()),
   buildProviderMissingAuthMessageWithPlugin: () => undefined,
   resolveProviderDeprecatedAuthProfileIds: () => [],
   resolveProviderSyntheticAuthWithPlugin: () => undefined,

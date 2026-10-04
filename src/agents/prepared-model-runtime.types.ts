@@ -42,6 +42,8 @@ export type PreparedNativeModelSelection = {
   provider: string;
   modelId: string;
   runtime: string;
+  /** Session-pinned auth profile for account-scoped native discovery. */
+  authProfileId?: string;
 };
 
 /** Per-call selected-row result; never persisted on a catalog snapshot. */

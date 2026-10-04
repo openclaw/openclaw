@@ -13,7 +13,10 @@ import {
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveEmbeddedRunModelSetup } from "./embedded-agent-runner/run/model-setup.js";
-import type { AgentHarnessModelCatalogResult } from "./harness/types.js";
+import type {
+  AgentHarnessModelCatalogParams,
+  AgentHarnessModelCatalogResult,
+} from "./harness/types.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
 import {
   loadProviderScopedThinkingCatalog,
@@ -87,8 +90,12 @@ async function fixture(
   mocks.resolveNativeModelPrimary.mockImplementation(resolveNativeModelPrimary);
   const a = { provider: "provider-a", id: "model", name: "A", nativeRuntime: runtimeA };
   const b = { provider: "provider-b", id: "model", name: "B", nativeRuntime: "native-b" };
-  const loadA = vi.fn<() => Promise<AgentHarnessModelCatalogResult>>(async () => [a]);
-  const loadB = vi.fn<() => Promise<AgentHarnessModelCatalogResult>>(async () => [b]);
+  const loadA = vi.fn<
+    (params: AgentHarnessModelCatalogParams) => Promise<AgentHarnessModelCatalogResult>
+  >(async () => [a]);
+  const loadB = vi.fn<
+    (params: AgentHarnessModelCatalogParams) => Promise<AgentHarnessModelCatalogResult>
+  >(async () => [b]);
   mocks.loadAgentRuntimePluginRegistryHandle.mockImplementation(() => {
     const registry = createEmptyPluginRegistry();
     for (const [entry, loadModelCatalog] of [
@@ -397,6 +404,63 @@ it("does not authorize a targeted native row with a failed runtime outcome", asy
     status: "unavailable",
   });
   expect(onSelectionReady).toHaveBeenCalledWith(false);
+});
+
+it("keeps a session-profile native row call-local instead of warming the shared config-profile catalog", async () => {
+  const { owner, b, loadB } = await fixture(true);
+  const configProfileRow = { ...b, name: "Config profile A model", contextWindow: 8_000 };
+  const sessionProfileRow = { ...b, name: "Session profile B model", contextWindow: 32_000 };
+  loadB.mockImplementation(async (params) =>
+    params.authProfileId ? [sessionProfileRow] : [configProfileRow],
+  );
+  const selected = {
+    provider: b.provider,
+    modelId: b.id,
+    runtime: b.nativeRuntime,
+    authProfileId: "provider-b:profile-b",
+  };
+  const selectedCatalog = await owner.loadNativeModelCatalog!(selected);
+
+  expect(selectedCatalog.entries).toContainEqual(expect.objectContaining(sessionProfileRow));
+  expect(owner.modelCatalog.entries).not.toContainEqual(expect.objectContaining(sessionProfileRow));
+  expect(owner.readFullModelCatalog?.()?.entries ?? []).not.toContainEqual(
+    expect.objectContaining(sessionProfileRow),
+  );
+
+  const configProfileCatalog = await owner.loadNativeModelCatalog!({
+    provider: b.provider,
+    modelId: b.id,
+    runtime: b.nativeRuntime,
+  });
+  expect(configProfileCatalog.entries).toContainEqual(expect.objectContaining(configProfileRow));
+  expect(configProfileCatalog.entries).not.toContainEqual(
+    expect.objectContaining(sessionProfileRow),
+  );
+  expect(loadB.mock.calls.map(([params]) => params.authProfileId)).toEqual([
+    "provider-b:profile-b",
+    undefined,
+  ]);
+
+  const sharedCatalogBeforeFailure = owner.readFullModelCatalog?.();
+  const events: unknown[] = [];
+  const unsubscribe = registerPreparedModelRuntimePublicationListener((event) => {
+    events.push(event);
+  });
+  const failure = new Error("Session profile B unavailable");
+  loadB.mockImplementation(async (params) => {
+    if (params.authProfileId) {
+      throw failure;
+    }
+    return [configProfileRow];
+  });
+  try {
+    await expect(owner.loadNativeModelCatalog!(selected)).rejects.toBe(failure);
+  } finally {
+    unsubscribe();
+  }
+  expect(owner.readFullModelCatalog?.()).toBe(sharedCatalogBeforeFailure);
+  expect(sharedCatalogBeforeFailure?.refreshFailed).toBeUndefined();
+  expect(events).toEqual([]);
 });
 
 it("does not reuse a failed native outcome when a readiness reader is present", async () => {

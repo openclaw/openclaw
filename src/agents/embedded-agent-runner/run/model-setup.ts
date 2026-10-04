@@ -247,6 +247,9 @@ export async function resolveEmbeddedRunModelSetup(params: {
         harness: agentHarness,
         provider,
         modelId,
+        ...(runParams.authProfileIdSource && runParams.authProfileId
+          ? { authProfileId: runParams.authProfileId }
+          : {}),
       });
   const nativeCatalogEntry = nativeCatalogSelection?.entry;
   runParams.abortSignal?.throwIfAborted();

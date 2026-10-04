@@ -38,21 +38,26 @@ export async function resolveReadyNativeModelCatalogEntry(params: {
   harness: AgentHarness;
   provider: string;
   modelId: string;
+  authProfileId?: string;
 }): Promise<ReadyNativeModelCatalogSelection | undefined> {
-  const { snapshot, harness, provider, modelId } = params;
+  const { snapshot, harness, provider, modelId, authProfileId } = params;
   if (!snapshot || !harness.loadModelCatalog || !snapshot.isCurrent()) {
     return undefined;
   }
   const ownerHarness = snapshot.pluginRegistry?.agentHarnesses.find(
     (registration) => registration.harness.id === harness.id,
   )?.harness;
-  if (ownerHarness !== harness) {
+  if (
+    ownerHarness !== harness ||
+    (authProfileId &&
+      (!harness.readModelCatalogReadiness || !harness.captureModelCatalogSelectionAuthority))
+  ) {
     return undefined;
   }
 
   let catalog = snapshot.readFullModelCatalog?.() ?? snapshot.modelCatalog;
   let entry =
-    catalog.authoritative === false
+    authProfileId || catalog.authoritative === false
       ? undefined
       : findOwnedEntry(catalog, provider, modelId, harness.id);
   if (!entry && snapshot.loadNativeModelCatalog) {
@@ -66,6 +71,7 @@ export async function resolveReadyNativeModelCatalogEntry(params: {
             provider,
             modelId,
             runtime: harness.id,
+            ...(authProfileId ? { authProfileId } : {}),
           },
           {
             onSelectionReady: (ready) => {
@@ -95,7 +101,7 @@ export async function resolveReadyNativeModelCatalogEntry(params: {
       // Prefer an authoritative refresh result when it contains the requested row. Some
       // snapshots publish inventory through an accessor that still points at the previous view.
       const refreshedEntry =
-        loaded.authoritative === false && !completedTargetedAcquisition
+        (authProfileId || loaded.authoritative === false) && !completedTargetedAcquisition
           ? undefined
           : findOwnedEntry(loaded, provider, modelId, harness.id);
       if (refreshedEntry) {
@@ -103,6 +109,9 @@ export async function resolveReadyNativeModelCatalogEntry(params: {
         // exact-runtime acquisition; other callers still require an authoritative snapshot.
         catalog = loaded;
         entry = refreshedEntry;
+      } else if (authProfileId) {
+        // A config-selected account row cannot authorize a session-pinned profile.
+        return undefined;
       } else {
         catalog = snapshot.readFullModelCatalog?.() ?? loaded;
         entry =
@@ -116,7 +125,7 @@ export async function resolveReadyNativeModelCatalogEntry(params: {
     if (!snapshot.isCurrent()) {
       return undefined;
     }
-  } else if (!entry && snapshot.loadFullModelCatalog) {
+  } else if (!entry && !authProfileId && snapshot.loadFullModelCatalog) {
     try {
       const loaded = await snapshot.loadFullModelCatalog({
         refresh: true,
@@ -155,6 +164,7 @@ export async function resolveReadyNativeModelCatalogEntry(params: {
     preparedRuntimeAuthModes: snapshot.authModes,
     pluginRegistry: snapshot.pluginRegistry,
     observationConfig: snapshot.observationConfig,
+    ...(authProfileId ? { nativeAuthProfileId: authProfileId } : {}),
     isCurrent: snapshot.isCurrent,
   });
   const variants = catalog.routeVariants.filter(
@@ -191,6 +201,7 @@ export async function resolveReadyNativeModelCatalogEntry(params: {
         workspaceDir: snapshot.workspaceDir ?? resolveAgentWorkspaceDir(snapshot.config, agentId),
         provider,
         modelId,
+        ...(authProfileId ? { authProfileId } : {}),
       });
     } catch {
       return undefined;

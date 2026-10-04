@@ -84,7 +84,40 @@ export function createCodexAppServerModelCatalog(runtime: string) {
   };
   const scopes = new WeakMap<AgentHarnessModelCatalogParams["config"], Map<string, Observation>>();
   const scopeKey = (params: AgentHarnessModelCatalogParams) =>
-    JSON.stringify([params.agentId, params.agentDir, params.workspaceDir]);
+    JSON.stringify([
+      params.agentId,
+      params.agentDir,
+      params.workspaceDir,
+      params.authProfileId?.trim() || undefined,
+    ]);
+  const isObservationCurrent = (
+    params: AgentHarnessModelCatalogParams,
+    observation: Observation,
+  ) => {
+    if (!observation.profileAuthSelected) {
+      return observation.isCurrent?.() === true;
+    }
+    const authProfileId = observation.authProfileId;
+    const ownerFingerprint = observation.authProfileOwnerFingerprint;
+    if (!authProfileId || !ownerFingerprint || observation.isClientCurrent?.() !== true) {
+      return false;
+    }
+    try {
+      const store = resolveCodexAppServerAuthProfileStore({
+        agentDir: params.agentDir,
+        authProfileId,
+        config: params.config,
+      });
+      return (
+        fingerprintAuthProfileStoreEntry({
+          profileId: authProfileId,
+          credential: store.profiles[authProfileId],
+        }) === ownerFingerprint
+      );
+    } catch {
+      return false;
+    }
+  };
   let disposed = false;
   return {
     dispose() {
@@ -102,7 +135,7 @@ export function createCodexAppServerModelCatalog(runtime: string) {
         observation.models?.has(params.modelId) &&
         observation.accountType &&
         (!observation.profileAuthSelected || observation.authBindingFingerprint !== undefined) &&
-        observation.isCurrent?.()
+        isObservationCurrent(params, observation)
         ? {
             accountType: observation.accountType,
             ...(observation.authMode ? { authMode: observation.authMode } : {}),
@@ -114,31 +147,6 @@ export function createCodexAppServerModelCatalog(runtime: string) {
       pluginConfig: unknown,
     ) {
       const observation = scopes.get(params.config)?.get(scopeKey(params));
-      const isLiveProfileOwnerCurrent = () => {
-        if (!observation?.profileAuthSelected) {
-          return true;
-        }
-        const authProfileId = observation.authProfileId;
-        const authProfileOwnerFingerprint = observation.authProfileOwnerFingerprint;
-        if (!authProfileId || !authProfileOwnerFingerprint) {
-          return false;
-        }
-        try {
-          const store = resolveCodexAppServerAuthProfileStore({
-            agentDir: params.agentDir,
-            authProfileId,
-            config: params.config,
-          });
-          return (
-            fingerprintAuthProfileStoreEntry({
-              profileId: authProfileId,
-              credential: store.profiles[authProfileId],
-            }) === authProfileOwnerFingerprint
-          );
-        } catch {
-          return false;
-        }
-      };
       const isCurrent = () =>
         !disposed &&
         params.provider === "openai" &&
@@ -148,9 +156,8 @@ export function createCodexAppServerModelCatalog(runtime: string) {
         observation.models?.has(params.modelId) === true &&
         observation.accountType !== undefined &&
         (observation.profileAuthSelected
-          ? observation.isClientCurrent?.() === true &&
-            observation.authBindingFingerprint !== undefined &&
-            isLiveProfileOwnerCurrent()
+          ? observation.authBindingFingerprint !== undefined &&
+            isObservationCurrent(params, observation)
           : observation.isCurrent?.() === true);
       if (!isCurrent()) {
         return undefined;
@@ -210,15 +217,24 @@ export function createCodexAppServerModelCatalog(runtime: string) {
       const options = resolveCodexAppServerRuntimeOptions({ pluginConfig });
       const ownsLocalProcess =
         options.start.transport === "stdio" && !isCodexAppServerProxyLaunch(options.start.args);
+      const requestedAuthProfileId = params.authProfileId?.trim();
+      if (requestedAuthProfileId && (!ownsLocalProcess || options.start.homeScope !== "agent")) {
+        return [];
+      }
       const authProfileStore =
         ownsLocalProcess && options.start.homeScope === "agent"
           ? resolveCodexAppServerAuthProfileStore({
               agentDir: params.agentDir,
+              authProfileId: requestedAuthProfileId,
               config: params.config,
             })
           : undefined;
       const authProfileId = authProfileStore
-        ? resolveCodexAppServerAuthProfileId({ store: authProfileStore, config: params.config })
+        ? resolveCodexAppServerAuthProfileId({
+            authProfileId: requestedAuthProfileId,
+            store: authProfileStore,
+            config: params.config,
+          })
         : undefined;
       // SIWC's public provider owns the account model list. Native Codex sees only a
       // placeholder API key here, so its bundled catalog cannot describe that account.

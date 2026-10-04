@@ -117,6 +117,78 @@ describe("first-turn native model catalog resolution", () => {
     ).resolves.toMatchObject({ entry: luna });
   });
 
+  it("acquires the exact user-pinned profile before accepting a config-owned row", async () => {
+    const assertCurrent = vi.fn();
+    const captureSelection = vi.fn(() => assertCurrent);
+    const loadNative = vi.fn<NonNullable<PreparedModelRuntimeSnapshot["loadNativeModelCatalog"]>>(
+      async (_selection, options) => {
+        options?.onSelectionReady?.(true);
+        return catalog([luna]);
+      },
+    );
+    const { harness, snapshot } = fixture({
+      entries: [luna],
+      loadNative,
+      captureSelection,
+      config: {
+        agents: {
+          defaults: {
+            model: "openai/gpt-6-luna",
+            models: { "openai/gpt-6-luna": { agentRuntime: { id: "codex" } } },
+          },
+        },
+        auth: {
+          profiles: {
+            "openai:profile-a": { provider: "openai", mode: "oauth" },
+            "openai:profile-b": { provider: "openai", mode: "oauth" },
+          },
+        },
+      },
+    });
+
+    await expect(
+      resolveReadyNativeModelCatalogEntry({
+        snapshot,
+        harness,
+        provider: "openai",
+        modelId: "gpt-6-luna",
+        authProfileId: "openai:profile-b",
+      }),
+    ).resolves.toMatchObject({ entry: luna, assertCurrent });
+    expect(loadNative).toHaveBeenCalledOnce();
+    expect(loadNative.mock.calls[0]?.[0]).toMatchObject({ authProfileId: "openai:profile-b" });
+    expect(captureSelection).toHaveBeenCalledWith(
+      expect.objectContaining({ authProfileId: "openai:profile-b" }),
+    );
+  });
+
+  it("does not reuse profile A's retained row when the pinned profile B acquisition is not ready", async () => {
+    const captureSelection = vi.fn(() => vi.fn());
+    const loadNative = vi.fn<NonNullable<PreparedModelRuntimeSnapshot["loadNativeModelCatalog"]>>(
+      async (_selection, options) => {
+        options?.onSelectionReady?.(false);
+        return catalog([luna]);
+      },
+    );
+    const { harness, snapshot } = fixture({
+      entries: [luna],
+      loadNative,
+      captureSelection,
+    });
+
+    await expect(
+      resolveReadyNativeModelCatalogEntry({
+        snapshot,
+        harness,
+        provider: "openai",
+        modelId: "gpt-6-luna",
+        authProfileId: "openai:profile-b",
+      }),
+    ).resolves.toBeUndefined();
+    expect(loadNative).toHaveBeenCalledOnce();
+    expect(captureSelection).not.toHaveBeenCalled();
+  });
+
   it("loads a cold exact Luna row and returns it only after readiness", async () => {
     const load = vi.fn(async () => catalog([luna]));
     const { harness, snapshot } = fixture({ load });

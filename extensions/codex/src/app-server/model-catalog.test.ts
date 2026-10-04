@@ -33,7 +33,8 @@ vi.mock("./request.js", () => ({
       run(rpc.request, rpc.client),
   ),
 }));
-vi.mock("./shared-client.js", () => ({
+vi.mock("./shared-client.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./shared-client.js")>()),
   captureSharedClientRegistration: () => () => rpc.registered,
   captureSharedCodexAppServerCatalogLifetime: () => {
     const epoch = rpc.epoch;
@@ -417,6 +418,12 @@ describe("Codex app-server model catalog", () => {
     // The prepared profile login and its delayed account/updated notification are expected.
     rpc.epoch += 1;
     expect(() => assertSelectionCurrent?.()).not.toThrow();
+    expect(
+      owner.read(
+        { ...params, provider: "openai", modelId: "synthetic-profile-model" },
+        pluginConfig,
+      ),
+    ).toEqual({ accountType: "chatgpt" });
     const preparedAttemptFingerprint = fingerprintCodexModelCatalogAttemptAuthority({
       clientInstanceId: "synthetic-attempt-client",
       modelCatalogRevision: 2,
@@ -478,6 +485,167 @@ describe("Codex app-server model catalog", () => {
     expect(() => assertSelectionCurrent?.()).toThrow(
       "Codex native model catalog selection is no longer current",
     );
+    expect(
+      owner.read(
+        { ...params, provider: "openai", modelId: "synthetic-profile-model" },
+        pluginConfig,
+      ),
+    ).toBeUndefined();
+  });
+
+  it("discovers and fences the exact session-pinned profile instead of config-order profile A", async () => {
+    profiles.store = {
+      version: 1,
+      profiles: {
+        "openai:profile-a": {
+          type: "oauth",
+          provider: "openai",
+          access: "synthetic-access-a",
+          refresh: "synthetic-refresh-a",
+          expires: Date.now() + 60 * 60_000,
+          accountId: "synthetic-account-a",
+        },
+        "openai:profile-b": {
+          type: "oauth",
+          provider: "openai",
+          access: "synthetic-access-b",
+          refresh: "synthetic-refresh-b",
+          expires: Date.now() + 60 * 60_000,
+          accountId: "synthetic-account-b",
+        },
+      },
+      order: { openai: ["openai:profile-a", "openai:profile-b"] },
+    };
+    const params = {
+      ...catalogParams,
+      authProfileId: "openai:profile-b",
+      config: { auth: { order: { openai: ["openai:profile-a", "openai:profile-b"] } } },
+    };
+    const pluginConfig = { appServer: { homeScope: "agent" } };
+    rpc.request.mockResolvedValue({ account: { type: "chatgpt" }, requiresOpenaiAuth: true });
+    listModelsMock.mockResolvedValue({
+      models: [
+        {
+          id: "synthetic-profile-b-model",
+          model: "synthetic-profile-b-model",
+          inputModalities: ["text"],
+          supportedReasoningEfforts: [],
+        },
+      ],
+    });
+
+    await expect(owner.load(params, pluginConfig)).resolves.toMatchObject([
+      { id: "synthetic-profile-b-model", nativeRuntime: "codex" },
+    ]);
+    expect(vi.mocked(withCodexAppServerJsonClient).mock.calls[0]?.[0].authProfileId).toBe(
+      "openai:profile-b",
+    );
+    expect(
+      owner.read(
+        {
+          ...params,
+          authProfileId: "openai:profile-b",
+          provider: "openai",
+          modelId: "synthetic-profile-b-model",
+        },
+        pluginConfig,
+      ),
+    ).toEqual({ accountType: "chatgpt" });
+    expect(
+      owner.read(
+        {
+          ...params,
+          authProfileId: undefined,
+          provider: "openai",
+          modelId: "synthetic-profile-b-model",
+        },
+        pluginConfig,
+      ),
+    ).toBeUndefined();
+
+    listModelsMock.mockResolvedValue({
+      models: [
+        {
+          id: "synthetic-profile-a-model",
+          model: "synthetic-profile-a-model",
+          inputModalities: ["text"],
+          supportedReasoningEfforts: [],
+        },
+      ],
+    });
+    await owner.load(
+      {
+        ...params,
+        authProfileId: "openai:profile-a",
+      },
+      pluginConfig,
+    );
+    expect(
+      owner.read(
+        {
+          ...params,
+          authProfileId: "openai:profile-a",
+          provider: "openai",
+          modelId: "synthetic-profile-a-model",
+        },
+        pluginConfig,
+      ),
+    ).toEqual({ accountType: "chatgpt" });
+    expect(
+      owner.read(
+        {
+          ...params,
+          provider: "openai",
+          modelId: "synthetic-profile-a-model",
+        },
+        pluginConfig,
+      ),
+    ).toBeUndefined();
+    expect(
+      owner.read(
+        {
+          ...params,
+          authProfileId: "openai:profile-b",
+          provider: "openai",
+          modelId: "synthetic-profile-b-model",
+        },
+        pluginConfig,
+      ),
+    ).toEqual({ accountType: "chatgpt" });
+
+    const assertSelectionCurrent = owner.captureSelectionAuthority(
+      {
+        ...params,
+        provider: "openai",
+        modelId: "synthetic-profile-b-model",
+      },
+      pluginConfig,
+    );
+    const binding = await prepareCodexAppServerAuthBinding({
+      authProfileId: "openai:profile-b",
+      authProfileStore: profiles.store,
+      agentDir: params.agentDir,
+      config: params.config,
+    });
+    expect(binding?.fingerprint).toBeTruthy();
+    expect(() =>
+      assertSelectionCurrent?.({
+        phase: "bind",
+        authBindingFingerprint: binding?.fingerprint ?? "",
+        attemptFingerprint: fingerprintCodexModelCatalogAttemptAuthority({
+          clientInstanceId: "synthetic-profile-b-client",
+          modelCatalogRevision: 1,
+        }),
+      }),
+    ).not.toThrow();
+  });
+
+  it("does not claim a session-pinned profile for native user-home transport", async () => {
+    await expect(
+      owner.load({ ...catalogParams, authProfileId: "openai:profile-b" }, nativePluginConfig),
+    ).resolves.toEqual([]);
+    expect(withCodexAppServerJsonClient).not.toHaveBeenCalled();
+    expect(listModelsMock).not.toHaveBeenCalled();
   });
 
   it("revokes profile-auth model selection when the selected profile binding changes or disappears", async () => {
@@ -551,6 +719,12 @@ describe("Codex app-server model catalog", () => {
         },
       },
     };
+    expect(
+      owner.read(
+        { ...params, provider: "openai", modelId: "synthetic-profile-model" },
+        pluginConfig,
+      ),
+    ).toBeUndefined();
     expect(() =>
       assertSelectionCurrent?.({
         phase: "assert",

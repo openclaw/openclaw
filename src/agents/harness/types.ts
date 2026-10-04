@@ -440,6 +440,11 @@ export type AgentHarnessModelCatalogParams = {
   agentDir: string;
   workspaceDir: string;
   configuredModelRefs?: readonly ModelRef[];
+  /**
+   * When set for a session-selected profile, load/readiness/authority must use this exact
+   * profile; a harness that cannot honor it must return no scoped native rows.
+   */
+  authProfileId?: string;
 };
 
 export type AgentHarnessModelCatalogResult =
@@ -638,7 +643,7 @@ type AgentHarnessContract<
     serviceTiers: readonly string[];
   }): readonly string[];
   /**
-   * Reads current, secret-free native account evidence for this exact catalog scope/model.
+   * Reads current, secret-free native account evidence for this exact catalog scope/model/profile.
    * No I/O or discovery here. Missing/stale/disposed evidence returns undefined; this is
    * picker metadata only, never execution authorization or a host-route credential.
    * When known, authMode describes this same account observation.

@@ -214,6 +214,9 @@ export async function augmentModelCatalogWithAgentHarness(params: {
         agentDir: params.agentDir,
         workspaceDir: params.workspaceDir,
         configuredModelRefs,
+        ...(params.nativeSelection?.authProfileId
+          ? { authProfileId: params.nativeSelection.authProfileId }
+          : {}),
       });
       // v2026.9.5 plugins return plain rows; structured results also own discovery outcomes.
       if (isCatalogRowList(loaded)) {
@@ -376,6 +379,7 @@ export function isPreparedNativeModelCatalogReady(params: {
             ...preparedHarnessCatalogScope(params.input),
             provider: selection.provider,
             modelId: selection.modelId,
+            ...(selection.authProfileId ? { authProfileId: selection.authProfileId } : {}),
           }),
       ) !== undefined)
   );

@@ -183,6 +183,7 @@ export type ModelCatalogViewFacts = {
   preferredProfileId?: string;
   pinnedProfileId?: string;
   profileProvider?: string;
+  nativeAuthProfileId?: string;
   view?: ModelCatalogBrowseView;
   retainedModel?: ModelRef;
 };
@@ -360,6 +361,7 @@ export function prepareModelCatalogView(params: ModelCatalogViewFacts) {
               workspaceDir: params.workspaceDir,
               provider,
               modelId: entry.id,
+              ...(params.nativeAuthProfileId ? { authProfileId: params.nativeAuthProfileId } : {}),
             })
           : undefined;
         ready =

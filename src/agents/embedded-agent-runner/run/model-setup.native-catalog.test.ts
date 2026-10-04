@@ -52,12 +52,38 @@ describe("first-turn native catalog model setup", () => {
       readinessCallback: true,
       catalogShape: "cold-variant",
     },
+    {
+      label: "explicit user-pinned Codex profile B over configured profile A",
+      selection: "configured primary",
+      readinessCallback: true,
+      catalogShape: "warm-entry",
+      authProfileId: "openai:profile-b",
+      authProfileIdSource: "user",
+    },
+    {
+      label: "explicit auto-pinned Codex profile B over configured profile A",
+      selection: "configured primary",
+      readinessCallback: true,
+      catalogShape: "warm-entry",
+      authProfileId: "openai:profile-b",
+      authProfileIdSource: "auto",
+    },
   ] as const)("materializes the current ready Codex model for $label", async (scenario) => {
     const { selection, readinessCallback, catalogShape } = scenario;
     await withOpenClawTestState({ label: "native-catalog-model-setup" }, async (state) => {
       const defaultModel =
         selection === "configured primary" ? "openai/gpt-6-luna" : "openai/gpt-6-astra";
       const config: OpenClawConfig = {
+        ...(scenario.authProfileId
+          ? {
+              auth: {
+                profiles: {
+                  "openai:profile-a": { provider: "openai", mode: "oauth" },
+                  "openai:profile-b": { provider: "openai", mode: "oauth" },
+                },
+              },
+            }
+          : {}),
         agents: {
           defaults: {
             workspace: state.workspaceDir,
@@ -71,6 +97,11 @@ describe("first-turn native catalog model setup", () => {
       };
       const pluginRegistry = createEmptyPluginRegistry();
       const assertSelectionCurrent = vi.fn();
+      const readModelCatalogReadiness = vi.fn(() => ({
+        accountType: "chatgpt",
+        authMode: "oauth",
+      }));
+      const captureModelCatalogSelectionAuthority = vi.fn(() => assertSelectionCurrent);
       const harness: AgentHarness = {
         id: "codex",
         label: "Codex",
@@ -79,8 +110,8 @@ describe("first-turn native catalog model setup", () => {
         loadModelCatalog: async () => [luna],
         ...(readinessCallback
           ? {
-              readModelCatalogReadiness: () => ({ accountType: "chatgpt", authMode: "oauth" }),
-              captureModelCatalogSelectionAuthority: () => assertSelectionCurrent,
+              readModelCatalogReadiness,
+              captureModelCatalogSelectionAuthority,
             }
           : {}),
         runAttempt: vi.fn(),
@@ -103,7 +134,12 @@ describe("first-turn native catalog model setup", () => {
                 entries: [{ provider: "openai", id: luna.id, name: luna.name }],
                 routeVariants: [],
               };
-      const loadNativeModelCatalog = vi.fn(async () => loadedCatalog);
+      const loadNativeModelCatalog = vi.fn(async (_selection, options) => {
+        if (scenario.authProfileId) {
+          options?.onSelectionReady?.(true);
+        }
+        return loadedCatalog;
+      });
       const ownerSnapshot: PreparedModelRuntimeSnapshot = {
         catalogOwner: { agentId: "main", workspaceDir: state.workspaceDir },
         agentId: "main",
@@ -153,6 +189,12 @@ describe("first-turn native catalog model setup", () => {
         agentHarnessId: "codex",
         agentHarnessRuntimeOverride: "codex",
         modelSelectionLocked: true,
+        ...(scenario.authProfileId
+          ? {
+              authProfileId: scenario.authProfileId,
+              authProfileIdSource: scenario.authProfileIdSource,
+            }
+          : {}),
       };
       await withPluginRuntimeGenerationScope({ metadataSnapshot, pluginRegistry }, async () => {
         const setup = await resolveEmbeddedRunModelSetup({
@@ -186,7 +228,21 @@ describe("first-turn native catalog model setup", () => {
         });
         expect(setup.model.contextWindow).toBeUndefined();
         expect(setup.model.maxTokens).toBeUndefined();
-        expect(loadNativeModelCatalog).toHaveBeenCalledTimes(catalogShape === "warm-entry" ? 0 : 1);
+        expect(loadNativeModelCatalog).toHaveBeenCalledTimes(
+          catalogShape === "warm-entry" && !scenario.authProfileId ? 0 : 1,
+        );
+        if (scenario.authProfileId) {
+          expect(loadNativeModelCatalog).toHaveBeenCalledWith(
+            expect.objectContaining({ authProfileId: scenario.authProfileId }),
+            expect.anything(),
+          );
+          expect(readModelCatalogReadiness).toHaveBeenCalledWith(
+            expect.objectContaining({ authProfileId: scenario.authProfileId }),
+          );
+          expect(captureModelCatalogSelectionAuthority).toHaveBeenCalledWith(
+            expect.objectContaining({ authProfileId: scenario.authProfileId }),
+          );
+        }
       });
     });
   });
