@@ -160,8 +160,10 @@ resumption acquires a new lease through the original owner and scope. A retained
 iterator cannot acquire fresh authority after its owner closes.
 
 Native plugins execute in the Gateway process and are not sandboxed. Provenance
-diagnostics and capability-specific trust requirements still apply;
-`plugins.allow` permits loading without verifying source provenance. These
+diagnostics and capability-specific trust requirements, such as hook agent turns
+and Gateway scope elevation, still apply. Every loaded plugin can
+use its own [state and ingress queues](/plugins/sdk-runtime/state-and-system#api-runtime-state),
+regardless of provenance. `plugins.allow` permits loading without verifying source provenance. These
 load-time facts belong to the instance until the plugin owner replaces it through
 restart or an explicit reload or installation operation.
 
