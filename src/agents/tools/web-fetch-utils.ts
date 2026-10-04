@@ -334,35 +334,42 @@ export function normalizeWhitespace(value: string): string {
 }
 
 export function markdownToText(markdown: string): string {
-  let text = markdown;
-  text = text.replace(/!\[[^\]]*]\([^)]+\)/g, "");
-  text = text.replace(/\[([^\]]+)]\([^)]+\)/g, "$1");
-  let unfenced = "";
+  let text = "";
+  const appendProse = (value: string) => {
+    // A fence can end mid-line; its suffix must not gain a heading/list boundary.
+    const prefix = text && !/[\r\n\u2028\u2029]/.test(text.slice(-1)) ? "\0" : "";
+    text += stripMarkdownFormatting(prefix + value).slice(prefix.length);
+  };
   let pos = 0;
-  while (pos < text.length) {
-    const open = text.indexOf("```", pos);
+  while (pos < markdown.length) {
+    const open = markdown.indexOf("```", pos);
     if (open === -1) {
-      unfenced += text.slice(pos);
+      appendProse(markdown.slice(pos));
       break;
     }
-    unfenced += text.slice(pos, open);
+    appendProse(markdown.slice(pos, open));
     const afterOpen = open + 3;
-    const close = text.indexOf("```", afterOpen);
+    const close = markdown.indexOf("```", afterOpen);
     if (close === -1) {
-      unfenced += text.slice(open);
+      appendProse(markdown.slice(open));
       break;
     }
-    const firstLineEnd = text.indexOf("\n", afterOpen);
+    const firstLineEnd = markdown.indexOf("\n", afterOpen);
     const contentStart = firstLineEnd === -1 || firstLineEnd > close ? afterOpen : firstLineEnd + 1;
-    unfenced += text.slice(contentStart, close);
+    text += markdown.slice(contentStart, close);
     pos = close + 3;
   }
-  text = unfenced;
+  return normalizeWhitespace(text);
+}
+
+function stripMarkdownFormatting(text: string): string {
+  text = text.replace(/!\[[^\]]*]\([^)]+\)/g, "");
+  text = text.replace(/\[([^\]]+)]\([^)]+\)/g, "$1");
   text = text.replace(/`([^`]+)`/g, "$1");
   text = text.replace(/^#{1,6}\s+/gm, "");
   text = text.replace(/^[^\S\n]*[-*+]\s+/gm, "");
   text = text.replace(/^[^\S\n]*\d+\.\s+/gm, "");
-  return normalizeWhitespace(text);
+  return text;
 }
 
 export function truncateWebFetchText(

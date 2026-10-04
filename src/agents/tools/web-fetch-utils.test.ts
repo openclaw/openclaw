@@ -450,6 +450,21 @@ describe("web-fetch-utils htmlToMarkdown entity decoding", () => {
     expect(markdownToText(fenced)).toBe(`${"x\n".repeat(1_000)}after`);
   });
 
+  it.each([
+    [
+      "```md\n# comment\n- literal\n1. literal\n[label](https://example.com)\n![alt](image.png)\n`value`\n```",
+      "# comment\n- literal\n1. literal\n[label](https://example.com)\n![alt](image.png)\n`value`",
+    ],
+    ["before```text\ncode```# tail", "beforecode# tail"],
+    ["```js\n# heading", "```js\nheading"],
+    [
+      "before\n```text\n  # literal \r\n\r\n\r\n  body\n```\nafter",
+      "before\n # literal\n\n body\n\nafter",
+    ],
+  ])("preserves fenced code literals and existing extraction boundaries: %s", (markdown, text) => {
+    expect(markdownToText(markdown)).toBe(text);
+  });
+
   it("keeps blank lines between paragraphs, headings, and lists in text mode", async () => {
     const markdown = "Intro:\n\n- one\n  - nested\n\n## Steps\n\n1. first\n2. second";
     expect(markdownToText(markdown)).toBe("Intro:\n\none\nnested\n\nSteps\n\nfirst\nsecond");
