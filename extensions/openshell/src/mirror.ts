@@ -5,6 +5,7 @@ import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coer
 import pLimit from "p-limit";
 
 export const DEFAULT_OPEN_SHELL_MIRROR_EXCLUDE_DIRS = ["hooks", "git-hooks", ".git"] as const;
+const NESTED_MIRROR_EXCLUDE_DIRS = new Set([".git"]);
 const COPY_TREE_FS_CONCURRENCY = 16;
 
 function createExcludeMatcher(excludeDirs?: readonly string[]) {
@@ -27,6 +28,7 @@ async function reconcileMirrorPath(params: {
   sourcePath?: string;
   targetPath: string;
   replace: boolean;
+  excludeDirs?: readonly string[];
 }): Promise<boolean> {
   const targetStats = await lstatIfExists(params.targetPath);
   // Preserve host entries mirror transport cannot represent and their ancestor directories.
@@ -48,6 +50,7 @@ async function reconcileMirrorPath(params: {
       sourceDir,
       targetDir: params.targetPath,
       replace: params.replace,
+      excludeDirs: params.excludeDirs,
     });
     // A remote file cannot replace a directory containing preserved host entries.
     if (sourceDir || preservedEntries) {
@@ -73,6 +76,9 @@ async function reconcileMirrorDirectory(params: {
 }): Promise<boolean> {
   const { sourceDir } = params;
   const isExcluded = createExcludeMatcher(params.excludeDirs);
+  const nestedExcludeDirs = params.excludeDirs?.filter((dir) =>
+    NESTED_MIRROR_EXCLUDE_DIRS.has(normalizeLowercaseStringOrEmpty(dir)),
+  );
   await runLimitedFs(fs.mkdir, params.targetDir, { recursive: true });
   const sourceEntries = new Set(
     sourceDir ? await runLimitedFs(async () => await fs.readdir(sourceDir)) : [],
@@ -90,10 +96,11 @@ async function reconcileMirrorDirectory(params: {
             sourceDir && sourceEntries.has(entry) ? path.join(sourceDir, entry) : undefined,
           targetPath: path.join(params.targetDir, entry),
           replace: params.replace,
+          excludeDirs: nestedExcludeDirs,
         }),
       ),
   );
-  let preservedEntries = false;
+  let preservedEntries = targetEntries.some(isExcluded);
   for (const result of results) {
     if (result.status === "rejected") {
       throw result.reason;
