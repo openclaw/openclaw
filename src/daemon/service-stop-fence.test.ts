@@ -19,6 +19,7 @@ import {
 } from "./schtasks-control.js";
 import * as schtasksExec from "./schtasks-exec.js";
 import { terminateGatewayProcessTree } from "./schtasks-process.js";
+import * as serviceUpdateAuthority from "./service-update-authority.js";
 import * as systemctl from "./systemd-exec.js";
 import { stopSystemdService } from "./systemd-lifecycle.js";
 import * as systemdScope from "./systemd-scope.js";
@@ -113,6 +114,64 @@ it("does not force a Windows process tree after losing the owner during graceful
       .filter(([command]) => command.toLowerCase().endsWith("taskkill.exe"))
       .map(([, args]) => args),
   ).toEqual([["/T", "/PID", "4242"]]);
+});
+
+it("refuses graceful taskkill when update authority is revoked between the awaited callback and the effect (#159297)", async () => {
+  vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+  native.spawn.mockImplementation((command) => {
+    const executable = command.toLowerCase();
+    const stdout = executable.endsWith("tasklist.exe")
+      ? '"node.exe","4242","Console","1","1 K"'
+      : "";
+    return { pid: 0, output: [null, stdout, ""], stdout, stderr: "", status: 0, signal: null };
+  });
+  let revoked = false;
+  vi.spyOn(serviceUpdateAuthority, "assertGatewayServiceUpdateCurrent").mockImplementation(() => {
+    if (revoked) {
+      throw new Error("update authority revoked after the pre-signal callback");
+    }
+    return true;
+  });
+  // Simulates a revocation microtask landing in the gap between this async callback
+  // settling and the caller resuming from its await, the exact window the taskkill
+  // effect must not run inside.
+  const callback = async () => {
+    await Promise.resolve();
+    queueMicrotask(() => {
+      revoked = true;
+    });
+  };
+  await expect(terminateGatewayProcessTree(4242, 300, callback)).rejects.toThrow(
+    "update authority revoked after the pre-signal callback",
+  );
+  expect(
+    native.spawn.mock.calls.filter(([command]) => command.toLowerCase().endsWith("taskkill.exe")),
+  ).toEqual([]);
+
+  // Same window, caller grant: revoked after `prepare` settles, before taskkill.
+  let callerRevoked = false;
+  revoked = false;
+  const assertCaller = () => {
+    if (callerRevoked) {
+      throw new Error("caller authority revoked after the pre-signal callback");
+    }
+  };
+  await expect(
+    terminateGatewayProcessTree(
+      4242,
+      300,
+      async () => {
+        await Promise.resolve();
+        queueMicrotask(() => {
+          callerRevoked = true;
+        });
+      },
+      assertCaller,
+    ),
+  ).rejects.toThrow("caller authority revoked after the pre-signal callback");
+  expect(
+    native.spawn.mock.calls.filter(([command]) => command.toLowerCase().endsWith("taskkill.exe")),
+  ).toEqual([]);
 });
 
 it("rechecks ownership after the asynchronous Windows suppression guard", async () => {

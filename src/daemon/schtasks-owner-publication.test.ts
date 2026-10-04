@@ -5,7 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { GatewayOwnerLeaseIdentity } from "../infra/gateway-owner-lease.types.js";
 import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { resolveTaskScriptPath } from "./schtasks-layout.js";
+import { resolveTaskName, resolveTaskScriptPath } from "./schtasks-layout.js";
 import "./test-helpers/schtasks-base-mocks.js";
 import {
   inspectPortUsageMock,
@@ -235,3 +235,90 @@ it.each(["snapshot", "per-pid"])(
     });
   },
 );
+
+it("retries the pre-signal owner-lease recheck after a transient SQLITE_IOERR with no stop context (#159222)", async () => {
+  // schtasks-install-files.ts's installer restore() calls terminateScheduledTaskGatewayListeners(env)
+  // with no `stop` context, so it can't fall back on the stop-gated sharing-error recovery: the
+  // pre-signal recheck inside terminateGatewayProcessTree's callback must retry on its own.
+  await withPreparedGatewayTask(async ({ env }) => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const owner: GatewayOwnerLeaseIdentity = {
+      ...GATEWAY_OWNER,
+      supervisor: { kind: "schtasks", name: resolveTaskName(env) },
+    };
+    spawnSync.mockImplementation((command, args) =>
+      args?.some((arg) => arg.includes("$process.StartTime"))
+        ? makeSpawnSyncResult({ stdout: new Date(owner.startedAt ?? 0).toISOString() })
+        : makeSpawnSyncResult(),
+    );
+    inspectPortUsageMock.mockResolvedValue({
+      port: 18789,
+      status: "busy",
+      listeners: [{ pid: 4242, command: "node.exe", commandLine: INSTALLED_GATEWAY_COMMAND_LINE }],
+      hints: [],
+    });
+    const transientTruncateError = Object.assign(new Error("disk I/O error"), {
+      code: "ERR_SQLITE_ERROR",
+      errcode: 1546, // SQLITE_IOERR_TRUNCATE
+    });
+    readGatewayOwnerLease
+      .mockReturnValueOnce(owner) // ownership resolution
+      .mockReturnValueOnce(owner) // pre-loop owner-still-current check
+      .mockImplementationOnce(() => {
+        throw transientTruncateError; // pre-signal recheck inside terminateGatewayProcessTree
+      })
+      .mockReturnValue(owner); // retried pre-signal recheck succeeds
+
+    await expect(terminateScheduledTaskGatewayListeners(env)).resolves.toEqual([4242]);
+
+    expect(sleepMock).toHaveBeenCalled();
+    expect(taskkillPids()).toEqual([4242]);
+  });
+});
+
+it("refuses taskkill when authority is revoked while the pre-signal lease retry is waiting (#159297)", async () => {
+  await withPreparedGatewayTask(async ({ env }) => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const owner: GatewayOwnerLeaseIdentity = {
+      ...GATEWAY_OWNER,
+      supervisor: { kind: "schtasks", name: resolveTaskName(env) },
+    };
+    spawnSync.mockImplementation((command, args) =>
+      args?.some((arg) => arg.includes("$process.StartTime"))
+        ? makeSpawnSyncResult({ stdout: new Date(owner.startedAt ?? 0).toISOString() })
+        : makeSpawnSyncResult(),
+    );
+    inspectPortUsageMock.mockResolvedValue({
+      port: 18789,
+      status: "busy",
+      listeners: [{ pid: 4242, command: "node.exe", commandLine: INSTALLED_GATEWAY_COMMAND_LINE }],
+      hints: [],
+    });
+    const transientTruncateError = Object.assign(new Error("disk I/O error"), {
+      code: "ERR_SQLITE_ERROR",
+      errcode: 1546, // SQLITE_IOERR_TRUNCATE
+    });
+    readGatewayOwnerLease
+      .mockReturnValueOnce(owner) // ownership resolution
+      .mockReturnValueOnce(owner) // pre-loop owner-still-current check
+      .mockImplementationOnce(() => {
+        throw transientTruncateError; // pre-signal recheck inside terminateGatewayProcessTree
+      })
+      .mockReturnValue(owner); // retried pre-signal recheck succeeds
+
+    let calls = 0;
+    const assertCurrent = vi.fn(() => {
+      calls += 1;
+      if (calls > 1) {
+        throw new Error("authority revoked while the lease retry was waiting");
+      }
+    });
+
+    await expect(
+      terminateScheduledTaskGatewayListeners(env, undefined, assertCurrent),
+    ).rejects.toThrow("authority revoked while the lease retry was waiting");
+
+    expect(sleepMock).toHaveBeenCalled();
+    expect(taskkillPids()).toEqual([]);
+  });
+});

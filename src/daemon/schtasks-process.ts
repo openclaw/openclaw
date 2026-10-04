@@ -562,10 +562,17 @@ export async function terminateScheduledTaskGatewayListeners(
           continue;
         }
         await retryScheduledTaskLeaseRead(() => ownership.assertOwnerCurrent(pid));
-        await terminateGatewayProcessTree(pid, 300, () => {
-          assertCurrent?.();
-          ownership.assertOwnerCurrent(pid);
-        });
+        await terminateGatewayProcessTree(
+          pid,
+          300,
+          async () => {
+            assertCurrent?.();
+            // Not gated on `stop`: the installer-rollback caller has no stop context to
+            // fall back to a sharing-error recovery, so this recheck must retry itself.
+            await retryScheduledTaskLeaseRead(() => ownership.assertOwnerCurrent(pid));
+          },
+          assertCurrent,
+        );
       }
       if (stop && !exclusion) {
         await retryScheduledTaskLeaseRead(ownership.assertOwnerCurrent);
@@ -670,10 +677,15 @@ async function waitForProcessExit(pid: number, timeoutMs: number): Promise<boole
 export async function terminateGatewayProcessTree(
   pid: number,
   graceMs: number,
-  assertCurrent?: () => void,
+  assertCurrent?: () => void | Promise<void>,
+  assertCallerCurrent?: () => void,
 ): Promise<void> {
+  // The awaited callback can retry for several seconds; either grant can be revoked
+  // during that wait, so recheck both synchronously right after it resolves,
+  // immediately before each native termination effect below.
+  await assertCurrent?.();
+  assertCallerCurrent?.();
   assertGatewayServiceUpdateCurrent();
-  assertCurrent?.();
   if (process.platform !== "win32") {
     // These PIDs come from argv/port ownership; leader verification avoids signaling our group.
     killProcessTree(pid, { graceMs });
@@ -690,8 +702,9 @@ export async function terminateGatewayProcessTree(
   if (await waitForProcessExit(pid, graceful.status === 0 && !graceful.error ? graceMs : 0)) {
     return;
   }
+  await assertCurrent?.();
+  assertCallerCurrent?.();
   assertGatewayServiceUpdateCurrent();
-  assertCurrent?.();
   const forced = spawnSync(taskkillPath, ["/F", "/T", "/PID", String(pid)], {
     env: resolveServiceManagerEnv(),
     stdio: "ignore",
