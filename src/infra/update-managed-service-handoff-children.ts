@@ -64,7 +64,7 @@ export function managedCommandAllowsBinding(
     : true;
 }
 
-export function releasedManagedCommandAction(action: ManagedHandoffLease["action"]) {
+function releasedManagedCommandAction(action: ManagedHandoffLease["action"]) {
   if (action.kind !== "update") {
     return action;
   }
