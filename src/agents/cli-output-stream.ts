@@ -199,6 +199,11 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
     ({ assistantText, customThinkingText, sessionId, usage, output, sawCustomJsonlEvent } = state);
   };
 
+  const formatJsonlParserError = (error: unknown) =>
+    truncateUtf16Safe(
+      `CLI backend ${params.providerId} JSONL parser failed: ${formatErrorMessage(error)}`,
+      500,
+    );
   const accountClaudeJsonlLine = (lineChars: number): boolean => {
     rawChars += lineChars + 1;
     if (rawChars <= outputLimits.maxTurnRawChars) {
@@ -250,10 +255,7 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
         backend: params.backend,
       });
     } catch (error) {
-      parseErrorText = truncateUtf16Safe(
-        `CLI backend ${params.providerId} JSONL parser failed: ${formatErrorMessage(error)}`,
-        500,
-      );
+      parseErrorText = formatJsonlParserError(error);
       return true;
     }
     if (parsed == null) {
@@ -624,6 +626,24 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
     }
   };
 
+  // Backends validate Claude assistant text on the terminal result record. An interrupted
+  // turn never emits one, so offer its partial text as that record before anyone persists it.
+  const rejectUnterminatedClaudeText = (text: string): string | undefined => {
+    if (!claudeStreamJson || !params.parseJsonlEvent) {
+      return undefined;
+    }
+    try {
+      const parsed = params.parseJsonlEvent(JSON.stringify({ type: "result", result: text }), {
+        backendId: params.providerId,
+        backend: params.backend,
+      });
+      const events = parsed == null ? [] : Array.isArray(parsed) ? parsed : [parsed];
+      return events.find((event) => event.kind === "result" && event.errorText)?.errorText;
+    } catch (error) {
+      return formatJsonlParserError(error);
+    }
+  };
+
   return {
     push(chunk: string) {
       if (!chunk || parseErrorText) {
@@ -686,6 +706,10 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
         return { text: texts.join("\n").trim() || assistantText.trim(), sessionId, usage };
       }
       if (supportsCliJsonlToolEvents(params) && assistantText.trim()) {
+        const rejectedErrorText = rejectUnterminatedClaudeText(assistantText.trim());
+        if (rejectedErrorText) {
+          return { text: "", sessionId, usage, errorText: rejectedErrorText };
+        }
         return {
           text: assistantText.trim(),
           sessionId,
