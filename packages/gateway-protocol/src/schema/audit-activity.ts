@@ -514,6 +514,7 @@ export type AuditActivitySkillSelectionV1 = AuditActivityRecordBaseV1 & {
   kind: "skill_selection";
   action: "skill.selection.observed";
   status: "observed";
+  actor: { type: "agent" | "system"; id: string };
   selectedSkill: string;
 };
 
