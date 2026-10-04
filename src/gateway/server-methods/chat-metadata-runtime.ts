@@ -1,6 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { ModelsListResult } from "../../../packages/gateway-protocol/src/schema/model-catalog.js";
-import { readAcpSessionMetaForEntries } from "../../acp/runtime/session-meta-readonly.js";
 import { getPreparedRuntimeAuthProfileStoreSnapshot } from "../../agents/auth-profiles.js";
 import { getRuntimeAuthProfileStoreMetadataRevision } from "../../agents/auth-profiles/runtime-snapshots.js";
 import { getPublishedPreparedModelCatalogOwnerSnapshot } from "../../agents/prepared-model-catalog.js";
@@ -35,6 +34,7 @@ import { createChatMetadataModelList } from "./chat-metadata-model-list.js";
 import {
   hasSessionCatalogContext,
   prepareChatMetadataModelProjection,
+  prepareSessionAcpMeta,
   sessionProjectionKey,
   resolveSessionCatalogProfiles,
   projectChatSessionMetadata,
@@ -103,22 +103,6 @@ function readPreparedChatMetadata(
   );
 }
 
-async function prepareSessionAcpMeta(
-  params: Pick<ChatMetadataReadParams, "agentId" | "sessionKey" | "sessionEntry">,
-  cfg: OpenClawConfig,
-): Promise<SessionAcpMeta | null> {
-  if (!params.sessionKey) {
-    return null;
-  }
-  const [meta] = await readAcpSessionMetaForEntries({
-    cfg,
-    entries: [
-      { agentId: params.agentId, sessionKey: params.sessionKey, entry: params.sessionEntry },
-    ],
-  });
-  return meta ?? null;
-}
-
 export function createGatewayChatMetadataRuntime(params: {
   getConfig: () => OpenClawConfig;
   getContext: () => GatewayModelCatalogContext;
@@ -140,8 +124,6 @@ export function createGatewayChatMetadataRuntime(params: {
     params: ChatStartupProjectionReadParams,
   ) => Promise<ChatStartupProjectionResult | undefined>;
 } {
-  // Publication callbacks can carry a temporary startup admission borrow.
-  const inOwnerContext = AsyncLocalStorage.snapshot();
   const deps: ChatMetadataRuntimeDeps = {
     getConfig: params.getConfig,
     getContext: params.getContext,
@@ -369,7 +351,8 @@ export function createGatewayChatMetadataRuntime(params: {
     }
   };
 
-  const prepareRefresh = (options: ChatMetadataRefreshOptions = {}): Promise<void> => {
+  // Publication callbacks can carry a temporary startup admission borrow.
+  const refresh = AsyncLocalStorage.bind((options: ChatMetadataRefreshOptions = {}) => {
     if (stoppedError) {
       return Promise.reject(stoppedError);
     }
@@ -446,9 +429,7 @@ export function createGatewayChatMetadataRuntime(params: {
       },
     );
     return promise;
-  };
-  const refresh = (options?: ChatMetadataRefreshOptions) =>
-    inOwnerContext(() => prepareRefresh(options));
+  });
 
   const authStoresCurrent = (generation: PreparedMetadataGeneration) =>
     generation.facts.agents.every(
