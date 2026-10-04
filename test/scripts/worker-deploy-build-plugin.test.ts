@@ -12,6 +12,7 @@ import { WebSocketServer } from "ws";
 import { rawDataToString } from "../../packages/gateway-client/src/websocket-data.js";
 import {
   createWorkerDeployBuildPlugin,
+  createWorkerDeployCodeSplitting,
   WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID,
 } from "../../scripts/lib/worker-deploy-build-plugin.mts";
 import { createWorkerBundleProducer } from "../../src/gateway/worker-environments/bundle.js";
@@ -40,6 +41,49 @@ const fail = (message: string): never => {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("worker deploy build plugin", () => {
+  it("coarsens within loading stages and recomputes them for each build pass", () => {
+    const entry = fs.realpathSync("src/worker/worker-deploy-entry.ts").replaceAll("\\", "/");
+    const turnEntry = fs.realpathSync("src/worker/embedded-agent.runtime.ts").replaceAll("\\", "/");
+    const group = createWorkerDeployCodeSplitting(entry, [turnEntry]).groups[0];
+    if (!group) {
+      throw new Error("Missing worker chunk group");
+    }
+    const context = {
+      getModuleInfo: vi.fn((id: string) => ({
+        importedIds:
+          id === entry
+            ? ["shared"]
+            : id === "shared"
+              ? [entry]
+              : id === turnEntry
+                ? ["shared", "turn-shared"]
+                : [],
+        dynamicallyImportedIds: ["conditional"],
+      })),
+    };
+    expect(group.name("conditional", context)).toBe("worker-optional");
+    expect(group.name("turn-shared", context)).toBe("worker-turn");
+    expect(group.name(turnEntry, context)).toBe("worker-turn");
+    expect(group.name("shared", context)).toBeUndefined();
+    expect(group.name(entry, context)).toBeUndefined();
+    const calls = context.getModuleInfo.mock.calls.length;
+    expect(group.name("another-optional-module", context)).toBe("worker-optional");
+    expect(context.getModuleInfo).toHaveBeenCalledTimes(calls);
+
+    // A watch rebuild may change both closures while retaining the same config.
+    const rebuilt = {
+      getModuleInfo: (id: string) => ({
+        importedIds: id === entry ? ["conditional"] : id === turnEntry ? ["next-turn"] : [],
+      }),
+    };
+    expect(group.name("conditional", rebuilt)).toBeUndefined();
+    expect(group.name("next-turn", rebuilt)).toBe("worker-turn");
+    expect(group.name("turn-shared", rebuilt)).toBe("worker-optional");
+    expect(() => group.name("conditional", { getModuleInfo: () => null })).toThrow(
+      "Missing worker startup or turn module",
+    );
+  });
+
   it.each(["escaped.mjs", "worker/extra.mjs", "worker/native.node", "worker/runtime.wasm"])(
     "rejects an unstaged emitted %s before publishing the worker graph",
     (fileName) => {

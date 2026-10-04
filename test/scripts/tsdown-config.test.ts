@@ -20,7 +20,10 @@ import {
   TSDOWN_UNIFIED_CONFIG_GROUP,
   TSDOWN_UNIFIED_DTS_CONFIG_GROUPS,
 } from "../../scripts/lib/tsdown-config-groups.mts";
-import { WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID } from "../../scripts/lib/worker-deploy-build-plugin.mts";
+import {
+  createWorkerDeployCodeSplitting,
+  WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID,
+} from "../../scripts/lib/worker-deploy-build-plugin.mts";
 import { importFreshModule } from "../../src/plugin-sdk/test-helpers/import-fresh.js";
 import { WORKER_BUNDLE_CHUNK_PATH_PATTERN } from "../../src/shared/worker-bundle-hash.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
@@ -80,6 +83,14 @@ const isWorkerBuildConfig = (config: TsdownConfig) =>
 function findWorkerBuildConfig(target: string) {
   const selected = workerBuildTargets.find(([name]) => name === target);
   return selected && configs.find((config) => hasWorkerEntry(config, selected[1], selected[2]));
+}
+
+function workerFixtureOutputOptions(config: TsdownConfig | undefined, entry: string) {
+  const output = config?.outputOptions;
+  if (!output || typeof output === "function") {
+    throw new Error("Expected concrete worker output options");
+  }
+  return { ...output, codeSplitting: createWorkerDeployCodeSplitting(entry, [entry]) };
 }
 
 const FS_SAFE_CALLER_PROBE = `
@@ -620,10 +631,15 @@ describe("tsdown config", () => {
       : configs.find((config) => config.name === TSDOWN_UNIFIED_CONFIG_GROUP);
     expect(selected).toBeDefined();
     const outDir = path.join(root, "build");
+    const entrySource = path.resolve("src/infra/command-explainer/tree-sitter-runtime.ts");
     const { bundles } = await build({
       ...selected,
       config: false,
-      entry: { [entry]: path.resolve("src/infra/command-explainer/tree-sitter-runtime.ts") },
+      entry: { [entry]: entrySource },
+      // Replacing the production worker entry also replaces its chunking roots.
+      outputOptions: worker
+        ? workerFixtureOutputOptions(selected, entrySource)
+        : selected?.outputOptions,
       outDir,
       dts: false,
       logLevel: "silent",
@@ -816,6 +832,9 @@ console.log("relocated Bash parser works without native grammar package");
         entry: worker
           ? { "worker/worker": observerSource }
           : { "plugin-sdk/memory-core-host-engine-fs": sdkSource, observer: observerSource },
+        outputOptions: worker
+          ? workerFixtureOutputOptions(selected, observerSource)
+          : selected?.outputOptions,
         outDir: path.join(sourceRoot, "output"),
         dts: false,
         logLevel: "silent",
@@ -1032,6 +1051,10 @@ console.log("relocated Bash parser works without native grammar package");
         config: false,
         cwd: root,
         entry: bundleAll ? { "worker/entry": entry } : [entry],
+        outputOptions:
+          target === "worker"
+            ? workerFixtureOutputOptions(selected, entry)
+            : selected?.outputOptions,
         outDir: path.join(root, "dist"),
         tsconfig: declarations ? path.join(root, "tsconfig.json") : false,
         dts: declarations ? { emitDtsOnly: true } : false,
@@ -1266,7 +1289,17 @@ console.log("relocated Bash parser works without native grammar package");
       expect.arrayContaining([expect.objectContaining({ name: "openclaw:worker-deploy" })]),
     );
     expect(workerConfig?.outputOptions).toMatchObject({
-      codeSplitting: true,
+      codeSplitting: {
+        groups: [
+          {
+            name: expect.any(Function),
+            entriesAware: true,
+            entriesAwareMergeThreshold: 64 * 1024,
+            includeDependenciesRecursively: false,
+          },
+        ],
+      },
+      strictExecutionOrder: true,
       chunkFileNames: "worker/worker-chunk-[hash].mjs",
       assetFileNames: "worker/[name][extname]",
     });

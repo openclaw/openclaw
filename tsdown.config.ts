@@ -42,6 +42,7 @@ import { tsdownPackageOutputRoot } from "./scripts/lib/tsdown-output-roots.mts";
 import { runtimeProcessDeclarationEntries } from "./scripts/lib/vitest-worker-declarations.mts";
 import {
   createWorkerDeployBuildPlugin,
+  createWorkerDeployCodeSplitting,
   WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID,
 } from "./scripts/lib/worker-deploy-build-plugin.mts";
 import { buildPackageDistEntriesFromExports } from "./scripts/lib/workspace-package-entries.mts";
@@ -239,6 +240,10 @@ function nodeBuildConfig(
 }
 
 function workerDeployBuildConfig(entry: Record<string, string>, split = false): UserConfig {
+  const startupEntry = split ? entry["worker/worker"] : undefined;
+  if (split && !startupEntry) {
+    throw new Error("Split worker build requires its startup entry");
+  }
   return {
     name: TSDOWN_UNIFIED_CONFIG_GROUP,
     entry,
@@ -269,7 +274,16 @@ function workerDeployBuildConfig(entry: Record<string, string>, split = false): 
     minify: { codegen: true, compress: true, mangle: { keepNames: true } },
     outExtensions: () => ({ js: ".mjs", dts: ".d.ts" }),
     outputOptions: {
-      codeSplitting: split,
+      codeSplitting: startupEntry
+        ? createWorkerDeployCodeSplitting(startupEntry, [
+            // Unconditional preparation in runWorkerDescriptor/loadWorkerTurnRuntime,
+            // plus profile disposal before runManagedWorkerCommand retains an idle worker.
+            "src/worker/embedded-agent.runtime.ts",
+            "src/worker/inference-stream.runtime.ts",
+            "src/agents/workspace.ts",
+            "src/worker/github-binding.runtime.ts",
+          ])
+        : false,
       strictExecutionOrder: true,
       chunkFileNames: "worker/worker-chunk-[hash].mjs",
       assetFileNames: "worker/[name][extname]",
