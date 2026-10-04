@@ -1,3 +1,4 @@
+import os from "node:os";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 const { sysctl, errno, dead } = vi.hoisted(() => ({
@@ -25,6 +26,7 @@ const foreignUid = uid + 1;
 const getuidDescriptor = Object.getOwnPropertyDescriptor(process, "getuid");
 
 afterEach(() => {
+  vi.restoreAllMocks();
   if (getuidDescriptor) {
     Object.defineProperty(process, "getuid", getuidDescriptor);
   } else {
@@ -116,3 +118,14 @@ it.each([
     }
   },
 );
+
+it("fails visibly instead of calling sysctl through koffi under Rosetta", () => {
+  vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+  vi.spyOn(process, "arch", "get").mockReturnValue("x64");
+  vi.spyOn(os, "cpus").mockReturnValue([
+    { model: "Apple M3 Ultra", speed: 0, times: { user: 0, nice: 0, sys: 0, idle: 0, irq: 0 } },
+  ]);
+  reply = argumentsReply(["node", "dist/index.js"]);
+  expect(() => readDarwinProcessCommand(12, uid)).toThrow(/under Rosetta/);
+  expect(sysctl).not.toHaveBeenCalled();
+});
