@@ -110,12 +110,24 @@ describe("readScheduledTaskCommand", () => {
     },
   );
 
-  it.each(["cmd", "current vbs", "published vbs", "legacy vbs"] as const)(
+  it.each([
+    "cmd",
+    "cmd executable",
+    "wscript executable",
+    "current vbs",
+    "published vbs",
+    "legacy vbs",
+  ] as const)(
     "reads the registered custom task action instead of the canonical launcher (%s)",
     async (kind) => {
       const taskName = "\\OpenClaw Gateway Backup";
       const scriptPath = "C:\\Services\\Backup\\gateway.cmd";
-      const launcherPath = kind === "cmd" ? scriptPath : "C:\\Services\\Backup\\gateway.vbs";
+      const launcherPath =
+        kind === "cmd"
+          ? scriptPath
+          : kind === "cmd executable"
+            ? "C:\\Windows\\System32\\cmd.exe"
+            : "C:\\Services\\Backup\\gateway.vbs";
       const programArguments = [
         "C:\\Node\\node.exe",
         "C:\\OtherInstall\\openclaw.mjs",
@@ -131,8 +143,14 @@ describe("readScheduledTaskCommand", () => {
           actions: [
             {
               type: 0,
-              path: launcherPath,
-              arguments: "",
+              path:
+                kind === "wscript executable" ? "C:\\Windows\\System32\\wscript.exe" : launcherPath,
+              arguments:
+                kind === "cmd executable"
+                  ? `/d /s /c ""${scriptPath}""`
+                  : kind === "wscript executable"
+                    ? `"${launcherPath}"`
+                    : "",
               workingDirectory: "C:\\Services\\Backup",
             },
           ],
@@ -182,7 +200,7 @@ describe("readScheduledTaskCommand", () => {
         },
       });
       expect(readFile).toHaveBeenCalledWith(scriptPath);
-      expect(captured).toHaveLength(kind === "cmd" ? 1 : 2);
+      expect(captured).toHaveLength(kind === "cmd" || kind === "cmd executable" ? 1 : 2);
       expect(captured.at(-1)).toContain("OtherInstall");
     },
   );

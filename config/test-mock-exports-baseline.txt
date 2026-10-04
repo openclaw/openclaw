@@ -4636,7 +4636,6 @@
 ["src/cli/daemon-cli/lifecycle-fallback.test.ts","./shared.js","cdd4d71cfcb4ae16b73ee20fba81b6456496a5469d6c708b9ee1959a64a9ed89",1]
 ["src/cli/daemon-cli/lifecycle-fallback.test.ts","./start-health.js","aebb5ed7e95d1b9707ef839b78c605749a89666411845b91d0dabbd16ac5b502",1]
 ["src/cli/daemon-cli/lifecycle-fallback.test.ts","./start-repair.js","df3afe6f62b9ea0aeb96c6b5afc8a593bccaf2cbb536e05202a51372d7a3299c",1]
-["src/cli/daemon-cli/lifecycle-readiness.test.ts","../../commands/gateway-startup-timing.js","c4f2feab555c366caaa456209b6f2fd8d37d210f28e55508c045a7c910dbc6b3",1]
 ["src/cli/daemon-cli/lifecycle-readiness.test.ts","../../config/config.js","2283cb6c591a8b688b7c43cbd89b95f1fa4428632ab8be257f60fb5f46256f33",1]
 ["src/cli/daemon-cli/lifecycle-readiness.test.ts","../../config/io.js","9aa8b6c477f7e919d39fd533261ae1830782f6b864b8945b3d856b7467128181",1]
 ["src/cli/daemon-cli/lifecycle-readiness.test.ts","../../daemon/service.js","615e2578490c39a3440c33925cb366576f90d0f3c9a655dc5512039a25eb9e1b",1]

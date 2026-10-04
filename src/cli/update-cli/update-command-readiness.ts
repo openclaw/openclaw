@@ -1,3 +1,4 @@
+import { resolveGatewayStartupTiming } from "../../commands/gateway-startup-timing.js";
 import { resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveGatewayService } from "../../daemon/service.js";
@@ -37,7 +38,8 @@ import {
 } from "./update-command-service-plan.js";
 import { hasLoadedLaunchdKeepAliveSupervisor } from "./update-command-supervisor.js";
 
-// The startup watchdog supplies the floor; ×10 leaves slow-disk headroom.
+// The startup watchdog and platform cold-boot allowance supply the floor.
+// ×10 observed startup leaves slow-disk headroom.
 // One hour bounds implicit observation of an already-serving Gateway; --timeout wins.
 const PREVIOUS_GATEWAY_READINESS_CAP_MS = 60 * 60_000;
 
@@ -47,7 +49,14 @@ function readinessTimeoutMs(
 ) {
   return (
     params.timeoutMs ??
-    Math.min(capMs, Math.max(STARTUP_MIGRATION_LEASE_TTL_MS, (params.observedStartupMs ?? 0) * 10))
+    Math.min(
+      capMs,
+      Math.max(
+        STARTUP_MIGRATION_LEASE_TTL_MS,
+        process.platform === "win32" ? resolveGatewayStartupTiming().deadlineMs : 0,
+        (params.observedStartupMs ?? 0) * 10,
+      ),
+    )
   );
 }
 
@@ -70,7 +79,7 @@ export async function verifyPreviousGatewayForUpdate(params: {
   const timeoutMs = readinessTimeoutMs(params, PREVIOUS_GATEWAY_READINESS_CAP_MS);
   const derivation =
     params.timeoutMs === undefined
-      ? `min(${PREVIOUS_GATEWAY_READINESS_CAP_MS}ms, max(${STARTUP_MIGRATION_LEASE_TTL_MS}ms, canary startup ${params.observedStartupMs ?? 0}ms × 10))`
+      ? `min(${PREVIOUS_GATEWAY_READINESS_CAP_MS}ms, max(${readinessTimeoutMs({})}ms, canary startup ${params.observedStartupMs ?? 0}ms × 10))`
       : "explicit --timeout";
   const startedAtMs = Date.now();
   const deadline = createGatewayRestartDeadline({ timeoutMs, signal: params.signal });

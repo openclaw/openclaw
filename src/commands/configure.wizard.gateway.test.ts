@@ -280,7 +280,7 @@ describe("runConfigureWizard", () => {
         url: "ws://127.0.0.1:18789",
         token: "configured-token",
         password: undefined,
-        deadlineMs: 90_000,
+        deadlineMs: 5_400_000,
         probeTimeoutMs: 15_000,
       }),
     );

@@ -680,6 +680,62 @@ describe("update readiness generation", () => {
   );
 
   it.each([
+    { timeout: undefined, readyAtMs: 44 * 60_000, expected: "ok", budgetMs: 5_400_000 },
+    {
+      timeout: undefined,
+      readyAtMs: 91 * 60_000,
+      expected: "readiness-pending",
+      budgetMs: 5_400_000,
+    },
+    { timeout: "60", readyAtMs: 44 * 60_000, expected: "readiness-pending", budgetMs: 60_000 },
+  ])(
+    "preserves Windows cold startup and an explicit update timeout ($timeout, ready at $readyAtMs)",
+    async ({ timeout, readyAtMs, expected, budgetMs }) => {
+      mockProcessPlatform("win32");
+      const service = makeGatewayService({ status: "running", pid: 8000 });
+      vi.spyOn(gatewayService, "resolveGatewayService").mockReturnValue(service);
+      inspectPortUsage.mockImplementation(async (port) => ({
+        port,
+        status: monotonicClock.nowMs < readyAtMs ? "free" : "busy",
+        listeners: monotonicClock.nowMs < readyAtMs ? [] : [{ pid: 8000 }],
+        hints: [],
+      }));
+      sleep.mockImplementation(async (delayMs) => {
+        // Advance the cold-loading interval without thousands of identical probes.
+        monotonicClock.nowMs +=
+          monotonicClock.nowMs === 0 ? Math.min(readyAtMs, budgetMs) : delayMs;
+      });
+      callGateway.mockImplementation(
+        gatewayHealthResponse({ server: { version: "2026.9.4", bootId: "windows-cold-boot" } }),
+      );
+      const gatewayPort = await listen();
+      const outcome = await maybeRestartService({
+        shouldRestart: true,
+        result: {
+          status: "ok",
+          mode: "npm",
+          steps: [],
+          durationMs: 0,
+          after: { version: "2026.9.4" },
+        },
+        opts: { json: true, timeout },
+        refreshServiceEnv: false,
+        serviceEnv: { HOME: "/synthetic-home" },
+        gatewayPort,
+        requireRunningServiceAfterRestart: true,
+        timeoutMs: timeout === undefined ? 30 * 60_000 : 60_000,
+      });
+
+      expect(outcome).toBe(expected);
+      expect(runUpdatedInstallGatewayCommand).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ timeoutMs: budgetMs }),
+        "restart",
+      );
+      expect(monotonicClock.nowMs).toBe(Math.min(readyAtMs, budgetMs) + 5_500);
+    },
+  );
+
+  it.each([
     { transition: "unchanged", supplied: false },
     { transition: "replacement-at-deadline", supplied: false },
     { transition: "unchanged-at-deadline", supplied: false },

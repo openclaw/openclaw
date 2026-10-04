@@ -158,11 +158,22 @@ for each command. Other Git clients accessing the same deeply nested repository
 may need `core.longpaths=true` in their own configuration, for example with
 `git -C "<repository>" config core.longpaths true`.
 
-Managed startup uses Windows Scheduled Tasks when available. The task keeps
-the readable `gateway.cmd` script in the OpenClaw state dir but launches it
-through a generated `gateway.vbs` WScript wrapper, so the background Gateway
-does not open a visible console window. If task creation is denied, OpenClaw
-falls back to a per-user Startup-folder login item.
+Managed Gateway startup uses a Scheduled Task with the current user's S4U
+principal, boot and logon triggers, and a direct `cmd.exe` action for the readable
+`gateway.cmd` script. It can run before login without storing a password.
+S4U does not provide Windows network credentials or access to encrypted files;
+installations that need those capabilities can retain an operator-configured
+Password task. Reinstall refreshes its launcher files without replacing its
+account, credentials, action, or triggers.
+
+The installer reports the selected startup mode. Node hosts retain per-user
+interactive tasks for desktop access. If the account cannot be identified or
+task creation is denied, the desktop task or Startup-folder fallback requires
+interactive logon; it cannot provide unattended boot startup. Run installation
+from an elevated terminal as the intended service user to register boot tasks.
+`openclaw doctor --fix` migrates recognized older Gateway definitions from
+interactive logon to unattended startup, backing up the definition and launcher
+before repair. Custom definitions remain operator-owned.
 
 If you append output redirection to the `gateway.cmd` launch line, quote the
 entire target, for example `>> "%USERPROFILE%\.openclaw\logs\gateway-stdout.log" 2>&1`.
@@ -171,7 +182,7 @@ Unquoted environment expansions can leave filename fragments in the Gateway's
 arguments; OpenClaw preserves ambiguous launcher commands and refuses to terminate
 a listener whose ownership cannot be verified. Quote the target before retrying.
 
-The hidden launcher owns the supervised Gateway process tree. Ending the task
+The task launcher owns the supervised Gateway process tree. Ending the task
 with `schtasks /end /tn "OpenClaw Gateway"`, `Stop-ScheduledTask`, or Task
 Scheduler's **End** action terminates the Gateway and its descendants. After
 updating an older installation, run `openclaw gateway install --force` to
