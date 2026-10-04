@@ -4758,29 +4758,31 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     });
 
     it("finalizes the card with the answer only and stops the draft at final delivery", async () => {
-      const { result, options } = createDispatcherHarness();
-      await result.replyOptions.onToolStart?.({ name: "bash", phase: "start" });
-      const session = requireStreamingInstance(0);
-      await vi.waitFor(() => expect(session.update).toHaveBeenCalled());
-
-      const delivery = await options.deliver({ text: "Final answer" }, { kind: "final" });
-      await options.onIdle?.();
-      await delivery?.finalization;
-      expect(session.closeWithResult).toHaveBeenCalledWith("Final answer", expect.anything());
-      const updatesAtFinal = session.update.mock.calls.length;
-
-      await result.replyOptions.onToolStart?.({ name: "bash", phase: "start" });
-      // Deterministic settlement: advancing fake timers flushes any delayed
-      // render work the late callback could have armed, without a wall-clock
-      // sleep (repo test policy).
+      // Fake timers must be live before the harness is constructed: the
+      // compositor captures setTimeout/clearTimeout at creation, so a clock
+      // swapped in afterwards cannot flush work it scheduled. vi.waitFor
+      // advances the fake clock while polling, keeping the whole scenario
+      // deterministic (repo test policy).
       vi.useFakeTimers();
       try {
+        const { result, options } = createDispatcherHarness();
+        await result.replyOptions.onToolStart?.({ name: "bash", phase: "start" });
+        const session = requireStreamingInstance(0);
+        await vi.waitFor(() => expect(session.update).toHaveBeenCalled());
+
+        const delivery = await options.deliver({ text: "Final answer" }, { kind: "final" });
+        await options.onIdle?.();
+        await delivery?.finalization;
+        expect(session.closeWithResult).toHaveBeenCalledWith("Final answer", expect.anything());
+        const updatesAtFinal = session.update.mock.calls.length;
+
+        await result.replyOptions.onToolStart?.({ name: "bash", phase: "start" });
         await vi.advanceTimersByTimeAsync(1_000);
+        expect(streamingInstances).toHaveLength(1);
+        expect(session.update.mock.calls.length).toBe(updatesAtFinal);
       } finally {
         vi.useRealTimers();
       }
-      expect(streamingInstances).toHaveLength(1);
-      expect(session.update.mock.calls.length).toBe(updatesAtFinal);
     });
 
     it("renders narration preambles as commentary lines in the rolling draft", async () => {
