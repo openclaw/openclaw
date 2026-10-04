@@ -496,7 +496,7 @@ export default definePluginEntry({
             return { text: "Pairing request not found." };
           }
           return await approvePendingPairingRequest({
-            requestId: pending.requestId,
+            pending,
             callerScopes: authState.approvalCallerScopes,
             assertCurrent: assertOwnerCurrent,
           });

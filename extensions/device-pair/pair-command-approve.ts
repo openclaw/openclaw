@@ -3,7 +3,11 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { approveDevicePairing, listDevicePairing } from "./api.js";
+import {
+  approveDevicePairing,
+  listDevicePairing,
+  resolveDevicePairingApprovalDenial,
+} from "./api.js";
 import { formatPendingRequests } from "./notify.js";
 
 type PendingPairingEntry = Awaited<ReturnType<typeof listDevicePairing>>["pending"][number];
@@ -60,10 +64,21 @@ function formatApprovedPairingReply(approved: ApprovedPairingEntry): { text: str
 }
 
 export async function approvePendingPairingRequest(params: {
-  requestId: string;
+  pending: PendingPairingEntry;
   callerScopes?: readonly string[];
   assertCurrent?: () => void;
 }): Promise<{ text: string }> {
+  const denial = resolveDevicePairingApprovalDenial(
+    {
+      callerDeviceId: null,
+      isAdminCaller: params.callerScopes?.includes("operator.admin") === true,
+    },
+    params.pending,
+  );
+  if (denial) {
+    return { text: "⚠️ This command requires operator.admin to approve this pairing request." };
+  }
+  const requestId = params.pending.requestId;
   const assertCurrent = params.assertCurrent;
   const isApprovalCurrent = assertCurrent
     ? () => {
@@ -73,8 +88,8 @@ export async function approvePendingPairingRequest(params: {
     : undefined;
   const approved =
     params.callerScopes === undefined && !isApprovalCurrent
-      ? await approveDevicePairing(params.requestId)
-      : await approveDevicePairing(params.requestId, {
+      ? await approveDevicePairing(requestId)
+      : await approveDevicePairing(requestId, {
           callerScopes: params.callerScopes,
           ...(isApprovalCurrent ? { isApprovalCurrent } : {}),
         });

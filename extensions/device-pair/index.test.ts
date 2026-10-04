@@ -38,6 +38,8 @@ vi.mock("./api.js", async () => ({
   definePluginEntry: vi.fn((entry) => entry),
   issueDeviceBootstrapToken: pluginApiMocks.issueDeviceBootstrapToken,
   listDevicePairing: vi.fn(async () => ({ pending: [] })),
+  resolveDevicePairingApprovalDenial: (await import("openclaw/plugin-sdk/device-bootstrap"))
+    .resolveDevicePairingApprovalDenial,
   renderQrPngDataUrl: pluginApiMocks.renderQrPngDataUrl,
   revokeDeviceBootstrapToken: pluginApiMocks.revokeDeviceBootstrapToken,
   resolvePreferredOpenClawTmpDir: pluginApiMocks.resolvePreferredOpenClawTmpDir,
@@ -937,5 +939,47 @@ describe("device-pair /pair approve", () => {
       callerScopes: expectedCall,
     });
     expect(result).toEqual({ text: expectedText });
+  });
+
+  it.each([
+    {
+      name: "internal operator.pairing caller",
+      context: { channel: "webchat", gatewayClientScopes: INTERNAL_PAIRING_SCOPES },
+    },
+    {
+      name: "command owner on a channel surface",
+      context: { channel: "telegram", gatewayClientScopes: undefined, senderIsOwner: true },
+    },
+  ])("denies node-role approval from a $name without operator.admin", async ({ context }) => {
+    vi.mocked(listDevicePairing).mockResolvedValueOnce({
+      pending: [{ ...makePendingPairingRequest(), role: "node", roles: ["node"] }],
+      paired: [],
+    });
+    const result = await runPair({
+      ...context,
+      args: "approve req-1",
+      commandBody: "/pair approve req-1",
+    });
+    expect(result).toEqual({
+      text: "⚠️ This command requires operator.admin to approve this pairing request.",
+    });
+    expect(approveDevicePairing).not.toHaveBeenCalled();
+  });
+
+  it("allows node-role approval from an operator.admin caller", async () => {
+    vi.mocked(listDevicePairing).mockResolvedValueOnce({
+      pending: [{ ...makePendingPairingRequest(), role: "node", roles: ["node"] }],
+      paired: [],
+    });
+    vi.mocked(approveDevicePairing).mockResolvedValueOnce(makeApprovedPairingResult());
+    const scopes = ["operator.admin", "operator.pairing"];
+    const result = await runPair({
+      channel: "webchat",
+      gatewayClientScopes: scopes,
+      args: "approve req-1",
+      commandBody: "/pair approve req-1",
+    });
+    expect(approveDevicePairing).toHaveBeenCalledWith("req-1", { callerScopes: scopes });
+    expect(result).toEqual({ text: "✅ Paired Victim Phone (ios)." });
   });
 });

@@ -44,8 +44,8 @@ import {
   deniesCrossDeviceManagement,
   deniesDeviceTokenRoleManagement,
   pairedDeviceHasNonOperatorRole,
-  requestsNonOperatorDeviceRole,
   resolveDeviceManagementAuthz,
+  resolveDevicePairingApprovalDenial,
   resolveDeviceSessionAuthz,
 } from "./device-management-authz.js";
 import type { DeviceManagementAuthz, DeviceSessionAuthz } from "./device-management-authz.js";
@@ -265,12 +265,7 @@ export const deviceHandlers: GatewayRequestHandlers = {
         );
         return;
       }
-      const reason =
-        authz.callerDeviceId && pending.deviceId.trim() !== authz.callerDeviceId
-          ? "device-ownership-mismatch"
-          : requestsNonOperatorDeviceRole(pending)
-            ? "role-management-requires-admin"
-            : undefined;
+      const reason = resolveDevicePairingApprovalDenial(authz, pending);
       if (reason) {
         context.logGateway.warn(
           `device pairing approval denied request=${requestId} reason=${reason}`,
