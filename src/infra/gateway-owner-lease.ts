@@ -5,7 +5,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
 import type { OpenClawStateSchemaReadAdmission } from "../state/openclaw-state-db-contract.js";
 import { openDoctorStateSchemaReadAdmission } from "../state/openclaw-state-db-doctor-schema.js";
-import { withOpenClawStateReadOnlyLocation } from "../state/openclaw-state-db-read-connection.js";
+import { openOpenClawStateReadConnection } from "../state/openclaw-state-db-read-connection.js";
 import {
   withExistingOpenClawStateDatabaseCurrentReadOnly,
   withExistingOpenClawStateDatabaseReadOnly,
@@ -34,6 +34,7 @@ import type {
 } from "./gateway-owner-lease.types.js";
 import { captureGatewayStateOwner, type StateDatabaseSchemaLease } from "./gateway-state-owner.js";
 import { resolveDiagnosticProcessEnv } from "./process-env.js";
+import { runWithSqliteCleanup } from "./sqlite-lifecycle-errors.js";
 import { prepareSqliteReadOnlyLocationSync } from "./sqlite-snapshot-source.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 import { STARTUP_MIGRATION_LEASE_TTL_MS } from "./startup-migration-checkpoint.js";
@@ -81,15 +82,28 @@ export function assertGatewayOwnerLeaseStopped(
     if (existingPathOrUndefined(pathname) === undefined) {
       return;
     }
-    // Doctor must inspect lease authority before it can repair a quarantined database.
-    withOpenClawStateReadOnlyLocation(
-      ({ db }) => {
-        maintenanceOwner.assertDatabaseAccess(pathname);
-        readStoppedGatewayOwnerLease(db);
+    // Lease admission precedes Doctor's schema guard, including newer or quarantined state.
+    const snapshot = prepareSqliteReadOnlyLocationSync(pathname);
+    const connection = openOpenClawStateReadConnection(pathname, snapshot.location);
+    runWithSqliteCleanup(
+      {
+        release: () => {
+          connection.close();
+          // Only after native close: the snapshot owner warns and retries disposable cleanup.
+          snapshot.cleanup();
+        },
       },
-      pathname,
-      prepareSqliteReadOnlyLocationSync(pathname),
-      openDoctorStateSchemaReadAdmission,
+      "Gateway owner lease inspection",
+      () => {
+        maintenanceOwner.assertDatabaseAccess(pathname);
+        const db = connection.database.db;
+        const closeAdmission = openDoctorStateSchemaReadAdmission(db);
+        runWithSqliteCleanup(
+          { release: () => closeAdmission?.() },
+          "Gateway owner lease schema read admission",
+          () => readStoppedGatewayOwnerLease(db),
+        );
+      },
     );
     return;
   }
