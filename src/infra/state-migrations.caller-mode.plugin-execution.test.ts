@@ -419,7 +419,6 @@ module.exports = { stateMigrations: [{
       const legacyStateDir = legacyRoot
         ? path.join(fixture.homeDir, ".clawdbot")
         : fixture.stateDir;
-      const stateDir = legacyRoot ? path.join(fixture.homeDir, ".openclaw") : fixture.stateDir;
       const pluginId = "relocated-owner";
       const pluginRoot = fromInstallIndex
         ? path.join(fixture.root, pluginId)
