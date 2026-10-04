@@ -317,6 +317,29 @@ describe("Telegram retained message history", () => {
     expect(await retained.count()).toBe(3001);
   });
 
+  it("retires a precisely identified message from retained history", async () => {
+    const cache = createTelegramMessageCache({ scope });
+    await record(cache, message(1));
+    await record(cache, message(2));
+
+    expect(await cache.retireMessage({ accountId, chatId, messageId: 1 })).toBe(true);
+    expect(await get(cache, 1)).toBeNull();
+    expect((await get(cache, 2))?.messageId).toBe("2");
+    expect((await history(cache)).messages.map((node) => node.messageId)).toEqual(["2"]);
+
+    // A reopened bucket must not resurrect the retired entry from the store.
+    resetTelegramMessageCacheForTest();
+    resetPluginStateStoreForTests();
+    const reopened = createTelegramMessageCache({ scope });
+    expect(await get(reopened, 1)).toBeNull();
+    expect((await get(reopened, 2))?.messageId).toBe("2");
+
+    expect(await cache.retireMessage({ accountId, chatId, messageId: 1 })).toBe(false);
+    expect(await cache.retireMessage({ accountId, chatId, messageId: "not-a-native-id" })).toBe(
+      false,
+    );
+  });
+
   it("pages numerically through other topics while excluding unobserved snapshots and exact foreign scopes", async () => {
     const cache = createTelegramMessageCache({ scope });
     await record(cache, message(9));
