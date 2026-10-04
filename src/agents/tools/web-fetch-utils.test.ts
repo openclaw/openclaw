@@ -456,6 +456,9 @@ describe("web-fetch-utils htmlToMarkdown entity decoding", () => {
       "# comment\n- literal\n1. literal\n[label](https://example.com)\n![alt](image.png)\n`value`",
     ],
     ["before```text\ncode```# tail", "beforecode# tail"],
+    ["[```label```](https://example.com)", "label"],
+    ["```text\ncode\n```# heading", "code\nheading"],
+    ["\0```text\n$&\n```", "\0$&"],
     ["```js\n# heading", "```js\nheading"],
     [
       "before\n```text\n  # literal \r\n\r\n\r\n  body\n```\nafter",

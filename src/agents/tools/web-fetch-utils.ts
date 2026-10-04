@@ -334,31 +334,44 @@ export function normalizeWhitespace(value: string): string {
 }
 
 export function markdownToText(markdown: string): string {
+  let marker = "\0";
+  while (markdown.includes(marker)) {
+    marker += marker;
+  }
+  const codeBlocks: string[] = [];
   let text = "";
-  const appendProse = (value: string) => {
-    // A fence can end mid-line; its suffix must not gain a heading/list boundary.
-    const prefix = text && !/[\r\n\u2028\u2029]/.test(text.slice(-1)) ? "\0" : "";
-    text += stripMarkdownFormatting(prefix + value).slice(prefix.length);
-  };
   let pos = 0;
   while (pos < markdown.length) {
     const open = markdown.indexOf("```", pos);
     if (open === -1) {
-      appendProse(markdown.slice(pos));
+      text += markdown.slice(pos);
       break;
     }
-    appendProse(markdown.slice(pos, open));
+    text += markdown.slice(pos, open);
     const afterOpen = open + 3;
     const close = markdown.indexOf("```", afterOpen);
     if (close === -1) {
-      appendProse(markdown.slice(open));
+      text += markdown.slice(open);
       break;
     }
     const firstLineEnd = markdown.indexOf("\n", afterOpen);
     const contentStart = firstLineEnd === -1 || firstLineEnd > close ? afterOpen : firstLineEnd + 1;
-    text += markdown.slice(contentStart, close);
+    const code = markdown.slice(contentStart, close);
+    // Keep the surrounding prose connected without interpreting the code as Markdown.
+    // Preserve its final line boundary for heading/list markers after the closing fence.
+    const lineEnd = /[\r\n\u2028\u2029]$/.test(code) ? code.slice(-1) : "";
+    const literal = code.slice(0, code.length - lineEnd.length);
+    if (literal) {
+      text += `${marker}${codeBlocks.length}${marker}`;
+      codeBlocks.push(literal);
+    }
+    text += lineEnd;
     pos = close + 3;
   }
+  text = stripMarkdownFormatting(text).replace(
+    new RegExp(`${marker}(\\d+)${marker}`, "g"),
+    (_match, index: string) => codeBlocks[Number(index)]!,
+  );
   return normalizeWhitespace(text);
 }
 
