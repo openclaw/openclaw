@@ -322,9 +322,11 @@ export function openPackageActivationJournal(anchor: string) {
               packageActivationIdentity(preparationSource(descriptor, "helper"), false) !==
                 descriptor.helperIdentity ||
               previous.descriptor.authority.databasePath !== descriptor.authority.databasePath ||
-              previous.descriptor.authority.databaseIdentity !==
-                descriptor.authority.databaseIdentity ||
-              previous.descriptor.authority.parentIdentity !== descriptor.authority.parentIdentity
+              (previous.intent?.kind !== "recovery-lease-identity-changed" &&
+                (previous.descriptor.authority.databaseIdentity !==
+                  descriptor.authority.databaseIdentity ||
+                  previous.descriptor.authority.parentIdentity !==
+                    descriptor.authority.parentIdentity))
             ) {
               throw new Error("The previous package receipt is not safely replaceable.");
             }

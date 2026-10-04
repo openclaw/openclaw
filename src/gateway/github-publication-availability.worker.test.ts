@@ -8,14 +8,27 @@ import {
 import type { ManagedWorktreeRecord } from "../agents/worktrees/types.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
-import { prepareGitHubPublicationAvailability } from "./github-publication-availability.js";
+import {
+  hasSupportedGitHubPublicationTarget,
+  prepareGitHubPublicationAvailability,
+} from "./github-publication-availability.js";
 
-const mocks = vi.hoisted(() => ({ session: vi.fn(), identity: vi.fn() }));
+const mocks = vi.hoisted(() => ({ session: vi.fn(), sessionRead: vi.fn(), identity: vi.fn() }));
 // mock-isolation: Keep session-owner SQL outside the worktree-read measurement.
 vi.mock("./session-utils.js", () => ({ loadGatewaySessionEntryReadOnly: mocks.session }));
+// mock-isolation: Keep session-worker state outside the worktree-read measurement.
+vi.mock("./session-utils-store-worker.js", () => ({
+  loadGatewaySessionEntryReadOnlyInWorker: mocks.sessionRead,
+}));
 // mock-isolation: Use the synthetic registry without starting managed-worktree services.
 vi.mock("../agents/worktrees/service.js", () => ({
   managedWorktrees: {
+    resolveRepositoryIdentity: async () => ({
+      checkoutRoot: worktree.path,
+      repoRoot: worktree.repoRoot,
+      fingerprint: worktree.repoFingerprint,
+      originUrl: "https://github.com/example/publication.git",
+    }),
     findLiveByOwner: (kind: ManagedWorktreeRecord["ownerKind"], id: string) =>
       findLiveRegistryWorktreeByOwner(process.env, kind, id),
   },
@@ -64,6 +77,7 @@ beforeEach(() => {
       worktree: { id: worktree.id, branch: worktree.branch, repoRoot: worktree.repoRoot },
     },
   });
+  mocks.sessionRead.mockReset().mockImplementation(async () => mocks.session());
   mocks.identity.mockReset().mockResolvedValue({ source: "system-configured" });
   insertRegistryWorktree(process.env, worktree);
 });
@@ -95,10 +109,30 @@ it("rejects a worktree retired while publication identity is prepared", async ()
   expect(await prepareGitHubPublicationAvailability(session)).toBe(false);
 });
 
-it("keeps availability reads on the captured physical store across identity preparation", async () => {
-  mocks.identity.mockImplementationOnce(async () => {
+it.each(["session", "identity"] as const)(
+  "keeps availability reads on the captured physical store across %s preparation",
+  async (preparation) => {
+    const retarget = () =>
+      vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("publication-other-store-"));
+    if (preparation === "session") {
+      mocks.sessionRead.mockImplementationOnce(async () => {
+        retarget();
+        return mocks.session();
+      });
+    } else {
+      mocks.identity.mockImplementationOnce(async () => {
+        retarget();
+        return { source: "system-configured" };
+      });
+    }
+    expect(await prepareGitHubPublicationAvailability(session)).toBe(true);
+  },
+);
+
+it("keeps target discovery on the captured physical store across session preparation", async () => {
+  mocks.sessionRead.mockImplementationOnce(async () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("publication-other-store-"));
-    return { source: "system-configured" };
+    return mocks.session();
   });
-  expect(await prepareGitHubPublicationAvailability(session)).toBe(true);
+  expect(await hasSupportedGitHubPublicationTarget(session, () => {})).toBe(true);
 });

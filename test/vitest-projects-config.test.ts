@@ -654,59 +654,92 @@ describe("projects vitest config", () => {
   });
 
   it.each([
-    undefined,
-    "src/channels/plugins/contracts/session-binding.registry-backed.contract.test.ts",
-    "src/channels/plugins/contracts/session-key-artifact.contract.test.ts",
-  ])("preserves public channel contract command coverage with include filter %s", (filter) => {
-    const includeFile = filter
-      ? patternFiles.writePatternFile("command-include.json", [filter])
-      : undefined;
-    const result = spawnNodeEvalSync(
-      `
+    { family: "channels", filter: undefined },
+    {
+      family: "channels",
+      filter: "src/channels/plugins/contracts/session-binding.registry-backed.contract.test.ts",
+    },
+    {
+      family: "channels",
+      filter: "src/channels/plugins/contracts/session-key-artifact.contract.test.ts",
+    },
+    { family: "plugins", filter: undefined },
+    { family: "plugins", filter: "src/plugins/contracts/host-hook-state.identity.test.ts" },
+    { family: "plugins", filter: "src/plugins/contracts/host-hooks.contract.test.ts" },
+  ])(
+    "preserves public $family contract command coverage with include filter $filter",
+    ({ family, filter }) => {
+      const root =
+        family === "channels" ? "src/channels/plugins/contracts" : "src/plugins/contracts";
+      const includeFile = filter
+        ? patternFiles.writePatternFile("command-include.json", [filter])
+        : undefined;
+      const result = spawnNodeEvalSync(
+        `
         import assert from "node:assert/strict";
-        import { globSync, readFileSync } from "node:fs";
+        import { globSync, readFileSync, rmSync } from "node:fs";
         import path from "node:path";
         import { parseCLI, resolveConfig } from "vitest/node";
-        import { createVitestRunSpecs } from "./scripts/test-projects.test-support.mts";
-        const command = JSON.parse(readFileSync("package.json", "utf8")).scripts["test:contracts:channels"];
+        import { createVitestRunSpecs, writeVitestIncludeFile } from "./scripts/test-projects.test-support.mts";
+        const command = JSON.parse(readFileSync("package.json", "utf8")).scripts[${JSON.stringify(`test:contracts:${family}`)}];
         const argv = command.split(/\\s+/u);
         const wrapper = argv.indexOf("scripts/test-projects.mts");
         assert.notEqual(wrapper, -1);
         const specs = createVitestRunSpecs(argv.slice(wrapper + 1));
+        const includeFile = process.env.OPENCLAW_VITEST_INCLUDE_FILE;
         const matches = [];
         for (const spec of specs) {
-          assert.equal(spec.includeFilePath, null);
-          const { options } = parseCLI(["vitest", ...spec.pnpmArgs.slice(spec.pnpmArgs.indexOf("run"))]);
-          const resolved = await resolveConfig(options);
-          for (const { projectConfig } of resolved.test.resolvedProjects) {
-            for (const file of globSync(projectConfig.include, { cwd: projectConfig.dir, exclude: projectConfig.exclude })) {
-              const relative = path.relative(process.cwd(), path.resolve(projectConfig.dir, file)).replaceAll("\\\\", "/");
-              matches.push(relative);
-              if (relative.endsWith("/session-binding.registry-backed.contract.test.ts")) {
-                assert.equal(projectConfig.pool, "forks");
-                assert.equal(projectConfig.maxWorkers, 1);
+          try {
+            if (spec.includeFilePath) {
+              writeVitestIncludeFile(spec.includeFilePath, spec.includePatterns);
+            }
+            if (spec.env.OPENCLAW_VITEST_INCLUDE_FILE === undefined) {
+              delete process.env.OPENCLAW_VITEST_INCLUDE_FILE;
+            } else {
+              process.env.OPENCLAW_VITEST_INCLUDE_FILE = spec.env.OPENCLAW_VITEST_INCLUDE_FILE;
+            }
+            const { options } = parseCLI(["vitest", ...spec.pnpmArgs.slice(spec.pnpmArgs.indexOf("run"))]);
+            const resolved = await resolveConfig(options);
+            for (const { projectConfig } of resolved.test.resolvedProjects) {
+              for (const file of globSync(projectConfig.include, { cwd: projectConfig.dir, exclude: projectConfig.exclude })) {
+                const relative = path.relative(process.cwd(), path.resolve(projectConfig.dir, file)).replaceAll("\\\\", "/");
+                matches.push(relative);
+                if (relative.endsWith("/session-binding.registry-backed.contract.test.ts")) {
+                  assert.equal(projectConfig.pool, "forks");
+                  assert.equal(projectConfig.maxWorkers, 1);
+                }
+                if (relative === "src/plugins/contracts/host-hook-state.identity.test.ts" || relative === "src/plugins/contracts/host-hooks.contract.test.ts") {
+                  assert.equal(projectConfig.isolate, true);
+                  assert.equal(projectConfig.name, "infra");
+                }
               }
             }
+          } finally {
+            if (spec.includeFilePath) rmSync(spec.includeFilePath);
           }
         }
-        const includeFile = process.env.OPENCLAW_VITEST_INCLUDE_FILE;
         const filters = includeFile ? JSON.parse(readFileSync(includeFile, "utf8")) : null;
-        const expected = globSync("src/channels/plugins/contracts/**/*.test.ts")
+        const expected = globSync(${JSON.stringify(`${root}/**/*.test.ts`)})
           .map(file => file.replaceAll("\\\\", "/"))
           .filter(file => !filters || filters.some(filter => path.matchesGlob(file, filter)));
         assert.deepEqual(matches.toSorted(), expected.toSorted());
         assert.equal(new Set(matches).size, matches.length);
       `,
-      {
-        imports: ["tsx"],
-        env: { ...process.env, GITHUB_ACTIONS: "true", OPENCLAW_VITEST_INCLUDE_FILE: includeFile },
-        timeout: DEFAULT_VITEST_TEST_TIMEOUT_MS,
-      },
-    );
-    expect(result.error, result.stderr).toBeUndefined();
-    expect(result.signal, result.stderr).toBeNull();
-    expect(result.status, result.stderr).toBe(0);
-  });
+        {
+          imports: ["tsx"],
+          env: {
+            ...process.env,
+            GITHUB_ACTIONS: "true",
+            OPENCLAW_VITEST_INCLUDE_FILE: includeFile,
+          },
+          timeout: DEFAULT_VITEST_TEST_TIMEOUT_MS,
+        },
+      );
+      expect(result.error, result.stderr).toBeUndefined();
+      expect(result.signal, result.stderr).toBeNull();
+      expect(result.status, result.stderr).toBe(0);
+    },
+  );
 
   it("gives contract project configs unique names", () => {
     expect([

@@ -98,6 +98,16 @@ vi.mock("./session-utils.js", async (importOriginal) => ({
   loadGatewaySessionEntryReadOnly: mocks.loadSession,
 }));
 
+// Preparation and live authority checks use the same fixture session state.
+vi.mock("./session-utils-store-worker.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./session-utils-store-worker.js")>()),
+  loadGatewaySessionEntryReadOnlyInWorker: async (
+    params: Parameters<
+      typeof import("./session-utils-store-worker.js").loadGatewaySessionEntryReadOnlyInWorker
+    >[0],
+  ) => mocks.loadSession(params.key, { agentId: params.agentId }),
+}));
+
 vi.mock("../process/exec.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../process/exec.js")>()),
   runCommandBuffered: mocks.runCommand,

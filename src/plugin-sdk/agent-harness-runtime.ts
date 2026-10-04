@@ -270,6 +270,7 @@ export {
   extractMessagingToolSourceReplyPayload,
   isDeliveredMessagingToolSendToCurrentSource,
 } from "../agents/embedded-agent-messaging-extraction.js";
+export { captureToolAuthoredSourceReply } from "../agents/embedded-agent-tool-authored-source-reply.js";
 export {
   extractToolResultMediaArtifact,
   filterToolResultMediaUrls,

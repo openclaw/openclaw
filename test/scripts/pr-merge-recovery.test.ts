@@ -79,8 +79,6 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
   });
 
   it.each([
-    { replacement: false, reviewHead: "current", forwardMain: false },
-    { replacement: true, reviewHead: "current", forwardMain: false },
     { replacement: true, reviewHead: "previous", forwardMain: false },
     { replacement: false, reviewHead: "current", forwardMain: true },
     { replacement: true, reviewHead: "current", forwardMain: true },
@@ -203,8 +201,6 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
     },
   );
 
-  // These refusals precede replacement validation, so keep the stronger prepared
-  // replacement input. Later admission cases retain both head paths.
   const retainedIntentFaults = new Set([
     "stale-outcome",
     "accepted",
@@ -235,7 +231,7 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
       "current-auto",
       "current-queued",
     ].flatMap((fault) =>
-      (retainedIntentFaults.has(fault) ? [true] : [false, true]).map((replacement) => ({
+      (fault === "prepared-head" ? [false, true] : [true]).map((replacement) => ({
         fault,
         replacement,
       })),

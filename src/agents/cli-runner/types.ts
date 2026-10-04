@@ -65,6 +65,7 @@ type CliSessionRetryParams = {
 
 /** Input contract for one CLI-backed agent run. */
 export type RunCliAgentParams = {
+  preparedTtsPreferences?: import("../../tts/tts-preferences.js").PreparedTtsPreferences;
   /** Verified in-process completion authority; never supplied by native CLI input. */
   trustedInternalHandoff?: TrustedSubagentCompletionHandoff;
   /** Core lifecycle owner; never forwarded to the plugin execution context. */

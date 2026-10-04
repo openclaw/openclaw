@@ -189,7 +189,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +4: owner-approved replay V2 types on core and plugin-entry (2026-10-01).
       // +11: ten service-lifetime type exports and the owner-bound scheduler resolver.
       // +1: owner-approved async watched-session preparation with retained sync compatibility.
-      3644,
+      // +1: captureToolAuthoredSourceReply lets the Codex harness deliver canDeliverSourceReply tool replies.
+      3645,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -198,7 +199,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: createSessionHeaderLink shares plugin-owned conversation navigation (PR #158742).
       // +1: resolvePluginServiceScheduler borrows an existing service/account/CLI owner.
       // +1: owner-approved async watched-session preparation with retained sync compatibility.
-      2109,
+      // +1: captureToolAuthoredSourceReply lets the Codex harness deliver canDeliverSourceReply tool replies.
+      2110,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

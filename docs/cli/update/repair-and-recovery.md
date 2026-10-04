@@ -244,6 +244,17 @@ gate then clears, so another update can proceed. Same-identity recovery keeps it
 original sealed-helper checks; missing packages, active update owners, and pending
 database or configuration restoration still require their existing recovery path.
 
+If recovery instead reports `managed handoff lease database identity changed`,
+run `openclaw update repair` from a CLI containing this fix. Repair acquires fresh
+update ownership on the current lease database and closes the orphaned package
+operation as `recovery-lease-identity-changed`. It warns with the old operation ID
+and retained artifact path, leaves the installed package and launchers in place,
+and clears package admission for the next update. The original helper cannot
+recover against a replaced lease database. Matching lease identities keep the
+original recovery checks; another live update owner still prevents settlement.
+No recovery artifacts are deleted. An older installed CLI cannot obtain this fix
+from a candidate it has not yet staged; use the manual installation hop above.
+
 Rerun update finalization after the core package already changed but later
 repair work did not finish cleanly. This is the supported recovery path when
 `openclaw update` installed the new core package but post-core plugin sync,

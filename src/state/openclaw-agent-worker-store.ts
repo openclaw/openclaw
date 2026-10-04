@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { addAbortListener } from "node:events";
 import type { DatabaseSync } from "node:sqlite";
 import { deserialize, serialize } from "node:v8";
 import type { Result } from "@openclaw/normalization-core/result";
@@ -23,7 +24,10 @@ import {
   type SqliteWorkerStore,
 } from "../infra/sqlite-worker-store.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { getGatewayRestartDrainSignal } from "../process/gateway-work-admission.js";
+import {
+  getGatewayRestartDrainSignal,
+  getGatewayShutdownCleanupSignal,
+} from "../process/gateway-work-admission.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { OpenClawAgentDatabaseOptions } from "./openclaw-agent-db-contract.js";
 import { readOpenClawAgentDatabaseIdentity } from "./openclaw-agent-db-identity.js";
@@ -125,6 +129,11 @@ export async function openOpenClawAgentSqliteWorkerStore<Operations extends Sqli
   let unregisterAgent: (() => void) | undefined;
   let unregisterState: (() => void) | undefined;
   const pending = new Set<Promise<unknown>>();
+  const cleanupSignal = getGatewayShutdownCleanupSignal();
+  const releaseDrainExecution = async () => {
+    await drainExecution?.release();
+    drainExecution = undefined;
+  };
   const assertHeld = (cleanup = false) => {
     if (revoked && !cleanup) {
       throw new Error("Agent database Worker owner is closed");
@@ -155,12 +164,10 @@ export async function openOpenClawAgentSqliteWorkerStore<Operations extends Sqli
   }
   const close = (): Promise<void> => {
     revoked = true;
+    cleanupListener[Symbol.dispose]();
     closing ??= (async () => {
       await Promise.allSettled(pending);
-      if (drainExecution) {
-        await drainExecution.release();
-        drainExecution = undefined;
-      }
+      await releaseDrainExecution();
       releaseBorrow?.();
       releaseBorrow = undefined;
       unregisterAgent?.();
@@ -171,6 +178,13 @@ export async function openOpenClawAgentSqliteWorkerStore<Operations extends Sqli
     });
     return closing;
   };
+  const cleanupListener = addAbortListener(cleanupSignal, () => {
+    const release = releaseDrainExecution();
+    pending.add(release);
+    void release
+      .finally(() => pending.delete(release))
+      .catch(reportCompletedPublicationCleanupFailure);
+  });
   try {
     unregisterAgent = registerOpenClawAgentDatabaseAsyncResource({
       agentId: options.agentId,
@@ -263,8 +277,13 @@ export async function openOpenClawAgentSqliteWorkerStore<Operations extends Sqli
         completed = { ok: false, error };
       }
       let releasing: OpenClawAgentDatabaseExecution | undefined = execution;
-      if (completed.ok && !revoked && getGatewayRestartDrainSignal().aborted) {
-        // Keep the accepted publication sequence on one native lease until its store closes.
+      if (
+        completed.ok &&
+        !revoked &&
+        getGatewayRestartDrainSignal().aborted &&
+        !cleanupSignal.aborted
+      ) {
+        // Keep one lease during grace; cleanup releases retention independently of the marker.
         const previous = drainExecution;
         drainExecution = execution;
         releasing = previous;
