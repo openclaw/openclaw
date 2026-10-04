@@ -173,7 +173,7 @@ describe("native relay confirmation transcript admission", () => {
       },
       client: { connId },
       respond,
-      context: { ...controlContext(), getRuntimeConfig: () => ({}), chatRunState },
+      context: { ...(controlContext() as object), getRuntimeConfig: () => ({}), chatRunState },
       sessionMutationAuthorization: {
         talkSessionTarget: h.relay.sessionTarget,
         assertCurrent: vi.fn(),
@@ -241,8 +241,11 @@ describe("native relay confirmation transcript admission", () => {
       try {
         await nextEventLoopTurn();
         expect(call.respond).not.toHaveBeenCalled();
-        if (answer === "no") h.request.onTranscript?.("user", "no", true);
-        else await stopTalkRealtimeRelaySession({ relaySessionId: h.relay.id, connId });
+        if (answer === "no") {
+          h.request.onTranscript?.("user", "no", true);
+        } else {
+          await stopTalkRealtimeRelaySession({ relaySessionId: h.relay.id, connId });
+        }
         await call.pending;
         expect(call.respond).toHaveBeenCalledOnce();
         expect(call.respond).toHaveBeenCalledWith(false, undefined, expect.any(Object));
