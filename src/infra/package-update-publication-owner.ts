@@ -18,7 +18,6 @@ import {
   type PackageActivationJournal,
   type PackageActivationPhase,
   type PackageActivationRecord,
-  type PackageActivationDescriptor,
   isPackageActivationComplete,
 } from "./package-update-activation-journal.js";
 import { decodePackageActivationLauncher } from "./package-update-activation-launcher.js";
@@ -40,7 +39,7 @@ import {
 } from "./package-update-integrity.js";
 import {
   copyPackagePublicationTree,
-  matchesPackagePublicationTree,
+  createPackagePublicationTreeMatcher,
 } from "./package-update-publication-tree.js";
 import { assertManagedUpdateLeaseDatabaseIdentity } from "./update-managed-service-handoff-database.js";
 
@@ -66,7 +65,7 @@ export function createPublicationOwner(
 ) {
   let record = initial;
   let descriptor = record.descriptor;
-  let candidateWarningRecorded = false;
+  const matches = createPackagePublicationTreeMatcher(descriptor.candidate, onWarning);
   let retirementSelected: "previous" | "candidate" | undefined;
   const live = descriptor.authority.installKey;
   const root = (name: string) => path.join(anchor, name);
@@ -180,28 +179,6 @@ export function createPublicationOwner(
     assertCurrent();
     record = journal.transition(record, phase, intent, assertion, publications);
   };
-  const matches = (
-    file: string,
-    expected: PackageActivationDescriptor["candidate"],
-    logical: string,
-    contents = true,
-  ) =>
-    matchesPackagePublicationTree(
-      file,
-      expected,
-      logical,
-      contents,
-      expected === descriptor.candidate
-        ? () => {
-            if (!candidateWarningRecorded) {
-              onWarning(
-                "candidate package fingerprint incomplete; activation requires the directory identity, package version and launchers; full package contents are unverified",
-              );
-              candidateWarningRecorded = true;
-            }
-          }
-        : undefined,
-    );
   const inspect = async (contents: "all" | "selected" | "staged" | "none" = "all") => {
     const reader = createPackageIntegrityReader();
     const liveIdentity = entryIdentity(live, true);

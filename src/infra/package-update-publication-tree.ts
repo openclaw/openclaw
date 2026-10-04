@@ -113,45 +113,55 @@ export async function copyPackagePublicationTree(
   await copy("", assertCurrent);
 }
 
-export async function matchesPackagePublicationTree(
-  file: string,
-  expected: PackageActivationDescriptor["candidate"],
-  logical: string,
-  contents = true,
-  onIncomplete?: () => void,
+export function createPackagePublicationTreeMatcher(
+  candidate: PackageActivationDescriptor["candidate"],
+  onWarning: (message: string) => void,
 ) {
-  const id = entryIdentity(file, true);
-  if (id === null) {
-    return false;
-  }
-  if (id !== expected.identity) {
-    throw new Error(`Package publication object changed: ${file}`);
-  }
-  if (!contents) {
-    return true;
-  }
-  // A prepared descriptor carries its in-process observation, so settled unchanged
-  // files are not re-read. A recovery process parses one without and re-reads all.
-  if ("digest" in expected) {
-    try {
-      const observed = await createPackageIntegrityReader().tree(file, logical, expected);
-      if (!isDeepStrictEqual(observed, expected)) {
-        throw new PackageIntegrityMismatchError(
-          `Package publication object changed: ${file}`,
-          packageIntegrityDifferences(expected, observed),
-        );
-      }
+  let candidateWarningRecorded = false;
+  return async (
+    file: string,
+    expected: PackageActivationDescriptor["candidate"],
+    logical: string,
+    contents = true,
+  ) => {
+    const id = entryIdentity(file, true);
+    if (id === null) {
+      return false;
+    }
+    if (id !== expected.identity) {
+      throw new Error(`Package publication object changed: ${file}`);
+    }
+    if (!contents) {
       return true;
-    } catch (error) {
-      if (!onIncomplete || !isPackageIntegrityResourceError(error)) {
-        throw error;
+    }
+    // A prepared descriptor carries its in-process observation, so settled unchanged
+    // files are not re-read. A recovery process parses one without and re-reads all.
+    if ("digest" in expected) {
+      try {
+        const observed = await createPackageIntegrityReader().tree(file, logical, expected);
+        if (!isDeepStrictEqual(observed, expected)) {
+          throw new PackageIntegrityMismatchError(
+            `Package publication object changed: ${file}`,
+            packageIntegrityDifferences(expected, observed),
+          );
+        }
+        return true;
+      } catch (error) {
+        if (expected !== candidate || !isPackageIntegrityResourceError(error)) {
+          throw error;
+        }
       }
     }
-  }
-  const observed = await createPackageIntegrityReader().directoryIdentity(file);
-  if (observed?.identity !== expected.identity || observed.version !== expected.version) {
-    throw new Error(`Package publication object changed: ${file}`);
-  }
-  onIncomplete?.();
-  return true;
+    const observed = await createPackageIntegrityReader().directoryIdentity(file);
+    if (observed?.identity !== expected.identity || observed.version !== expected.version) {
+      throw new Error(`Package publication object changed: ${file}`);
+    }
+    if (!candidateWarningRecorded) {
+      onWarning(
+        "candidate package fingerprint incomplete; activation requires the directory identity, package version and launchers; full package contents are unverified",
+      );
+      candidateWarningRecorded = true;
+    }
+    return true;
+  };
 }
