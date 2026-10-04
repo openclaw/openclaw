@@ -7,27 +7,24 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { handleGatewayPostJsonEndpoint } from "./http-endpoint-helpers.js";
 
-vi.mock("./http-utils.js", () => {
-  return {
-    authorizeGatewayHttpRequestOrReply: vi.fn(),
-    resolveSharedSecretHttpOperatorScopes: vi.fn(),
-  };
-});
+vi.mock("./http-utils.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./http-utils.js")>()),
+  authorizeGatewayHttpRequestOrReply: vi.fn(),
+  resolveSharedSecretHttpOperatorScopes: vi.fn(),
+}));
 
-vi.mock("./http-common.js", () => {
-  return {
-    readJsonBodyOrError: vi.fn(),
-    sendJson: vi.fn(),
-    sendMethodNotAllowed: vi.fn(),
-    sendMissingScopeForbidden: vi.fn(),
-  };
-});
+vi.mock("./http-common.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./http-common.js")>()),
+  readJsonBodyOrError: vi.fn(),
+  sendJson: vi.fn(),
+  sendMethodNotAllowed: vi.fn(),
+  sendMissingScopeForbidden: vi.fn(),
+}));
 
-vi.mock("./method-scopes.js", () => {
-  return {
-    authorizeOperatorScopesForMethod: vi.fn(),
-  };
-});
+vi.mock("./method-scopes.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./method-scopes.js")>()),
+  authorizeOperatorScopesForMethod: vi.fn(),
+}));
 
 const { readJsonBodyOrError, sendMethodNotAllowed, sendMissingScopeForbidden } =
   await import("./http-common.js");

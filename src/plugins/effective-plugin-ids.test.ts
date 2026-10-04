@@ -24,7 +24,8 @@ vi.mock("../config/plugin-auto-enable.js", () => ({
     mocks.applyPluginAutoEnable(...args),
 }));
 
-vi.mock("../channels/config-presence.js", () => ({
+vi.mock("../channels/config-presence.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../channels/config-presence.js")>()),
   listExplicitlyDisabledChannelIdsForConfig: (
     ...args: Parameters<typeof mocks.listExplicitlyDisabledChannelIdsForConfig>
   ) => mocks.listExplicitlyDisabledChannelIdsForConfig(...args),
@@ -99,9 +100,8 @@ describe("resolveEffectivePluginIds", () => {
   });
 
   it("does not activate channels from persisted auth", () => {
-    mocks.listExplicitlyDisabledChannelIdsForConfig.mockReturnValue(["credential-only"]);
     mocks.listPotentialConfiguredChannelIds.mockImplementation((_config, _env, options) =>
-      options?.includePersistedAuthState ? ["credential-only"] : [],
+      options?.includePersistedAuthState === false ? [] : ["credential-only"],
     );
     expect(
       collectConfiguredStartupChannelIds({

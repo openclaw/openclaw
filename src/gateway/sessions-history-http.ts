@@ -31,6 +31,7 @@ import {
   authorizeScopedGatewayHttpRequestOrReply,
   checkGatewayHttpRequestAuth,
   getHeader,
+  resolveSharedSecretHttpOperatorScopes,
   type AuthorizedGatewayHttpRequest,
 } from "./http-utils.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
