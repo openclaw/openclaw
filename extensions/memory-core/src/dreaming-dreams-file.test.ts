@@ -162,6 +162,31 @@ describe("dream diary file behavior", () => {
     },
   );
 
+  it("publishes when already-clamped diary context is unchanged", async () => {
+    const workspaceDir = await createTempWorkspace("dreaming-narrative-clamped-context-");
+    const longEntry = `${"a".repeat(359)} ${"b".repeat(20)}`;
+    await writeBackfillDiaryEntries({
+      workspaceDir,
+      entries: [{ isoDay: "2026-04-05", bodyLines: [longEntry] }],
+      timezone: "UTC",
+    });
+    const recentDiaryEntries = await readRecentDreamDiaryEntries({ workspaceDir, limit: 1 });
+
+    const dreamsPath = await appendNarrativeEntry({
+      workspaceDir,
+      narrative: "A new thread joined the unchanged memory.",
+      nowMs: Date.parse("2026-04-06T03:00:00Z"),
+      timezone: "UTC",
+      recentDiaryEntries,
+    });
+
+    const expectedDreamsPath = path.join(workspaceDir, "DREAMS.md");
+    expect(dreamsPath).toBe(expectedDreamsPath);
+    await expect(fs.readFile(expectedDreamsPath, "utf8")).resolves.toContain(
+      "A new thread joined the unchanged memory.",
+    );
+  });
+
   it("skips symlinked and non-file DREAMS.md when reading recent context", async () => {
     const symlinkWorkspace = await createTempWorkspace("dreaming-narrative-read-symlink-");
     const targetPath = path.join(symlinkWorkspace, "target-dreams.md");
