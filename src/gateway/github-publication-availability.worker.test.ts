@@ -11,22 +11,28 @@ import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-s
 import { prepareGitHubPublicationAvailability } from "./github-publication-availability.js";
 
 const mocks = vi.hoisted(() => ({ session: vi.fn(), identity: vi.fn() }));
+// mock-isolation: Keep session-owner SQL outside the worktree-read measurement.
 vi.mock("./session-utils.js", () => ({ loadGatewaySessionEntryReadOnly: mocks.session }));
+// mock-isolation: Use the synthetic registry without starting managed-worktree services.
 vi.mock("../agents/worktrees/service.js", () => ({
   managedWorktrees: {
     findLiveByOwner: (kind: ManagedWorktreeRecord["ownerKind"], id: string) =>
       findLiveRegistryWorktreeByOwner(process.env, kind, id),
   },
 }));
+// mock-isolation: Control identity preparation without credential discovery.
 vi.mock("../agents/github-tool-identity.js", () => ({
   prepareGitHubPublicationIdentity: mocks.identity,
   prepareGitHubPublicationOptionsIdentity: mocks.identity,
   matchesPreparedGitHubPublicationIdentity: () => true,
 }));
+// mock-isolation: Exclude OAuth credentials and network activity from this reader fixture.
 vi.mock("./github-oauth-lifecycle.js", () => ({
   requestCurrentGitHubOAuthRefresh: async () => {},
 }));
+// mock-isolation: Use synthetic configuration without loading operator configuration.
 vi.mock("../config/config.js", () => ({ getRuntimeConfig: () => ({}) }));
+// mock-isolation: Exclude process-wide secret materialization from this reader fixture.
 vi.mock("../secrets/runtime-state.js", () => ({
   getActiveSecretsRuntimeConfigSnapshot: () => undefined,
 }));
