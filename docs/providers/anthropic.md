@@ -200,8 +200,12 @@ OpenClaw release:
     Claude Code client version, or the installed CLI version when newer.
     Anthropic uses that identity to gate newer models. A missing, older, or
     failed CLI probe uses OpenClaw's maintained version floor. Discovery is
-    shared with the CLI backend and cached until process restart; API-key
-    requests do not run the probe.
+    shared with the CLI backend. A result holds while the same executable file
+    stays installed: after `claude update` or a reinstall, the next request
+    probes the new file without a gateway restart. A missing or failed probe
+    is retried after 60 seconds, or at once when the executable file changes.
+    The native-install location outside `PATH` is looked up once per process.
+    API-key requests do not run the probe.
 
     ### Config example
 
