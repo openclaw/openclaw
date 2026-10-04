@@ -165,7 +165,7 @@ export function parseArgs(argv: string[]) {
 
 const checkName = (check: RollupCheck) =>
   check.kind === "StatusContext" ? check.context : check.name;
-export const sanitizeCheckName = (name: string) =>
+const sanitizeCheckName = (name: string) =>
   name.replaceAll(ANSI_ESCAPE_SEQUENCE, "\u0000").replaceAll(UNSAFE_CHECK_NAME_RUN, "?");
 const isAutoResponse = (check: RollupCheck) =>
   checkName(check)
