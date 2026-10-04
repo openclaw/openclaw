@@ -19,6 +19,7 @@ function createA2aInboundFixture(peerName = "hermes") {
     configured: true,
     config: { peers: { hermes: { token: "test-token" } } },
     unresolvedPeers: [],
+    unresolvedOutboundPeers: [],
   };
   return {
     runtime,

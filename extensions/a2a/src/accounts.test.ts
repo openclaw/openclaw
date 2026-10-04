@@ -100,6 +100,8 @@ describe("A2A account credential resolution", () => {
       expect(peer?.token).toBe("inline-inbound-secret");
       expect(peer?.url).toBe("https://peer.example.test");
       expect(peer).not.toHaveProperty("outboundToken");
+      // The failure is remembered so the sender can refuse instead of going anonymous.
+      expect(resolveA2aChannelAccount({ cfg }).unresolvedOutboundPeers).toEqual(["hermes"]);
     });
   });
 

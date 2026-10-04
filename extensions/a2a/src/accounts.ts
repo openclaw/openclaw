@@ -19,9 +19,10 @@ export function resolveDefaultA2aChannelAccountId(): string {
  */
 function withoutUnresolvedCredentials(cfg: OpenClawConfig, config: A2aChannelConfig) {
   const unresolvedPeers: string[] = [];
+  const unresolvedOutboundPeers: string[] = [];
   const peers = config.peers;
   if (!peers) {
-    return { config, unresolvedPeers };
+    return { config, unresolvedPeers, unresolvedOutboundPeers };
   }
   const available: NonNullable<A2aChannelConfig["peers"]> = {};
   for (const [peerName, peer] of Object.entries(peers)) {
@@ -31,20 +32,23 @@ function withoutUnresolvedCredentials(cfg: OpenClawConfig, config: A2aChannelCon
       continue;
     }
     if (peer.outboundToken && hasUnresolvedConfigValue(cfg, [...base, "outboundToken"])) {
+      // Remember the failure: a peer with no authored outbound token is anonymous by
+      // design, but one whose authored reference failed must not become anonymous.
+      unresolvedOutboundPeers.push(peerName);
       const { outboundToken: _unresolved, ...rest } = peer;
       available[peerName] = rest;
       continue;
     }
     available[peerName] = peer;
   }
-  return { config: { ...config, peers: available }, unresolvedPeers };
+  return { config: { ...config, peers: available }, unresolvedPeers, unresolvedOutboundPeers };
 }
 
 export function resolveA2aChannelAccount(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
 }): ResolvedA2aChannelAccount {
-  const { config, unresolvedPeers } = withoutUnresolvedCredentials(
+  const { config, unresolvedPeers, unresolvedOutboundPeers } = withoutUnresolvedCredentials(
     params.cfg,
     params.cfg.channels?.a2a ?? {},
   );
@@ -54,6 +58,7 @@ export function resolveA2aChannelAccount(params: {
     configured: Object.keys(config.peers ?? {}).length > 0,
     config,
     unresolvedPeers,
+    unresolvedOutboundPeers,
   };
 }
 
