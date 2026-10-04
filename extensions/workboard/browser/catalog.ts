@@ -65,6 +65,16 @@ export class WorkboardCatalog {
     }
   }
 
+  removeBoard(id: string): void {
+    this.generation += 1;
+    this.load = null;
+    invalidateWorkboardLoads(this.host);
+    const state = getWorkboardState(this.host);
+    state.boards = state.boards.filter((board) => board.id !== id);
+    this.publishCatalog(state.boards, this.snapshot.ready);
+    this.ensureAndRecover(true);
+  }
+
   dispose(): void {
     this.disposed = true;
     this.connectionGeneration += 1;
