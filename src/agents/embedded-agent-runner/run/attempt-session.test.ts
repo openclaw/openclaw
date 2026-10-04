@@ -659,7 +659,7 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
       contextOverflowRecoveryOwner: "caller",
       cleanupProviderSessionResourcesOnDispose: false,
     });
-    expect(fixture.activeSession.setBaseSystemPrompt).toHaveBeenCalledWith("system prompt");
+    expect(fixture.activeSession.agent.state.systemPrompt).toBe("system prompt");
     expect(fixture.input.onSystemPromptChanged).toHaveBeenCalledWith("  system prompt\n");
     expect(fixture.setActiveToolsByName).toHaveBeenCalledWith(fixture.sessionToolAllowlist);
     expect(result).toEqual(
