@@ -49,6 +49,10 @@ async function makeLauncherFixture(
     path.join(fixtureRoot, "node-runtime-recovery.mjs"),
   );
   await fs.copyFile(
+    path.resolve(process.cwd(), "node-runtime-env.mjs"),
+    path.join(fixtureRoot, "node-runtime-env.mjs"),
+  );
+  await fs.copyFile(
     path.resolve(process.cwd(), "cli-root-options.mjs"),
     path.join(fixtureRoot, "cli-root-options.mjs"),
   );
@@ -480,10 +484,9 @@ describe("openclaw launcher", () => {
       expect(output).toEqual({
         args,
         cwd: fixture.root,
-        path: expect.any(String),
+        path: [path.dirname(fixture.nodePath), process.env.PATH].join(path.delimiter),
         recovered: true,
       });
-      expect(output.path).toBe(process.env.PATH);
       expect(JSON.parse(await fs.readFile(fixture.installLog, "utf8"))).toEqual({
         command: process.platform === "darwin" ? "/bin/bash" : "bash",
         args: [
@@ -558,7 +561,10 @@ describe("openclaw launcher", () => {
       const result = fixture.run("", args);
       expect(result.status, result.stderr).toBe(17);
       expect(result.stderr).not.toContain("Update NodeJS:");
-      expect(JSON.parse(result.stdout)).toMatchObject({ path: process.env.PATH, recovered: true });
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        path: [path.dirname(fixture.nodePath), process.env.PATH].join(path.delimiter),
+        recovered: true,
+      });
       await expect(fs.stat(fixture.installLog)).rejects.toMatchObject({ code: "ENOENT" });
     });
 
