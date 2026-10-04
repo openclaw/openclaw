@@ -2132,7 +2132,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/commands/onboard-quickstart-host.plugin-generation.test.ts",
   "src/commands/sessions-tail.test.ts",
   "src/commands/sessions.acp-runtime-metadata.test.ts",
-  "src/commands/sessions.kind-classification.test.ts",
   "src/commands/sessions.plugin-metadata.test.ts",
   "src/commands/sessions.test.ts",
   "src/commands/setup.test.ts",
