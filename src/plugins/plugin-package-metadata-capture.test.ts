@@ -1,9 +1,52 @@
+import Module, { createRequire } from "node:module";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { pathToFileURL } from "node:url";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
+  createPluginSourceCapture,
   findPluginCapturedPackage,
+  withPluginSourceCaptureDirectory,
   type PluginPackageCapture,
 } from "./plugin-package-metadata-capture.js";
+
+const temp = useAutoCleanupTempDirTracker(afterEach);
+
+it.each(["dispose", "disposeAsync"] as const)(
+  "%s reclaims canonical path aliases without evicting another capture",
+  async (method) => {
+    const capture = withPluginSourceCaptureDirectory(temp.make("plugin-cache-owner-"), () =>
+      createPluginSourceCapture(),
+    );
+    const filename = path.join(capture.directory, "module.cjs");
+    const owned = new Set([
+      filename,
+      filename.replaceAll("\\", "/"),
+      pathToFileURL(filename).href,
+      `${path.dirname(capture.directory)}${path.sep}.${path.sep}${path.basename(capture.directory)}${path.sep}module.cjs`,
+      ...(process.platform === "win32" ? [filename.toUpperCase()] : []),
+    ]);
+    const sibling = `${capture.directory}-sibling${path.sep}module.cjs`;
+    const preserved = [sibling, pathToFileURL(sibling).href];
+    const cache = createRequire(import.meta.url).cache;
+    const record = new Module(filename);
+    for (const id of [...owned, ...preserved]) {
+      cache[id] = record;
+    }
+    const pending = capture[method]();
+    try {
+      expect([...owned].filter((id) => cache[id] !== undefined)).toEqual([]);
+      for (const id of preserved) {
+        expect(cache[id]).toBe(record);
+      }
+    } finally {
+      await pending;
+      for (const id of [...owned, ...preserved]) {
+        delete cache[id];
+      }
+    }
+  },
+);
 
 function capturedPackage(root: string, links: string[] = []): PluginPackageCapture {
   return {
