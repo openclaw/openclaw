@@ -23,7 +23,10 @@ import {
   inlineDirectiveDisplayTextFilter,
   stripInlineDirectiveTagsForDisplay,
 } from "../utils/directive-tags.js";
-import type { AssistantTextSnapshot } from "./agent-event-assistant-text.js";
+import {
+  resolveAssistantTextInput,
+  type AssistantTextSnapshot,
+} from "./agent-event-assistant-text.js";
 import { stripAssistantMediaDirectivesForDisplay } from "./chat-display-projection.helpers.js";
 import {
   isSuppressedControlReplyLeadFragment,
@@ -237,6 +240,29 @@ export function projectLiveAssistantBufferedText(
     return { text, suppress: true, pendingLeadFragment: true };
   }
   return { text, suppress: false, pendingLeadFragment: false };
+}
+
+/** Resolve mutable chat input without retracting append-only assistant transports. */
+export function resolveLiveAssistantTextInput(stream: string, data: Record<string, unknown>) {
+  const input = resolveAssistantTextInput(
+    stream === "assistant"
+      ? data
+      : stream === "item" && data.kind === "preamble"
+        ? data.assistantStreamReplacement
+        : undefined,
+  );
+  if (!input) {
+    return undefined;
+  }
+  if (stream !== "assistant") {
+    // Only an explicit item-owned replacement can retire a preamble contribution.
+    return input.itemId && input.replace ? input : undefined;
+  }
+  return shouldSuppressAssistantEventForLiveChat(data)
+    ? input.itemId
+      ? { ...input, text: "", delta: "" }
+      : undefined
+    : input;
 }
 
 /** Returns true when an assistant event phase should not appear in live chat. */

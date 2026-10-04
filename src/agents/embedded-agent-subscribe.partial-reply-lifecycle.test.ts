@@ -1,6 +1,13 @@
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import {
+  mergeAssistantText,
+  resolveAssistantTextInput,
+  type AssistantTextSnapshot,
+} from "../gateway/agent-event-assistant-text.js";
 import { onAgentEventForRun } from "../infra/agent-events.js";
+import type { EmbeddedAgentEvent } from "./embedded-agent-subscribe.shared-types.js";
 
 const logger = vi.hoisted(() => ({
   debug: vi.fn(),
@@ -359,7 +366,7 @@ describe("subscribeEmbeddedAgentSession partial reply lifecycle", () => {
   });
   it.each([
     { name: "sanitized empty", text: "<think>hidden reasoning</think>", preambles: 0 },
-    { name: "duplicate", text: "Working.", preambles: 1 },
+    { name: "duplicate", text: "Working.", preambles: 2 },
   ])(
     "retires pending partials at a $name generic commentary boundary",
     async ({ text, preambles }) => {
@@ -414,6 +421,12 @@ describe("subscribeEmbeddedAgentSession partial reply lifecycle", () => {
           ([event]) => event.stream === "item" && event.data.kind === "preamble",
         );
         expect(preambleEvents).toHaveLength(preambles);
+        if (preambles) {
+          expect(preambleEvents[1]?.[0].data).toMatchObject({
+            itemId: "commentary",
+            assistantStreamReplacement: { itemId: expect.any(String), text: "", replace: true },
+          });
+        }
       } finally {
         pending.resolve();
         subscription.unsubscribe();
@@ -457,5 +470,115 @@ describe("native reasoning projection", () => {
       off();
       probe.mockRestore();
     }
+  });
+});
+
+function createOwnershipHarness(runId = "commentary-handoff") {
+  const events: EmbeddedAgentEvent[] = [];
+  let snapshot: AssistantTextSnapshot = { text: "" };
+  const state = createEmbeddedAgentSubscribeState({});
+  const delivery = createReplyDelivery({
+    params: {
+      runId,
+      session: createStubSessionHarness().session,
+      onAgentEvent: (event) => {
+        events.push(event);
+        if (event.stream === "assistant" || event.stream === "item") {
+          const input = resolveAssistantTextInput(
+            event.stream === "assistant" ? event.data : event.data.assistantStreamReplacement,
+          );
+          if (input) {
+            snapshot = mergeAssistantText(snapshot, input, "live");
+          }
+        }
+      },
+    },
+    state,
+    log: logger,
+  });
+  const text = (value: string) => delivery.emitAssistantStreamData({ text: value, delta: value });
+  const commentary = (value: string, itemId = "provider-item") =>
+    delivery.emitAssistantStreamData(
+      { text: value, delta: "", replace: true, phase: "commentary", itemId },
+      { finalMessage: true },
+    );
+  return { state, delivery, text, commentary, events, snapshot: () => snapshot };
+}
+
+describe("commentary stream ownership", () => {
+  it("hands off the generated stream item with its differently keyed commentary", () => {
+    const h = createOwnershipHarness();
+    h.text("Checking the workspace.");
+    const streamed = expectDefined(h.events[0], "initial assistant stream event");
+    h.commentary("Checking the workspace.");
+    expect(h.events).toMatchObject([
+      { stream: "assistant", data: { text: "Checking the workspace." } },
+      {
+        stream: "item",
+        data: {
+          itemId: "provider-item",
+          kind: "preamble",
+          assistantStreamReplacement: {
+            itemId: streamed.data.itemId,
+            text: "",
+            delta: "",
+            replace: true,
+          },
+        },
+      },
+    ]);
+    expect(h.snapshot().text).toBe("");
+    h.commentary("Checking the workspace.");
+    expect(h.events).toHaveLength(2);
+  });
+
+  it("retains earlier messages and only retires the current message contribution", () => {
+    const h = createOwnershipHarness();
+    h.text("An earlier answer.");
+    h.state.assistantMessageStartIndex = h.state.assistantMessageIndex = 1;
+    h.text("Checking the workspace.");
+    h.commentary("Checking the workspace.");
+    expect(h.snapshot().text).toBe("An earlier answer.");
+  });
+
+  it("preserves prior block formatting when only the current block becomes commentary", () => {
+    const h = createOwnershipHarness();
+    const earlier = "```python\nif ready:\n    run()\n```";
+    h.text(earlier);
+    h.state.assistantMessageIndex += 1;
+    h.text("Checking another file.");
+    h.commentary("Checking another file.");
+    expect(h.snapshot().text).toBe(earlier);
+  });
+
+  it("does not retract another block for already-phased commentary", () => {
+    const h = createOwnershipHarness();
+    h.text("Repeated text.");
+    h.state.assistantMessageIndex += 1;
+    h.commentary("Repeated text.");
+    expect(h.snapshot().text).toBe("Repeated text.");
+    expect(h.events.map((event) => event.stream)).toEqual(["assistant", "item"]);
+  });
+
+  it("preserves a separate same-text answer and distinct repeated commentary items", () => {
+    const h = createOwnershipHarness();
+    for (let index = 0; index < 2; index++) {
+      h.state.assistantMessageStartIndex = h.state.assistantMessageIndex = index;
+      h.text("Repeated text.");
+      h.commentary("Repeated text.", "commentary-" + index);
+    }
+    h.state.assistantMessageStartIndex = h.state.assistantMessageIndex = 2;
+    h.text("Repeated text.");
+    expect(h.snapshot().text).toBe("Repeated text.");
+    expect(h.events.filter((event) => event.stream === "item")).toHaveLength(2);
+  });
+
+  it("does not release deferred text after its reclassification", () => {
+    const h = createOwnershipHarness();
+    h.state.deferBlockReplyDelivery = true;
+    h.text("Checking the workspace.");
+    h.commentary("Checking the workspace.");
+    h.delivery.releaseDeferredReplies();
+    expect(h.snapshot().text).toBe("");
   });
 });

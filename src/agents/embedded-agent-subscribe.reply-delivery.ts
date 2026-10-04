@@ -28,6 +28,7 @@ import type { AgentMessage } from "./runtime/index.js";
 type AssistantStreamDelivery = {
   data: AssistantStreamData;
   eventData?: AssistantStreamData;
+  retiredAssistant?: AssistantStreamData;
   emitPartialReply: boolean;
   finalMessage: boolean;
   blockIndex: number;
@@ -131,23 +132,29 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
     // Completion must survive an identical last delta: first-notification
     // consumers wait for this boundary, not a timer or a repeated text snapshot.
     const commentarySignature = `${preamblePhase}\0${progressText}`;
-    const event = progressText
-      ? {
-          stream: "item" as const,
-          data: {
-            kind: "preamble",
-            title: "Preamble",
-            phase: preamblePhase,
-            progressText,
-            ...(itemId ? { itemId } : {}),
-          },
-        }
-      : !eventData || eventData.phase === "commentary"
-        ? undefined
-        : { stream: "assistant" as const, data: eventData };
+    const event =
+      progressText || delivery.retiredAssistant
+        ? {
+            stream: "item" as const,
+            data: {
+              kind: "preamble",
+              title: "Preamble",
+              phase: preamblePhase,
+              progressText,
+              ...(itemId ? { itemId } : {}),
+              ...(delivery.retiredAssistant
+                ? { assistantStreamReplacement: delivery.retiredAssistant }
+                : {}),
+            },
+          }
+        : !eventData || eventData.phase === "commentary"
+          ? undefined
+          : { stream: "assistant" as const, data: eventData };
     if (
       event &&
-      (event.stream !== "item" || lastEmittedCommentaryByItem.get(itemId) !== commentarySignature)
+      (event.stream !== "item" ||
+        delivery.retiredAssistant ||
+        lastEmittedCommentaryByItem.get(itemId) !== commentarySignature)
     ) {
       if (event.stream === "item") {
         lastEmittedCommentaryByItem.set(itemId, commentarySignature);
@@ -164,8 +171,28 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
       return;
     }
     let eventData: AssistantStreamData | undefined;
+    let retiredAssistant: AssistantStreamData | undefined;
     if (data.phase === "commentary") {
       eventData = data;
+      if (
+        messageIndex === state.assistantMessageStartIndex &&
+        blockIndex === state.assistantMessageIndex &&
+        streamedText !== prefix
+      ) {
+        // Late phase classification transfers this block to the keyed preamble.
+        // Retract its actual generated stream identity, not the provider item ID:
+        // otherwise the Gateway retains the old text in live/recovery snapshots.
+        retiredAssistant = { itemId: assistantItemId, text: prefix, delta: "", replace: true };
+        streamedText = prefix;
+        for (const deferred of deferredAssistantScopes) {
+          if (
+            deferred.delivery?.blockIndex === blockIndex &&
+            deferred.delivery.eventData?.itemId === assistantItemId
+          ) {
+            deferred.delivery = undefined;
+          }
+        }
+      }
     } else {
       if (messageIndex !== state.assistantMessageStartIndex) {
         messageIndex = state.assistantMessageStartIndex;
@@ -222,6 +249,7 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
     const delivery = {
       data,
       eventData,
+      retiredAssistant,
       emitPartialReply: options?.emitPartialReply === true,
       finalMessage: options?.finalMessage === true,
       blockIndex: state.assistantMessageIndex,
