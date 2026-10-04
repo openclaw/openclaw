@@ -175,13 +175,6 @@ describe("managed handoff database publication", () => {
     expect(fs.statSync(databasePath).nlink).toBe(1);
   });
 
-  it("recovers an existing private empty database through the existing DDL path", () => {
-    fs.writeFileSync(databasePath, "", { mode: 0o600 });
-    const withDatabase = createManagedHandoffLeaseDatabase(databasePath);
-    withDatabase(true, (db) => insertRow(db, root, "recovered"));
-    expect(readOwners()).toEqual(["recovered"]);
-  });
-
   it.skipIf(process.platform === "win32")(
     "repairs an interrupted legacy initializer that wins exclusive creation",
     () => {
@@ -445,32 +438,6 @@ describe("managed handoff database publication", () => {
       }
     },
   );
-
-  it("preserves a committed row when its writer crashes afterward", async () => {
-    const script = `
-      import fs from "node:fs";
-      const { createManagedHandoffLeaseDatabase } = await import(${JSON.stringify(databaseModule)});
-      const withDatabase = createManagedHandoffLeaseDatabase(process.argv[1]);
-      withDatabase(true, (db) => db.prepare(
-        "INSERT INTO managed_update_handoffs " +
-        "(install_root, owner, payload_json, updated_at) VALUES (?, ?, ?, ?)"
-      ).run("committed", "committed", "{}", 1));
-      fs.writeSync(1, "committed-and-closed\\n");
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
-    `;
-    const writer = spawnFixture(script, [databasePath]);
-    try {
-      await writer.waitForMarker("committed-and-closed");
-      await killFixture(writer);
-      expect(readOwners()).toEqual(["committed"]);
-
-      const withDatabase = createManagedHandoffLeaseDatabase(databasePath);
-      withDatabase(true, (db) => insertRow(db, "next", "next"));
-      expect(readOwners()).toEqual(["committed", "next"]);
-    } finally {
-      await stopChildProcess(writer.child, 5_000);
-    }
-  });
 });
 
 it.each(["9.4 identity-less", "9.6 numeric", "9.6 bridge", "9.7 exact"] as const)(

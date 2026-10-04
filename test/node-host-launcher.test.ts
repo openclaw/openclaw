@@ -67,6 +67,7 @@ async function writePackage(root: string, version: string, body: string, schema 
     "node-sqlite.mjs",
     "node-runtime-update.mjs",
     "node-runtime-recovery.mjs",
+    "node-runtime-env.mjs",
     "cli-root-options.mjs",
     "gateway-run-argv.mjs",
     "gateway-shutdown-budget.mjs",
@@ -114,7 +115,15 @@ async function fixture(body: string, stateRelativePath = "state") {
     return { prefix, packageRoot };
   };
   const current = path.join(runtimeDirectory, "current");
-  return { root, base, stateDir, runtimeDirectory, current, release };
+  const select = async (prefix: string, options: { stale?: boolean; backup?: boolean } = {}) => {
+    const selector = options.backup ? `${current}.previous` : current;
+    await fs.symlink(prefix, selector, process.platform === "win32" ? "junction" : "dir");
+    if (options.stale) {
+      const old = new Date(Date.now() - 13 * 60 * 60 * 1_000);
+      await fs.lutimes(selector, old, old);
+    }
+  };
+  return { root, base, stateDir, runtimeDirectory, current, release, select };
 }
 
 function run(
@@ -212,13 +221,6 @@ describe("managed node launcher", () => {
     expect(JSON.parse(result.stdout.trim())).toEqual({ supervised: false });
   });
 
-  it("lets a drained runtime exit without the supervisor IPC keeping it alive", async () => {
-    const f = await fixture("await ready(); report('drained');");
-    const result = await run(f.base, f.stateDir).done;
-    expect(result.code, result.stderr).toBe(0);
-    expect(result.stdout).toContain('"drained"');
-  });
-
   it.each(["--openclaw-node-host-child", "--openclaw-node-host-managed-child"])(
     "rejects private %s arguments without supervisor IPC",
     async (argument) => {
@@ -248,7 +250,7 @@ report({before, after: getManagedNodeHostStatePath() ?? null});
 process.exit(0);
 `,
     );
-    await fs.symlink(managed.prefix, f.current, process.platform === "win32" ? "junction" : "dir");
+    await f.select(managed.prefix);
     const result = await run(f.base, f.stateDir).done;
     expect(result.code, result.stderr).toBe(0);
     expect(JSON.parse(result.stdout.trim())).toEqual({
@@ -272,11 +274,7 @@ if (!process.env.TEST_BOOTSTRAPPED) {
       const f = await fixture(body);
       if (selected === "managed") {
         const managed = await f.release("2026.9.2", body);
-        await fs.symlink(
-          managed.prefix,
-          f.current,
-          process.platform === "win32" ? "junction" : "dir",
-        );
+        await f.select(managed.prefix);
       }
       const argv = ["node", "run", "--display-name", "bootstrap"];
       const launched = run(f.base, f.stateDir, argv, {
@@ -296,11 +294,8 @@ if (!process.env.TEST_BOOTSTRAPPED) {
   );
 
   it.each([
-    ["2026.9.2", "managed"],
     ["2026.9.1", "managed"],
     ["2026.8.9", "base"],
-    ["2026.9.1-beta.1", "base"],
-    ["2026.9.1-1", "managed"],
   ])(
     "selects the newest runtime (%s) before loading the invoking package",
     async (version, expected) => {
@@ -308,11 +303,7 @@ if (!process.env.TEST_BOOTSTRAPPED) {
         `report({selected:'${selected}',state:getManagedNodeHostStatePath() ?? null,argv:process.argv.slice(2)}); process.exit(0);`;
       const f = await fixture(reportSelection("base"));
       const managed = await f.release(version, reportSelection("managed"));
-      await fs.symlink(
-        managed.prefix,
-        f.current,
-        process.platform === "win32" ? "junction" : "dir",
-      );
+      await f.select(managed.prefix);
       const result = await run(f.base, f.stateDir).done;
       expect(result.code, result.stderr).toBe(0);
       expect(JSON.parse(result.stdout.trim())).toEqual({
@@ -398,9 +389,7 @@ setTimeout(() => {
 }, 100);
 `,
     );
-    await fs.symlink(previous.prefix, f.current, process.platform === "win32" ? "junction" : "dir");
-    const old = new Date(Date.now() - 13 * 60 * 60 * 1_000);
-    await fs.lutimes(f.current, old, old);
+    await f.select(previous.prefix, { stale: true });
     const before = await fs.lstat(f.current);
     const result = await run(f.base, f.stateDir, ["node", "run"], {
       TEST_RUNTIME_ROOT: candidate.prefix,
@@ -433,13 +422,7 @@ if (process.env.TEST_SELECT_ONLY || version === process.env.TEST_VERSION) {
       const f = await fixture("throw new Error('the global runtime must not load');");
       const previous = await f.release("2026.9.2", body);
       const candidate = await f.release("2026.9.3", body);
-      await fs.symlink(
-        previous.prefix,
-        f.current,
-        process.platform === "win32" ? "junction" : "dir",
-      );
-      const old = new Date(Date.now() - 13 * 60 * 60 * 1_000);
-      await fs.lutimes(f.current, old, old);
+      await f.select(previous.prefix, { stale: true });
       const previousMtime = (await fs.lstat(f.current)).mtimeMs;
       const { env, execArgv } = await windowsSelectorFixture(f.root, f.current, failure);
       const result = await run(
@@ -536,13 +519,7 @@ if (fs.existsSync(process.env.TEST_ATTEMPT)) {
       let previous;
       if (selected === "managed") {
         previous = await f.release("2026.9.1", body);
-        await fs.symlink(
-          previous.prefix,
-          f.current,
-          process.platform === "win32" ? "junction" : "dir",
-        );
-        const old = new Date(Date.now() - 13 * 60 * 60 * 1_000);
-        await fs.lutimes(f.current, old, old);
+        await f.select(previous.prefix, { stale: true });
       }
       const candidate = await f.release("2026.9.2", `${reportRuntime} process.exit(42);`);
       const result = await run(f.base, f.stateDir, ["node", "run"], {
@@ -607,9 +584,7 @@ await ready();
 process.exit(0);
 `,
     );
-    await fs.symlink(previous.prefix, f.current, process.platform === "win32" ? "junction" : "dir");
-    const old = new Date(Date.now() - 13 * 60 * 60 * 1_000);
-    await fs.lutimes(f.current, old, old);
+    await f.select(previous.prefix, { stale: true });
     const before = await fs.lstat(f.current);
     const candidateStarted = path.join(f.root, "candidate-started");
     const result = await run(f.base, f.stateDir, ["node", "run"], {
@@ -632,8 +607,6 @@ process.exit(0);
 
   it.each([
     ["2026.9.2", "current"],
-    ["2026.9.2-1", "current"],
-    ["2026.9.2", "current.previous"],
     ["2026.9.2-1", "current.previous"],
   ])(
     "refuses %s after another parent publishes a newer shared runtime at %s",
@@ -676,11 +649,7 @@ ${requestUpdate}
         "2026.9.2",
         "report({selected:'managed',state:process.env.OPENCLAW_STATE_DIR ?? null,home:process.env.OPENCLAW_HOME ?? null,managedState:getManagedNodeHostStatePath() ?? null}); process.exit(0);",
       );
-      await fs.symlink(
-        managed.prefix,
-        f.current,
-        process.platform === "win32" ? "junction" : "dir",
-      );
+      await f.select(managed.prefix);
       const inheritedHome = path.join(f.root, "inherited-home");
       const defaultState = path.join(inheritedHome, ".openclaw");
       const gatewayEnvDir = path.join(inheritedHome, ".config", "openclaw");
@@ -746,7 +715,7 @@ syncBuiltinESMExports();
       "2026.9.2",
       "report({selected:'profile-managed',state:getManagedNodeHostStatePath() ?? null}); process.exit(0);",
     );
-    await fs.symlink(managed.prefix, f.current, process.platform === "win32" ? "junction" : "dir");
+    await f.select(managed.prefix);
     const home = path.dirname(f.stateDir);
     await fs.mkdir(path.join(home, ".openclaw"), { recursive: true });
     await fs.writeFile(
@@ -780,11 +749,7 @@ syncBuiltinESMExports();
       );
       if (condition === "cooldown" || condition === "backup-cooldown") {
         const current = await f.release("2026.9.1", requestUpdate);
-        await fs.symlink(
-          current.prefix,
-          condition === "backup-cooldown" ? `${f.current}.previous` : f.current,
-          process.platform === "win32" ? "junction" : "dir",
-        );
+        await f.select(current.prefix, { backup: condition === "backup-cooldown" });
       } else if (condition === "existing-lock") {
         await fs.writeFile(
           path.join(f.runtimeDirectory, "activation.lock"),

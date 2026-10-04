@@ -179,6 +179,79 @@ struct ChatGatewayRequestTests {
         #expect(request.params["configuredAgentsOnly"]?.value as? Bool == true)
     }
 
+    @Test(arguments: [
+        (OpenClawChatSidebarStatus.active, "{}"),
+        (OpenClawChatSidebarStatus.archived, #"{"archived":true}"#),
+        (OpenClawChatSidebarStatus.all, #"{"archived":"all"}"#),
+    ])
+    func `sidebar list serializes page search and explicit status scope`(
+        status: OpenClawChatSidebarStatus,
+        archiveJSON: String) throws
+    {
+        let request = OpenClawChatGatewayRequests.sidebarSessions(
+            query: .init(
+                agentID: " research ", status: status, search: " migration ",
+                ownerId: " person ", involvingMe: false),
+            limit: 200,
+            offset: 200)
+        let expectedJSON = #"""
+        {"includeGlobal":true,"includeUnknown":true,"configuredAgentsOnly":true,
+         "limit":200,"offset":200,"agentId":"research","search":"migration","ownerId":"person",
+         "excludeCron":true,"excludeSystem":true}
+        """#
+        var expected = try JSONDecoder().decode(
+            [String: OpenClawProtocol.AnyCodable].self,
+            from: Data(expectedJSON.utf8))
+        try expected.merge(
+            JSONDecoder().decode([String: OpenClawProtocol.AnyCodable].self, from: Data(archiveJSON.utf8)),
+            uniquingKeysWith: { _, next in next })
+        let wire = try JSONDecoder().decode(
+            [String: OpenClawProtocol.AnyCodable].self,
+            from: JSONEncoder().encode(request.params))
+        #expect(request.method == "sessions.list")
+        #expect(wire == expected)
+    }
+
+    @Test func `unscoped sidebar page does not invent an agent or exclude unknown sessions`() throws {
+        let request = OpenClawChatGatewayRequests.sidebarSessions(
+            query: .init(agentID: nil, status: .all, search: "  "), limit: 100)
+        let expectedJSON = #"""
+        {"includeGlobal":true,"includeUnknown":true,"configuredAgentsOnly":true,
+         "includeDerivedTitles":true,"includeLastMessage":true,"limit":100,"archived":"all"}
+        """#
+        let wire = try JSONDecoder().decode(
+            [String: OpenClawProtocol.AnyCodable].self,
+            from: JSONEncoder().encode(request.params))
+        #expect(try wire == JSONDecoder().decode(
+            [String: OpenClawProtocol.AnyCodable].self,
+            from: Data(expectedJSON.utf8)))
+    }
+
+    @Test(arguments: [" research ", nil] as [String?])
+    func `sidebar transcript search serializes the corpus scope without metadata search or enrichment`(
+        agentID: String?) throws
+    {
+        let request = OpenClawChatGatewayRequests.sidebarTranscriptSearch(
+            query: .init(
+                agentID: agentID, status: .archived, search: " transcript-only phrase ",
+                ownerId: "other-person", involvingMe: true))
+        let expectedJSON = #"""
+        {"includeGlobal":true,"includeUnknown":true,"configuredAgentsOnly":true,
+         "archived":true,"involvingMe":true,"excludeCron":true,"excludeSystem":true}
+        """#
+        var scope = try JSONDecoder().decode([String: OpenClawProtocol.AnyCodable].self, from: Data(expectedJSON.utf8))
+        if agentID != nil { scope["agentId"] = OpenClawProtocol.AnyCodable("research") }
+        let wire = try JSONDecoder().decode(
+            [String: OpenClawProtocol.AnyCodable].self,
+            from: JSONEncoder().encode(request.params))
+        #expect(request.method == "sessions.search")
+        #expect(wire == [
+            "query": OpenClawProtocol.AnyCodable("transcript-only phrase"),
+            "limit": OpenClawProtocol.AnyCodable(25),
+            "scope": OpenClawProtocol.AnyCodable(scope),
+        ])
+    }
+
     @Test func `session patch request preserves explicit null clearing`() {
         let request = OpenClawChatGatewayRequests.patchSession(
             sessionKey: "global",

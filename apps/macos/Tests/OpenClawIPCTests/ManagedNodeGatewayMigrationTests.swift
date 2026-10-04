@@ -90,6 +90,64 @@ struct ManagedNodeGatewayMigrationTests {
         #expect(fixture.version == "2026.9.6")
     }
 
+    @Test func `repin after final app check is passed to CLI and never rolled back`() async throws {
+        let home = try makeTempDirForTests()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let databaseURL = home.appendingPathComponent("state/openclaw.sqlite")
+        let key = try GatewayLaunchAgentManager.runtimePinKey(
+            profile: .current, configPath: home.appendingPathComponent("openclaw.json").path)
+        try await TestIsolation.withIsolatedState(launchAgentHomeDirectory: home) {
+            let fixture = Fixture()
+            let refusal = "Gateway service or runtime pin changed before installation. " +
+                "The newer selection was preserved; inspect it before retrying."
+            GatewayLaunchAgentManager.setTestingDaemonStatusPayload("""
+            {"service":{"runtimeIntent":{"status":"known","revision":"before-repin","definition":"node-service"}}}
+            """)
+            GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true, beforeReturning: { args in
+                if args.first == "status" {
+                    GatewayLaunchAgentManager.setTestingDaemonStatusPayload("""
+                    {"ok":false,"error":"\(refusal)"}
+                    """)
+                } else if args.first == "install" {
+                    // The CLI subprocess sees an operator repin after the app's last check.
+                    do { try await Self.writePinFixture(databaseURL: databaseURL, key: key) } catch {
+                        Issue.record(error)
+                    }
+                }
+            })
+            GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+            defer {
+                GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
+                GatewayLaunchAgentManager.setTestingDaemonStatusPayload(nil)
+            }
+            var operations = fixture.operations
+            operations.install = { _, runtime in
+                let error = await GatewayLaunchAgentManager.runDaemonCommand(
+                    ["install", "--force", "--runtime", "bun", "--runtime-path", runtime.bun.path],
+                    runtime: runtime, checkCurrent: {
+                        #expect(!FileManager.default.fileExists(atPath: databaseURL.path))
+                        #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().count == 1)
+                    })
+                if let error { throw ManagedNodeGatewayMigration.Failure(message: error) }
+            }
+            do {
+                _ = try await ManagedNodeGatewayMigration.run(
+                    candidate: fixture.candidate, targetVersion: fixture.version, operations: operations)
+                Issue.record("Expected preservation of the operator selection")
+            } catch {
+                #expect(error.localizedDescription == refusal)
+            }
+            #expect(fixture.restoredCLI == nil)
+            #expect(!fixture.calls.contains("health"))
+            #expect(try await GatewayLaunchAgentManager
+                .runtimePinRecord(stateDirectory: home, profile: .current) != nil)
+            let install = try #require(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().last)
+            #expect(Array(install.suffix(2)) == [
+                "--expected-runtime-pin", #"{"definition":"node-service","revision":"before-repin"}"#,
+            ])
+        }
+    }
+
     @Test(arguments: ["2026.8.1", "2026.9.6"])
     func `resuming an absent legacy service finishes version and runtime work in one activation`(
         installedVersion: String) async throws
@@ -344,8 +402,8 @@ struct ManagedNodeGatewayMigrationTests {
                     currentVersion: "2026.9.6", owner: .gateway))
                 #expect(pending.hasPendingRuntimeMigration)
                 let manager = GatewayProcessManager()
-                manager.setTestingDesiredActive(true)
-                defer { manager.setTestingDesiredActive(false) }
+                manager.desiredActive = true
+                defer { manager.desiredActive = false }
                 // These are alternative results from the completed migration's previous lifecycle.
                 manager.nodeMigrationCompleted = !versionOnly
                 manager.nodeMigrationVersionUpdated = versionOnly
@@ -388,7 +446,7 @@ struct ManagedNodeGatewayMigrationTests {
             }
             let manager = GatewayProcessManager()
             manager.retainedServiceCLI = Fixture().candidate.cli
-            manager.setTestingDesiredActive(true)
+            manager.desiredActive = true
             manager.nodeMigrationFailure = "The Node update needs repair."
             if failureSource != "memory" {
                 try PostAppUpdateReceiptStore.recordSetupRecovery(fromVersion: "2026.8.1", toVersion: "2026.9.6")
@@ -397,12 +455,12 @@ struct ManagedNodeGatewayMigrationTests {
                     manager.stop()
                     await manager.waitForPendingLaunchAgentDisable()
                     #expect(!manager.nodeMigrationAttempted)
-                    manager.setTestingDesiredActive(true)
+                    manager.desiredActive = true
                 } else {
                     manager.nodeMigrationFailure = nil
                 }
             }
-            defer { manager.setTestingDesiredActive(false) }
+            defer { manager.desiredActive = false }
             GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
             let result = await manager.enableLaunchAgentIfNeeded(port: port)
             #expect(result.error?.localizedCaseInsensitiveContains("repair") == true)
@@ -439,7 +497,9 @@ struct ManagedNodeGatewayMigrationTests {
         {
             GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(home.appendingPathComponent("disabled"))
             GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true)
-            GatewayLaunchAgentManager.setTestingDaemonStatusPayload(#"{"ok":true}"#)
+            GatewayLaunchAgentManager.setTestingDaemonStatusPayload("""
+            {"ok":true,"service":{"runtimeIntent":{"status":"known","revision":"absent"}}}
+            """)
             GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
             defer {
                 GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(nil)
@@ -461,6 +521,7 @@ struct ManagedNodeGatewayMigrationTests {
                     try Data(text.utf8).write(to: wrapper)
                 })
             let dispatched = GatewayLaunchAgentManager.testingResolvedDaemonCommandsSnapshot()
+                .filter { $0.contains("install") }
             if operatorReplacesWrapper {
                 #expect(result != nil)
                 #expect(dispatched.isEmpty)
@@ -800,7 +861,7 @@ extension AppStateIsolationTests {
             let release = AsyncTestGate()
             defer { release.open() }
             let generation = manager.gatewayStartGeneration
-            manager.setTestingDesiredActive(true)
+            manager.desiredActive = true
             manager.beginGatewayStartTask(generation: generation) {
                 entered.open()
                 await release.wait()
@@ -865,7 +926,7 @@ extension AppStateIsolationTests {
             defaults.set("exact", forKey: cliInstallPolicyKey)
             defaults.set("service", forKey: GatewayHosting.defaultsKey)
             manager.retainedServiceCLI = fixture.cli
-            manager.setTestingDesiredActive(true)
+            manager.desiredActive = true
             manager.nodeMigrationFailure = "previous runtime switch failed"
             defer {
                 manager._testSetLaunchAgentDisableWaitHook(nil)

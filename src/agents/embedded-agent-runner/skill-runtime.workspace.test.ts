@@ -6,6 +6,7 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { loadWorkspaceSkills } from "../../skills/loading/workspace-skill-loader.js";
 import { buildSkillSnapshot } from "../../skills/loading/workspace-skill-prompt.js";
 import { readSkillResourceFiles } from "../../skills/runtime/resources.js";
+import { recordSkillFileHost, resolveSkillFileHost } from "../../skills/skill-file-host.js";
 import { writeSkill } from "../../skills/test-support/e2e-test-helpers.js";
 import type { SkillEntry } from "../../skills/types.js";
 import { resolveWorkshopSkillsDir } from "../../skills/workshop/skills-root.js";
@@ -113,10 +114,14 @@ it("keeps Code Mode file ownership despite an unavailable same-name pin", async 
       librarySelections,
     });
     snapshot.librarySelections = librarySelections;
-    expect(snapshot.resolvedSkills?.find((skill) => skill.name === "guide")?.fileHost).toBe(
-      "workspace",
+    const guide = expectDefined(
+      snapshot.resolvedSkills?.find((skill) => skill.name === "guide"),
+      "workspace guide",
     );
-    expect(snapshot.prompt).toContain("<location>~/");
+    expect(resolveSkillFileHost(guide)).toBe("workspace");
+    expect(snapshot.prompt).toContain(
+      "<location>workspace-skill://workspace/guide/SKILL.md</location>",
+    );
     const prepared = await prepareEmbeddedSkills({
       attempt: { config: {}, skillsSnapshot: snapshot },
       effectiveWorkspace: gateway,
@@ -214,7 +219,8 @@ it.each([
     await fs.writeFile(path.join(root, "outside.txt"), "Not admitted");
     const selected = loadWorkspaceSkills(logical, { workspaceOnly: true })[0]!.skill;
     const gatewaySkill = loadWorkspaceSkills(library, { workspaceOnly: true })[0]!.skill;
-    const skill = { ...selected, fileHost: "workspace" as const };
+    const skill = recordSkillFileHost({ ...selected }, "workspace");
+    const gatewayOwnedSkill = recordSkillFileHost({ ...gatewaySkill }, "gateway");
     const resources = {
       readInstructions: (filePath: string, options: { signal?: AbortSignal }) =>
         fs.readFile(path.join(host, path.relative(logical, filePath)), {
@@ -255,10 +261,10 @@ it.each([
         skillsSnapshot: {
           skills: [],
           prompt: "",
-          resolvedSkills: [skill, { ...gatewaySkill, fileHost: "gateway" }],
+          resolvedSkills: [skill, gatewayOwnedSkill],
         },
       }).find((tool) => tool.name === "read")!;
-      const target = path.join(skill.baseDir, fileName);
+      const target = `workspace-skill://workspace/guide/${fileName}`;
       expect(
         getTextContent(
           await read.execute("remote", {

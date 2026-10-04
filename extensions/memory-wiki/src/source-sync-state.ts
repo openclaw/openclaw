@@ -2,7 +2,6 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { readFileWindowFully } from "openclaw/plugin-sdk/file-access-runtime";
-import { readJsonFileWithFallback } from "openclaw/plugin-sdk/json-store";
 import type {
   OpenKeyedStoreOptions,
   PluginStateKeyedStore,
@@ -51,8 +50,8 @@ type MemoryWikiSourceSyncStateRecord = MemoryWikiImportedSourceStateEntry & {
   syncKey: string;
 };
 
-export const MEMORY_WIKI_SOURCE_SYNC_STATE_NAMESPACE = "source-sync";
-export const MEMORY_WIKI_SOURCE_SYNC_STATE_MAX_ENTRIES = 20_000;
+const MEMORY_WIKI_SOURCE_SYNC_STATE_NAMESPACE = "source-sync";
+const MEMORY_WIKI_SOURCE_SYNC_STATE_MAX_ENTRIES = 20_000;
 const MAX_MEMORY_WIKI_NOTES_RECOVERY_BYTES = 16 * 1024 * 1024;
 const MAX_MEMORY_WIKI_SOURCE_PAGE_HEADER_BYTES = 64 * 1024;
 const MAX_MEMORY_WIKI_SOURCE_PAGE_SCAN_BYTES = 32 * 1024 * 1024;
@@ -68,10 +67,6 @@ const sourceSyncStateChanges = new WeakMap<
   MemoryWikiImportedSourceState,
   MemoryWikiSourceSyncStateChanges
 >();
-
-export function resolveMemoryWikiSourceSyncStatePath(vaultRoot: string): string {
-  return path.join(vaultRoot, ".openclaw-wiki", "source-sync.json");
-}
 
 function cloneSourceSyncState(state: MemoryWikiImportedSourceState): MemoryWikiImportedSourceState {
   return {
@@ -103,21 +98,6 @@ function normalizeSourceSyncEntry(value: unknown): MemoryWikiImportedSourceState
     sourceSize: entry.sourceSize,
     renderFingerprint: entry.renderFingerprint,
   };
-}
-
-function normalizeSourceSyncState(value: unknown): MemoryWikiImportedSourceState {
-  const parsed = asNullableRecord(value);
-  if (parsed?.version !== 1 || !parsed.entries || typeof parsed.entries !== "object") {
-    return EMPTY_STATE;
-  }
-  const entries: Record<string, MemoryWikiImportedSourceStateEntry> = {};
-  for (const [syncKey, rawEntry] of Object.entries(parsed.entries)) {
-    const entry = normalizeSourceSyncEntry(rawEntry);
-    if (entry) {
-      entries[syncKey] = entry;
-    }
-  }
-  return { version: 1, entries };
 }
 
 function resolveVaultRootKey(vaultRoot: string): string {
@@ -195,31 +175,21 @@ export function createMemoryWikiSourceSyncStateStore(
         for (const syncKey of plan.deleteKeys) {
           await store.delete(resolveStateEntryKey(vaultRootKey, syncKey));
         }
-        for (const syncKey of plan.upsertKeys) {
-          const entry = state.entries[syncKey];
-          if (!entry) {
-            throw new Error(`Missing tracked Memory Wiki source sync entry: ${syncKey}`);
+      } else {
+        const nextKeys = new Set(
+          Object.keys(state.entries).map((syncKey) => resolveStateEntryKey(vaultRootKey, syncKey)),
+        );
+        for (const row of await store.entries()) {
+          if (row.value.vaultRootKey === vaultRootKey && !nextKeys.has(row.key)) {
+            await store.delete(row.key);
           }
-          await store.register(resolveStateEntryKey(vaultRootKey, syncKey), {
-            ...entry,
-            vaultRootKey,
-            syncKey,
-          });
-        }
-        return;
-      }
-      const normalized = normalizeSourceSyncState(state);
-      const nextKeys = new Set(
-        Object.keys(normalized.entries).map((syncKey) =>
-          resolveStateEntryKey(vaultRootKey, syncKey),
-        ),
-      );
-      for (const row of await store.entries()) {
-        if (row.value.vaultRootKey === vaultRootKey && !nextKeys.has(row.key)) {
-          await store.delete(row.key);
         }
       }
-      for (const [syncKey, entry] of Object.entries(normalized.entries)) {
+      for (const syncKey of plan?.upsertKeys ?? Object.keys(state.entries)) {
+        const entry = state.entries[syncKey];
+        if (!entry) {
+          throw new Error(`Missing tracked Memory Wiki source sync entry: ${syncKey}`);
+        }
         await store.register(resolveStateEntryKey(vaultRootKey, syncKey), {
           ...entry,
           vaultRootKey,
@@ -249,14 +219,6 @@ export async function readMemoryWikiSourceSyncState(
   const state = await resolveSourceSyncStore(store).read(vaultRoot);
   sourceSyncStateChanges.set(state, { upsertKeys: new Set(), deleteKeys: new Set() });
   return state;
-}
-
-export async function readLegacyMemoryWikiSourceSyncState(
-  vaultRoot: string,
-): Promise<MemoryWikiImportedSourceState> {
-  const statePath = resolveMemoryWikiSourceSyncStatePath(vaultRoot);
-  const { value: parsed } = await readJsonFileWithFallback<unknown>(statePath, EMPTY_STATE);
-  return normalizeSourceSyncState(parsed);
 }
 
 export async function writeMemoryWikiSourceSyncState(

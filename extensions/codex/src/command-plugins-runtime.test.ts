@@ -114,7 +114,7 @@ async function fixture(stableAccount = true) {
     config: {
       agents: {
         defaults: { model: { primary: "openai/gpt-5.5" } },
-        list: [{ id: "second", agentDir, workspace: workspaceDir }],
+        entries: { second: { agentDir, workspace: workspaceDir } },
       },
     },
     agentId: "second",

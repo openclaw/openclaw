@@ -1,12 +1,14 @@
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { setTimeout as waitForProcessTick } from "node:timers/promises";
 import type {
   CliBackendExecuteContext,
   CliBackendLiveSessionHandle,
   CliBackendPreparedExecution,
 } from "openclaw/plugin-sdk/cli-backend";
 import { formatErrorMessageForDisplay } from "openclaw/plugin-sdk/error-runtime";
+import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildAnthropicCliBackend } from "./cli-backend.js";
 import type { ClaudeCliSecretInput } from "./cli-process.js";
@@ -119,6 +121,24 @@ function attachLiveSession(context: CliBackendExecuteContext) {
   return () => current;
 }
 
+// The transport joins its root and signal dispatch, not this foreign descendant's exit.
+async function waitForDescendantExit(pid: number, signal: AbortSignal): Promise<void> {
+  try {
+    for (;;) {
+      try {
+        process.kill(pid, 0);
+      } catch {
+        return;
+      }
+      await waitForProcessTick(10, undefined, { signal });
+    }
+  } catch (cause) {
+    throw new Error(`Claude stderr descendant ${pid} did not exit before the test aborted`, {
+      cause,
+    });
+  }
+}
+
 describe("Claude subprocess diagnostics through the direct CLI transport", () => {
   it("drains pipe-sized stderr and reports a bounded redacted fatal diagnostic", async () => {
     const secret = "sk-ant-api03-synthetic-diagnostic-credential-123456789";
@@ -186,30 +206,25 @@ describe("Claude subprocess diagnostics through the direct CLI transport", () =>
   // POSIX process groups survive root exit; Windows cannot enumerate a spontaneously exited root.
   it.skipIf(process.platform === "win32")(
     "reports failure and reaps a descendant that inherited stderr",
-    async () => {
+    async ({ signal }) => {
       const context = await contextForChild(`
       import { spawn } from "node:child_process";
       import { writeFileSync, writeSync } from "node:fs";
-      const descendant = spawn(process.execPath, ["-e", "setTimeout(() => {}, 10000)"],
+      // Natural expiry would hide a missing transport tree kill from the exit assertion.
+      const descendant = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"],
         { stdio: ["ignore", "ignore", 2] });
       writeFileSync("descendant.pid", String(descendant.pid));
       writeSync(2, "PermissionError: parent exited\\n");
       process.exit(1);
     `);
       try {
-        const error = await collect(context).catch((failure: unknown) => failure);
+        const error = await withinTest(
+          collect(context).catch((failure: unknown) => failure),
+          signal,
+        );
         expect(formatErrorMessageForDisplay(error)).toContain("PermissionError: parent exited");
         const pid = Number(await readFile(path.join(context.cwd, "descendant.pid"), "utf8"));
-        await expect
-          .poll(() => {
-            try {
-              process.kill(pid, 0);
-              return false;
-            } catch {
-              return true;
-            }
-          })
-          .toBe(true);
+        await waitForDescendantExit(pid, signal);
       } finally {
         const pid = Number(await readFile(path.join(context.cwd, "descendant.pid"), "utf8"));
         try {

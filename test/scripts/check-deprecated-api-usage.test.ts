@@ -118,7 +118,7 @@ describe("scripts/check-deprecated-api-usage", () => {
         "extensions/probe/src/a.ts":
           'export { x } from "openclaw/plugin-sdk/inbound-reply-dispatch";\ndeliverOutboundPayloads();',
         "packages/a.ts":
-          'import { x } from "openclaw/plugin-sdk/command-auth";\ndeliverOutboundPayloads();',
+          'import { x } from "openclaw/plugin-sdk/agent-media-payload";\ndeliverOutboundPayloads();',
         "src/infra/outbound/deliver.ts": "deliverOutboundPayloads();",
         "src/a.test.ts": "deliverOutboundPayloads();",
       },
@@ -137,7 +137,7 @@ describe("scripts/check-deprecated-api-usage", () => {
         "Deprecated API usage guard failed:",
         "- plugin-sdk-compat-subpaths: src/a.ts:1: openclaw/plugin-sdk/inbound-reply-dispatch (use focused non-deprecated plugin SDK subpaths)",
         "- plugin-sdk-compat-subpaths: src/a.ts:2: @openclaw/plugin-sdk/inbound-reply-dispatch (use focused non-deprecated plugin SDK subpaths)",
-        "- plugin-sdk-compat-subpaths: packages/a.ts:1: openclaw/plugin-sdk/command-auth (use focused non-deprecated plugin SDK subpaths)",
+        "- plugin-sdk-compat-subpaths: packages/a.ts:1: openclaw/plugin-sdk/agent-media-payload (use focused non-deprecated plugin SDK subpaths)",
         "- extension-plugin-sdk-compat-subpaths: extensions/probe/src/a.ts:1: openclaw/plugin-sdk/inbound-reply-dispatch (extensions must use focused non-deprecated plugin SDK subpaths)",
         "- facade-internal-imports: src/a.ts:1: openclaw/plugin-sdk/inbound-reply-dispatch (use openclaw/plugin-sdk/channel-inbound)",
         "- facade-internal-imports: src/a.ts:2: @openclaw/plugin-sdk/inbound-reply-dispatch (use openclaw/plugin-sdk/channel-inbound)",

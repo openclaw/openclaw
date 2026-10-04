@@ -750,115 +750,91 @@ describe("ManagedWorktreeService provisioned state", () => {
     expect(await git(restored.path, "diff", "--cached", "--name-only")).toBe("");
   });
 
-  it("snapshots a missing file that reappears before the index update", async () => {
-    const created = await service.create({
-      repoRoot: repo,
-      name: "reappearing-file",
-      baseRef: "HEAD",
-    });
-    const originalHead = await git(created.path, "rev-parse", "HEAD");
-    const localPath = path.join(created.path, "README.md");
-    await fs.rm(localPath);
-    const runCommand = commandRunner.runCommandBuffersWithTimeout;
-    let reappeared = false;
-    const commandSpy = vi.spyOn(commandRunner, "runCommandBuffersWithTimeout");
-    commandSpy.mockImplementation(async (...args) => {
-      const argv = args[0];
-      if (
-        argv[0] === "git" &&
-        argv.includes("update-index") &&
-        argv.includes("--add") &&
-        argv.includes("--remove") &&
-        argv.includes("--stdin")
-      ) {
-        expect(reappeared).toBe(false);
-        await expect(fs.stat(localPath)).rejects.toMatchObject({ code: "ENOENT" });
-        await fs.writeFile(localPath, "reappeared contents\n");
-        reappeared = true;
+  it.each(["tracked file", "untracked child"] as const)(
+    "snapshots a reappearing %s before the index update",
+    async (kind) => {
+      const child = kind === "untracked child";
+      if (child) {
+        await fs.writeFile(path.join(repo, "entry"), "original file\n");
+        await git(repo, "add", "entry");
+        await git(repo, "commit", "-m", "add tracked parent");
       }
-      return await runCommand(...args);
-    });
-
-    try {
-      const removed = await service.remove({ id: created.id, reason: "test" });
-      expect(reappeared).toBe(true);
-      expect(await git(repo, "show", `${removed.snapshotRef}:README.md`)).toBe(
-        "reappeared contents",
-      );
-      await expect(fs.stat(created.path)).rejects.toMatchObject({ code: "ENOENT" });
-      const restored = await service.restore({ id: created.id });
-
-      expect(await git(restored.path, "rev-parse", "HEAD")).toBe(originalHead);
-      expect(await fs.readFile(path.join(restored.path, "README.md"), "utf8")).toBe(
-        "reappeared contents\n",
-      );
-      expect(await git(restored.path, "diff", "--cached", "--name-only")).toBe("");
-    } finally {
-      commandSpy.mockRestore();
-    }
-  });
-
-  it("snapshots a reappearing untracked child after its parent becomes a directory", async () => {
-    await fs.writeFile(path.join(repo, "entry"), "original file\n");
-    await git(repo, "add", "entry");
-    await git(repo, "commit", "-m", "add tracked parent");
-    const created = await service.create({
-      repoRoot: repo,
-      name: "reappearing-child",
-      baseRef: "HEAD",
-    });
-    const originalHead = await git(created.path, "rev-parse", "HEAD");
-    const parentPath = path.join(created.path, "entry");
-    const childPath = path.join(parentPath, "child.txt");
-    await fs.rm(parentPath);
-    await fs.mkdir(parentPath);
-    await fs.writeFile(childPath, "discovered child\n");
-    const runCommand = commandRunner.runCommandBuffersWithTimeout;
-    let disappeared = false;
-    let reappeared = false;
-    const commandSpy = vi.spyOn(commandRunner, "runCommandBuffersWithTimeout");
-    commandSpy.mockImplementation(async (...args) => {
-      const argv = args[0];
-      if (argv[0] === "git" && argv.includes("read-tree") && argv.at(-1) === originalHead) {
-        const result = await runCommand(...args);
-        expect(result.code).toBe(0);
-        expect(disappeared).toBe(false);
-        await fs.rm(childPath);
-        disappeared = true;
-        return result;
+      const created = await service.create({
+        repoRoot: repo,
+        name: child ? "reappearing-child" : "reappearing-file",
+        baseRef: "HEAD",
+      });
+      const originalHead = await git(created.path, "rev-parse", "HEAD");
+      const relativePath = child ? "entry/child.txt" : "README.md";
+      const localPath = path.join(created.path, relativePath);
+      const contents = child ? "reappeared child\n" : "reappeared contents\n";
+      if (child) {
+        const parentPath = path.dirname(localPath);
+        await fs.rm(parentPath);
+        await fs.mkdir(parentPath);
+        await fs.writeFile(localPath, "discovered child\n");
+      } else {
+        await fs.rm(localPath);
       }
-      if (
-        argv[0] === "git" &&
-        argv.includes("update-index") &&
-        argv.includes("--add") &&
-        argv.includes("--remove") &&
-        argv.includes("--stdin")
-      ) {
-        expect(disappeared).toBe(true);
-        expect(reappeared).toBe(false);
-        await expect(fs.stat(childPath)).rejects.toMatchObject({ code: "ENOENT" });
-        await fs.writeFile(childPath, "reappeared child\n");
-        reappeared = true;
+      const runCommand = commandRunner.runCommandBuffersWithTimeout;
+      let disappeared = false;
+      let reappeared = false;
+      const commandSpy = vi.spyOn(commandRunner, "runCommandBuffersWithTimeout");
+      commandSpy.mockImplementation(async (...args) => {
+        const argv = args[0];
+        if (
+          child &&
+          argv[0] === "git" &&
+          argv.includes("read-tree") &&
+          argv.at(-1) === originalHead
+        ) {
+          const result = await runCommand(...args);
+          expect(result.code).toBe(0);
+          expect(disappeared).toBe(false);
+          await fs.rm(localPath);
+          disappeared = true;
+          return result;
+        }
+        if (
+          argv[0] === "git" &&
+          argv.includes("update-index") &&
+          argv.includes("--add") &&
+          argv.includes("--remove") &&
+          argv.includes("--stdin")
+        ) {
+          if (child) {
+            expect(disappeared).toBe(true);
+          }
+          expect(reappeared).toBe(false);
+          await expect(fs.stat(localPath)).rejects.toMatchObject({ code: "ENOENT" });
+          await fs.writeFile(localPath, contents);
+          reappeared = true;
+        }
+        return await runCommand(...args);
+      });
+
+      try {
+        const removed = await service.remove({ id: created.id, reason: "test" });
+        expect(reappeared).toBe(true);
+        if (child) {
+          expect(
+            (await git(repo, "ls-tree", "-r", "--name-only", removed.snapshotRef!)).split("\n"),
+          ).toEqual(["README.md", "entry/child.txt"]);
+        } else {
+          expect(await git(repo, "show", `${removed.snapshotRef}:README.md`)).toBe(contents.trim());
+          await expect(fs.stat(created.path)).rejects.toMatchObject({ code: "ENOENT" });
+        }
+        const restored = await service.restore({ id: created.id });
+
+        expect(await git(restored.path, "rev-parse", "HEAD")).toBe(originalHead);
+        if (child) {
+          expect((await fs.stat(path.join(restored.path, "entry"))).isDirectory()).toBe(true);
+        }
+        expect(await fs.readFile(path.join(restored.path, relativePath), "utf8")).toBe(contents);
+        expect(await git(restored.path, "diff", "--cached", "--name-only")).toBe("");
+      } finally {
+        commandSpy.mockRestore();
       }
-      return await runCommand(...args);
-    });
-
-    try {
-      const removed = await service.remove({ id: created.id, reason: "test" });
-      expect(reappeared).toBe(true);
-      expect(
-        (await git(repo, "ls-tree", "-r", "--name-only", removed.snapshotRef!)).split("\n"),
-      ).toEqual(["README.md", "entry/child.txt"]);
-      const restored = await service.restore({ id: created.id });
-
-      expect(await git(restored.path, "rev-parse", "HEAD")).toBe(originalHead);
-      expect((await fs.stat(path.join(restored.path, "entry"))).isDirectory()).toBe(true);
-      expect(await fs.readFile(path.join(restored.path, "entry", "child.txt"), "utf8")).toBe(
-        "reappeared child\n",
-      );
-      expect(await git(restored.path, "diff", "--cached", "--name-only")).toBe("");
-    } finally {
-      commandSpy.mockRestore();
-    }
-  });
+    },
+  );
 });

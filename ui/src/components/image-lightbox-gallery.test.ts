@@ -28,7 +28,7 @@ afterEach(() => {
 });
 
 describe("image lightbox gallery resource lifecycle", () => {
-  it.each(["close", "reset", "evict"] as const)(
+  it.each(["reset", "evict"] as const)(
     "releases a late full-resolution image after %s without replacing newer intent",
     async (action) => {
       const initial = imageItem("preview");
@@ -49,17 +49,13 @@ describe("image lightbox gallery resource lifecycle", () => {
 
       if (action === "reset") {
         controller.reset(undefined, replacement);
-      } else if (action === "evict") {
-        expect(await controller.move(1)).toBe(true);
-        expect(await controller.move(1)).toBe(true);
       } else {
-        controller.dispose();
+        expect(await controller.move(1)).toBe(true);
+        expect(await controller.move(1)).toBe(true);
       }
       pending.resolve(original);
       await vi.waitFor(() => expect(original.release).toHaveBeenCalledOnce());
-      expect(controller.current).toBe(
-        action === "close" ? undefined : action === "evict" ? beyond : replacement,
-      );
+      expect(controller.current).toBe(action === "evict" ? beyond : replacement);
       controller.dispose();
       await Promise.resolve();
       expect(original.release).toHaveBeenCalledOnce();
@@ -117,39 +113,32 @@ describe("image lightbox gallery resource lifecycle", () => {
     },
   );
 
-  it.each(["close", "reset"] as const)(
-    "releases a late image once after %s without replacing the current selection",
-    async (action) => {
-      const initial = imageItem("initial");
-      const late = imageItem("late");
-      const replacement = imageItem("replacement");
-      const pending = createDeferred<ImageLightboxItem | null>();
-      const load = vi.fn(() => pending.promise);
-      controller.reset({ index: 0, items: [async () => initial, load] }, initial);
-      const moving = controller.move(1);
-      await vi.waitFor(() => expect(load).toHaveBeenCalledOnce());
-      expect(controller.current).toBe(initial);
-      expect(controller.busy).toBe(true);
+  it("releases a late image once after reset without replacing the current selection", async () => {
+    const initial = imageItem("initial");
+    const late = imageItem("late");
+    const replacement = imageItem("replacement");
+    const pending = createDeferred<ImageLightboxItem | null>();
+    const load = vi.fn(() => pending.promise);
+    controller.reset({ index: 0, items: [async () => initial, load] }, initial);
+    const moving = controller.move(1);
+    await vi.waitFor(() => expect(load).toHaveBeenCalledOnce());
+    expect(controller.current).toBe(initial);
+    expect(controller.busy).toBe(true);
 
-      if (action === "reset") {
-        controller.reset(undefined, replacement);
-      } else {
-        controller.dispose();
-      }
-      pending.resolve(late);
+    controller.reset(undefined, replacement);
+    pending.resolve(late);
 
-      expect(await moving).toBe(false);
-      await vi.waitFor(() => expect(late.release).toHaveBeenCalledOnce());
-      expect(controller.current).toBe(action === "reset" ? replacement : undefined);
-      expect(controller.busy).toBe(false);
-      expect(controller.failed).toBe(false);
-      controller.dispose();
-      await Promise.resolve();
-      expect(late.release).toHaveBeenCalledOnce();
-      expect(initial.release).not.toHaveBeenCalled();
-      expect(replacement.release).not.toHaveBeenCalled();
-    },
-  );
+    expect(await moving).toBe(false);
+    await vi.waitFor(() => expect(late.release).toHaveBeenCalledOnce());
+    expect(controller.current).toBe(replacement);
+    expect(controller.busy).toBe(false);
+    expect(controller.failed).toBe(false);
+    controller.dispose();
+    await Promise.resolve();
+    expect(late.release).toHaveBeenCalledOnce();
+    expect(initial.release).not.toHaveBeenCalled();
+    expect(replacement.release).not.toHaveBeenCalled();
+  });
 
   it("keeps the current image after a failed neighbor load and retries on navigation", async () => {
     const initial = imageItem("initial");

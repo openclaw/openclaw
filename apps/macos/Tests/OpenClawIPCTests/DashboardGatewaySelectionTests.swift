@@ -49,7 +49,7 @@ struct DashboardGatewaySelectionTests {
             #expect(controller.auth.token == "personal-account")
             #expect(state.connectionMode == mode)
             if mode != .unconfigured {
-                await restored._testSwitchTarget(.primary, in: controller)
+                _ = await restored.switchTarget(.primary, in: controller)?.value
                 #expect(selection.profileID == nil)
                 restored.close()
                 let primary = makeManager()

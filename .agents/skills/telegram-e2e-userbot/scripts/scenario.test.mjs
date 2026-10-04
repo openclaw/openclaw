@@ -200,3 +200,56 @@ test("photo sends allow an empty caption and replyToPrevious targets an earlier 
   );
   assert.throws(() => parseScenario({ actions: [{ type: "send", atMs: 0 }] }), /text/);
 });
+
+test("album sends normalize photos with an optional caption and enforce Telegram bounds", () => {
+  const album = { type: "send", atMs: 0, photos: ["/tmp/a.png", "/tmp/b.png"] };
+  assert.deepEqual(parseScenario({ actions: [album] }).actions, [{ ...album, text: "" }]);
+  assert.deepEqual(parseScenario({ actions: [{ ...album, text: "caption" }] }).actions, [
+    { ...album, text: "caption" },
+  ]);
+  for (const photos of [[], ["/tmp/a.png"], Array(11).fill("/tmp/a.png"), "/tmp/a.png"]) {
+    assert.throws(
+      () => parseScenario({ actions: [{ ...album, photos }] }),
+      /photos must be an array of 2-10 photo paths/,
+    );
+  }
+  assert.throws(
+    () => parseScenario({ actions: [{ ...album, photos: ["/tmp/a.png", " "] }] }),
+    /photos\[1\] must be a non-empty string/,
+  );
+  assert.throws(
+    () => parseScenario({ actions: [{ ...album, photo: "/tmp/c.png" }] }),
+    /photo or photos, not both/,
+  );
+});
+
+test("forward bursts normalize and support a later replyToPrevious after sorting", () => {
+  const burst = { type: "forwardBurst", text: "forwarded text", photo: "/tmp/fixture.png" };
+  const reply = { type: "send", atMs: 5, text: "follow-up", replyToPrevious: true };
+  assert.deepEqual(parseScenario({ actions: [reply, burst] }).actions, [
+    { ...burst, atMs: 0 },
+    reply,
+  ]);
+  assert.throws(
+    () => parseScenario({ actions: [reply, { ...burst, atMs: 10 }] }),
+    /replyToPrevious/,
+  );
+});
+
+test("forward bursts require text and photo and reject unknown keys", () => {
+  const burst = { type: "forwardBurst", text: "forwarded text", photo: "/tmp/fixture.png" };
+  for (const key of ["text", "photo"]) {
+    for (const value of [undefined, "", " ", 42]) {
+      assert.throws(
+        () => parseScenario({ actions: [{ ...burst, [key]: value }] }),
+        new RegExp(`${key} must be a non-empty string`),
+      );
+    }
+  }
+  for (const key of ["extra", "awaitReply", "forumTopicId"]) {
+    assert.throws(
+      () => parseScenario({ actions: [{ ...burst, [key]: true }] }),
+      new RegExp(`unknown field: ${key}`),
+    );
+  }
+});

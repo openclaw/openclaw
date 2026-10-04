@@ -7,7 +7,7 @@ import {
 } from "./request.js";
 import { CODEX_RESPONSES_OAUTH_PROVIDER } from "./responses-oauth.js";
 
-/** Optional speed upgrades follow this turn's native model and authenticated client. */
+/** Validate an explicit Ultrafast selection against this turn's native model and client. */
 export async function resolveCodexUltrafastServiceTier(params: {
   enabled: boolean;
   serviceTier?: CodexServiceTier | null;

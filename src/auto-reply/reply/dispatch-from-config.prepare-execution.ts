@@ -51,22 +51,6 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
   }
 
   let didSendPlanStatusNotice = false;
-  const formatPlanUpdateText = (
-    payload: Parameters<NonNullable<GetReplyOptions["onPlanUpdate"]>>[0],
-  ) => {
-    const explanation = payload.explanation?.replace(/\s+/g, " ").trim();
-    const lines = formatPlanChecklistLines(payload.steps ?? [], {
-      maxLines: payload.steps?.length ?? 0,
-      maxLineChars: 120,
-    });
-    if (lines.length > 0) {
-      return lines.join("\n");
-    }
-    // Generic notices retain their shipped receipt; prepared notes belong to literal-capable drafts.
-    return payload.explanationFormat === "plain"
-      ? "Progress updated"
-      : explanation || "Planning next steps.";
-  };
   const sendPlanUpdate = async (
     payload: Parameters<NonNullable<GetReplyOptions["onPlanUpdate"]>>[0],
   ): Promise<void> => {
@@ -74,8 +58,19 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
       return;
     }
     didSendPlanStatusNotice = true;
+    const explanation = payload.explanation?.replace(/\s+/g, " ").trim();
+    const lines = formatPlanChecklistLines(payload.steps ?? [], {
+      maxLines: payload.steps?.length ?? 0,
+      maxLineChars: 120,
+    });
+    // Generic notices retain their shipped receipt; prepared notes belong to literal-capable drafts.
     const replyPayload: ReplyPayload = {
-      text: formatPlanUpdateText(payload),
+      text:
+        lines.length > 0
+          ? lines.join("\n")
+          : payload.explanationFormat === "plain"
+            ? "Progress updated"
+            : explanation || "Planning next steps.",
       isStatusNotice: true,
     };
     if (shouldRouteToOriginating) {
@@ -172,15 +167,6 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
   };
   const preserveProgressCallbackStartOrder =
     params.replyOptions?.preserveProgressCallbackStartOrder === true;
-  const reserveProgressCallbackStart = () => {
-    const previousStart = progressState.progressCallbackStartTail;
-    const start = createDeferredCore();
-    progressState.progressCallbackStartTail = start.promise;
-    return {
-      previousStart,
-      releaseStart: start.resolve,
-    };
-  };
   const wrapProgressCallback = <Args extends unknown[], Result extends boolean | void>(
     callback: ((...args: Args) => Promise<Result> | Result) | undefined,
     options?: {
@@ -195,10 +181,14 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     if (!callback) {
       return undefined;
     }
-    const runProgressCallback = async (
-      args: Args,
-      noteCallbackStarted: () => void,
-    ): Promise<Result | undefined> => {
+    return async (...args: Args): Promise<Result | undefined> => {
+      const start = preserveProgressCallbackStartOrder ? createDeferredCore() : undefined;
+      if (start) {
+        // Reserve source order synchronously, releasing on invocation rather than completion.
+        const previousStart = progressState.progressCallbackStartTail;
+        progressState.progressCallbackStartTail = start.promise;
+        await previousStart;
+      }
       try {
         if (isDispatchOperationAborted()) {
           return undefined;
@@ -221,7 +211,7 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
             await options?.onForward?.(...args);
           }
           const callbackResult = callback(...args);
-          noteCallbackStarted();
+          start?.resolve();
           const result = await callbackResult;
           if (result === false) {
             return result;
@@ -230,20 +220,8 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
         }
         return undefined;
       } finally {
-        noteCallbackStarted();
+        start?.resolve();
       }
-    };
-    return (...args: Args) => {
-      if (!preserveProgressCallbackStartOrder) {
-        return runProgressCallback(args, () => undefined);
-      }
-      // Reserve source order synchronously. Release after callback invocation, not completion,
-      // so async presentation work stays concurrent without letting later activity overtake it.
-      const start = reserveProgressCallbackStart();
-      return (async () => {
-        await start.previousStart;
-        return await runProgressCallback(args, start.releaseStart);
-      })();
     };
   };
 
@@ -282,52 +260,45 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     });
   const deliverStandaloneCommentaryProgress =
     standaloneCommentaryProgressVisible && !draftOwnsCommentaryProgress;
-  const itemEventForwardingOptions = {
-    forwardWhenSourceDeliverySuppressed: true,
-    requiresToolSummaryVisibility: true,
-  } as const;
   const canForwardItemEvents = Boolean(params.replyOptions?.onItemEvent);
   const canForwardSuppressedSourceItemEvents =
-    allowSuppressedSourceProgressCallbacks &&
-    !state.sendPolicyDenied &&
-    Boolean(params.replyOptions?.onItemEvent);
+    allowSuppressedSourceProgressCallbacks && !state.sendPolicyDenied && canForwardItemEvents;
   const shouldDeliverDurableCommentaryProgress = (
     payload: Parameters<NonNullable<GetReplyOptions["onItemEvent"]>>[0],
   ) =>
     deliverStandaloneCommentaryProgress &&
     payload.kind === "preamble" &&
     payload.suppressDurableProgress !== true;
-  const forwardItemEvent = canForwardItemEvents
-    ? wrapProgressCallback(params.replyOptions?.onItemEvent, {
-        ...itemEventForwardingOptions,
-        waitForDirectBlockReplyDelivery: true,
-        onForward: (payload) =>
-          preserveProgressCallbackStartOrder && shouldDeliverDurableCommentaryProgress(payload)
-            ? noteCommentaryProgress(payload)
-            : undefined,
-      })
-    : undefined;
-  const canConsumeItemEvents = deliverStandaloneCommentaryProgress || canForwardItemEvents;
+  const forwardItemEvent = wrapProgressCallback(params.replyOptions?.onItemEvent, {
+    forwardWhenSourceDeliverySuppressed: true,
+    requiresToolSummaryVisibility: true,
+    waitForDirectBlockReplyDelivery: true,
+    onForward: (payload) =>
+      preserveProgressCallbackStartOrder && shouldDeliverDurableCommentaryProgress(payload)
+        ? noteCommentaryProgress(payload)
+        : undefined,
+  });
   // CLI runners classify preambles as item events only when this handler exists.
   // Keep it for channel-owned capture even when delivery policy hides the event.
-  const onItemEvent = canConsumeItemEvents
-    ? async (payload: Parameters<NonNullable<GetReplyOptions["onItemEvent"]>>[0]) => {
-        if (isDispatchOperationAborted()) {
-          return;
+  const onItemEvent =
+    deliverStandaloneCommentaryProgress || canForwardItemEvents
+      ? async (payload: Parameters<NonNullable<GetReplyOptions["onItemEvent"]>>[0]) => {
+          if (isDispatchOperationAborted()) {
+            return;
+          }
+          if (!forwardItemEvent && deliverStandaloneCommentaryProgress) {
+            // The wrapped forwarder marks progress itself when present.
+            markProgress();
+          }
+          if (
+            (!forwardItemEvent || !preserveProgressCallbackStartOrder) &&
+            shouldDeliverDurableCommentaryProgress(payload)
+          ) {
+            await noteCommentaryProgress(payload);
+          }
+          return await forwardItemEvent?.(payload);
         }
-        if (!forwardItemEvent && deliverStandaloneCommentaryProgress) {
-          // The wrapped forwarder marks progress itself when present.
-          markProgress();
-        }
-        if (
-          (!forwardItemEvent || !preserveProgressCallbackStartOrder) &&
-          shouldDeliverDurableCommentaryProgress(payload)
-        ) {
-          await noteCommentaryProgress(payload);
-        }
-        return await forwardItemEvent?.(payload);
-      }
-    : undefined;
+      : undefined;
   const replyResolver: InternalGetReplyFromConfig =
     params.replyResolver ??
     (

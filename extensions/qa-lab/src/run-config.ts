@@ -8,7 +8,6 @@ import type {
   QaLabRunnerSnapshot,
   QaLabRunSelection,
 } from "../runner-contract.js";
-import { defaultQaModelForMode as defaultStaticQaModelForMode } from "./model-selection.js";
 import {
   defaultQaRuntimeModelForMode,
   resolveQaRuntimeModelPair,
@@ -68,10 +67,7 @@ function createDefaultQaRunSelection(
     channelDriver: profile.channelDriver,
     evidenceMode: profile.evidenceMode,
     providerMode,
-    ...resolveQaRuntimeModelPair({
-      providerMode,
-      resolveDefaultModel: (mode, alternate) => defaultStaticQaModelForMode(mode, { alternate }),
-    }),
+    ...resolveQaRuntimeModelPair({ providerMode }),
     fastMode: getQaProvider(providerMode).kind === "live",
     runtimePair: null,
     runtimePairLane: null,

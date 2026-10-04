@@ -1,3 +1,4 @@
+use crate::remote_gateway::{is_private_address, is_private_host};
 use mdns_sd::{ResolvedService, ServiceDaemon, ServiceEvent};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -73,9 +74,7 @@ impl DiscoveredGateway {
         if addresses.is_empty() {
             return false;
         }
-        self.tls
-            || (is_trusted_plaintext_host(&self.host)
-                && addresses.iter().all(is_trusted_plaintext_address))
+        self.tls || (is_private_host(&self.host) && addresses.iter().all(is_private_address))
     }
 }
 
@@ -206,7 +205,7 @@ impl GatewayDiscovery {
                 .addresses
                 .iter()
                 .filter_map(|address| resolved_ip_address(address))
-                .find(is_trusted_plaintext_address)
+                .find(is_private_address)
                 .ok_or_else(|| {
                     "The discovered gateway does not have a safe resolved address.".to_string()
                 })?;
@@ -346,32 +345,6 @@ fn resolved_ip_address(address: &str) -> Option<IpAddr> {
         .map_or(address, |(address, _scope)| address)
         .parse()
         .ok()
-}
-
-fn is_trusted_plaintext_host(host: &str) -> bool {
-    let host = host.to_ascii_lowercase();
-    host == "localhost"
-        || host.ends_with(".local")
-        || host.ends_with(".ts.net")
-        || host
-            .parse::<IpAddr>()
-            .is_ok_and(|address| is_trusted_plaintext_address(&address))
-}
-
-fn is_trusted_plaintext_address(address: &IpAddr) -> bool {
-    match address {
-        IpAddr::V4(address) => {
-            let [first, second, _, _] = address.octets();
-            address.is_loopback()
-                || address.is_private()
-                || address.is_link_local()
-                || (first == 100 && (64..=127).contains(&second))
-        }
-        IpAddr::V6(address) => {
-            let first = address.segments()[0];
-            address.is_loopback() || first & 0xfe00 == 0xfc00 || first & 0xffc0 == 0xfe80
-        }
-    }
 }
 
 fn service_instance_name(fullname: &str) -> String {

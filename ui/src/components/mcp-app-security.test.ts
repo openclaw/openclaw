@@ -1,11 +1,37 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   buildMcpAppHostCapabilities,
   dispatchWidgetPrompt,
+  negotiateMcpAppDisplayModes,
   resolveMcpAppSandboxUrl,
+  WIDGET_PROMPT_EVENT,
 } from "./mcp-app-security.ts";
 
 describe("MCP App sandbox security", () => {
+  it("negotiates resource hints before initialization and App capabilities afterward", () => {
+    expect(negotiateMcpAppDisplayModes(undefined)).toEqual({
+      available: ["inline", "fullscreen"],
+      initial: "inline",
+    });
+    expect(negotiateMcpAppDisplayModes({ preferredDisplayMode: "fullscreen" })).toEqual({
+      available: ["fullscreen"],
+      initial: "fullscreen",
+    });
+    expect(
+      negotiateMcpAppDisplayModes({
+        availableDisplayModes: ["inline", "fullscreen"],
+        preferredDisplayMode: "fullscreen",
+      }),
+    ).toEqual({ available: ["inline", "fullscreen"], initial: "fullscreen" });
+    expect(negotiateMcpAppDisplayModes(undefined, ["fullscreen"])).toEqual({
+      available: ["fullscreen"],
+      initial: "fullscreen",
+    });
+    expect(() => negotiateMcpAppDisplayModes(undefined, ["pip"])).toThrow(
+      "no available host display mode",
+    );
+  });
   it("advertises the CSP applied to MCP Apps", () => {
     expect(
       buildMcpAppHostCapabilities({ connectDomains: ["https://api.example.com"] }),
@@ -83,14 +109,14 @@ describe("MCP App sandbox security", () => {
     }
   });
 
-  it("keeps the per-view prompt budget across iframe remounts", () => {
+  it("keeps the per-view prompt budget across iframe remounts", async () => {
     const key = `agent:main:main\0view-${crypto.randomUUID()}`;
     const first = document.createElement("iframe");
     document.body.append(first);
     first.checkVisibility = () => true;
     Object.defineProperty(document, "activeElement", { get: () => first, configurable: true });
     for (let index = 0; index < 10; index += 1) {
-      expect(dispatchWidgetPrompt(first, `Prompt ${index}`, key)).toBe(true);
+      expect(await dispatchWidgetPrompt(first, `Prompt ${index}`, key)).toBe(true);
     }
 
     first.remove();
@@ -101,8 +127,34 @@ describe("MCP App sandbox security", () => {
       get: () => replacement,
       configurable: true,
     });
-    expect(dispatchWidgetPrompt(replacement, "Prompt after remount", key)).toBe(false);
+    expect(await dispatchWidgetPrompt(replacement, "Prompt after remount", key)).toBe(false);
     replacement.remove();
     delete (document as unknown as Record<string, unknown>).activeElement;
+  });
+
+  it("waits for widget confirmation and rejects a frame retired while it was pending", async () => {
+    const frame = document.createElement("iframe");
+    document.body.append(frame);
+    frame.checkVisibility = () => true;
+    frame.focus();
+    const received = vi.fn();
+    frame.addEventListener(WIDGET_PROMPT_EVENT, received);
+    const decision = createDeferred<boolean>();
+    try {
+      const pending = dispatchWidgetPrompt(
+        frame,
+        "Compare parts",
+        crypto.randomUUID(),
+        () => decision.promise,
+      );
+      expect(received).not.toHaveBeenCalled();
+      frame.remove();
+      decision.resolve(true);
+      expect(await pending).toBe(false);
+      expect(received).not.toHaveBeenCalled();
+    } finally {
+      decision.resolve(false);
+      frame.remove();
+    }
   });
 });

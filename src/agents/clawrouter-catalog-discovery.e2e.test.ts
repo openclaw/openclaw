@@ -142,12 +142,11 @@ describe("ClawRouter cold prepared catalog", () => {
           },
           modelPolicy: { allow: ["clawrouter/codex-latest"] },
         },
-        list: [
-          {
-            id: agentId,
+        entries: {
+          [agentId]: {
             model: { primary: refreshedAuth ? "openai/codex-latest" : "clawrouter/codex-latest" },
           },
-        ],
+        },
       },
     };
     const input = {

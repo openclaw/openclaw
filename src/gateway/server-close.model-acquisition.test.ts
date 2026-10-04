@@ -34,7 +34,7 @@ it.each(["final Gateway", "live sibling", "closing sibling"] as const)(
     fixture.config.gateway = { reload: { mode: "hybrid" } };
     fixture.config.agents = {
       defaults: { workspace: fixture.state.workspaceDir, model: `${fixture.pluginId}/before` },
-      entries: { main: { default: true, workspace: fixture.state.workspaceDir } },
+      entries: { main: { workspace: fixture.state.workspaceDir } },
     };
     const entered = createDeferredCore();
     const cancelled = createDeferredCore();
@@ -302,12 +302,19 @@ it.each(["static catalog", "synthetic auth"] as const)(
       };`,
     );
     fixture.config.agents = {
-      defaults: { workspace: fixture.state.workspaceDir, model: `${provider}/model` },
+      ownership: "explicit",
+      defaults: {
+        workspace: fixture.state.workspaceDir,
+        model: `${provider}/model`,
+        heartbeat: { agentId: "main" },
+        systemAgent: { agentId: "main" },
+      },
       entries: {
-        main: { default: true, workspace: fixture.state.workspaceDir },
+        main: { workspace: fixture.state.workspaceDir },
         late: { workspace: fixture.state.path("late-workspace") },
       },
     };
+    fixture.config.talk = { agentId: "main" };
     const unsubscribe = registerPreparedModelRuntimePublicationListener(({ phase: event }) => {
       if (event === "published" && getPreparedModelRuntimeStartupStatus()?.degraded === false) {
         completePublications++;

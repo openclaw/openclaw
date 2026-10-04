@@ -1,3 +1,4 @@
+import "openclaw/plugin-sdk/compiled-subprocess-testing";
 import type {
   PluginDoctorCronInventory,
   PluginDoctorCronJob,

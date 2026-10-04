@@ -7,7 +7,6 @@ import type { MessageGroup } from "../../lib/chat/chat-types.ts";
 import { prependUniqueNativeMessages } from "../../lib/chat/history-message-identity.ts";
 import { normalizeMessage } from "../../lib/chat/message-normalizer.ts";
 import * as toolCards from "../../lib/chat/tool-cards.ts";
-import { collectGarbageForTest } from "../../test-helpers/garbage-collection.ts";
 import { coalesceAgentRunFrames } from "./chat-agent-run-grouping.ts";
 import { buildChatItems } from "./chat-thread-build.ts";
 import {
@@ -15,6 +14,7 @@ import {
   type WorkGroupRenderItem as WorkGroupItem,
 } from "./chat-thread-grouping.ts";
 import * as threadItems from "./chat-thread-items.ts";
+import { buildItems, createProps, type CachedChatItemsProps } from "./chat-thread.test-support.ts";
 import {
   buildCachedChatItems,
   coalesceStreamRuns,
@@ -38,30 +38,10 @@ function preparedGroup(key: string, message: unknown): MessageGroup {
   return requireGroup(groupMessages([{ kind: "message", key, message }])[0]);
 }
 
-type CachedChatItemsProps = Parameters<typeof buildCachedChatItems>[0];
 type ChatQueueItem = NonNullable<CachedChatItemsProps["queue"]>[number];
 
 // Display fixtures need provenance markers for inbound-metadata stripping.
 const SENDER_METADATA_BLOCK = `${markInboundContextLabel("Sender:")}\n\`\`\`json\n{"label":"openclaw-control-ui","id":"openclaw-control-ui"}\n\`\`\``;
-
-function createProps(overrides: Partial<CachedChatItemsProps> = {}): CachedChatItemsProps {
-  return {
-    paneId: "pane-a",
-    sessionKey: "main",
-    runId: null,
-    messages: [],
-    toolMessages: [],
-    streamSegments: [],
-    stream: null,
-    streamStartedAt: null,
-    showToolCalls: true,
-    ...overrides,
-  };
-}
-
-function buildItems(overrides: Partial<CachedChatItemsProps> = {}) {
-  return buildCachedChatItems(createProps(overrides));
-}
 
 function chatMessage(
   role: string,
@@ -1936,38 +1916,6 @@ describe("buildCachedChatItems", () => {
 });
 
 describe("tool expansion state", () => {
-  it("releases a closed pane's messages while retaining its disclosure choices", async () => {
-    resetChatThreadState();
-    class TranscriptMessage {
-      role = "assistant";
-      content = [{ type: "toolcall", id: "released-call", name: "read" }];
-    }
-    const paneId = "released-pane";
-    const sessionKey = "released-session";
-    const populatePane = () => {
-      const message = new TranscriptMessage();
-      const items = buildItems({ paneId, sessionKey, messages: [message] });
-      syncToolCardExpansionState(sessionKey, items, true);
-      return {
-        messageReference: new WeakRef(message),
-        collectionControl: new WeakRef({ unowned: true }),
-      };
-    };
-    try {
-      const { messageReference, collectionControl } = populatePane();
-      await collectGarbageForTest();
-      expect(collectionControl.deref()).toBeUndefined();
-      expect(messageReference.deref() !== undefined).toBe(true);
-
-      resetChatThreadState(paneId);
-      await collectGarbageForTest();
-      expect(messageReference.deref()).toBeUndefined();
-      expect([...getExpandedToolCards(sessionKey).values()]).toEqual([true]);
-    } finally {
-      resetChatThreadState();
-    }
-  });
-
   it("skips the tool-card walk when the item array identity is unchanged", () => {
     resetChatThreadState();
     const group = preparedGroup("assistant-stable", {

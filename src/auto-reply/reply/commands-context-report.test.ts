@@ -208,13 +208,12 @@ describe("buildContextReply", () => {
               bootstrapMaxChars: 12_000,
               bootstrapTotalMaxChars: 60_000,
             },
-            list: [
-              {
-                id: "scout",
+            entries: {
+              scout: {
                 bootstrapMaxChars: 32_000,
                 bootstrapTotalMaxChars: 96_000,
               },
-            ],
+            },
           },
         },
       }),

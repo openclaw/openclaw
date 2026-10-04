@@ -1,11 +1,14 @@
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it, vi } from "vitest";
 import { createSqliteWalReclamationResult } from "../infra/sqlite-wal-reclamation.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import {
   createOpenClawDatabaseMaintenanceScope,
+  createOpenClawStateDatabaseAsyncLifecycle,
   isOpenClawDatabaseMaintenanceResourceOwned,
 } from "./openclaw-state-db-async-lifecycle.js";
 import {
+  assertStateDatabaseBorrowersReleased,
   createStateDatabaseRetainer,
   type StateDatabaseBorrowers,
 } from "./openclaw-state-db-borrow.js";
@@ -27,6 +30,7 @@ function fixture(inTransaction = false) {
     db: new DatabaseSync(":memory:"),
     path: "/fixture/state.sqlite",
     walMaintenance: {
+      stop: async () => {},
       close: () => true,
       checkpoint: () => true,
       reclaimFreePages: createSqliteWalReclamationResult,
@@ -38,20 +42,147 @@ function fixture(inTransaction = false) {
     source.db.close(),
   );
   const assertOpen = vi.fn();
+  const retirementResources = createOpenClawStateDatabaseAsyncLifecycle();
+  const retainFailed = vi.fn();
+  const touch = vi.fn();
   const retainer = createStateDatabaseRetainer(
     { borrowers, cachedDatabases: new Map([[database.path, database]]) },
     {
       assertOpen,
       capture: () => ({ assertCurrent() {} }),
       retire,
-      retainFailed: vi.fn(),
-      touch() {},
+      retainFailed,
+      ownRetirement(_database, close) {
+        return retirementResources.register({ close });
+      },
+      touch,
     },
   );
   const scope = createOpenClawDatabaseMaintenanceScope();
   scope.own(database.db, "shared-handles", () => database.db.close());
-  return { database, borrowers, retire, retainer, scope, assertOpen };
+  return {
+    database,
+    borrowers,
+    retire,
+    retainer,
+    scope,
+    assertOpen,
+    retirementResources,
+    retainFailed,
+    touch,
+  };
 }
+
+it.each(["complete", "failed stop", "changed owner"] as const)(
+  "retains async retirement when a synchronous read pin is released last (%s)",
+  async (outcome) => {
+    const {
+      database,
+      borrowers,
+      retainer,
+      retire,
+      scope,
+      retirementResources,
+      retainFailed,
+      touch,
+    } = fixture();
+    const released = createDeferredCore();
+    const stop = vi.spyOn(database.walMaintenance, "stop").mockReturnValue(released.promise);
+    const writer = retainer.retain(database);
+    const reader = retainer.retainForIndependentRead(database.path);
+    if (!reader) {
+      throw new Error("Expected native read pin");
+    }
+    let current = true;
+    try {
+      await writer.releaseAsync();
+      expect(stop).not.toHaveBeenCalled();
+      const owner = borrowers.get(database.db);
+      if (!owner?.retirement) {
+        throw new Error("Expected the writer's retained retirement request");
+      }
+      owner.retirement.isCurrent = () => current;
+      reader.release();
+      await Promise.resolve();
+      expect(stop).toHaveBeenCalledOnce();
+      expect(retire).not.toHaveBeenCalled();
+      expect(database.db.isOpen).toBe(true);
+      expect(() => assertStateDatabaseBorrowersReleased(owner, database.path)).toThrow(
+        "active native borrowers",
+      );
+      expect(() => retainer.retain(database)).toThrow("native owner is retiring");
+      touch.mockClear();
+      if (outcome === "changed owner") {
+        current = false;
+      }
+      const closing = retirementResources.close(undefined, () => true);
+      if (outcome === "failed stop") {
+        const failure = new Error("WAL retirement failed");
+        released.reject(failure);
+        await expect(closing).rejects.toThrow("WAL retirement failed");
+        expect(touch).not.toHaveBeenCalled();
+        expect(retainFailed).toHaveBeenCalled();
+        expect(database.db.isOpen).toBe(true);
+        expect(owner.cleanupComplete).toBe(false);
+        expect(() => assertStateDatabaseBorrowersReleased(owner, database.path)).toThrow(
+          "active native borrowers",
+        );
+        stop.mockResolvedValue();
+        await retirementResources.close(undefined, () => true);
+      } else {
+        released.resolve();
+        await closing;
+      }
+      expect(database.db.isOpen).toBe(outcome === "changed owner");
+      expect(retire).toHaveBeenCalledTimes(outcome === "changed owner" ? 0 : 1);
+      expect(() => assertStateDatabaseBorrowersReleased(owner, database.path)).not.toThrow();
+      if (outcome === "changed owner") {
+        expect(owner.cleanupComplete).toBe(false);
+        expect(owner.retiring).toBe(false);
+        expect(touch).toHaveBeenCalledExactlyOnceWith(database);
+      }
+    } finally {
+      current = true;
+      released.resolve();
+      stop.mockResolvedValue();
+      await retirementResources.close(undefined, () => true);
+      reader.release();
+      await scope.close();
+    }
+  },
+);
+
+it("keeps concurrent synchronous release fenced behind the same asynchronous WAL join", async () => {
+  const { database, borrowers, retainer, retire, scope, retirementResources } = fixture();
+  const entered = createDeferredCore();
+  const released = createDeferredCore();
+  const stop = vi.spyOn(database.walMaintenance, "stop").mockImplementation(() => {
+    entered.resolve();
+    return released.promise;
+  });
+  const reference = retainer.retain(database);
+  try {
+    const closing = reference.releaseAsync();
+    await entered.promise;
+    reference.release();
+    const repeated = reference.releaseAsync();
+    expect(stop).toHaveBeenCalledOnce();
+    expect(retire).not.toHaveBeenCalled();
+    expect(database.db.isOpen).toBe(true);
+    expect(() =>
+      assertStateDatabaseBorrowersReleased(borrowers.get(database.db), database.path),
+    ).toThrow("active native borrowers");
+    expect(() => retainer.retain(database)).toThrow("native owner is retiring");
+    released.resolve();
+    await Promise.all([closing, repeated]);
+    expect(retire).toHaveBeenCalledOnce();
+    expect(database.db.isOpen).toBe(false);
+  } finally {
+    released.resolve();
+    await retirementResources.close(undefined, () => true);
+    await scope.close();
+  }
+});
 
 describe.each(["borrowForRead", "retainForIndependentRead"] as const)("%s", (readPin) => {
   it("checks access once when finding and retaining the same native owner", async () => {

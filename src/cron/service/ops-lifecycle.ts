@@ -173,6 +173,9 @@ export async function waitForRunSettlement(
 
 /** Starts the cron service, atomically repairs abandoned runs, and arms scheduling. */
 export async function start(state: CronServiceState): Promise<void> {
+  if (state.schedulerScope.signal.aborted) {
+    state.schedulerScope = state.deps.scheduler.scope();
+  }
   state.stopped = false;
   const generation = state.lifecycleGeneration;
   stopForeignReceiptMonitor(state);
@@ -277,6 +280,10 @@ export async function start(state: CronServiceState): Promise<void> {
 export function stop(state: CronServiceState) {
   state.lifecycleGeneration += 1;
   state.stopped = true;
+  // stop() closes admission synchronously; only external drain callers join it.
+  state.schedulerDrain = Promise.all([state.schedulerDrain, state.schedulerScope.stop()]).then(
+    () => undefined,
+  );
   cancelCronRunAdmissionWaiters(state);
   state.schedulerStarted = false;
   stopForeignReceiptMonitor(state);

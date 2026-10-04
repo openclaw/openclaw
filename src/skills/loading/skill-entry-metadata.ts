@@ -4,7 +4,6 @@ import { readRootJsonObjectSync } from "../../infra/json-files.js";
 import type { OpenClawSkillMetadata, ParsedSkillFrontmatter } from "../types.js";
 import { resolveSkillInvocationPolicy, resolveSkillManifestMetadata } from "./frontmatter.js";
 import { SKILL_SOURCE_ORIGIN_RELATIVE_PATH } from "./skill-entry-metadata-path.js";
-import type { LoadedSkillRecord } from "./skill-root-loader.js";
 import { tryRealpath } from "./symlink-targets.js";
 import type { WorkspaceSkillSources } from "./workspace-skill-sources.types.js";
 
@@ -55,7 +54,10 @@ function resolveSkillEntryMetadata(params: {
 }
 
 export function createSkillEntry(
-  record: LoadedSkillRecord & { sourceOrder?: number },
+  record: Pick<
+    WorkspaceSkillSources["entries"][number],
+    "skill" | "frontmatter" | "sourceOrder" | "syncSourceDir" | "syncDirName"
+  >,
 ): WorkspaceSkillSources["entries"][number] {
   const { skill, frontmatter } = record;
   const invocation = resolveSkillInvocationPolicy(frontmatter);

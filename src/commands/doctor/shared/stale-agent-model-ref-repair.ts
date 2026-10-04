@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   listAgentEntries,
   resolveAgentDir,
@@ -9,7 +9,7 @@ import {
 } from "../../../agents/agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../../agents/defaults.js";
 import { normalizeProviderId } from "../../../agents/model-selection.js";
-import type { AgentModelConfig } from "../../../config/types.agents-shared.js";
+import type { OpenClawConfigWithLegacyRoster } from "../../../config/legacy.roster.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { hasIncompletePluginDiscovery } from "../../../plugins/discovery-availability.js";
 import { resolvePluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.js";
@@ -23,10 +23,10 @@ import {
 } from "./retired-model-ref-repair.js";
 
 type StaleAgentModelRefRepair = {
-  config: OpenClawConfig;
+  config: OpenClawConfigWithLegacyRoster;
   changes: string[];
   warnings: string[];
-  retiredModelRefConfig?: Pick<OpenClawConfig, "agents" | "models">;
+  retiredModelRefConfig?: Record<string, unknown>;
 };
 
 type RepairOptions = {
@@ -202,7 +202,7 @@ function repairModelMap(params: {
 }
 
 function filterFallbacks(params: {
-  model: Exclude<AgentModelConfig, string>;
+  model: Record<string, unknown>;
   path: string;
   isStale: (ref: string) => string | undefined;
   changes: string[];
@@ -211,7 +211,8 @@ function filterFallbacks(params: {
     return;
   }
   // An empty array disables inherited fallbacks, including after stale refs are removed.
-  params.model.fallbacks = params.model.fallbacks.filter((ref) => {
+  const fallbacks: unknown[] = params.model.fallbacks;
+  params.model.fallbacks = fallbacks.filter((ref) => {
     if (typeof ref !== "string") {
       return true;
     }
@@ -253,10 +254,14 @@ function modelPrimaryRef(model: unknown): string | undefined {
 }
 
 export function repairStaleAgentModelRefs(
-  cfg: OpenClawConfig,
+  cfg: unknown,
   options: RepairOptions = {},
 ): StaleAgentModelRefRepair {
-  const replaceMode = cfg.models?.mode === "replace";
+  if (!isRecord(cfg)) {
+    throw new TypeError("Stale agent model repair requires a config object");
+  }
+  const configuredModels = asOptionalRecord(cfg.models);
+  const replaceMode = configuredModels?.mode === "replace";
   const pluginProviders = replaceMode
     ? { providerIds: new Set<string>(), warnings: [] }
     : collectPluginProviderIds(cfg, options);
@@ -270,7 +275,7 @@ export function repairStaleAgentModelRefs(
   if (!replaceMode) {
     baseAvailableProviders.add(normalizeProviderId(DEFAULT_PROVIDER));
   }
-  for (const providerId of Object.keys(cfg.models?.providers ?? {})) {
+  for (const providerId of Object.keys(asOptionalRecord(configuredModels?.providers) ?? {})) {
     const normalized = normalizeProviderId(providerId);
     if (normalized) {
       baseAvailableProviders.add(normalized);
@@ -382,7 +387,7 @@ export function repairStaleAgentModelRefs(
     return provider && !available.has(provider) ? provider : undefined;
   };
 
-  const defaults = config.agents?.defaults;
+  const defaults = asOptionalRecord(asOptionalRecord(config.agents)?.defaults);
   const defaultAvailability = availabilityForDefaults();
   const configuredDefaultPrimary = modelPrimaryRef(defaults?.model);
   let repairedDefaultPrimary =
@@ -397,12 +402,13 @@ export function repairStaleAgentModelRefs(
     let replacement: string | undefined;
     if (provider && primary !== undefined) {
       const modelPath = `agents.defaults.model${typeof model === "string" ? "" : " primary"}`;
-      replacement =
-        replaceMode && isRecord(model) && Array.isArray(model.fallbacks)
-          ? (model.fallbacks.find(
-              (fallback) => typeof fallback === "string" && !isStale(fallback),
-            ) ?? configuredReplacement)
-          : configuredReplacement;
+      const fallbacks: unknown[] =
+        isRecord(model) && Array.isArray(model.fallbacks) ? model.fallbacks : [];
+      replacement = replaceMode
+        ? (fallbacks.find(
+            (fallback): fallback is string => typeof fallback === "string" && !isStale(fallback),
+          ) ?? configuredReplacement)
+        : configuredReplacement;
       if (replacement) {
         if (typeof model === "string") {
           defaults.model = replacement;
@@ -427,11 +433,13 @@ export function repairStaleAgentModelRefs(
     if (isRecord(model)) {
       filterFallbacks({ model, path: "agents.defaults.model", isStale, changes });
       if (replacement && Array.isArray(model.fallbacks) && model.fallbacks.includes(replacement)) {
-        model.fallbacks = model.fallbacks.filter((fallback) => fallback !== replacement);
+        const fallbacks: unknown[] = model.fallbacks;
+        const filteredFallbacks = fallbacks.filter((fallback) => fallback !== replacement);
+        model.fallbacks = filteredFallbacks;
         changes.push(
           `Removed duplicate agents.defaults.model fallback "${replacement}" after selecting it as the default primary.`,
         );
-        if (model.fallbacks.length === 0) {
+        if (filteredFallbacks.length === 0) {
           delete model.fallbacks;
         }
       }
@@ -445,7 +453,7 @@ export function repairStaleAgentModelRefs(
     const modelMapAvailability = availabilityForDefaultModelMap();
     if (modelMapAvailability) {
       repairModelMap({
-        models: defaults.models,
+        models: asOptionalRecord(defaults.models),
         path: "agents.defaults.models",
         isStale: makeStaleChecker(modelMapAvailability),
         replacementRef: repairedDefaultPrimary,
@@ -489,10 +497,12 @@ export function repairStaleAgentModelRefs(
           `Removed stale ${primaryPath} "${primary}" so agent "${entry.agentId}" inherits the default model (provider "${provider}" is unavailable).`,
         );
       } else {
+        const fallbacks: unknown[] =
+          isRecord(model) && Array.isArray(model.fallbacks) ? model.fallbacks : [];
         agentReplacement =
-          (isRecord(model) && Array.isArray(model.fallbacks)
-            ? model.fallbacks.find((fallback) => typeof fallback === "string" && !isStale(fallback))
-            : undefined) ??
+          fallbacks.find(
+            (fallback): fallback is string => typeof fallback === "string" && !isStale(fallback),
+          ) ??
           (repairedDefaultPrimary && !isStale(repairedDefaultPrimary)
             ? repairedDefaultPrimary
             : undefined);
@@ -520,9 +530,8 @@ export function repairStaleAgentModelRefs(
         Array.isArray(model.fallbacks) &&
         model.fallbacks.includes(agentReplacement)
       ) {
-        const filteredFallbacks = model.fallbacks.filter(
-          (fallback) => fallback !== agentReplacement,
-        );
+        const fallbacks: unknown[] = model.fallbacks;
+        const filteredFallbacks = fallbacks.filter((fallback) => fallback !== agentReplacement);
         model.fallbacks = filteredFallbacks;
         changes.push(
           `Removed duplicate ${modelPath} fallback "${agentReplacement}" after selecting it as the primary.`,

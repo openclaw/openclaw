@@ -42,10 +42,11 @@ export class PreparedQuestionAnswerRefusedError extends Error {
 export function buildAgentQuestionRequestQuestions(
   questions: readonly AgentHarnessUserInputQuestion[],
 ): QuestionRequestQuestion[] {
-  return questions.map(({ id, ...question }) => ({
+  return questions.map(({ id, defaultAnswers, ...question }) => ({
     ...question,
     questionId: id,
     options: [...(question.options ?? [])],
+    ...(defaultAnswers ? { defaultAnswers: [...defaultAnswers] } : {}),
   }));
 }
 

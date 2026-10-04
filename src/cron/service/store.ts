@@ -4,7 +4,6 @@ import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.pa
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { describeUnavailableCronAgent } from "../agent-availability.js";
 import { captureCronMutationCommit } from "../mutation-completion.js";
-import { normalizeCronJobIdentityFields } from "../normalize-job-identity.js";
 import { normalizeCronJobInput } from "../normalize.js";
 import { getInvalidPersistedCronJobReason } from "../persisted-shape.js";
 import { cronSchedulingInputsEqual } from "../schedule-identity.js";
@@ -20,6 +19,7 @@ import {
   CRON_DELIVERY_REPAIR_REQUIRED_MESSAGE,
   hasCanonicalCronDeliveryMode,
 } from "../store/delivery-codec.js";
+import { publishCronJobNames } from "../store/job-name.js";
 import { cronStoreKey } from "../store/key.js";
 import { assertCronStoreCanPersist } from "../store/row-codec.js";
 import {
@@ -146,9 +146,6 @@ export async function ensureLoaded(
     const rawConfigJob = loaded.configJobs[index] ?? structuredClone(raw);
     const sourceIndex = loaded.configJobIndexes[index] ?? index;
     const runtimeEntry = loaded.configJobRuntimeEntries[index];
-    // Accept old `jobId` rows at the raw boundary only; the in-memory store
-    // uses canonical `id` before validation and scheduling.
-    normalizeCronJobIdentityFields(raw);
     const rawInvalidReason = getInvalidPersistedCronJobReason(raw);
     let normalized: Record<string, unknown> | null;
     try {
@@ -479,13 +476,21 @@ export async function persistCronJobMutation(params: {
       assertAvailable();
       return { value: { nowMs: state.deps.nowMs() }, assertCurrent: assertAvailable };
     },
-    publish({ store, jobsFingerprint: committedJobs, runtimeFingerprint: committedRuntime }) {
+    publish({
+      store,
+      names,
+      jobsFingerprint: committedJobs,
+      runtimeFingerprint: committedRuntime,
+    }) {
       published = true;
       if (changes.changedIds.size > 0) {
         markCommitted?.();
       }
       const unchanged = getCronJobsStoreRevision(source.storeKey) === observedRevision;
       noteCronJobsStoreCommit(source.storeKey);
+      if (unchanged) {
+        publishCronJobNames(source.storeKey, source.context, names);
+      }
       state.store = store;
       state.storeLoadedAtMs = state.deps.nowMs();
       if (quarantine) {

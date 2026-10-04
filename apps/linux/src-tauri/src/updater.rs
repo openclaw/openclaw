@@ -582,10 +582,6 @@ fn install_kind_from_appimage_env(appimage: Option<OsString>, platform: Platform
     }
 }
 
-fn main_window(app: &AppHandle) -> Option<Webview> {
-    app.get_webview("main")
-}
-
 fn main_content_is_remote(app: &AppHandle, window: Option<&Webview>) -> bool {
     !window.is_some_and(|window| {
         app.state::<crate::DesktopState>()
@@ -602,7 +598,7 @@ fn progress_callback(app: AppHandle) -> impl FnMut(usize, Option<u64>) {
 }
 
 fn emit<S: Serialize + Clone>(app: &AppHandle, event: &str, payload: S) {
-    if let Some(window) = main_window(app) {
+    if let Some(window) = app.get_webview("main") {
         if !main_content_is_remote(app, Some(&window)) {
             let _ = window.emit(event, payload);
         }
@@ -623,7 +619,7 @@ fn deliver_result<S: Serialize + Clone>(
         .expect("updater lifecycle lock poisoned")
         .record_result(result);
     refresh_action(app);
-    let window = main_window(app);
+    let window = app.get_webview("main");
     let destination = result_delivery(manual, main_content_is_remote(app, window.as_ref()), result);
     if matches!(
         destination,

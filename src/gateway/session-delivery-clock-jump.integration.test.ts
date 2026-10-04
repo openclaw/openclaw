@@ -164,7 +164,7 @@ describe("session delivery clock-jump integration", () => {
                 },
               },
             },
-            entries: { main: { default: true } },
+            entries: { main: {} },
           },
           models: {
             mode: "replace",

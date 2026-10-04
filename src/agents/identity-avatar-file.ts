@@ -5,13 +5,13 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openRootFileSync, readFileDescriptorBoundedSync } from "../infra/boundary-file-read.js";
 import { resolveRealpathOrAbsolute } from "../infra/boundary-path.js";
+import { isPathInside } from "../infra/path-guards.js";
 import { isRenderableAvatarImageDataUrl } from "../shared/avatar-limits.js";
 import {
   AVATAR_MAX_BYTES,
   hasAvatarUriScheme,
   isAvatarDataUrl,
   isAvatarHttpUrl,
-  isPathWithinRoot,
   isSupportedLocalAvatarExtension,
   isWindowsAbsolutePath,
   resolveAvatarMime,
@@ -56,7 +56,7 @@ export function resolveLocalAgentAvatarPath(params: {
       ? resolveUserPath(params.raw)
       : path.resolve(workspaceRoot, params.raw);
   const filePath = resolveRealpathOrAbsolute(resolved);
-  if (!isPathWithinRoot(workspaceRoot, filePath)) {
+  if (!isPathInside(workspaceRoot, filePath)) {
     return { ok: false, reason: "outside_workspace" };
   }
   if (!isSupportedLocalAvatarExtension(filePath)) {

@@ -8,12 +8,16 @@ import { SemVer } from "semver";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer, type RawData } from "ws";
 import { createCodexAppServerAgentHarness } from "../../harness.js";
-import type { CodexAppServerAuthHandoff, CodexAppServerPreparedAuth } from "./auth-bridge.js";
+import type { CodexAppServerAuthHandoff, CodexAppServerPreparedAuth } from "./auth-types.js";
 import { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerStartOptions } from "./config.js";
 import { acquireCodexNativeConfigFence } from "./native-config-fence.js";
 import { withCodexAppServerJsonClient } from "./request.js";
 import { createCodexTestBindingStore } from "./session-binding.test-helpers.js";
+import {
+  deferNextAuthProfileApplication,
+  registerSharedClientAcquisitionDiagnosticsTests,
+} from "./shared-client-acquisition-diagnostics.test-support.js";
 import { registerSharedClientCompactionRetentionTests } from "./shared-client-compaction-retention.test-support.js";
 import { registerSharedClientConnectionArtifactTests } from "./shared-client-connection-artifact.test-support.js";
 import { registerSharedClientInferenceTests } from "./shared-client-inference.test-support.js";
@@ -230,15 +234,6 @@ function clientStartCall(startSpy: unknown) {
   };
 }
 
-function deferNextAuthProfileApplication(): () => void {
-  let release: () => void = () => {};
-  const gate = new Promise<CodexAppServerAuthHandoff | undefined>((resolve) => {
-    release = () => resolve(undefined);
-  });
-  mocks.applyCodexAppServerAuthProfile.mockReturnValueOnce(gate);
-  return release;
-}
-
 function configureManagedDesktopFallback(): CodexAppServerStartOptions {
   mocks.resolveManagedCodexAppServerStartOptions.mockImplementation(async (startOptions) => ({
     ...startOptions,
@@ -338,6 +333,11 @@ describe("shared Codex app-server client", () => {
     createStartOptions,
     createInitializingClientHarness,
     authHandoff: mocks.applyCodexAppServerAuthProfile,
+  });
+
+  registerSharedClientAcquisitionDiagnosticsTests({
+    createInitializingClientHarness,
+    sendInitializeResult,
   });
 
   registerSharedClientInferenceTests((generation, command) => {

@@ -175,10 +175,7 @@ function attachManagedImageRecordInDatabase(
       .where("attachment_id", "=", params.attachmentId)
       .where("session_key", "=", params.sessionKey),
   );
-  if (!row) {
-    return false;
-  }
-  if (row.cleanup_pending === 1) {
+  if (!row || row.cleanup_pending === 1) {
     return false;
   }
   const current = managedImageRecordFromRow(row);

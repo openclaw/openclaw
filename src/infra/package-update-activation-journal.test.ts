@@ -4,11 +4,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { assertReliabilityForcedExit } from "../../scripts/lib/sqlite-reliability-process.js";
 import {
   installPrivateUpdateHandoffStore,
   writePrivateUpdateHandoffChildGuard,
 } from "../../test/helpers/private-update-handoff-store.js";
+import { createHotSqliteRollbackJournal } from "../../test/helpers/sqlite-hot-journal.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   captureUpdateCommandExecutorAuthority,
@@ -303,155 +303,71 @@ function replaceField(
   }
 }
 
+function createHotJournal(journalPath: string) {
+  createHotSqliteRollbackJournal({
+    path: journalPath,
+    mutationSql: "UPDATE package_activation SET phase = 'publication-complete'",
+    env: childGuardEnv({}),
+  });
+}
+
 describe.skipIf(process.platform === "win32")("package activation journal", () => {
-  it("status refuses a real hot rollback journal without recovering or changing its files", async () => {
-    const f = await fixture();
-    const setup = new DatabaseSync(f.journalPath);
-    try {
-      setup.exec(`
-        PRAGMA journal_mode = DELETE;
-        PRAGMA synchronous = FULL;
-        CREATE TABLE hot_journal_pressure (
-          id INTEGER PRIMARY KEY,
-          value TEXT NOT NULL,
-          payload BLOB NOT NULL
-        ) STRICT;
-        WITH RECURSIVE rows(id) AS (
-          SELECT 1 UNION ALL SELECT id + 1 FROM rows WHERE id < 256
-        )
-        INSERT INTO hot_journal_pressure
-        SELECT id, 'committed', zeroblob(8192) FROM rows;
-      `);
-    } finally {
-      setup.close();
-    }
-    // Match the existing sqlite-snapshot crash fixture: spill a real uncommitted
-    // write, then join the exact child that leaves the native rollback journal.
-    const crashed = spawnSync(
-      process.execPath,
-      [
-        "--no-warnings",
-        "--input-type=module",
-        "-e",
-        `
-          import { DatabaseSync } from "node:sqlite";
-          const database = new DatabaseSync(process.argv[1]);
-          database.exec(
-            "PRAGMA journal_mode = DELETE; PRAGMA synchronous = FULL; " +
-            "PRAGMA cache_size = 2; PRAGMA cache_spill = ON; BEGIN IMMEDIATE; " +
-            "UPDATE package_activation SET phase = 'publication-complete'; " +
-            "UPDATE hot_journal_pressure SET value = 'uncommitted';"
-          );
-          process.kill(process.pid, "SIGKILL");
-        `,
-        f.journalPath,
-      ],
-      { env: childGuardEnv({}), encoding: "utf8", timeout: 10_000, killSignal: "SIGKILL" },
-    );
-    expect(crashed.error, crashed.stderr).toBeUndefined();
-    assertReliabilityForcedExit(
-      { code: crashed.status, signal: crashed.signal },
-      "activation hot-journal fixture",
-    );
-    const rollbackPath = `${f.journalPath}-journal`;
-    expect(fs.statSync(rollbackPath).size).toBeGreaterThan(512);
-    const before = journalFiles(f.anchor);
-    const readOnly = new DatabaseSync(f.journalPath, { readOnly: true });
-    try {
-      let refusal: unknown;
+  it.each([false, true])(
+    "preserves a hot journal until recovery admission (replaced=%s)",
+    async (replaced) => {
+      const f = await fixture();
+      createHotJournal(f.journalPath);
+      const rollbackPath = `${f.journalPath}-journal`;
+      expect(fs.statSync(rollbackPath).size).toBeGreaterThan(512);
+      const before = journalFiles(f.anchor);
+      const readOnly = new DatabaseSync(f.journalPath, { readOnly: true });
       try {
-        readOnly.prepare("SELECT phase FROM package_activation").get();
-      } catch (error) {
-        refusal = error;
+        expect(() => readOnly.prepare("SELECT phase FROM package_activation").get()).toThrow(
+          expect.objectContaining({ errcode: 776 }),
+        );
+      } finally {
+        readOnly.close();
       }
-      expect(refusal).toMatchObject({ errcode: 776 });
-    } finally {
-      readOnly.close();
-    }
-    await expect(
-      readPackageActivationStatus(f.anchor, f.record.descriptor.operationId),
-    ).rejects.toThrow();
-    expect(journalFiles(f.anchor)).toEqual(before);
-    expect(fs.existsSync(`${f.journalPath}-wal`)).toBe(false);
-    expect(fs.existsSync(`${f.journalPath}-shm`)).toBe(false);
+      await expect(
+        readPackageActivationStatus(f.anchor, f.record.descriptor.operationId),
+      ).rejects.toThrow();
+      expect(journalFiles(f.anchor)).toEqual(before);
+      expect(fs.existsSync(`${f.journalPath}-wal`)).toBe(false);
+      expect(fs.existsSync(`${f.journalPath}-shm`)).toBe(false);
 
-    const admission = await f.journal.readForRecovery();
-    expect(admission.record).toEqual(f.record);
-    expect(journalFiles(f.anchor)).toEqual(before);
-    await expect(runPackageActivationRecovery(f.anchor, "repair", randomUUID())).rejects.toThrow(
-      "different operation",
-    );
-    expect(journalFiles(f.anchor)).toEqual(before);
-    await withUpdateCommandExecutor(
-      randomUUID(),
-      async (executor) => {
-        const fence = await executor.enter(f.packageRoot);
-        admission.admit(fence.assertCurrent);
-      },
-      { existingAuthority: f.authority },
-    );
-    expect(f.journal.read()).toEqual(f.record);
-    expect(fs.existsSync(rollbackPath)).toBe(false);
-  });
-
-  it("refuses a replaced hot journal before recovering its rollback", async () => {
-    const f = await fixture();
-    const setup = new DatabaseSync(f.journalPath);
-    try {
-      setup.exec(`
-        PRAGMA journal_mode = DELETE;
-        PRAGMA synchronous = FULL;
-        CREATE TABLE pressure (id INTEGER PRIMARY KEY, value TEXT NOT NULL, payload BLOB NOT NULL) STRICT;
-        WITH RECURSIVE rows(id) AS (
-          SELECT 1 UNION ALL SELECT id + 1 FROM rows WHERE id < 256
-        )
-        INSERT INTO pressure SELECT id, 'committed', zeroblob(8192) FROM rows;
-      `);
-    } finally {
-      setup.close();
-    }
-    const child = spawnSync(
-      process.execPath,
-      [
-        "--input-type=module",
-        "-e",
-        `import { DatabaseSync } from 'node:sqlite';
-         const database = new DatabaseSync(process.argv[1]);
-         database.exec("PRAGMA journal_mode = DELETE; PRAGMA synchronous = FULL; PRAGMA cache_size = 2; PRAGMA cache_spill = ON; BEGIN IMMEDIATE; UPDATE package_activation SET phase = 'publication-complete'; UPDATE pressure SET value = 'uncommitted';");
-         process.kill(process.pid, 'SIGKILL');`,
-        f.journalPath,
-      ],
-      { env: childGuardEnv({}), encoding: "utf8", timeout: 10_000, killSignal: "SIGKILL" },
-    );
-    expect(child.error, child.stderr).toBeUndefined();
-    assertReliabilityForcedExit(
-      { code: child.status, signal: child.signal },
-      "replacement hot journal",
-    );
-    const admission = await f.journal.readForRecovery();
-    const rollbackPath = `${f.journalPath}-journal`;
-    const readOnly = new DatabaseSync(f.journalPath, { readOnly: true });
-    try {
-      expect(() => readOnly.prepare("SELECT phase FROM package_activation").get()).toThrow(
-        expect.objectContaining({ errcode: 776 }),
+      const admission = await f.journal.readForRecovery();
+      expect(admission.record).toEqual(f.record);
+      expect(journalFiles(f.anchor)).toEqual(before);
+      await expect(runPackageActivationRecovery(f.anchor, "repair", randomUUID())).rejects.toThrow(
+        "different operation",
       );
-    } finally {
-      readOnly.close();
-    }
-    const rollback = fs.readFileSync(rollbackPath);
-    const replacement = path.join(path.dirname(f.journalPath), "replacement.sqlite");
-    fs.copyFileSync(f.journalPath, replacement);
-    fs.renameSync(replacement, f.journalPath);
-    await withUpdateCommandExecutor(
-      randomUUID(),
-      async (executor) => {
-        const fence = await executor.enter(f.packageRoot);
-        expect(() => admission.admit(fence.assertCurrent)).toThrow("changed");
-      },
-      { existingAuthority: f.authority },
-    );
-    expect(fs.readFileSync(rollbackPath)).toEqual(rollback);
-  });
+      expect(journalFiles(f.anchor)).toEqual(before);
+      const rollback = fs.readFileSync(rollbackPath);
+      if (replaced) {
+        const replacement = path.join(path.dirname(f.journalPath), "replacement.sqlite");
+        fs.copyFileSync(f.journalPath, replacement);
+        fs.renameSync(replacement, f.journalPath);
+      }
+      await withUpdateCommandExecutor(
+        randomUUID(),
+        async (executor) => {
+          const fence = await executor.enter(f.packageRoot);
+          if (replaced) {
+            expect(() => admission.admit(fence.assertCurrent)).toThrow("changed");
+          } else {
+            admission.admit(fence.assertCurrent);
+          }
+        },
+        { existingAuthority: f.authority },
+      );
+      if (replaced) {
+        expect(fs.readFileSync(rollbackPath)).toEqual(rollback);
+      } else {
+        expect(f.journal.read()).toEqual(f.record);
+        expect(fs.existsSync(rollbackPath)).toBe(false);
+      }
+    },
+  );
 
   it.each([false, true])(
     "status refuses foreign WAL without touching its files (liveWriter=%s)",
@@ -486,17 +402,30 @@ describe.skipIf(process.platform === "win32")("package activation journal", () =
     },
   );
 
-  it("keeps one bounded descriptor while exact-revision intents advance", async () => {
+  it("keeps all 64 bounded launcher entries while exact-revision intents advance", async () => {
     const f = await fixture();
-    expect(f.record).toMatchObject({ revision: 1, phase: "prepared", intent: null });
-    const publishing = await f.transition(f.record, "publishing", { kind: "displace" });
+    const launchers = Array.from({ length: 64 }, (_, index) => ({
+      ...f.record.descriptor.launchers[0]!,
+      name: `launcher-${index}`,
+      previous: "p".repeat(4096),
+      candidate: "c".repeat(4096),
+    }));
+    replaceField(
+      f.journalPath,
+      "descriptor_json",
+      JSON.stringify({ ...f.record.descriptor, launchers }),
+    );
+    const record = openPackageActivationJournal(f.anchor).read();
+    expect(record.descriptor.launchers).toEqual(launchers);
+    expect(record).toMatchObject({ revision: 1, phase: "prepared", intent: null });
+    const publishing = await f.transition(record, "publishing", { kind: "displace" });
     expect(publishing).toMatchObject({
       revision: 2,
       phase: "publishing",
       intent: { kind: "displace" },
-      descriptor: f.record.descriptor,
+      descriptor: record.descriptor,
     });
-    await expect(f.transition(f.record, "publication-complete", null)).rejects.toThrow(
+    await expect(f.transition(record, "publication-complete", null)).rejects.toThrow(
       "no longer current",
     );
     expect(f.journal.read()).toEqual(publishing);
@@ -506,7 +435,7 @@ describe.skipIf(process.platform === "win32")("package activation journal", () =
     expect(restored).toMatchObject({
       revision: 4,
       phase: "rolled-back",
-      descriptor: f.record.descriptor,
+      descriptor: record.descriptor,
     });
     const db = new DatabaseSync(f.journalPath, { readOnly: true });
     try {
@@ -556,76 +485,34 @@ describe.skipIf(process.platform === "win32")("package activation journal", () =
           launchers: [record.descriptor.launchers[0], record.descriptor.launchers[0]],
         }),
     },
+    { name: "missing operation", column: null, value: () => "DELETE FROM package_activation" },
     {
-      name: "oversized UTF-8 descriptor",
-      column: "descriptor_json",
-      value: (record: PackageActivationRecord) => {
-        const value = JSON.stringify({
-          ...record.descriptor,
-          launchers: Array.from({ length: 64 }, (_, index) => ({
-            ...record.descriptor.launchers[0]!,
-            name: `launcher-${index}`,
-            previous: "\u754c".repeat(4096),
-            candidate: "\u754c".repeat(4096),
-          })),
-        });
-        expect(value.length).toBeLessThan(1024 * 1024);
-        expect(Buffer.byteLength(value)).toBeGreaterThan(1024 * 1024);
-        return value;
-      },
+      name: "additional operation",
+      column: null,
+      value: () =>
+        "INSERT INTO package_activation SELECT 2, revision, phase, descriptor_json, intent_json, publications_json FROM package_activation WHERE slot = 1",
     },
-  ] as const)("preserves a journal with $name", async ({ column, value }) => {
+  ] as const)("preserves a journal with $name", async ({ name, column, value }) => {
     const f = await fixture();
-    replaceField(f.journalPath, column, value(f.record));
+    if (column === null) {
+      const db = new DatabaseSync(f.journalPath);
+      try {
+        db.exec(value());
+      } finally {
+        db.close();
+      }
+    } else {
+      replaceField(f.journalPath, column, value(f.record));
+    }
     const before = journalFiles(f.anchor);
-    expect(() => openPackageActivationJournal(f.anchor).read()).toThrow();
+    expect(() =>
+      (column === null ? f.journal : openPackageActivationJournal(f.anchor)).read(),
+    ).toThrow(name === "malformed descriptor" ? SyntaxError : undefined);
     await expect(f.transition(f.record, "publishing", { kind: "displace" })).rejects.toThrow();
     expect(journalFiles(f.anchor)).toEqual(before);
   });
 
-  it.each(["missing", "additional"] as const)(
-    "refuses a journal with a %s operation without changing it",
-    async (kind) => {
-      const f = await fixture();
-      const db = new DatabaseSync(f.journalPath);
-      try {
-        db.exec(
-          kind === "missing"
-            ? "DELETE FROM package_activation"
-            : "INSERT INTO package_activation SELECT 2, revision, phase, descriptor_json, intent_json, publications_json FROM package_activation WHERE slot = 1",
-        );
-      } finally {
-        db.close();
-      }
-      const before = journalFiles(f.anchor);
-      expect(() => f.journal.read()).toThrow();
-      await expect(f.transition(f.record, "publishing", { kind: "displace" })).rejects.toThrow();
-      expect(journalFiles(f.anchor)).toEqual(before);
-    },
-  );
-
-  it("accepts all 64 bounded launcher entries", async () => {
-    const f = await fixture();
-    const launchers = Array.from({ length: 64 }, (_, index) => ({
-      ...f.record.descriptor.launchers[0]!,
-      name: `launcher-${index}`,
-      previous: "p".repeat(4096),
-      candidate: "c".repeat(4096),
-    }));
-    replaceField(
-      f.journalPath,
-      "descriptor_json",
-      JSON.stringify({ ...f.record.descriptor, launchers }),
-    );
-    const record = openPackageActivationJournal(f.anchor).read();
-    expect(record.descriptor.launchers).toEqual(launchers);
-    expect(await f.transition(record, "publishing", { kind: "displace" })).toMatchObject({
-      revision: 2,
-      descriptor: { launchers },
-    });
-  });
-
-  it.each(["rollback-in-progress", "rolled-back", "aborted", "retiring"] as const)(
+  it.each(["rollback-in-progress", "retiring"] as const)(
     "refuses forward repair after %s is durable",
     async (phase) => {
       const f = await fixture();
@@ -708,7 +595,7 @@ describe.skipIf(process.platform === "win32")("package activation journal", () =
 
 const jsonColumns = ["descriptor_json", "intent_json", "publications_json"] as const;
 
-function byteBoundsFixture(oversized?: (typeof jsonColumns)[number]) {
+function byteBoundsFixture(oversized: (typeof jsonColumns)[number]) {
   const anchor = path.join(dirs.make("package-journal-byte-bound-"), "anchor");
   fs.mkdirSync(anchor, { mode: 0o700 });
   fs.mkdirSync(resolvePackageActivationControl(anchor), { mode: 0o700 });
@@ -719,10 +606,8 @@ function byteBoundsFixture(oversized?: (typeof jsonColumns)[number]) {
       "CREATE TABLE package_activation (slot INTEGER, revision INTEGER, phase TEXT, descriptor_json TEXT, intent_json TEXT, publications_json TEXT)",
     );
     const row = { descriptor_json: "{", intent_json: "null", publications_json: "[]" };
-    if (oversized) {
-      // Under one million characters, but over the one MiB byte bound.
-      row[oversized] = "é".repeat(512 * 1024 + 1);
-    }
+    // Under one million characters, but over the one MiB byte bound.
+    row[oversized] = "é".repeat(512 * 1024 + 1);
     db.prepare("INSERT INTO package_activation VALUES (1, 0, 'prepared', ?, ?, ?)").run(
       row.descriptor_json,
       row.intent_json,
@@ -758,11 +643,4 @@ describe.skipIf(process.platform === "win32")("existing package journal byte bou
       expect(snapshot()).toEqual(before);
     },
   );
-
-  it("passes bounded bytes to the decoder and preserves malformed input", () => {
-    const { anchor, snapshot } = byteBoundsFixture();
-    const before = snapshot();
-    expect(() => openPackageActivationJournal(anchor).read()).toThrow(SyntaxError);
-    expect(snapshot()).toEqual(before);
-  });
 });

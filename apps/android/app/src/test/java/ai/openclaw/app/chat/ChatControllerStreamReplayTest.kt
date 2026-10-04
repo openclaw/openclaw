@@ -77,7 +77,7 @@ class ChatControllerStreamReplayTest {
     val gateway: ScriptedGateway,
     val owner: ChatComposerOwner,
   ) {
-    suspend fun send(id: String): Boolean = controller.sendMessageForOwnerAwaitAcceptance(id, "off", emptyList(), owner, idempotencyKey = id)
+    suspend fun send(id: String): Boolean = controller.sendMessageAwaitAcceptance(id, "off", emptyList(), owner, idempotencyKey = id)
 
     fun text(id: String) {
       controller.handleGatewayEvent("chat", chatDeltaPayload(owner.sessionKey, id, 1, null, "Original output"))

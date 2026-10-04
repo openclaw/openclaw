@@ -30,6 +30,7 @@ import {
   prepareSqliteReadOnlyCopyInProcess,
 } from "./sqlite-readonly-location.js";
 import {
+  assertExpectedContent,
   assertOpenFileIdentitySync,
   assertPublishedFileIdentitySync,
   hashPublishedFileSync,
@@ -139,7 +140,7 @@ async function copyFileExclusive(
     }
     targetIdentity = openedIdentity;
     const content = await hashOpenPublishedFile(target, targetPath, targetIdentity);
-    await assertMutationFingerprintUnchanged(source, sourceFingerprint, targetPath);
+    await assertMutationFingerprintUnchanged(source, sourceFingerprint, targetPath, content);
     await target.sync();
     const currentIdentity = await fs.lstat(targetPath, { bigint: true });
     if (!sameFileIdentity(targetIdentity, currentIdentity)) {
@@ -165,10 +166,21 @@ async function assertMutationFingerprintUnchanged(
   handle: FileHandle,
   expected: FileMutationFingerprint,
   filePath: string,
+  expectedContent: SqliteFileContent,
 ): Promise<void> {
   const current = await handle.stat({ bigint: true });
   if (!sameFileMutationFingerprint(current, expected)) {
-    throw new Error(`SQLite snapshot file changed while reading: ${filePath}`);
+    if (
+      current.dev !== expected.dev ||
+      current.ino !== expected.ino ||
+      current.birthtimeNs !== expected.birthtimeNs ||
+      current.size !== expected.size
+    ) {
+      throw new Error(`SQLite snapshot file changed while reading: ${filePath}`);
+    }
+    // Re-read the pinned snapshot when FUSE timestamps settle after copying or hashing.
+    const { digest, bytes } = await sha256File(handle);
+    assertExpectedContent({ sha256: digest, sizeBytes: bytes }, expectedContent, filePath);
   }
 }
 
@@ -219,26 +231,10 @@ async function hashOpenPublishedFile(
   await assertOpenFileIdentity(handle, filePath, expectedIdentity);
   const fingerprint = await handle.stat({ bigint: true });
   const { digest, bytes } = await sha256File(handle);
-  await assertMutationFingerprintUnchanged(handle, fingerprint, filePath);
+  const content = { sha256: digest, sizeBytes: bytes };
+  await assertMutationFingerprintUnchanged(handle, fingerprint, filePath, content);
   await assertOpenFileIdentity(handle, filePath, expectedIdentity);
-  return { sha256: digest, sizeBytes: bytes };
-}
-
-function assertExpectedContent(
-  actual: SqliteFileContent,
-  expected: SqliteFileContent,
-  filePath: string,
-): void {
-  if (actual.sizeBytes !== expected.sizeBytes) {
-    throw new Error(
-      `SQLite snapshot size mismatch for ${filePath}: expected ${expected.sizeBytes}, got ${actual.sizeBytes}`,
-    );
-  }
-  if (actual.sha256 !== expected.sha256) {
-    throw new Error(
-      `SQLite snapshot hash mismatch for ${filePath}: expected ${expected.sha256}, got ${actual.sha256}`,
-    );
-  }
+  return content;
 }
 
 function assertSynchronousCallbackResult(result: unknown, label: string): void {
@@ -493,12 +489,12 @@ async function publishSqliteFile(
         const content = hashPublishedFileSync(options.targetPath, expectedIdentity);
         assertExpectedContent(content, expectedContent, options.targetPath);
         assertSynchronousCallbackResult(finalCheck?.(), "SQLite publication final check");
-        assertPublishedFileIdentitySync(options.targetPath, expectedIdentity);
+        assertPublishedFileIdentitySync(options.targetPath, expectedIdentity, expectedContent);
       },
       assertTargetUnchanged: (finalCheck) => {
-        assertPublishedFileIdentitySync(options.targetPath, expectedIdentity);
+        assertPublishedFileIdentitySync(options.targetPath, expectedIdentity, expectedContent);
         assertSynchronousCallbackResult(finalCheck?.(), "SQLite publication final check");
-        assertPublishedFileIdentitySync(options.targetPath, expectedIdentity);
+        assertPublishedFileIdentitySync(options.targetPath, expectedIdentity, expectedContent);
       },
     };
     if (options.afterPublish) {
@@ -653,8 +649,7 @@ async function verifyAndPublishSqliteSnapshot(
       if (!options.preserveRowIds) {
         snapshot.exec("VACUUM;");
       }
-      assertSqliteIntegrity(snapshot, options.targetPath);
-      options.validate?.(snapshot, options.targetPath);
+      // Publication validates this output once, after transfer and before exposing the target.
       const userVersion = readSqliteUserVersion(snapshot);
       snapshot.close();
       await syncFile(stagedPath);

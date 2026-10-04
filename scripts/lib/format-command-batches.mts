@@ -1,5 +1,5 @@
 // Keep formatter arguments bounded even when pnpm joins them into one shell command.
-export const FORMAT_MAX_COMMAND_LINE_BYTES = 24 * 1024;
+const FORMAT_MAX_COMMAND_LINE_BYTES = 24 * 1024;
 
 function commandLineBytes(args: string[]) {
   return args.reduce((total, arg) => total + Buffer.byteLength(arg, "utf8") + 3, 0);

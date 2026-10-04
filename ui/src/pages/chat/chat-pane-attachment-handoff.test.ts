@@ -119,6 +119,7 @@ describe("cross-region Home composer ownership", () => {
     const handoff = new ChatPaneComposerHandoff(context, {
       state: () => current,
       owner: () => view.owner,
+      presentationOwner: () => persistence.presentationOwner,
       region: () => region,
       presented: () => view.presented,
       pause: () => persistence.stop(),
@@ -527,7 +528,10 @@ describe("cross-region Home composer ownership", () => {
     "moves edited draft and file back to the already-retained Home (%s, client rotation=%s)",
     (sessionKey, rotateClient) => {
       const context = {} as ApplicationContext;
-      const owner = { recoveryScope: "profile-a" } as GatewayBrowserClient;
+      const owner = {
+        recoveryScope: "profile-a",
+        offlineRecoveryScope: "profile-a",
+      } as GatewayBrowserClient;
       const page = presentation(context, owner, "page", sessionKey);
       page.edit("Home page draft");
       page.view.presented = false;
@@ -595,7 +599,10 @@ describe("cross-region Home composer ownership", () => {
     }
     const nextOwner =
       difference === "client" || difference === "unverified-rotation"
-        ? ({ recoveryScope: "profile-a" } as GatewayBrowserClient)
+        ? ({
+            recoveryScope: "profile-a",
+            offlineRecoveryScope: "profile-a",
+          } as GatewayBrowserClient)
         : owner;
     if (difference === "unverified-rotation") {
       page.view.owner = nextOwner;

@@ -154,16 +154,3 @@ export function resolveConfiguredAcpBindingSpecFromRecord(
     label: normalizeText(record.metadata?.label),
   };
 }
-
-export function toResolvedConfiguredAcpBinding(
-  record: SessionBindingRecord,
-): ResolvedConfiguredAcpBinding | null {
-  const spec = resolveConfiguredAcpBindingSpecFromRecord(record);
-  if (!spec) {
-    return null;
-  }
-  return {
-    spec,
-    record,
-  };
-}

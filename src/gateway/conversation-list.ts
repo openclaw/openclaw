@@ -11,7 +11,7 @@ import {
 import {
   listConversations,
   registerConversationAddresses,
-  resolveConversationRegistryScope,
+  prepareConversationRegistryScope,
   runConversationDatabaseWrite,
   type ConversationRecord,
   type ConversationRegistryScope,
@@ -239,7 +239,7 @@ export async function runGatewayConversationList(
   },
   deps: ConversationListDeps = defaultDeps,
 ): Promise<ConversationListResult> {
-  const scope = resolveConversationRegistryScope(params);
+  const scope = await prepareConversationRegistryScope(params);
   const query = params.query?.trim() || undefined;
   const discovery = params.channel
     ? await discoverChannelAddresses({
@@ -253,7 +253,7 @@ export async function runGatewayConversationList(
         ...(params.readCurrentConfig ? { readCurrentConfig: params.readCurrentConfig } : {}),
       })
     : undefined;
-  const conversations = deps.listConversations(
+  const conversations = await deps.listConversations(
     scope,
     discovery ? { channel: discovery.channel } : {},
   );

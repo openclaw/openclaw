@@ -47,6 +47,7 @@ export type SqliteWorkerOperationAdmission = SqliteWorkerNativeSettlementOwner &
   readonly failure: unknown;
   readonly failureSource: AdmissionFailureSource | undefined;
   readonly cleanupFailures: readonly unknown[];
+  observeRequests(observer: (request: SqliteWorkerAdmissionRequest) => void): void;
   service(): void;
   finish(): void;
   bindDatabaseAuthority(authority: {
@@ -82,6 +83,7 @@ export function createSqliteWorkerOperationAdmission(
   const decisions = new Set<Int32Array>();
   const cleanupFailures: unknown[] = [];
   let closed = false;
+  let observeRequest: ((request: SqliteWorkerAdmissionRequest) => void) | undefined;
   let failure: { error: unknown; source: AdmissionFailureSource } | undefined;
   let committed: SqliteWorkerNativeSettlementOwner["committed"];
   let settlement: SqliteWorkerNativeSettlement | undefined;
@@ -161,6 +163,14 @@ export function createSqliteWorkerOperationAdmission(
     }
     const decision = new Int32Array(message.decision);
     decisions.add(decision);
+    const request: SqliteWorkerAdmissionRequest = { stage: message.stage, facts: message.facts };
+    try {
+      // A queued fact may describe an earlier COMMIT; observing it never grants more work.
+      inOwnerContext(() => observeRequest?.(request));
+    } catch (error) {
+      refuse(decision, error, "domain");
+      return;
+    }
     if (closed) {
       refuse(
         decision,
@@ -169,7 +179,6 @@ export function createSqliteWorkerOperationAdmission(
       );
       return;
     }
-    const request: SqliteWorkerAdmissionRequest = { stage: message.stage, facts: message.facts };
     const grant = () => {
       if (closed || Atomics.load(decision, 0) !== REQUESTED) {
         return false;
@@ -243,6 +252,15 @@ export function createSqliteWorkerOperationAdmission(
   };
   return {
     port: port2,
+    observeRequests(observer) {
+      if (closed || observeRequest) {
+        throw new SqliteWorkerError(
+          "SQLite request observation is already bound or closed",
+          "closed",
+        );
+      }
+      observeRequest = observer;
+    },
     bindDatabaseAuthority(authority) {
       if (closed || databaseAuthority) {
         throw new SqliteWorkerError(

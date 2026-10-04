@@ -30,7 +30,6 @@ import {
   buildGatewayStopArgsFromHelpText,
   buildGatewayStatusArgsFromHelpText,
   buildInstallerSmokeScript,
-  buildWindowsPathBootstrapScript,
   canConnectToLoopbackPort,
   buildRealUpdateEnv,
   dashboardHtmlMarkerStatus,
@@ -66,7 +65,6 @@ import {
   resolvePackagedUpgradeTimeouts,
   resolveInstalledCliInvocation,
   resolveInstalledPackageRootFromCliPath,
-  resolveNpmPackTarballFileName,
   resolveNpmDebugLogDirs,
   restartManualGatewayForDiscordSmoke,
   resolveManagedGatewayInstallerEnv,
@@ -87,11 +85,9 @@ import {
   verifyPackagedUpgradeUpdateResult,
   verifyWindowsPackagedUpgradeFallbackInstall,
   waitForGatewayWithStartupMigrationRestart,
-  writePackageDistInventoryForCandidate,
   writeSummary,
 } from "../../scripts/lib/cross-os-release-checks/index.ts";
 import * as candidateProcess from "../../scripts/lib/cross-os-release-checks/process.ts";
-import { LOCAL_BUILD_METADATA_DIST_PATHS } from "../../scripts/lib/local-build-metadata-paths.mts";
 import { resolveRuntimeWorkerUrl } from "../../src/infra/runtime-worker-url.js";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 import {
@@ -129,12 +125,6 @@ beforeAll(async () => {
 afterAll(async () => {
   await receipts.close();
 });
-
-const rootPackageManager = (
-  JSON.parse(readFileSync("package.json", "utf8")) as {
-    packageManager: string;
-  }
-).packageManager;
 
 function isProcessAlive(pid: number): boolean {
   try {
@@ -780,26 +770,6 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     ]);
   });
 
-  it("rejects unsafe npm pack tarball filenames before staging release artifacts", () => {
-    expect(resolveNpmPackTarballFileName("openclaw-2026.6.17.tgz")).toBe("openclaw-2026.6.17.tgz");
-
-    const unsafeFilenames = [
-      "../openclaw.tgz",
-      "nested/openclaw.tgz",
-      "nested\\openclaw.tgz",
-      "/tmp/openclaw.tgz",
-      "C:\\temp\\openclaw.tgz",
-      "openclaw\u0000.tgz",
-      "openclaw.tar.gz",
-    ];
-
-    for (const filename of unsafeFilenames) {
-      expect(() => resolveNpmPackTarballFileName(filename)).toThrow(
-        "npm pack did not report a safe .tgz filename.",
-      );
-    }
-  });
-
   it("accepts pnpm pack tarballs reported under the requested destination", () => {
     const packDir = resolvePath("/tmp/openclaw-pack");
 
@@ -838,78 +808,62 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     }
   });
 
-  it.each([true, false])(
-    "prepares source-owned package inventory (helper=%s)",
-    async (hasHelper) => {
-      const sourceDir = tempDirs.make("openclaw-cross-os-prepare-package-");
-      const outputDir = join(sourceDir, "out");
-      const logsDir = join(sourceDir, "logs");
-      const helperPath = join(sourceDir, "scripts", "package-openclaw-for-docker.mjs");
-      const inventoryPath = join(sourceDir, "dist", "postinstall-inventory.json");
-      const candidateTgz = join(outputDir, "package", "openclaw-2026.9.1.tgz");
-      const sourceSha = "a".repeat(40);
-      mkdirSync(dirname(helperPath), { recursive: true });
-      mkdirSync(dirname(inventoryPath), { recursive: true });
-      writeFileSync(
-        join(sourceDir, "CHANGELOG.md"),
-        "# Changelog\n\n## 2026.9.1\n\n- Preserve source-owned inventory during candidate packaging.\n",
-      );
-      writeFileSync(join(sourceDir, "pnpm-workspace.yaml"), "nodeLinker: isolated\n");
-      writeFileSync(
-        join(sourceDir, "package.json"),
-        JSON.stringify({
-          name: "openclaw",
-          version: "2026.9.1",
-          ...(hasHelper ? { bundleDependencies: ["fixture-runtime"] } : {}),
-        }),
-      );
-      if (hasHelper) {
-        writeFileSync(helperPath, "export {};\n");
-      }
-      const commands = vi
-        .spyOn(candidateProcess, "runCommand")
-        .mockImplementation(async (_, args) => {
-          let stdout = "";
-          if (args[0] === "rev-parse") {
-            stdout = sourceSha;
-          } else if (args[0] === helperPath) {
-            writeFileSync(inventoryPath, JSON.stringify(["dist/from-source-helper.js"]));
-            writeFileSync(candidateTgz, "fixture tarball");
-            stdout = `${candidateTgz}\n`;
-          } else if (args[0] === "pack") {
-            if (hasHelper) {
-              throw new Error('bundleDependencies does not work with "nodeLinker: isolated"');
-            }
-            stdout = JSON.stringify(
-              args.includes("--dry-run")
-                ? { files: [{ path: "dist/from-historical-pack.js" }] }
-                : { filename: candidateTgz, version: "2026.9.1" },
-            );
-          }
-          return { exitCode: 0, stdout, stderr: "" };
-        });
-      try {
-        const candidate = await prepareCandidate({ sourceDir, outputDir, logsDir });
+  it("prepares source-owned package inventory for isolated candidates", async () => {
+    const sourceDir = tempDirs.make("openclaw-cross-os-prepare-package-");
+    const outputDir = join(sourceDir, "out");
+    const logsDir = join(sourceDir, "logs");
+    const helperPath = join(sourceDir, "scripts", "package-openclaw-for-docker.mjs");
+    const inventoryPath = join(sourceDir, "dist", "postinstall-inventory.json");
+    const candidateTgz = join(outputDir, "package", "openclaw-2026.9.1.tgz");
+    const sourceSha = "a".repeat(40);
+    mkdirSync(dirname(helperPath), { recursive: true });
+    mkdirSync(dirname(inventoryPath), { recursive: true });
+    writeFileSync(
+      join(sourceDir, "CHANGELOG.md"),
+      "# Changelog\n\n## 2026.9.1\n\n- Preserve source-owned inventory during candidate packaging.\n",
+    );
+    writeFileSync(join(sourceDir, "pnpm-workspace.yaml"), "nodeLinker: isolated\n");
+    writeFileSync(
+      join(sourceDir, "package.json"),
+      JSON.stringify({
+        name: "openclaw",
+        version: "2026.9.1",
+        bundleDependencies: ["fixture-runtime"],
+      }),
+    );
+    writeFileSync(helperPath, "export {};\n");
+    const commands = vi
+      .spyOn(candidateProcess, "runCommand")
+      .mockImplementation(async (_, args) => {
+        let stdout = "";
+        if (args[0] === "rev-parse") {
+          stdout = sourceSha;
+        } else if (args[0] === helperPath) {
+          writeFileSync(inventoryPath, JSON.stringify(["dist/from-source-helper.js"]));
+          writeFileSync(candidateTgz, "fixture tarball");
+          stdout = `${candidateTgz}\n`;
+        } else if (args[0] === "pack") {
+          throw new Error('bundleDependencies does not work with "nodeLinker: isolated"');
+        }
+        return { exitCode: 0, stdout, stderr: "" };
+      });
+    try {
+      const candidate = await prepareCandidate({ sourceDir, outputDir, logsDir });
 
-        expect(candidate).toMatchObject({
-          sourceSha,
-          candidateTgz,
-          candidateVersion: "2026.9.1",
-        });
-        expect(JSON.parse(readFileSync(inventoryPath, "utf8"))).toEqual([
-          hasHelper ? "dist/from-source-helper.js" : "dist/from-historical-pack.js",
-        ]);
-        expect(commands.mock.calls.filter(([, args]) => args[0] === "pack")).toHaveLength(
-          hasHelper ? 0 : 2,
-        );
-        expect(commands.mock.calls.filter(([, args]) => args[0] === helperPath)).toHaveLength(
-          hasHelper ? 1 : 0,
-        );
-      } finally {
-        commands.mockRestore();
-      }
-    },
-  );
+      expect(candidate).toMatchObject({
+        sourceSha,
+        candidateTgz,
+        candidateVersion: "2026.9.1",
+      });
+      expect(JSON.parse(readFileSync(inventoryPath, "utf8"))).toEqual([
+        "dist/from-source-helper.js",
+      ]);
+      expect(commands.mock.calls.filter(([, args]) => args[0] === "pack")).toHaveLength(0);
+      expect(commands.mock.calls.filter(([, args]) => args[0] === helperPath)).toHaveLength(1);
+    } finally {
+      commands.mockRestore();
+    }
+  });
 
   it("keeps packaged-upgrade release updates out of service restart flow", () => {
     const args = buildPackagedUpgradeUpdateArgs("http://127.0.0.1:49152/openclaw-current.tgz");
@@ -1082,10 +1036,7 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     const script = buildWindowsFreshShellVersionCheckScript({
       expectedNeedle: "2026.4.14",
     });
-    expect(script).toContain(buildWindowsPathBootstrapScript());
-    expect(script).not.toContain(
-      buildWindowsPathBootstrapScript({ includeCurrentProcessPath: false }),
-    );
+    expect(script).toContain("foreach ($candidate in @($env:Path, $userPath, $machinePath))");
     expect(script).toContain("Get-Command npm.cmd -ErrorAction SilentlyContinue");
     expect(script).toContain('$env:Path = "$npmPrefix;$env:Path"');
     expect(script).toContain("(Join-Path $npmPrefix 'openclaw.cmd')");
@@ -1094,10 +1045,7 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
 
   it("keeps Windows dev-update toolchain checks compatible with setup-node PATH shims", () => {
     const script = buildWindowsDevUpdateToolchainCheckScript();
-    expect(script).toContain(buildWindowsPathBootstrapScript());
-    expect(script).not.toContain(
-      buildWindowsPathBootstrapScript({ includeCurrentProcessPath: false }),
-    );
+    expect(script).toContain("foreach ($candidate in @($env:Path, $userPath, $machinePath))");
     expect(script).toContain("$pnpmPath = Resolve-CommandPath 'pnpm'");
     expect(script).toContain("$corepackPath = Resolve-CommandPath 'corepack'");
     expect(script).toContain("$npmPath = Resolve-CommandPath 'npm'");
@@ -1803,19 +1751,16 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
 
   it("rejects a successful packaged update followed by an old self-swapped process import miss", () => {
     expect(() =>
-      verifyPackagedUpgradeUpdateResult(
-        {
-          exitCode: 1,
-          stdout: JSON.stringify({
-            status: "ok",
-            after: { version: "2026.4.27" },
-            steps: [{ name: "global update", exitCode: 0 }],
-          }),
-          stderr:
-            "[openclaw] Failed to start CLI: Error [ERR_MODULE_NOT_FOUND]: Cannot find module '/tmp/prefix/lib/node_modules/openclaw/dist/memory-state-old.js'",
-        },
-        { candidateVersion: "2026.4.27" },
-      ),
+      verifyPackagedUpgradeUpdateResult({
+        exitCode: 1,
+        stdout: JSON.stringify({
+          status: "ok",
+          after: { version: "2026.4.27" },
+          steps: [{ name: "global update", exitCode: 0 }],
+        }),
+        stderr:
+          "[openclaw] Failed to start CLI: Error [ERR_MODULE_NOT_FOUND]: Cannot find module '/tmp/prefix/lib/node_modules/openclaw/dist/memory-state-old.js'",
+      }),
     ).toThrow(/Packaged upgrade failed/u);
   });
 
@@ -2016,54 +1961,6 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
 
     expect(packageHasScript(packageRoot, "build")).toBe(true);
     expect(packageHasScript(packageRoot, "ui:build")).toBe(false);
-  });
-
-  it("rejects legacy plugin dependency staging debris before candidate inventory generation", async () => {
-    const packageRoot = tempDirs.make("openclaw-cross-os-stage-debris-");
-    mkdirSync(
-      join(packageRoot, "dist", "Extensions", "demo", ".OpenClaw-Install-Stage", "node_modules"),
-      { recursive: true },
-    );
-    writeFileSync(
-      join(packageRoot, "dist", "Extensions", "demo", ".OpenClaw-Install-Stage", "package.json"),
-      "{}\n",
-      "utf8",
-    );
-
-    await expect(
-      writePackageDistInventoryForCandidate({
-        sourceDir: packageRoot,
-        logPath: join(packageRoot, "npm-pack-dry-run.log"),
-      }),
-    ).rejects.toThrow("unexpected legacy plugin dependency staging debris");
-  });
-
-  it("omits local build metadata from candidate package inventories", async () => {
-    const packageRoot = tempDirs.make("openclaw-cross-os-local-stamps-");
-    mkdirSync(join(packageRoot, "dist"), { recursive: true });
-    writeFileSync(
-      join(packageRoot, "package.json"),
-      JSON.stringify({
-        files: ["dist/"],
-        name: "openclaw-fixture",
-        packageManager: rootPackageManager,
-        version: "0.0.0",
-      }),
-      "utf8",
-    );
-    writeFileSync(join(packageRoot, "dist", "index.js"), "export {};\n", "utf8");
-    for (const relativePath of LOCAL_BUILD_METADATA_DIST_PATHS) {
-      writeFileSync(join(packageRoot, relativePath), "{}\n", "utf8");
-    }
-
-    await writePackageDistInventoryForCandidate({
-      sourceDir: packageRoot,
-      logPath: join(packageRoot, "npm-pack-dry-run.log"),
-    });
-
-    expect(
-      JSON.parse(readFileSync(join(packageRoot, "dist", "postinstall-inventory.json"), "utf8")),
-    ).toEqual(["dist/index.js"]);
   });
 
   it.each([

@@ -17,17 +17,6 @@ import { DEFAULT_DEEPGRAM_AUDIO_BASE_URL, DEFAULT_DEEPGRAM_AUDIO_MODEL } from ".
 
 type DeepgramRealtimeTranscriptionEncoding = "linear16" | "mulaw" | "alaw";
 
-type DeepgramRealtimeTranscriptionProviderConfig = {
-  apiKey?: string;
-  baseUrl?: string;
-  model?: string;
-  language?: string;
-  sampleRate?: number;
-  encoding?: DeepgramRealtimeTranscriptionEncoding;
-  interimResults?: boolean;
-  endpointingMs?: number;
-};
-
 type DeepgramRealtimeTranscriptionSessionConfig = RealtimeTranscriptionSessionCreateRequest & {
   apiKey: string;
   baseUrl: string;
@@ -56,11 +45,7 @@ type DeepgramRealtimeTranscriptionEvent = {
 const DEEPGRAM_REALTIME_DEFAULT_SAMPLE_RATE = 8000;
 const DEEPGRAM_REALTIME_DEFAULT_ENCODING: DeepgramRealtimeTranscriptionEncoding = "mulaw";
 const DEEPGRAM_REALTIME_DEFAULT_ENDPOINTING_MS = 800;
-const DEEPGRAM_REALTIME_CONNECT_TIMEOUT_MS = 10_000;
 const DEEPGRAM_REALTIME_CLOSE_TIMEOUT_MS = 5_000;
-const DEEPGRAM_REALTIME_MAX_RECONNECT_ATTEMPTS = 5;
-const DEEPGRAM_REALTIME_RECONNECT_DELAY_MS = 1000;
-const DEEPGRAM_REALTIME_MAX_QUEUED_BYTES = 2 * 1024 * 1024;
 const DEEPGRAM_REALTIME_MAX_RETAINED_TRANSCRIPT_BYTES = 256 * 1024;
 const DEEPGRAM_REALTIME_FINALIZE_FALLBACK_MS = DEEPGRAM_REALTIME_CLOSE_TIMEOUT_MS - 100;
 
@@ -136,9 +121,7 @@ function toDeepgramRealtimeWsUrl(config: DeepgramRealtimeTranscriptionSessionCon
   return url.toString();
 }
 
-function normalizeProviderConfig(
-  config: RealtimeTranscriptionProviderConfig,
-): DeepgramRealtimeTranscriptionProviderConfig {
+function normalizeProviderConfig(config: RealtimeTranscriptionProviderConfig) {
   const raw = readNestedDeepgramConfig(config);
   return {
     apiKey: normalizeResolvedSecretInputString({
@@ -280,11 +263,7 @@ function createDeepgramRealtimeTranscriptionSession(
     url: () => toDeepgramRealtimeWsUrl(config),
     headers: { Authorization: `Token ${config.apiKey}` },
     readyOnOpen: true,
-    connectTimeoutMs: DEEPGRAM_REALTIME_CONNECT_TIMEOUT_MS,
     closeTimeoutMs: DEEPGRAM_REALTIME_CLOSE_TIMEOUT_MS,
-    maxReconnectAttempts: DEEPGRAM_REALTIME_MAX_RECONNECT_ATTEMPTS,
-    reconnectDelayMs: DEEPGRAM_REALTIME_RECONNECT_DELAY_MS,
-    maxQueuedBytes: DEEPGRAM_REALTIME_MAX_QUEUED_BYTES,
     connectTimeoutMessage: "Deepgram realtime transcription connection timeout",
     connectClosedBeforeReadyMessage:
       "Deepgram realtime transcription connection closed before ready",

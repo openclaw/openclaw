@@ -8,7 +8,7 @@ import type { AddressInfo } from "node:net";
 import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import {
   clearActiveEmbeddedRun,
   setActiveEmbeddedRun,
@@ -21,6 +21,7 @@ import { subscribeSubagentRunChanges } from "../../agents/subagents/registry/sub
 import { registerSubagentRun } from "../../agents/subagents/registry/subagent-registry.js";
 import { writeSubagentSessionEntry } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
 import { getSubagentRunByChildSessionKey } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
+import { isSameSubagentRunOwner } from "../../agents/subagents/registry/subagent-run-generation.js";
 import { enqueueSwarmRun, releaseSwarmRun } from "../../agents/subagents/swarm/swarm-scheduler.js";
 import { formatAbortReplyText, tryFastAbortFromMessage } from "../../auto-reply/reply/abort.js";
 import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
@@ -37,7 +38,7 @@ import {
 import { isPathInside } from "../../infra/path-guards.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import {
-  closeOpenClawAgentDatabaseByPath,
+  closeOpenClawAgentDatabaseByPathAsync,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { listOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.test-support.js";
@@ -61,7 +62,7 @@ async function corruptChildDatabase(storePath: string, sessionKey: string) {
     (item) => item.agentId === "broken" && isPathInside(fixture.stateDir, item.path),
   );
   expect(database).toBeDefined();
-  expect(closeOpenClawAgentDatabaseByPath(database!.path)).toBe(true);
+  expect(await closeOpenClawAgentDatabaseByPathAsync(database!.path, "broken")).toBe(true);
   await writeFile(database!.path, "not a SQLite database");
   expect(() => loadExactSessionEntryReadOnly({ storePath, sessionKey })).toThrow();
 }
@@ -396,9 +397,9 @@ it.each([
   },
 );
 
-it.each(["cascade native new", "RPC reset", "RPC delete"])(
+it.for(["cascade native new", "RPC reset", "RPC delete"])(
   "%s does not append delayed aborted text into a new session incarnation",
-  async (boundary) => {
+  async (boundary, { signal }) => {
     const sessionKey = "agent:main:direct:incarnation";
     const sessionId = "incarnation-parent";
     const childKey = "agent:child:subagent:incarnation";
@@ -449,10 +450,8 @@ it.each(["cascade native new", "RPC reset", "RPC delete"])(
     const child = getSubagentRunByChildSessionKey(childKey)!;
     const childTerminated = createDeferred();
     const stopObservingChild = subscribeSubagentRunChanges("persistence", () => {
-      if (
-        getSubagentRunByChildSessionKey(childKey) === child &&
-        child.endedReason === "subagent-killed"
-      ) {
+      const current = getSubagentRunByChildSessionKey(childKey);
+      if (isSameSubagentRunOwner(current, child) && current?.endedReason === "subagent-killed") {
         childTerminated.resolve();
       }
     });
@@ -508,12 +507,15 @@ it.each(["cascade native new", "RPC reset", "RPC delete"])(
       completed = true;
     });
     try {
-      await Promise.race([
-        Promise.all([entered.promise, childTerminated.promise]),
-        abort.then(() => {
-          throw new Error("abort completed before child gate");
-        }),
-      ]);
+      await withinTest(
+        Promise.race([
+          Promise.all([entered.promise, childTerminated.promise]),
+          abort.then(() => {
+            throw new Error("abort completed before child gate");
+          }),
+        ]),
+        signal,
+      );
       expect(parent.controller.signal.aborted).toBe(true);
       expect(context.chatAbortControllers.has("parent")).toBe(false);
       expect(getSubagentRunByChildSessionKey(childKey)?.endedReason).toBe("subagent-killed");

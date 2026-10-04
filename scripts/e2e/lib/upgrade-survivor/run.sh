@@ -904,43 +904,6 @@ read_installed_version() {
   node -p 'JSON.parse(require("node:fs").readFileSync(process.argv[1] + "/package.json", "utf8")).version' "$(package_root)"
 }
 
-repair_2026_7_33_ai_runtime() {
-  if [ "$baseline_version" != "2026.7.33" ]; then
-    return 0
-  fi
-  local root ai_manifest ai_version installed_version
-  root="$(package_root)"
-  ai_manifest="$root/node_modules/@openclaw/ai/package.json"
-  if [ -f "$ai_manifest" ]; then
-    return 0
-  fi
-  ai_version="$(
-    node -p 'JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")).dependencies?.["@openclaw/ai"] ?? ""' \
-      "$root/package.json"
-  )"
-  if [ "$ai_version" != "2026.7.33" ]; then
-    echo "2026.7.33 baseline declares unexpected @openclaw/ai version: ${ai_version:-<missing>}" >&2
-    return 1
-  fi
-  echo "Repairing published 2026.7.33 baseline's omitted @openclaw/ai runtime."
-  if ! openclaw_prepublish_plugin_registry_run_published \
-    openclaw_e2e_maybe_timeout "${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-600s}" \
-    npm install --prefix "$root" --no-save --omit=dev --ignore-scripts --no-fund --no-audit \
-      "@openclaw/ai@$ai_version" >>"$BASELINE_INSTALL_LOG" 2>&1; then
-    echo "2026.7.33 @openclaw/ai repair failed" >&2
-    openclaw_e2e_print_log "$BASELINE_INSTALL_LOG" >&2
-    return 1
-  fi
-  installed_version="$(
-    node -p 'JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")).version' \
-      "$ai_manifest"
-  )"
-  if [ "$installed_version" != "$ai_version" ]; then
-    echo "2026.7.33 @openclaw/ai repair mismatch: expected $ai_version, got $installed_version" >&2
-    return 1
-  fi
-}
-
 storage_preflight() {
   echo "Storage preflight:"
   df -h "$ARTIFACT_ROOT" "$TMPDIR" /tmp || true
@@ -983,7 +946,6 @@ install_baseline() {
     return 1
   fi
   baseline_version="$installed_version"
-  repair_2026_7_33_ai_runtime || return "$?"
   local version_output
   if ! version_output="$(openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" openclaw --version 2>&1)"; then
     echo "baseline openclaw --version failed" >&2
@@ -2174,7 +2136,8 @@ NODE
 }
 
 prepare_worker_cell_package() {
-  node scripts/e2e/lib/upgrade-survivor/worker-cell-package.mjs candidate "$(package_root)" "$CANDIDATE_SPEC"
+  node scripts/e2e/lib/upgrade-survivor/worker-cell-package.mjs candidate "$(package_root)" "$CANDIDATE_SPEC" \
+    "$ARTIFACT_ROOT/baseline-package-identity.json"
   OPENCLAW_UPGRADE_SURVIVOR_CANDIDATE_COMMIT="$(node -e \
     'process.stdout.write(JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")).buildInfo.commit)' \
     "$ARTIFACT_ROOT/candidate-package-identity.json")"
@@ -2495,7 +2458,8 @@ if [ "$SCENARIO" = "workshop-doctor-recovery" ]; then
   phase capture-workshop-baseline node scripts/e2e/lib/upgrade-survivor/workshop-doctor-recovery.mjs baseline "$(package_root)"
   phase capture-workshop-published-package node scripts/e2e/lib/upgrade-survivor/worker-cell-package.mjs baseline "$(package_root)"
   phase capture-workshop-candidate node scripts/e2e/lib/upgrade-survivor/workshop-doctor-recovery.mjs candidate "$CANDIDATE_SPEC" "$candidate_version"
-  phase capture-workshop-candidate-package node scripts/e2e/lib/upgrade-survivor/worker-cell-package.mjs candidate "$(package_root)" "$CANDIDATE_SPEC"
+  phase capture-workshop-candidate-package node scripts/e2e/lib/upgrade-survivor/worker-cell-package.mjs candidate "$(package_root)" "$CANDIDATE_SPEC" \
+    "$ARTIFACT_ROOT/baseline-package-identity.json"
   phase seed-physical-baseline-index node scripts/e2e/lib/upgrade-survivor/workshop-doctor-recovery.mjs physical-seed baseline
   phase assert-physical-baseline-refusal assert_workshop_published_refusal physical
   phase restore-physical-baseline-fixture node scripts/e2e/lib/upgrade-survivor/workshop-doctor-recovery.mjs physical-restore
@@ -2597,7 +2561,7 @@ run_plugin_fixture_phase seed-source-only-plugin-shadow seed_source_only_plugin_
 if [ "$SCENARIO" = "sqlite-volume" ]; then
   phase seed-baseline-shared-state node scripts/e2e/lib/upgrade-survivor/sqlite-volume-shared-state.mjs \
     seed-baseline-plugin-state "$(package_root)"
-  phase seed-volume-state node scripts/e2e/lib/upgrade-survivor/assertions.mjs seed-volume
+  phase seed-volume-state node scripts/e2e/lib/upgrade-survivor/assertions.mjs seed-volume "$(package_root)"
   phase validate-volume-baseline-config validate_baseline_config
 fi
 phase assert-baseline assert_baseline_state

@@ -226,7 +226,7 @@ openclaw matrix devices prune-stale
   </Accordion>
 
   <Accordion title="Crypto store">
-    Matrix E2EE uses the official `matrix-js-sdk` Rust crypto path with `fake-indexeddb` as the IndexedDB shim. Crypto state persists to `crypto-idb-snapshot.json` (restrictive file permissions).
+    Matrix E2EE uses the official `matrix-js-sdk` Rust crypto path with `fake-indexeddb` as the IndexedDB shim. Crypto state persists in the account's `state/openclaw.sqlite` database with restrictive file permissions. The pre-July `crypto-idb-snapshot.json` import is retired; see [Matrix migration](/channels/matrix-migration#retired-pre-july-state-files) for recovery guidance.
 
     Encrypted runtime state lives under `~/.openclaw/matrix/accounts/<account>/<homeserver>__<user>/<token-hash>/` and includes the sync store, crypto store, recovery key, IDB snapshot, thread bindings, and startup verification state. When the token changes but the account identity stays the same, OpenClaw reuses the best existing root so prior state remains visible.
 

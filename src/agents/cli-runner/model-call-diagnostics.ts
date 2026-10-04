@@ -191,16 +191,10 @@ function assistantMessageHasText(message: unknown): boolean {
   if (typeof message.content === "string") {
     return message.content.length > 0;
   }
-  if (!Array.isArray(message.content)) {
-    return false;
-  }
-  const limit = Math.min(message.content.length, MAX_CAPTURED_OUTPUT_BLOCKS);
-  for (let index = 0; index < limit; index += 1) {
-    if (isTextAssistantContentBlock(message.content[index])) {
-      return true;
-    }
-  }
-  return false;
+  return (
+    Array.isArray(message.content) &&
+    message.content.slice(0, MAX_CAPTURED_OUTPUT_BLOCKS).some(isTextAssistantContentBlock)
+  );
 }
 
 // Claude's assistant envelopes can contain native tool arguments and opaque

@@ -70,7 +70,6 @@ final class GatewayChildSupervisor {
     private let elapsedTime: @Sendable () -> Duration
     private var child: Child?
     private var generation: UInt64 = 0
-    private var fastFailures = 0
     private var monitorTask: Task<Void, Never>?
     private var healthySince: Duration?
     private var stopTask: Task<Void, Never>?
@@ -98,7 +97,6 @@ final class GatewayChildSupervisor {
         guard self.child == nil, self.monitorTask == nil else { throw CancellationError() }
         self.generation &+= 1
         let generation = self.generation
-        self.fastFailures = 0
         let child = try self.launcher(configuration)
         self.child = child
         let pid: Int32
@@ -152,22 +150,23 @@ final class GatewayChildSupervisor {
     {
         var child = firstChild
         var failure = await child.wait()
+        var fastFailures = 0
         while self.generation == generation, !Task.isCancelled {
             self.child = nil
             self.processIdentifier = nil
             if let healthySince, self.elapsedTime() - healthySince >= .seconds(60) {
-                self.fastFailures = 0
+                fastFailures = 0
             }
             self.healthySince = nil
-            self.fastFailures += 1
-            guard self.fastFailures < 5 else {
+            fastFailures += 1
+            guard fastFailures < 5 else {
                 self.monitorTask = nil
                 let tail = Self.logTail(path: configuration.logPath)
                 onEvent(.failed("Gateway stopped after five failed starts (\(failure))." +
                         (tail.isEmpty ? "" : "\n\(tail)")))
                 return
             }
-            let delay = Duration.seconds(min(30, 1 << (self.fastFailures - 1)))
+            let delay = Duration.seconds(1 << (fastFailures - 1))
             onEvent(.restarting(delay: delay))
             do { try await self.clock.sleep(for: delay) } catch { return }
             guard self.generation == generation, !Task.isCancelled else { return }

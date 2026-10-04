@@ -72,11 +72,12 @@ describe("Memory observation lifecycle", () => {
 
   it.each([
     ["false", undefined, 30_000],
-    ["false", "100", 30_000],
-    ["true", "100", 30_000],
+    ["false", "40", 40],
+    ["true", undefined, 30_000],
+    ["true", "40", 40],
     ["true", "60000", 60_000],
   ] as const)(
-    "bounds background polling with polling=%s interval=%s",
+    "honors background polling defaults and overrides with polling=%s interval=%s",
     async (poll, interval, expected) => {
       vi.stubEnv("CHOKIDAR_USEPOLLING", poll);
       vi.stubEnv("CHOKIDAR_INTERVAL", interval);
@@ -84,8 +85,19 @@ describe("Memory observation lifecycle", () => {
       await watcher.start();
       expect(observer.observations.length).toBeGreaterThan(0);
       for (const entry of observer.observations) {
+        expect(entry.options.mode).toBe(poll === "true" ? "poll" : "auto");
         expect(entry.options.pollIntervalMs).toBe(expected);
+        entry.health({ state: "ready", mode: "poll" });
       }
+      expect(watcher.health()).toEqual(
+        observer.observations.map(() =>
+          expect.objectContaining({
+            mode: "poll",
+            pollingFallback: poll !== "true",
+            pollIntervalMs: expected,
+          }),
+        ),
+      );
     },
   );
 

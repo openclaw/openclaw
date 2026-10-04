@@ -1,57 +1,71 @@
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { runNodeScript } from "../../../test/helpers/run-node-script.js";
 import { canonicalizeBase64, estimateBase64DecodedBytes, isValidBase64 } from "./base64.js";
 import { measureBase64Memory } from "./base64.memory.test-support.js";
 
-describe("base64 helpers", () => {
-  it("canonicalizeBase64 handles attachment-sized payloads without heap blow-up", async ({
-    signal,
-  }) => {
-    // Per-character concatenation previously used >500 MiB for this 16 MiB payload.
-    const memory = await measureBase64Memory("canonical", signal);
-    expect(memory.vmDelta).toBeLessThan(100 * 1024 * 1024);
-  });
+it("bounds base64 memory use for contiguous and whitespace-separated payloads", async ({
+  signal,
+}) => {
+  for (const [kind, mib] of [
+    ["canonical", 100],
+    ["shredded", 64],
+  ] as const) {
+    const memory = await measureBase64Memory(kind, signal);
+    expect(memory.vmDelta, kind).toBeLessThan(mib * 1024 * 1024);
+  }
+});
 
-  it("canonicalizeBase64 handles one whitespace per character without heap blow-up", async ({
-    signal,
-  }) => {
-    // Keep the same coarse memory budget when every data character is its own
-    // whitespace-delimited run (2.7 M runs here).
-    const memory = await measureBase64Memory("shredded", signal);
-    expect(memory.vmDelta).toBeLessThan(64 * 1024 * 1024);
-  });
+it.skipIf(!process.versions.bun)(
+  "memory guards exclude predecessor allocations",
+  async ({ signal }) => {
+    const result = await runNodeScript(
+      [fileURLToPath(new URL("./base64.memory-ownership.test-support.mjs", import.meta.url))],
+      process.env,
+      15_000,
+      { signal, maxBuffer: 4096, executable: process.execPath },
+    );
+    expect(result.error, result.stderr).toBeUndefined();
+    expect(result.status, result.stderr).toBe(0);
+  },
+);
 
-  it.skipIf(!process.versions.bun)(
-    "memory guards exclude predecessor allocations",
-    async ({ signal }) => {
-      const result = await runNodeScript(
-        [fileURLToPath(new URL("./base64.memory-ownership.test-support.mjs", import.meta.url))],
-        process.env,
-        15_000,
-        { signal, maxBuffer: 4096, executable: process.execPath },
-      );
-      expect(result.error, result.stderr).toBeUndefined();
-      expect(result.status, result.stderr).toBe(0);
-    },
-  );
-
+it("validates canonical and attachment base64 dialects", () => {
   const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  const cases: [string, string | undefined, boolean][] = [
+    [alphabet, alphabet, true],
+    [" SGV s bG8= \n", "SGVsbG8=", false],
+    ["QQ==", "QQ==", true],
+    ["QUI=", "QUI=", true],
+    ["QUJD", "QUJD", true],
+    ["ZE==", undefined, true], // Attachments permit nonzero pad bits.
+    ["QQ", "QQ==", false],
+    ["QQ==\n", "QQ==", false],
+    ["Q Q=", undefined, false],
+    ["QQ$=", undefined, false],
+    ["QQ-_", undefined, false],
+    ["QQ=Q", undefined, false],
+    ["Q===", undefined, false],
+    ["====", undefined, false],
+    ["QQ==QQ==", undefined, false],
+    ["", undefined, false],
+    ["S", undefined, false],
+    ['SGVsbG8=" onerror="alert(1)', undefined, false],
+    ["data:image/png;base64,QUJD", undefined, false],
+    [" \r\n\t", undefined, false],
+  ];
+  for (const [input, canonical, accepted] of cases) {
+    expect(canonicalizeBase64(input), input).toBe(canonical);
+    expect(isValidBase64(input), input).toBe(accepted);
+  }
+  for (const glyph of [":", "@", "[", "`", "{", "-", "_", "é", "\ud800"]) {
+    expect(canonicalizeBase64(`AA${glyph}A`), glyph).toBeUndefined();
+    expect(isValidBase64(`AA${glyph}A`), glyph).toBe(false);
+  }
+});
 
-  it("base64 helpers accept the full standard alphabet", () => {
-    expect(canonicalizeBase64(alphabet)).toBe(alphabet);
-    expect(isValidBase64(alphabet)).toBe(true);
-  });
-
-  it.each([":", "@", "[", "`", "{", "-", "_", "é", "\ud800"])(
-    "base64 helpers reject non-alphabet glyph %j",
-    (glyph) => {
-      expect(canonicalizeBase64("AA" + glyph + "A")).toBeUndefined();
-      expect(isValidBase64("AA" + glyph + "A")).toBe(false);
-    },
-  );
-
-  it.each([
+it("validates padded and unpadded terminal bits", () => {
+  for (const [glyph, byte, pair] of [
     ["Q", "AQ==", "AAQ="],
     ["E", undefined, "AAE="],
     ["B", undefined, undefined],
@@ -60,48 +74,17 @@ describe("base64 helpers", () => {
     ["0", undefined, "AA0="],
     ["+", undefined, undefined],
     ["/", undefined, undefined],
-  ] as const)("validates padded and unpadded terminal bits for %s", (glyph, byte, pair) => {
+  ] as const) {
     expect(canonicalizeBase64(`A${glyph}==`)).toBe(byte);
     expect(canonicalizeBase64(`A${glyph}`)).toBe(byte);
     expect(canonicalizeBase64(`AA${glyph}=`)).toBe(pair);
     expect(canonicalizeBase64(`AA${glyph}`)).toBe(pair);
-  });
-
-  it.each([
-    [" SGV s bG8= \n", "SGVsbG8="],
-    ["S", undefined],
-    ['SGVsbG8=" onerror="alert(1)', undefined],
-    ["QQ==QQ==", undefined],
-    ["====", undefined],
-    ["data:image/png;base64,QUJD", undefined],
-    [" \r\n\t", undefined],
-  ] as const)("canonicalizes %j", (input, expected) => {
-    expect(canonicalizeBase64(input)).toBe(expected);
-  });
-
-  it.each([
-    ["SGV s bG8= \n", 5],
-    ["", 0],
-  ] as const)("estimates decoded bytes for %j", (input, expected) => {
-    expect(estimateBase64DecodedBytes(input)).toBe(expected);
-  });
+  }
 });
 
-it.each<[string, boolean]>([
-  ["", false],
-  ["QQ==", true],
-  ["QUI=", true],
-  ["QUJD", true],
-  ["ZE==", true], // Attachment validation historically accepts nonzero pad bits.
-  ["QQ", false],
-  ["QQ==\n", false],
-  ["Q Q=", false],
-  ["QQ$=", false],
-  ["QQ-_", false],
-  ["QQ=Q", false],
-  ["Q===", false],
-  ["====", false],
-  ["QQ==QQ==", false],
-])("validates attachment base64 %j without normalization", (value, accepted) => {
-  expect(isValidBase64(value)).toBe(accepted);
+it.each([
+  ["SGV s bG8= \n", 5],
+  ["", 0],
+] as const)("estimates decoded bytes for %j", (input, expected) => {
+  expect(estimateBase64DecodedBytes(input)).toBe(expected);
 });

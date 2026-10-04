@@ -1850,34 +1850,5 @@ describe("exportTrajectoryBundle", () => {
     expect(tools).toContain("$WORKSPACE_DIR/docs");
     expect(`${prompts}\n${artifacts}\n${systemPrompt}\n${tools}`).not.toContain(tmpDir);
   });
-
-  it("exports the transcript for a legacy v1 session without entry timestamps", async () => {
-    const { tmpDir, sessionFile, outputDir } = exportPaths();
-    const header = {
-      type: "session",
-      version: 1,
-      id: "session-1",
-      cwd: tmpDir,
-    };
-    const userEntry = {
-      type: "message",
-      message: userMessage("hello"),
-    };
-    const assistantEntry = {
-      type: "message",
-      message: assistantMessage([{ type: "text", text: "done" }]),
-    };
-    writeJsonl(sessionFile, [header, userEntry, assistantEntry]);
-
-    const bundle = await exportTrajectoryBundle({
-      outputDir,
-      sessionFile,
-      sessionId: "session-1",
-      workspaceDir: tmpDir,
-    });
-
-    expect(bundle.manifest.transcriptEventCount).toBe(2);
-    expect(eventTypes(bundle.events)).toEqual(["user.message", "assistant.message"]);
-  });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

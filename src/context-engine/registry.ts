@@ -12,10 +12,6 @@ import { getActivePluginRegistry, requireActivePluginRegistry } from "../plugins
 import { defaultSlotIdForKey } from "../plugins/slots.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import {
-  inheritRuntimeCompactionDelegate,
-  markRuntimeCompactionDelegate,
-} from "./compaction-watchdog.js";
 import { contextEngineAbortSignal, isContextEngineAbortRejection } from "./context-engine-abort.js";
 import { pluginIdFromContextEngineOwner } from "./registry-adoption.js";
 import {
@@ -58,7 +54,6 @@ type RegisterContextEngineForOwnerOptions = {
 };
 
 type GuardedContextEngineMethodName = Exclude<keyof ContextEngine, "info" | "dispose">;
-type GuardedContextEngineMethod = (...args: never[]) => unknown;
 const GUARDED_CONTEXT_ENGINE_METHODS = new Set<PropertyKey>(
   "bootstrap maintain ingest ingestBatch afterTurn commitTurn assemble compact prepareSubagentSpawn onSubagentEnded".split(
     " ",
@@ -73,21 +68,6 @@ type ResolvedContextEngineMetadata = {
 };
 
 const resolvedEngineMetadata = new WeakMap<ContextEngine, ResolvedContextEngineMetadata>();
-
-function inheritCompactionWatchdogOwnership(
-  property: PropertyKey,
-  source: GuardedContextEngineMethod,
-  wrapped: GuardedContextEngineMethod,
-): GuardedContextEngineMethod {
-  if (property !== "compact") {
-    return wrapped;
-  }
-  // SAFETY: the compact property narrows both functions to the ContextEngine compact contract.
-  const compact = source as ContextEngine["compact"];
-  // SAFETY: guarded compact wrappers preserve the source method's single-parameter contract.
-  const wrappedCompact = wrapped as ContextEngine["compact"];
-  return inheritRuntimeCompactionDelegate(compact, wrappedCompact);
-}
 
 function wrapResolvedContextEngine(
   rawEngine: ContextEngine,
@@ -218,9 +198,8 @@ function wrapResolvedContextEngine(
         }
         const methodName = property as GuardedContextEngineMethodName;
         if (!fallback || !getFallbackEngine) {
-          const invoke = (params: Record<string, unknown>) =>
+          return (params: Record<string, unknown>) =>
             method.call(engine, projectContextEngineHostParams(engine, methodName, params));
-          return inheritCompactionWatchdogOwnership(property, method, invoke);
         }
         const invokeFallback = async (
           methodParams: Record<string, unknown>,
@@ -234,11 +213,9 @@ function wrapResolvedContextEngine(
           });
         };
         if (getContextEngineQuarantine(metadata.engineId)) {
-          return methodName === "compact"
-            ? markRuntimeCompactionDelegate(invokeFallback as ContextEngine["compact"]) // SAFETY: compact keeps this parameter contract.
-            : invokeFallback;
+          return invokeFallback;
         }
-        const invoke = async (methodParams: Record<string, unknown>) => {
+        return async (methodParams: Record<string, unknown>) => {
           const abortSignal = contextEngineAbortSignal(methodParams);
           if (getContextEngineQuarantine(metadata.engineId)) {
             // Runtime failures downgrade future guarded calls for this process.
@@ -274,7 +251,6 @@ function wrapResolvedContextEngine(
             }
           }
         };
-        return inheritCompactionWatchdogOwnership(property, method, invoke);
       },
     },
   );

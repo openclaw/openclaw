@@ -5,6 +5,7 @@ import { property, state } from "lit/decorators.js";
 import { keyed } from "lit/directives/keyed.js";
 import type {
   ControlUiAction,
+  ControlUiSession,
   ControlUiSurface,
   ControlUiSurfaceProps,
   ControlUiView,
@@ -300,6 +301,7 @@ class ControlUiPluginContributions extends OpenClawLightDomContentsElement {
     "navigation";
   @property({ attribute: false }) sessionKey = "";
   @property({ attribute: false }) agentId?: string;
+  @property({ attribute: false }) session?: ControlUiSession;
   @property({ attribute: false }) navigationKey = "";
   @property({ type: Boolean }) presented = true;
   @state() private actionError = "";
@@ -386,36 +388,68 @@ class ControlUiPluginContributions extends OpenClawLightDomContentsElement {
       return nothing;
     }
     if (this.kind === "navigation") {
-      return runtime
-        .registrations("navigation")
-        .filter((entry) => entry.key === this.navigationKey)
-        .map((entry) => {
-          const href = entry.host.navigation.pageHref(entry.value.page);
-          const target = new URL(href, window.location.href);
-          const search = new URLSearchParams(window.location.search);
-          // Extra page filters do not change the destination; explicit target params do.
-          const active =
-            target.pathname === window.location.pathname &&
-            [...target.searchParams].every(([key, value]) => search.get(key) === value);
-          let icon: IconName = "plug";
-          if (entry.value.icon && Object.hasOwn(icons, entry.value.icon)) {
-            // SAFETY: the own-key check narrows this plugin-provided name to the icon registry.
-            icon = entry.value.icon as IconName;
+      const search = new URLSearchParams(window.location.search);
+      const navigation = runtime.registrations("navigation").map((entry) => {
+        const href = entry.host.navigation.pageHref(entry.value.page);
+        const target = new URL(href, window.location.href);
+        // Extra page filters do not change the destination; explicit target params do.
+        const active =
+          target.pathname === window.location.pathname &&
+          [...target.searchParams].every(([key, value]) => search.get(key) === value);
+        return { entry, href, active };
+      });
+      const renderLink = (
+        { entry, href, active }: (typeof navigation)[number],
+        child = false,
+        fallbackIcon = "plug",
+      ) => {
+        let icon: IconName = Object.hasOwn(icons, fallbackIcon)
+          ? (fallbackIcon as IconName) // SAFETY: the own-key check admits only registered icon names.
+          : "plug";
+        if (entry.value.icon && Object.hasOwn(icons, entry.value.icon)) {
+          // SAFETY: the own-key check narrows this plugin-provided name to the icon registry.
+          icon = entry.value.icon as IconName;
+        }
+        return html`<a
+          class="nav-item ${child ? "nav-item--child" : ""} ${active ? "nav-item--active" : ""}"
+          href=${href}
+          aria-current=${active ? "page" : nothing}
+          @click=${(event: MouseEvent) => {
+            if (!shouldHandleNavigationClick(event)) {
+              return;
+            }
+            event.preventDefault();
+            entry.host.navigation.openPage(entry.value.page);
+          }}
+          ><span class="nav-item__icon" aria-hidden="true">${icons[icon]}</span
+          ><span class="nav-item__text">${entry.value.label}</span></a
+        >`;
+      };
+      return navigation
+        .filter(({ entry }) => entry.key === this.navigationKey)
+        .map((parent) => {
+          const children = navigation
+            .filter(
+              ({ entry }) =>
+                entry.pluginId === parent.entry.pluginId &&
+                entry.value.parent === parent.entry.value.id &&
+                entry.key !== parent.entry.key,
+            )
+            .toSorted(
+              (a, b) =>
+                (a.entry.value.order ?? 0) - (b.entry.value.order ?? 0) ||
+                a.entry.value.label.localeCompare(b.entry.value.label),
+            );
+          if (!children.length || !(parent.active || children.some((child) => child.active))) {
+            return renderLink(parent);
           }
-          return html`<a
-            class="nav-item ${active ? "nav-item--active" : ""}"
-            href=${href}
-            aria-current=${active ? "page" : nothing}
-            @click=${(event: MouseEvent) => {
-              if (!shouldHandleNavigationClick(event)) {
-                return;
-              }
-              event.preventDefault();
-              entry.host.navigation.openPage(entry.value.page);
-            }}
-            ><span class="nav-item__icon" aria-hidden="true">${icons[icon]}</span
-            ><span class="nav-item__text">${entry.value.label}</span></a
-          >`;
+          // The zone entry is a flex row; one block group keeps the children under the link.
+          return html`<div class="nav-item-group">
+            ${renderLink(parent)}
+            <ul class="nav-item__children">
+              ${children.map((child) => html`<li>${renderLink(child, true, parent.entry.value.icon)}</li>`)}
+            </ul>
+          </div>`;
         });
     }
     if (this.kind === "session-header") {
@@ -426,7 +460,7 @@ class ControlUiPluginContributions extends OpenClawLightDomContentsElement {
           renderPluginContribution(
             "accessories",
             entry.key,
-            { sessionKey: this.sessionKey, agentId: this.agentId },
+            { sessionKey: this.sessionKey, agentId: this.agentId, session: this.session },
             nothing,
             this.presented,
           ),

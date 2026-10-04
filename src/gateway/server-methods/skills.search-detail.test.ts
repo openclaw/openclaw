@@ -197,7 +197,10 @@ describe("skills.detail handler", () => {
       slug: "github",
     });
 
-    expect(fetchClawHubSkillDetailMock).toHaveBeenCalledWith({ slug: "github" });
+    expect(fetchClawHubSkillDetailMock).toHaveBeenCalledWith({
+      slug: "github",
+      includeInspection: true,
+    });
     expect(ok).toBe(true);
     expect(error).toBeUndefined();
     expect(response).toEqual(detail);

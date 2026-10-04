@@ -5,6 +5,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import "../../test-utils/prepare-compiled-subprocesses.js";
+import { FsSafeError } from "../../infra/fs-safe.js";
 import {
   createSandbox,
   expectOnlyCanonicalPathCommands,
@@ -493,6 +494,9 @@ describe("sandbox fs bridge anchored ops", () => {
       });
 
       await expect(bridge.stat({ filePath: "note.txt" })).resolves.toBeNull();
+      await expect(
+        bridge.stat({ filePath: "note.txt", expectedPolicyPath: "/workspace/note.txt" }),
+      ).resolves.toBeNull();
 
       const statCall = requireDockerCall(
         findCallByScriptFragment('stat -c "%F|%s|%y" -- "$2"'),
@@ -530,6 +534,18 @@ describe("sandbox fs bridge anchored ops", () => {
       });
 
       await expect(bridge.stat({ filePath: "note.txt" })).rejects.toThrow("Permission denied");
+
+      const failure = new FsSafeError("path-mismatch", "descriptor identity changed", {
+        cause: Object.assign(new Error("missing during final admission"), { code: "ENOENT" }),
+      });
+      mockedOpenRootFile.mockResolvedValueOnce({
+        ok: false,
+        reason: "validation",
+        error: failure,
+      });
+      await expect(
+        bridge.stat({ filePath: "note.txt", expectedPolicyPath: "/workspace/note.txt" }),
+      ).rejects.toBe(failure);
     });
   });
 

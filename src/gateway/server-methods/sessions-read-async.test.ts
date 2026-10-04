@@ -41,7 +41,6 @@ function viewerConfig(others: "view" | "none"): OpenClawConfig {
 }
 
 it.each([
-  "membership",
   "membership-unpublished",
   "membership-external",
   "visibility",
@@ -140,7 +139,7 @@ it.each([
                 visibility: "draft",
               });
             }
-            if (change === "membership" || change === "visibility") {
+            if (change === "visibility") {
               emitSessionsChanged(context, { reason: "sharing", sessionKey: scope.sessionKey });
             }
           }

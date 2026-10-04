@@ -1,7 +1,5 @@
 /** Maps cron jobs to the canonical session-store keys they are bound to. */
-import { tryGetLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizeAgentId } from "../routing/session-key.js";
 import { tryResolveCronJobEffectiveAgentId } from "./agent-id.js";
 import { resolveCronAgentSessionKey } from "./isolated-agent/session-key.js";
 import type { CronServiceContract } from "./service-contract.js";
@@ -21,10 +19,7 @@ export function resolveCronJobBoundSessionKeys(
   opts: { cfg: OpenClawConfig; defaultAgentId?: string },
 ): Set<string> {
   const keys = new Set<string>();
-  const legacyDefaultAgentId = tryGetLegacyDefaultAgentId(opts.cfg);
-  const agentId = legacyDefaultAgentId
-    ? tryResolveCronJobEffectiveAgentId(job, opts.defaultAgentId, legacyDefaultAgentId)
-    : normalizeAgentId(job.agentId ?? opts.defaultAgentId);
+  const agentId = tryResolveCronJobEffectiveAgentId(job, opts.defaultAgentId);
   if (!agentId) {
     return keys;
   }

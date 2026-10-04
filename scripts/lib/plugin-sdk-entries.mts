@@ -57,6 +57,7 @@ const nonProductionPluginSdkSubpathSet = new Set([
   "channel-ingress-test-runtime",
   "channel-target-testing",
   "channel-test-helpers",
+  "compiled-subprocess-testing",
   "plugin-test-api",
   "plugin-test-contracts",
   "plugin-state-test-runtime",
@@ -107,7 +108,7 @@ export const deprecatedBarrelPluginSdkEntrypoints = pluginSdkSubpaths.filter((en
 );
 
 /** Supported SDK facades backed by bundled plugins until generic contracts replace them. */
-export const supportedBundledFacadeSdkEntrypoints = ["discord", "telegram-account"] as const;
+export const supportedBundledFacadeSdkEntrypoints = [] as const;
 
 /** Plugin-owned surfaces intentionally public and documented for third-party plugins. */
 export const publicPluginOwnedSdkEntrypoints = ["memory-core-host-engine-foundation"] as const;

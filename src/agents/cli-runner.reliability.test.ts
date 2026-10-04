@@ -4,7 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import {
@@ -40,14 +40,12 @@ import { createUserTurnTranscriptRecorder } from "../sessions/user-turn-transcri
 import { createTestUserTurnTranscriptTarget } from "../sessions/user-turn-transcript.test-support.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
+import * as sleepModule from "../utils/sleep.js";
 import { prepareSystemAgentRunAdmission } from "./admitted-run-context.js";
 import { createTestAdmittedRunContext } from "./admitted-run-context.test-support.js";
 import { testing as cliBackendsTesting } from "./cli-backends.test-support.js";
-import {
-  restoreCliRunnerTestDeps,
-  runPreparedCliAgent as runPreparedCliAgentCore,
-  setCliRunnerTestDeps,
-} from "./cli-runner.js";
+import { createLifecycleHooks, setHookRunnerForTest } from "./cli-runner.hooks.test-support.js";
+import { runPreparedCliAgent as runPreparedCliAgentCore } from "./cli-runner.js";
 import { registerCliReplyCompletionTests } from "./cli-runner.reply-completion.cases.js";
 import {
   createManagedRun,
@@ -60,6 +58,7 @@ import { wrapPreparedCliRunWithTestAdmission } from "./cli-runner/execute.test-s
 import { prepareCliRunContext } from "./cli-runner/prepare.js";
 import { hashCliReseedPrompt } from "./cli-runner/reseed-envelope.js";
 import { captureCliRunStartTime, type PreparedCliRunContext } from "./cli-runner/types.js";
+import * as cliTranscript from "./command/attempt-execution.helpers.js";
 import { isIntermediateAssistantTranscriptMessage } from "./embedded-agent-runner/message-visibility.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "./harness/hook-helpers.js";
 import { MAX_AGENT_HOOK_HISTORY_MESSAGES } from "./harness/hook-history.js";
@@ -96,41 +95,8 @@ vi.mock("../tts/tts-settings.js", () => ({
   setTtsMachinePrefsPathResolver: vi.fn(),
 }));
 
-const mockGetGlobalHookRunner = vi.mocked(getGlobalHookRunner);
-const hookRunnerGlobalStateKey = Symbol.for("openclaw.plugins.hook-runner-global-state");
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-cli-hooks-");
 let sessionFileEnvSnapshot: ReturnType<typeof captureEnv> | undefined;
-
-type HookRunnerGlobalStateForTest = {
-  hookRunner: unknown;
-  registry: unknown;
-};
-
-function setHookRunnerForTest(hookRunner: unknown): void {
-  // Keep the module-level hook runner singleton aligned with the mocked getter.
-  mockGetGlobalHookRunner.mockReturnValue(hookRunner as never);
-  const globalStore = globalThis as Record<PropertyKey, unknown>;
-  const state = (globalStore[hookRunnerGlobalStateKey] as
-    | HookRunnerGlobalStateForTest
-    | undefined) ?? {
-    hookRunner: null,
-    registry: null,
-  };
-  state.hookRunner = hookRunner;
-  state.registry = null;
-  globalStore[hookRunnerGlobalStateKey] = state;
-}
-
-function createLifecycleHooks(hooks: string[], onAgentEnd: () => Promise<void> = async () => {}) {
-  const hookRunner = {
-    hasHooks: vi.fn((hookName: string) => hooks.includes(hookName)),
-    runLlmInput: vi.fn(async () => undefined),
-    runLlmOutput: vi.fn(async () => undefined),
-    runAgentEnd: vi.fn(onAgentEnd),
-  };
-  setHookRunnerForTest(hookRunner);
-  return hookRunner;
-}
 
 function createSessionFixture(params?: {
   history?: Array<{ role: "user"; content: string }>;
@@ -525,15 +491,14 @@ describe("runCliAgent reliability", () => {
     supervisorSpawnMock.mockReset();
     // Binding-flush retry timing has dedicated coverage. Reliability cases only
     // need its stable not-yet-flushed outcome, without filesystem polling/sleeps.
-    setCliRunnerTestDeps({
-      claudeCliSessionTranscriptHasContent: async () => false,
-      delay: async () => {},
-    });
+    vi.spyOn(cliTranscript, "claudeCliSessionTranscriptHasContent").mockResolvedValue(false);
+    vi.spyOn(sleepModule, "sleep").mockResolvedValue(undefined);
   });
 
   afterEach(() => {
-    restoreCliRunnerTestDeps();
-    mockGetGlobalHookRunner.mockReset();
+    vi.mocked(cliTranscript.claudeCliSessionTranscriptHasContent).mockRestore();
+    vi.mocked(sleepModule.sleep).mockRestore();
+    vi.mocked(getGlobalHookRunner).mockReset();
     setHookRunnerForTest(null);
     vi.unstubAllEnvs();
     sessionFileEnvSnapshot?.restore();
@@ -1469,9 +1434,7 @@ describe("runCliAgent reliability", () => {
       "</next_user_message>",
     ].join("\n");
 
-    setCliRunnerTestDeps({
-      claudeCliSessionTranscriptHasContent: async () => true,
-    });
+    vi.mocked(cliTranscript.claudeCliSessionTranscriptHasContent).mockResolvedValue(true);
     const context = makeClaudePreparedContext({
       model: "claude-opus-4-6",
       openClawHistoryPrompt: historyPrompt,
@@ -1505,9 +1468,7 @@ describe("runCliAgent reliability", () => {
     supervisorSpawnMock.mockResolvedValueOnce(makeManagedRun({ stdout: "hello from claude" }));
     const { dir, sessionTarget } = createSessionFixture();
 
-    setCliRunnerTestDeps({
-      claudeCliSessionTranscriptHasContent: async () => true,
-    });
+    vi.mocked(cliTranscript.claudeCliSessionTranscriptHasContent).mockResolvedValue(true);
     const context = makeClaudePreparedContext({
       model: "claude-opus-4-6",
       openClawHistoryPrompt: CLI_RESEED_PROMPT,
@@ -1541,9 +1502,7 @@ describe("runCliAgent reliability", () => {
     });
     recorder.markBlocked();
 
-    setCliRunnerTestDeps({
-      claudeCliSessionTranscriptHasContent: async () => true,
-    });
+    vi.mocked(cliTranscript.claudeCliSessionTranscriptHasContent).mockResolvedValue(true);
     const context = makeClaudePreparedContext({
       model: "claude-opus-4-6",
       openClawHistoryPrompt: CLI_RESEED_PROMPT,
@@ -1578,9 +1537,7 @@ describe("runCliAgent reliability", () => {
 
     const persisted = await recorder.persistApproved();
     expect(persisted?.messageId).toEqual(expect.any(String));
-    setCliRunnerTestDeps({
-      claudeCliSessionTranscriptHasContent: async () => true,
-    });
+    vi.mocked(cliTranscript.claudeCliSessionTranscriptHasContent).mockResolvedValue(true);
     const context = makeClaudePreparedContext({
       model: "claude-opus-4-6",
       openClawHistoryPrompt: CLI_RESEED_PROMPT,
@@ -1623,12 +1580,8 @@ describe("runCliAgent reliability", () => {
       reseedReceipt,
     };
 
-    setCliRunnerTestDeps({
-      claudeCliSessionTranscriptHasContent: async () => true,
-    });
-    const result = await runPreparedCliAgent(context).finally(() => {
-      restoreCliRunnerTestDeps();
-    });
+    vi.mocked(cliTranscript.claudeCliSessionTranscriptHasContent).mockResolvedValue(true);
+    const result = await runPreparedCliAgent(context);
 
     expect(result.meta.agentMeta?.cliSessionBinding?.reseedReceipt).toEqual(reseedReceipt);
   });
@@ -1766,6 +1719,7 @@ describe("runCliAgent reliability", () => {
   });
 
   it("blocks CLI runs before llm_input and model execution when before_agent_run blocks", async () => {
+    const agentEndStarted = createDeferred();
     let releaseAgentEnd: () => void = () => undefined;
     const agentEndSettled = new Promise<void>((resolve) => {
       releaseAgentEnd = resolve;
@@ -1783,7 +1737,10 @@ describe("runCliAgent reliability", () => {
         },
       })),
       runLlmInput: vi.fn(async () => undefined),
-      runAgentEnd: vi.fn(() => agentEndSettled),
+      runAgentEnd: vi.fn(() => {
+        agentEndStarted.resolve();
+        return agentEndSettled;
+      }),
     };
     setHookRunnerForTest(hookRunner);
     const { dir, sessionTarget, storePath } = createSessionFixture({
@@ -1807,9 +1764,12 @@ describe("runCliAgent reliability", () => {
       return result;
     });
 
-    await vi.waitFor(() => {
-      expect(hookRunner.runAgentEnd).toHaveBeenCalledTimes(1);
-    });
+    await awaitGateBeforeSettlement(
+      agentEndStarted.promise,
+      run,
+      "Blocked CLI run settled before agent_end",
+    );
+    expect(hookRunner.runAgentEnd).toHaveBeenCalledTimes(1);
     await Promise.resolve();
     expect(resolved).toBe(false);
 

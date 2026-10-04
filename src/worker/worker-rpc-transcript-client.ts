@@ -131,7 +131,7 @@ export class WorkerTranscriptCommitClient {
     while (true) {
       await this.connection.waitForReady();
       try {
-        const response = await this.connection.requestTranscriptCommit(request);
+        const response = await this.connection.rpc.request("transcript", request);
         if (response.ok) {
           this.baseLeafIdValue = response.payload.newLeafId;
           this.nextSeqValue = request.seq + 1;

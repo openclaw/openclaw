@@ -262,7 +262,12 @@ async function resolveRuntimeInfo(
       json: probe.json,
       ...(probe.error ? { error: probe.error } : {}),
     };
-    const capabilityError = runtime === "node" ? nodeRuntimeFailure(version, sqliteProbe) : null;
+    const capabilityError =
+      runtime === "node"
+        ? typeof parsed.bunVersion === "string"
+          ? "The executable is Bun, not Node."
+          : nodeRuntimeFailure(version, sqliteProbe)
+        : null;
     const note = runtime === "node" ? nodeRuntimeNote(version, sqliteProbe) : null;
     const supportedVersion = runtime === "node" ? !capabilityError : isSupportedBunVersion(version);
     return {
@@ -326,10 +331,7 @@ export async function resolveRecordedDaemonRuntime(
   if (!runtime) {
     return undefined;
   }
-  const info =
-    runtime === "bun"
-      ? await resolveBunRuntimeInfo(runtimePath, undefined, env)
-      : await resolveNodeRuntimeInfo(runtimePath, env);
+  const info = await resolveRuntimeInfo(runtimePath, runtime, execFileAsync, env);
   return { ...info, runtime, path: runtimePath };
 }
 

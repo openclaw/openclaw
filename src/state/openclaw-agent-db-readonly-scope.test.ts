@@ -2,6 +2,8 @@ import fs from "node:fs";
 import nodePath from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
+import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { applyAgentDatabaseReaderRequest } from "../infra/agent-database-readers.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
@@ -12,10 +14,7 @@ import {
   closeOpenClawAgentDatabaseByPath,
   closeOpenClawAgentDatabaseByPathAsync,
 } from "./openclaw-agent-db-lifecycle.js";
-import {
-  closeOpenClawAgentDatabaseReadOnlyCandidates,
-  OpenClawAgentDatabaseReadOnlyScope,
-} from "./openclaw-agent-db-readonly-scope.js";
+import { OpenClawAgentDatabaseReadOnlyScope } from "./openclaw-agent-db-readonly-scope.js";
 import {
   retainOpenClawAgentDatabaseReadOnly,
   withOpenClawAgentDatabaseReadOnly,
@@ -41,6 +40,7 @@ it("bounds query preparation while scoped reads observe new commits", async () =
             .select("updated_at")
             .where("meta_key", "=", "primary");
           const prepare = vi.spyOn(db, "prepare");
+          const observation = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
           try {
             for (let stamp = 1; stamp <= 20; stamp++) {
               writer
@@ -55,7 +55,16 @@ it("bounds query preparation while scoped reads observe new commits", async () =
             }
             const preparations = prepare.mock.calls.filter(([sql]) => sql === query.compile().sql);
             expect(preparations.length).toBeLessThanOrEqual(2);
+            expect(
+              observation.queries.filter((sql) => /^PRAGMA data_version$/iu.test(sql)),
+            ).toHaveLength(20);
+            expect(
+              observation.queries.filter((sql) =>
+                /^SELECT role, schema_version, agent_id/iu.test(sql),
+              ),
+            ).toHaveLength(20);
           } finally {
+            observation.restore();
             prepare.mockRestore();
           }
         }, options);
@@ -382,8 +391,10 @@ it("closes generic and explicit candidate-family readers without releasing unrel
     const explicit = scope.run(options(sibling), () => read(sibling));
     const retained = read(unrelated);
     const candidates = [{ path: family, scope: "sibling-family" as const }];
+    const closeReaders = () =>
+      applyAgentDatabaseReaderRequest({ kind: "close", candidates, deleted: false });
     try {
-      closeOpenClawAgentDatabaseReadOnlyCandidates(candidates);
+      await closeReaders();
       expect(selected.isOpen).toBe(false);
       expect(explicit.isOpen).toBe(false);
       expect(retained.isOpen).toBe(true);
@@ -391,16 +402,21 @@ it("closes generic and explicit candidate-family readers without releasing unrel
 
       const reopened = scope.run(options(sibling), () => read(sibling));
       const failure = new Error("native reader close failed");
-      const close = vi.spyOn(reopened, "close").mockImplementationOnce(() => {
+      const close = vi.spyOn(reopened, "close").mockImplementation(() => {
         throw failure;
       });
+      const causes = (error: unknown): unknown[] =>
+        error instanceof AggregateError ? error.errors.flatMap(causes) : [error];
       try {
-        expect(() => closeOpenClawAgentDatabaseReadOnlyCandidates(candidates)).toThrow(failure);
+        await expect(closeReaders()).rejects.toSatisfy(
+          (error: unknown) => error instanceof AggregateError && causes(error).includes(failure),
+        );
         expect(reopened.isOpen).toBe(true);
         expect(() => scope.run(options(sibling), () => read(sibling))).toThrow(
           "native cleanup is pending",
         );
-        closeOpenClawAgentDatabaseReadOnlyCandidates(candidates);
+        close.mockRestore();
+        await closeReaders();
         expect(reopened.isOpen).toBe(false);
         expect(retained.isOpen).toBe(true);
       } finally {

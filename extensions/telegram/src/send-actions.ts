@@ -4,6 +4,7 @@ import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { buildTypingThreadParams } from "./bot/helpers.js";
 import { isRecoverableTelegramNetworkError } from "./network-errors.js";
+import { resolveTelegramSendThreadSpec } from "./reply-parameters.js";
 import {
   createTelegramRequestWithDiag,
   isTelegramMessageDeleteNoopError,
@@ -53,6 +54,16 @@ export async function sendTypingTelegram(
   if (target.directMessagesTopicId != null) {
     throw new Error("Telegram typing is not supported in channel Direct Messages chats.");
   }
+  // Validate both sources; the target topic still wins when both are present.
+  const targetThread = resolveTelegramSendThreadSpec({
+    messageThreadId: target.messageThreadId,
+    chatType: target.chatType,
+  });
+  const optionThread = resolveTelegramSendThreadSpec({
+    messageThreadId: opts.messageThreadId,
+    chatType: target.chatType,
+  });
+  const threadSpec = targetThread ?? optionThread;
   // grammY's Node API uses the abort-controller signal, not Node's native type.
   // Bridge the event so queues recognize owner cancellation instead of cooling down the account.
   const apiAbort = opts.signal ? new TelegramAbortController() : undefined;
@@ -78,7 +89,7 @@ export async function sendTypingTelegram(
         verbose: opts.verbose,
         shouldRetry: (err) => isRecoverableTelegramNetworkError(err, { context: "action" }),
       });
-      const threadParams = buildTypingThreadParams(target.messageThreadId ?? opts.messageThreadId);
+      const threadParams = buildTypingThreadParams(threadSpec?.id);
       const signalArgs: [Parameters<TelegramApi["sendChatAction"]>[3]?] = apiAbort
         ? [apiAbort.signal]
         : [];

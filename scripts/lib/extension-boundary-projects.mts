@@ -15,7 +15,7 @@ import {
 } from "./extension-boundary-inputs.mts";
 import { createDeclarationInputBoundary } from "./local-check-runtime.mts";
 import { readNativeTypeScriptConfig } from "./native-typescript-config.mts";
-import { createNativeTypeScriptProject } from "./native-typescript.mts";
+import { createNativeTypeScriptProjectAsync } from "./native-typescript.mts";
 import { isRecord } from "./record-shared.mjs";
 
 function exportTargets(value: unknown): string[] {
@@ -123,7 +123,7 @@ export function prepareExtensionBoundaryProjects(rootDir: string, extensionIds: 
 }
 
 /** Discover generated inputs; preparedSdk requires a verified current SDK emit or receipt. */
-export function resolveExtensionBoundaryPreparation(
+export async function resolveExtensionBoundaryPreparation(
   rootDir: string,
   extensionIds: string[],
   { preparedSdk = false }: { preparedSdk?: boolean } = {},
@@ -200,7 +200,7 @@ export function resolveExtensionBoundaryPreparation(
       continue;
     }
     visited.add(config);
-    using project = createNativeTypeScriptProject({
+    await using project = await createNativeTypeScriptProjectAsync({
       cwd: boundary.root,
       configFileName: config,
       fs: {
@@ -267,7 +267,7 @@ export function resolveExtensionBoundaryPreparation(
         },
       },
     });
-    for (const file of project.project.program.getSourceFileNames()) {
+    for (const file of await project.project.program.getSourceFileNames()) {
       if (!owned(file) || currentSdkDeclaration(file)) {
         continue;
       }

@@ -10,7 +10,10 @@ import { describe, expect, it, vi } from "vitest";
 import { upsertSessionEntryCore } from "../../../../src/config/sessions/session-accessor.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../../../src/state/openclaw-agent-db-lifecycle.js";
 import { registerOpenClawAgentDatabase } from "../../../../src/state/openclaw-agent-db-registry.js";
-import { getOpenClawAgentDatabaseIfOpen } from "../../../../src/state/openclaw-agent-db.js";
+import {
+  getOpenClawAgentDatabaseIfOpen,
+  openOpenClawAgentDatabase,
+} from "../../../../src/state/openclaw-agent-db.js";
 import { tableExists } from "../../../../src/state/openclaw-state-db-schema-helpers.js";
 import { withOpenClawTestState } from "../../../../src/test-utils/openclaw-test-state.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
@@ -60,7 +63,7 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
           },
           { sessionId: "cron-thread", updatedAt: 1 },
         );
-        const { db } = getOpenClawAgentDatabaseIfOpen({ agentId: "main", env: state.env })!;
+        const { db } = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
         if (!archiveTablePresent) {
           db.exec("DROP TABLE session_transcript_archives");
         }
@@ -119,7 +122,7 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
           /^\s*select\b[\s\S]*\bfrom\s+["`]?session_nodes\b/i.test(sql) &&
           /\bentry_json\b|\*/i.test(sql.split(/\bfrom\b/i)[0]!);
         try {
-          const { db } = getOpenClawAgentDatabaseIfOpen({ agentId: "main", env: state.env })!;
+          const { db } = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
           expect(
             db.prepare('select "session_key", "entry_json" from "session_nodes" where 0').all(),
           ).toEqual([]);
@@ -146,9 +149,7 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
               updatedAtMs: persisted?.updatedAt,
             },
           ]);
-          if (readOnly && !includeRetainedSqlite) {
-            expect(observed.queries.filter(isSummaryRead)).toEqual([]);
-          }
+          expect(observed.queries).toEqual([]);
           const decodedEntries = parse.mock.calls.filter(([json]) =>
             json.includes('"sessionId":"corpus-metadata"'),
           );
@@ -175,7 +176,7 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
         { sessionKey, storePath },
         { sessionId, updatedAt: 10 },
       );
-      const { db } = getOpenClawAgentDatabaseIfOpen({ agentId: "main", env: state.env })!;
+      const { db } = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
       const options = { readOnly: true, includeContentRevision: false };
       const expected = {
         agentId: "main",

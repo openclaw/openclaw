@@ -63,7 +63,6 @@ function draw(
     })),
   };
   const onOpenReply = vi.fn();
-  const onResolveReply = vi.fn();
   const resolveReplyPreview = createReplyPreviewResolver(
     new Map(
       Object.entries({
@@ -93,7 +92,6 @@ function draw(
     showToolCalls: false,
     avatarPlacement: "none" as const,
     onOpenReply,
-    onResolveReply,
     resolveReplyPreview,
   };
   render(
@@ -123,7 +121,6 @@ function draw(
   );
   return {
     onOpenReply,
-    onResolveReply,
     row: container.querySelector<HTMLElement>(".chat-reply-attribution--reply")!,
   };
 }
@@ -258,7 +255,7 @@ it.each([
 ])(
   "renders no strip in a 1:1 turn without its prompt for an unresolved or missing reference %o",
   ({ snapshot, missing }) => {
-    const { onResolveReply } = draw(
+    draw(
       prompt,
       [
         {
@@ -273,7 +270,6 @@ it.each([
     );
     expect(container.querySelector(".chat-reply-attribution")).toBeNull();
     expect(container.textContent).not.toContain("Original message unavailable");
-    expect(onResolveReply).toHaveBeenCalledTimes(missing.length ? 0 : 1);
   },
 );
 
@@ -342,8 +338,7 @@ it.each([
     expect(first.row.querySelector(".chat-reply-attribution__name")?.textContent).toBe("Jordan");
     expect(first.row.querySelector(".chat-author-avatar")).not.toBeNull();
     expect(first.row.querySelector(".chat-reply-attribution__unavailable")).toBeNull();
-    // The lookup still runs so a missing original can be confirmed.
-    expect(first.onResolveReply).toHaveBeenCalledWith("older");
+    // A later authoritative page can confirm that the original is missing.
     render(null, firstContainer);
     firstContainer.remove();
 
@@ -421,7 +416,7 @@ it.each([
 ])(
   "keeps an available snapshot within a reply $presentation",
   ({ presentation, snapshotIndex }) => {
-    const { row, onOpenReply, onResolveReply } = draw(
+    const { row, onOpenReply } = draw(
       prompt,
       [0, 1].map((index) => ({
         role: "assistant",
@@ -440,7 +435,6 @@ it.each([
     expect(row.querySelector(".chat-reply-attribution__name")?.textContent).toBe("Jordan");
     expect(container.querySelector(".chat-reply-attribution--inline")).toBeNull();
     // A named snapshot with text resolves the reference before its source loads.
-    expect(onResolveReply).not.toHaveBeenCalled();
     // The original is known but outside the loaded history: the name still navigates.
     row.querySelector<HTMLButtonElement>("button.chat-reply-attribution__target")!.click();
     expect(onOpenReply).toHaveBeenCalledWith("deleted");
@@ -483,7 +477,7 @@ it.each(["loaded", "fetched"] as const)(
         senderIdentity: { type: "profile", id: "mira" },
       },
     };
-    const { row, onOpenReply, onResolveReply } = draw(
+    const { row, onOpenReply } = draw(
       prompt,
       [{ role: "assistant", content: "Nice photo", __openclaw: { replyToId: "photo" } }],
       true,
@@ -500,7 +494,6 @@ it.each(["loaded", "fetched"] as const)(
     const target = row.querySelector<HTMLButtonElement>("button.chat-reply-attribution__target")!;
     expect(target.getAttribute("aria-label")).toBe("Replying to Mira");
     expect(target.querySelector(".chat-author-avatar")).not.toBeNull();
-    expect(onResolveReply).not.toHaveBeenCalled();
     target.click();
     expect(onOpenReply).toHaveBeenCalledWith("photo");
   },
@@ -518,7 +511,7 @@ it.each([
       content: "Deploy?",
       __openclaw: { id: "p1", senderName: "Alice", idempotencyKey: `${promptRun}:user` },
     };
-    const { row, onResolveReply } = draw(
+    const { row } = draw(
       prompt,
       [
         {
@@ -542,7 +535,6 @@ it.each([
     // Its own turn's prompt is hidden, so the row is not reserved while the lookup runs.
     expect(row?.querySelector(".chat-reply-attribution__name")?.textContent).toBe(name);
     expect(container.querySelector(".chat-reply-attribution--pending")).toBeNull();
-    expect(onResolveReply).toHaveBeenCalledTimes(promptRun ? 0 : 1);
   },
 );
 

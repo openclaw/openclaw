@@ -13,6 +13,7 @@ import type {
   FsSafeCopyReply,
   FsSafeCopyWrite,
 } from "./fs-safe-copy-worker-contract.js";
+import { normalizeFsSafeNativeEnv } from "./fs-safe-env.js";
 
 function failure(error: unknown): FsSafeCopyReply {
   return {
@@ -23,6 +24,8 @@ function failure(error: unknown): FsSafeCopyReply {
       : {}),
   };
 }
+
+normalizeFsSafeNativeEnv();
 
 if (parentPort) {
   // This isolate uses the library's default and explicit operator environment.

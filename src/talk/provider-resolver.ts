@@ -68,19 +68,13 @@ export function resolveRealtimeVoiceProviderCapabilities(params: {
   clientControl?: RealtimeVoiceBrowserSessionCreateRequest["clientControl"];
   surface?: "browser-session" | "gateway-relay" | "bridge";
 }): InternalRealtimeVoiceProviderCapabilities | undefined {
-  if (params.surface === "browser-session") {
-    const internalCapabilities = resolveInternalRealtimeVoiceBrowserSessionCapabilities(params);
-    if (internalCapabilities) {
-      return internalCapabilities;
-    }
-  }
-  if (params.surface === "gateway-relay") {
-    const internalCapabilities = resolveInternalRealtimeVoiceGatewayRelayCapabilities(params);
-    if (internalCapabilities) {
-      return internalCapabilities;
-    }
-  }
-  return params.provider.capabilities;
+  const resolveInternal =
+    params.surface === "browser-session"
+      ? resolveInternalRealtimeVoiceBrowserSessionCapabilities
+      : params.surface === "gateway-relay"
+        ? resolveInternalRealtimeVoiceGatewayRelayCapabilities
+        : undefined;
+  return resolveInternal?.(params) || params.provider.capabilities;
 }
 
 export function isRealtimeVoiceProviderConfigured(params: {
@@ -110,7 +104,7 @@ export function isRealtimeVoiceProviderConfigured(params: {
 export function resolveConfiguredRealtimeVoiceProvider(
   params: ResolveConfiguredRealtimeVoiceProviderParams,
 ): ResolvedRealtimeVoiceProvider {
-  const cfgForResolve = params.cfgForResolve ?? params.cfg ?? ({} as OpenClawConfig);
+  const cfgForResolve = params.cfgForResolve ?? params.cfg ?? {};
   const resolution = resolveConfiguredCapabilityProvider({
     configuredProviderId: params.configuredProviderId,
     providerConfigs: params.providerConfigs,

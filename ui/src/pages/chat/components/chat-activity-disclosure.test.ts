@@ -14,6 +14,38 @@ import {
   prepareHistoryGroups,
 } from "./chat-message.test-support.ts";
 
+function renderSummary(
+  messages: Record<string, unknown>[],
+  kind: "activity" | "work",
+  options: { expanded?: boolean; durationMs?: number | null; container?: HTMLElement } = {},
+) {
+  const {
+    expanded = false,
+    durationMs = 1000,
+    container = document.createElement("div"),
+  } = options;
+  const groups = [
+    createToolGroup(
+      "history",
+      messages.map((message, index) => createMessageEntry(`message-${index}`, message)),
+    ),
+  ];
+  render(
+    kind === "activity"
+      ? renderActivityGroup(groups, {
+          showToolCalls: true,
+          showReasoning: true,
+          isToolMessageExpanded: () => expanded,
+        })
+      : renderWorkGroupSummary(
+          { key: "work", durationMs, groups },
+          { expanded, onToggle: () => {} },
+        ),
+    container,
+  );
+  return container.querySelector(".chat-activity-group__summary");
+}
+
 it.each(["activity", "work"] as const)(
   "keeps parallel tool activity expandable without hover text (%s)",
   (kind) => {
@@ -53,9 +85,9 @@ it.each(["activity", "work"] as const)(
     );
 
     const activity = container.querySelector<HTMLButtonElement>(".chat-activity-group__summary");
-    expect(activity?.textContent).toContain(kind === "work" ? "Worked for 1s" : "2 reads");
+    expect(activity?.textContent).toContain(kind === "work" ? "Worked for 1 second" : "2 reads");
     if (kind === "work") {
-      expect(activity?.textContent).toContain("2 tool calls");
+      expect(activity?.textContent).not.toContain("tool calls");
       expect(activity?.textContent).not.toContain("failed");
     }
     expect(activity?.querySelector("[title], [data-tooltip], openclaw-tooltip")).toBeNull();
@@ -96,27 +128,13 @@ it.each([
       ],
     },
   );
-  const groups = [createToolGroup("failed-group", [createMessageEntry("failed-entry", message)])];
   const container = document.createElement("div");
   for (const expanded of [false, true]) {
-    render(
-      kind === "activity"
-        ? renderActivityGroup(groups, {
-            showToolCalls: true,
-            showReasoning: true,
-            isToolMessageExpanded: () => expanded,
-          })
-        : renderWorkGroupSummary(
-            { key: "failed-work", durationMs: 1000, groups },
-            { expanded, onToggle: () => {} },
-          ),
-      container,
-    );
-    const summary = container.querySelector(".chat-activity-group__summary");
-    expect(summary?.textContent).toContain(kind === "work" ? "Worked for 1s" : "1 read");
+    const summary = renderSummary([message], kind, { expanded, container });
+    expect(summary?.textContent).toContain(kind === "work" ? "Worked for 1 second" : "1 read");
     expect(summary?.textContent?.match(/1 failed/gu)).toHaveLength(1);
     if (kind === "work") {
-      expect(summary?.textContent).toContain("1 tool call");
+      expect(summary?.textContent?.includes("1 tool call")).toBe(expanded);
     }
   }
 });
@@ -151,23 +169,11 @@ it.each(["activity", "work"] as const)("uses current prepared outcomes in %s sum
       ],
     },
   );
-  const groups = [createToolGroup("current", [createMessageEntry("entry", message)])];
-  const container = document.createElement("div");
-  render(
-    kind === "activity"
-      ? renderActivityGroup(groups, { showToolCalls: true, showReasoning: true })
-      : renderWorkGroupSummary(
-          { key: "work", durationMs: 1000, groups },
-          { expanded: false, onToggle: () => {} },
-        ),
-    container,
-  );
-  const summary = container.querySelector(".chat-activity-group__summary");
-  expect(summary?.textContent).toContain(kind === "work" ? "Worked for 1s" : "1 read");
+  const summary = renderSummary([message], kind);
+  expect(summary?.textContent).toContain(kind === "work" ? "Worked for 1 second" : "1 read");
   expect(summary?.textContent).not.toContain("failed");
   if (kind === "work") {
-    expect(summary?.textContent).toContain("1 tool call");
-    expect(summary?.textContent).not.toContain("2 tool calls");
+    expect(summary?.textContent).not.toContain("tool call");
   }
   expect(summary?.querySelector(".chat-tool-failure")).toBeNull();
 });
@@ -187,21 +193,11 @@ it.each(["blocked", "skipped", undefined] as const)(
         },
       ],
     });
-    const groups = [
-      createToolGroup("outcome-group", [createMessageEntry("outcome-entry", message)]),
-    ];
     const container = document.createElement("div");
     for (const expanded of [false, true]) {
-      render(
-        renderWorkGroupSummary(
-          { key: "outcome-work", durationMs: 1000, groups },
-          { expanded, onToggle: () => {} },
-        ),
-        container,
-      );
-      const summary = container.querySelector(".chat-activity-group__summary");
-      expect(summary?.textContent).toContain("Worked for 1s");
-      expect(summary?.textContent).toContain("1 tool call");
+      const summary = renderSummary([message], "work", { expanded, container });
+      expect(summary?.textContent).toContain("Worked for 1 second");
+      expect(summary?.textContent?.includes("1 tool call")).toBe(expanded);
       expect(summary?.textContent).toContain(`1 ${status ?? "unknown"}`);
       if (status === "skipped") {
         expect(summary?.textContent?.match(/1 skipped/g)).toHaveLength(1);
@@ -211,7 +207,7 @@ it.each(["blocked", "skipped", undefined] as const)(
   },
 );
 
-it.each([0, 10])("shows the total alongside failures without a duration (%i calls)", (total) => {
+it.each([0, 10])("keeps failures visible without a duration (%i calls)", (total) => {
   const groups = prepareHistoryGroups([
     createToolGroup("mixed", [
       createMessageEntry(
@@ -237,67 +233,23 @@ it.each([0, 10])("shows the total alongside failures without a duration (%i call
   );
   const summary = container.querySelector(".chat-activity-group__summary");
   const text = summary?.textContent?.replace(/\s+/gu, " ").trim();
-  expect(text).toBe(total ? "Worked · 10 tool calls · 2 failed" : "Worked");
-});
-
-it("counts a raw call and its separate result once", () => {
-  const groups = [
-    createToolGroup("raw", [
-      createMessageEntry("call", createAssistantMessage([createToolCall("one", "read", {})])),
-      createMessageEntry(
-        "result",
-        createToolResultMessage("one", "read", "Unavailable", { isError: true }),
-      ),
-    ]),
-  ];
-  const container = document.createElement("div");
-  render(
-    renderWorkGroupSummary(
-      { key: "raw-work", durationMs: 1000, groups },
-      { expanded: false, onToggle: () => {} },
-    ),
-    container,
-  );
-  const text = container.querySelector(".chat-activity-group__summary")?.textContent;
-  expect(text).toContain("1 tool call");
-  expect(text).toContain("1 failed");
-  expect(text).not.toContain("2 tool calls");
+  expect(text).toBe(total ? "Worked · 2 failed" : "Worked");
 });
 
 function workSummaryText(messages: Record<string, unknown>[]) {
-  const groups = [
-    createToolGroup(
-      "history",
-      messages.map((message, index) => createMessageEntry(`message-${index}`, message)),
-    ),
-  ];
-  const container = document.createElement("div");
-  render(
-    renderWorkGroupSummary(
-      { key: "work", durationMs: null, groups },
-      { expanded: false, onToggle: () => {} },
-    ),
-    container,
-  );
-  return container
-    .querySelector(".chat-activity-group__summary")
+  return renderSummary(messages, "work", { durationMs: null, expanded: true })
     ?.textContent?.replace(/\s+/gu, " ")
     .trim();
 }
 
-it.each([
-  [true, false],
-  [false, true],
-  [true, true],
-])("keeps anonymous calls and their failures distinct (%s, %s)", (firstFailed, secondFailed) => {
-  const messages = [firstFailed, secondFailed].map((isError) => ({
+it("keeps anonymous calls and their failures distinct", () => {
+  const messages = [true, false].map((isError) => ({
     role: "toolResult",
     toolName: "exec",
     content: isError ? "Command failed" : "Command completed",
     isError,
   }));
-  const failures = Number(firstFailed) + Number(secondFailed);
-  expect(workSummaryText(messages)).toBe(`Worked · 2 tool calls · ${failures} failed`);
+  expect(workSummaryText(messages)).toBe("Worked · 2 tool calls · 1 failed");
 });
 
 it.each([false, true])("counts mixed prepared and raw history (reverse=%s)", (reverse) => {
@@ -357,38 +309,26 @@ it.each(["empty", "hidden", "suppressed"] as const)(
   },
 );
 
-it.each(["raw", "empty", "hidden", "suppressed", "completed", "blocked", "skipped"] as const)(
+it.each(["raw", "blocked", "skipped"] as const)(
   "keeps steering skips consistent with %s activity",
   (kind) => {
-    const activity =
-      kind === "empty"
-        ? []
-        : [
-            {
-              itemId: "tool:skip",
-              toolCallId: "skip",
-              kind: "tool",
-              phase: "end",
-              name: "exec",
-              title: "Command",
-              status:
-                kind === "completed" ? "completed" : kind === "blocked" ? "blocked" : "skipped",
-              ...(kind === "hidden" ? { hideFromChannelProgress: true } : {}),
-              ...(kind === "suppressed" ? { suppressChannelProgress: true } : {}),
-            },
-          ];
+    const activity = [
+      {
+        itemId: "tool:skip",
+        toolCallId: "skip",
+        kind: "tool",
+        phase: "end",
+        name: "exec",
+        title: "Command",
+        status: kind === "blocked" ? "blocked" : "skipped",
+      },
+    ];
     const message = createToolResultMessage("skip", "exec", "Skipped", {
       details: { status: "skipped", deniedReason: "steering" },
       ...(kind === "raw" ? {} : { activity }),
     });
     const expected =
-      kind === "raw" || kind === "skipped"
-        ? "Worked · 1 tool call · 1 skipped"
-        : kind === "blocked"
-          ? "Worked · 1 tool call · 1 blocked"
-          : kind === "completed"
-            ? "Worked · 1 tool call"
-            : "Worked";
+      kind === "blocked" ? "Worked · 1 tool call · 1 blocked" : "Worked · 1 tool call · 1 skipped";
     expect(workSummaryText([message])).toBe(expected);
   },
 );

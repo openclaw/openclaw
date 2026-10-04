@@ -48,6 +48,7 @@ suite.define(() => {
           "sessions.branches.switch",
           "sessions.fork",
           "sessions.github.publish",
+          "sessions.github.options",
           "sessions.patch",
           "sessions.rewind",
           SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,

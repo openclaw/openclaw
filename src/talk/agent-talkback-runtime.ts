@@ -58,9 +58,6 @@ export function createRealtimeVoiceAgentTalkbackQueue(
   const shouldStop = () => closed || params.isStopped();
 
   const clearDebounceTimer = () => {
-    if (!debounceTimer) {
-      return;
-    }
     clearTimeout(debounceTimer);
     debounceTimer = undefined;
   };

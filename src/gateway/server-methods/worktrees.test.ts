@@ -228,7 +228,7 @@ describe("worktrees gateway methods", () => {
           client: writeClient,
           context: {
             getRuntimeConfig: () => ({
-              agents: { list: [{ id: "main", default: true, workspace }] },
+              agents: { entries: { main: { workspace } } },
             }),
           },
         },
@@ -409,10 +409,21 @@ describe("worktrees gateway methods", () => {
     ]);
   });
 
-  it("rejects invalid parameters", async () => {
+  it.each([
+    ["worktrees.create", { repoRoot: "" }],
+    ["worktrees.remove", { id: record.id, force: true, ifLossless: true }],
+    ["worktrees.remove", { id: record.id, exactState: { head: "incomplete" } }],
+    ["worktrees.restore", { id: record.id, recoverExactState: { head: "incomplete" } }],
+    ["worktrees.recoverRemoval", { id: record.id, snapshot: "a".repeat(40) }],
+    ["worktrees.retireSnapshot", { id: record.id }],
+  ])("refuses invalid %s parameters before admitting a mutation", async (method, params) => {
     const handlers = createWorktreesHandlers({} as never);
-    const response = await call(handlers, "worktrees.create", { repoRoot: "" });
+    const response = await call(handlers, method, params);
 
     expect(response?.[0]).toBe(false);
+    expect(response?.[2]).toMatchObject({
+      code: "INVALID_REQUEST",
+      details: { mutationAccepted: false },
+    });
   });
 });

@@ -26,6 +26,10 @@ import type {
   PendingBridgeRequest,
   SettledBridgeRequest,
 } from "./code-mode-runtime.js";
+import {
+  createCodeModeSessionStoreAccess,
+  type CodeModeSessionStoreAccess,
+} from "./code-mode-session-store.js";
 import { recordCodeModeToolOutcome } from "./code-mode-tool-outcome.js";
 import { captureAgentPluginRuntimeRefresh } from "./plugin-runtime-refresh.js";
 import type { AgentToolUpdateCallback } from "./runtime/index.js";
@@ -38,8 +42,8 @@ export type CodeModeBridgeDispatchState = {
 };
 
 export type PendingBridgeState = PendingBridgeRequest & {
-  promise: Promise<void>;
   reply: CodeModeReplyLease;
+  onSettlement?: () => void;
   settled?: boolean;
   settledSequence?: number;
   cancel?: () => void;
@@ -85,6 +89,7 @@ export function createCodeModeRunOwner(
   ctx: ToolSearchToolContext,
   config: CodeModeConfig,
   initialRequired = false,
+  enableSessionStore = false,
 ) {
   let required = initialRequired;
   const inbox = new CodeModeProgramDataInbox(config);
@@ -98,6 +103,9 @@ export function createCodeModeRunOwner(
   const signal = ctx.abortSignal
     ? AbortSignal.any([closed.signal, ctx.abortSignal])
     : closed.signal;
+  const sessionStore = enableSessionStore
+    ? createCodeModeSessionStoreAccess(ctx, signal)
+    : undefined;
   const disposers = ctx.catalogRef
     ? (ctx.catalogRef.onDispose ??= new Set<() => void>())
     : undefined;
@@ -165,6 +173,7 @@ export function createCodeModeRunOwner(
       disposers?.delete(onCatalogDispose);
       closed.abort(reason);
       inbox.close();
+      sessionStore?.close();
       const parked = activeRuns.get(runId);
       if (parked?.owner === owner) {
         activeRuns.delete(runId);
@@ -220,6 +229,7 @@ export function createCodeModeRunOwner(
     signal,
     inbox,
     results: createCodeModeResultsAccess(ctx, config),
+    sessionStore,
     close,
     retainContinuation,
     runExecution(operation: () => Promise<CodeModeWorkerResult>): Promise<CodeModeWorkerResult> {
@@ -413,22 +423,39 @@ export function pendingBridgeStatesForSettlement(
 export function waitForPendingBridgeSettlement(
   pending: readonly PendingBridgeState[],
   settlementMode: CodeModeSettlementMode,
+  signal?: AbortSignal,
 ): Promise<void> {
   const required = pendingBridgeStatesForSettlement(pending, settlementMode);
   const outstanding = required.filter((entry) => !entry.settled);
   // Workers reject hostless pending guests; headless execution also validates
   // the frontier before reaching this shared settlement helper.
   if (
+    signal?.aborted ||
     outstanding.length === 0 ||
     (settlementMode.kind === "awaiting" && outstanding.length !== required.length)
   ) {
     return Promise.resolve();
   }
-  const settlement =
-    settlementMode.kind === "draining"
-      ? Promise.all(outstanding.map((entry) => entry.promise))
-      : Promise.race(outstanding.map((entry) => entry.promise));
-  return settlement.then(() => undefined);
+  // A cell serializes guest frontiers and rejects concurrent waits. Retain only
+  // its current observer: Promise.race retains a reaction per losing frontier.
+  return new Promise<void>((resolve) => {
+    const finish = () => {
+      for (const entry of outstanding) {
+        entry.onSettlement = undefined;
+      }
+      signal?.removeEventListener("abort", finish);
+      resolve();
+    };
+    const onSettlement = () => {
+      if (settlementMode.kind === "awaiting" || outstanding.every((entry) => entry.settled)) {
+        finish();
+      }
+    };
+    for (const entry of outstanding) {
+      entry.onSettlement = onSettlement;
+    }
+    signal?.addEventListener("abort", finish, { once: true });
+  });
 }
 
 export function reserveActiveRunSlot(ownedRunId?: string): () => void {
@@ -508,6 +535,7 @@ export function createPendingBridgeStates(
     config: CodeModeConfig;
     inbox: CodeModeProgramDataInbox;
     results: CodeModeResultsAccess;
+    sessionStore?: CodeModeSessionStoreAccess;
     runtime: ToolSearchRuntime;
     catalogProjection: CodeModeCatalogProjection;
     namespaceRuntime: CodeModeNamespaceRuntime;
@@ -545,6 +573,7 @@ export function createPendingBridgeStates(
     const bridgeCall = runBridgeRequest({
       runtime: params.runtime,
       results: params.results,
+      sessionStore: params.sessionStore,
       catalogProjection: params.catalogProjection,
       namespaceRuntime: params.namespaceRuntime,
       parentToolCallId: params.parentToolCallId,
@@ -564,33 +593,33 @@ export function createPendingBridgeStates(
     const state: PendingBridgeState = {
       ...request,
       reply,
-      promise: completion.then(() => {
-        params.signal.removeEventListener("abort", onAbort);
-        state.settledSequence = ++nextPendingBridgeSettlementSequence;
-        state.settled = true;
-        // Only the response is needed until guest replay; live calls keep their own request.
-        state.args = [];
-        if (state.method === "agentWait" && params.activeRunId) {
-          const active = activeRuns.get(params.activeRunId);
-          if (active?.pending.includes(state)) {
-            const renewed = resolveExpiresAtMsFromDurationSeconds(
-              active.config.snapshotTtlSeconds,
-              { nowMs: Date.now() },
-            );
-            if (renewed !== undefined) {
-              active.expiresAt = renewed;
-              scheduleActiveRunExpiry();
-            }
-          }
-        }
-      }),
       cancel: () => {
         reply.cancel();
-        if (!state.settled) {
-          abortController.abort(new Error(BRIDGE_CLOSED_MESSAGE));
-        }
+        abortController.abort(new Error(BRIDGE_CLOSED_MESSAGE));
       },
     };
+    void completion.then(() => {
+      params.signal.removeEventListener("abort", onAbort);
+      state.settledSequence = ++nextPendingBridgeSettlementSequence;
+      state.settled = true;
+      state.cancel = undefined;
+      // Only the response is needed until guest replay; live calls keep their own request.
+      state.args = [];
+      if (state.method === "agentWait" && params.activeRunId) {
+        const active = activeRuns.get(params.activeRunId);
+        if (active?.pending.includes(state)) {
+          const renewed = resolveExpiresAtMsFromDurationSeconds(active.config.snapshotTtlSeconds, {
+            nowMs: Date.now(),
+          });
+          if (renewed !== undefined) {
+            active.expiresAt = renewed;
+            scheduleActiveRunExpiry();
+          }
+        }
+      }
+      state.onSettlement?.();
+      state.onSettlement = undefined;
+    });
     return state;
   });
 }

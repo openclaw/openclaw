@@ -2,6 +2,7 @@ import { lstatSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { assertDirectoryIdentitySync } from "@openclaw/fs-safe/advanced";
 import { FsSafeError } from "@openclaw/fs-safe/errors";
+import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { PLUGIN_CAPABILITY_CONSENT_REQUIRED } from "../../../../packages/gateway-protocol/src/capability-consent-error-details.js";
 import { stripAnsi } from "../../../../packages/terminal-core/src/ansi.js";
 import { formatCliCommand } from "../../../cli/command-format.js";
@@ -134,18 +135,10 @@ export async function repairMissingConfiguredPluginInstalls(
 ): Promise<RepairMissingPluginInstallsResult> {
   return repairMissingPluginInstalls(
     copyPluginInstallTransactionRequest(params, {
-      cfg: params.cfg,
-      timeoutMs: params.timeoutMs,
-      workTimeoutMs: params.workTimeoutMs,
-      env: params.env,
+      ...params,
       pluginIds: collectConfiguredPluginIds(params.cfg, params.env),
       channelIds: collectConfiguredChannelIds(params.cfg, params.env),
       blockedPluginIds: collectBlockedPluginIds(params.cfg),
-      repairVersionDrift: params.repairVersionDrift,
-      onWarning: params.onWarning,
-      ...(params.onCapabilityConsent ? { onCapabilityConsent: params.onCapabilityConsent } : {}),
-      beforePersistentEffect: params.beforePersistentEffect,
-      ...(params.baselineRecords ? { baselineRecords: params.baselineRecords } : {}),
     }),
   );
 }
@@ -160,27 +153,10 @@ export async function repairMissingPluginInstallsForIds(
 ): Promise<RepairMissingPluginInstallsResult> {
   return repairMissingPluginInstalls(
     copyPluginInstallTransactionRequest(params, {
-      cfg: params.cfg,
-      timeoutMs: params.timeoutMs,
-      workTimeoutMs: params.workTimeoutMs,
-      env: params.env,
-      pluginIds: new Set(
-        [...params.pluginIds].map((pluginId) => pluginId.trim()).filter((pluginId) => pluginId),
-      ),
-      channelIds: new Set(
-        [...(params.channelIds ?? [])]
-          .map((channelId) => channelId.trim())
-          .filter((channelId) => channelId),
-      ),
-      blockedPluginIds: new Set(
-        [...(params.blockedPluginIds ?? [])]
-          .map((pluginId) => pluginId.trim())
-          .filter((pluginId) => pluginId),
-      ),
-      ...(params.onCapabilityConsent ? { onCapabilityConsent: params.onCapabilityConsent } : {}),
-      onWarning: params.onWarning,
-      beforePersistentEffect: params.beforePersistentEffect,
-      ...(params.baselineRecords ? { baselineRecords: params.baselineRecords } : {}),
+      ...params,
+      pluginIds: new Set(normalizeTrimmedStringList([...params.pluginIds])),
+      channelIds: new Set(normalizeTrimmedStringList([...(params.channelIds ?? [])])),
+      blockedPluginIds: new Set(normalizeTrimmedStringList([...(params.blockedPluginIds ?? [])])),
     }),
   );
 }
@@ -564,14 +540,7 @@ async function repairMissingPluginInstallsWithLease(
       candidate,
       records: nextRecords,
       env,
-      context: {
-        bundledPluginsById,
-        officialReplacementPluginIds,
-        knownIds,
-        installedPluginIdsWithStaleVersionBoundRuntimePackages,
-        installedPluginIdsWithRepairablePackageDiagnostics,
-        configuredPluginIdsWithStaleDescriptors,
-      },
+      context: installContext,
     });
     if (!repair) {
       continue;

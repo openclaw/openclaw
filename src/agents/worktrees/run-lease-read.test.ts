@@ -2,6 +2,7 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import * as pidAlive from "../../shared/pid-alive.js";
 import * as stateDatabase from "../../state/openclaw-state-db.js";
 import { readWorktreeCleanupState } from "./registry-read.js";
 import { hasLiveWorktreeRunLeaseRow, insertRegistryWorktree } from "./registry.js";
@@ -53,16 +54,16 @@ it("reads live, dead, reused, and unverifiable owners without reaping or writer 
   }
   const { db } = stateDatabase.openOpenClawStateDatabase({ env });
   const writes = vi.spyOn(stateDatabase, "runOpenClawStateWriteTransaction");
+  const deadPid = vi
+    .spyOn(pidAlive, "isPidDefinitelyDead")
+    .mockImplementation((pid) => pid === 2147483647);
+  const processStart = vi
+    .spyOn(pidAlive, "getFileLockProcessStartTime")
+    .mockImplementation((pid) => (pid === process.pid ? 2 : null));
   db.exec("PRAGMA query_only = ON");
   try {
     for (const entry of cases) {
-      expect(
-        hasLiveWorktreeRunLeaseRow(env, entry.id, {
-          isPidDefinitelyDead: (pid) => pid === 2147483647,
-          getProcessStartTime: (pid) => (pid === process.pid ? 2 : null),
-        }),
-        entry.id,
-      ).toBe(entry.live);
+      expect(hasLiveWorktreeRunLeaseRow(env, entry.id), entry.id).toBe(entry.live);
     }
     expect(writes).not.toHaveBeenCalled();
     const queries = trackSqliteStatementExecutions(db, ["leases"], (sql) =>
@@ -79,6 +80,8 @@ it("reads live, dead, reused, and unverifiable owners without reaping or writer 
     expect(db.prepare("SELECT count(*) AS count FROM state_leases").get()?.count).toBe(4);
   } finally {
     db.exec("PRAGMA query_only = OFF");
+    deadPid.mockRestore();
+    processStart.mockRestore();
   }
 
   const { leases } = await readWorktreeCleanupState(env);

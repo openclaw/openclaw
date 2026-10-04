@@ -18,6 +18,47 @@ import {
 const requireRecord = createRequireRecord("object", "expected-label");
 
 describe("session roster refresh", () => {
+  it.each(["primary", "managed"] as const)(
+    "keeps the %s startup retry alive past three minutes and cancels it on disposal",
+    async (owner) => {
+      vi.useFakeTimers();
+      const pending = new GatewayRequestError({
+        code: "UNAVAILABLE",
+        message: "Agent is preparing its database",
+        retryable: true,
+        retryAfterMs: 7_000,
+        details: { code: "agent-database-inspection-pending", agentId: "main" },
+      });
+      const request = vi.fn().mockRejectedValue(pending);
+      const { sessions } = createSessionCapabilityHarness(request);
+      const query = {
+        agentId: "main",
+        ...(owner === "managed" ? { archivedFilter: "all" as const } : {}),
+      };
+      const stop = sessions.subscribeList(query, () => {});
+      try {
+        await sessions.refreshList({ ...query, force: true });
+        expect(sessions.listSnapshot(query)).toMatchObject({ startupPending: true, error: null });
+        await vi.advanceTimersByTimeAsync(6_999);
+        expect(request).toHaveBeenCalledOnce();
+        await vi.advanceTimersByTimeAsync(1);
+        expect(request).toHaveBeenCalledTimes(2);
+        await vi.advanceTimersByTimeAsync(180_000);
+        const reads = request.mock.calls.length;
+        expect(reads).toBeGreaterThan(20);
+        expect(sessions.listSnapshot(query)).toMatchObject({ startupPending: true, error: null });
+        stop();
+        sessions.dispose();
+        await vi.advanceTimersByTimeAsync(30_000);
+        expect(request).toHaveBeenCalledTimes(reads);
+      } finally {
+        stop();
+        sessions.dispose();
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it.each([
     { recover: false, explicit: false },
     { recover: true, explicit: false },

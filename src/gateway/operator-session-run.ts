@@ -5,12 +5,21 @@ import {
 import { ToolAuthorizationError } from "../agents/tool-input-error.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  authorizeGatewaySessionCreation,
-  resolveSandboxedSessionCreation,
-} from "./operator-role-policy.js";
+import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "./operator-role-policy.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
+import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
 import { authorizeSessionAgentRun } from "./session-sharing-policy.js";
+
+/** Leave ordinary creation attribution unchanged unless the authenticated person requires isolation. */
+export function resolveSandboxedSessionCreation(
+  client: Parameters<typeof resolveOperatorSessionCreation>[0],
+  cfg: OpenClawConfig,
+): ReturnType<typeof resolveOperatorSessionCreation> | undefined {
+  const creation = resolveOperatorSessionCreation(client);
+  return resolveCreatorSandbox(cfg, creation) === "required"
+    ? { ...creation, sandbox: "required" }
+    : undefined;
+}
 
 /** Binds create-on-run provenance and row admission to the original operator. */
 export function prepareGatewayOperatorSessionRun(params: {

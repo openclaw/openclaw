@@ -52,6 +52,42 @@ approval, command, URL, web-app, question, callback, and model-picker actions
 distinguishable until that encoding boundary; never infer picker intent from a
 raw callback string. Actor and source-message checks remain channel-owned.
 
+## Return to the source conversation
+
+Channel plugins can supply `conversation.link` when building an inbound event
+with `buildChannelInboundEventContext`:
+
+```typescript
+conversation: {
+  ...conversation,
+  link: {
+    url: "https://chat.example.com/conversations/example-thread",
+    label: "Example Thread",
+  },
+}
+```
+
+The channel owns the destination URL and plain-text label. Discord supplies the
+actual created or existing thread URL. Slack uses its documented
+[`app_redirect` channel link](https://docs.slack.dev/interactivity/deep-linking/)
+to open the containing channel or direct conversation; it does not request a
+message permalink while preparing an inbound reply.
+
+The host retains the first valid HTTP(S) link on the logical session, preserves
+it across resets, and carries it to explicitly spawned or forked child sessions.
+Later delivery-route changes do not replace it. Upgrades do not backfill
+existing entries: an existing session receives a link only when a later inbound
+event supplies one. There is no historical-message scan or store migration.
+This metadata does not render any UI by itself. A channel's browser plugin
+registers a `session-header` accessory to display its link. Discord and Slack
+use the shared `createSessionHeaderLink` helper from
+`openclaw/plugin-sdk/control-ui` for the standard appearance and direct
+navigation, with no preview or dropdown.
+The helper receives the current session snapshot through the accessory's props;
+it requires no extra Gateway request. See [Feature plugins](/plugins/feature-plugins#contribute-and-replace-views)
+for registration. Other plugin accessories, including their custom HTML, CSS,
+and JavaScript, keep their existing contract.
+
 ## Walkthrough
 
 <Steps>
@@ -382,13 +418,18 @@ raw callback string. Actor and source-message checks remain channel-owned.
       Channel turn adapters can forward the same plan through
       `deliverPreparedWithProviderMessageSending`, and durable inbound delivery uses
       `deliverStructuredInboundReplyWithMessageSendContext({ ...context, plan })`.
+      A prepared or filtered agent registry from the current Gateway publication
+      is not a reload successor: ordinary final replies use that Gateway’s live
+      channel registry and do not require a handoff callback.
       Both durable inbound helpers accept an optional synchronous
       `prepareRuntimeHandoff(cfg)` callback for final replies after an unrelated
       plugin reload. The channel must reject a changed admitted sender and return
       a config that pins the verified credential for all parts of that delivery.
       Core requires the exact retained channel registration and unchanged channel,
-      shared-default, and owning-plugin settings; channels without this callback
-      cannot transfer a final reply to a successor registry. The callback must not
+      shared-default, and owning-plugin settings for every successor handoff.
+      Channels without this callback deliver with the successor's unchanged
+      config; add the callback when the sender credential can change outside
+      config (environment, token files, SecretRef values). The callback must not
       persist credentials or change unrelated settings.
       Existing raw callbacks remain supported. An older adapter receives the
       payload through its original callback; it must adopt the prepared operation
@@ -697,10 +738,15 @@ Microsoft Teams supports `read`, `search`, `reactions`, `list-pins`, `member-inf
 `channel-info`, and `channel-list` under the [Teams access rules](/channels/msteams/access-control).
 
 Discord's `permissions` action inspects the bot's permissions for an allowed channel.
-Guild metadata reads require the requested guild to be allowed by the selected
+Guild-wide metadata reads require the requested guild to be allowed by the selected
 account's current configuration, with unrestricted or wildcard channel access.
+The narrow exception is an active `thread-list` naming a parent `channelId`: the
+parent must be allowed and its metadata must confirm the requested guild before
+the guild-wide fetch. The result includes only allowed threads under that parent
+and member records for those returned threads. An active list without a parent
+still requires guild-wide channel access; archived lists keep their channel-scoped path.
 Only direct operators receive the filtered-results relaxation for `channel-list`;
-delegated agents still require guild-wide channel access.
+delegated `channel-list` callers still require guild-wide channel access.
 
 The transport contract is mandatory for opt-in adapters:
 

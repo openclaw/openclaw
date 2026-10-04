@@ -27,7 +27,7 @@ barrel when authoring new plugins. Core subpaths:
 Channel plugins pick from a family of narrow seams — `channel-setup`,
 `setup-runtime`, `setup-tools`, `channel-pairing`,
 `channel-contract`, `channel-feedback`, `channel-inbound`, `channel-outbound`,
-`command-auth`, `secret-input`, `webhook-ingress`,
+`command-auth-native`, `secret-input`, `webhook-ingress`,
 `channel-targets`, and `channel-actions`. Approval behavior should consolidate
 on one `approvalCapability` contract rather than mixing across unrelated
 plugin fields. See [Channel plugins](/plugins/sdk-channel-plugins).

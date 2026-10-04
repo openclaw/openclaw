@@ -24,6 +24,7 @@ import {
   extractToolCardsCached,
   isToolCardError,
   isToolCallContentBlock,
+  resolveToolCardDisplay,
   resolveToolCardOutcome,
 } from "../../../lib/chat/tool-cards.ts";
 import { stripThinkingTags } from "../../../lib/strip-thinking-tags.ts";
@@ -171,7 +172,8 @@ function toolIcon(call: ToolCard) {
   }
 }
 
-function renderToolLine(call: ToolCard) {
+function renderToolLine(originalCall: ToolCard) {
+  const call = resolveToolCardDisplay(originalCall);
   const view = resolveToolCallView(call);
   const raw = redactToolPayloadText(
     (view.command ?? view.code ?? call.inputText ?? call.name).trim(),

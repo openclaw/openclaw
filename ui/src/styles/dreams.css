@@ -459,7 +459,8 @@
   color: var(--muted);
 }
 
-.dreams-advanced__actions {
+.dreams-advanced__actions,
+.dreams-advanced__section-toolbar {
   display: flex;
   align-items: center;
   gap: 10px;
@@ -517,13 +518,6 @@
   font-size: 12px;
   line-height: 1.5;
   color: var(--muted);
-}
-
-.dreams-advanced__section-toolbar {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
 }
 
 .dreams-advanced__section-count {

@@ -135,7 +135,7 @@ export function createFixture({ pendingPrompt = "hello", pendingImageCount = 1 }
   const sessionManager = {
     getSessionTarget: () => undefined,
     getHeader: () => ({ version: 3 }),
-    appendCustomEntry: vi.fn(),
+    appendCustomEntryAsync: vi.fn(async () => undefined),
     getEntries: vi.fn(() => []),
   };
   const sessionRuntimeState = { systemPromptText: "system", prePromptMessageCount: 1 };

@@ -1,5 +1,5 @@
 import { runInNewContext, runInThisContext } from "node:vm";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { PluginInstance } from "./plugin-instance.js";
 
 // oxlint-disable typescript/unbound-method -- Retaining methods and supplying their receiver later is the lifecycle behavior under test.
@@ -39,9 +39,18 @@ function createBase(kind: "class" | "function", realm: "host" | "VM"): BaseConst
   return realm === "VM" ? runInNewContext(source) : runInThisContext(source);
 }
 
-const constructorCases = (["host", "VM"] as const).flatMap((realm) =>
-  (["class", "function"] as const).map((kind) => ({ realm, kind })),
-);
+const constructorCases = [
+  { realm: "host", kind: "class" },
+  { realm: "VM", kind: "function" },
+] as const;
+
+let instance: PluginInstance;
+beforeEach(() => {
+  instance = new PluginInstance("constructors");
+});
+afterEach(async () => {
+  await instance.dispose();
+});
 
 describe("managed exported constructors", () => {
   it.each(
@@ -49,35 +58,25 @@ describe("managed exported constructors", () => {
       (["prototype", "capability"] as const).map((key) => ({ realm, kind, key })),
     ),
   )("preserves $realm $kind $key membership", async ({ realm, kind, key }) => {
-    const instance = new PluginInstance("constructor-membership");
     const source = Object.assign(createBase(kind, realm), { capability: true });
-    try {
-      const wrapped = instance.wrap(source);
-      expect(wrapped.capability).toBe(true);
-      expect(Object.hasOwn(wrapped, key)).toBe(true);
-      expect("bind" in wrapped).toBe(true);
-      expect("missing" in wrapped).toBe(false);
-      expect(key in wrapped).toBe(true);
-    } finally {
-      await instance.dispose();
-    }
+    const wrapped = instance.wrap(source);
+    expect(wrapped.capability).toBe(true);
+    expect(Object.hasOwn(wrapped, key)).toBe(true);
+    expect("bind" in wrapped).toBe(true);
+    expect("missing" in wrapped).toBe(false);
+    expect(key in wrapped).toBe(true);
   });
 
   it("reads a custom prototype accessor only when requested", async () => {
-    const instance = new PluginInstance("prototype-accessor");
     let reads = 0;
     const source = () => "call";
     Object.defineProperty(source, "prototype", { get: () => ({ value: ++reads }) });
-    try {
-      const wrapped = instance.wrap(source);
-      expect(reads).toBe(0);
-      expect(Reflect.get(wrapped, "prototype")).toEqual({ value: 1 });
-      await instance.dispose();
-      expect(() => Reflect.get(wrapped, "prototype")).toThrow("reloaded or disabled");
-      expect(reads).toBe(1);
-    } finally {
-      await instance.dispose();
-    }
+    const wrapped = instance.wrap(source);
+    expect(reads).toBe(0);
+    expect(Reflect.get(wrapped, "prototype")).toEqual({ value: 1 });
+    await instance.dispose();
+    expect(() => Reflect.get(wrapped, "prototype")).toThrow("reloaded or disabled");
+    expect(reads).toBe(1);
   });
 
   it.each(
@@ -85,7 +84,6 @@ describe("managed exported constructors", () => {
       (["public", "private", "super"] as const).map((fields) => ({ realm, kind, fields })),
     ),
   )("preserves $realm $kind derived $fields fields", async ({ realm, kind, fields }) => {
-    const instance = new PluginInstance("derived-constructor");
     const Base = createBase(kind, realm);
     const WrappedBase = instance.wrap(Base);
     class Derived extends WrappedBase {
@@ -104,36 +102,30 @@ describe("managed exported constructors", () => {
         return `${super.readBase()}/${super.baseLabel}/${this.#value}`;
       }
     }
-    try {
-      const base = new WrappedBase();
-      expect(base).toBeInstanceOf(Base);
-      expect(base).toBeInstanceOf(WrappedBase);
-      expect(base.basePublic).toBe("base");
-      expect(base.readBase()).toBe("base private");
-      const derived = new Derived();
-      expect(derived).toBeInstanceOf(Derived);
-      expect(derived).toBeInstanceOf(WrappedBase);
-      expect(derived).toBeInstanceOf(Base);
-      expect(derived.basePublic).toBe("base");
-      if (fields === "public") {
-        expect(derived.derivedPublic).toBe("derived");
-        expect(Object.keys(derived)).toEqual(
-          expect.arrayContaining(["basePublic", "derivedPublic"]),
-        );
-        expect(Object.getOwnPropertyDescriptor(derived, "derivedPublic")?.value).toBe("derived");
-      } else if (fields === "private") {
-        expect(derived.readBase()).toBe("base private");
-        expect(derived.readDerived()).toBe("derived private");
-        expect(derived.derivedLabel).toBe("derived private");
-        derived.baseLabel = "changed base";
-        derived.derivedLabel = "changed derived";
-        expect(derived.readBase()).toBe("changed base");
-        expect(derived.readDerived()).toBe("changed derived");
-      } else {
-        expect(derived.readSuper()).toBe("base private/base private/derived private");
-      }
-    } finally {
-      await instance.dispose();
+    const base = new WrappedBase();
+    expect(base).toBeInstanceOf(Base);
+    expect(base).toBeInstanceOf(WrappedBase);
+    expect(base.basePublic).toBe("base");
+    expect(base.readBase()).toBe("base private");
+    const derived = new Derived();
+    expect(derived).toBeInstanceOf(Derived);
+    expect(derived).toBeInstanceOf(WrappedBase);
+    expect(derived).toBeInstanceOf(Base);
+    expect(derived.basePublic).toBe("base");
+    if (fields === "public") {
+      expect(derived.derivedPublic).toBe("derived");
+      expect(Object.keys(derived)).toEqual(expect.arrayContaining(["basePublic", "derivedPublic"]));
+      expect(Object.getOwnPropertyDescriptor(derived, "derivedPublic")?.value).toBe("derived");
+    } else if (fields === "private") {
+      expect(derived.readBase()).toBe("base private");
+      expect(derived.readDerived()).toBe("derived private");
+      expect(derived.derivedLabel).toBe("derived private");
+      derived.baseLabel = "changed base";
+      derived.derivedLabel = "changed derived";
+      expect(derived.readBase()).toBe("changed base");
+      expect(derived.readDerived()).toBe("changed derived");
+    } else {
+      expect(derived.readSuper()).toBe("base private/base private/derived private");
     }
   });
 
@@ -142,23 +134,18 @@ describe("managed exported constructors", () => {
       (["constructor", "method", "receiver"] as const).map((member) => ({ realm, kind, member })),
     ),
   )("owns the $realm $kind prototype $member", async ({ realm, kind, member }) => {
-    const instance = new PluginInstance("prototype-constructor");
     const Base = createBase(kind, realm);
     const WrappedBase = instance.wrap(Base);
     const Constructor: BaseConstructor = Reflect.get(WrappedBase.prototype, "constructor");
     const method = WrappedBase.prototype.readBase;
     const receiver = member === "receiver" ? new WrappedBase() : new Base();
-    try {
-      expect(new Constructor().basePublic).toBe("base");
-      expect(Reflect.apply(method, receiver, [])).toBe("base private");
-      await instance.dispose();
-      if (member === "constructor") {
-        expect(() => new Constructor()).toThrow("reloaded or disabled");
-      } else {
-        expect(() => Reflect.apply(method, receiver, [])).toThrow("reloaded or disabled");
-      }
-    } finally {
-      await instance.dispose();
+    expect(new Constructor().basePublic).toBe("base");
+    expect(Reflect.apply(method, receiver, [])).toBe("base private");
+    await instance.dispose();
+    if (member === "constructor") {
+      expect(() => new Constructor()).toThrow("reloaded or disabled");
+    } else {
+      expect(() => Reflect.apply(method, receiver, [])).toThrow("reloaded or disabled");
     }
   });
 });
@@ -167,7 +154,6 @@ describe("managed constructor receiver layers", () => {
   it.each(["static", "object"] as const)(
     "preserves inherited %s receivers across alternating and detached reads",
     async (kind) => {
-      const instance = new PluginInstance("inherited-receivers");
       const { base, first, second } = (() => {
         if (kind === "static") {
           // oxlint-disable-next-line typescript/no-extraneous-class -- Static inheritance is the receiver contract under test.
@@ -204,24 +190,20 @@ describe("managed constructor receiver layers", () => {
         secondObject.label = "second";
         return { base: baseObject, first: firstObject, second: secondObject };
       })();
-      try {
-        expect([base.read(), first.read(), second.read(), first.read()]).toEqual([
-          "base",
-          "first",
-          "second",
-          "first",
-        ]);
-        expect([first.readLabel, second.readLabel]).toEqual(["first", "second"]);
-        const firstRead = first.read;
-        const secondRead = second.read;
-        expect([firstRead(), secondRead(), firstRead()]).toEqual(["first", "second", "first"]);
-        await instance.dispose();
-        expect(() => firstRead()).toThrow("reloaded or disabled");
-        expect(() => secondRead()).toThrow("reloaded or disabled");
-        expect(() => first.readLabel).toThrow("reloaded or disabled");
-      } finally {
-        await instance.dispose();
-      }
+      expect([base.read(), first.read(), second.read(), first.read()]).toEqual([
+        "base",
+        "first",
+        "second",
+        "first",
+      ]);
+      expect([first.readLabel, second.readLabel]).toEqual(["first", "second"]);
+      const firstRead = first.read;
+      const secondRead = second.read;
+      expect([firstRead(), secondRead(), firstRead()]).toEqual(["first", "second", "first"]);
+      await instance.dispose();
+      expect(() => firstRead()).toThrow("reloaded or disabled");
+      expect(() => secondRead()).toThrow("reloaded or disabled");
+      expect(() => first.readLabel).toThrow("reloaded or disabled");
     },
   );
 
@@ -232,7 +214,6 @@ describe("managed constructor receiver layers", () => {
   )(
     "preserves a nested $realm $kind prototype $member receiver",
     async ({ realm, kind, member }) => {
-      const instance = new PluginInstance("nested-constructors");
       const Base = createBase(kind, realm);
       const WrappedBase = instance.wrap(Base);
       class Middle extends WrappedBase {
@@ -245,31 +226,28 @@ describe("managed constructor receiver layers", () => {
         }
       }
       const WrappedMiddle = instance.wrap(Middle);
-      try {
-        const value = new WrappedMiddle();
-        expect(value).toBeInstanceOf(Base);
-        expect(value).toBeInstanceOf(Middle);
-        expect(value).toBeInstanceOf(WrappedMiddle);
-        expect(value.readBase()).toBe("base private");
-        const read =
-          member === "method"
-            ? WrappedMiddle.prototype.readMiddle
-            : Object.getOwnPropertyDescriptor(WrappedMiddle.prototype, "middleLabel")!.get!;
-        expect(Reflect.apply(read, value, [])).toBe("middle private");
-        await instance.dispose();
-        expect(() => Reflect.apply(read, value, [])).toThrow("reloaded or disabled");
-      } finally {
-        await instance.dispose();
-      }
+      const value = new WrappedMiddle();
+      expect(value).toBeInstanceOf(Base);
+      expect(value).toBeInstanceOf(Middle);
+      expect(value).toBeInstanceOf(WrappedMiddle);
+      expect(value.readBase()).toBe("base private");
+      const read =
+        member === "method"
+          ? WrappedMiddle.prototype.readMiddle
+          : Object.getOwnPropertyDescriptor(WrappedMiddle.prototype, "middleLabel")!.get!;
+      expect(Reflect.apply(read, value, [])).toBe("middle private");
+      await instance.dispose();
+      expect(() => Reflect.apply(read, value, [])).toThrow("reloaded or disabled");
     },
   );
 
-  it.each(
-    (["host", "VM"] as const).flatMap((realm) =>
-      (["field", "assignment"] as const).map((form) => ({ realm, form })),
-    ),
-  )("preserves $realm base and derived own callable $form receivers", async ({ realm, form }) => {
-    const source = `(class Base {
+  it.each([
+    { realm: "host", form: "field" },
+    { realm: "VM", form: "assignment" },
+  ] as const)(
+    "preserves $realm base and derived own callable $form receivers",
+    async ({ realm, form }) => {
+      const source = `(class Base {
       #value = "base own";
       ${
         form === "field"
@@ -277,27 +255,25 @@ describe("managed constructor receiver layers", () => {
           : "constructor() { this.baseOwn = function() { return this.#value; }; }"
       }
     })`;
-    const Base: new () => { baseOwn(): string } =
-      realm === "VM" ? runInNewContext(source) : runInThisContext(source);
-    const instance = new PluginInstance("own-constructor-fields");
-    const WrappedBase = instance.wrap(Base);
-    class DerivedFields extends WrappedBase {
-      #value = "derived own";
-      derivedOwn = function (this: DerivedFields) {
-        return this.#value;
-      };
-    }
-    class DerivedAssignment extends WrappedBase {
-      #value = "derived own";
-      declare derivedOwn: () => string;
-      constructor() {
-        super();
-        this.derivedOwn = function (this: DerivedAssignment) {
+      const Base: new () => { baseOwn(): string } =
+        realm === "VM" ? runInNewContext(source) : runInThisContext(source);
+      const WrappedBase = instance.wrap(Base);
+      class DerivedFields extends WrappedBase {
+        #value = "derived own";
+        derivedOwn = function (this: DerivedFields) {
           return this.#value;
         };
       }
-    }
-    try {
+      class DerivedAssignment extends WrappedBase {
+        #value = "derived own";
+        declare derivedOwn: () => string;
+        constructor() {
+          super();
+          this.derivedOwn = function (this: DerivedAssignment) {
+            return this.#value;
+          };
+        }
+      }
       const value = form === "field" ? new DerivedFields() : new DerivedAssignment();
       const baseOwn = value.baseOwn;
       const derivedOwn = value.derivedOwn;
@@ -306,8 +282,6 @@ describe("managed constructor receiver layers", () => {
       await instance.dispose();
       expect(() => baseOwn()).toThrow("reloaded or disabled");
       expect(() => Reflect.apply(derivedOwn, undefined, [])).toThrow("reloaded or disabled");
-    } finally {
-      await instance.dispose();
-    }
-  });
+    },
+  );
 });

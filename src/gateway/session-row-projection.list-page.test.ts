@@ -1,4 +1,6 @@
+import { performance } from "node:perf_hooks";
 import { StatementSync } from "node:sqlite";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { notifyPreparedModelRuntimePublication } from "../agents/prepared-model-runtime.publication-events.js";
@@ -10,15 +12,22 @@ import * as history from "../config/sessions/session-transcript-worker-runtime.j
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import {
+  requestContext,
+  sessionReadHandlers,
+} from "./server-methods/sessions-read-cache.test-support.js";
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
+import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
 import { listProjectedSessions } from "./session-utils-list.js";
+import * as rowInputs from "./session-utils-row.js";
+import type { SessionsListResult } from "./session-utils.types.js";
 
 afterEach(() => vi.restoreAllMocks());
 
 it("retries failed catalog renewal without blocking lists on its replacement", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg = { agents: { list: [{ id: "main", default: true }] } };
+    const cfg = { agents: { entries: { main: {} } } };
     setRuntimeConfigSnapshot(cfg);
     const key = "agent:main:dashboard:catalog-retry";
     const catalog = [
@@ -74,7 +83,7 @@ it("retries failed catalog renewal without blocking lists on its replacement", a
 
 it("retains prepared child metadata across a parent presentation refresh", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg = { agents: { list: [{ id: "main", default: true }] } };
+    const cfg = { agents: { entries: { main: {} } } };
     setRuntimeConfigSnapshot(cfg);
     const parent = "agent:main:dashboard:prepared-parent";
     const child = "agent:main:dashboard:prepared-child";
@@ -113,13 +122,14 @@ it("retains prepared child metadata across a parent presentation refresh", async
   });
 });
 
-it("materializes only concurrent selected pages after a catalog publication", async () => {
+it("yields while materializing only overlapping selected pages for concurrent list handlers", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg = { agents: { list: [{ id: "main", default: true }] } };
+    const cfg = { agents: { entries: { main: {} } } };
     setRuntimeConfigSnapshot(cfg);
-    for (let index = 0; index < 80; index++) {
+    const keys = Array.from({ length: 80 }, (_, index) => `agent:main:dashboard:page-${index}`);
+    for (const [index, key] of keys.entries()) {
       replaceSessionEntrySync(
-        { agentId: "main", sessionKey: `agent:main:dashboard:page-${index}` },
+        { agentId: "main", sessionKey: key },
         { sessionId: `page-${index}`, updatedAt: index + 1 },
       );
     }
@@ -127,20 +137,44 @@ it("materializes only concurrent selected pages after a catalog publication", as
     const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
     try {
       await projection.ensureMaterialized();
+      const context = bindSessionRowProjection(requestContext(cfg), () => projection);
       const before = projection.materializedCount;
       const reads = vi.spyOn(history, "withSessionHistoryWorkerDatabases");
       const sql = observeSqliteReadSql(StatementSync.prototype);
+      const rendered: string[] = [];
       const materialized: number[] = [];
+      let elapsed = 0;
+      let checkpoint: Promise<number> | undefined;
+      vi.spyOn(performance, "now").mockImplementation(() => elapsed);
+      const readInputs = rowInputs.readSessionRowInputs;
+      vi.spyOn(rowInputs, "readSessionRowInputs").mockImplementation((params) => {
+        const result = readInputs(params);
+        rendered.push(params.key);
+        // Charge the slice budget deterministically without sleeping or busy-waiting.
+        elapsed += 20;
+        checkpoint ??= nextTurn().then(() => rendered.length);
+        return result;
+      });
       try {
         sessionChanges.emit({ all: true, scope: "catalog" });
         const pages = await Promise.all(
-          [0, 5, 0, 5].map((offset) =>
-            listProjectedSessions({
-              projection,
-              opts: { limit: 5, offset },
-              onResult: () => materialized.push(projection.materializedCount - before),
-            }),
-          ),
+          [0, 5, 0, 5].map(async (offset, index) => {
+            const respond = vi.fn();
+            await sessionReadHandlers["sessions.list"]!({
+              req: { type: "req", id: `page-${index}`, method: "sessions.list" },
+              params: { limit: 5, offset },
+              client: null,
+              context,
+              isWebchatConnect: () => false,
+              respond(ok, result) {
+                expect(ok).toBe(true);
+                materialized.push(projection.materializedCount - before);
+                respond(result);
+              },
+            });
+            expect(respond).toHaveBeenCalledOnce();
+            return respond.mock.calls[0]![0] as SessionsListResult;
+          }),
         );
         expect(pages.map((page) => page.sessions.map((row) => row.sessionId))).toEqual([
           ["page-79", "page-78", "page-77", "page-76", "page-75"],
@@ -148,6 +182,11 @@ it("materializes only concurrent selected pages after a catalog publication", as
           ["page-79", "page-78", "page-77", "page-76", "page-75"],
           ["page-74", "page-73", "page-72", "page-71", "page-70"],
         ]);
+        expect(pages.map((page) => page.sessions.map((row) => row.key))).toEqual(
+          [0, 5, 0, 5].map((offset) => keys.toReversed().slice(offset, offset + 5)),
+        );
+        expect(await checkpoint).toBeLessThan(5);
+        expect(rendered.toSorted()).toEqual(keys.slice(-10).toSorted());
         expect(Math.max(...materialized)).toBe(10);
         expect(reads).not.toHaveBeenCalled();
         expect(sql.queries).toEqual([]);
@@ -163,7 +202,7 @@ it("materializes only concurrent selected pages after a catalog publication", as
 
 it("selects fresh metadata and board facts without materializing the unselected roster", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg = { agents: { list: [{ id: "main", default: true }] } };
+    const cfg = { agents: { entries: { main: {} } } };
     setRuntimeConfigSnapshot(cfg);
     for (let index = 0; index < 70; index++) {
       replaceSessionEntrySync(

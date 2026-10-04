@@ -18,7 +18,6 @@ import type { SessionsListResult } from "./session-utils.types.js";
 import { testState, writeSessionStore } from "./test-helpers.js";
 import {
   directSessionReq,
-  seedSessionTranscript,
   sessionStoreEntry,
   setupGatewaySessionsHandlerTestHarness,
 } from "./test/server-sessions.test-helpers.js";
@@ -38,7 +37,8 @@ const LIST_PARAMS = {
 
 test("sessions.list keeps warm roster enumeration bounded as ordinary rows grow", async () => {
   await createSessionStoreDir();
-  testState.agentsConfig = { list: [{ id: "main", default: true }, { id: "work" }] };
+  testState.agentsConfig = { entries: { main: {}, work: {} } };
+  testState.agentConfig = { sessionStore: { agentId: "main" } };
   const rosterReads: number[] = [];
   for (const rows of [20, 2_001]) {
     const entries: Record<string, ReturnType<typeof sessionStoreEntry>> = {
@@ -81,7 +81,7 @@ test("sessions.list retains stored titles and transcript previews beyond the dat
   const storeTemplate = path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json");
   testState.sessionConfig = { store: storeTemplate };
   testState.agentsConfig = {
-    list: agentIds.map((id, index) => ({ id, default: index === 0 })),
+    entries: Object.fromEntries(agentIds.map((id) => [id, {}])),
   };
 
   for (const [index, agentId] of agentIds.entries()) {
@@ -98,16 +98,23 @@ test("sessions.list retains stored titles and transcript previews beyond the dat
       },
       storePath,
     });
-    await seedSessionTranscript({
-      agentId,
-      messages: [
-        { role: "user", content: `Title ${agentId}` },
-        { role: "assistant", content: `Reply ${agentId}` },
-      ],
-      sessionId,
-      sessionKey,
-      storePath,
-    });
+    await sessionAccessor.replaceTranscriptEvents({ agentId, sessionId, sessionKey, storePath }, [
+      { type: "session", version: 3, id: sessionId, cwd: "/tmp" },
+      {
+        type: "message",
+        id: "question",
+        parentId: null,
+        timestamp: "2026-06-19T12:00:01.000Z",
+        message: { role: "user", content: `Title ${agentId}`, timestamp: 1 },
+      },
+      {
+        type: "message",
+        id: "reply",
+        parentId: "question",
+        timestamp: "2026-06-19T12:00:02.000Z",
+        message: { role: "assistant", content: `Reply ${agentId}`, timestamp: 2 },
+      },
+    ]);
   }
 
   const cfg = { session: { store: storeTemplate }, agents: testState.agentsConfig };
@@ -195,7 +202,7 @@ test("sessions.list projects out prompt snapshots without changing full entry re
   const readonly = vi.spyOn(sessionEntryReader, "listSessionEntriesReadOnly");
   const decode = vi.spyOn(sessionEntryStatus, "parseSessionEntryJson");
   const cfg = {
-    agents: { list: [{ id: "main", default: true }] },
+    agents: { entries: { main: {} } },
     session: { store: storePath },
   };
   let projection: Awaited<ReturnType<typeof createSessionRowProjection>> | undefined;

@@ -3,6 +3,7 @@ import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPluginCatalogEntry } from "../channels/plugins/catalog.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createCanonicalAgentConfigFixture } from "../test-utils/config-roster.js";
 import { registerChannelsCli } from "./channels-cli.js";
 
 const fixture = vi.hoisted(() => ({
@@ -193,10 +194,15 @@ describe.each(["login", "logout"])("channels %s owner", (mode) => {
     },
   );
 
-  it("keeps the legacy owner when the configured System Agent is unused", async () => {
-    fixture.config.agents!.ownership = undefined;
-    fixture.config.agents!.entries!.research!.default = true;
-    fixture.config.agents!.defaults = { systemAgent: { agentId: "???" } };
+  it("keeps the migrated legacy owner through channel auth", async () => {
+    fixture.config = createCanonicalAgentConfigFixture({
+      agents: {
+        entries: {
+          ...fixture.config.agents!.entries,
+          research: { ...fixture.config.agents!.entries!.research, default: true },
+        },
+      },
+    }).config;
 
     await runAuth(mode);
 

@@ -25,6 +25,15 @@ the remote's full ref inventory. Local upstreams need no fetch; an unknown upstr
 stays unknown. The selected upstream's own missing history may still be downloaded.
 Ahead/behind counts remain unavailable when shallow history has no merge base.
 
+The Gateway initializes local update facts after post-ready startup work settles.
+Local Git discovery uses the managed Gateway startup allowance (45 seconds, or
+90 seconds on Windows) per command and retries once after a one-second backoff on
+timeout. If both attempts time out, it logs one
+initialization warning and the `update.status` RPC reports
+`schedule.install.git.status: "unavailable"` with reason `"git-unavailable"`.
+Status reads reuse that result; an explicit Dev checkout refresh can recover it.
+Package directories without Git metadata skip the Git discovery subprocess.
+
 For a clean source checkout configured with `update.channel: "stable"` or `"beta"`, `update status --json` can include `update.git.preferredTarget` with `channel`, `tag`, and the exact commit `sha`.
 This uses the updater's release selector and fetches into a temporary private Git repository, preserving the installed refs and checkout.
 The selected tag must still resolve to that commit at the release remote; retained local-only tags do not count as fresh targets.
@@ -34,6 +43,20 @@ Default/dev targets, explicit refs, unsupported channels, dirty checkouts, and u
 It describes the preferred selection for the observed configured channel, not candidate build success, downgrade approval, service readiness, or safe state recovery.
 An explicit update invocation can select a different target or install method.
 Older installed status commands cannot acquire this observation from candidate code.
+
+For adopted immutable installations, the installation projection includes
+`activationEnabled` only when explicitly enabled. `activation` reports a
+retained operation's `operationId`, `phase`, `previousSha`, and `candidateSha`;
+`lastActivation` records the verified result and selected generation after
+retirement. Read these under `update.immutable` in CLI JSON or
+`schedule.install.immutable` in Gateway `update.status`. A prepared generation
+or `starting` phase is not activation success. Use
+[`openclaw update recover --root <installation-root>`](/cli/update#immutable-release-installations)
+to reconcile a retained operation.
+Once the Gateway recognizes an adopted immutable installation, ordinary
+`update.status` requests refresh its native activation facts; callers do not need
+`refreshCheckout: true` to observe phase changes. That installation's native
+record takes precedence over an external update manager.
 
 For Git installs, `update status --json` can include `update.git.artifacts`.
 `ready: true` includes the installed artifact `version` and immutable `buildId` after the native verifier checks the observed source commit, build stamps, runtime entry, and Control UI assets.
@@ -165,9 +188,18 @@ the stale row does not block updater admission. Upgrade normally, then run
 `openclaw update repair` from the updated installation if status still shows the
 old run. See [Updating](/install/updating#stale-update-history).
 
-Human output, chat completion notices, the Control UI update view, and the
-`openclaw status` update line use the same report, including on success. The report shows recorded facts; an absent verification fact
-means that check has not been observed.
+Chat completion notices show a short outcome and a next step. For diagnostics
+and recovery instructions, open **Settings → Updates** in the Control UI or run
+`openclaw update status` in your terminal. Human status output, the Control UI
+update view, and the `openclaw status` update line use the detailed report,
+including on success. The report shows recorded facts; an absent verification
+fact means that check has not been observed.
+
+If recovery verifies that the Gateway is still serving after a failed update,
+the terminal and saved Markdown guidance name that version and direct you to fix
+the update failure before retrying `openclaw update`. The update remains failed;
+serving health does not grant permission to restart or roll back. Restart-safety
+and migrated-state constraints remain visible separately.
 
 An unsuccessful identity check is reported as a version or build mismatch only
 when the saved observed and expected values disagree. Missing identity evidence
@@ -177,7 +209,7 @@ The Control UI's version badge shows **Not verified** for unavailable identity
 evidence and **Failed** for an observed version or build mismatch. This does not
 change the recorded update outcome.
 
-For failed runs, human status, completion notices, and reviewed failure reports
+For failed runs, human status and reviewed failure reports
 also try a read-only health request to the recorded Gateway port. A response
 supersedes historical claims that the Gateway is stopped; it does not change the
 failed update outcome or verify rollback safety. Saved recovery advice is labeled
@@ -195,6 +227,13 @@ user text, and show config key families instead of operator-defined names. Only
 catalog-confirmed public check and plugin IDs are included; unknown IDs and codes
 remain complete locally and are redacted publicly. Older runs cannot recover facts that their updater did not record. Existing history
 and report size limits still apply.
+
+Failed updates always retain a reason code and a failure fact, including failures
+before the first command runs. Git failures use codes such as `fetch-failed`,
+`git-root-unresolved`, `unsupported_git_channel`, and
+`snapshot-capacity-insufficient`. A refusal while recovery still owns the run uses
+`update-recovery-pending`; an otherwise unclassified failure uses `update-failed`.
+The check and code remain visible when private diagnostic text must be redacted.
 
 npm failure records keep the first five sanitized error lines in order. Lines over
 200 UTF-8 bytes retain a prefix followed by a space and an explicit `…[truncated]`
@@ -310,6 +349,16 @@ version is not proof of the version currently serving requests. Optional Doctor
 diagnostic failures remain warnings, while refused config writes and incomplete
 required migrations remain errors. Historical runs cannot recover facts that
 their updater never recorded.
+
+If a candidate check exits by signal, its failed step retains `termination`,
+`signal`, and a redacted `stderrTail` (up to 80 lines, 512 characters per line,
+and 8,192 characters total, reserving the fatal header when present). The report names the check, including **Checking
+data migrations** for Doctor, and shows the native diagnostics ahead of adjacent
+plugin warnings. The terminal and local Markdown report retain the excerpt;
+the short status report can truncate it. JSON history keeps the bounded excerpt,
+and reviewed public reports retain the termination class and recognized signal. This capture
+requires the updated updater; a candidate cannot restore diagnostics that an
+older installed driver discarded.
 
 Current updaters record their process identities and refresh the ledger
 every 30 seconds during long build, install, and finalization phases. Those

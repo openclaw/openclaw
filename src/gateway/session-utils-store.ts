@@ -46,8 +46,8 @@ import type { GatewayAgentOwnership } from "./agent-list.js";
 import { resolveGatewayAssistantAvatar } from "./assistant-avatar.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "./session-request-agent.js";
 import { resolveGatewayModelThinkingProfile } from "./session-utils-model.js";
+import type { GatewaySessionStoreDiscoveryCache } from "./session-utils-store-candidates.js";
 import {
-  type GatewaySessionStoreDiscoveryCache,
   resolveGatewaySessionStoreTarget,
   resolveGatewaySessionStoreTargetWithStore,
 } from "./session-utils-store-lookup.js";
@@ -101,10 +101,6 @@ function readAcpMetaForDeletedAgentCheck(params: {
   entry?: Pick<SessionEntry, "acp" | "lifecycleRevision"> | null;
   acpMetadataSessionKey?: string | null;
 }) {
-  if (params.entry?.acp) {
-    return params.entry.acp;
-  }
-
   const acpMetadataSessionKey = normalizeOptionalString(params.acpMetadataSessionKey);
   const directKeys = new Set<string>();
   if (acpMetadataSessionKey) {

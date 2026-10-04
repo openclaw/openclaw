@@ -68,7 +68,6 @@ async function withGoogleChatResponse<T>(
     url: string;
     init?: Pick<RequestInit, "method" | "body"> & { headers?: Record<string, string> };
     auditContext: string;
-    errorPrefix?: string;
     timeoutMs?: number;
     handleResponse: (response: Response) => Promise<T>;
   },
@@ -78,7 +77,6 @@ async function withGoogleChatResponse<T>(
     url,
     init,
     auditContext,
-    errorPrefix = "Google Chat API",
     timeoutMs = GOOGLECHAT_API_TIMEOUT_MS,
     handleResponse,
     assertDirectAdapterHandoff,
@@ -107,10 +105,10 @@ async function withGoogleChatResponse<T>(
   });
   try {
     if (!response.ok) {
-      const text = await readGoogleChatErrorResponse(response, errorPrefix);
+      const text = await readGoogleChatErrorResponse(response, "Google Chat API");
       throw new GoogleChatApiError(
         response.status,
-        `${errorPrefix} ${response.status}: ${text || response.statusText}`,
+        `Google Chat API ${response.status}: ${text || response.statusText}`,
       );
     }
     return await handleResponse(response);

@@ -10,7 +10,6 @@ import {
 import { describeCodexNativeWebSearch } from "../agents/codex-native-web-search.shared.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { readConfigFileSnapshotForWrite, resolveGatewayPort } from "../config/config.js";
-import { inheritLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import { logConfigUpdated } from "../config/logging.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createChannelSetupHooks, setupChannels } from "../flows/channel-setup.js";
@@ -21,7 +20,6 @@ import { formatWindowsGatewayFirewallGuidance } from "../infra/windows-gateway-f
 import { resolvePluginContributionOwners } from "../plugins/plugin-registry.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
-import { createLazyPromise } from "../shared/lazy-promise.js";
 import { resolveUserPath } from "../utils.js";
 import { createClackPrompter } from "../wizard/clack-prompter.js";
 import { WizardCancelledError } from "../wizard/prompts.js";
@@ -63,10 +61,6 @@ import type { OnboardMode } from "./onboard-types.js";
 type ConfigureSectionChoice = WizardSection | "__continue";
 
 const GATEWAY_HINT_PROBE_TIMEOUT_MS = 300;
-
-const loadSetupPluginConfigModule = createLazyPromise(
-  () => import("../wizard/setup.plugin-config.js"),
-);
 
 async function promptConfigureSection(
   runtime: RuntimeEnv,
@@ -447,9 +441,6 @@ export async function runConfigureWizard(
     let setupAgentId: string | undefined;
     const resolveSetupTarget = async () => {
       // Only agent-scoped steps choose an owner; keep that choice across sections.
-      if (nextConfig.agents?.ownership !== "explicit") {
-        inheritLegacyDefaultAgentId(baseConfig, nextConfig);
-      }
       setupAgentId ??=
         nextConfig.agents?.ownership === "explicit"
           ? tryResolveAmbientOwnerAgentId(nextConfig)
@@ -582,7 +573,7 @@ export async function runConfigureWizard(
       },
       channels: configureChannelsSection,
       plugins: async () => {
-        const { configurePluginConfig } = await loadSetupPluginConfigModule();
+        const { configurePluginConfig } = await import("../wizard/setup.plugin-config.js");
         nextConfig = await configurePluginConfig({
           config: nextConfig,
           prompter,

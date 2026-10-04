@@ -242,7 +242,7 @@ it("cancels a contended persistent admission without claiming the reply or poiso
       .spyOn(agentWriteAdmission, "runOpenClawAgentWorkerWrite")
       .mockImplementation((...args) => {
         const pendingWrite = enqueue(...args);
-        if (args[0].path === storePath && ++queued === 2) {
+        if (!("target" in args[0]) && args[0].path === storePath && ++queued === 2) {
           followerQueued.resolve();
         }
         return pendingWrite;

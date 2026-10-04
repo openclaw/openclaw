@@ -25,7 +25,7 @@ vi.mock("./context-engine-capabilities.js", () => ({
   resolveContextEngineCapabilities: () => ({}),
 }));
 vi.mock("../../config/sessions/session-accessor.js", () => ({ publishTranscriptUpdate: vi.fn() }));
-vi.mock("../sessions/index.js", () => ({ SessionManager: { open: vi.fn() } }));
+vi.mock("../sessions/index.js", () => ({ SessionManager: { openAsync: vi.fn() } }));
 vi.mock("../sessions/session-manager-write-admission.js", () => ({
   withSessionManagerWrite: vi.fn(),
 }));

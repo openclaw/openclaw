@@ -1,13 +1,12 @@
 import { expect, it, vi } from "vitest";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import * as stateReads from "../../../state/openclaw-state-db-readonly.js";
+import { restoreSubagentRunsFromDisk } from "./subagent-registry-persistence.js";
+import { persistRegistryFixture } from "./subagent-registry-state.fixture.test-support.js";
 import {
   getSubagentMaintenanceRunsSnapshotForRead,
   getSubagentSessionListRunsSnapshotForRead,
   getSubagentRunsSnapshotForRead,
-  persistSubagentRunsToDisk,
-  persistSubagentRunsToDiskOrThrow,
-  restoreSubagentRunsFromDisk,
 } from "./subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
@@ -21,8 +20,7 @@ export function registerSubagentRestoreCacheCases(params: {
     "invalidates loaded snapshots on restore, including empty stores (%s)",
     async (empty) => {
       const stale = createRun("stale");
-      params.mockRestoredRows(new Map([[stale.runId, stale]]));
-      await restoreSubagentRunsFromDisk({ runs: new Map() });
+      persistRegistryFixture(new Map([[stale.runId, stale]]));
       const restored = empty
         ? new Map<string, SubagentRunRecord>()
         : new Map([["restored", createRun("restored")]]);
@@ -41,12 +39,11 @@ export function registerSubagentRestoreCacheCases(params: {
   );
 
   it.each([true, false])(
-    "restores canonical rows across a concurrent deletion (committed: %s)",
+    "restores canonical rows across an external deletion publication (committed: %s)",
     async (committed) => {
       const entry = createRun("retained");
       const canonical = new Map([[entry.runId, entry]]);
-      params.mockRestoredRows(canonical);
-      await restoreSubagentRunsFromDisk({ runs: new Map() });
+      persistRegistryFixture(canonical);
       const entered = createDeferredCore();
       const release = createDeferredCore();
       let reads = 0;
@@ -66,11 +63,11 @@ export function registerSubagentRestoreCacheCases(params: {
       try {
         await entered.promise;
         if (committed) {
-          persistSubagentRunsToDiskOrThrow(new Map(), [entry.runId]);
+          persistRegistryFixture(new Map(), [entry.runId]);
           canonical.delete(entry.runId);
         } else {
           params.refuseNextWrite();
-          persistSubagentRunsToDisk(new Map(), [entry.runId]);
+          expect(() => persistRegistryFixture(new Map(), [entry.runId])).toThrow("write refused");
         }
       } finally {
         release.resolve();

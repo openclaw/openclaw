@@ -28,8 +28,7 @@ import { resolveAllowedMessageActions } from "../../infra/outbound/outbound-poli
 import { normalizeAccountId, parseSessionDeliveryRoute } from "../../routing/session-key.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 import { listAllChannelSupportedActions, listChannelSupportedActions } from "../channel-tools.js";
-import { buildMessageToolSchemaFromActions } from "./message-tool-schema-scoping.js";
-import { MESSAGE_TOOL_SCHEMA_BUILDERS } from "./message-tool-schema.js";
+import { buildMessageToolSchemaFromActions } from "./message-tool-schema.js";
 export type MessageToolDiscoveryParams = {
   cfg: OpenClawConfig;
   currentChatType?: ChatType;
@@ -380,19 +379,15 @@ export function buildMessageToolSchema(params: MessageToolDiscoveryParams, actio
           resolveDiscoveryAccountId(params, channel, contextualAccountId)
       : undefined,
   });
-  return buildMessageToolSchemaFromActions(
-    actions.length > 0 ? actions : ["send"],
-    {
-      includeClawHub:
-        normalizeMessageChannel(params.currentChannelProvider) === INTERNAL_MESSAGE_CHANNEL,
-      includePresentation,
-      includeDeliveryPin,
-      includeBestEffort,
-      scopeToActions: normalizeMessageChannel(params.currentChannelProvider) !== undefined,
-      extraProperties,
-    },
-    MESSAGE_TOOL_SCHEMA_BUILDERS,
-  );
+  return buildMessageToolSchemaFromActions(actions.length > 0 ? actions : ["send"], {
+    includeClawHub:
+      normalizeMessageChannel(params.currentChannelProvider) === INTERNAL_MESSAGE_CHANNEL,
+    includePresentation,
+    includeDeliveryPin,
+    includeBestEffort,
+    scopeToActions: normalizeMessageChannel(params.currentChannelProvider) !== undefined,
+    extraProperties,
+  });
 }
 
 export function resolveAgentAccountId(value?: string): string | undefined {

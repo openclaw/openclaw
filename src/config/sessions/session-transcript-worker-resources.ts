@@ -1,8 +1,9 @@
 import { channel } from "node:diagnostics_channel";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
+import { joinOwnedWorkerTasks } from "@openclaw/worker-runtime";
 import {
+  captureSqliteWorkerClosePolicy,
   ensureSqliteLibrarySelected,
-  getSqliteRuntimeCapabilities,
 } from "../../infra/bun-sqlite-library.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
@@ -13,7 +14,6 @@ import {
   type UsageCostWorkerReply,
 } from "../../infra/session-cost-usage-worker.types.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../../infra/sqlite-handle-lifecycle.js";
-import { joinOwnedWorkerTasks } from "../../infra/worker-task-pool-owned.js";
 import {
   createOwnedWorkerTaskPool,
   WorkerTaskError,
@@ -53,7 +53,8 @@ import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-
 
 const workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sessionTranscript);
 function createHistoryPool() {
-  return createOwnedWorkerTaskPool<
+  let generation: { canCloseNativeResources: boolean } | undefined;
+  const pool = createOwnedWorkerTaskPool<
     SessionHistoryWorkerInput,
     SessionTranscriptWorkerReply<SessionHistoryWorkerInput["kind"]>
   >({
@@ -63,9 +64,30 @@ function createHistoryPool() {
     idleTimeoutMs: 0,
     prepareWorker: () => {
       ensureSqliteLibrarySelected();
-      return { options: {} };
+      // The worker inherits this same fact at creation; later admission cannot upgrade it.
+      const current = { canCloseNativeResources: captureSqliteWorkerClosePolicy() };
+      generation = current;
+      return {
+        options: {},
+        async releaseResources() {
+          if (generation === current) {
+            generation = undefined;
+          }
+        },
+      };
+    },
+    onRetirementFailure() {
+      generation = undefined;
     },
   });
+  return {
+    ...pool,
+    canCloseNativeResources: () => generation?.canCloseNativeResources === true,
+    rotate() {
+      generation = undefined;
+      return pool.rotate();
+    },
+  };
 }
 
 function createUsageCostPool(kind: "read" | "refresh") {
@@ -285,12 +307,9 @@ async function closeDatabaseWorkerResource(
   idle: boolean,
 ): Promise<void> {
   const pool = historyWorkerLanes.find((candidate) => candidate === lane)?.pool;
-  // Active reads retain native-exit custody even when ordinary close releases handles.
-  if (
-    !idle ||
-    !getSqliteRuntimeCapabilities().explicitSqliteCloseReleasesNativeResources ||
-    !pool
-  ) {
+  // Active or unqualified readers keep native-exit custody. Proven idle readers
+  // release the exact database while retaining this worker's loaded code.
+  if (!idle || !pool?.canCloseNativeResources()) {
     await rotateDatabaseWorkers(lane);
     return;
   }
@@ -480,11 +499,8 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
       return closing;
     };
     const settleCandidates = async () => {
-      // Failed discovery can retain native handles outside candidate custody.
-      if (
-        discoveryFailed ||
-        !getSqliteRuntimeCapabilities().explicitSqliteCloseReleasesNativeResources
-      ) {
+      // Failed discovery can retain handles outside candidate custody even on a proven worker.
+      if (discoveryFailed || !lane.pool.canCloseNativeResources()) {
         await retire();
         return;
       }

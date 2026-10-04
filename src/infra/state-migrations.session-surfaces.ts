@@ -11,30 +11,6 @@ import {
 
 export type { PreparedLegacySessionSurfaces };
 
-export function isSurfaceGroupKey(key: string): boolean {
-  return key.includes(":group:") || key.includes(":channel:");
-}
-
-export function isLegacyGroupKey(
-  key: string,
-  surfaces: PreparedLegacySessionSurfaces["surfaces"] = [],
-): boolean {
-  const trimmed = key.trim();
-  if (!trimmed) {
-    return false;
-  }
-  const lower = normalizeLowercaseStringOrEmpty(trimmed);
-  if (lower.startsWith("group:") || lower.startsWith("channel:")) {
-    return true;
-  }
-  for (const surface of surfaces) {
-    if (surface.isLegacyGroupSessionKey?.(trimmed)) {
-      return true;
-    }
-  }
-  return false;
-}
-
 export function isLegacyDefaultMainAliasKey(key: string, mainKey: string): boolean {
   const lower = normalizeLowercaseStringOrEmpty(key.trim());
   const canonicalMainKey = normalizeMainKey(mainKey);

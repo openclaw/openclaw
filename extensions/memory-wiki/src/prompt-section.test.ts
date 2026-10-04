@@ -330,7 +330,7 @@ describe("Memory Wiki prompt section", () => {
   it("prepares only the invoking agent's compiled digest", async () => {
     const rootDir = path.join(suiteRoot, "agent-digests");
     const appConfig = {
-      agents: { list: [{ id: "support", default: true }, { id: "marketing" }] },
+      agents: { entries: { support: {}, marketing: {} } },
     } as OpenClawConfig;
     const config = resolveMemoryWikiConfig({
       vault: { scope: "agent", path: rootDir },

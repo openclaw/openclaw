@@ -928,7 +928,7 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
       await page.goto(new URL("/chat", fixtureServer.url).toString(), { waitUntil: "networkidle" });
       expect(await page.locator(".community-invite-card").count()).toBe(0);
       expect(
-        await page.evaluate(() => localStorage.getItem("openclaw:control-ui:community-invite")),
+        await page.evaluate(() => localStorage.getItem("openclaw:control-ui:community-invite:v2")),
       ).not.toBeNull();
       await page.getByText("OpenClaw work checkout", { exact: true }).click();
 

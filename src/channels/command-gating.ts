@@ -57,34 +57,3 @@ export function resolveControlCommandGate(
   const shouldBlock = params.allowTextCommands && params.hasControlCommand && !commandAuthorized;
   return { commandAuthorized, shouldBlock };
 }
-
-/** Convenience gate for channels that check primary and secondary text command identities. */
-export function resolveDualTextControlCommandGate(params: {
-  /** Global access-group switch for the channel/runtime. */
-  useAccessGroups: boolean;
-  /** Whether the primary identity has an access-group rule. */
-  primaryConfigured: boolean;
-  /** Whether the primary configured rule permits the command. */
-  primaryAllowed: boolean;
-  /** Whether the secondary identity has an access-group rule. */
-  secondaryConfigured: boolean;
-  /** Whether the secondary configured rule permits the command. */
-  secondaryAllowed: boolean;
-  /** True when the current inbound message parsed as a control command. */
-  hasControlCommand: boolean;
-  /** Policy used only when `useAccessGroups` is false. Defaults to open. */
-  modeWhenAccessGroupsOff?: CommandGatingModeWhenAccessGroupsOff;
-}): { commandAuthorized: boolean; shouldBlock: boolean } {
-  // Treat primary and secondary identities as independent authorization sources; channels use
-  // this when a text command can come from either a sender id or a platform-specific actor id.
-  return resolveControlCommandGate({
-    useAccessGroups: params.useAccessGroups,
-    authorizers: [
-      { configured: params.primaryConfigured, allowed: params.primaryAllowed },
-      { configured: params.secondaryConfigured, allowed: params.secondaryAllowed },
-    ],
-    allowTextCommands: true,
-    hasControlCommand: params.hasControlCommand,
-    modeWhenAccessGroupsOff: params.modeWhenAccessGroupsOff,
-  });
-}

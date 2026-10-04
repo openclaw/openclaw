@@ -115,7 +115,7 @@ describe("prepared model catalog worker boundary", () => {
     vi.stubEnv("HOME", homeA);
     vi.stubEnv("OPENCLAW_HOME", homeA);
     vi.stubEnv("CODEX_HOME", codexHome);
-    const fixture = createCatalogFixture(makeTempDir, 0);
+    const fixture = await createCatalogFixture(makeTempDir, 0);
     vi.stubEnv("OPENCLAW_STATE_DIR", fixture.env.OPENCLAW_STATE_DIR);
     const config = {
       ...fixture.config,
@@ -198,7 +198,7 @@ describe("prepared model catalog worker boundary", () => {
   it("configured runtime refresh keeps an unaffected worker live across a scoped sibling reload", async ({
     signal,
   }) => {
-    const fixture = createCatalogFixture(
+    const fixture = await createCatalogFixture(
       makeTempDir,
       0,
       {},
@@ -222,7 +222,7 @@ describe("prepared model catalog worker boundary", () => {
       agents: {
         ...fixture.config.agents,
         entries: {
-          main: { default: true, agentDir: fixture.agentDir, workspace: fixture.workspaceDir },
+          main: { agentDir: fixture.agentDir, workspace: fixture.workspaceDir },
           sibling: {
             agentDir: siblingDir,
             workspace: fixture.workspaceDir,
@@ -556,14 +556,7 @@ describe("prepared model catalog worker boundary", () => {
       ...fixture.config,
       agents: {
         ...fixture.config.agents,
-        list: [
-          {
-            id: "main",
-            default: true,
-            agentDir: fixture.agentDir,
-            workspace: fixture.workspaceDir,
-          },
-        ],
+        entries: { main: { agentDir: fixture.agentDir, workspace: fixture.workspaceDir } },
       },
     } satisfies OpenClawConfig;
     const owner = Object.freeze({

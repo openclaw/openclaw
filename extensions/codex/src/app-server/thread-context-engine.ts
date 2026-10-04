@@ -1,7 +1,5 @@
-import {
-  isActiveHarnessContextEngine,
-  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
-} from "openclaw/plugin-sdk/agent-harness-runtime";
+import { isActiveHarnessContextEngine } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { AgentHarnessSessionRuntimeParamsV1 } from "openclaw/plugin-sdk/codex-mcp-projection";
 import { resolveCodexContextEngineProjectionMaxChars } from "./context-engine-projection.js";
 import type {
   CodexAppServerContextEngineBinding,
@@ -14,7 +12,7 @@ export type CodexContextEngineThreadBootstrapProjection = Pick<
 >;
 
 export function buildContextEngineBinding(
-  params: EmbeddedRunAttemptParams,
+  params: AgentHarnessSessionRuntimeParamsV1,
   projection?: CodexContextEngineThreadBootstrapProjection,
 ): CodexAppServerContextEngineBinding | undefined {
   const contextEngine = isActiveHarnessContextEngine(params.contextEngine)

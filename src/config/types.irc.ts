@@ -1,5 +1,7 @@
-import type { CommonChannelMessagingConfig } from "./types.channel-messaging-common.js";
-import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
+import type {
+  CommonChannelGroupConfig,
+  CommonChannelMessagingConfig,
+} from "./types.channel-messaging-common.js";
 
 export type IrcAccountConfig = Omit<CommonChannelMessagingConfig, "mentionPatterns"> & {
   /** IRC server hostname (example: irc.example.com). */
@@ -37,18 +39,7 @@ export type IrcAccountConfig = Omit<CommonChannelMessagingConfig, "mentionPatter
   channels?: string[];
   /** Outbound text chunk size (chars). Default: 350. */
   textChunkLimit?: number;
-  groups?: Record<
-    string,
-    {
-      requireMention?: boolean;
-      tools?: GroupToolPolicyConfig;
-      toolsBySender?: GroupToolPolicyBySenderConfig;
-      allowFrom?: Array<string | number>;
-      skills?: string[];
-      enabled?: boolean;
-      systemPrompt?: string;
-    }
-  >;
+  groups?: Record<string, CommonChannelGroupConfig>;
 };
 
 export type IrcConfig = {

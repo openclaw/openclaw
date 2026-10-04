@@ -35,6 +35,7 @@ import {
   rememberSessionObserverDormantRun,
   rememberSessionObserverRevisionFloor,
   resolveSessionObserverDigestForLifecycle,
+  snapshotSessionObserverRevisionFloor,
   synthesizeSessionObserverTerminalDigest,
 } from "./session-observer-model.js";
 import type {
@@ -544,12 +545,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
     }
     let revisionFloor = revisionFloors.get(scopeKey);
     if (state && state.runId !== event.runId) {
-      const candidate = {
-        sessionId: state.sessionId,
-        lifecycleRevision: state.lifecycleRevision,
-        revision: state.revision,
-        previousDigest: state.previousDigest,
-      };
+      const candidate = snapshotSessionObserverRevisionFloor(state);
       if (!revisionFloor || candidate.revision > revisionFloor.revision) {
         revisionFloor = candidate;
       }
@@ -577,12 +573,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
         );
       const latest = superseded[0];
       if (latest && (!revisionFloor || latest.revision > revisionFloor.revision)) {
-        revisionFloor = {
-          sessionId: latest.sessionId,
-          lifecycleRevision: latest.lifecycleRevision,
-          revision: latest.revision,
-          previousDigest: latest.previousDigest,
-        };
+        revisionFloor = snapshotSessionObserverRevisionFloor(latest);
       }
       if (isRunStart) {
         if (revisionFloor) {

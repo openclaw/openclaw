@@ -28,7 +28,7 @@ export function createHarnessRecorders(runtime: DiagnosticsRecorderRuntime) {
     addRunAttrs,
     tracesEnabled,
     getTrackedInternalOrTrustedSpan,
-    contentCapturePolicy,
+    captureContent,
   } = runtime;
 
   const recordAgentCommentary = (
@@ -49,7 +49,7 @@ export function createHarnessRecorders(runtime: DiagnosticsRecorderRuntime) {
       "openclaw.commentary.text_length": evt.textLength,
       "openclaw.commentary.content_truncated": evt.contentTruncated,
     };
-    assignOtelModelContentAttributes(attrs, privateData.modelContent, contentCapturePolicy);
+    assignOtelModelContentAttributes(attrs, privateData.modelContent, captureContent);
     // addEvent bypasses setSpanAttrs; apply the same redaction and identifier
     // policy. Queued commentary precedes queued harness completion.
     span.addEvent("openclaw.agent.commentary", redactOtelAttributes(attrs), evt.sourceTimestampMs);

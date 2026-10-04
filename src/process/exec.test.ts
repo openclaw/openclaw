@@ -340,16 +340,25 @@ describe("runCommandWithTimeout", () => {
     },
   );
 
-  it("keeps argv values out of transport errors", async () => {
+  it("retires a failed launch before its scope closes and keeps argv out of the error", async () => {
     const privateArg = "private-command-argument";
-    const error = await runCommandWithTimeout(
-      [`openclaw-missing-${process.pid}-${Date.now()}`, "--token", privateArg],
-      { timeoutMs: 3_000 },
-    ).catch((caught: unknown) => caught);
+    const reservation = { spawned: vi.fn(), settled: vi.fn() };
+    await execSpawn.withCommandProcessScope(
+      async () => {
+        const error = await runCommandWithTimeout(
+          [`openclaw-missing-${process.pid}-${Date.now()}`, "--token", privateArg],
+          { timeoutMs: 3_000 },
+        ).catch((caught: unknown) => caught);
 
-    expect(error).toBeInstanceOf(Error);
-    expect(String(error)).not.toContain(privateArg);
-    expect(error).toMatchObject({ code: "ENOENT" });
+        expect(error).toBeInstanceOf(Error);
+        expect(String(error)).not.toContain(privateArg);
+        expect(error).toMatchObject({ code: "ENOENT" });
+        expect(reservation.spawned).not.toHaveBeenCalled();
+        expect(reservation.settled).toHaveBeenCalledOnce();
+      },
+      undefined,
+      { reserve: () => reservation },
+    );
   });
 });
 

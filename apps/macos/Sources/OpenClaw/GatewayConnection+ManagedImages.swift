@@ -84,19 +84,8 @@ extension GatewayConnection {
         guard await self.isCurrentServerLease(lease) else {
             throw OpenClawChatTransportSendError.notDispatched
         }
-        let transferID = UUID()
-        let transfer = Task { [urlRequest] in
-            try await session.data(for: urlRequest, maximumBytes: maximumBytes) { [weak self] in
-                self?.serverLeaseMatchesCurrentState(lease) == true
-            }
-        }
-        self.managedMediaTransfers[transferID] = transfer
-        defer { self.managedMediaTransfers[transferID] = nil }
-        let (data, urlResponse) = try await withTaskCancellationHandler {
-            try await transfer.value
-        } onCancel: {
-            transfer.cancel()
-        }
+        let (data, urlResponse) = try await self.transferMedia(
+            request: urlRequest, session: session, maximumBytes: maximumBytes, lease: lease)
         guard await self.isCurrentServerLease(lease) else {
             throw OpenClawChatTransportSendError.notDispatched
         }
@@ -115,5 +104,26 @@ extension GatewayConnection {
                 sizeBytes: response.artifact.sizebytes))
         }
         return .data(OpenClawChatMediaData(data: data, mimeType: mimeType))
+    }
+
+    func transferMedia(
+        request: URLRequest,
+        session: GatewayTLSPinningSession,
+        maximumBytes: Int,
+        lease: ServerLease) async throws -> (Data, URLResponse)
+    {
+        let transferID = UUID()
+        let transfer = Task {
+            try await session.data(for: request, maximumBytes: maximumBytes) { [weak self] in
+                self?.serverLeaseMatchesCurrentState(lease) == true
+            }
+        }
+        self.managedMediaTransfers[transferID] = transfer
+        defer { self.managedMediaTransfers[transferID] = nil }
+        return try await withTaskCancellationHandler {
+            try await transfer.value
+        } onCancel: {
+            transfer.cancel()
+        }
     }
 }

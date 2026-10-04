@@ -25,6 +25,12 @@ session hosting with the same node-local setting:
 Only enable session hosting on a machine you trust as shared Gateway infrastructure. Hosting consent applies to the device, not to an individual person's ownership of it. Existing session authorization still controls who may dispatch work.
 </Warning>
 
+The Gateway applies plugin `before_agent_run` policies to OpenClaw node turns
+before persisting input or launching the worker. Blocked turns retain only the
+redacted block message and leave the node available for the next turn. The hook
+sees the Gateway input and history; node-local system context is assembled later
+and is not included. See [hook boundaries](/plugins/hooks#choose-a-hook).
+
 Restart the app or node host after enabling this setting. The macOS app owns
 one paired node identity and uses the shared node runtime for session hosting;
 do not start a second CLI node for the same Mac. Its native camera, screen, and
@@ -40,7 +46,9 @@ When a session first needs the current worker build, the Gateway sends its seale
 worker artifact to the paired host. The node verifies the exact content hash,
 publishes the artifact atomically, and prewarms it when supported by the execution mode.
 The artifact contains its complete JavaScript dependency closure; the node does
-not install packages or execute lifecycle scripts. Installation belongs to the
+not install packages or execute lifecycle scripts. Runtime chunks are sealed and
+verified with the artifact, and cold workers complete admission before loading
+the turn runtime. Installation belongs to the
 session request and receives its cancellation signal. Reconnect maintenance does
 not install or prewarm a worker build.
 
@@ -96,6 +104,10 @@ execution and other approved node commands retain their existing requirements.
 Updating a node first remains compatible with an older Gateway; the node
 advertises this support only when the Gateway understands it.
 
+When updating a node before a `2026.9.8` Gateway, the node preserves that
+Gateway's Skill Workshop launch binding for its supplied worker bundle.
+Ordinary attributed chat turns continue to work without updating both sides together.
+
 Turn completion uses a bounded status wait when both the Gateway and node host
 support `node-worker-status-wait-v1`. The node wakes the waiting request as soon
 as the exact turn's terminal result is journaled; transcript settlement and
@@ -104,10 +116,30 @@ mixed Gateway/node versions: update either side first, and older node hosts
 continue to use status polling. A newer node advertises `workerHost.statusWait: 1`
 only to a Gateway that announces the capability. Reconnects renegotiate support.
 
-Worker tools newer than a node's installed OpenClaw, such as `presence`, are
-offered only when the node's supervisor declares support. Older nodes keep
-hosting OpenClaw worker turns without those tools. Update OpenClaw on the node
-and restart it to enable them.
+Hosted turns use the same prepared tool surface and agent/session policy as
+Gateway-local turns. Workspace file and process tools execute on the node;
+Gateway-owned tools, including web search, memory, and session discovery, execute
+on the Gateway with the turn's live authority and tool hooks. Tool definitions
+carry their execution location, so new Gateway tools do not require a separate
+node allowlist.
+
+The model-facing tools use the same Code Mode or Tool Search presentation as
+local turns, including the Gateway's resolved model settings and limits. Code
+Mode runs on the node and calls each catalog tool at its declared execution
+location. Its catalog and pending cells belong to the current turn; a retained
+worker receives a fresh presentation on the next turn.
+Node workers use `tool_call` for Tool Search, including when directory mode is configured.
+
+Concurrent Gateway tool calls wait for the existing transport budget, so larger
+model tool batches do not lose calls. Cancellation and heartbeats remain independent.
+
+Placement-local tools are offered only when the node declares their capability.
+Unavailable placement or transport capabilities are recorded in the Gateway log.
+Update OpenClaw on the node and restart it to enable newer local tools. Gateway
+operations use the matching downloaded worker bundle and do not depend on the
+installed supervisor recognizing their tool names. Updated nodes continue
+advertising the Gateway tools expected by older Gateways, preserving those
+tools when the node is updated first.
 
 This setting enables supervised session turns on the paired device, including
 Gateway-owned workspace transfer and result reconciliation. The Gateway prepares
@@ -122,9 +154,17 @@ response, including when a warm worker process is reused. A retained process rec
 the current turn's catalog and generation, so a turn does not need a separate
 discovery request. This uses the existing
 build-bound worker tool capability: the worker and Gateway must run the same
-bundle. If the complete admission response exceeds the control-frame limit, the
-turn fails explicitly instead of receiving a truncated catalog. The catalog grants
+bundle. The authenticated admission response uses the same negotiated payload budget
+as worker inference, so a complete tool catalog is not capped by the smaller
+control-frame limit. Oversized catalogs fail explicitly instead of being truncated. The catalog grants
 no execution authority; every Gateway tool call still checks the live turn claim.
+
+Worker reply attachments inside the assigned workspace are copied through the
+node transport before workspace reconciliation. Relative and absolute `MEDIA:`
+paths use the worker's bytes, including completed live replies. Raw paths outside
+that workspace produce a remote-file attachment error; allowed managed media
+references and HTTP URLs retain their existing delivery policy. Final chat
+completion still waits for reconciliation and includes any conflict summary.
 
 By default, each node has one worker slot per available CPU core. Configure the slot count with
 `nodeHost.workerRuns.capacity`. Launches beyond capacity wait up to 10 seconds
@@ -132,6 +172,10 @@ for a durable slot. A slot occupied only by an idle worker can be reclaimed for
 new work; active turns and background commands keep their slots. When no free
 or reclaimable slot remains, the node stays available for status and cancellation
 but is not selected for a new session turn.
+
+Capacity, host-stat, and skill-bin updates do not interrupt active node work or
+change its pairing authority. This behavior requires an updated Gateway; node
+configuration and stored pairings remain unchanged.
 
 After a turn settles, OpenClaw can retain its worker process for up to two
 minutes so an immediate follow-up avoids loading the runtime again. The timer
@@ -260,6 +304,11 @@ pairing, or removing only its node role invalidates clients first, then runs
 targeted environment and placement reconciliation; explicit removal waits for
 the credential fence before returning success, and the periodic sweep retries
 failed provider or placement cleanup.
+
+While a device runner is unavailable, including after session hosting is disabled,
+the Gateway pauses advisory disk-space probes and retains the last sample for
+that placement. Probes resume on the next scheduled sweep after the current
+runner reconnects. Disabling hosting does not discard the session's workspace.
 
 See [Anthropic: Claude sessions across computers](/providers/anthropic#claude-sessions-across-computers)
 for the Control UI behavior and storage sources.

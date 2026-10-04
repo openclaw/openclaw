@@ -26,13 +26,13 @@ import { listBundledPluginBuildEntries } from "../../scripts/lib/bundled-plugin-
 import * as liveGatewayDistFence from "../../scripts/lib/live-gateway-dist-fence.mts";
 import { createManagedCommandInvocation } from "../../scripts/lib/managed-child-process.mts";
 import { TSDOWN_UNIFIED_CONFIG_GROUP } from "../../scripts/lib/tsdown-config-groups.mts";
-import { runNodeMain } from "../../scripts/run-node.mts";
 import {
   resolveRuntimeWorkerArgv,
   resolveRuntimeWorkerUrl,
 } from "../../src/infra/runtime-worker-url.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { runNodeMain } from "./run-node-boundary.test-support.js";
 import { toolingProbeRuntimeEntrypoints } from "./tooling-probe-runtime.test-support.mts";
 
 beforeEach(() => {
@@ -146,29 +146,37 @@ describe("resolveBuildAllStep", () => {
     ).toThrow("full 40-character hexadecimal SHA");
   });
 
-  it("routes pnpm steps through the npm_execpath pnpm runner on Windows", () => {
-    const step = getBuildAllStep("plugins:assets:build");
-    const tempDir = tempDirs.make("openclaw-pnpm-runner-");
-    const npmExecPath = path.join(tempDir, "pnpm.cjs");
-    fs.writeFileSync(npmExecPath, "console.log('pnpm');\n");
-    const result = resolveBuildAllStep(step, {
-      platform: "win32",
-      nodeExecPath: "C:\\Program Files\\nodejs\\node.exe",
-      npmExecPath,
-      env: {},
-    });
-
-    expect(result).toEqual({
-      command: "C:\\Program Files\\nodejs\\node.exe",
-      args: [npmExecPath, "plugins:assets:build"],
-      options: {
-        stdio: "inherit",
+  it.each([false, true])(
+    "routes pnpm steps through the npm_execpath pnpm runner on Windows (defer isolated: %s)",
+    (deferIsolatedAssets) => {
+      const step = getBuildAllStep("plugins:assets:build");
+      const tempDir = tempDirs.make("openclaw-pnpm-runner-");
+      const npmExecPath = path.join(tempDir, "pnpm.cjs");
+      fs.writeFileSync(npmExecPath, "console.log('pnpm');\n");
+      const result = resolveBuildAllStep(step, {
+        platform: "win32",
+        nodeExecPath: "C:\\Program Files\\nodejs\\node.exe",
+        npmExecPath,
         env: {},
-        shell: false,
-        windowsVerbatimArguments: undefined,
-      },
-    });
-  });
+        deferIsolatedAssets,
+      });
+
+      expect(result).toEqual({
+        command: "C:\\Program Files\\nodejs\\node.exe",
+        args: [
+          npmExecPath,
+          "plugins:assets:build",
+          ...(deferIsolatedAssets ? ["--defer-isolated"] : []),
+        ],
+        options: {
+          stdio: "inherit",
+          env: {},
+          shell: false,
+          windowsVerbatimArguments: undefined,
+        },
+      });
+    },
+  );
 
   it("passes encoded import URLs literally to managed Node on Windows", () => {
     const importUrl = "file:///C:/Users/RUNNER%7E1/Project/scripts/tsx.mjs";
@@ -192,32 +200,43 @@ describe("resolveBuildAllStep", () => {
     });
   });
 
-  it("runs pnpm-free plugin builds through managed Node on Windows", () => {
-    const args = ["--import", "tsx", "scripts/bundled-plugin-assets.mts", "--phase", "build"];
-    const result = resolveBuildAllStep(getBuildAllStep("plugins:assets:build"), {
-      platform: "win32",
-      nodeExecPath: "C:\\Program Files\\nodejs\\node.exe",
-      env: { OPENCLAW_BUILD_ALL_NO_PNPM: "1" },
-    });
-    expect(
-      createManagedCommandInvocation({
-        bin: result.command,
-        args: result.args,
-        ...result.options,
+  it.each([false, true])(
+    "runs pnpm-free plugin builds through managed Node on Windows (defer isolated: %s)",
+    (deferIsolatedAssets) => {
+      const args = [
+        "--import",
+        "tsx",
+        "scripts/bundled-plugin-assets.mts",
+        "--phase",
+        "build",
+        ...(deferIsolatedAssets ? ["--defer-isolated"] : []),
+      ];
+      const result = resolveBuildAllStep(getBuildAllStep("plugins:assets:build"), {
         platform: "win32",
-      }),
-    ).toEqual({
-      command: "C:\\Program Files\\nodejs\\node.exe",
-      args,
-      shell: false,
-      windowsVerbatimArguments: undefined,
-    });
-    expect(result.options).toEqual({
-      stdio: "inherit",
-      env: { OPENCLAW_BUILD_ALL_NO_PNPM: "1" },
-      shell: false,
-    });
-  });
+        nodeExecPath: "C:\\Program Files\\nodejs\\node.exe",
+        env: { OPENCLAW_BUILD_ALL_NO_PNPM: "1" },
+        deferIsolatedAssets,
+      });
+      expect(
+        createManagedCommandInvocation({
+          bin: result.command,
+          args: result.args,
+          ...result.options,
+          platform: "win32",
+        }),
+      ).toEqual({
+        command: "C:\\Program Files\\nodejs\\node.exe",
+        args,
+        shell: false,
+        windowsVerbatimArguments: undefined,
+      });
+      expect(result.options).toEqual({
+        stdio: "inherit",
+        env: { OPENCLAW_BUILD_ALL_NO_PNPM: "1" },
+        shell: false,
+      });
+    },
+  );
 });
 
 describe("resolveBuildAllSteps", () => {

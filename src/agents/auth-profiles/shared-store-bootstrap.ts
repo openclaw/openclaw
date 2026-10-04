@@ -5,6 +5,7 @@ import { hasErrnoCode } from "../../infra/errno.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { prepareSqliteReadOnlyLocationSync } from "../../infra/sqlite-snapshot-source.js";
+import { registerListener } from "../../shared/listeners.js";
 import { writeConfigMachineState } from "../../state/config-machine-state-write.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import {
@@ -42,8 +43,7 @@ const freshSharedAuthStoreHandoffs = new Set<(handoff: FreshSharedAuthStoreHando
 export function registerFreshSharedAuthStoreHandoff(
   handoff: (receipt: FreshSharedAuthStoreHandoff) => void,
 ): () => void {
-  freshSharedAuthStoreHandoffs.add(handoff);
-  return () => freshSharedAuthStoreHandoffs.delete(handoff);
+  return registerListener(freshSharedAuthStoreHandoffs, handoff);
 }
 
 type SourceAuthDatabase = Pick<

@@ -16,19 +16,20 @@ import {
 } from "./artifacts.test-support.js";
 
 const hoisted = vi.hoisted(() => ({
-  loadSessionEntry: vi.fn(),
   resolveManagedArtifactDownload: vi.fn(),
   resolveManagedUrlDownload: vi.fn(),
   visitSessionMessagesAsync: vi.fn(),
-  resolveSessionKeyForRun: vi.fn(),
+  resolveSessionForRun: vi.fn(),
 }));
 
-vi.mock("../session-utils.js", async () => {
-  const actual = await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js");
+vi.mock("../session-sharing-preparation.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../session-sharing-preparation.js")>();
+  const { artifactFixtureSessionFacts } = await import("./artifacts.test-support.js");
   return {
     ...actual,
-    loadSessionEntry: hoisted.loadSessionEntry,
-    loadGatewaySessionEntryReadOnly: hoisted.loadSessionEntry,
+    prepareSessionMutationFacts: async (
+      params: Parameters<typeof actual.prepareSessionMutationFacts>[0],
+    ) => artifactFixtureSessionFacts(params),
   };
 });
 
@@ -46,7 +47,7 @@ vi.mock("../server-session-key.js", async () => {
   );
   return {
     ...actual,
-    resolveSessionKeyForRun: hoisted.resolveSessionKeyForRun,
+    resolveSessionForRun: hoisted.resolveSessionForRun,
   };
 });
 
@@ -80,7 +81,7 @@ async function invokeArtifactHandler(
 ) {
   const responder = createResponder();
   const defaultContext = {
-    getRuntimeConfig: () => ({ agents: { entries: { main: { default: true } } } }),
+    getRuntimeConfig: () => ({ agents: { entries: { main: {} } } }),
   };
   await artifactsHandlers[method]?.({
     req: { type: "req", id: options.id ?? method, method, params: {} },
@@ -117,13 +118,9 @@ async function downloadArtifact(
 describe("artifacts RPC handlers", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    hoisted.resolveSessionKeyForRun.mockReset();
+    hoisted.resolveSessionForRun.mockReset();
     hoisted.resolveManagedArtifactDownload.mockResolvedValue(null);
     hoisted.resolveManagedUrlDownload.mockResolvedValue(null);
-    hoisted.loadSessionEntry.mockReturnValue({
-      storePath: "/tmp/sessions.json",
-      entry: { sessionId: "sess-main", sessionFile: "/tmp/sess-main.jsonl" },
-    });
     mockedMessages([resultImageMessage()]);
   });
 
@@ -157,19 +154,6 @@ describe("artifacts RPC handlers", () => {
     expectFields(artifact?.download, { mode: "bytes" });
     expect(artifact?.id).toMatch(/^artifact_/);
     expect(artifact).not.toHaveProperty("data");
-    expect(hoisted.visitSessionMessagesAsync).toHaveBeenCalledWith(
-      {
-        agentId: "main",
-        sessionEntry: {
-          sessionFile: "/tmp/sess-main.jsonl",
-          sessionId: "sess-main",
-        },
-        sessionId: "sess-main",
-        sessionKey: "agent:main:main",
-        storePath: "/tmp/sessions.json",
-      },
-      expect.any(Function),
-    );
   });
 
   it("canonicalizes scoped sessionKey aliases with runtime config", async () => {
@@ -179,12 +163,15 @@ describe("artifacts RPC handlers", () => {
         id: "session-alias-main-key",
         context: runtimeContext({
           session: { mainKey: "primary" },
-          agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+          agents: { entries: { main: {}, work: {} } },
         }),
       },
     );
 
-    expect(hoisted.loadSessionEntry).toHaveBeenCalledWith("agent:work:primary");
+    expect(hoisted.visitSessionMessagesAsync).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionKey: "agent:work:primary", agentId: "work" }),
+      expect.any(Function),
+    );
     expectFields(expectFirstArtifact(calls), { sessionKey: "agent:work:primary" });
   });
 
@@ -197,19 +184,22 @@ describe("artifacts RPC handlers", () => {
           session: { store: "/tmp/shared-sessions.sqlite", scope: "global" },
           agents: {
             ownership: "explicit",
-            list: [{ id: "ops" }, { id: "research" }],
+            entries: { ops: {}, research: {} },
             defaults: { sessionStore: { agentId: "ops" } },
           },
         }),
       },
     );
 
-    expect(hoisted.loadSessionEntry).toHaveBeenCalledWith("global", { agentId: "ops" });
+    expect(hoisted.visitSessionMessagesAsync).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionKey: "global", agentId: "ops" }),
+      expect.any(Function),
+    );
     expectFields(expectFirstArtifact(calls), { sessionKey: "global" });
   });
 
   it("preserves agent scope when loading global-scope run artifacts", async () => {
-    hoisted.resolveSessionKeyForRun.mockReturnValue("global");
+    hoisted.resolveSessionForRun.mockReturnValue({ sessionKey: "global", agentId: "work" });
     mockedMessages([assistantFileMessage({ title: "out.txt", runId: "run-global" })]);
 
     const { calls } = await listArtifacts(
@@ -218,20 +208,26 @@ describe("artifacts RPC handlers", () => {
         id: "global-run-agent-scope",
         context: runtimeContext({
           session: { scope: "global" },
-          agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+          agents: { entries: { main: {}, work: {} } },
         }),
       },
     );
 
-    expect(hoisted.resolveSessionKeyForRun).toHaveBeenCalledWith("run-global", {
+    expect(hoisted.resolveSessionForRun).toHaveBeenCalledWith("run-global", {
       agentId: "work",
     });
-    expect(hoisted.loadSessionEntry).toHaveBeenCalledWith("global", { agentId: "work" });
+    expect(hoisted.visitSessionMessagesAsync).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionKey: "global", agentId: "work" }),
+      expect.any(Function),
+    );
     expectFields(expectFirstArtifact(calls), { sessionKey: "global", runId: "run-global" });
   });
 
   it("uses the run row owner before default selection", async () => {
-    hoisted.resolveSessionKeyForRun.mockReturnValue("agent:research:main");
+    hoisted.resolveSessionForRun.mockReturnValue({
+      sessionKey: "agent:research:main",
+      agentId: "research",
+    });
     mockedMessages([assistantFileMessage({ title: "out.txt", runId: "run-owned" })]);
 
     const { calls } = await listArtifacts(
@@ -240,19 +236,22 @@ describe("artifacts RPC handlers", () => {
         context: runtimeContext({
           agents: {
             ownership: "explicit",
-            list: [{ id: "ops" }, { id: "research" }],
+            entries: { ops: {}, research: {} },
           },
         }),
       },
     );
 
-    expect(hoisted.resolveSessionKeyForRun).toHaveBeenCalledWith("run-owned", {});
-    expect(hoisted.loadSessionEntry).toHaveBeenCalledWith("agent:research:main");
+    expect(hoisted.resolveSessionForRun).toHaveBeenCalledWith("run-owned", {});
+    expect(hoisted.visitSessionMessagesAsync).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionKey: "agent:research:main", agentId: "research" }),
+      expect.any(Function),
+    );
     expect(calls[0]?.ok).toBe(true);
   });
 
   it("translates run lookup selection-required into INVALID_REQUEST", async () => {
-    hoisted.resolveSessionKeyForRun.mockImplementation(() => {
+    hoisted.resolveSessionForRun.mockImplementation(() => {
       throw new AgentSelectionRequiredError(["ops", "research"], {
         surface: "artifact run",
         hint: "Pass agentId to select a configured agent.",
@@ -265,7 +264,7 @@ describe("artifacts RPC handlers", () => {
         context: runtimeContext({
           agents: {
             ownership: "explicit",
-            list: [{ id: "ops" }, { id: "research" }],
+            entries: { ops: {}, research: {} },
           },
         }),
       },
@@ -416,7 +415,10 @@ describe("artifacts RPC handlers", () => {
   });
 
   it("does not return untagged session artifacts for scoped runId queries", async () => {
-    hoisted.resolveSessionKeyForRun.mockReturnValue("agent:main:main");
+    hoisted.resolveSessionForRun.mockReturnValue({
+      sessionKey: "agent:main:main",
+      agentId: "main",
+    });
     const { calls } = await listArtifacts({ runId: "run-1" }, { id: "run-scope" });
 
     expect(expectArtifactList(calls)).toEqual({ artifacts: [] });

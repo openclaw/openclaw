@@ -52,8 +52,8 @@ const nodeBin = resolveNodeRuntimeExecutable() ?? process.execPath;
 
 export type BuildAllStep = BuildCacheStep &
   (
-    | { kind: "pnpm"; args?: never; pnpmArgs: string[]; windowsNodeOptions?: string }
-    | { kind?: "node"; args: string[]; pnpmArgs?: never; windowsNodeOptions?: string }
+    | { kind: "pnpm"; args?: never; pnpmArgs: string[] }
+    | { kind?: "node"; args: string[]; pnpmArgs?: never }
   );
 
 type BuildAllTiming = { label: string; durationMs: number; status: string };
@@ -69,6 +69,7 @@ type BuildAllStepParams = {
   nodeExecPath?: string;
   npmExecPath?: string;
   comSpec?: string;
+  deferIsolatedAssets?: boolean;
 };
 const RUN_NODE_SKIP_DTS_BUILD_ENV = "OPENCLAW_RUN_NODE_SKIP_DTS_BUILD";
 const TSDOWN_AI_OUTPUT_ROOT = tsdownPackageOutputRoot("ai");
@@ -439,26 +440,14 @@ function resolveBuildAllTsdownPlan(
   };
 }
 
-function resolveStepEnv(step: BuildAllStep, env: NodeJS.ProcessEnv, platform: NodeJS.Platform) {
-  const stepEnv = step.env ? Object.assign({}, env, step.env) : env;
-  if (platform !== "win32" || !step.windowsNodeOptions) {
-    return stepEnv;
-  }
-  const currentNodeOptions = stepEnv.NODE_OPTIONS?.trim() ?? "";
-  if (currentNodeOptions.includes(step.windowsNodeOptions)) {
-    return stepEnv;
-  }
-  return {
-    ...stepEnv,
-    NODE_OPTIONS: currentNodeOptions
-      ? `${currentNodeOptions} ${step.windowsNodeOptions}`
-      : step.windowsNodeOptions,
-  };
-}
-
 export function resolveBuildAllStep(step: BuildAllStep, params: BuildAllStepParams = {}) {
   const platform = params.platform ?? process.platform;
-  const env = resolveStepEnv(step, params.env ?? process.env, platform);
+  const env = step.env
+    ? Object.assign({}, params.env ?? process.env, step.env)
+    : (params.env ?? process.env);
+  const assetArgs =
+    params.deferIsolatedAssets && step.label === "plugins:assets:build" ? ["--defer-isolated"] : [];
+  const pnpmArgs = step.kind === "pnpm" ? [...step.pnpmArgs, ...assetArgs] : undefined;
   const nodeArgs =
     step.kind !== "pnpm"
       ? step.args
@@ -468,7 +457,7 @@ export function resolveBuildAllStep(step: BuildAllStep, params: BuildAllStepPara
   if (nodeArgs) {
     return {
       command: params.nodeExecPath ?? nodeBin,
-      args: nodeArgs,
+      args: [...nodeArgs, ...assetArgs],
       options: {
         stdio: "inherit",
         env,
@@ -480,7 +469,7 @@ export function resolveBuildAllStep(step: BuildAllStep, params: BuildAllStepPara
   }
   const runner = resolvePnpmRunner({
     env,
-    pnpmArgs: step.pnpmArgs,
+    pnpmArgs,
     nodeExecPath: params.nodeExecPath ?? nodeBin,
     npmExecPath: params.npmExecPath ?? env.npm_execpath,
     comSpec: params.comSpec,
@@ -565,6 +554,7 @@ export async function runBuildAllSteps(
     params.memoryLimit,
   );
   const steps = params.steps ?? resolveBuildAllSteps(profile, buildEnv);
+  const deferIsolatedAssets = steps.some((step) => step.label === "external-plugins:local-dist");
   const cacheEnabled = params.cacheEnabled ?? buildEnv.OPENCLAW_BUILD_CACHE !== "0";
   const logger = params.logger ?? console;
   // One owner for both `pnpm build` and run-node dirty-tree auto-build: both
@@ -692,7 +682,7 @@ export async function runBuildAllSteps(
       stepToRun = cacheHitStep;
     }
     logger.error(`[build-all] ${step.label}${reusedCache ? " (cache restored)" : ""}`);
-    const invocation = resolveBuildAllStep(stepToRun, { env: buildEnv });
+    const invocation = resolveBuildAllStep(stepToRun, { env: buildEnv, deferIsolatedAssets });
     invalidateInputStamps();
     const result = await runStep(invocation);
     params.signal?.throwIfAborted();

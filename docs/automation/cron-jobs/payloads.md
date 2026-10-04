@@ -259,9 +259,10 @@ judgment and move the repeatable parts into code:
 - When a run fails, make it fail instead of posting the error yourself: throw from
   trigger or script payload JavaScript, or exit non-zero from a command payload. A
   script that returns an error field still succeeds. The scheduler owns failure
-  accounting:
-  [failure notifications](/automation/cron-jobs/delivery#failure-notifications)
-  already wait for consecutive failed runs, so a one-off outage stays quiet.
+  accounting: only the
+  [failure alert](/automation/cron-jobs/delivery#failure-notifications) waits for
+  consecutive failed runs; the run's own output still follows the job's delivery
+  setting.
 
 ## Execution styles
 

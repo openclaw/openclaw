@@ -10,9 +10,8 @@ import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worke
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import { withProjectCheckoutLifecycle } from "./project-checkout.js";
 import { registerResolvedProject } from "./project-registration.js";
-import type { ProjectRegistryIdentity, ProjectRegistryRecord } from "./project-registry.kernel.js";
+import type { ProjectRegistryIdentity, ProjectRegistryRecord } from "./project-registry.types.js";
 
-export type { ProjectRegistryRecord } from "./project-registry.kernel.js";
 export {
   ProjectCheckoutError,
   resolveProjectCheckout,

@@ -27,10 +27,11 @@ backup.
 
 ## Upgrading very old versions
 
-For installations older than June 2026, upgrade to **`2026.9.5` first**, run its
+For installations older than July 2026, upgrade to **`2026.9.5` first**, run its
 Doctor migrations, and then upgrade to `latest`. The bridge release still
 imports the old `tasks/runs.sqlite`, `flows/registry.sqlite`, and
-`plugin-state/state.sqlite` databases, imports pre-June plugin JSON state and
+`plugin-state/state.sqlite` databases, imports the JSON plugin install index,
+pre-June plugin JSON state, and
 `credentials/oauth.json`, repairs retired agent and channel config keys, and
 includes the old runtime aliases. The retired plugin imports cover Telegram,
 iMessage, Active Memory, Nostr, and Microsoft Teams; see
@@ -39,10 +40,15 @@ those retired state files untouched.
 If you already installed the latest version, Doctor stops before rewriting config
 that still contains these retired keys and directs you through the same bridge.
 
+The retired same-file memory index (`meta`, `files`, and `chunks`) is also refused
+before canonical tables are created. Preserve the original state and configuration,
+then use **`2026.9.7`** to migrate a compatible copy of that index before retrying.
+Unrelated tables with these generic names remain untouched.
+
 If a newer release has already upgraded your SQLite databases, use a compatible
 pre-update backup for the bridge. Older releases cannot open newer database
 schemas; follow [downgrade recovery](/reference/database-schemas/integrity-and-recovery#downgrade-recovery)
-before running `2026.9.5` against that state.
+before running either bridge release against that state.
 
 Back up the state first and use a [supported Node version](/install/node):
 Node 24.16+ on the 24.x line, or Node 26.1+. Keep the same owning account,
@@ -473,6 +479,11 @@ migrations. Automatic rollback keeps compatible databases in place, preserving
 newer writes. If the previous runtime cannot read the current databases, the
 updater retains the candidate and recovery artifacts and reports why rollback
 was refused.
+
+Rollback snapshots settle local SQLite writers under maintenance ownership before
+capture, so writer shutdown during rollback is not mistaken for intervening writes.
+The installed updater owns snapshot capture; staging a newer candidate cannot
+change that behavior in an already-running older updater.
 
 Switch channels or target a specific version:
 

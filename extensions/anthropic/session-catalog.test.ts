@@ -794,10 +794,10 @@ describe("Claude session catalog", () => {
           model: { primary: "anthropic/claude-opus-4-8" },
           models: { "anthropic/claude-opus-4-8": { agentRuntime: { id: "claude-cli" } } },
         },
-        list: [
-          { id: "main", default: true },
-          { id: "research", ...research },
-        ],
+        entries: {
+          main: {},
+          research: { ...research },
+        },
       },
     } satisfies OpenClawConfig;
     const provider = captureCatalogProvider(
@@ -1738,7 +1738,7 @@ describe("Claude session catalog", () => {
       size: originalStat.size,
     });
 
-    watches.change(transcriptPath, "rename");
+    watches.change(transcriptPath);
     expect((await listLocalClaudeSessionPage({}, home)).sessions[0]?.name).toBe("Bravo");
   });
 
@@ -1948,7 +1948,7 @@ describe("Claude session catalog", () => {
 
     await fs.rm(transcriptPath);
     await fs.utimes(projectDir, fixedTime, fixedTime);
-    watches.change(transcriptPath, "rename");
+    watches.change(transcriptPath);
     expect((await listLocalClaudeSessionPage({}, home)).sessions).toEqual([]);
     await fs.writeFile(transcriptPath, `${JSON.stringify(sdkCliMessage(sessionId, "Bravo"))}\n`);
     await fs.utimes(transcriptPath, fixedTime, fixedTime);
@@ -1960,7 +1960,7 @@ describe("Claude session catalog", () => {
     });
     const openSpy = vi.spyOn(fs, "open");
 
-    watches.change(transcriptPath, "rename");
+    watches.change(transcriptPath);
     expect((await listLocalClaudeSessionPage({}, home)).sessions).toEqual([
       expect.objectContaining({ threadId: sessionId, name: "Bravo" }),
     ]);

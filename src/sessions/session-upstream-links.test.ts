@@ -62,13 +62,13 @@ describe("session upstream links", () => {
     upsertLink(watched, "claude", database);
     upsertLink(unwatched, "codex", database);
     expect(
-      registerSessionStateWatch(
+      await registerSessionStateWatch(
         { watcherSessionKey: "agent:main:main", targetSessionKey: watched },
         database,
       ),
     ).toBe(true);
     expect(
-      registerSessionStateWatch(
+      await registerSessionStateWatch(
         { watcherSessionKey: "agent:other:main", targetSessionKey: watched },
         database,
       ),
@@ -91,7 +91,7 @@ describe("session upstream links", () => {
       ),
     ).toBe(true);
     expect(
-      registerSessionStateWatch(
+      await registerSessionStateWatch(
         { watcherSessionKey: "agent:main:main", targetSessionKey: ambiguous },
         database,
       ),
@@ -174,7 +174,7 @@ describe("session upstream links", () => {
     const database = createDatabaseOptions();
     const sessionKey = "agent:main:adopted:refresh";
     upsertLink(sessionKey, "claude", database);
-    registerSessionStateWatch(
+    await registerSessionStateWatch(
       { watcherSessionKey: "agent:main:main", targetSessionKey: sessionKey },
       database,
     );

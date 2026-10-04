@@ -61,6 +61,8 @@ export type PluginManifestRecord = PluginManifestRecordStatic & {
   format?: PluginFormat;
   bundleFormat?: PluginBundleFormat;
   bundleCapabilities?: string[];
+  /** Packaged, plugin-relative setup skill; invoked only by an explicit user action. */
+  onboardingSkill?: string;
   channels: string[];
   providers: string[];
   providerDiscoverySource?: string;

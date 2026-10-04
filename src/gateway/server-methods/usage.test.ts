@@ -201,7 +201,7 @@ describe("gateway usage", () => {
     const params = {
       startMs: 1,
       endMs: 2,
-      config: { agents: { entries: { ops: { default: true } } } },
+      config: { agents: { entries: { ops: {} } } },
     };
     await loadCostUsageSummaryCached(params);
     expect(vi.mocked(loadCostUsageSummaryFromCache).mock.calls[0]?.[0]?.agentId).toBe("ops");
@@ -236,7 +236,7 @@ describe("gateway usage", () => {
             ...dates,
             agentScope: "all",
           },
-          { agents: { list: [{ id: "main" }] } },
+          { agents: { entries: { main: {} } } },
         ),
       );
       const loaded = vi
@@ -251,7 +251,7 @@ describe("gateway usage", () => {
     await withTestDir({ prefix: "openclaw-usage-avatar-" }, async (workspace) => {
       await fs.writeFile(`${workspace}/avatar.png`, "avatar");
       const config: OpenClawConfig = {
-        agents: { list: [{ id: "main", workspace, identity: { avatar: "avatar.png" } }] },
+        agents: { entries: { main: { workspace, identity: { avatar: "avatar.png" } } } },
       };
       const readSync = vi.spyOn(fsSync, "readSync");
       try {
@@ -268,7 +268,13 @@ describe("gateway usage", () => {
     vi.mocked(loadCostUsageSummaryFromCache).mockImplementation(async (params) =>
       params?.agentId === "opus" ? costSummary(20, 2) : costSummary(10, 1),
     );
-    const config = { agents: { list: [{ id: "main", default: true }, { id: "opus" }] } };
+    const config: OpenClawConfig = {
+      agents: {
+        ownership: "explicit",
+        defaults: { systemAgent: { agentId: "main" } },
+        entries: { main: {}, opus: {} },
+      },
+    };
     const params = { ...dates, endDate: dates.startDate, mode: "utc" };
     const [, defaultResult] = await request("usage.cost", params, config);
     expect(loadCostUsageSummaryFromCache).toHaveBeenCalledTimes(1);
@@ -307,7 +313,9 @@ describe("gateway usage", () => {
       "usage.cost",
       { ...dates, agentScope: "all" },
       {
-        agents: { list: Array.from({ length: 13 }, (_, i) => ({ id: `agent-${i}` })) },
+        agents: {
+          entries: Object.fromEntries(Array.from({ length: 13 }, (_, i) => [`agent-${i}`, {}])),
+        },
       },
     );
     try {
@@ -336,7 +344,7 @@ describe("gateway usage", () => {
         "usage.cost",
         { ...dates, agentScope: "all" },
         {
-          agents: { list: [{ id: "main" }, { id: "broken" }] },
+          agents: { entries: { main: {}, broken: {} } },
         },
         respond,
       ),

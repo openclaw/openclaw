@@ -216,6 +216,20 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
         }
         void params.onOpen?.();
         syncChatModelSearch(details);
+        const active = details.ownerDocument.activeElement;
+        // wa-popup can hide and reopen its top layer while resolving the anchor.
+        // Focus after that opening work, not on every catalog render.
+        requestAnimationFrame(() => {
+          if (
+            details.isConnected &&
+            details.open &&
+            details.ownerDocument.activeElement === active
+          ) {
+            details
+              .querySelector<HTMLInputElement>("[data-chat-model-search]")
+              ?.focus({ preventScroll: true });
+          }
+        });
       }}
     >
       <summary

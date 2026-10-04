@@ -56,7 +56,6 @@ type CreateProfileResult = BrowserCreateProfileResult & {
   transport: "cdp" | "chrome-mcp";
 };
 
-/** Create a profile service bound to one browser route context. */
 export function createBrowserProfilesService(ctx: BrowserRouteContext) {
   const createProfile = async (params: CreateProfileParams): Promise<CreateProfileResult> => {
     const name = params.name.trim();

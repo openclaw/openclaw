@@ -244,7 +244,7 @@ function expectOrphanReply(messages: unknown, latestPrompt: string) {
     "final assistant",
   );
   expect(assistant.content).toBe(`stub-provider-target=${latestPrompt}`);
-  expect(hoisted.sessionManager.branch).toHaveBeenCalledWith("parent-leaf");
+  expect(hoisted.sessionManager.branchAsync).toHaveBeenCalledWith("parent-leaf");
 }
 
 function expectFields(actual: Record<string, unknown>, expected: Record<string, unknown>) {
@@ -386,7 +386,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
             codeMode: { enabled: false },
           },
           agents: {
-            list: [{ id: "ops", tools: { codeMode: true } }],
+            entries: { ops: { tools: { codeMode: true } } },
           },
         } as OpenClawConfig,
         model: {
@@ -462,10 +462,6 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     ]);
 
     await runAttempt({
-      contextEngine: {
-        assemble: async ({ messages }) => ({ messages, estimatedTokens: 1 }),
-      },
-
       attemptOverrides: {
         disableTools: false,
         sourceReplyDeliveryMode: "message_tool_only",
@@ -487,7 +483,9 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(options.includeToolSearchControls).toBe(!privateReply);
     const sessionOptions = mockParams(hoisted.createAgentSessionMock);
     const customTools = requireRecords(sessionOptions.customTools, "customTools");
-    expect(customTools.map((tool) => tool.name)).toEqual(["message"]);
+    expect(customTools.map((tool) => tool.name)).toEqual(
+      privateReply ? ["message"] : ["tool_search", "tool_describe", "tool_call", "message"],
+    );
   });
 
   it("quarantines unsupported tool schemas before creating the model session", async () => {
@@ -722,13 +720,13 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       replayedEntries.push(`model:${String(provider)}/${String(modelId)}`);
       return "replayed-model";
     });
-    hoisted.sessionManager.appendCustomEntry.mockImplementation((...args: unknown[]) => {
+    hoisted.sessionManager.appendCustomEntryAsync.mockImplementation((...args: unknown[]) => {
       if (args[0] === "model-snapshot") {
         replayedEntries.push(`custom:${args[0]}:${JSON.stringify(args[1])}`);
       }
       return "replayed-custom";
     });
-    hoisted.sessionManager.appendLabelChange.mockImplementation((...args: unknown[]) => {
+    hoisted.sessionManager.appendLabelChangeAsync.mockImplementation((...args: unknown[]) => {
       replayedEntries.push(`label:${String(args[0])}/${String(args[1])}`);
       return "replayed-label";
     });
@@ -764,7 +762,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     };
     installOrphanMetadata(olderPrompt, [labelEntry]);
     hoisted.sessionManager.appendThinkingLevelChange.mockResolvedValue("replayed-thinking");
-    hoisted.sessionManager.appendLabelChange.mockImplementation((targetId: unknown) => {
+    hoisted.sessionManager.appendLabelChangeAsync.mockImplementation((targetId: unknown) => {
       throw new Error(`Entry ${String(targetId)} not found`);
     });
     const { seen, sessionPrompt } = captureOrphanPrompt(olderPrompt);
@@ -779,7 +777,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(result.finalPromptText).toBe(`${orphanMarker}\n${olderPrompt}\n\n${latestPrompt}`);
     expect(seen.modelInputPrompt).toBe(result.finalPromptText);
     expectOrphanReply(result.messagesSnapshot, latestPrompt);
-    expect(hoisted.sessionManager.appendLabelChange).not.toHaveBeenCalled();
+    expect(hoisted.sessionManager.appendLabelChangeAsync).not.toHaveBeenCalled();
   });
 
   it("removes the repaired orphan from assembled history when the context engine appends the active prompt", async () => {
@@ -826,7 +824,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(JSON.stringify(seen.assembledMessages)).not.toContain(olderPrompt);
     expect(JSON.stringify(seen.messages)).not.toContain(olderPrompt);
     expect(JSON.stringify(seen.messages)).toContain(latestPrompt);
-    expect(hoisted.sessionManager.branch).toHaveBeenCalledWith("parent-leaf");
+    expect(hoisted.sessionManager.branchAsync).toHaveBeenCalledWith("parent-leaf");
   });
 
   it("keeps bootstrap truncation warnings out of WebChat runtime context", async () => {
@@ -956,15 +954,13 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       });
 
       if (runtimeOnly) {
-        expect(seen.prompt).toContain("Continue the OpenClaw runtime event.");
-        expect(seen.prompt).toContain("Reply target of current user message:");
-        expect(seen.prompt).toContain("WT daily plan - Sat May 2");
+        expect(seen.prompt).toBe("Continue the OpenClaw runtime event.");
       } else {
         expect(seen.prompt).toBe("what does this mean?");
       }
       expect(result.finalPromptText).toBe(seen.prompt);
       const runtimeContext = runtimeContextMessage(seen.messages);
-      const inboundContext = runtimeOnly ? seen.prompt : runtimeContext.content;
+      const inboundContext = runtimeContext.content;
       expect(inboundContext).toContain("Reply target of current user message:");
       expect(inboundContext).toContain('"sender_label": "Mike"');
       expect(inboundContext).toContain("WT daily plan - Sat May 2");
@@ -986,7 +982,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       expect(contextCompiled?.data?.systemPrompt).not.toContain("secret runtime context");
       if (runtimeOnly) {
         expect(JSON.stringify(seen.modelMessages)).toContain("secret runtime context");
-        expect(promptSubmitted?.data?.prompt).toContain("WT daily plan - Sat May 2");
+        expect(promptSubmitted?.data?.prompt).not.toContain("WT daily plan - Sat May 2");
         expect(promptSubmitted?.data?.prompt).toContain("secret runtime context");
         expect(
           requireRecords(result.messagesSnapshot, "messages snapshot").some(
@@ -1081,7 +1077,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(runtimeContext.content).toContain("internal heartbeat event");
     expect(contextCompiled?.data?.systemPrompt).not.toContain("internal heartbeat event");
     expect(JSON.stringify(result.messagesSnapshot)).not.toContain("internal heartbeat event");
-    expect(hoisted.sessionManager.branch).toHaveBeenCalledWith("parent-leaf");
+    expect(hoisted.sessionManager.branchAsync).toHaveBeenCalledWith("parent-leaf");
   });
 
   it("skips blank visible prompts with replay history before provider submission", async () => {

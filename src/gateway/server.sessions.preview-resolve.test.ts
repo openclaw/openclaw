@@ -71,11 +71,12 @@ test("lists and previews the selected aggregate global owner over WebSocket", as
   const { workStorePath } = await createSelectedGlobalSessionStore();
   testState.agentsConfig = {
     entries: {
-      main: { default: true, model: { primary: "openai/gpt-5.4" } },
+      main: { model: { primary: "openai/gpt-5.4" } },
       work: { model: { primary: "openai/gpt-5.5" } },
     },
   };
   const sessionId = "aggregate-work-global";
+  const backfilled = observeSessionRowBackfill(["global"]);
   await writeSessionStore({
     agentId: "work",
     storePath: workStorePath,
@@ -88,7 +89,6 @@ test("lists and previews the selected aggregate global owner over WebSocket", as
     storePath: workStorePath,
     messages: [{ role: "user", content: "Work global conversation" }],
   });
-  const backfilled = observeSessionRowBackfill(["global"]);
   const { ws } = await openClient();
   try {
     await backfilled;

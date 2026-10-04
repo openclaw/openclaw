@@ -316,7 +316,7 @@ export async function noteSessionTranscriptHealth(options?: {
     deliveryReport = repairCanonicalSessionDeliveryStates(rowRepairParams);
     repairLegacySessionExecPolicy(rowRepairParams);
     acpKeyReport = await repairAcpSessionMetaKeysForDoctor({
-      ...repairParams,
+      ...rowRepairParams,
       authority: maintenanceAuthority,
     });
     titleReport = await repairLegacySessionTitles({
@@ -442,11 +442,13 @@ export async function noteSessionTranscriptHealth(options?: {
     );
   }
   if (acpKeyReport.found > 0 || acpKeyReport.warnings.length > 0) {
+    params.onWarnings?.(acpKeyReport.warnings);
     note(
       [
         params.shouldRepair
-          ? `- Repaired ${acpKeyReport.repaired} of ${acpKeyReport.found} legacy ACP metadata key(s).`
-          : `- Found ${acpKeyReport.found} legacy ACP metadata key(s). Run "openclaw doctor --fix" to repair them.`,
+          ? `- Repaired ${acpKeyReport.repaired} of ${acpKeyReport.found} legacy ACP metadata record(s).`
+          : `- Found ${acpKeyReport.found} legacy ACP metadata record(s). Run "openclaw doctor --fix" to repair them.`,
+        ...(acpKeyReport.backups ?? []).map((backup) => `- Saved ACP metadata backup: ${backup}`),
         ...acpKeyReport.warnings,
       ].join("\n"),
       "ACP session keys",

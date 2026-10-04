@@ -7,7 +7,6 @@ import {
   replaceSessionEntrySync,
 } from "../../config/sessions/session-accessor.js";
 import { clearSessionStoreCacheForTest } from "../../config/sessions/store-writer-state.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   McpLoopbackToolCache,
   resolveMcpLoopbackScopedTools,
@@ -55,6 +54,13 @@ vi.mock("../model-runtime-aliases.js", async () => ({
 }));
 
 type TrustedHandoff = NonNullable<RunCliAgentParams["trustedInternalHandoff"]>;
+type RestrictedCompletion = {
+  name: string;
+  providerName?: string;
+  execHost?: "node";
+  seedChildLineage?: boolean;
+  forge?: (handoff: TrustedHandoff) => TrustedHandoff | undefined;
+};
 
 const runAgentAttempt = (params: RunAgentAttemptOverrides) =>
   runAgentAttemptImpl(makeRunAgentAttemptParams(params));
@@ -138,51 +144,6 @@ describe("CLI completion tool handoffs", () => {
   it.each([
     { name: "a non-Claude CLI runtime", providerName: "google-gemini-cli", execHost: undefined },
     { name: "a node-hosted Claude CLI requester", providerName: "claude-cli", execHost: "node" },
-  ] as const)(
-    "keeps trusted completion handoffs off the requester tools for $name",
-    async ({ providerName, execHost }) => {
-      const sessionKey = "agent:main:direct:cli-announce-unenforced";
-      const sessionEntry = makeSessionEntry(
-        "openclaw-session-cli-announce-unenforced",
-        execHost ? { execHost } : {},
-      );
-      const sessionStore = createSubagentAnnounceSessionStore(sessionKey, sessionEntry, {});
-      await writeSessionStoreSeed(sessionStore);
-      runCliAgentMock.mockResolvedValue(makeCliResult("completion announce"));
-
-      for (const sourceReplyDeliveryMode of ["automatic", "message_tool_only"] as const) {
-        runCliAgentMock.mockClear();
-        await runStoredAttempt({
-          providerOverride: providerName,
-          modelOverride: "opus",
-          cfg: { session: { store: storePath } },
-          sessionEntry,
-          sessionKey,
-          body: "A background task finished. Process the completion update now.",
-          runId: `run-cli-announce-unenforced-${sourceReplyDeliveryMode}`,
-          opts: createSubagentAnnounceHandoffOptions({
-            sourceReplyDeliveryMode,
-            targetSessionKey: sessionKey,
-            targetSessionId: sessionEntry.sessionId,
-            provider: providerName,
-            model: "opus",
-          }),
-          messageChannel: "telegram",
-          sessionStore,
-        });
-
-        expectMockArgFields({
-          provider: providerName,
-          ...(sourceReplyDeliveryMode === "automatic"
-            ? { disableTools: true, toolsAllow: undefined }
-            : { disableTools: false, toolsAllow: ["message"] }),
-          trustedInternalHandoff: undefined,
-        });
-      }
-    },
-  );
-
-  it.each([
     { name: "a missing capability", seedChildLineage: true, forge: () => undefined },
     {
       name: "a capability minted for another requester session",
@@ -199,11 +160,19 @@ describe("CLI completion tool handoffs", () => {
       seedChildLineage: false,
       forge: (handoff: TrustedHandoff) => handoff,
     },
-  ])(
-    "keeps a Claude CLI completion handoff tool-free for $name",
-    async ({ seedChildLineage, forge }) => {
+  ] satisfies RestrictedCompletion[])(
+    "restricts completion tools for $name",
+    async ({
+      providerName = "claude-cli",
+      execHost,
+      seedChildLineage = true,
+      forge,
+    }: RestrictedCompletion) => {
       const sessionKey = "agent:main:direct:claude-announce-unverified";
-      const sessionEntry = makeSessionEntry("openclaw-session-cli-announce-unverified");
+      const sessionEntry = makeSessionEntry(
+        "openclaw-session-cli-announce-unverified",
+        execHost ? { execHost } : {},
+      );
       const sessionStore = seedChildLineage
         ? createSubagentAnnounceSessionStore(sessionKey, sessionEntry, {})
         : { [sessionKey]: sessionEntry };
@@ -216,13 +185,14 @@ describe("CLI completion tool handoffs", () => {
           sourceReplyDeliveryMode,
           targetSessionKey: sessionKey,
           targetSessionId: sessionEntry.sessionId,
-          provider: "claude-cli",
+          provider: providerName,
           model: "opus",
         });
         const { trustedInternalHandoff, ...unverifiedOpts } = opts;
-        const forged = trustedInternalHandoff ? forge(trustedInternalHandoff) : undefined;
+        const forged =
+          trustedInternalHandoff && forge ? forge(trustedInternalHandoff) : trustedInternalHandoff;
         await runStoredAttempt({
-          providerOverride: "claude-cli",
+          providerOverride: providerName,
           modelOverride: "opus",
           cfg: { session: { store: storePath } },
           sessionEntry,
@@ -234,10 +204,11 @@ describe("CLI completion tool handoffs", () => {
           sessionStore,
         });
 
+        const messageOnly = !forge && sourceReplyDeliveryMode === "message_tool_only";
         expectMockArgFields({
-          provider: "claude-cli",
-          disableTools: true,
-          toolsAllow: undefined,
+          provider: providerName,
+          disableTools: !messageOnly,
+          toolsAllow: messageOnly ? ["message"] : undefined,
           trustedInternalHandoff: undefined,
         });
       }
@@ -258,11 +229,11 @@ describe("CLI completion tool handoffs", () => {
   };
 
   /** Runs a verified Claude CLI completion and returns the grant its runner would mint. */
-  async function runTrustedClaudeCompletion(child: Partial<SessionEntry> = {}) {
+  async function runTrustedClaudeCompletion() {
     const sessionEntry = makeSessionEntry("openclaw-session-cli-trusted-announce");
     const sessionStore: Record<string, SessionEntry> = {
       [trustedSessionKey]: sessionEntry,
-      [trustedChildSessionKey]: { ...trustedChildEntry, ...child },
+      [trustedChildSessionKey]: trustedChildEntry,
     };
     await writeSessionStoreSeed(sessionStore);
     runCliAgentMock.mockResolvedValueOnce(makeCliResult("trusted announce"));
@@ -270,7 +241,7 @@ describe("CLI completion tool handoffs", () => {
     await runStoredAttempt({
       providerOverride: "claude-cli",
       modelOverride: "opus",
-      cfg: { session: { store: storePath } } as OpenClawConfig,
+      cfg: { session: { store: storePath } },
       sessionEntry,
       sessionKey: trustedSessionKey,
       body: "A background task finished. Process the completion update now.",
@@ -305,6 +276,7 @@ describe("CLI completion tool handoffs", () => {
             replyInstruction: "Relay this completion.",
           },
         ],
+        runtimeContextFragments: [{ kind: "conversation-data", text: "supplemental context" }],
       },
       messageChannel: "telegram",
       sessionStore,
@@ -329,65 +301,57 @@ describe("CLI completion tool handoffs", () => {
     });
   }
 
-  it("preserves inherited denies in the trusted Claude CLI completion MCP surface", async () => {
-    const context = await runTrustedClaudeCompletion();
+  it("forwards the child result and reply instruction to CLI append context", async () => {
+    await runTrustedClaudeCompletion();
 
-    const scoped = await resolveMcpLoopbackScopedTools({
-      cfg: { session: { store: storePath } },
-      context,
-    });
-
-    expect(scoped.tools.map((tool) => tool.name)).toEqual(["read"]);
+    const run = runCliAgentMock.mock.calls[0]?.[0] as RunCliAgentParams;
+    expect(run.runtimeContextFragments).toEqual([
+      {
+        kind: "runtime-instruction",
+        text: "A background task completed. Keep internal details private and use its result to reply in your normal assistant voice.",
+      },
+      {
+        kind: "conversation-data",
+        text: expect.stringContaining("child output"),
+      },
+      {
+        kind: "runtime-instruction",
+        text: "Relay this completion.",
+      },
+      {
+        kind: "conversation-data",
+        text: "supplemental context",
+      },
+    ]);
   });
 
-  it("fails closed when a completion grant outlives its requester lineage", async () => {
-    const context = await runTrustedClaudeCompletion();
-    await replaceSessionEntry(
-      { sessionKey: trustedChildSessionKey, storePath },
-      { ...trustedChildEntry, spawnedBy: "agent:main:direct:another-requester" },
-    );
-    clearSessionStoreCacheForTest();
-
-    await expect(
-      resolveMcpLoopbackScopedTools({ cfg: { session: { store: storePath } }, context }),
-    ).rejects.toThrow("CLI completion tool grant no longer matches its requester policy");
-  });
-
-  it("rechecks requester lineage before serving cached completion tools", async () => {
-    const context = await runTrustedClaudeCompletion();
-    const cfg = { session: { store: storePath } };
-    const cache = new McpLoopbackToolCache();
-    const first = await cache.resolve({ cfg, context, grantToken: "completion-grant" });
-    expect(first.tools.map((tool) => tool.name)).toEqual(["read"]);
-
-    await replaceSessionEntry(
-      { sessionKey: trustedChildSessionKey, storePath },
-      { ...trustedChildEntry, spawnedBy: "agent:main:direct:another-requester" },
-    );
-    clearSessionStoreCacheForTest();
-
-    // The second request would be a cache hit; the lineage check must still run.
-    await expect(cache.resolve({ cfg, context, grantToken: "completion-grant" })).rejects.toThrow(
-      "CLI completion tool grant no longer matches its requester policy",
-    );
-  });
-
-  it("rechecks requester lineage when it changes while a cached lookup awaits", async () => {
-    const context = await runTrustedClaudeCompletion();
-    const cfg = { session: { store: storePath } };
-    const cache = new McpLoopbackToolCache();
-    await cache.resolve({ cfg, context, grantToken: "completion-grant" });
-
-    // The lookup yields before it reads the cache; the child is re-parented in that window.
-    const pending = cache.resolve({ cfg, context, grantToken: "completion-grant" });
-    replaceSessionEntrySync(
-      { sessionKey: trustedChildSessionKey, storePath },
-      { ...trustedChildEntry, spawnedBy: "agent:main:direct:another-requester" },
-    );
-    clearSessionStoreCacheForTest();
-
-    await expect(pending).rejects.toThrow(
-      "CLI completion tool grant no longer matches its requester policy",
-    );
-  });
+  it.each(["direct", "cached", "awaiting cache"])(
+    "preserves inherited denies and rechecks lineage for a %s lookup",
+    async (mode) => {
+      const context = await runTrustedClaudeCompletion();
+      const cfg = { session: { store: storePath } };
+      const cache = new McpLoopbackToolCache();
+      const resolve = () =>
+        mode === "direct"
+          ? resolveMcpLoopbackScopedTools({ cfg, context })
+          : cache.resolve({ cfg, context, grantToken: "completion-grant" });
+      const first = await resolve();
+      expect(first.tools.map((tool) => tool.name)).toEqual(["read"]);
+      const replacement = {
+        ...trustedChildEntry,
+        spawnedBy: "agent:main:direct:another-requester",
+      };
+      // The awaiting lookup must observe revocation after yielding, even on a cache hit.
+      const pending = mode === "awaiting cache" ? resolve() : undefined;
+      if (pending) {
+        replaceSessionEntrySync({ sessionKey: trustedChildSessionKey, storePath }, replacement);
+      } else {
+        await replaceSessionEntry({ sessionKey: trustedChildSessionKey, storePath }, replacement);
+      }
+      clearSessionStoreCacheForTest();
+      await expect(pending ?? resolve()).rejects.toThrow(
+        "CLI completion tool grant no longer matches its requester policy",
+      );
+    },
+  );
 });

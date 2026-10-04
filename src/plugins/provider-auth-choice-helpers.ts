@@ -6,11 +6,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import {
-  listAgentEntries,
-  readAgentRosterProperty,
-  toAgentEntriesRecord,
-} from "../agents/agent-scope-config.js";
+import { listAgentEntries, toAgentEntriesRecord } from "../agents/agent-scope-config.js";
 import { normalizeConfiguredProviderCatalogModelId } from "../agents/model-ref-shared.js";
 import {
   normalizeAgentModelMapForConfig,
@@ -241,7 +237,6 @@ function normalizeConfigModelRefsForWrite(
   const providerNormalized = normalizeModelProviderConfigsForWrite(cfg, providerConfigNormalizer);
   const defaults = providerNormalized.agents?.defaults;
   const agentsList = listAgentEntries(providerNormalized);
-  const roster = readAgentRosterProperty(providerNormalized);
 
   let nextDefaults = defaults;
   if (defaults) {
@@ -273,11 +268,9 @@ function normalizeConfigModelRefsForWrite(
     agents: {
       ...providerNormalized.agents,
       ...(nextDefaults ? { defaults: nextDefaults } : {}),
-      ...(nextAgentsList !== agentsList && roster?.kind === "entries"
+      ...(nextAgentsList !== agentsList
         ? { entries: toAgentEntriesRecord(nextAgentsList as typeof agentsList) }
-        : nextAgentsList !== agentsList && roster?.kind === "list"
-          ? { list: nextAgentsList as typeof agentsList }
-          : {}),
+        : {}),
     },
   };
 }

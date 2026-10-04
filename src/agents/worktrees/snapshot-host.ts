@@ -161,7 +161,7 @@ export function assertExactSnapshotRecordCurrent(
   }
 }
 
-/** Local CLI retirement shares the same allocation owner as removal and GC. */
+/** Explicit retirement shares the same allocation owner as removal and GC. */
 export async function retireManagedWorktreeSnapshotById(
   params: RetireManagedWorktreeSnapshotParams,
   env: NodeJS.ProcessEnv = process.env,

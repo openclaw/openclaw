@@ -295,7 +295,6 @@ describe("update completion ownership", () => {
       await writeScenario("resume", { runDoctorConfigFlow: true });
       await fs.rm(state.path("handoff.json"));
       const canonical = { source: "path" as const, installPath: state.path("canonical") };
-      const legacy = { source: "path" as const, installPath: state.path("legacy") };
       const config = {
         gateway: { mode: "local", auth: { mode: "none" } },
         agents: { entries: { main: {} } },
@@ -304,14 +303,15 @@ describe("update completion ownership", () => {
       await seedInstalledPluginIndex({ existing: canonical }, { config });
       await state.writeConfig({
         ...config,
-        ...(metadata ? { meta: { lastTouchedAt: "2026-03-31T00:00:00.000Z" } } : {}),
-        plugins: { ...config.plugins, installs: { existing: legacy, imported: legacy } },
+        ...(metadata ? { meta: { lastTouchedAt: "2026-07-02T00:00:00.000Z" } } : {}),
+        agents: { list: [{ id: "main" }] },
       });
       const original = await fs.readFile(state.configPath, "utf8");
-      const expectedRecords = { existing: canonical, imported: legacy };
+      const expectedRecords = { existing: canonical };
       mocks.plugins.mockImplementation(async ({ configSnapshot, pluginInstallRecords }) => {
         expect(configSnapshot.valid).toBe(true);
-        expect(configSnapshot.sourceConfig).not.toHaveProperty("plugins.installs");
+        expect(configSnapshot.sourceConfig).not.toHaveProperty("agents.list");
+        expect(configSnapshot.sourceConfig).toHaveProperty("agents.entries.main");
         expect(configSnapshot.sourceConfig).not.toHaveProperty("meta.lastTouchedAt");
         expect(pluginInstallRecords).toEqual(expectedRecords);
         return { ...pluginResult, changed: false };

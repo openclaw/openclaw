@@ -322,6 +322,7 @@ describe("worker live events", () => {
         throw failure;
       },
       isCancelled: () => false,
+      isCancelledFinishing: () => false,
     });
     const writer = holdWorkerTranscriptWriter(store);
     await writer.entered;
@@ -447,13 +448,15 @@ describe("worker live events", () => {
     const source = sourceFor();
     const receipt = vi.spyOn(source, "receiptAuthority");
     const record = vi.fn();
+    const finishing = live(1, lifecycle({ phase: "finishing", aborted: true, endedAt: 200 }));
     const owner = vi.spyOn(workerRunOwner, "captureWorkerTurnLiveEventOwner").mockReturnValue({
       isCancelled: () => true,
+      isCancelledFinishing: (request) => request === finishing,
       record,
     });
     try {
       await fail(msg(1, "late"), "invalid-event");
-      await ack(live(1, lifecycle({ phase: "finishing", aborted: true, endedAt: 200 })));
+      await ack(finishing);
       expect(receipt).not.toHaveBeenCalled();
       expect(record).not.toHaveBeenCalled();
       expect(events).toEqual([]);
@@ -727,9 +730,11 @@ describe("worker live events", () => {
         });
       }
       const diagnostic = vi.fn();
-      const recorder = vi
-        .spyOn(workerRunOwner, "captureWorkerTurnLiveEventOwner")
-        .mockReturnValue({ record: diagnostic, isCancelled: () => false });
+      const recorder = vi.spyOn(workerRunOwner, "captureWorkerTurnLiveEventOwner").mockReturnValue({
+        record: diagnostic,
+        isCancelled: () => false,
+        isCancelledFinishing: () => false,
+      });
       const stop = onAgentRuntimeEvent((event) => {
         if (event.runId === RUN && event.stream === stream) {
           rx.clearEnvironment(ID.environmentId, EPOCH);

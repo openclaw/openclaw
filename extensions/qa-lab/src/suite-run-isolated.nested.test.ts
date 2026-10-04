@@ -17,7 +17,7 @@ import {
 } from "./suite-run-isolated.test-support.js";
 import { runQaFlowSuiteStandard } from "./suite-run-standard.js";
 import { runQaFlowSuiteFromRuntime } from "./suite-run.runtime.js";
-import { makeQaSuiteTestScenario } from "./suite-test-helpers.js";
+import { makeQaSuiteTestScenario, recordQaSuiteTestResults } from "./suite-test-helpers.js";
 import type { QaSuiteRunner, QaSuiteScenarioResult, QaSuiteScenarioRunner } from "./suite-types.js";
 import * as suite from "./suite.js";
 
@@ -148,7 +148,11 @@ describe("isolated QA suite nested publication", () => {
         reportPath: "",
         summaryPath: "",
         report: "",
-        scenarios: [{ name: "same", status: calls === 1 ? "fail" : "pass", steps: [] }],
+        ...recordQaSuiteTestResults(
+          params,
+          [makeQaSuiteTestScenario("same")],
+          [{ name: "same", status: calls === 1 ? "fail" : "pass", steps: [] }],
+        ),
         startedScenarioIds: ["same"],
         watchUrl: lab.baseUrl,
       };
@@ -345,10 +349,10 @@ describe("isolated QA suite nested publication", () => {
           expect(Buffer.from(line).toString("utf8")).toBe(line);
         }
       };
-      mocks.writeQaSuiteArtifacts.mockImplementationOnce(async () => {
+      mocks.writeQaSuiteArtifacts.mockImplementationOnce(async (params) => {
         assertScenarioProgress(1);
         return {
-          evidence: undefined,
+          evidence: params.recordedEvidence,
           evidencePath: "/qa-output/qa-evidence.json",
           report: "",
           reportPath: "/qa-output/qa-suite-report.md",

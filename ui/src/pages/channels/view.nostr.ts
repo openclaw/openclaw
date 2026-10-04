@@ -1,7 +1,7 @@
 // Channels page renders Nostr status.
 import { html, nothing } from "lit";
 import type { ChannelAccountSnapshot, NostrProfile, NostrStatus } from "../../api/types.ts";
-import { renderSettingsSection } from "../../components/settings-ui.ts";
+import { renderSettingsRow, renderSettingsSection } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { renderChannelConfigSection } from "./view.config.ts";
@@ -93,29 +93,17 @@ export function renderNostrCard(params: {
     const hasAnyProfileData = name || displayName || about || picture || nip05;
 
     return html`
-      <div class="settings-row">
-        <div class="settings-row__text">
-          <span class="settings-row__title">${t("channels.nostr.profile")}</span>
-          ${
-            hasAnyProfileData
-              ? nothing
-              : html`<span class="settings-row__desc"
-                  >${t("channels.nostr.noProfile")} ${t("channels.nostr.noProfileHint")}</span
-                >`
-          }
-        </div>
-        ${
-          summaryConfigured
-            ? html`
-                <div class="settings-row__control">
-                  <button class="btn btn--sm" @click=${onEditProfile}>
-                    ${t("channels.nostr.editProfile")}
-                  </button>
-                </div>
-              `
-            : nothing
-        }
-      </div>
+      ${renderSettingsRow({
+        title: t("channels.nostr.profile"),
+        description: hasAnyProfileData
+          ? undefined
+          : html`${t("channels.nostr.noProfile")} ${t("channels.nostr.noProfileHint")}`,
+        control: summaryConfigured
+          ? html`<button class="btn btn--sm" @click=${onEditProfile}>
+              ${t("channels.nostr.editProfile")}
+            </button>`
+          : nothing,
+      })}
       ${
         hasAnyProfileData
           ? html`

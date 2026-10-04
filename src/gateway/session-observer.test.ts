@@ -141,7 +141,7 @@ describe("session observer", () => {
       session: { scope: "global" as const },
       agents: {
         defaults: { utilityModel: "openai/gpt-test" },
-        list: [{ id: "main", default: true }, { id: "work" }],
+        entries: { main: {}, work: {} },
       },
     } satisfies OpenClawConfig;
     const harness = createHarness({ subscribe: false, config });

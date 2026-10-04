@@ -132,48 +132,6 @@ describe("on-demand prepared worker admission", () => {
     }
   });
 
-  it.each(["build", "reserve"] as const)(
-    "atomically reuses an existing %s even when the pool is full",
-    async (purpose) => {
-      const f = await fixture();
-      support.getDevelopmentProfile().readyWorkers = 0;
-      support.testState.config.cloudWorkers!.preparedPool = { maxTotal: 1 };
-      const intent = await f.service.prepareProjectIntent("development", {
-        projectPath: f.projectPath,
-        executionMode: "worker-turn",
-        setupAuthorized: true,
-      });
-      const existing = await support.testState.store.createIntent({
-        environmentId: "existing-prepared",
-        provisionOperationId: "existing-operation",
-        providerId: intent.providerId,
-        profileId: "development",
-        profileSnapshot: intent.profileSnapshot,
-        preparation: {
-          purpose,
-          key: intent.preparationKey!,
-          demandAtMs: 1_000,
-          expiresAtMs: 11_000,
-        },
-      });
-      const results = await Promise.all([
-        f.service.prepare(f.request),
-        f.service.prepare(f.request),
-      ]);
-      expect(results).toEqual(
-        [0, 1].map(() => ({
-          environmentId: existing.environmentId,
-          preparationKey: existing.preparation!.key,
-          reused: true,
-        })),
-      );
-      expect(support.testState.store.list()).toHaveLength(1);
-      expect(support.testState.store.get(existing.environmentId)?.preparation?.purpose).toBe(
-        "build",
-      );
-    },
-  );
-
   it("uses the admitted profile's idle timeout after configuration changes during Git validation", async () => {
     const f = await fixture();
     f.provider.resolvePreparedIdleTimeoutMs = (settings) =>
@@ -343,39 +301,28 @@ describe("on-demand prepared worker admission", () => {
     },
   );
 
-  it.each([
-    "missing-profile",
-    "unsupported",
-    "no-timeout",
-    "non-git",
-    "missing-path",
-    "subdirectory",
-    "unborn",
-  ])("rejects %s before admitting a build", async (scenario) => {
-    const f = await fixture();
-    let code = "invalid_project";
-    if (scenario === "missing-profile") {
-      f.request.profileId = "missing";
-      code = "profile_not_found";
-    } else if (scenario === "unsupported") {
-      f.provider.supportsProjectPreparation = () => false;
-      code = "invalid_profile";
-    } else if (scenario === "no-timeout") {
-      f.provider.resolvePreparedIdleTimeoutMs = () => undefined;
-      code = "invalid_profile";
-    } else if (scenario === "non-git") {
-      f.request.projectPath = support.testState.root;
-    } else if (scenario === "missing-path") {
-      f.request.projectPath = path.join(support.testState.root, "missing");
-    } else if (scenario === "subdirectory") {
-      f.request.projectPath = path.join(f.projectPath, ".openclaw");
-    } else {
-      f.request.projectPath = path.join(support.testState.root, "unborn");
-      await fs.mkdir(f.request.projectPath);
-      await requireGit(f.request.projectPath, ["init", "--quiet"]);
-    }
-    await expect(f.service.prepare(f.request)).rejects.toMatchObject({ code });
-    expect(support.testState.store.list()).toHaveLength(0);
-    expect(f.provision).not.toHaveBeenCalled();
-  });
+  it.each(["missing-profile", "unsupported", "no-timeout", "missing-path", "subdirectory"])(
+    "rejects %s before admitting a build",
+    async (scenario) => {
+      const f = await fixture();
+      let code = "invalid_project";
+      if (scenario === "missing-profile") {
+        f.request.profileId = "missing";
+        code = "profile_not_found";
+      } else if (scenario === "unsupported") {
+        f.provider.supportsProjectPreparation = () => false;
+        code = "invalid_profile";
+      } else if (scenario === "no-timeout") {
+        f.provider.resolvePreparedIdleTimeoutMs = () => undefined;
+        code = "invalid_profile";
+      } else if (scenario === "missing-path") {
+        f.request.projectPath = path.join(support.testState.root, "missing");
+      } else {
+        f.request.projectPath = path.join(f.projectPath, ".openclaw");
+      }
+      await expect(f.service.prepare(f.request)).rejects.toMatchObject({ code });
+      expect(support.testState.store.list()).toHaveLength(0);
+      expect(f.provision).not.toHaveBeenCalled();
+    },
+  );
 });

@@ -1,4 +1,5 @@
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
+import { SqliteJsonlReadBudgetExceededError } from "../../infra/sqlite-jsonl-budget.js";
 import {
   encodeOpenClawStateWorkerError,
   hydrateOpenClawStateWorkerError,
@@ -13,6 +14,8 @@ import {
 import { SessionTranscriptReadFenceError } from "./session-transcript-read-fence.js";
 import type { SessionTranscriptWorkerReadError } from "./session-transcript-worker-error.types.js";
 import type {
+  SessionTranscriptWorkerError,
+  SessionTranscriptWorkerInput,
   SessionTranscriptWorkerReply,
   SessionTranscriptWorkerValues,
 } from "./session-transcript-worker.types.js";
@@ -30,6 +33,9 @@ export class SessionHistoryDeltaPreparationError extends Error {
 export function encodeSessionTranscriptWorkerError(
   error: unknown,
 ): SessionTranscriptWorkerReadError | undefined {
+  if (error instanceof SqliteJsonlReadBudgetExceededError) {
+    return { kind: "jsonl-budget", message: error.message };
+  }
   if (error instanceof SessionTranscriptStorageUnavailableError) {
     return { kind: "storage", reason: error.reason };
   }
@@ -50,6 +56,36 @@ export function encodeSessionTranscriptWorkerError(
   return payload ? { kind: "read-error", message: coerceErrorMessage(error), payload } : undefined;
 }
 
+export function encodeSessionTranscriptRequestError(
+  error: unknown,
+  request: SessionTranscriptWorkerInput,
+): SessionTranscriptWorkerError | undefined {
+  if (
+    error instanceof SessionHistoryDeltaPreparationError &&
+    request.kind === "history-page" &&
+    request.request.kind === "delta"
+  ) {
+    // Auxiliary readers may need retirement before the host consumes partial visibility facts.
+    return { kind: "delta-visibility", partial: error.partial };
+  }
+  if (
+    error instanceof SyntaxError &&
+    request.kind === "history-page" &&
+    (request.request.kind === "message-lookup" ||
+      request.request.kind === "message-by-id" ||
+      request.request.kind === "rpc-message" ||
+      request.request.kind === "message-count" ||
+      request.request.kind === "artifacts" ||
+      request.request.kind === "message-page" ||
+      request.request.kind === "around-id" ||
+      request.request.kind === "source-messages" ||
+      request.request.kind === "recent-page")
+  ) {
+    return { kind: "syntax", message: error.message };
+  }
+  return encodeSessionTranscriptWorkerError(error);
+}
+
 export function unwrapSessionTranscriptWorkerReply<
   Kind extends keyof SessionTranscriptWorkerValues,
 >(reply: SessionTranscriptWorkerReply<Kind>) {
@@ -66,6 +102,9 @@ export function unwrapSessionTranscriptWorkerReply<
 export function decodeSessionTranscriptWorkerReadError(
   failure: SessionTranscriptWorkerReadError,
 ): Error {
+  if (failure.kind === "jsonl-budget") {
+    return new SqliteJsonlReadBudgetExceededError(failure.message);
+  }
   if (failure.kind === "read-error") {
     const error = new Error(failure.message);
     retainOpenClawStateWorkerErrorPayload(error, failure.payload);

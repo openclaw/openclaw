@@ -67,37 +67,15 @@ function resolvePluginToolApprovalTimeoutMs(approval: PluginApprovalRequest): nu
   return Math.min(Math.floor(approval.timeoutMs), MAX_PLUGIN_APPROVAL_TIMEOUT_MS);
 }
 
-function resolvePluginToolApprovalGatewayTimeoutMs(timeoutMs: number): number {
-  return addTimerTimeoutGraceMs(timeoutMs, 10_000) ?? DEFAULT_PLUGIN_APPROVAL_TIMEOUT_MS + 10_000;
-}
-
 export function mergeParamsWithApprovalOverrides(
   originalParams: unknown,
   approvalParams?: unknown,
 ): unknown {
-  if (approvalParams && isPlainObject(approvalParams)) {
-    if (isPlainObject(originalParams)) {
-      return { ...originalParams, ...approvalParams };
-    }
-    return approvalParams;
-  }
-  return originalParams;
-}
-
-const warnedDeprecatedTimeoutBehaviorPluginIds = new Set<string>();
-
-function warnDeprecatedApprovalTimeoutBehavior(approval: PluginApprovalRequest): void {
-  if (approval.timeoutBehavior !== "allow") {
-    return;
-  }
-  const pluginId = approval.pluginId ?? "unknown-plugin";
-  if (warnedDeprecatedTimeoutBehaviorPluginIds.has(pluginId)) {
-    return;
-  }
-  warnedDeprecatedTimeoutBehaviorPluginIds.add(pluginId);
-  log.warn(
-    `plugin '${pluginId}' sets deprecated requireApproval.timeoutBehavior:"allow"; the field is ignored and approvals fail closed on timeout (see docs/plugins/plugin-permission-requests.md)`,
-  );
+  return isPlainObject(approvalParams)
+    ? isPlainObject(originalParams)
+      ? { ...originalParams, ...approvalParams }
+      : approvalParams
+    : originalParams;
 }
 
 function notifyPluginApprovalResolution(
@@ -215,7 +193,8 @@ async function requestPluginToolApproval(params: {
     ? { pluginKey: params.ctx.toolOwnerPluginId, tool: params.toolName }
     : undefined;
   const timeoutMs = resolvePluginToolApprovalTimeoutMs(approval);
-  const gatewayTimeoutMs = resolvePluginToolApprovalGatewayTimeoutMs(timeoutMs);
+  const gatewayTimeoutMs =
+    addTimerTimeoutGraceMs(timeoutMs, 10_000) ?? DEFAULT_PLUGIN_APPROVAL_TIMEOUT_MS + 10_000;
   const allowedDecisions = resolveCanonicalPluginApprovalRequestAllowedDecisions(approval);
   const resolveDecision = (decision: unknown): HookOutcome | undefined => {
     const resolution = resolvePermittedPluginApprovalResolution(decision, allowedDecisions);
@@ -236,6 +215,17 @@ async function requestPluginToolApproval(params: {
   };
   let gatewayApprovalPhase: "none" | "request" | "wait" = "none";
   try {
+    const requestIdentity = {
+      toolName: params.toolName,
+      toolCallId: params.toolCallId,
+      ...(policySubject ? { policySubject } : {}),
+      agentId: params.ctx?.agentId,
+      sessionKey: params.ctx?.sessionKey,
+      turnSourceChannel: params.ctx?.turnSourceChannel,
+      turnSourceTo: params.ctx?.turnSourceTo,
+      turnSourceAccountId: params.ctx?.turnSourceAccountId,
+      turnSourceThreadId: params.ctx?.turnSourceThreadId,
+    };
     const embeddedApprovalBroker = isEmbeddedMode() ? getEmbeddedPluginApprovalBroker() : null;
     if (embeddedApprovalBroker) {
       const result = await embeddedApprovalBroker.request({
@@ -246,15 +236,7 @@ async function requestPluginToolApproval(params: {
           ...(approval.scope ? { scope: sanitizeApprovalScope(approval.scope) } : {}),
           severity: approval.severity,
           allowedDecisions: approval.allowedDecisions,
-          toolName: params.toolName,
-          toolCallId: params.toolCallId,
-          ...(policySubject ? { policySubject } : {}),
-          agentId: params.ctx?.agentId,
-          sessionKey: params.ctx?.sessionKey,
-          turnSourceChannel: params.ctx?.turnSourceChannel,
-          turnSourceTo: params.ctx?.turnSourceTo,
-          turnSourceAccountId: params.ctx?.turnSourceAccountId,
-          turnSourceThreadId: params.ctx?.turnSourceThreadId,
+          ...requestIdentity,
         },
         timeoutMs,
         signal: params.signal,
@@ -299,7 +281,6 @@ async function requestPluginToolApproval(params: {
     gatewayApprovalPhase = "request";
     const requestResult: {
       id?: string;
-      status?: string;
       decision?: unknown;
       deliveryRoute?: string;
     } = await withGatewayToolApprovalOwner(
@@ -316,18 +297,10 @@ async function requestPluginToolApproval(params: {
             ...(approval.scope ? { scope: approval.scope } : {}),
             severity: approval.severity,
             allowedDecisions: approval.allowedDecisions,
-            toolName: params.toolName,
-            toolCallId: params.toolCallId,
-            ...(policySubject ? { policySubject } : {}),
-            agentId: params.ctx?.agentId,
-            sessionKey: params.ctx?.sessionKey,
+            ...requestIdentity,
             ...(params.ctx?.approvalReviewerDeviceId
               ? { approvalReviewerDeviceIds: [params.ctx.approvalReviewerDeviceId] }
               : {}),
-            turnSourceChannel: params.ctx?.turnSourceChannel,
-            turnSourceTo: params.ctx?.turnSourceTo,
-            turnSourceAccountId: params.ctx?.turnSourceAccountId,
-            turnSourceThreadId: params.ctx?.turnSourceThreadId,
             timeoutMs,
             twoPhase: true,
           },
@@ -489,7 +462,6 @@ export async function resolveBeforeToolCallApprovalOutcome(params: {
     params.result?.params === undefined
       ? undefined
       : cloneHookIsolationValue("before_tool_call", params.result.params);
-  warnDeprecatedApprovalTimeoutBehavior(approval);
   if (params.approvalMode === "defer") {
     return {
       blocked: false,

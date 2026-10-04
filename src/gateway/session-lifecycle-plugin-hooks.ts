@@ -12,7 +12,7 @@ import {
 } from "../hooks/session-auto-reset.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { SessionEndTranscriptSource } from "../plugins/session-end-transcript.js";
-import { runWithGatewayIndependentRootWorkContinuation } from "../process/gateway-work-admission.js";
+import { runWithGatewayDetachedWorkContinuation } from "../process/gateway-work-admission.js";
 import {
   forgetActiveSessionForShutdown,
   noteActiveSessionForShutdown,
@@ -120,7 +120,7 @@ export function emitGatewaySessionEndPluginHook(params: {
     nextSessionKey: params.nextSessionKey,
     endedTranscript,
   });
-  void runWithGatewayIndependentRootWorkContinuation(async () => {
+  void runWithGatewayDetachedWorkContinuation(async () => {
     await hookRunner.runSessionEnd(payload.event, payload.context);
   }, "hooks:session-end").catch((err: unknown) => {
     logVerbose(`session_end hook failed: ${String(err)}`);
@@ -159,7 +159,7 @@ export function emitGatewaySessionStartPluginHook(params: {
     agentId: params.agentId,
     resumedFrom: params.resumedFrom,
   });
-  void runWithGatewayIndependentRootWorkContinuation(async () => {
+  void runWithGatewayDetachedWorkContinuation(async () => {
     await hookRunner.runSessionStart(payload.event, payload.context);
   }, "hooks:session-start").catch((err: unknown) => {
     logVerbose(`session_start hook failed: ${String(err)}`);

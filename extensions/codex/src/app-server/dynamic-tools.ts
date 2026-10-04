@@ -29,6 +29,7 @@ import {
   type MessagingToolSend,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
+  collectAgentHarnessMessagingMediaUrls,
   copyInternalToolResultState,
   createAgentHarnessToolExecutionBoundaryRegistry,
   extractMessagingToolSourceReplyPayload,
@@ -42,6 +43,7 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-tool-runtime";
 import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
+import type { RemoteWorkspaceFileReader } from "openclaw/plugin-sdk/file-access-runtime";
 import {
   type JsonSchemaObject,
   validateJsonSchemaValue,
@@ -78,10 +80,8 @@ import {
 import type { CodexDynamicToolCallParams, CodexDynamicToolSpec } from "./protocol.js";
 import { flattenCodexDynamicToolFunctions } from "./protocol.js";
 import {
-  collectCodexMessageMediaUrls,
   prepareCodexRemoteWorkspaceMessageMedia,
   resolveCodexMediaSourceUrls,
-  type CodexRemoteWorkspaceFileReader,
 } from "./remote-workspace-media.js";
 import { resolveCodexToolAbortTerminalReason } from "./tool-abort-terminal-reason.js";
 
@@ -99,7 +99,10 @@ type CodexDynamicToolHookContext = CodexDynamicToolHookContextBase & {
   sourceReplyDeliveryMode?: EmbeddedRunAttemptParams["sourceReplyDeliveryMode"];
 };
 
-type CodexToolResultHookContext = Omit<CodexDynamicToolHookContext, "config">;
+type CodexToolResultHookContext = Pick<
+  CodexDynamicToolHookContext,
+  "agentId" | "sessionId" | "sessionKey" | "runId" | "channelId"
+>;
 
 const MAX_CODEX_DYNAMIC_TOOL_VALIDATION_ERRORS = 4;
 const MAX_CODEX_DYNAMIC_TOOL_VALIDATION_ERROR_CHARS = 160;
@@ -172,7 +175,7 @@ export type CodexDynamicToolBridge = {
     toolCallId: string,
   ) => AgentHarnessToolExecutionSnapshot | undefined;
   /** Bind the authenticated app-server client once remote thread startup completes. */
-  setRemoteWorkspaceFileReader?: (reader: CodexRemoteWorkspaceFileReader) => void;
+  setRemoteWorkspaceFileReader?: (reader: RemoteWorkspaceFileReader) => void;
   telemetry: AgentHarnessToolResultTelemetry & {
     didDeliverSourceReplyViaMessageTool: boolean;
     sourceReplyDelivered?: true;
@@ -336,7 +339,7 @@ export function createCodexDynamicToolBridge(params: {
       functionToolsOnly: params.functionToolsOnly,
     });
   const resolveAutomationsToolsAllow = createCodexAutomationsToolsAllowResolver(specs);
-  let readRemoteWorkspaceFile: CodexRemoteWorkspaceFileReader | undefined;
+  let readRemoteWorkspaceFile: RemoteWorkspaceFileReader | undefined;
   return {
     availableTools: availableTools.map((entry) => entry.tool),
     availableSpecs: inheritedSpecs
@@ -597,11 +600,7 @@ export function createCodexDynamicToolBridge(params: {
           void runAgentHarnessAfterToolCallHook({
             toolName,
             toolCallId: call.callId,
-            runId: toolResultHookContext.runId,
-            agentId: toolResultHookContext.agentId,
-            sessionId: toolResultHookContext.sessionId,
-            sessionKey: toolResultHookContext.sessionKey,
-            channelId: toolResultHookContext.channelId,
+            ...toolResultHookContext,
             startArgs: executedArgs,
             result,
             startedAt,
@@ -647,7 +646,7 @@ export function createCodexDynamicToolBridge(params: {
           const autoDeliveryTtsMediaUrls = getCoreTtsToolResultMediaUrls(rawResult);
           recordAgentHarnessToolResultTelemetry({
             extractSourceReplyPayload: extractMessagingToolSourceReplyPayload,
-            collectMessagingMediaUrls: collectCodexMessageMediaUrls,
+            collectMessagingMediaUrls: collectAgentHarnessMessagingMediaUrls,
             resolveMessagingMediaSourceUrls: (mediaUrls) =>
               resolveCodexMediaSourceUrls(mediaUrls, preparedMessageMedia?.sourcePathsByStagedPath),
             toolName,
@@ -727,11 +726,7 @@ export function createCodexDynamicToolBridge(params: {
           void runAgentHarnessAfterToolCallHook({
             toolName,
             toolCallId: call.callId,
-            runId: toolResultHookContext.runId,
-            agentId: toolResultHookContext.agentId,
-            sessionId: toolResultHookContext.sessionId,
-            sessionKey: toolResultHookContext.sessionKey,
-            channelId: toolResultHookContext.channelId,
+            ...toolResultHookContext,
             startArgs: executedArgs,
             error: errorMessage,
             startedAt,

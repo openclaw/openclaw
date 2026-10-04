@@ -627,31 +627,6 @@ export class AgentsApiClient {
   }
 }
 
-/** Customer-safe native failure facts remain available to host result classification. */
-export class AgentsApiError extends Error {
-  readonly code: string | null | undefined;
-  readonly status: number | undefined;
-  readonly type: string | undefined;
-  readonly param: string | null | undefined;
-
-  constructor(
-    message: string,
-    details: {
-      code?: string | null;
-      status?: number;
-      type?: string;
-      param?: string | null;
-    } = {},
-  ) {
-    super(message);
-    this.name = "AgentsApiError";
-    this.code = details.code;
-    this.status = details.status;
-    this.type = details.type;
-    this.param = details.param;
-  }
-}
-
 export function isAgentsApiTerminalTurn(status?: string): boolean {
   return status === "completed" || status === "failed" || status === "cancelled";
 }

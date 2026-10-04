@@ -8,6 +8,7 @@
 
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
+import { unwrapToolCallForDisplay } from "../../../../src/agents/tool-display-call.js";
 import { resolveExecCode, resolveExecTitle } from "../../../../src/agents/tool-display-exec.js";
 import {
   buildWriteDiffLines,
@@ -245,9 +246,10 @@ const toolCallViewCache = new WeakMap<
 >();
 
 export function resolveToolCallView(source: ToolCallViewSource): ToolCallView {
-  const args = asRecord(source.args);
+  const call = unwrapToolCallForDisplay(source);
+  const args = asRecord(call.args);
   const cacheKey = args ?? asRecord(source.details);
-  const name = source.name.trim().toLowerCase();
+  const name = call.name.trim().toLowerCase();
   if (cacheKey) {
     const cached = toolCallViewCache.get(cacheKey);
     if (cached && cached.details === source.details && cached.name === name) {

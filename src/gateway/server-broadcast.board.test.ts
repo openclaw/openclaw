@@ -3,10 +3,8 @@ import {
   GATEWAY_CLIENT_CAPS,
   GATEWAY_CLIENT_IDS,
 } from "../../packages/gateway-protocol/src/client-info.js";
-import {
-  persistSubagentRunsToDiskOrThrow,
-  clearSubagentRunsReadCacheForTest,
-} from "../agents/subagents/registry/subagent-registry-state.js";
+import { mutateSubagentRuns } from "../agents/subagents/registry/subagent-registry-persistence.js";
+import { clearSubagentRunsReadCacheForTest } from "../agents/subagents/registry/subagent-registry-state.js";
 import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
 import { setRuntimeConfigSnapshot } from "../config/io.js";
 import {
@@ -80,7 +78,11 @@ describe("board and progress event session ownership", () => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
         const cfg: OpenClawConfig = {
           ...rolePolicyConfig(),
-          agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+          agents: {
+            ownership: "explicit",
+            defaults: { systemAgent: { agentId: "main" } },
+            entries: { main: {}, work: {} },
+          },
           session: { scope },
           tools: { exec: { mode: "ask" } },
         };
@@ -261,7 +263,7 @@ describe("board and progress event session ownership", () => {
           await flushPendingSessionsChangedEvents(context);
           detach();
           projection.dispose();
-          connection.mentionInbox.dispose();
+          await connection.mentionInbox.dispose();
         }
       });
     },
@@ -516,8 +518,13 @@ describe("collaboration event scope guards", () => {
       subscribers,
       sessionEventSubscribers,
       isVisible: () => true,
-      getConfig: () =>
-        ({ agents: { list: [{ id: "main", default: true }, { id: "work" }] } }) as OpenClawConfig,
+      getConfig: () => ({
+        agents: {
+          ownership: "explicit",
+          defaults: { systemAgent: { agentId: "main" } },
+          entries: { main: {}, work: {} },
+        },
+      }),
     });
     const { broadcastToConnIds } = createGatewayBroadcaster({
       clients: new GatewayClientRegistry([message.client, eventOnly.client, unrelated.client]),
@@ -730,19 +737,30 @@ it("delivers committed collector updates to a parent-only cross-agent viewer", a
       completion: { required: false },
       delivery: { status: "not_required" },
     };
-    const runs = new Map([[run.runId, run]]);
+    const runs = new Map<string, SubagentRunRecord>();
     try {
-      persistSubagentRunsToDiskOrThrow(runs, [run.runId]);
-      run.execution = { status: "running", startedAt: 2 };
-      persistSubagentRunsToDiskOrThrow(runs, [run.runId]);
-      run.execution = { status: "terminal", endedAt: 3, outcome: { status: "error" } };
-      run.collectorCompletion = {
-        status: "failed",
-        structured: { private: "child-private result" },
-      };
-      persistSubagentRunsToDiskOrThrow(runs, [run.runId]);
-      runs.clear();
-      persistSubagentRunsToDiskOrThrow(runs, [run.runId]);
+      for (const next of [
+        run,
+        { ...run, execution: { status: "running", startedAt: 2 } },
+        {
+          ...run,
+          execution: { status: "terminal", endedAt: 3, outcome: { status: "error" } },
+          collectorCompletion: {
+            status: "failed",
+            structured: { private: "child-private result" },
+          },
+        },
+        null,
+      ] satisfies Array<SubagentRunRecord | null>) {
+        await mutateSubagentRuns(
+          [run.runId],
+          () => ({
+            value: undefined,
+            postimages: new Map([[run.runId, next]]),
+          }),
+          { runs },
+        );
+      }
       await Promise.all(publications);
       expect(peers[0]!.socket.events).toEqual(Array(4).fill("sessions.changed"));
       expect(peers[1]!.socket.events).toEqual([]);
@@ -765,7 +783,7 @@ it("delivers committed collector updates to a parent-only cross-agent viewer", a
       await Promise.allSettled(publications);
       detach();
       rowProjection.dispose();
-      connection.mentionInbox.dispose();
+      await connection.mentionInbox.dispose();
       clearSubagentRunsReadCacheForTest();
       invalidateSessionSharingSnapshot();
     }

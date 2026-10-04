@@ -105,6 +105,7 @@ import {
   pluginSyncResult,
 } from "./update-cli/update-cli-config.test-support.js";
 import { reportUpdateCliHomeCleanupFailure } from "./update-cli/update-cli-failure-recovery.test-support.js";
+import { getNodeRuntimeFixture } from "./update-cli/update-command-runtime-recovery.test-support.js";
 
 await vi.hoisted(() => import("./update-cli-mocks.test-support.js"));
 
@@ -299,7 +300,6 @@ export function registerUpdateCliLifecycle(fixture: UpdateCliLifecycleFixture): 
       version: "9999.0.0",
     });
     vi.mocked(fetchNpmPackageTargetStatus).mockImplementation(async ({ target }) => ({
-      target,
       version: /^\d/u.test(target) ? target : "9999.0.0",
       nodeEngine: ">=22.19.0",
     }));
@@ -311,12 +311,19 @@ export function registerUpdateCliLifecycle(fixture: UpdateCliLifecycleFixture): 
     });
     primeNpmChannelTag("latest", "9999.0.0");
     nodeVersionSatisfiesEngine.mockReturnValue(true);
+    const nodeRuntime = getNodeRuntimeFixture();
     resolveNodeRuntimeInfo.mockResolvedValue({
       status: "supported",
-      version: process.versions.node,
-      sqliteVersion: "3.51.3",
+      version: nodeRuntime.versions.node,
+      sqliteVersion: nodeRuntime.versions.sqlite,
       nodeSharedSqlite: false,
-      sqliteProbe: { available: true, version: "3.51.3", text: true, blob: true, json: true },
+      sqliteProbe: {
+        available: true,
+        version: nodeRuntime.versions.sqlite,
+        text: true,
+        blob: true,
+        json: true,
+      },
     });
     vi.mocked(resolveUpdateInstallKind).mockResolvedValue("git");
     vi.mocked(resolveUpdateInstallIdentity).mockResolvedValue({

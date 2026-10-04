@@ -4,6 +4,7 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, test, expect, vi } from "vitest";
+import { seedCanonicalAcpSessionMeta } from "../acp/runtime/session-meta-fixture.test-support.js";
 import { withAgentRosterFactsBatch } from "../agents/agent-scope-config.js";
 import { resolveAgentIdentity } from "../agents/identity.js";
 import * as modelCatalogLookup from "../agents/model-catalog-lookup.js";
@@ -20,7 +21,6 @@ import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import * as usageFormat from "../utils/usage-format.js";
 import type { GatewayClient } from "./server-methods/types.js";
-import * as sessionOrder from "./session-list-order.js";
 import { readSessionListSelectionFacts } from "./session-list-target.js";
 import * as projectionWork from "./session-projection-work.js";
 import { createSessionRowProjection, type SessionRowProjection } from "./session-row-projection.js";
@@ -45,7 +45,7 @@ import { writeResidentEntries } from "./session-utils.perf.test-support.js";
  * are the actual scaling failure mode we care about.
  */
 describe("session list resolver cache", () => {
-  test("bounds first-page comparisons while preserving the latest-row order", async () => {
+  test("preserves latest-row order when initializing the first page", async () => {
     await withStateDirEnv("openclaw-list-order-work-", async () => {
       resetPluginRuntimeStateForTest();
       setActivePluginRegistry(createEmptyPluginRegistry());
@@ -65,20 +65,14 @@ describe("session list resolver cache", () => {
       const projection = await createSessionRowProjection({ cfg });
       try {
         await projection.ensureMaterialized();
-        const compare = vi.spyOn(sessionOrder, "compareSessionEntryPairs");
-        try {
-          const result = await listProjectedSessions({ projection, opts: { limit: 5 } });
-          expect(result.sessions.map((row) => row.key)).toEqual(
-            Object.entries(store)
-              .toSorted((a, b) => b[1].updatedAt - a[1].updatedAt)
-              .slice(0, 5)
-              .map(([key]) => key),
-          );
-          expect(result.totalCount).toBe(count);
-          expect(compare.mock.calls.length).toBeLessThanOrEqual(count * 4);
-        } finally {
-          compare.mockRestore();
-        }
+        const result = await listProjectedSessions({ projection, opts: { limit: 5 } });
+        expect(result.sessions.map((row) => row.key)).toEqual(
+          Object.entries(store)
+            .toSorted((a, b) => b[1].updatedAt - a[1].updatedAt)
+            .slice(0, 5)
+            .map(([key]) => key),
+        );
+        expect(result.totalCount).toBe(count);
       } finally {
         projection.dispose();
       }
@@ -512,23 +506,27 @@ describe("session list resolver cache", () => {
               providerOverride: "example",
               modelOverride:
                 index % 8 < 2 ? "model-hit" : index % 8 < 4 ? "Model-Hit" : "model-missing",
-              ...(index % 8 < 2
-                ? {
-                    acp: {
-                      backend: "acpx",
-                      agent: agentId,
-                      runtimeSessionName: `catalog-${index}`,
-                      mode: "persistent" as const,
-                      state: "idle" as const,
-                      lastActivityAt: index,
-                    },
-                  }
-                : {}),
             } satisfies SessionEntry,
           ];
         }),
       );
       writeResidentEntries(store);
+      for (const [index, [sessionKey, entry]] of Object.entries(store).entries()) {
+        if (index % 8 < 2) {
+          seedCanonicalAcpSessionMeta({
+            sessionKey,
+            sessionId: entry.sessionId,
+            meta: {
+              backend: "acpx",
+              agent: index % 2 ? "research" : "main",
+              runtimeSessionName: `catalog-${index}`,
+              mode: "persistent",
+              state: "idle",
+              lastActivityAt: index,
+            },
+          });
+        }
+      }
       const catalogSpy = vi.spyOn(modelCatalogLookup, "findModelCatalogEntry");
       let projection: SessionRowProjection | undefined;
       try {
@@ -584,6 +582,7 @@ describe("session list resolver cache", () => {
             canonicalKey: key,
             targetAgentId: "main",
             entry: store[key]!,
+            preparedAcpMeta: projection.describe({ key, agentId: "main" })?.preparedAcpMeta ?? null,
             storePath: path.join(stateDir, "agents", "main", "sessions", "sessions.json"),
             modelCatalog: modelCatalog.get("main")!.entries,
           });

@@ -194,7 +194,7 @@ describe("cache-TTL tool-result projection", () => {
 
   it.each(["soft", "hard"] as const)(
     "replays %s pruning after TTL refresh and restart, until compaction/reset",
-    (mode) => {
+    async (mode) => {
       const sessionId = `cache-ttl-${mode}`;
       clearEmbeddedSessionPromptStates([sessionId]);
       try {
@@ -227,12 +227,12 @@ describe("cache-TTL tool-result projection", () => {
         const entries: { type: string; customType: string; data: unknown }[] = [];
         const sessionManager = {
           getEntries: () => entries,
-          appendCustomEntry: (customType: string, data: unknown) => {
+          appendCustomEntryAsync: async (customType: string, data: unknown) => {
             const serialized = JSON.stringify(data);
             entries.push({ type: "custom", customType, data: JSON.parse(serialized) });
           },
         };
-        appendAttemptCacheTtlIfNeeded({
+        await appendAttemptCacheTtlIfNeeded({
           sessionManager,
           config: { agents: { defaults: { contextPruning: { mode: "cache-ttl" } } } },
           provider: "anthropic",

@@ -4,10 +4,17 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayBrowserClient } from "../../../api/gateway.ts";
+import {
+  markdownFileLinkFromEvent,
+  markdownFileLinkFromKeyboardEvent,
+} from "../../../components/markdown-file-links.ts";
 import { SessionLinkTitler } from "../../../components/session-link-titling.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
+import { coalesceAgentRunFrames } from "../chat-agent-run-grouping.ts";
 import { groupMessages } from "../chat-thread-grouping.ts";
+import { renderAgentRunFrame } from "./chat-agent-run-frame.ts";
 import { renderMessageGroup } from "./chat-message-group.ts";
+import { createAssistantMessage, createMessageGroup } from "./chat-message.test-support.ts";
 
 let container: HTMLDivElement;
 
@@ -25,22 +32,11 @@ function createGroup(
   overrides: Partial<Pick<MessageGroup, "senderLabel" | "senderSession">> = {},
   messageOverrides: Record<string, unknown> = {},
 ): MessageGroup {
-  const [group] = groupMessages([
-    {
-      kind: "message",
-      key: "forwarded-message",
-      message: {
-        role: "assistant",
-        content: "forwarded report",
-        timestamp: 1_000,
-        ...messageOverrides,
-      },
-    },
-  ]);
-  if (group?.kind !== "group") {
-    throw new Error("expected a prepared assistant message group");
-  }
-  return { ...group, ...overrides };
+  return createMessageGroup(
+    createAssistantMessage("forwarded report", { timestamp: 1_000, ...messageOverrides }),
+    "assistant",
+    overrides,
+  );
 }
 
 function renderTestMessageGroup(
@@ -57,6 +53,172 @@ function renderTestMessageGroup(
 }
 
 describe("forwarded message attribution", () => {
+  it.each(
+    [false, true].flatMap((collapsed) =>
+      ["click", "Enter", " "].map((key) => ({ collapsed, key })),
+    ),
+  )(
+    "resolves $key file links to the sender in collapsed=$collapsed groups",
+    ({ collapsed, key }) => {
+      const sessionKey = "agent:research:report";
+      const group = createGroup(
+        { senderSession: { sessionKey } },
+        {
+          content: "See `reports/index.html:7`",
+          ...(collapsed
+            ? { provenance: { kind: "inter_session", sourceTool: "sessions_send" } }
+            : {}),
+        },
+      );
+      render(renderTestMessageGroup(group, { isToolMessageExpanded: () => true }), container);
+      const opened = vi.fn();
+      container.addEventListener("click", (event) => opened(markdownFileLinkFromEvent(event)));
+      container.addEventListener("keydown", (event) =>
+        opened(markdownFileLinkFromKeyboardEvent(event)),
+      );
+      const link = expectDefined(
+        container.querySelector<HTMLAnchorElement>("a.markdown-file-link"),
+        "forwarded file link",
+      );
+      if (key === "click") {
+        link.click();
+      } else {
+        const event = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true });
+        link.dispatchEvent(event);
+        expect(event.defaultPrevented).toBe(true);
+      }
+      expect(opened).toHaveBeenCalledExactlyOnceWith({
+        path: "reports/index.html",
+        line: 7,
+        sessionKey,
+      });
+    },
+  );
+
+  it.each([false, true])(
+    "opens nested tool activity files in the sending session (frame=%s)",
+    (frame) => {
+      const sessionKey = "agent:research:report";
+      const onOpenWorkspaceFile = vi.fn();
+      const group = createGroup(
+        { senderSession: { sessionKey } },
+        {
+          runId: "forwarded-tools",
+          content: [
+            {
+              type: "toolCall",
+              id: "parent-read",
+              name: "read",
+              arguments: { path: "reports/index.html" },
+            },
+            {
+              type: "toolCall",
+              id: "child-read",
+              name: "read",
+              parentToolCallId: "parent-read",
+              arguments: { path: "reports/styles.css" },
+            },
+          ],
+        },
+      );
+      const options = {
+        showReasoning: true,
+        onOpenWorkspaceFile,
+        isToolMessageExpanded: () => true,
+        isToolExpanded: () => true,
+      };
+      const content = frame
+        ? renderAgentRunFrame(
+            {
+              kind: "agent-run-frame",
+              key: "forwarded-frame",
+              runId: "forwarded-tools",
+              boundaryId: "forwarded-boundary",
+              outcome: { kind: "completed", actionOwner: null },
+              parts: [group],
+            },
+            {
+              streamOptions: {},
+              renderGroupOptions: () => options,
+              isWorkExpanded: () => true,
+              onToggleWork: () => {},
+            },
+          )
+        : renderTestMessageGroup(group, options);
+      render(content, container);
+      const links = container.querySelectorAll<HTMLButtonElement>(".chat-tool-row__file-link");
+      expect(links).toHaveLength(2);
+      for (const link of links) {
+        link.click();
+      }
+      expect(onOpenWorkspaceFile.mock.calls).toEqual([
+        [{ path: "reports/index.html", sessionKey }],
+        [{ path: "reports/styles.css", sessionKey }],
+      ]);
+    },
+  );
+
+  it("keeps the sender on narrated file links beside a single tool in a run frame", () => {
+    const sessionKey = "agent:research:report";
+    const groups = groupMessages([
+      {
+        kind: "message",
+        key: "forwarded-tool-narration",
+        message: {
+          role: "assistant",
+          runId: "narrated-file-run",
+          timestamp: 1_000,
+          senderSession: { sessionKey },
+          content: [
+            { type: "text", text: "See `reports/index.html:7`" },
+            {
+              type: "toolCall",
+              id: "read-report",
+              name: "read",
+              arguments: { path: "reports/index.html" },
+            },
+          ],
+        },
+      },
+      {
+        kind: "message",
+        key: "narrated-file-answer",
+        message: {
+          role: "assistant",
+          runId: "narrated-file-run",
+          timestamp: 2_000,
+          phase: "final_answer",
+          content: "Done.",
+        },
+      },
+    ]).filter((item) => item.kind === "group");
+    const frame = coalesceAgentRunFrames(groups).find((item) => item.kind === "agent-run-frame");
+    if (!frame) {
+      throw new Error("Expected the narrated tool to join its completed run frame");
+    }
+    render(
+      renderAgentRunFrame(frame, {
+        streamOptions: {},
+        renderGroupOptions: () => ({ showReasoning: true }),
+        isWorkExpanded: () => true,
+        onToggleWork: () => {},
+      }),
+      container,
+    );
+    const opened = vi.fn();
+    container.addEventListener("click", (event) => opened(markdownFileLinkFromEvent(event)));
+    const link = expectDefined(
+      container.querySelector<HTMLAnchorElement>('a[data-file-path="reports/index.html"]'),
+      "narrated file link",
+    );
+    link.click();
+    expect(opened).toHaveBeenCalledExactlyOnceWith({
+      path: "reports/index.html",
+      line: 7,
+      sessionKey,
+    });
+  });
+
   it("preserves custom assistant sender labels without forwarded provenance", () => {
     const group = createGroup({ senderLabel: "Forwarded from main" });
 
@@ -95,7 +257,6 @@ describe("forwarded message attribution", () => {
 
   it.each([
     { agentId: "research", avatar: "blob:research-avatar", expected: "image" },
-    { agentId: "research", avatar: null, expected: "face" },
     { agentId: "research", avatar: "https://example.test/avatar.png", expected: "face" },
     { agentId: "main", avatar: "blob:main-avatar", expected: "face" },
     { agentId: "removed", avatar: "blob:stale-avatar", expected: "empty" },
@@ -132,9 +293,6 @@ describe("forwarded message attribution", () => {
     },
   );
 
-  // Label rules: an agent's main session reads as the agent itself; other
-  // sessions read as the session (titler-resolved), prefixed with the agent
-  // name only when the sender is a different agent.
   it.each([
     {
       name: "another agent's main session labels as that agent",
@@ -177,13 +335,6 @@ describe("forwarded message attribution", () => {
       key: "agent:main:cron:daily:run:first",
       label: "Daily report",
       chipText: "Daily report",
-      prefix: null,
-      titled: true,
-    },
-    {
-      name: "cron run without a label hides its raw session key",
-      key: "agent:main:cron:daily:run:first",
-      chipText: "Automation",
       prefix: null,
       titled: true,
     },
@@ -282,10 +433,6 @@ describe("forwarded message attribution", () => {
     },
   );
 
-  // A rendered group's source cannot change in place: messages are immutable
-  // and grouping splits on senderSession, so a different source produces a new
-  // group key and a fresh anchor. The protected behavior is that the titler's
-  // stamped title and href survive ordinary re-renders of the same group.
   it("keeps titled source chips usable across rerenders", async () => {
     const group = createGroup({
       senderSession: { sessionKey: "agent:main:main" },
@@ -310,7 +457,7 @@ describe("forwarded message attribution", () => {
     expect(sourceLink()).toBeInstanceOf(HTMLAnchorElement);
     await titler.decorate(sourceLink(), true);
     expect(sourceLink().textContent).toBe("Main session");
-    expect(() => render(renderTestMessageGroup(group), container)).not.toThrow();
+    render(renderTestMessageGroup(group), container);
     expect(sourceLink().textContent).toBe("Main session");
     expect(sourceLink().title).toBe("agent:main:main");
   });

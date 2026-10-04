@@ -58,17 +58,20 @@ export function mutateAcpSessionEntryInWorker(
         prepared,
         sessionKey: input.sessionKey,
         writeBase: base,
-        next: mutation.kind === "clear-legacy" && !base.acp ? undefined : next,
+        next,
         options: {},
       });
       const publication = changed.identity
-        ? prepareSessionEntryReplacementPublication({
-            pendingArchiveRecovery: false,
-            previous: changed.identity.previous,
-            current: changed.identity.current,
-            maintenancePlans: [],
-            membershipInvalidatedKeys: [],
-          })
+        ? prepareSessionEntryReplacementPublication(
+            {
+              pendingArchiveRecovery: false,
+              previous: changed.identity.previous,
+              current: changed.identity.current,
+              maintenancePlans: [],
+              membershipInvalidatedKeys: [],
+            },
+            database,
+          )
         : undefined;
       const result = { entry: changed.entry, ...(publication ? { publication } : {}) };
       deferSqliteWorkerCommitReceipt(database.db, { kind: "acp-entry-mutation", result });

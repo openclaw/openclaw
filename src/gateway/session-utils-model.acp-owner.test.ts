@@ -1,4 +1,4 @@
-// Session model projection tests verify ACP metadata reads preserve row ownership.
+// Session model projection consumes prepared ACP metadata without reading storage.
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearAgentHarnesses,
@@ -8,21 +8,6 @@ import {
 import { restoreRegisteredAgentHarnesses } from "../agents/harness/registry.test-support.js";
 import * as thinking from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-
-const { readAcpSessionMeta, readAcpSessionMetaForEntry } = vi.hoisted(() => ({
-  readAcpSessionMeta: vi.fn<typeof import("../acp/runtime/session-meta.js").readAcpSessionMeta>(),
-  readAcpSessionMetaForEntry:
-    vi.fn<typeof import("../acp/runtime/session-meta-readonly.js").readAcpSessionMetaForEntry>(),
-}));
-
-vi.mock("../acp/runtime/session-meta.js", () => ({
-  readAcpSessionMeta,
-}));
-
-vi.mock("../acp/runtime/session-meta-readonly.js", () => ({
-  readAcpSessionMetaForEntry,
-}));
-
 import {
   resolveGatewayModelThinkingProfile,
   resolveGatewaySessionThinkingProjectionInternal,
@@ -32,8 +17,6 @@ describe("resolveGatewaySessionThinkingProjectionInternal", () => {
   const registeredHarnesses = listRegisteredAgentHarnesses();
   beforeEach(() => {
     clearAgentHarnesses();
-    readAcpSessionMeta.mockReset();
-    readAcpSessionMetaForEntry.mockReset();
   });
   afterAll(() => restoreRegisteredAgentHarnesses(registeredHarnesses));
 
@@ -165,7 +148,7 @@ describe("resolveGatewaySessionThinkingProjectionInternal", () => {
     },
   );
 
-  it("reads bare-key ACP metadata under the resolved row owner", () => {
+  it("projects the prepared ACP runtime for a bare key under its resolved owner", () => {
     const cfg: OpenClawConfig = {
       session: { scope: "global", store: "/tmp/shared.sqlite" },
       agents: {
@@ -175,18 +158,26 @@ describe("resolveGatewaySessionThinkingProjectionInternal", () => {
       },
     };
 
-    resolveGatewaySessionThinkingProjectionInternal({
+    const projection = resolveGatewaySessionThinkingProjectionInternal({
       cfg,
       agentId: "ops",
       provider: "openai",
       model: "gpt-5.6-sol",
       sessionKey: "global",
+      preparedAcpMeta: {
+        backend: "acpx",
+        agent: "ops",
+        runtimeSessionName: "global",
+        mode: "persistent",
+        state: "idle",
+        lastActivityAt: 1,
+      },
     });
 
-    expect(readAcpSessionMeta).toHaveBeenCalledWith({ sessionKey: "global", agentId: "ops" });
+    expect(projection.agentRuntime).toEqual({ id: "acpx", source: "session-key" });
   });
 
-  it("keeps a prepared row from adopting a replacement session's ACP runtime", () => {
+  it("does not infer an ACP runtime from the session key without prepared metadata", () => {
     const cfg: OpenClawConfig = {
       agents: {
         entries: { ops: {} },
@@ -195,14 +186,6 @@ describe("resolveGatewaySessionThinkingProjectionInternal", () => {
     };
     const entry = { sessionId: "original", lifecycleRevision: "original-revision", updatedAt: 1 };
     const sessionKey = "agent:ops:acp:owned";
-    readAcpSessionMeta.mockReturnValue({
-      backend: "replacement-backend",
-      agent: "ops",
-      runtimeSessionName: "replacement",
-      mode: "persistent",
-      state: "idle",
-      lastActivityAt: 2,
-    });
 
     const projection = resolveGatewaySessionThinkingProjectionInternal({
       cfg,
@@ -211,15 +194,9 @@ describe("resolveGatewaySessionThinkingProjectionInternal", () => {
       model: "gpt-5.6-sol",
       sessionKey,
       entry,
+      preparedAcpMeta: null,
     });
 
     expect(projection.agentRuntime.id).toBe("openclaw");
-    expect(readAcpSessionMeta).not.toHaveBeenCalled();
-    expect(readAcpSessionMetaForEntry).toHaveBeenCalledWith({
-      cfg,
-      sessionKey,
-      agentId: "ops",
-      entry,
-    });
   });
 });

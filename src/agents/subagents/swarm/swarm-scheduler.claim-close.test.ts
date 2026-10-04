@@ -1,8 +1,14 @@
+import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { resetGatewayWorkAdmission } from "../../../process/gateway-work-admission.js";
 import { getAsyncWorkSignal, trackAsyncWork } from "../../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
+import {
+  captureOpenClawStateDatabaseReadAdmission,
+  closeOpenClawStateDatabaseByPathAsync,
+} from "../../../state/openclaw-state-db-cache.js";
 import { waitForQueuedSubagentClaim } from "../registry/subagent-registry-queued-registration-wait.js";
 import { activateSwarmRun, closeSwarmScheduler, reserveSwarmRun } from "./swarm-scheduler.js";
 import { testing } from "./swarm-scheduler.test-support.js";
@@ -23,14 +29,19 @@ vi.mock("../registry/subagent-registry-publication.js", async (importOriginal) =
     }) satisfies typeof actual.subscribeSubagentRunChanges,
   };
 });
-vi.mock("../../../state/openclaw-state-db-cache.js", () => ({
-  registerOpenClawStateDatabaseLifecycleListener: () => () => {},
-}));
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+let admission: ReturnType<typeof captureOpenClawStateDatabaseReadAdmission>;
 
-beforeEach(resetGatewayWorkAdmission);
-afterEach(() => {
+beforeEach(() => {
+  resetGatewayWorkAdmission();
+  admission = captureOpenClawStateDatabaseReadAdmission(
+    path.join(tempDirs.make("openclaw-swarm-claim-close-"), "state.sqlite"),
+  );
+});
+afterEach(async () => {
   testing.reset();
   resetGatewayWorkAdmission();
+  await closeOpenClawStateDatabaseByPathAsync(admission.databasePath);
   expect(wakes.size).toBe(0);
 });
 
@@ -50,7 +61,11 @@ it.each(["start", "failure"] as const)(
     let closed = false;
     let closing: Promise<void> | undefined;
     const waitForClaim = () =>
-      waitForQueuedSubagentClaim({ assertCurrent: () => {}, pending: () => pendingClaim });
+      waitForQueuedSubagentClaim({
+        admission,
+        assertCurrent: admission.assertCurrent,
+        pending: () => pendingClaim,
+      });
     const retainPhysicalWork = () => {
       waitingSignal = getAsyncWorkSignal();
       tails.push(trackAsyncWork(() => physical.promise));

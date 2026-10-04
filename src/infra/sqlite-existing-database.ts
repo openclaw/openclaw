@@ -44,7 +44,7 @@ export function createExistingSqliteRollbackReader(
         throw new Error("Existing SQLite reader is closed or already in use.");
       }
       try {
-        return withExistingRollbackDatabase(
+        return withExistingSqliteRollbackDatabase(
           pathname,
           { ...options, write: false },
           operation,
@@ -66,14 +66,6 @@ export function createExistingSqliteRollbackReader(
 
 /** Keep a SQLite-owned read lock until the existing writer has acquired its lock. */
 export function withExistingSqliteRollbackDatabase<T>(
-  pathname: string,
-  options: ExistingSqliteReadOptions & { write: boolean },
-  operation: ExistingSqliteOperation<T>,
-): T {
-  return withExistingRollbackDatabase(pathname, options, operation);
-}
-
-function withExistingRollbackDatabase<T>(
   pathname: string,
   options: ExistingSqliteReadOptions & { write: boolean },
   operation: ExistingSqliteOperation<T>,

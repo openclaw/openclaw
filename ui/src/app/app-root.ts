@@ -600,7 +600,17 @@ export class OpenClawApp extends OpenClawLightDomElement {
       ((this.startupPending && gatewaySnapshot.phase === "stopped") ||
         gatewaySnapshot.phase === "starting" ||
         (gatewaySnapshot.phase === "connecting" && !this.loginGatePinned));
-    const warmConnectPending = initialConnectPending && runtime.warmBoot && !this.loginGatePinned;
+    // A failed network attempt cannot revoke the already admitted local cache.
+    // Credential changes and explicit auth/pairing rejections still return to sign-in.
+    const warmConnectPending =
+      runtime.documentMode === null &&
+      runtime.warmBoot &&
+      !this.loginGatePinned &&
+      (initialConnectPending ||
+        (gatewaySnapshot.phase === "connecting" &&
+          !gatewaySnapshot.lastErrorAuthReason &&
+          (gatewaySnapshot.lastErrorCode === null ||
+            gatewaySnapshot.lastErrorCode === "GATEWAY_BUSY")));
     if (initialConnectPending && !warmConnectPending) {
       return renderConnectingSplash(gatewayStartupStatus);
     }

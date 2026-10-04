@@ -289,6 +289,9 @@ type RedactMatcher = {
 export type ResolvedRedactPattern = RegExp | RedactMatcher;
 export type RedactPattern = string | ResolvedRedactPattern;
 
+// Derived matchers live only as long as their owner pattern, never as long as a secret value.
+const indexedPatterns = new WeakMap<RegExp, RegExp>();
+
 function getIndexedCaptureStart(
   pattern: ResolvedRedactPattern,
   input: string,
@@ -299,42 +302,34 @@ function getIndexedCaptureStart(
   if (!(pattern instanceof RegExp) || matchOffset < 0 || !input) {
     return null;
   }
-  try {
-    const flags = pattern.flags.includes("d") ? pattern.flags : `${pattern.flags}d`;
-    const indexedPattern = new RegExp(pattern.source, flags);
-    indexedPattern.lastIndex = matchOffset;
-    const indexedMatch = indexedPattern.exec(input);
-    const captureIndices = indexedMatch?.indices?.[captureIndex + 1];
-    if (!indexedMatch || indexedMatch.index !== matchOffset || indexedMatch[0] !== match) {
-      return null;
-    }
-    if (!captureIndices) {
-      return null;
-    }
-    return captureIndices[0] - matchOffset;
-  } catch {
-    return null;
+  let indexedPattern = indexedPatterns.get(pattern);
+  if (!indexedPattern) {
+    indexedPattern = new RegExp(
+      pattern.source,
+      `${pattern.flags.replace("d", "").replace("g", "")}dg`,
+    );
+    indexedPatterns.set(pattern, indexedPattern);
   }
-}
-
-function hasBackreferenceToGroup(pattern: RegExp, groupNumber: number): boolean {
-  return new RegExp(String.raw`\\${groupNumber}(?!\d)`).test(pattern.source);
+  indexedPattern.lastIndex = matchOffset;
+  const indexedMatch = indexedPattern.exec(input);
+  const captureIndices = indexedMatch?.indices?.[captureIndex + 1];
+  return indexedMatch?.index === matchOffset && indexedMatch[0] === match && captureIndices
+    ? captureIndices[0] - matchOffset
+    : null;
 }
 
 type SecretCaptureSelection = {
-  captureCount: number;
   index: number;
   value: string;
 };
 
 export function selectSecretCapture(match: string, groups: string[]): SecretCaptureSelection {
-  const selected = { index: -1, value: match, captureCount: 0 };
+  const selected = { index: -1, value: match };
   for (let index = 0; index < groups.length; index++) {
     const value = groups[index];
     if (typeof value === "string" && value.length > 0) {
       selected.index = index;
       selected.value = value;
-      selected.captureCount++;
     }
   }
   return selected;
@@ -354,15 +349,7 @@ export function getSecretCaptureStart(
     matchOffset,
     selected.index,
   );
-  if (indexedTokenStart !== null) {
-    return indexedTokenStart;
-  }
-  const preferFirstCapture =
-    pattern instanceof RegExp &&
-    selected.captureCount === 1 &&
-    selected.index >= 0 &&
-    hasBackreferenceToGroup(pattern, selected.index + 1);
-  return preferFirstCapture ? match.indexOf(selected.value) : match.lastIndexOf(selected.value);
+  return indexedTokenStart ?? match.lastIndexOf(selected.value);
 }
 
 const globalPatterns = new WeakMap<RegExp, RegExp>();

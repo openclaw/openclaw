@@ -411,21 +411,24 @@ describe("model resolution auth row snapshots", () => {
         const entered = createDeferredCore();
         const resume = createDeferredCore();
         const prepare = sqliteRead.prepareAgentAuthProfileRowsRead;
+        let capturedModelRead = false;
         const read = vi
           .spyOn(sqliteRead, "prepareAgentAuthProfileRowsRead")
           .mockImplementation((options) => {
             const reader = prepare(options);
-            return options.databasePath === databasePath
-              ? {
-                  ...reader,
-                  read: async () => {
-                    const rows = await reader.read();
-                    entered.resolve();
-                    await resume.promise;
-                    return rows;
-                  },
-                }
-              : reader;
+            if (options.databasePath !== databasePath || capturedModelRead) {
+              return reader;
+            }
+            capturedModelRead = true;
+            return {
+              ...reader,
+              read: async () => {
+                const rows = await reader.read();
+                entered.resolve();
+                await resume.promise;
+                return rows;
+              },
+            };
           });
         const loading = modelResolver(state)();
         try {

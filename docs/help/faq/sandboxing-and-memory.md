@@ -62,7 +62,7 @@ read_when:
   </Accordion>
 
   <Accordion title="Does semantic memory search require an OpenAI API key?">
-    Only if you use **OpenAI embeddings**, which is the default provider. Codex OAuth covers chat/completions and does **not** grant embeddings access, so signing in with Codex (OAuth or the Codex CLI login) does not enable semantic memory search. OpenAI embeddings still need a real API key (`OPENAI_API_KEY` or `models.providers.openai.apiKey`).
+    No. **OpenAI embeddings**, the default provider, can use a stored Codex OAuth profile when the account grants embedding access, or an API key (`OPENAI_API_KEY` or `models.providers.openai.apiKey`). The separate Sign in with ChatGPT token-sharing grant does not authorize embeddings. Run `openclaw memory status --deep` to check your configured account.
 
     To stay local, set `memory.search.provider: "local"` (GGUF/llama.cpp). Other supported providers: Bedrock, DeepInfra, Gemini (`GEMINI_API_KEY` or `memory.search.remote.apiKey`), GitHub Copilot, LM Studio, Mistral, Ollama, OpenAI-compatible, and Voyage. See [Memory](/concepts/memory) and [Memory search](/concepts/memory-search) for setup details.
 

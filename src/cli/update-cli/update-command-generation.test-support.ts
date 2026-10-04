@@ -10,6 +10,7 @@ import {
   recordUpdateRunVerification,
 } from "../../infra/update-run-ledger.js";
 import { renderUpdateRunReport } from "../../infra/update-run-report.js";
+import { createCommandResult as commandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import { VERSION } from "../../version.js";
 import { runDaemonRestart } from "../daemon-cli/lifecycle.js";
 import { readUpdateConfigSnapshot } from "./update-command-config-snapshot.js";
@@ -17,6 +18,7 @@ import { createUpdateCommandExecutionGuards } from "./update-command-execution-g
 import { finishUpdate } from "./update-command-post-update.js";
 import { UpdateCommandFailure } from "./update-command-result.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
+import { serviceUpdateResult } from "./update-command-service-recovery.test-support.js";
 import {
   maybeRestartService,
   maybeStopManagedServiceBeforeMutableUpdate,
@@ -55,15 +57,10 @@ export function registerGenerationRecoveryTests(
     expect(
       await maybeRestartService({
         shouldRestart: true,
-        result: {
-          status: "ok",
-          mode: "npm",
-          root,
+        result: serviceUpdateResult(root, {
           before: { version: VERSION },
           after: { version: "9999.1.1" },
-          steps: [],
-          durationMs: 0,
-        },
+        }),
         opts: { json: true, run },
         refreshServiceEnv: false,
         serviceUpdateVerdict: before.serviceUpdateVerdict,
@@ -157,16 +154,13 @@ export function registerGenerationRecoveryTests(
           typeof options === "object" ? options.env : undefined,
           () => runDaemonRestart({ json: true, preserveDefinition: true }),
         );
-        return {
+        return commandResult({
           code: healthy ? 0 : 1,
           stdout: JSON.stringify(mocks.writeJson.mock.lastCall?.[0]),
-          stderr: "",
-          signal: null,
-          killed: false,
-          termination: "exit",
-        };
+        });
       });
       mocks.health.mockImplementation(async ({ port, expectedVersion }) => ({
+        outcome: mocks.running ? "ready" : "failed",
         healthy: mocks.running,
         staleGatewayPids: [],
         runtime: {
@@ -178,15 +172,10 @@ export function registerGenerationRecoveryTests(
         expectedVersion: expectedVersion ?? undefined,
         portUsage: { port, status: mocks.running ? "busy" : "free", listeners: [], hints: [] },
       }));
-      const result = {
-        status: "ok" as const,
-        mode: "npm" as const,
-        root,
+      const result = serviceUpdateResult(root, {
         before: { version: VERSION },
         after: { version: "9999.1.1" },
-        steps: [],
-        durationMs: 0,
-      };
+      });
       let completedStatus: string | undefined;
       const error = await finishUpdate({
         mutationStarted: true,

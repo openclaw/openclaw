@@ -1,7 +1,66 @@
 // Container target tests cover CLI container target parsing and validation.
 import type { spawnSync as nodeSpawnSync } from "node:child_process";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { maybeRunCliInContainer, parseCliContainerArgs } from "./container-target.js";
+
+const childProcessMocks = vi.hoisted(() => ({ spawnSync: vi.fn() }));
+vi.mock("node:child_process", () => ({ spawnSync: childProcessMocks.spawnSync }));
+
+const stdinTty = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
+const stdoutTty = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
+afterEach(() => {
+  vi.unstubAllEnvs();
+  for (const [stream, descriptor] of [
+    [process.stdin, stdinTty],
+    [process.stdout, stdoutTty],
+  ] as const) {
+    if (descriptor) {
+      Object.defineProperty(stream, "isTTY", descriptor);
+    } else {
+      Reflect.deleteProperty(stream, "isTTY");
+    }
+  }
+});
+
+function runInContainer(
+  argv: string[],
+  setup: {
+    env: NodeJS.ProcessEnv;
+    spawnSync?: typeof nodeSpawnSync;
+    stdinIsTTY?: boolean;
+    stdoutIsTTY?: boolean;
+  },
+) {
+  for (const name of [
+    "OPENCLAW_CONTAINER",
+    "OPENCLAW_CLI_CONTAINER_BYPASS",
+    "OPENCLAW_PROXY_URL",
+    "OPENCLAW_CONTAINER_ALLOW_LOOPBACK_PROXY_URL",
+    "OPENCLAW_PROFILE",
+    "OPENCLAW_GATEWAY_PORT",
+    "OPENCLAW_GATEWAY_URL",
+    "OPENCLAW_GATEWAY_TOKEN",
+    "OPENCLAW_GATEWAY_PASSWORD",
+  ]) {
+    vi.stubEnv(name, undefined);
+  }
+  for (const [name, value] of Object.entries(setup.env)) {
+    vi.stubEnv(name, value);
+  }
+  Object.defineProperty(process.stdin, "isTTY", {
+    configurable: true,
+    value: setup.stdinIsTTY ?? false,
+  });
+  Object.defineProperty(process.stdout, "isTTY", {
+    configurable: true,
+    value: setup.stdoutIsTTY ?? false,
+  });
+  childProcessMocks.spawnSync.mockReset();
+  if (setup.spawnSync) {
+    childProcessMocks.spawnSync.mockImplementation(setup.spawnSync);
+  }
+  return maybeRunCliInContainer(argv);
+}
 
 function requireSpawnCall(
   spawnSync: ReturnType<typeof vi.fn>,
@@ -81,7 +140,7 @@ function expectContainerExec(
     ],
     {
       stdio: "inherit",
-      env: { ...params.env, OPENCLAW_CONTAINER: "" },
+      env: expect.objectContaining({ ...params.env, OPENCLAW_CONTAINER: "" }),
     },
   );
 }
@@ -156,7 +215,7 @@ describe("parseCliContainerArgs", () => {
 
 describe("maybeRunCliInContainer", () => {
   it("passes through when no container target is provided", () => {
-    expect(maybeRunCliInContainer(["node", "openclaw", "status"], { env: {} })).toEqual({
+    expect(runInContainer(["node", "openclaw", "status"], { env: {} })).toEqual({
       handled: false,
       argv: ["node", "openclaw", "status"],
     });
@@ -172,7 +231,7 @@ describe("maybeRunCliInContainer", () => {
     });
 
     expect(
-      maybeRunCliInContainer(["node", "openclaw", "status"], {
+      runInContainer(["node", "openclaw", "status"], {
         env: { OPENCLAW_CONTAINER: "demo" } as NodeJS.ProcessEnv,
         spawnSync,
       }),
@@ -191,7 +250,7 @@ describe("maybeRunCliInContainer", () => {
 
     let thrown: unknown;
     try {
-      maybeRunCliInContainer(["node", "openclaw", "status"], {
+      runInContainer(["node", "openclaw", "status"], {
         env: { OPENCLAW_CONTAINER: "demo" } as NodeJS.ProcessEnv,
         spawnSync,
       });
@@ -205,7 +264,7 @@ describe("maybeRunCliInContainer", () => {
   it("clears inherited host routing and gateway env before execing into the child CLI", () => {
     const spawnSync = mockSpawn(runningContainer, missingContainer, successfulExec);
 
-    maybeRunCliInContainer(["node", "openclaw", "status"], {
+    runInContainer(["node", "openclaw", "status"], {
       env: {
         OPENCLAW_CONTAINER: "demo",
         OPENCLAW_PROFILE: "work",
@@ -218,12 +277,22 @@ describe("maybeRunCliInContainer", () => {
     });
 
     expectContainerExec(spawnSync);
+    const childOptions = requireSpawnCall(spawnSync, 2)[2] as { env: NodeJS.ProcessEnv };
+    for (const name of [
+      "OPENCLAW_PROFILE",
+      "OPENCLAW_GATEWAY_PORT",
+      "OPENCLAW_GATEWAY_URL",
+      "OPENCLAW_GATEWAY_TOKEN",
+      "OPENCLAW_GATEWAY_PASSWORD",
+    ]) {
+      expect(childOptions.env).not.toHaveProperty(name);
+    }
   });
 
   it("passes the proxy URL env fallback into the child container CLI", () => {
     const spawnSync = mockSpawn(runningContainer, missingContainer, successfulExec);
 
-    maybeRunCliInContainer(["node", "openclaw", "status"], {
+    runInContainer(["node", "openclaw", "status"], {
       env: {
         OPENCLAW_CONTAINER: "demo",
         OPENCLAW_PROXY_URL: " http://proxy.internal:3128 ",
@@ -248,7 +317,7 @@ describe("maybeRunCliInContainer", () => {
     const spawnSync = mockSpawn(runningContainer, missingContainer);
 
     expect(() =>
-      maybeRunCliInContainer(["node", "openclaw", "status"], {
+      runInContainer(["node", "openclaw", "status"], {
         env: {
           OPENCLAW_CONTAINER: "demo",
           OPENCLAW_PROXY_URL: ` ${proxyUrl} `,
@@ -265,7 +334,7 @@ describe("maybeRunCliInContainer", () => {
 
     let message = "";
     try {
-      maybeRunCliInContainer(["node", "openclaw", "status"], {
+      runInContainer(["node", "openclaw", "status"], {
         env: {
           OPENCLAW_CONTAINER: "demo",
           OPENCLAW_PROXY_URL:
@@ -290,7 +359,7 @@ describe("maybeRunCliInContainer", () => {
   it("allows explicitly overridden loopback proxy URL forwarding into a child container CLI", () => {
     const spawnSync = mockSpawn(runningContainer, missingContainer, successfulExec);
 
-    maybeRunCliInContainer(["node", "openclaw", "status"], {
+    runInContainer(["node", "openclaw", "status"], {
       env: {
         OPENCLAW_CONTAINER: "demo",
         OPENCLAW_PROXY_URL: " http://127.0.0.1:3128 ",
@@ -311,7 +380,7 @@ describe("maybeRunCliInContainer", () => {
     const spawnSync = mockSpawn(runningContainer, missingContainer, successfulExec);
 
     expect(
-      maybeRunCliInContainer(["node", "openclaw", "--container", "demo", "status"], {
+      runInContainer(["node", "openclaw", "--container", "demo", "status"], {
         env: {},
         spawnSync,
       }),
@@ -328,7 +397,7 @@ describe("maybeRunCliInContainer", () => {
     const spawnSync = mockSpawn(missingContainer, runningContainer, successfulExec, successfulExec);
 
     expect(
-      maybeRunCliInContainer(["node", "openclaw", "--container", "demo", "status"], {
+      runInContainer(["node", "openclaw", "--container", "demo", "status"], {
         env: { USER: "somalley" } as NodeJS.ProcessEnv,
         spawnSync,
       }),
@@ -347,7 +416,7 @@ describe("maybeRunCliInContainer", () => {
     const spawnSync = mockSpawn(missingContainer, missingContainer);
 
     expect(() =>
-      maybeRunCliInContainer(["node", "openclaw", "--container", "demo", "status"], {
+      runInContainer(["node", "openclaw", "--container", "demo", "status"], {
         env: { USER: "somalley" } as NodeJS.ProcessEnv,
         spawnSync,
       }),
@@ -362,7 +431,7 @@ describe("maybeRunCliInContainer", () => {
     const spawnSync = mockSpawn(runningContainer, runningContainer, missingContainer);
 
     expect(() =>
-      maybeRunCliInContainer(["node", "openclaw", "--container", "demo", "status"], {
+      runInContainer(["node", "openclaw", "--container", "demo", "status"], {
         env: { USER: "somalley" } as NodeJS.ProcessEnv,
         spawnSync,
       }),
@@ -374,7 +443,7 @@ describe("maybeRunCliInContainer", () => {
   it("allocates a tty for interactive terminal sessions", () => {
     const spawnSync = mockSpawn(runningContainer, missingContainer, successfulExec);
 
-    maybeRunCliInContainer(["node", "openclaw", "--container", "demo", "setup"], {
+    runInContainer(["node", "openclaw", "--container", "demo", "setup"], {
       env: {},
       spawnSync,
       stdinIsTTY: true,
@@ -388,7 +457,7 @@ describe("maybeRunCliInContainer", () => {
     const spawnSync = mockSpawn(runningContainer, missingContainer, successfulExec);
 
     expect(
-      maybeRunCliInContainer(["node", "openclaw", "--container", "flag-demo", "health"], {
+      runInContainer(["node", "openclaw", "--container", "flag-demo", "health"], {
         env: { OPENCLAW_CONTAINER: "env-demo" } as NodeJS.ProcessEnv,
         spawnSync,
       }),
@@ -402,7 +471,7 @@ describe("maybeRunCliInContainer", () => {
 
   it("skips recursion when the bypass env is set", () => {
     expect(
-      maybeRunCliInContainer(["node", "openclaw", "--container", "demo", "status"], {
+      runInContainer(["node", "openclaw", "--container", "demo", "status"], {
         env: { OPENCLAW_CLI_CONTAINER_BYPASS: "1" } as NodeJS.ProcessEnv,
       }),
     ).toEqual({
@@ -415,7 +484,7 @@ describe("maybeRunCliInContainer", () => {
     const spawnSync = mockSpawn(runningContainer);
 
     expect(() =>
-      maybeRunCliInContainer(["node", "openclaw", "--container", "demo", "--no-color", "update"], {
+      runInContainer(["node", "openclaw", "--container", "demo", "--no-color", "update"], {
         env: {},
         spawnSync,
       }),
@@ -429,7 +498,7 @@ describe("maybeRunCliInContainer", () => {
     const spawnSync = mockSpawn(runningContainer);
 
     expect(() =>
-      maybeRunCliInContainer(["node", "openclaw", "--container", "demo", "--update"], {
+      runInContainer(["node", "openclaw", "--container", "demo", "--update"], {
         env: {},
         spawnSync,
       }),

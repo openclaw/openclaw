@@ -86,6 +86,8 @@ export async function createTelegramBotCore(
     kind: "subagent",
   });
   const telegramCfg = account.config;
+  const apiRoot = normalizeOptionalString(telegramCfg.apiRoot);
+  const normalizedApiRoot = apiRoot ? normalizeTelegramApiRoot(apiRoot) : undefined;
 
   const telegramTransport =
     opts.telegramTransport ??
@@ -98,8 +100,6 @@ export async function createTelegramBotCore(
     transport: telegramTransport,
   });
 
-  const apiRoot = normalizeOptionalString(telegramCfg.apiRoot);
-  const normalizedApiRoot = apiRoot ? normalizeTelegramApiRoot(apiRoot) : undefined;
   const client: ApiClientOptions = {
     fetch: asTelegramClientFetch(finalFetch),
     ...(normalizedApiRoot ? { apiRoot: normalizedApiRoot } : {}),

@@ -93,45 +93,48 @@ it("dispatches an authenticated targeted stop to the existing host lifecycle", a
   });
 });
 
-it("requires administrator scope before inspecting the stop target", async () => {
-  const { request, respond } = dispatchStop({ scopes: ["operator.write"] });
-  await request;
-
-  expect(readActiveGatewayLockIdentity).not.toHaveBeenCalled();
-  expect(acceptStop).not.toHaveBeenCalled();
-  expect(respond).toHaveBeenCalledWith(
-    false,
-    undefined,
-    expect.objectContaining({ message: expect.stringContaining("operator.admin") }),
-  );
-});
-
 it.each([
-  ["missing target", {}],
-  ["different PID", { target: { ...target, pid: process.pid + 1 } }],
-  ["different owner", { target: { ...target, ownerId: "replacement-owner" } }],
-  ["different port", { target: { ...target, port: target.port + 1 } }],
-] as const)("rejects %s without stopping the host", async (_label, params) => {
-  const { request, respond } = dispatchStop({ params });
+  {
+    label: "non-admin",
+    options: { scopes: ["operator.write"] },
+    error: { message: expect.stringContaining("operator.admin") },
+  },
+  ...(
+    [
+      ["missing target", {}],
+      ["different PID", { target: { ...target, pid: process.pid + 1 } }],
+      ["different owner", { target: { ...target, ownerId: "replacement-owner" } }],
+      ["different port", { target: { ...target, port: target.port + 1 } }],
+    ] as const
+  ).map(([label, params]) => ({ label, options: { params }, error: { code: "INVALID_REQUEST" } })),
+])("rejects $label without stopping the host", async ({ label, options, error }) => {
+  const { request, respond } = dispatchStop(options);
   await request;
-
+  if (label === "non-admin") {
+    expect(readActiveGatewayLockIdentity).not.toHaveBeenCalled();
+  }
   expect(acceptStop).not.toHaveBeenCalled();
-  expect(respond).toHaveBeenCalledWith(
-    false,
-    undefined,
-    expect.objectContaining({ code: "INVALID_REQUEST" }),
-  );
+  expect(respond).toHaveBeenCalledWith(false, undefined, expect.objectContaining(error));
 });
 
-it.each(["signal", "client invalidation", "transport authority"] as const)(
-  "rejects a caller that loses %s while looking up the owner",
+it.each(["signal", "client invalidation", "transport authority", "stop preparation"] as const)(
+  "rejects a caller that loses authority during %s",
   async (loss) => {
     const reached = createDeferred();
-    const lock = createDeferred<typeof activeLock>();
-    readActiveGatewayLockIdentity.mockImplementationOnce(() => {
-      reached.resolve();
-      return lock.promise;
-    });
+    const released = createDeferred();
+    if (loss === "stop preparation") {
+      prepareHostedGatewayStop.mockImplementationOnce(async () => {
+        reached.resolve();
+        await released.promise;
+        return nativeStop;
+      });
+    } else {
+      readActiveGatewayLockIdentity.mockImplementationOnce(async () => {
+        reached.resolve();
+        await released.promise;
+        return activeLock;
+      });
+    }
     const abort = new AbortController();
     let current = true;
     const { request, respond, client } = dispatchStop({
@@ -146,41 +149,21 @@ it.each(["signal", "client invalidation", "transport authority"] as const)(
     } else {
       current = false;
     }
-    lock.resolve(activeLock);
+    released.resolve();
     await request;
-
-    expect(prepareHostedGatewayStop).not.toHaveBeenCalled();
+    if (loss === "stop preparation") {
+      expect(nativeStop.dispose).toHaveBeenCalledOnce();
+    } else {
+      expect(prepareHostedGatewayStop).not.toHaveBeenCalled();
+    }
     expect(acceptStop).not.toHaveBeenCalled();
     expect(respond).toHaveBeenCalledWith(
       false,
       undefined,
-      expect.objectContaining({ code: "UNAVAILABLE" }),
+      expect.objectContaining({
+        code: "UNAVAILABLE",
+        ...(loss === "stop preparation" ? { message: "Gateway requester authority changed" } : {}),
+      }),
     );
   },
 );
-
-it("retains caller authority through the host's asynchronous stop preparation", async () => {
-  const reached = createDeferred();
-  const preparation = createDeferred<typeof nativeStop>();
-  prepareHostedGatewayStop.mockImplementationOnce(() => {
-    reached.resolve();
-    return preparation.promise;
-  });
-  let current = true;
-  const { request, respond } = dispatchStop({ hasCurrentClientAuthority: () => current });
-  await reached.promise;
-  current = false;
-  preparation.resolve(nativeStop);
-  await request;
-
-  expect(acceptStop).not.toHaveBeenCalled();
-  expect(nativeStop.dispose).toHaveBeenCalledOnce();
-  expect(respond).toHaveBeenCalledWith(
-    false,
-    undefined,
-    expect.objectContaining({
-      code: "UNAVAILABLE",
-      message: "Gateway requester authority changed",
-    }),
-  );
-});

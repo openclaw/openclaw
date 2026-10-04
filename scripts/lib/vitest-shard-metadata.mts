@@ -188,7 +188,6 @@ const STRIPE_FILE_SECONDS_HINTS = new Map<string, number>([
   ["src/commands/doctor-lint.state-isolation.test.ts", 32.5],
   ["src/commands/doctor-lint.test.ts", 26.9],
   ["src/commands/doctor-maintenance.finish-revalidation.test.ts", 23.3],
-  ["src/commands/doctor-plugin-install-config.process.test.ts", 53.1],
   ["src/commands/doctor-session-sqlite.deferred-plugin.test.ts", 31],
   ["src/commands/doctor-session-sqlite.memory.test.ts", 45.1],
   ["src/commands/doctor-state-migrations.test.ts", 20.4],

@@ -1,7 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { DatabaseSync } from "node:sqlite";
 import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
-import { enableNodeSqliteKyselyStatementCache } from "../infra/kysely-sync-cache-state.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
 import {
   registerSqliteCacheExitClose,
@@ -24,18 +23,12 @@ import {
   type OpenClawAgentReadOnlyDatabase,
   type OpenClawAgentReadOnlyDatabaseHandle,
 } from "./openclaw-agent-db-readonly-open.js";
-import {
-  registerOpenClawAgentDatabaseSyncResource,
-  matchesAgentDatabaseReadCandidatePath,
-  type OpenClawAgentDatabaseReadCandidateResource,
-} from "./openclaw-agent-db-resources.js";
+import { registerOpenClawAgentDatabaseSyncResource } from "./openclaw-agent-db-resources.js";
 import { observeOpenClawDatabaseMaintenanceResource } from "./openclaw-state-db-async-lifecycle.js";
 
 export type OpenClawAgentDatabaseReadOnlyBehavior = {
   allowExtension?: boolean;
 };
-
-type ReadCandidate = Pick<OpenClawAgentDatabaseReadCandidateResource, "path" | "scope">;
 
 type ReadTarget = OpenClawAgentDatabaseOptions & { agentId: string; path: string };
 const readOnlyScope = new AsyncLocalStorage<OpenClawAgentDatabaseReadOnlyScope>();
@@ -153,16 +146,6 @@ export class OpenClawAgentDatabaseReadOnlyScope {
     return this.target?.agentId === agentId && this.target.path === pathname;
   }
 
-  closeMatching(candidates: readonly ReadCandidate[]): void {
-    const target = this.target;
-    if (
-      target &&
-      candidates.some((candidate) => matchesAgentDatabaseReadCandidatePath(candidate, target.path))
-    ) {
-      this.close();
-    }
-  }
-
   private acquire(options: OpenClawAgentDatabaseOptions) {
     if (this.database && !isOpenClawAgentDatabasePathCurrent(this.database)) {
       this.discardConnection();
@@ -187,7 +170,6 @@ export class OpenClawAgentDatabaseReadOnlyScope {
           revoke: () => this.close(),
           close: () => this.close(),
         });
-        enableNodeSqliteKyselyStatementCache(this.database.db);
         retainedScopes.active.add(this);
         if (this.cached) {
           retainedScopes.paths.set(this.database.path, this);
@@ -315,15 +297,6 @@ export function invalidateOpenClawAgentReadOnlyProjections(
 /** Writable admission retires an idle reader before opening the same physical file. */
 export function closeIdleOpenClawAgentDatabaseReadOnly(pathname: string): void {
   retainedScopes.paths.get(pathname)?.closeIfIdle();
-}
-
-/** Called only after the native worker has settled preceding reads, including explicit scopes. */
-export function closeOpenClawAgentDatabaseReadOnlyCandidates(
-  candidates: readonly ReadCandidate[],
-): void {
-  for (const scope of retainedScopes.active) {
-    scope.closeMatching(candidates);
-  }
 }
 
 export function retainCachedOpenClawAgentDatabaseReadOnly(options: ReadTarget) {

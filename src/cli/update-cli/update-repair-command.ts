@@ -4,6 +4,7 @@ import {
 } from "../../config/config.js";
 import { resolveGatewayPort } from "../../config/paths.js";
 import { readPackageVersion } from "../../infra/package-json.js";
+import { supersedePackageActivationAfterManualInstall } from "../../infra/package-update-activation.js";
 import { tryProcessCwd } from "../../infra/safe-cwd.js";
 import {
   normalizeUpdateChannel,
@@ -12,6 +13,7 @@ import {
 import { compareSemverStrings, resolveNpmChannelTag } from "../../infra/update-check.js";
 import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js";
 import { readBuiltGatewayBuildId } from "../../infra/update-git-runtime.js";
+import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
 import { createManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
 import { POST_CORE_UPDATE_ENV } from "../../infra/update-post-core-context.js";
 import {
@@ -52,13 +54,16 @@ import {
   type UpdateFinalizeOptions,
 } from "./shared.js";
 import { updateFinalizeCommand } from "./update-command-finalize.js";
+import { refuseImmutableUpdateActivation } from "./update-command-immutable.js";
 import { resolveServiceRefreshEnv } from "./update-command-service-env.js";
 
 /** Public repair can clear a stale ledger without entering post-core maintenance. */
 export async function updateRepairCommand(opts: UpdateFinalizeOptions): Promise<void> {
   // Recovery refusal precedes discovery; later mutation checks still revalidate.
   await assertUpdateRecoveryAdmission({ env: process.env });
-  await refuseHostOwnedUpdate(await resolveUpdateRoot(), opts);
+  const discoveredRoot = await resolveUpdateRoot();
+  await refuseHostOwnedUpdate(discoveredRoot, opts);
+  await refuseImmutableUpdateActivation(discoveredRoot, opts);
   const timeoutMs = parseUpdateTimeoutMs(opts.timeout);
   const env = resolveServiceRefreshEnv(process.env, tryProcessCwd());
   const options = { env, busyTimeoutMs: timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS };
@@ -73,6 +78,16 @@ export async function updateRepairCommand(opts: UpdateFinalizeOptions): Promise<
   const admission = inspectUpdateRepairDriverAdmission(activeRuns, inheritedRunId);
   if (admission.kind === "conflict") {
     throw new Error(admission.message);
+  }
+  if (opts.channel === undefined || normalizeUpdateChannel(opts.channel)) {
+    const superseded = await supersedePackageActivationAfterManualInstall(
+      resolveUpdateInstallRoot(discoveredRoot),
+    );
+    if (superseded) {
+      defaultRuntime.error(
+        `Warning: previous package update operation ${superseded.operationId} closed as superseded-by-manual-install. Recovery evidence retained at ${superseded.retained}.`,
+      );
+    }
   }
   using handoff =
     hasCliProcessScope() &&

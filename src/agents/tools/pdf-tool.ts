@@ -4,6 +4,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { Type } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { captureAmbientGatewayOperatorAuthority } from "../../gateway/operator-invocation-authority.js";
+import { providerSupportsNativePdfDocument } from "../../media-understanding/defaults.js";
 import { renderDocumentTruncationNotice } from "../../media/document-extraction-metadata.js";
 import {
   classifyMediaReferenceSource,
@@ -56,7 +57,6 @@ import {
   coercePdfAssistantText,
   coercePdfModelConfig,
   parsePageRange,
-  providerSupportsNativePdf,
   resolvePdfInputs,
   resolvePdfToolMaxTokens,
 } from "./pdf-tool.helpers.js";
@@ -245,7 +245,7 @@ async function runPdfPrompt(params: {
           ? (auth.apiKey ?? "")
           : requireApiKey(auth, model.provider);
 
-      if (providerSupportsNativePdf(provider)) {
+      if (providerSupportsNativePdfDocument({ providerId: provider })) {
         if (params.password) {
           throw new Error(
             `password is not supported with native PDF providers (${provider}/${modelId}). Remove password, or use a non-native model for encrypted PDFs.`,

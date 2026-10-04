@@ -12,11 +12,13 @@ import {
   createOpenClawStateDatabaseAsyncLifecycle,
 } from "./openclaw-state-db-async-lifecycle.js";
 import {
+  clearOpenClawStateDatabaseOpenFailure,
   prepareOpenClawStateDatabaseRemoval,
   captureOpenClawStateDatabaseReadAdmission,
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseByPath,
   closeOpenClawStateDatabaseByPathAsync,
+  publishOpenClawStateDatabaseWorkerAdmission,
   registerOpenClawStateDatabaseAsyncResource,
 } from "./openclaw-state-db-cache.js";
 import { openOpenClawStateReadConnection } from "./openclaw-state-db-read-connection.js";
@@ -196,6 +198,38 @@ describe("canonical shared-state resource drainage", () => {
     expect(original.assertCurrent).toThrow(/admission changed/);
     expect(observed.assertCurrent).toThrow(/admission changed/);
   });
+
+  it.each(["first-creation", "replacement"] as const)(
+    "publishes physical identity without renewing revoked read authority (%s)",
+    (creation) => {
+      const pathname = databasePath();
+      if (creation === "replacement") {
+        writeFileSync(pathname, "original");
+      }
+      const original = captureOpenClawStateDatabaseReadAdmission(pathname);
+      const originalKey = original.identity.key;
+      const coordinationKey = original.coordinationKey;
+      clearOpenClawStateDatabaseOpenFailure(pathname);
+      expect(original.assertCurrent).toThrow(/admission changed/);
+      if (creation === "replacement") {
+        renameSync(pathname, `${pathname}.retired`);
+      }
+      writeFileSync(pathname, "created");
+      const physical = databaseIdentity.readDatabasePathIdentitySync(pathname);
+      expect(physical.key).not.toBe(originalKey);
+      expect(() => publishOpenClawStateDatabaseWorkerAdmission(original)).toThrow(
+        /admission changed/,
+      );
+      expect(original.assertCurrent).toThrow(/admission changed/);
+      expect(original.coordinationKey).toBe(coordinationKey);
+      if (creation === "first-creation") {
+        expect(original.identity.key).toBe(physical.key);
+      } else {
+        expect(original.identity.key).toBe(originalKey);
+        expect(original.identity.key).not.toBe(physical.key);
+      }
+    },
+  );
 
   it("normalizes relative paths for identity, invalidation, exclusion, and closure", async () => {
     const lifecycle = createOpenClawStateDatabaseAsyncLifecycle();

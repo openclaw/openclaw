@@ -18,16 +18,7 @@ function isMutatingMethod(method: string): boolean {
 }
 
 function isLoopbackUrl(value: string): boolean {
-  const v = value.trim();
-  if (!v || v === "null") {
-    return false;
-  }
-  try {
-    const parsed = new URL(v);
-    return isLoopbackHost(parsed.hostname);
-  } catch {
-    return false;
-  }
+  return isLoopbackHost(URL.parse(value.trim())?.hostname ?? "");
 }
 
 /** Return true when a request should be rejected as browser-originated CSRF. */
@@ -69,22 +60,12 @@ export function browserMutationGuardMiddleware(): (
   next: NextFunction,
 ) => void {
   return (req: Request, res: Response, next: NextFunction) => {
-    // OPTIONS is used for CORS preflight. Even if cross-origin, the preflight isn't mutating.
-    const method = (req.method || "").trim().toUpperCase();
-    if (method === "OPTIONS") {
-      return next();
-    }
-
-    const origin = firstHeader(req.headers.origin);
-    const referer = firstHeader(req.headers.referer);
-    const secFetchSite = firstHeader(req.headers["sec-fetch-site"]);
-
     if (
       shouldRejectBrowserMutation({
-        method,
-        origin,
-        referer,
-        secFetchSite,
+        method: req.method,
+        origin: firstHeader(req.headers.origin),
+        referer: firstHeader(req.headers.referer),
+        secFetchSite: firstHeader(req.headers["sec-fetch-site"]),
       })
     ) {
       res.status(403).send("Forbidden");

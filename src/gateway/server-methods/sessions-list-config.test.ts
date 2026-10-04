@@ -34,11 +34,35 @@ import {
 
 afterEach(() => vi.restoreAllMocks());
 
+const readDatabases = history.withSessionHistoryWorkerDatabases;
+
+function observeRowFacts(reads: string[], pause?: () => Promise<void>) {
+  vi.spyOn(history, "withSessionHistoryWorkerDatabases").mockImplementation((targets, consume) =>
+    readDatabases(targets, (owners) =>
+      consume(
+        owners.map((owner) => ({
+          ...owner,
+          readRowFacts(input) {
+            reads.push(...input.sessionKeys);
+            const result = owner.readRowFacts(input);
+            return pause
+              ? result.then(async (rows) => {
+                  await pause();
+                  return rows;
+                })
+              : result;
+          },
+        })),
+      ),
+    ),
+  );
+}
+
 it("reuses committed row facts when a changed model catalog updates session lists", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const cfg: OpenClawConfig = {
       agents: {
-        list: [{ id: "main", default: true }],
+        entries: { main: {} },
         defaults: { utilityModel: "unit-test/small" },
       },
       plugins: { enabled: false },
@@ -82,21 +106,7 @@ it("reuses committed row facts when a changed model catalog updates session list
     try {
       expect((await list()).sessions.map((row) => row.contextTokens)).toEqual([8192, 8192]);
       const reads: string[] = [];
-      const readDatabases = history.withSessionHistoryWorkerDatabases;
-      vi.spyOn(history, "withSessionHistoryWorkerDatabases").mockImplementation(
-        (targets, consume) =>
-          readDatabases(targets, (owners) =>
-            consume(
-              owners.map((owner) => ({
-                ...owner,
-                readRowFacts(input) {
-                  reads.push(...input.sessionKeys);
-                  return owner.readRowFacts(input);
-                },
-              })),
-            ),
-          ),
-      );
+      observeRowFacts(reads);
       const acp = vi.spyOn(acpReads, "readAcpSessionMetaForEntries");
       const hostReads = observeSqliteReadSql(StatementSync.prototype);
       try {
@@ -125,23 +135,10 @@ it("reuses committed row facts when a changed model catalog updates session list
       const captured = createDeferredCore();
       const resume = createDeferredCore();
       const first = scopes[0]!;
-      vi.spyOn(history, "withSessionHistoryWorkerDatabases").mockImplementation(
-        (targets, consume) =>
-          readDatabases(targets, (owners) =>
-            consume(
-              owners.map((owner) => ({
-                ...owner,
-                async readRowFacts(input) {
-                  reads.push(...input.sessionKeys);
-                  const result = await owner.readRowFacts(input);
-                  captured.resolve();
-                  await resume.promise;
-                  return result;
-                },
-              })),
-            ),
-          ),
-      );
+      observeRowFacts(reads, async () => {
+        captured.resolve();
+        await resume.promise;
+      });
       replaceSessionEntrySync(first, {
         ...loadSessionEntry(first)!,
         label: "Committed during renewal",
@@ -176,7 +173,7 @@ it("retains session facts on identity-scope changes and refreshes changes that a
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     let cfg: OpenClawConfig = {
       agents: {
-        list: [{ id: "main", default: true }],
+        entries: { main: {} },
         defaults: { model: "unit-test/original" },
       },
       plugins: { enabled: false },
@@ -210,21 +207,7 @@ it("retains session facts on identity-scope changes and refreshes changes that a
       const original = await list();
       expect(original.totalCount).toBe(2);
       const reads: string[] = [];
-      const readDatabases = history.withSessionHistoryWorkerDatabases;
-      vi.spyOn(history, "withSessionHistoryWorkerDatabases").mockImplementation(
-        (targets, consume) =>
-          readDatabases(targets, (owners) =>
-            consume(
-              owners.map((owner) => ({
-                ...owner,
-                readRowFacts(input) {
-                  reads.push(...input.sessionKeys);
-                  return owner.readRowFacts(input);
-                },
-              })),
-            ),
-          ),
-      );
+      observeRowFacts(reads);
       const publish = async (next: OpenClawConfig, refresh: boolean) => {
         reads.length = 0;
         const materialized = projection.materializedCount;

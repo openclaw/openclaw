@@ -95,15 +95,12 @@ extension OnboardingView {
     }
 
     func reconcilePageForModeChange(previousActivePageIndex: Int) {
-        if let exact = pageOrder.firstIndex(of: previousActivePageIndex) {
-            withAnimation { self.currentPage = exact }
-            return
+        let page = pageOrder.firstIndex(of: previousActivePageIndex) ??
+            pageOrder.firstIndex(where: { $0 > previousActivePageIndex }) ??
+            max(0, pageOrder.count - 1)
+        withAnimation {
+            self.currentPage = page
         }
-        if let next = pageOrder.firstIndex(where: { $0 > previousActivePageIndex }) {
-            withAnimation { self.currentPage = next }
-            return
-        }
-        withAnimation { self.currentPage = max(0, self.pageOrder.count - 1) }
     }
 
     func handleConnectionModeChange(updatePageMonitoring: ((Int) -> Void)? = nil) {

@@ -74,23 +74,25 @@ suite.define(() => {
           code: "UNAVAILABLE",
           message: "QA synthetic command rejection",
         });
+        const dockDraftBeforeReturn = handoff ? await dockComposer.inputValue() : null;
+        if (handoff) {
+          // Retained source DOM stays parked; observe the recovered presentation on return.
+          await page.locator("a.nav-item--home").click();
+          await composer.waitFor({ state: "visible" });
+          await expect.poll(() => dockComposer.isVisible()).toBe(false);
+        }
         await page
           .locator("openclaw-chat-page .chat-error", { hasText: "QA synthetic command rejection" })
-          .waitFor({ state: "attached" });
+          .waitFor({ state: "visible" });
         const failureObservation = {
           sourceDraft: await composer.inputValue(),
-          dockDraft: handoff ? await dockComposer.inputValue() : null,
+          dockDraft: dockDraftBeforeReturn,
           errors: await page.locator(".chat-error").allTextContents(),
         };
         await page.screenshot({
           path: `${suite.artifactDir}/command-rejected.png`,
           fullPage: true,
         });
-        if (handoff) {
-          await page.locator("a.nav-item--home").click();
-          await composer.waitFor({ state: "visible" });
-          await expect.poll(() => dockComposer.isVisible()).toBe(false);
-        }
         const receipt = {
           handoff,
           newerDraft,

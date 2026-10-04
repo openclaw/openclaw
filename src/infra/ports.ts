@@ -55,9 +55,7 @@ export async function handlePortError(
   // Uniform messaging for EADDRINUSE with optional owner details.
   if (err instanceof PortInUseError || (isErrno(err) && err.code === "EADDRINUSE")) {
     const details =
-      err instanceof PortInUseError
-        ? (err.details ?? (await describePortOwner(port)))
-        : await describePortOwner(port);
+      (err instanceof PortInUseError ? err.details : undefined) ?? (await describePortOwner(port));
     runtime.error(danger(`${context} failed: port ${port} is already in use.`));
     if (details) {
       runtime.error(info("Port listener details:"));

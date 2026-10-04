@@ -99,7 +99,7 @@ test("projects.list returns only the caller's deterministic resolved recents", a
         execCwd: "/work/incognito",
       },
     );
-    const cfg = { agents: { list: [{ id: "main", default: true, workspace: "/workspace" }] } };
+    const cfg = { agents: { entries: { main: { workspace: "/workspace" } } } };
     linkEmail("source@example.test", targetProfile.id);
     releaseCatalog = retainUserProfileCatalog();
     const readResult = await invokeProjectMethod(
@@ -271,7 +271,7 @@ test("projects.list returns only the caller's deterministic resolved recents", a
   }
 });
 
-test("projects.list preserves exact-path ranking, locale ties, and the pre-access recent limit", async () => {
+test("projects.list preserves path ranking, folder names, locale ties, and the pre-access recent limit", async () => {
   const state = await createOpenClawTestState({ layout: "state-only", prefix: "projects-rpc-" });
   try {
     const repo = await initializeRepository(state.root);
@@ -346,6 +346,16 @@ test("projects.list preserves exact-path ranking, locale ties, and the pre-acces
         repositoryWorkspaceId: "missing-workspace",
         expected: [],
       },
+      ...(
+        [
+          ["C:\\Users\\dev\\projects\\windows-project\\", "windows-project"],
+          ["C:\\Users/dev\\projects/mixed-project/", "mixed-project"],
+        ] as const
+      ).map(([folder, displayName]) => ({
+        agent: "main",
+        folder,
+        expected: [{ kind: "folder", folder, displayName }],
+      })),
     ];
     for (const [index, entry] of cases.entries()) {
       const profile = ensureProfileForEmail(`ranking-${index}@example.test`);
@@ -375,6 +385,9 @@ test("projects.list preserves exact-path ranking, locale ties, and the pre-acces
         profile.id,
       );
       expect(result).toMatchObject({ ok: true, payload: { recents: entry.expected } });
+      expect((result?.payload as { recents?: unknown[] } | undefined)?.recents).toEqual(
+        entry.expected,
+      );
     }
 
     const limited = ensureProfileForEmail("limited-recents@example.test");
@@ -391,48 +404,6 @@ test("projects.list preserves exact-path ranking, locale ties, and the pre-acces
     }
     const read = await invokeProjectMethod("projects.list", {}, cfg, ["operator.read"], limited.id);
     expect(read).toMatchObject({ ok: true, payload: { recents: [] } });
-  } finally {
-    await state.cleanup();
-  }
-});
-
-test.each([
-  ["POSIX", "/Users/dev/projects/posix-project", "posix-project"],
-  ["POSIX with a trailing separator", "/Users/dev/projects/posix-project/", "posix-project"],
-  ["Windows", "C:\\Users\\dev\\projects\\windows-project", "windows-project"],
-  [
-    "Windows with a trailing separator",
-    "C:\\Users\\dev\\projects\\windows-project\\",
-    "windows-project",
-  ],
-  ["mixed separators", "C:\\Users/dev\\projects/mixed-project/", "mixed-project"],
-] as const)("projects.list names folder recents from %s paths", async (_, folder, displayName) => {
-  const state = await createOpenClawTestState({ layout: "state-only", prefix: "projects-rpc-" });
-  try {
-    const profile = ensureProfileForEmail("windows-recents@example.test");
-    replaceSessionEntrySync(
-      { agentId: "main", sessionKey: "agent:main:windows" },
-      {
-        sessionId: "session-windows",
-        updatedAt: 900,
-        createdActor: { type: "human", source: "profile", id: profile.id },
-        spawnedCwd: folder,
-      },
-    );
-    const result = await invokeProjectMethod(
-      "projects.list",
-      {},
-      { agents: { list: [{ id: "main", default: true, workspace: "/workspace" }] } },
-      ["operator.write"],
-      profile.id,
-    );
-    expect((result?.payload as { recents?: unknown[] } | undefined)?.recents).toEqual([
-      {
-        kind: "folder",
-        folder,
-        displayName,
-      },
-    ]);
   } finally {
     await state.cleanup();
   }

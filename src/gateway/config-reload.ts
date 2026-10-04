@@ -23,7 +23,6 @@ import type { RuntimeConfigSnapshotRefreshOptions } from "../config/runtime-snap
 import {
   getRuntimeConfigWriteApplication,
   type RuntimeConfigWriteApplicationClaim,
-  type RuntimeConfigWriteApplicationStatus,
 } from "../config/runtime-write-application.js";
 import {
   createConfigSource,
@@ -150,12 +149,6 @@ export function startGatewayConfigReloader(
   let pendingInProcessConfig: InProcessConfigCandidate | null = null;
   let activeInProcessConfig: InProcessConfigCandidate | null = null;
   let retryWriteCandidate: InProcessConfigCandidate | null = null;
-  const settleApplication = (
-    candidate: InProcessConfigCandidate | null,
-    status: RuntimeConfigWriteApplicationStatus,
-  ) => {
-    candidate?.application?.settle(status);
-  };
   let acceptedSourceSnapshot: ConfigFileSnapshot | undefined;
   let lastSourceOnly:
     | {
@@ -942,7 +935,7 @@ export function startGatewayConfigReloader(
         !snapshot.exists && missingConfigRetries >= MISSING_CONFIG_MAX_RETRIES;
       if (handleMissingSnapshot(snapshot)) {
         if (missingRetriesExhausted) {
-          settleApplication(intentCandidate, "failed");
+          intentCandidate?.application?.settle("failed");
         }
         await appliedRevision.flush(currentConfig);
         return;
@@ -976,7 +969,7 @@ export function startGatewayConfigReloader(
         return;
       }
       if (retryWriteCandidate === intentCandidate) {
-        settleApplication(intentCandidate, "superseded");
+        intentCandidate?.application?.settle("superseded");
         retryWriteCandidate = null;
       }
       if (acceptedSourceSnapshot && configSourceSnapshotsMatch(snapshot, acceptedSourceSnapshot)) {
@@ -1051,7 +1044,7 @@ export function startGatewayConfigReloader(
     } catch (err) {
       const superseded = isConfigReloadSuperseded(err);
       if (!superseded || retryWriteCandidate !== attemptedCandidate) {
-        settleApplication(attemptedCandidate, superseded ? "superseded" : "failed");
+        attemptedCandidate?.application?.settle(superseded ? "superseded" : "failed");
       }
       if (superseded) {
         opts.log.info(`config reload superseded: ${String(err)}`);
@@ -1181,12 +1174,12 @@ export function startGatewayConfigReloader(
           queued !== null && configSourceSnapshotsMatch(snapshot, queued.snapshot);
         if (!matchesSnapshot(candidate)) {
           if (candidate !== retryWriteCandidate) {
-            settleApplication(candidate, "superseded");
+            candidate?.application?.settle("superseded");
           }
           candidate = matchesSnapshot(retryWriteCandidate) ? retryWriteCandidate : null;
         }
         if (retryWriteCandidate && retryWriteCandidate !== candidate) {
-          settleApplication(retryWriteCandidate, "superseded");
+          retryWriteCandidate.application?.settle("superseded");
           retryWriteCandidate = null;
         }
         activeInProcessConfig = candidate;
@@ -1218,7 +1211,7 @@ export function startGatewayConfigReloader(
         }
         return applied.runtime;
       } catch (error) {
-        settleApplication(candidate, "failed");
+        candidate?.application?.settle("failed");
         if (error instanceof PluginRuntimeApplicationError) {
           throw error;
         }
@@ -1277,8 +1270,8 @@ export function startGatewayConfigReloader(
         activeInProcessConfig,
         retryWriteCandidate,
       ].find((candidate) => candidate?.afterWrite?.mode === "restart")?.afterWrite;
-      settleApplication(pendingInProcessConfig, "superseded");
-      settleApplication(retryWriteCandidate, "superseded");
+      pendingInProcessConfig?.application?.settle("superseded");
+      retryWriteCandidate?.application?.settle("superseded");
       retryWriteCandidate = null;
       const afterWrite =
         pendingRestartIntent && event.afterWrite?.mode !== "restart"
@@ -1422,9 +1415,9 @@ export function startGatewayConfigReloader(
     stop: async () => {
       stopped = true;
       lifecycle.abort(new GatewayConfigReloadSupersededError());
-      settleApplication(pendingInProcessConfig, "stopped");
-      settleApplication(activeInProcessConfig, "stopped");
-      settleApplication(retryWriteCandidate, "stopped");
+      pendingInProcessConfig?.application?.settle("stopped");
+      activeInProcessConfig?.application?.settle("stopped");
+      retryWriteCandidate?.application?.settle("stopped");
       clearReloadTimer();
       await source.stop();
       await ready.catch(() => {});

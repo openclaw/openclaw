@@ -17,10 +17,10 @@ import {
   completeAgentDeletionJournalInDatabase,
 } from "../state/agent-deletion-journal.js";
 import {
-  closeOpenClawAgentDatabasesForTest,
+  closeOpenClawAgentDatabasesAsync,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
-import { SQLITE_SESSION_WRITER_QUEUES } from "../state/openclaw-agent-write-admission.js";
+import * as agentWriteAdmission from "../state/openclaw-agent-write-admission.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
@@ -62,7 +62,7 @@ describe("plugin host cleanup session stores", () => {
         },
       );
     }
-    closeOpenClawAgentDatabasesForTest();
+    await closeOpenClawAgentDatabasesAsync();
     const retainedDatabase = path.join(
       fixtureStateDir,
       "agents",
@@ -173,7 +173,7 @@ describe("plugin host cleanup session stores", () => {
       loadSessionEntry({ agentId: "main", storePath: activeStore, sessionKey: "agent:main:main" })
         ?.pluginExtensions,
     ).toBeUndefined();
-    expect(await fs.readFile(retainedDatabase)).toEqual(before);
+    expect((await fs.readFile(retainedDatabase)).equals(before)).toBe(true);
   });
 
   it("still cleans an active store when the retained-deletion snapshot read rejects", async () => {
@@ -202,7 +202,7 @@ describe("plugin host cleanup session stores", () => {
         loadSessionEntry({ agentId: "main", storePath: activeStore, sessionKey: "agent:main:main" })
           ?.pluginExtensions,
       ).toBeUndefined();
-      expect(await fs.readFile(retainedDatabase)).toEqual(before);
+      expect((await fs.readFile(retainedDatabase)).equals(before)).toBe(true);
     } finally {
       snapshotRead.mockRestore();
     }
@@ -224,7 +224,7 @@ describe("plugin host cleanup session stores", () => {
         },
       );
     }
-    closeOpenClawAgentDatabasesForTest();
+    await closeOpenClawAgentDatabasesAsync();
     const retiredBefore = loadSessionEntry({
       agentId: "retired",
       storePath: sharedStore,
@@ -288,7 +288,7 @@ describe("plugin host cleanup session stores", () => {
         pluginExtensions: { fixture: { active: true } },
       },
     );
-    closeOpenClawAgentDatabasesForTest();
+    await closeOpenClawAgentDatabasesAsync();
     const databasePath = path.join(
       fixtureStateDir,
       "agents",
@@ -322,7 +322,7 @@ describe("plugin host cleanup session stores", () => {
     expect(result.failures).toEqual([
       expect.objectContaining({ pluginId: "fixture", hookId: "session-store" }),
     ]);
-    expect(await fs.readFile(databasePath)).toEqual(before);
+    expect((await fs.readFile(databasePath)).equals(before)).toBe(true);
   });
 
   it.each(["cancelled", "already-cleared", "locked", "revoked", "committed"] as const)(
@@ -375,6 +375,15 @@ describe("plugin host cleanup session stores", () => {
         { replaceEntry: true, skipMaintenance: true },
       );
       await entered.promise;
+      const queued = createDeferredCore();
+      const admit = agentWriteAdmission.runOpenClawAgentWriteAdmission;
+      const admission = vi
+        .spyOn(agentWriteAdmission, "runOpenClawAgentWriteAdmission")
+        .mockImplementation((...args) => {
+          const result = admit(...args);
+          queued.resolve();
+          return result;
+        });
       let current = true;
       const revoked = new Error("session reset authority changed");
       const cleanup = runPluginHostCleanup({
@@ -393,8 +402,14 @@ describe("plugin host cleanup session stores", () => {
       });
       const settled = Promise.allSettled([blocker, cleanup]);
       try {
+        await Promise.race([
+          queued.promise,
+          cleanup.then(() => {
+            throw new Error("Cleanup completed before writer admission");
+          }),
+        ]);
         expect(
-          [...SQLITE_SESSION_WRITER_QUEUES.values()].reduce(
+          [...agentWriteAdmission.SQLITE_SESSION_WRITER_QUEUES.values()].reduce(
             (count, queue) => count + queue.pending.length,
             0,
           ),
@@ -427,6 +442,7 @@ describe("plugin host cleanup session stores", () => {
           expect(after).toEqual(before);
         }
       } finally {
+        admission.mockRestore();
         release.resolve();
         await settled;
       }
@@ -532,7 +548,7 @@ describe("plugin host cleanup session stores", () => {
       });
 
       expect(result).toEqual({ cleanupCount: 1, failures: [] });
-      closeOpenClawAgentDatabasesForTest();
+      await closeOpenClawAgentDatabasesAsync();
       const target = loadSessionEntry({ sessionKey: targetKey, storePath });
       expect(target?.pluginExtensions).toEqual({ other: { state: { preserved: true } } });
       expect(target?.pluginNextTurnInjections).toBeUndefined();
@@ -656,7 +672,10 @@ describe("plugin host cleanup session stores", () => {
     const result = await runPluginHostCleanup({
       cfg: {
         session: { store: sharedStorePath },
-        agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+        agents: {
+          entries: { main: {}, work: {} },
+          defaults: { sessionStore: { agentId: "main" } },
+        },
       },
       registry: createEmptyPluginRegistry(),
       pluginId: "cleanup",

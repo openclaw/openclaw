@@ -9,6 +9,28 @@ title: "Integrity, troubleshooting, and recovery"
 
 ## Integrity checks
 
+Gateway agent inspections share a five-second foreground wait. Unfinished stores
+remain unavailable while the startup admission owner completes their inspection
+and session/model preparation after the listener is ready. Other agents and the
+Control UI can start in the meantime. Inspection starts during foreground
+readiness and continues without an idle retry delay. Deferred preparation starts
+when plugins and sidecars are ready, without waiting for restored subagent work
+to settle. Readiness reports pending required stores in
+`agentDatabases` without failing the Gateway probe; confirmed database failures
+still fail readiness. The full validation deadlines, dirty-close checks, and
+clean-close receipt requirements are unchanged; a deferred store is never
+admitted for writes merely because the foreground wait expired.
+Update canaries retain foreground inspection and strict database readiness because
+they do not activate background agent preparation.
+
+Without a reusable clean-close receipt, startup inspection performs a full-file
+`integrity_check` and `foreign_key_check` before allowing runtime preparation.
+Writable admission separately claims the current lease and performs its checks
+below. A stale-lease log appears at that claim, after read-only inspection; the
+time before that log can include a full scan rather than a wait for lease expiry.
+A clean same-version receipt skips both blocking integrity scans while retaining
+the owner, schema, canonical-index, and background-check requirements.
+
 For current-schema writable agent admission, the gate runs `quick_check` on
 `transcript_events` and per-table `integrity_check` on every other discovered
 table, including shadow tables and `sqlite_schema`. Asynchronous admission uses
@@ -100,6 +122,9 @@ reclamation connections close immediately. Active executions close when their
 final borrower releases them; active reclamation requests settle before closing.
 External cleanup can still be pending. Cancellation alone never certifies a
 receipt: the last lease must still complete its checkpoint and native close.
+Required subagent cleanup remains tracked by its Gateway during drain, including
+child-session deletion, before database dependencies retire. Ordinary RPC
+admission stays closed; cleanup retains its original Gateway and session generation.
 Cleanup that needs another connection uses ordinary admission, which dirties the
 receipt again. A forced exit during a write still requires the admission gate.
 This changes no schema, update, or rollback contract.
@@ -128,7 +153,11 @@ versions do not change. An update to a different OpenClaw version runs the admis
 gate, and older builds ignore the new table and retain their full checks. Pending
 migrations, index repairs, shared-state readiness, and explicit copied-file
 preflight still perform their existing full checks. Snapshot-based agent
-readiness also conservatively retains its full gate.
+readiness also conservatively retains its full gate. For a clean closed WAL store,
+startup uses a locked read-only source transaction instead of copying the entire
+database. SQLite may create empty WAL/SHM sidecars; the inspection rechecks the
+receipt inside that transaction before skipping the scan. Missing or dirty proof
+and incomplete WAL families retain the private-recovery path.
 
 Startup certifies each database without a canonical-validation receipt once,
 including an empty session source with an empty pending-validation queue.
@@ -451,6 +480,7 @@ free space of at least twice the uncompressed store directory size. It takes
 verified WAL-aware SQLite backups, streams copies into a fresh NOCOW sibling,
 preserves ownership, modes, and access/default ACLs, checks copy size and
 `PRAGMA quick_check`, then atomically exchanges directories.
+Symbolic links retain their exact link text and ownership without following targets (including dangling links), and empty regular files are preserved.
 The report names the retained original directory and the standalone backups.
 Keep them until the updated Gateway has been verified; do not overwrite newer
 runtime state with an old copy.
@@ -530,6 +560,11 @@ updater checks database integrity before it can launch the target version.
 Doctor checks database versions and active owners before repairing the exact
 known index. It restores catalog readability before loading dependent config
 and plugin state, then continues its normal migration and verification flow.
+The maintenance lease check can inspect a newer database without admitting it
+for runtime use. Doctor still refuses its newer schema before repair and reports
+the schema mismatch; a fresh, unverifiable Gateway owner still blocks maintenance.
+After the inspection reader closes, failure to remove its private snapshot warns
+and leaves cleanup to the snapshot owner; it does not block maintenance entry.
 The readability repair preserves review rows and schema-version markers;
 unrecognized damage and newer databases remain refused.
 

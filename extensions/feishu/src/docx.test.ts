@@ -220,6 +220,35 @@ describe("feishu_doc image fetch hardening", () => {
     return (await tool.execute("tool-call", params)) as ToolResultWithDetails;
   }
 
+  it("projects color markup directly to styled document text without consuming literal brackets", async () => {
+    const result = await executeFeishuDocTool(resolveFeishuDocTool(), {
+      action: "color_text",
+      doc_token: "doc_1",
+      block_id: "text_1",
+      content: "[Q1][RED bg:yellow bold]profit[/green][bg:unknown]plain[/bg][gray][/gray]",
+    });
+
+    expect(blockPatchMock).toHaveBeenCalledExactlyOnceWith({
+      path: { document_id: "doc_1", block_id: "text_1" },
+      data: {
+        update_text_elements: {
+          elements: [
+            { text_run: { content: "[", text_element_style: {} } },
+            { text_run: { content: "Q1]", text_element_style: {} } },
+            {
+              text_run: {
+                content: "profit",
+                text_element_style: { text_color: 1, background_color: 3, bold: true },
+              },
+            },
+            { text_run: { content: "plain", text_element_style: {} } },
+          ],
+        },
+      },
+    });
+    expect(result.details).toStrictEqual({ success: true, segments: 4, block: undefined });
+  });
+
   it.each([
     { representation: "string IDs", children: ["cell_1", "cell_2", "cell_3", "cell_4"] },
     {

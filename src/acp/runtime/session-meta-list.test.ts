@@ -8,11 +8,8 @@ import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import {
-  listAcpSessionEntries,
-  upsertAcpSessionMeta,
-  writeAcpSessionMetaForMigration,
-} from "./session-meta.js";
+import { seedCanonicalAcpSessionMeta } from "./session-meta-fixture.test-support.js";
+import { listAcpSessionEntries, upsertAcpSessionMeta } from "./session-meta.js";
 import { withAcpSessionTestDir as withTestDir } from "./session-meta.test-support.js";
 
 describe("ACP session listing", () => {
@@ -30,7 +27,7 @@ describe("ACP session listing", () => {
       const scope = { cfg, env, databasePath };
       const sessionKey = "agent:codex:acp:s1";
       await replaceSessionEntry(
-        { agentId: "codex", storePath, sessionKey },
+        { agentId: "codex", storePath, sessionKey, env },
         {
           sessionId: "sess-acp",
           updatedAt: 100,
@@ -143,7 +140,7 @@ describe("ACP session listing", () => {
     await withTestDir({ prefix: "openclaw-acp-list-missing-" }, async (dir) => {
       const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(dir, "missing") };
       if (missing === "agent") {
-        writeAcpSessionMetaForMigration({
+        seedCanonicalAcpSessionMeta({
           env,
           sessionKey: "agent:codex:acp:missing",
           sessionId: "missing",

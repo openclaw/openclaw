@@ -58,7 +58,7 @@ export function registerSupersededNativeTimingTest({
         childSessionKey,
         task: "new timing owner",
       });
-      mod.releaseSubagentRun("run-released-timing-new");
+      await mod.releaseSubagentRun("run-released-timing-new");
     } finally {
       release.resolve();
       expect(await termination).toBe(1);

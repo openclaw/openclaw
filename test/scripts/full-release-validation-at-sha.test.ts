@@ -21,7 +21,7 @@ import {
   assertTrustedWorkflowHarness,
   dispatchInputsDigest,
   parseArgs,
-  releaseProfileForTarget,
+  releaseProfileForVersion,
   releaseDecisionStopsForeground,
   releaseEvidenceVerificationArgs,
   releaseEvidenceVerifierPath,
@@ -1077,14 +1077,12 @@ describe("full-release-validation-at-sha", () => {
   });
 
   it("infers the release profile from the target package version", () => {
-    const readVersion = (version: string) => () => JSON.stringify({ version });
-
-    expect(releaseProfileForTarget("a".repeat(40), readVersion("2026.7.1-beta.4"))).toBe("beta");
-    expect(() => releaseProfileForTarget("a".repeat(40), readVersion("2026.7.1-alpha.4"))).toThrow(
+    expect(releaseProfileForVersion("2026.7.1-beta.4")).toBe("beta");
+    expect(() => releaseProfileForVersion("2026.7.1-alpha.4")).toThrow(
       "Alpha releases are retired;",
     );
-    expect(releaseProfileForTarget("a".repeat(40), readVersion("2026.7.1"))).toBe("stable");
-    expect(releaseProfileForTarget("a".repeat(40), readVersion("2026.7.1-1"))).toBe("stable");
+    expect(releaseProfileForVersion("2026.7.1")).toBe("stable");
+    expect(releaseProfileForVersion("2026.7.1-1")).toBe("stable");
   });
 
   it("rejects missing option values", () => {

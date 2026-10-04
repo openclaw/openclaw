@@ -8,7 +8,7 @@ import { parseTcpListenerEndpoint } from "./ports-netstat.js";
 import type { PortListener, PortListenerKind, PortUsage } from "./ports-types.js";
 
 /** Classifies a listener as OpenClaw Gateway, SSH tunnel, known non-gateway, or unknown. */
-export function classifyPortListener(listener: PortListener, _port: number): PortListenerKind {
+export function classifyPortListener(listener: PortListener): PortListenerKind {
   const command = normalizeLowercaseStringOrEmpty(listener.command ?? "");
   const commandLine = normalizeLowercaseStringOrEmpty(listener.commandLine ?? "");
   // The inspected command identifies the listener owner. Check it before argv,
@@ -93,7 +93,7 @@ function parseGatewayListeners(
   listeners: PortListener[],
   port: number,
 ): ParsedGatewayListener[] | null {
-  if (listeners.some((listener) => classifyPortListener(listener, port) !== "gateway")) {
+  if (listeners.some((listener) => classifyPortListener(listener) !== "gateway")) {
     return null;
   }
   return parsePortListeners(listeners, port);
@@ -167,7 +167,7 @@ export function buildPortHints(listeners: PortListener[], port: number): string[
   if (listeners.length === 0) {
     return [];
   }
-  const kinds = new Set(listeners.map((listener) => classifyPortListener(listener, port)));
+  const kinds = new Set(listeners.map((listener) => classifyPortListener(listener)));
   const hints: string[] = [];
   const expectedGatewayListeners = isExpectedGatewayListeners(listeners, port);
   if (kinds.has("gateway") && !expectedGatewayListeners) {

@@ -17,20 +17,25 @@ import {
 import { DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS } from "./chat-display-projection.helpers.js";
 import {
   createSubagentCoordinationHistoryProjection,
+  prepareForwardedMessageCronJobNameResolver,
   projectForwardedMessages,
 } from "./chat-display-projection.history.js";
 import { resolveCurrentUserProfileDisplay } from "./current-user-profile-display.js";
 import {
+  createPreparedSessionHistorySubagentProjection,
+  readSessionHistorySubagentLookup,
+} from "./session-history-delta-visibility.js";
+import {
   buildPaginatedSessionHistory,
   readSessionHistorySnapshotKernel,
 } from "./session-history-snapshot.js";
-import { createSessionHistorySubagentProjection } from "./session-history-subagent-projection.js";
 import { readChatHistoryMessageSeq as resolveMessageSeq } from "./session-history-tail.js";
 import {
   readTranscriptMessageIdempotencyKey,
   attachOpenClawTranscriptMeta,
 } from "./session-transcript-entry-message.js";
 import { resolveTranscriptPathForComparison } from "./session-transcript-path.js";
+import type { SubagentCoordinationDisplayResolver } from "./session-transcript-read.types.js";
 import * as sessionTranscriptReaders from "./session-transcript-readers.js";
 
 type InlineSessionHistoryAppend = {
@@ -50,8 +55,13 @@ export async function readSessionHistorySnapshotAsync(
     const snapshot = await readSessionHistorySnapshotKernel(params, {
       readers: sessionTranscriptReaders,
       resolveCurrentUserProfileDisplay,
+      // Match the worker projection: install current names on the completed page below.
+      resolveCronJobName: () => undefined,
     });
-    const messages = projectForwardedMessages(snapshot.history.messages);
+    const resolveCronJobName = await prepareForwardedMessageCronJobNameResolver(
+      snapshot.history.messages,
+    );
+    const messages = projectForwardedMessages(snapshot.history.messages, resolveCronJobName);
     return { ...snapshot, history: { ...snapshot.history, items: messages, messages } };
   }
   const { readSessionHistoryPageInWorker } =
@@ -73,8 +83,13 @@ export async function readSessionHistorySnapshotAsync(
       },
     },
   });
+  const resolveCronJobName = await prepareForwardedMessageCronJobNameResolver(
+    snapshot.history.messages,
+  );
   const project = createCurrentUserProfileMessageProjector(resolveCurrentUserProfileDisplay);
-  const messages = projectForwardedMessages(snapshot.history.messages).map(project);
+  const messages = projectForwardedMessages(snapshot.history.messages, resolveCronJobName).map(
+    project,
+  );
   return { ...snapshot, history: { ...snapshot.history, items: messages, messages } };
 }
 
@@ -128,53 +143,71 @@ export class SessionHistorySseState {
     return this.snapshot();
   }
 
-  appendInlineMessage(update: {
+  async prepareInlineMessage(update: {
     message: unknown;
     messageId?: string;
     messageSeq?: number;
-  }): InlineSessionHistoryAppend | null {
+  }): Promise<() => InlineSessionHistoryAppend | null> {
     if (this.limit !== undefined || this.cursor !== undefined) {
-      return null;
+      return () => null;
     }
     const carriedSeq = asPositiveSafeInteger(update.messageSeq);
-    if (carriedSeq !== undefined) {
-      if (carriedSeq <= this.rawTranscriptSeq) {
-        return { shouldRefresh: true };
-      }
-      this.rawTranscriptSeq = carriedSeq;
-    } else {
-      this.rawTranscriptSeq += 1;
+    if (carriedSeq !== undefined && carriedSeq <= this.rawTranscriptSeq) {
+      return () => ({ shouldRefresh: true });
     }
+    const messageSeq = carriedSeq ?? this.rawTranscriptSeq + 1;
     const idempotencyKey = readTranscriptMessageIdempotencyKey(update.message);
-    let nextMessage = attachOpenClawTranscriptMeta(update.message, {
+    const message = attachOpenClawTranscriptMeta(update.message, {
       ...(typeof update.messageId === "string" ? { id: update.messageId } : {}),
       ...(idempotencyKey ? { idempotencyKey } : {}),
-      seq: this.rawTranscriptSeq,
+      seq: messageSeq,
     });
-    const hadPendingTurnBoundary = this.turnBoundaryPending;
-    const subagentCoordination =
+    let subagentCoordination: SubagentCoordinationDisplayResolver | undefined;
+    const lookup = readSessionHistorySubagentLookup(message);
+    if (
+      lookup &&
       this.target.storePath &&
       !this.target.sessionEntry?.incognito &&
       !isIncognitoSessionKey(this.target.sessionKey)
-        ? createSessionHistorySubagentProjection(this.target, { deferSources: true })
-        : undefined;
-    nextMessage = createSubagentCoordinationHistoryProjection(subagentCoordination)([
-      nextMessage,
+    ) {
+      const { readSessionHistoryPageInWorker } =
+        await import("../config/sessions/session-history-worker-runtime.js");
+      const prepared = await readSessionHistoryPageInWorker({
+        kind: "inline-visibility",
+        params: { target: this.target, lookup },
+      });
+      subagentCoordination = createPreparedSessionHistorySubagentProjection(
+        prepared.subagentCoordination,
+        prepared.assertCurrent,
+      );
+    }
+    const resolveCronJobName = await prepareForwardedMessageCronJobNameResolver([
+      ...this.sentHistory.messages,
+      message,
+    ]);
+    // The stream queue retains ordering; its publisher reauthorizes before applying this transition.
+    return () =>
+      this.appendInlineMessage(message, messageSeq, subagentCoordination, resolveCronJobName);
+  }
+
+  private appendInlineMessage(
+    message: unknown,
+    messageSeq: number,
+    subagentCoordination: SubagentCoordinationDisplayResolver | undefined,
+    resolveCronJobName: (jobId: string) => string | undefined,
+  ): InlineSessionHistoryAppend | null {
+    subagentCoordination?.assertCurrent?.();
+    const hadPendingTurnBoundary = this.turnBoundaryPending;
+    const nextMessage = createSubagentCoordinationHistoryProjection(subagentCoordination)([
+      message,
     ])[0];
     const nextProjection = projectChatDisplayMessagesWithState([nextMessage], {
       includeCommentaryFallbacks: true,
       maxChars: this.maxChars,
       turnBoundaryPending: hadPendingTurnBoundary,
       assistantErrorPending: this.assistantErrorPending,
+      resolveCronJobName,
     });
-    this.turnBoundaryPending = nextProjection.turnBoundaryPending;
-    this.assistantErrorPending = nextProjection.assistantErrorPending;
-    if (nextProjection.assistantErrorRecoveryObserved) {
-      // Keep only the pending bit here: retaining raw transcript context would
-      // undo the bounded SSE memory contract. The caller rereads canonical
-      // history so full projection can remove the already-emitted placeholder.
-      return { shouldRefresh: true };
-    }
     // Projection can split, drop, or rewrite raw transcript messages. When one
     // raw append changes multiple visible rows, callers must refresh instead of
     // emitting a misleading single SSE item.
@@ -184,9 +217,19 @@ export class SessionHistorySseState {
         includeCommentaryFallbacks: true,
         maxChars: this.maxChars,
         resolveCurrentUserProfileDisplay,
+        resolveCronJobName,
       },
     );
     subagentCoordination?.assertCurrent?.();
+    this.rawTranscriptSeq = messageSeq;
+    this.turnBoundaryPending = nextProjection.turnBoundaryPending;
+    this.assistantErrorPending = nextProjection.assistantErrorPending;
+    if (nextProjection.assistantErrorRecoveryObserved) {
+      // Keep only the pending bit here: retaining raw transcript context would
+      // undo the bounded SSE memory contract. The caller rereads canonical
+      // history so full projection can remove the already-emitted placeholder.
+      return { shouldRefresh: true };
+    }
     const projectedPrefix = projectedMessages.slice(0, this.sentHistory.messages.length);
     // A rewritten prefix needs a full refresh; only an unchanged prefix can append inline.
     if (
@@ -218,7 +261,7 @@ export class SessionHistorySseState {
     }
     if (
       nextProjection.messages.length === 0 &&
-      projectedMessages.length === this.sentHistory.messages.length
+      isDeepStrictEqual(projectedMessages, this.sentHistory.messages)
     ) {
       return null;
     }

@@ -80,21 +80,11 @@ describe("Crabbox protected model command", () => {
       model: process.env.OPENAI_MODEL, proxy: process.env.HTTPS_PROXY,
       ca: fs.readFileSync(process.env.SSL_CERT_FILE, 'utf8'), path: process.env.SSL_CERT_FILE
     }));`;
-    const child = execFile("bash", ["-s", "--", process.execPath, "-e", fixture], {
+    const child = execFileAsync("bash", ["-s", "--", process.execPath, "-e", fixture], {
       env: { ...process.env, NODE_OPTIONS: undefined },
     });
-    const completion = new Promise<string>((resolve, reject) => {
-      let output = "";
-      child.stdout?.on("data", (chunk) => {
-        output += String(chunk);
-      });
-      child.once("error", reject);
-      child.once("exit", (code) =>
-        code === 0 ? resolve(output) : reject(new Error(`fixture exited ${code}`)),
-      );
-    });
-    child.stdin!.end(remoteInput);
-    const observed = JSON.parse(await completion);
+    child.child.stdin!.end(remoteInput);
+    const observed = JSON.parse((await child).stdout);
     expect(observed).toMatchObject({
       key: egress.sentinel,
       baseUrl: egress.baseUrl,

@@ -1,6 +1,9 @@
+import { resolveGitHubHost } from "../agents/github-host-runtime.js";
 import type { PreparedGitHubPublicationIdentity } from "../agents/github-tool-identity.js";
-import { managedWorktrees } from "../agents/worktrees/service.js";
-import type { resolveGitHubPublicationWorktreeOwner } from "./github-publication-availability.js";
+import {
+  prepareGitHubPublicationRepositoryIdentity,
+  type resolveGitHubPublicationWorktreeOwner,
+} from "./github-publication-availability.js";
 import { parseGitHubPublicationBaseBranch } from "./github-publication-base.js";
 import { GitHubPublicationWorkspaceChangedError } from "./github-publication-failure.js";
 import { requirePublicationCommand } from "./github-publication-git-transport.js";
@@ -14,19 +17,9 @@ export async function prepareGitHubPublicationTarget(params: {
   assertCurrent: () => void;
 }) {
   const { worktree, assertCurrent } = params;
-  assertCurrent();
-  const repositoryIdentity = await managedWorktrees.resolveRepositoryIdentity(worktree.path);
-  assertCurrent();
-  if (
-    repositoryIdentity.checkoutRoot !== worktree.path ||
-    repositoryIdentity.repoRoot !== worktree.repoRoot ||
-    repositoryIdentity.fingerprint !== worktree.repoFingerprint
-  ) {
-    throw new GitHubPublicationWorkspaceChangedError(
-      "GitHub publication workspace repository changed.",
-    );
-  }
-  const remote = parseGitHubRemoteUrl(repositoryIdentity.originUrl);
+  const githubHost = params.identity.host ?? resolveGitHubHost();
+  const repositoryIdentity = await prepareGitHubPublicationRepositoryIdentity(params);
+  const remote = parseGitHubRemoteUrl(repositoryIdentity.originUrl, githubHost);
   if (
     !remote ||
     !/^[A-Za-z0-9_.-]+$/u.test(remote.owner) ||
@@ -48,7 +41,7 @@ export async function prepareGitHubPublicationTarget(params: {
       "gh",
       "api",
       "--hostname",
-      "github.com",
+      githubHost,
       `repos/${pushRepository}`,
       "--jq",
       "{fork, default_branch, parent: {name: .parent.name, default_branch: .parent.default_branch, owner: {login: .parent.owner.login}}}",
@@ -70,5 +63,12 @@ export async function prepareGitHubPublicationTarget(params: {
       "GitHub publication branch changed to its pull request base.",
     );
   }
-  return { pushRepository, repository, branch, baseBranch, pushOwner: target.push.owner };
+  return {
+    pushRepository,
+    repository,
+    branch,
+    baseBranch,
+    pushOwner: target.push.owner,
+    githubHost,
+  };
 }

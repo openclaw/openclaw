@@ -6,10 +6,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import {
+  inspectSqliteSchemaHeaderInProcess,
   prepareSqliteReadOnlyCopyInProcess,
   prepareSqliteReadOnlyLocationInProcess,
   prepareSqliteReadOnlyLocationSyncInProcess,
 } from "./sqlite-readonly-location.js";
+import { MAX_SNAPSHOT_ATTEMPTS } from "./sqlite-snapshot-policy.js";
 
 const MIB = 1024 * 1024;
 const copyDrivers = [
@@ -74,6 +76,28 @@ function afterFirstCopy(operation: () => void): () => boolean {
     }
   });
   return () => injected;
+}
+
+function createWalActivationFixture() {
+  const fixture = createFixture(Buffer.alloc(0));
+  const sqlite = requireNodeSqlite();
+  const seed = new sqlite.DatabaseSync(fixture.sourcePath);
+  seed.exec("PRAGMA journal_mode=WAL; PRAGMA user_version=7;");
+  seed.close();
+  const activatedPath = path.join(fixture.sourceRoot, "activated.sqlite");
+  const activated = new sqlite.DatabaseSync(activatedPath);
+  activated.exec("PRAGMA journal_mode=WAL; PRAGMA user_version=8;");
+  const family = ["", "-wal", "-shm"].map((suffix) => ({
+    suffix,
+    bytes: fs.readFileSync(activatedPath + suffix),
+  }));
+  activated.close();
+  const injected = afterFirstCopy(() => {
+    for (const { suffix, bytes } of family) {
+      fs.writeFileSync(fixture.sourcePath + suffix, bytes);
+    }
+  });
+  return { family, fixture, injected };
 }
 
 function afterPrivateCopy(stagingRoot: string, operation: (pathname: string) => void): void {
@@ -145,6 +169,95 @@ function interceptSourceReads(
 }
 
 describe("stable read-only snapshot copies", () => {
+  it("rechecks journal state when an inactive WAL family gains sidecars during schema inspection", async () => {
+    const { family, fixture, injected } = createWalActivationFixture();
+
+    await expect(
+      inspectSqliteSchemaHeaderInProcess(fixture.sourcePath, fixture.stagingRoot),
+    ).resolves.toMatchObject({ userVersion: 8 });
+    expect(injected()).toBe(true);
+    expect(fs.readdirSync(fixture.stagingRoot)).toEqual([]);
+    for (const { suffix, bytes } of family.filter((file) => file.suffix !== "-shm")) {
+      expect(fs.readFileSync(fixture.sourcePath + suffix)).toEqual(bytes);
+    }
+  });
+
+  it("does not start another copy when cleanup of a changed source fails", async () => {
+    const { fixture } = createWalActivationFixture();
+
+    const mkdtemp = fs.mkdtempSync.bind(fs);
+    const allocations = vi
+      .spyOn(fs, "mkdtempSync")
+      .mockImplementation((prefix, options) => mkdtemp(prefix, options));
+    const cleanupError = Object.assign(new Error("snapshot cleanup denied"), {
+      code: "EACCES",
+    });
+    vi.spyOn(fs.promises, "rm").mockRejectedValue(cleanupError);
+
+    const error = await inspectSqliteSchemaHeaderInProcess(
+      fixture.sourcePath,
+      fixture.stagingRoot,
+    ).catch((cause: unknown) => cause);
+
+    expect(error).toBeInstanceOf(AggregateError);
+    expect(error).toMatchObject({
+      message: expect.stringContaining("SQLite journal state changed while copying"),
+    });
+    expect((error as AggregateError).errors).toContain(cleanupError);
+    expect(allocations).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not retry after online backup and cleanup both fail", async () => {
+    const fixture = createFixture(Buffer.alloc(0));
+    const sqlite = requireNodeSqlite();
+    const seed = new sqlite.DatabaseSync(fixture.sourcePath);
+    seed.exec("CREATE TABLE probe (value TEXT);");
+    seed.close();
+
+    const mkdtemp = fs.mkdtempSync.bind(fs);
+    const allocations = vi
+      .spyOn(fs, "mkdtempSync")
+      .mockImplementation((prefix, options) => mkdtemp(prefix, options));
+    const open = fs.openSync.bind(fs);
+    const fsync = fs.fsyncSync.bind(fs);
+    const snapshotDescriptors = new Set<number>();
+    vi.spyOn(fs, "openSync").mockImplementation((pathname, flags, mode) => {
+      const descriptor = open(pathname, flags, mode);
+      if (
+        flags === "r+" &&
+        path.resolve(String(pathname)).startsWith(`${fixture.stagingRoot}${path.sep}`)
+      ) {
+        snapshotDescriptors.add(descriptor);
+      }
+      return descriptor;
+    });
+    vi.spyOn(fs, "fsyncSync").mockImplementation((descriptor) => {
+      if (snapshotDescriptors.has(descriptor)) {
+        throw Object.assign(new Error("SQLite destination is read-only"), { errcode: 8 });
+      }
+      fsync(descriptor);
+    });
+    const cleanupError = Object.assign(new Error("snapshot cleanup denied"), {
+      code: "EACCES",
+    });
+    vi.spyOn(fs.promises, "rm").mockImplementation(async () => {
+      fs.renameSync(fixture.sourcePath, `${fixture.sourcePath}.replaced`);
+      throw cleanupError;
+    });
+
+    const error = await prepareSqliteReadOnlyLocationInProcess(
+      fixture.sourcePath,
+      fixture.stagingRoot,
+    ).catch((cause: unknown) => cause);
+
+    expect(error).toBeInstanceOf(AggregateError);
+    expect(error).toMatchObject({
+      message: expect.stringContaining("SQLite destination is read-only"),
+    });
+    expect((error as AggregateError).errors).toContain(cleanupError);
+    expect(allocations).toHaveBeenCalledTimes(1);
+  });
+
   it.each([512])("preserves a malformed catalog beside a cold %i-byte journal", (bytes) => {
     const fixture = createFixture(Buffer.alloc(0));
     const sqlite = requireNodeSqlite();
@@ -469,31 +582,55 @@ describe("stable read-only snapshot copies", () => {
     },
   );
 
-  it("reports source replacement after one acquisition and removes its incomplete copy", async () => {
+  it("bounds retries for repeated source replacement and removes every incomplete copy", async () => {
     const fixture = createFixture(Buffer.alloc(0));
     let replacements = 0;
     __setFsSafeTestHooksForTest({
       beforeRootStatObservation: (pathname) => {
-        if (pathname === fixture.sourceRoot && replacements === 0) {
+        if (pathname === fixture.sourceRoot) {
           fs.renameSync(fixture.sourcePath, `${fixture.sourcePath}.displaced-${replacements++}`);
           fs.writeFileSync(fixture.sourcePath, "");
         }
       },
     });
-    let prepared: Awaited<ReturnType<typeof prepareSqliteReadOnlyLocationInProcess>> | undefined;
-    try {
-      await expect(
-        (async () => {
-          prepared = await prepareSqliteReadOnlyLocationInProcess(
-            fixture.sourcePath,
-            fixture.stagingRoot,
-          );
-        })(),
-      ).rejects.toThrow("SQLite source changed while copying");
-    } finally {
-      await prepared?.cleanupAsync();
+
+    await expect(
+      prepareSqliteReadOnlyLocationInProcess(fixture.sourcePath, fixture.stagingRoot),
+    ).rejects.toThrow("SQLite source changed while copying");
+    expect(replacements).toBe(MAX_SNAPSHOT_ATTEMPTS);
+    expect(fs.readdirSync(fixture.stagingRoot)).toEqual([]);
+  });
+
+  it.each(["cancel", "io-error"])("does not retry a snapshot after %s", async (failure) => {
+    const fixture = createFixture(Buffer.alloc(0));
+    const controller = new AbortController();
+    const error = Object.assign(new Error("inspection terminated"), { code: "EIO" });
+    let copies = 0;
+    __setFsSafeTestHooksForTest({
+      beforeRootStatObservation: (pathname) => {
+        if (pathname !== fixture.sourceRoot) {
+          return;
+        }
+        copies += 1;
+        if (failure === "io-error") {
+          throw error;
+        }
+        controller.abort(error);
+        fs.renameSync(fixture.sourcePath, `${fixture.sourcePath}.displaced`);
+        fs.writeFileSync(fixture.sourcePath, "");
+      },
+    });
+    const result = prepareSqliteReadOnlyLocationInProcess(
+      fixture.sourcePath,
+      fixture.stagingRoot,
+      controller.signal,
+    );
+    if (failure === "io-error") {
+      await expect(result).rejects.toThrow(/EIO/u);
+    } else {
+      await expect(result).rejects.toBe(error);
     }
-    expect(replacements).toBe(1);
+    expect(copies).toBe(1);
     expect(fs.readdirSync(fixture.stagingRoot)).toEqual([]);
   });
 

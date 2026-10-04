@@ -1,6 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import {
   assertAdmittedRunOperatorAuthority,
   type AdmittedRunOperatorAuthority,
@@ -35,6 +35,29 @@ installGatewayTestHooks();
 registerAgentSessionLoopTestLifecycle();
 const createBrowserFollowupFixture = useBrowserFollowupFixture();
 
+type FixtureClient = Awaited<ReturnType<typeof createBrowserFollowupFixture>>["client"];
+
+function setClientProfile(
+  client: FixtureClient,
+  profile: ReturnType<typeof ensureProfileForEmail>,
+) {
+  client.authenticatedUserProfile = {
+    profileId: profile.id,
+    displayName: null,
+    hasAvatar: false,
+    updatedAt: profile.updatedAt,
+  };
+}
+
+function setNativeIosClient(client: FixtureClient) {
+  client.connect.client = {
+    id: "openclaw-ios",
+    version: "test",
+    platform: "ios",
+    mode: "ui",
+  };
+}
+
 describe("native profile-bound input admission", () => {
   it.each(["reservation", "writer", "approval"] as const)(
     "rejects a native account merge at %s without accepting or terminalizing input",
@@ -43,18 +66,8 @@ describe("native profile-bound input admission", () => {
       const email = "native-source@example.test";
       const source = ensureProfileForEmail(email);
       const target = ensureProfileForEmail("native-target@example.test");
-      fixture.client.connect.client = {
-        id: "openclaw-ios",
-        version: "test",
-        platform: "ios",
-        mode: "ui",
-      };
-      fixture.client.authenticatedUserProfile = {
-        profileId: source.id,
-        displayName: null,
-        hasAvatar: false,
-        updatedAt: source.updatedAt,
-      };
+      setNativeIosClient(fixture.client);
+      setClientProfile(fixture.client, source);
       const before = loadSessionEntry(fixture.scope);
       const release = createDeferred();
       let writer: Promise<void> | undefined;
@@ -103,14 +116,29 @@ describe("native profile-bound input admission", () => {
               await release.promise;
             });
             await entered.promise;
-            request = fixture.send(undefined, { expectedProfileId: source.id });
-            await vi.waitFor(() =>
-              expect(
-                fixture.context.dedupe.has(
-                  `${PENDING_CHAT_SEND_DEDUPE_PREFIX}${fixture.params.idempotencyKey}`,
-                ),
-              ).toBe(true),
-            );
+            const pendingKey = `${PENDING_CHAT_SEND_DEDUPE_PREFIX}${fixture.params.idempotencyKey}`;
+            const reserved = createDeferred();
+            const setDedupe = fixture.context.dedupe.set.bind(fixture.context.dedupe);
+            const observeReservation = vi
+              .spyOn(fixture.context.dedupe, "set")
+              .mockImplementation((key, entry) => {
+                const result = setDedupe(key, entry);
+                if (key === pendingKey) {
+                  reserved.resolve();
+                }
+                return result;
+              });
+            try {
+              request = fixture.send(undefined, { expectedProfileId: source.id });
+              await awaitGateBeforeSettlement(
+                reserved.promise,
+                request,
+                "chat.send settled before its pending reservation",
+              );
+              expect(fixture.context.dedupe.has(pendingKey)).toBe(true);
+            } finally {
+              observeReservation.mockRestore();
+            }
             linkEmail(email, target.id);
             release.resolve();
             await writer;
@@ -128,7 +156,7 @@ describe("native profile-bound input admission", () => {
           );
         }
         expect(loadSessionEntry(fixture.scope)).toEqual(before);
-        expect(listSessionPendingInputs(fixture.scope)).toEqual({ items: [], total: 0 });
+        expect(await listSessionPendingInputs(fixture.scope)).toEqual({ items: [], total: 0 });
         expect(loadTranscriptEventsSync(fixture.scope)).toEqual(fixture.activeTranscript);
         expect(fixture.context.chatAbortControllers.size).toBe(0);
         expect(fixture.context.chatQueuedTurns.size).toBe(0);
@@ -151,18 +179,8 @@ describe("native profile-bound input admission", () => {
     const email = "native-approval@example.test";
     const source = ensureProfileForEmail(email);
     const target = ensureProfileForEmail("native-approval-target@example.test");
-    fixture.client.connect.client = {
-      id: "openclaw-ios",
-      version: "test",
-      platform: "ios",
-      mode: "ui",
-    };
-    fixture.client.authenticatedUserProfile = {
-      profileId: source.id,
-      displayName: null,
-      hasAvatar: false,
-      updatedAt: source.updatedAt,
-    };
+    setNativeIosClient(fixture.client);
+    setClientProfile(fixture.client, source);
     try {
       const ack = await fixture.send(undefined, { expectedProfileId: source.id });
       expect(ack.mock.calls[0]?.[1]).toMatchObject({ status: "started" });
@@ -212,7 +230,7 @@ describe("native profile-bound input admission", () => {
       );
       expect.soft(fixture.context.chatAbortControllers.size).toBe(0);
       expect.soft(fixture.context.chatQueuedTurns.size).toBe(0);
-      expect.soft(listSessionPendingInputs(fixture.scope)).toEqual({ items: [], total: 0 });
+      expect.soft(await listSessionPendingInputs(fixture.scope)).toEqual({ items: [], total: 0 });
     } finally {
       await fixture.cleanup();
     }
@@ -229,12 +247,7 @@ describe("native profile-bound input admission", () => {
         platform: "darwin",
         mode: "ui",
       };
-      fixture.client.authenticatedUserProfile = {
-        profileId: profile.id,
-        displayName: null,
-        hasAvatar: false,
-        updatedAt: profile.updatedAt,
-      };
+      setClientProfile(fixture.client, profile);
       const requestAbort = new AbortController();
       try {
         const ack = await fixture.send(undefined, {
@@ -287,7 +300,7 @@ describe("native profile-bound input admission", () => {
         expect(await recorder.persistApproved()).toEqual(committed);
         expect(loadTranscriptEventsSync(fixture.scope)).toEqual(accepted);
         expect(recorder.getAdmissionReceipt()).toEqual(receipt);
-        expect(listSessionPendingInputs(fixture.scope)).toEqual({ items: [], total: 0 });
+        expect(await listSessionPendingInputs(fixture.scope)).toEqual({ items: [], total: 0 });
         expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
       } finally {
         await fixture.cleanup();
@@ -307,18 +320,8 @@ describe("native profile-bound input admission", () => {
       const email = "native-steering@example.test";
       const profile = ensureProfileForEmail(email);
       const target = ensureProfileForEmail("native-steering-target@example.test");
-      fixture.client.connect.client = {
-        id: "openclaw-ios",
-        version: "test",
-        platform: "ios",
-        mode: "ui",
-      };
-      fixture.client.authenticatedUserProfile = {
-        profileId: profile.id,
-        displayName: null,
-        hasAvatar: false,
-        updatedAt: profile.updatedAt,
-      };
+      setNativeIosClient(fixture.client);
+      setClientProfile(fixture.client, profile);
       const fingerprint = "native-steering-tools";
       operation.bindToolAuthoritySnapshot({
         fingerprint: () => fingerprint,
@@ -396,29 +399,15 @@ describe("native profile-bound input admission", () => {
     },
   );
 
-  it.each(
-    (["backend", "question dispatcher"] as const).flatMap((sink) =>
-      [false, true].map((bound) => ({ sink, bound })),
-    ),
-  )(
-    "queues original operator input when the $sink is V1 (bound: $bound)",
-    async ({ sink, bound }) => {
+  it.each(["backend", "question dispatcher"] as const)(
+    "queues original operator input without an explicit profile binding when the %s is V1",
+    async (sink) => {
       const fixture = await createBrowserFollowupFixture({ preserveContent: true });
       try {
         fixture.params.queueMode = "steer";
-        fixture.client.connect.client = {
-          id: "openclaw-ios",
-          version: "test",
-          platform: "ios",
-          mode: "ui",
-        };
+        setNativeIosClient(fixture.client);
         const profile = ensureProfileForEmail("v1-steering@example.test");
-        fixture.client.authenticatedUserProfile = {
-          profileId: profile.id,
-          displayName: null,
-          hasAvatar: false,
-          updatedAt: profile.updatedAt,
-        };
+        setClientProfile(fixture.client, profile);
         const operation = fixture.activeRun!;
         const fingerprint = "v1-steering-tools";
         let originalOperatorAuthority: AdmittedRunOperatorAuthority | undefined;
@@ -467,9 +456,7 @@ describe("native profile-bound input admission", () => {
                 },
               }),
         });
-        const respond = await fixture.send(undefined, {
-          expectedProfileId: bound ? profile.id : undefined,
-        });
+        const respond = await fixture.send(undefined, {});
         expect(operation.result).toBeNull();
         expect(write).not.toHaveBeenCalled();
         expect(respond).toHaveBeenCalledOnce();
@@ -488,7 +475,7 @@ describe("native profile-bound input admission", () => {
         expect(authority.profileId).toBe(profile.id);
         expect(authority.scopes).toEqual(fixture.client.connect.scopes);
         expect(authority.assertCurrent).not.toThrow();
-        expect(listSessionPendingInputs(fixture.scope)).toMatchObject({
+        expect(await listSessionPendingInputs(fixture.scope)).toMatchObject({
           total: 1,
           items: [{ state: "queued", runId: fixture.params.idempotencyKey }],
         });
@@ -517,12 +504,7 @@ describe("native profile-bound input admission", () => {
         const email = "deferred-source@example.test";
         const profile = ensureProfileForEmail(email);
         const successor = ensureProfileForEmail("deferred-successor@example.test");
-        fixture.client.authenticatedUserProfile = {
-          profileId: profile.id,
-          displayName: null,
-          hasAvatar: false,
-          updatedAt: profile.updatedAt,
-        };
+        setClientProfile(fixture.client, profile);
         const binding = (await createExpectedProfileBinding(profile.id, fixture.client))!;
         const write = vi.fn();
         const questionCall = resolveAgentQuestionGatewayCall({
@@ -625,12 +607,7 @@ describe("native profile-bound input admission", () => {
         const email = "retained-authority@example.test";
         const profile = ensureProfileForEmail(email);
         const target = ensureProfileForEmail("retained-authority-target@example.test");
-        fixture.client.authenticatedUserProfile = {
-          profileId: profile.id,
-          displayName: null,
-          hasAvatar: false,
-          updatedAt: profile.updatedAt,
-        };
+        setClientProfile(fixture.client, profile);
         if (boundary === "session ACL") {
           fixture.client.connect.scopes = ["operator.read", "operator.write"];
         }
@@ -645,7 +622,7 @@ describe("native profile-bound input admission", () => {
         expect(ack).toHaveBeenCalledOnce();
         expect(ack.mock.calls[0]?.[1]).toMatchObject({ status: "started" });
         const originalAck = structuredClone(ack.mock.calls);
-        const pending = listSessionPendingInputs(fixture.scope);
+        const pending = await listSessionPendingInputs(fixture.scope);
         expect(pending).toMatchObject({
           total: 1,
           items: [{ state: "queued", message: { content: fixture.params.message } }],
@@ -671,7 +648,7 @@ describe("native profile-bound input admission", () => {
               entry.message.idempotencyKey === `${fixture.params.idempotencyKey}:user`,
           ),
         ).toEqual([]);
-        expect(listSessionPendingInputs(fixture.scope)).toMatchObject({
+        expect(await listSessionPendingInputs(fixture.scope)).toMatchObject({
           total: 1,
           items: [
             {

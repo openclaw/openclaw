@@ -2,8 +2,8 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { resolveExecutablePath } from "./executable-path.js";
+import type { PackageActivationRuntime } from "./package-update-activation-runtime.types.js";
 import type { PackageActivationRecord } from "./package-update-activation-schema.js";
-import type { PackageActivationRuntime } from "./package-update-swap-contract.js";
 
 const PACKAGE_ACTIVATION_PREFIX = ".openclaw.package-activation-";
 
@@ -94,6 +94,24 @@ export function isPackageActivationComplete(
   anchor: string,
   record: PackageActivationRecord,
 ): boolean {
+  if (record.phase === "superseded") {
+    if (record.intent?.kind !== "superseded-by-manual-install") {
+      throw new Error("Package supersession fact is missing.");
+    }
+    if (
+      !record.intent.settled ||
+      fs.lstatSync(anchor, { throwIfNoEntry: false }) ||
+      fs.lstatSync(resolvePackageActivationHelper(anchor), { throwIfNoEntry: false })
+    ) {
+      return false;
+    }
+    const retained = `${anchor}.superseded-${record.descriptor.operationId}`;
+    return (
+      packageActivationIdentity(retained, true) === record.descriptor.anchorIdentity &&
+      packageActivationIdentity(path.join(retained, "recovery.mjs"), false) ===
+        record.descriptor.helperIdentity
+    );
+  }
   if (record.phase !== "anchor-retired" || record.intent?.kind !== "unlink-helper") {
     return false;
   }

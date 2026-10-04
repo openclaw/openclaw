@@ -34,6 +34,56 @@ jobs:
           install-bun: "false"
           install-deps: "false"
           cache-mode: "off"
+      - name: Resolve published driver
+        id: driver
+        timeout-minutes: 1
+        env:
+          DRIVER_CACHE_MODE: ${{ github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main' && contains(fromJSON('["push","schedule","workflow_dispatch"]'), github.event_name) && 'read-write' || 'restore' }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { execFileSync } from "node:child_process";
+          import { appendFileSync } from "node:fs";
+          import { classifyReleaseTrain, parseReleaseVersion } from "./scripts/lib/release-version.mjs";
+          const version = JSON.parse(execFileSync("npm", ["view", "openclaw@latest", "version", "--json"], { encoding: "utf8" }));
+          const parsed = parseReleaseVersion(version);
+          if (!parsed || classifyReleaseTrain(parsed) !== "stable") throw new Error("npm latest must resolve to stable");
+          appendFileSync(process.env.GITHUB_OUTPUT, `version=${version}\ncache-mode=${process.env.DRIVER_CACHE_MODE}\n`);
+          NODE
+      - name: Restore published driver install
+        id: driver_cache
+        timeout-minutes: 2
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .cache/published-driver-install/${{ steps.driver.outputs.version }}/driver.tar
+          key: published-driver-update-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/e2e/Dockerfile') }}-${{ steps.driver.outputs.version }}
+      - name: Prepare main published driver seed
+        timeout-minutes: 3
+        if: github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main' && contains(fromJSON('["push","schedule","workflow_dispatch"]'), github.event_name) && steps.driver.outputs.cache-mode == 'read-write' && steps.driver_cache.outputs.cache-hit != 'true'
+        env:
+          DRIVER_VERSION: ${{ steps.driver.outputs.version }}
+        run: |
+          set -euo pipefail
+          source scripts/lib/docker-e2e-image.sh
+          image=$(docker_e2e_resolve_image openclaw-published-driver-update-e2e)
+          docker_e2e_build_or_reuse "$image" published-driver-update "$PWD/scripts/e2e/Dockerfile" "$PWD" bare
+          mkdir -p ".cache/published-driver-install/$DRIVER_VERSION"
+          chmod a+rwx ".cache/published-driver-install/$DRIVER_VERSION"
+          docker_e2e_run_with_harness --init -e DRIVER_VERSION \
+            -v "$PWD/.cache/published-driver-install/$DRIVER_VERSION:/tmp/published-driver-cache" \
+            "$image" bash -c '
+              set -euo pipefail
+              prefix=$(mktemp -d)
+              npm install --global --prefix "$prefix" "openclaw@$DRIVER_VERSION" --no-audit --no-fund
+              tar -cf /tmp/published-driver-cache/driver.tar.pending -C "$prefix" .
+              mv /tmp/published-driver-cache/driver.tar.pending /tmp/published-driver-cache/driver.tar
+            '
+      - name: Save main published driver seed
+        timeout-minutes: 2
+        if: github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main' && contains(fromJSON('["push","schedule","workflow_dispatch"]'), github.event_name) && steps.driver.outputs.cache-mode == 'read-write' && steps.driver_cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .cache/published-driver-install/${{ steps.driver.outputs.version }}/driver.tar
+          key: published-driver-update-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/e2e/Dockerfile') }}-${{ steps.driver.outputs.version }}
       - name: Download candidate package
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         timeout-minutes: 2
@@ -45,6 +95,7 @@ jobs:
         timeout-minutes: 20
         env:
           CANDIDATE_SHA256: ${{ inputs.candidate_sha256 }}
+          DRIVER_VERSION: ${{ steps.driver.outputs.version }}
         run: |
           set -euo pipefail
           package=.artifacts/published-driver-package/openclaw-candidate.tgz
@@ -65,7 +116,7 @@ jobs:
           fi
           cell_exit=0
           timeout --signal=TERM --kill-after=15s "${remaining}s" \
-            bash scripts/e2e/published-driver-update-docker.sh "$package" "$artifacts" || cell_exit=$?
+            bash scripts/e2e/published-driver-update-docker.sh "$package" "$artifacts" "$DRIVER_VERSION" || cell_exit=$?
           if [ "$cell_exit" -eq 124 ] || [ "$cell_exit" -eq 137 ]; then
             phase="$(cat "$artifacts/phase.txt" 2>/dev/null || printf 'prepare-container')"
             reason="Published-driver cell timed out or was killed during ${phase} (exit ${cell_exit})."

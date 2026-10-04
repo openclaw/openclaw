@@ -1,5 +1,4 @@
 // Missing configured plugin install tests cover doctor diagnostics for absent plugin installs.
-import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, expect, vi } from "vitest";
@@ -171,23 +170,6 @@ function mockCurrentBundledPlugin(
     plugins: [{ id: pluginId, origin: "bundled", packageName, rootDir }],
     diagnostics: [],
   });
-}
-
-function writeLegacyNpmDeclarationStub(params: {
-  pluginDir: string;
-  pluginId: string;
-  npmSpec: string;
-}): void {
-  fs.mkdirSync(params.pluginDir, { recursive: true });
-  fs.writeFileSync(
-    path.join(params.pluginDir, "openclaw.extension.json"),
-    JSON.stringify({
-      name: params.pluginId,
-      type: "npm",
-      npmSpec: params.npmSpec,
-    }),
-    "utf8",
-  );
 }
 
 async function repairConfiguredPlugins(
@@ -528,7 +510,6 @@ export {
   mockCallArg,
   expectedIndexWriteOptions,
   mockCurrentBundledPlugin,
-  writeLegacyNpmDeclarationStub,
   repairConfiguredPlugins,
   useRealInstallIndexWrites,
   useManifestCatalogResolvers,

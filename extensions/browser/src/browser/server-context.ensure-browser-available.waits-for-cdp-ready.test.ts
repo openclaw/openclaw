@@ -33,7 +33,6 @@ function fakeRunning(pid: number): RunningChrome {
     exe: { kind: "chromium", path: "/usr/bin/chromium" },
     userDataDir: "/tmp/openclaw-test",
     cdpPort: 18800,
-    startedAt: Date.now(),
     proc: new EventEmitter() as unknown as ChildProcessWithoutNullStreams,
   };
 }
@@ -160,7 +159,6 @@ describe("browser server-context ensureBrowserAvailable", () => {
     }
     const previousFailure = {
       consecutiveFailures: 2,
-      lastFailureAt: Date.now(),
       lastError: "earlier launch failure",
     };
     runtime.managedLaunchFailure = previousFailure;

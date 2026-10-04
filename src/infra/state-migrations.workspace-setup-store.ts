@@ -213,29 +213,21 @@ function findMigrationAuthority(params: {
   ).rows;
   let bestPriority: number | null = null;
   for (const row of rows) {
-    if (!row.report_json) {
+    const report = safeParseJsonRecord(row.report_json);
+    if (
+      !report ||
+      report.workspaceKey !== params.source.workspaceKey ||
+      report.sourceKind !== params.source.kind ||
+      report.canonicalFingerprint !== params.fingerprint ||
+      report.authoritative !== true ||
+      typeof report.sourcePriority !== "number" ||
+      !Number.isSafeInteger(report.sourcePriority) ||
+      report.sourcePriority < 0
+    ) {
       continue;
     }
-    try {
-      const report = JSON.parse(row.report_json) as Record<string, unknown>;
-      if (
-        report.workspaceKey !== params.source.workspaceKey ||
-        report.sourceKind !== params.source.kind ||
-        report.canonicalFingerprint !== params.fingerprint ||
-        report.authoritative !== true ||
-        typeof report.sourcePriority !== "number" ||
-        !Number.isSafeInteger(report.sourcePriority) ||
-        report.sourcePriority < 0
-      ) {
-        continue;
-      }
-      bestPriority =
-        bestPriority === null
-          ? report.sourcePriority
-          : Math.min(bestPriority, report.sourcePriority);
-    } catch {
-      // Ignore unrelated or older migration reports without authority metadata.
-    }
+    bestPriority =
+      bestPriority === null ? report.sourcePriority : Math.min(bestPriority, report.sourcePriority);
   }
   return bestPriority === null ? null : { priority: bestPriority };
 }
@@ -436,7 +428,28 @@ export function importAndRecordReceipt(params: {
             attestedAtMs: existingRow.attested_at_ms,
             generatedHashes: existingHashes,
           });
-          const replaceExistingAttestation = () => {
+          const equivalent =
+            existingRow.attested_at_ms === parsedAttestation.attestedAtMs &&
+            isDeepStrictEqual(existingHashes, parsedAttestation.generatedHashes);
+          let preserve = equivalent || existingRow.attested_at_ms > parsedAttestation.attestedAtMs;
+          if (!equivalent && existingRow.attested_at_ms === parsedAttestation.attestedAtMs) {
+            const authority = findMigrationAuthority({
+              db,
+              kysely,
+              source: params.source,
+              fingerprint: existingFingerprint,
+            });
+            if (!authority) {
+              throw new Error("legacy workspace attestation conflicts with canonical SQLite state");
+            }
+            // Equal-time markers use source priority only when migration receipts
+            // prove which whole snapshot won; hashes are never merged.
+            preserve = !(params.source.priority < authority.priority);
+          }
+          if (preserve) {
+            resolution = equivalent ? "verified" : "superseded";
+            verifiedFingerprint = existingFingerprint;
+          } else {
             executeSqliteQuerySync(
               db,
               kysely
@@ -454,39 +467,6 @@ export function importAndRecordReceipt(params: {
                 .where("workspace_key", "=", params.source.workspaceKey),
             );
             insertGeneratedHashes();
-          };
-          const equivalent =
-            existingRow.attested_at_ms === parsedAttestation.attestedAtMs &&
-            isDeepStrictEqual(existingHashes, parsedAttestation.generatedHashes);
-          if (equivalent) {
-            resolution = "verified";
-            verifiedFingerprint = existingFingerprint;
-          } else if (existingRow.attested_at_ms > parsedAttestation.attestedAtMs) {
-            resolution = "superseded";
-            verifiedFingerprint = existingFingerprint;
-          } else if (existingRow.attested_at_ms === parsedAttestation.attestedAtMs) {
-            const authority = findMigrationAuthority({
-              db,
-              kysely,
-              source: params.source,
-              fingerprint: existingFingerprint,
-            });
-            if (!authority) {
-              throw new Error("legacy workspace attestation conflicts with canonical SQLite state");
-            }
-            if (params.source.priority < authority.priority) {
-              // Equal-time markers use source priority only when migration receipts
-              // prove which whole snapshot won; hashes are never merged.
-              replaceExistingAttestation();
-              imported = true;
-              resolution = "replaced";
-              verifiedFingerprint = incomingFingerprint;
-            } else {
-              resolution = "superseded";
-              verifiedFingerprint = existingFingerprint;
-            }
-          } else {
-            replaceExistingAttestation();
             imported = true;
             resolution = "replaced";
             verifiedFingerprint = incomingFingerprint;

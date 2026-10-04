@@ -527,6 +527,31 @@ describe("CI changed Node test plan", () => {
     }
   });
 
+  it.each([
+    "src/agents/model-fallback.reply-entry.e2e.test.ts",
+    "src/auto-reply/reply/agent-runner.runreplyagent.e2e.test.ts",
+    "src/agents/bash-tools.process.e2e.test.ts",
+  ])("prepares the runtime for the executed E2E route of %s", (target) => {
+    const shards = expectDefined(
+      createChangedNodeTestShardsWithSmoke([target], { selectedTestTargets: [target] }),
+      "changed E2E plan",
+    );
+    expect(selectedFiles(shards)).toEqual([target]);
+    const row = expectDefined(
+      shards.find((shard) => shard.targets?.includes(target)),
+      "target row",
+    );
+    const plans = resolveShardPlans({
+      OPENCLAW_NODE_TEST_TARGETS_JSON: JSON.stringify(row.targets),
+    });
+    expect(plans).toHaveLength(1);
+    expect(plans[0]).toMatchObject({ kind: "target", target });
+    expect(buildVitestRunPlans([target]).map((plan) => plan.config)).toContain(
+      "test/vitest/vitest.e2e.config.ts",
+    );
+    expect(row.pretestBuildMode).toBe("private-qa");
+  });
+
   it("retains selected compact coverage when time splitting exceeds the non-dist matrix cap", async () => {
     const targets = [
       "test/scripts/ci-node-test-plan.test.ts",
@@ -732,7 +757,7 @@ describe("CI changed Node test plan", () => {
     (runnerBackend) => {
       const targets = [
         "src/agents/embedded-agent-runner/model-resolution-consistency.test.ts",
-        "src/agents/embedded-agent-runner/run/attempt.abort-race.test.ts",
+        "src/agents/embedded-agent-runner/run/attempt-transcript-helpers.presence.test.ts",
       ];
       const placement = vi.spyOn(testTimings, "readRuntimePlacementTimings").mockReturnValue([]);
       let full: CompactNodeTestShard[];
@@ -1011,7 +1036,8 @@ describe("CI changed Node test plan", () => {
 
   it("retains ordinary and embedded targets beside a shared Git fixture's canonical family", () => {
     const ordinary = "src/plugin-sdk/plugin-config-runtime.test.ts";
-    const embedded = "src/agents/embedded-agent-runner/run/attempt.abort-race.test.ts";
+    const embedded =
+      "src/agents/embedded-agent-runner/run/attempt-transcript-helpers.presence.test.ts";
     const shards = createChangedNodeTestShards([
       "test/scripts/ci-git-owner.test-support.ts",
       ordinary,
@@ -1061,7 +1087,8 @@ describe("CI changed Node test plan", () => {
 
   it("does not borrow canonical embedded ownership for another checkout", () => {
     const cwd = argvTempDirs.make("openclaw-embedded-owner-");
-    const target = "src/agents/embedded-agent-runner/run/attempt.abort-race.test.ts";
+    const target =
+      "src/agents/embedded-agent-runner/run/attempt-transcript-helpers.presence.test.ts";
 
     mkdirSync(path.dirname(path.join(cwd, target)), { recursive: true });
     writeFileSync(path.join(cwd, target), "export {};\n");

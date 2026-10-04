@@ -45,6 +45,7 @@ const RUNTIME_VALUE_OPTIONS = new Set([
   "--disable-proto",
   "--cpu-prof-name",
   "--max-old-space-size",
+  "--max-semi-space-size",
 ]);
 const RUNTIME_BOOLEAN_OPTIONS = new Set([
   "--inspect",
@@ -54,6 +55,9 @@ const RUNTIME_BOOLEAN_OPTIONS = new Set([
   "--jitless",
   "--no-opt",
   "--experimental-strip-types",
+  "--watch",
+  "--no-warnings",
+  "--trace-uncaught",
   "--bun",
 ]);
 
@@ -111,9 +115,10 @@ export function resolveRuntimeScriptPosition(args: string[]): {
     } else if (arg.startsWith("-")) {
       // A negated spelling proves a boolean; its absence never proves a value option.
       const negated = `--no-${option.replace(/^--(?:no-)?/, "")}`;
-      const nodeOption = process.allowedNodeEnvironmentFlags.has(option);
+      const nodeOption = !bun && process.allowedNodeEnvironmentFlags.has(option);
       const knownBoolean =
         RUNTIME_BOOLEAN_OPTIONS.has(option) ||
+        (bun && (option === "--hot" || option === "--no-install")) ||
         (nodeOption && process.allowedNodeEnvironmentFlags.has(negated));
       if (!inlineCommand && !knownBoolean && !/^--[^=]+=/.test(arg)) {
         unresolved ??= { kind: "unclassified", reason: `unsupported runtime option ${arg}` };

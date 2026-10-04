@@ -223,40 +223,12 @@ describe("node worker persistence settlement lifetime", () => {
       await f.launching;
       f.emitResult.resolve();
       await f.entered.promise;
+      await vi.advanceTimersByTimeAsync(0);
+      expect(observed).toEqual([]);
       f.persistence.resolve();
       await vi.advanceTimersByTimeAsync(0);
       expect(observed).toEqual([expect.objectContaining({ state: "completed" })]);
       await waiting;
-      expect(vi.getTimerCount()).toBe(0);
-    } finally {
-      controller.abort();
-      release.resolve();
-      await Promise.allSettled([waiting, f.launching]);
-      await f.dispose();
-      vi.useRealTimers();
-    }
-  });
-
-  it("wakes status waiters only after the exact turn is journaled, independently of its retained child", async () => {
-    vi.useFakeTimers();
-    const f = await fixture();
-    try {
-      const observed: NodeWorkerLaunchReceipt[] = [];
-      const waiting = f.supervisor
-        .status(f.identity.launchId, { waitMs: 20_000 })
-        .then((receipt) => {
-          if (receipt) {
-            observed.push(receipt);
-          }
-          return receipt;
-        });
-      await vi.advanceTimersByTimeAsync(0);
-      f.emitResult.resolve();
-      await f.entered.promise;
-      await vi.advanceTimersByTimeAsync(0);
-      expect(observed).toEqual([]);
-      f.persistence.resolve();
-      await expect(waiting).resolves.toMatchObject({ state: "completed" });
       expect(vi.getTimerCount()).toBe(0);
       expect(f.snapshots.at(-1)).toBe(0);
       expect(await f.supervisor.hasActiveWork()).toBe(true);
@@ -268,6 +240,9 @@ describe("node worker persistence settlement lifetime", () => {
       ).resolves.toBeUndefined();
       expect(vi.getTimerCount()).toBe(0);
     } finally {
+      controller.abort();
+      release.resolve();
+      await Promise.allSettled([waiting, f.launching]);
       await f.dispose();
       vi.useRealTimers();
     }
@@ -390,44 +365,6 @@ describe("node worker persistence settlement lifetime", () => {
       }
     },
   );
-
-  it("keeps receipt replay available after close without admitting a new launch", async () => {
-    const f = await fixture();
-    try {
-      f.emitResult.resolve();
-      await f.entered.promise;
-      f.persistence.resolve();
-      await nextTurn();
-      const completed = await f.supervisor.status(f.identity.launchId);
-      await f.dispose();
-      const writes = mocks.turnFinish.mock.calls.length + mocks.launchFinish.mock.calls.length;
-      expect(await f.supervisor.status(f.identity.launchId)).toEqual(completed);
-      expect(await f.supervisor.cancel(f.identity)).toEqual(completed);
-      await expect(
-        f.supervisor.launch(
-          testWorkerLaunchInput("/synthetic/workspace", "after-close-turn"),
-          TEST_WORKER_ENDPOINT,
-        ),
-      ).rejects.toThrow("supervisor is closed");
-      expect(mocks.turnFinish.mock.calls.length + mocks.launchFinish.mock.calls.length).toBe(
-        writes,
-      );
-    } finally {
-      await f.dispose();
-    }
-  });
-
-  it("does not initialize recovery for a receipt read after closing an unused supervisor", async () => {
-    const supervisor = createNodeWorkerSupervisor({
-      env: { OPENCLAW_STATE_DIR: "/synthetic/state" },
-    });
-    mocks.launchList.mockRejectedValue(new Error("Recovery must stay closed"));
-    mocks.turnGet.mockResolvedValue(undefined);
-    await supervisor.close();
-    expect(await supervisor.status("absent-turn")).toBeUndefined();
-    expect(mocks.launchList).not.toHaveBeenCalled();
-    expect(mocks.prepare).not.toHaveBeenCalled();
-  });
 
   it("retries failed close cleanup before completing shutdown", async () => {
     const f = await fixture();

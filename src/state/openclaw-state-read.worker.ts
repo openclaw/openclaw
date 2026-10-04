@@ -4,16 +4,8 @@ import {
   selectAcpSessionRows,
 } from "../acp/runtime/session-meta-keys.js";
 import {
-  countMcpOAuthPrincipalsInDatabase,
-  listMcpOAuthStoreKeysInDatabase,
-  readMcpOAuthPendingInDatabase,
-  readMcpOAuthStoreIfPresentInDatabase,
-  readMcpOAuthStatusesInDatabase,
-} from "../agents/mcp-oauth-store.kernel.js";
-import {
   loadSubagentMaintenanceRunsInDatabase,
-  loadSubagentRegistryFromSqlite,
-  loadSubagentRunsByRunIdsFromSqlite,
+  loadVersionedSubagentRunsInDatabase,
   loadSubagentRunsForSessionsInDatabase,
   loadSubagentRunsForChildSessionFromSqlite,
   loadSubagentRunsForSessionFromSqlite,
@@ -22,6 +14,12 @@ import {
 import { readWorkspaceStateSnapshotForDirectoryInDatabase } from "../agents/workspace-state-store.kernel.js";
 import { isChannelIngressReadCommand } from "../channels/message/ingress-queue-read-contract.js";
 import { readChannelIngressInDatabase } from "../channels/message/ingress-queue-read.worker.js";
+import {
+  readClawInstallRecordFromDatabase,
+  readClawInstallRecordsInDatabase,
+  readClawOrphanWorkspaceInDatabase,
+  readClawPackageRefsInDatabase,
+} from "../claws/provenance-read.kernel.js";
 import {
   isCronStateReadCommand,
   readCronStateCommandInDatabase,
@@ -48,11 +46,8 @@ import {
 } from "../gateway/worker-environments/placement-read-projection.js";
 import { readWorkerPlacementChangeSnapshotInDatabase } from "../gateway/worker-environments/placement-row-codec.js";
 import { readWorkspaceJournalInDatabase } from "../gateway/worker-environments/placement-workspace-journal.js";
-import { isWorkspaceJournalReadCommand } from "../gateway/worker-environments/placement-workspace-journal.worker-contract.js";
-import {
-  readWorkerEnvironmentFacts,
-  readWorkerEnvironmentPrunePage,
-} from "../gateway/worker-environments/store-row-codec.js";
+import { isWorkspaceJournalReadCommand } from "../gateway/worker-environments/placement-workspace-journal.types.js";
+import { listPendingWorkerWorkspaceResultsInDatabase } from "../gateway/worker-environments/placement-workspace-result.js";
 import { getSqliteRuntimeCapabilities } from "../infra/bun-sqlite-library.js";
 import { executeDevicePairingRead } from "../infra/device-pairing-read.kernel.js";
 import { readExecApprovalsConfigRow } from "../infra/exec-approvals-sqlite.js";
@@ -85,10 +80,7 @@ import {
 } from "../skills/library/selection-read.kernel.js";
 import { isTuiLastSessionReadCommand } from "../tui/tui-last-session.contract.js";
 import { readTuiLastSessionCommand } from "../tui/tui-last-session.kernel.js";
-import {
-  readAgentDatabaseDeletionSnapshotInDatabase,
-  readAgentDeletionJournalStatusInDatabase,
-} from "./agent-deletion-journal.read.js";
+import { readAgentDatabaseDeletionSnapshotInDatabase } from "./agent-deletion-journal.read.js";
 import { readBackupRunsInDatabase } from "./backup-run-records.kernel.js";
 import { readConfigMachineStateRowInDatabase } from "./config-machine-state.js";
 import { readGitHubPublicationSessionLifecycle } from "./github-publication-session-lifecycles.js";
@@ -107,6 +99,8 @@ import {
   isStateDiagnosticCommand,
   readStateDiagnosticCommand,
 } from "./openclaw-state-read-diagnostics.js";
+import { readMcpOAuthStateCommand } from "./openclaw-state-read-mcp-oauth.js";
+import { stateReadRegistry } from "./openclaw-state-read-operation-registry.js";
 import { readStateRegistryCommand } from "./openclaw-state-read-registry.js";
 import type {
   OpenClawStateReadReply,
@@ -134,12 +128,16 @@ import {
 import { readUserProfileAvatarCommand } from "./user-profiles-internal.js";
 
 serveOwnedWorkerTasks(
-  (input): OpenClawStateReadReply => {
+  function read(input): OpenClawStateReadReply | Promise<OpenClawStateReadReply> {
     let sourceAdmitted: true | undefined;
     let nativeCleanupFailure: OpenClawStateReadReply["nativeCleanupFailure"];
     try {
       if (!isReadRequest(input)) {
         throw new Error("Shared-state reader requires a captured state location and read command");
+      }
+      const prepared = stateReadRegistry.prepare(input.command.type);
+      if (prepared) {
+        return prepared.then(() => read(input));
       }
       const reply = runWithSqliteWorkerStateContext(input.context, (): OpenClawStateReadReply => {
         if (input.checkFreshAdmission) {
@@ -213,6 +211,22 @@ serveOwnedWorkerTasks(
         const result = withOpenClawStateReadOnlyLocation(
           ({ db }): OpenClawStateReadResult => {
             sourceAdmitted = true;
+            if (command.type === "claws.packageOwnership") {
+              const install =
+                command.agentId === undefined
+                  ? undefined
+                  : readClawInstallRecordFromDatabase(db, command.agentId);
+              return {
+                type: command.type,
+                install,
+                installs: command.includeInstalls ? readClawInstallRecordsInDatabase(db) : [],
+                packageRefs: readClawPackageRefsInDatabase(db, { agentId: command.agentId }),
+                orphanWorkspace:
+                  command.agentId !== undefined && !install
+                    ? readClawOrphanWorkspaceInDatabase(db, command.agentId)
+                    : undefined,
+              };
+            }
             if (command.type === "doctor.gatewayOwnerLease.read") {
               return { type: command.type, lease: readGatewayOwnerLeaseFromDatabase(db) };
             }
@@ -224,12 +238,6 @@ serveOwnedWorkerTasks(
                   input.databasePath,
                   command.purpose,
                 ),
-              };
-            }
-            if (command.type === "agentDeletionJournal.status") {
-              return {
-                type: command.type,
-                status: readAgentDeletionJournalStatusInDatabase(db, command.agentId),
               };
             }
             if (command.type === "deliveryQueue.outbound") {
@@ -259,9 +267,12 @@ serveOwnedWorkerTasks(
             if (isChannelIngressReadCommand(command)) {
               return readChannelIngressInDatabase(db, command);
             }
+            if ("input" in command && stateReadRegistry.has(command)) {
+              return stateReadRegistry.execute(command, db);
+            }
             if (command.type === "subagents.runs") {
               if (command.scope.kind === "all") {
-                return { type: command.type, runs: loadSubagentRegistryFromSqlite({ db }) };
+                return { type: command.type, ...loadVersionedSubagentRunsInDatabase({ db }) };
               }
               if (command.scope.kind === "maintenance") {
                 const maintenance = loadSubagentMaintenanceRunsInDatabase({ db });
@@ -288,44 +299,26 @@ serveOwnedWorkerTasks(
                   },
                 };
               }
-              const rows =
-                command.scope.kind === "session"
-                  ? loadSubagentRunsForSessionFromSqlite(command.scope.sessionKey, { db })
-                  : loadSubagentRunsByRunIdsFromSqlite(command.scope.runIds, { db });
+              if (command.scope.kind === "ids") {
+                return {
+                  type: command.type,
+                  ...loadVersionedSubagentRunsInDatabase({ db }, command.scope.runIds),
+                };
+              }
+              const rows = loadSubagentRunsForSessionFromSqlite(command.scope.sessionKey, { db });
               return {
                 type: command.type,
                 runs: new Map(rows.map((entry) => [entry.runId, entry])),
               };
             }
-            if (command.type === "mcpOAuth.statuses") {
-              return {
-                type: command.type,
-                value: readMcpOAuthStatusesInDatabase(db, command.input),
-              };
-            }
-            if (command.type === "mcpOAuth.readOnly") {
-              return {
-                type: command.type,
-                value: readMcpOAuthStoreIfPresentInDatabase(db, command.input),
-              };
-            }
-            if (command.type === "mcpOAuth.keys") {
-              return {
-                type: command.type,
-                value: listMcpOAuthStoreKeysInDatabase(db, command.input),
-              };
-            }
-            if (command.type === "mcpOAuth.pending") {
-              return {
-                type: command.type,
-                value: readMcpOAuthPendingInDatabase(db, command.input),
-              };
-            }
-            if (command.type === "mcpOAuth.countPrincipals") {
-              return {
-                type: command.type,
-                value: countMcpOAuthPrincipalsInDatabase(db, command.input),
-              };
+            if (
+              command.type === "mcpOAuth.statuses" ||
+              command.type === "mcpOAuth.readOnly" ||
+              command.type === "mcpOAuth.keys" ||
+              command.type === "mcpOAuth.pending" ||
+              command.type === "mcpOAuth.countPrincipals"
+            ) {
+              return readMcpOAuthStateCommand(db, command);
             }
             if (command.type === "sessionGroups.snapshot") {
               return {
@@ -445,20 +438,6 @@ serveOwnedWorkerTasks(
               return {
                 type: command.type,
                 row: readExecApprovalsConfigRow(db),
-              };
-            }
-            if (command.type === "workerEnvironments.snapshot") {
-              return {
-                type: command.type,
-                facts: runSqliteDeferredTransactionSync(db, () =>
-                  readWorkerEnvironmentFacts(db, command.ids),
-                ),
-              };
-            }
-            if (command.type === "workerEnvironments.pruneCandidates") {
-              return {
-                type: command.type,
-                page: readWorkerEnvironmentPrunePage(db, command.input),
               };
             }
             if (command.type === "skills.library.descriptions") {
@@ -650,6 +629,12 @@ serveOwnedWorkerTasks(
               return {
                 type: command.type,
                 candidates: readWorkerPlacementRecoveryCandidatesInDatabase(db),
+              };
+            }
+            if (command.type === "workers.placementPendingResults") {
+              return {
+                type: command.type,
+                pendingResults: listPendingWorkerWorkspaceResultsInDatabase(db, command.sessionId),
               };
             }
             if (command.type === "workers.placementProjection") {

@@ -1,7 +1,10 @@
 import { randomUUID } from "node:crypto";
 import type { OpenClawStateDatabase } from "../state/openclaw-state-db-contract.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
-import type { WorkerOperationHandlers } from "../state/worker-operation-registry.js";
+import type {
+  WorkerOperationContext,
+  WorkerOperationHandlers,
+} from "../state/worker-operation-registry.js";
 import { loadDeliveryQueueEntryInDatabase } from "./delivery-queue-sqlite-bound.js";
 import {
   claimDeliveryQueueEntryPlatformSendInDatabase,
@@ -268,194 +271,170 @@ function stageFailure(
   return staged;
 }
 
+function writeOperation<Input, Output>(
+  operationLabel: string,
+  operation: (database: OpenClawStateDatabase, input: Input) => Output,
+) {
+  return (input: Input, { open, stateOptions }: WorkerOperationContext): Output =>
+    runOpenClawStateWriteTransaction(
+      (database) => operation(database, input),
+      { database: open(), ...stateOptions() },
+      { operationLabel },
+    );
+}
+
 export const deliveryQueueOperations = {
-  "deliveryQueue.claimPreparation": (input: { id: string }, { open, stateOptions }) =>
-    runOpenClawStateWriteTransaction(
-      (database) => claimPreparation(database, input.id),
-      { database: open(), ...stateOptions() },
-      { operationLabel: "deliveryQueue.claimPreparation" },
-    ),
-  "deliveryQueue.replacePreparation": (
-    input: {
-      expectedEntry: StableDeliveryPreparation;
-      replacementEntry: StableDeliveryPreparation;
+  "deliveryQueue.claimPreparation": writeOperation(
+    "deliveryQueue.claimPreparation",
+    (database, input: { id: string }) => claimPreparation(database, input.id),
+  ),
+  "deliveryQueue.replacePreparation": writeOperation(
+    "deliveryQueue.replacePreparation",
+    (
+      database,
+      input: {
+        expectedEntry: StableDeliveryPreparation;
+        replacementEntry: StableDeliveryPreparation;
+      },
+    ) =>
+      replacePendingDeliveryQueueEntryInDatabase(database, {
+        queueName: OUTBOUND_DELIVERY_PREPARATION_QUEUE_NAME,
+        ...input,
+      }),
+  ),
+  "deliveryQueue.completePreparation": writeOperation(
+    "deliveryQueue.completePreparation",
+    (database, input: { expectedEntry: StableDeliveryPreparation }) =>
+      completePendingDeliveryQueueEntryInDatabase(database, {
+        queueName: OUTBOUND_DELIVERY_PREPARATION_QUEUE_NAME,
+        ...input,
+      }),
+  ),
+  "deliveryQueue.failPreparation": writeOperation(
+    "deliveryQueue.failPreparation",
+    (database, input: { entry: StableDeliveryPreparation }) => {
+      terminalizePendingDeliveryQueueEntryInDatabase(
+        database,
+        prepareDeliveryQueueTerminalEntry({
+          queueName: OUTBOUND_DELIVERY_PREPARATION_QUEUE_NAME,
+          id: input.entry.id,
+          entry: input.entry,
+        }),
+      );
     },
-    { open, stateOptions },
-  ) =>
-    runOpenClawStateWriteTransaction(
-      (database) =>
-        replacePendingDeliveryQueueEntryInDatabase(database, {
-          queueName: OUTBOUND_DELIVERY_PREPARATION_QUEUE_NAME,
-          ...input,
-        }),
-      { database: open(), ...stateOptions() },
-      { operationLabel: "deliveryQueue.replacePreparation" },
-    ),
-  "deliveryQueue.completePreparation": (
-    input: { expectedEntry: StableDeliveryPreparation },
-    { open, stateOptions },
-  ) =>
-    runOpenClawStateWriteTransaction(
-      (database) =>
-        completePendingDeliveryQueueEntryInDatabase(database, {
-          queueName: OUTBOUND_DELIVERY_PREPARATION_QUEUE_NAME,
-          ...input,
-        }),
-      { database: open(), ...stateOptions() },
-      { operationLabel: "deliveryQueue.completePreparation" },
-    ),
-  "deliveryQueue.failPreparation": (
-    input: { entry: StableDeliveryPreparation },
-    { open, stateOptions },
-  ) =>
-    runOpenClawStateWriteTransaction(
-      (database) => {
+  ),
+  "deliveryQueue.mutateOutbound": writeOperation("deliveryQueue.mutateOutbound", mutateOutbound),
+  "deliveryQueue.reserveOutbound": writeOperation(
+    "deliveryQueue.reserveOutbound",
+    (
+      database,
+      input: { id: string; maxAttempts: number; expectedPlatformSendAttemptId?: string },
+    ) =>
+      reserveDeliveryQueueEntryAttemptInDatabase(database, {
+        ...input,
+        queueName: resolveOutboundDeliveryQueueNameInDatabase(database, input.id),
+      }),
+  ),
+  "deliveryQueue.restoreOutbound": writeOperation(
+    "deliveryQueue.restoreOutbound",
+    (
+      database,
+      input: {
+        entry: OutboundDeliverySnapshot;
+        reservedAttemptCount: number;
+        claimedAttemptId?: string;
+      },
+    ) =>
+      restoreDeliveryAttemptBeforeDispatchInDatabase(
+        database,
+        decodeOutboundDeliverySnapshot(input.entry),
+        input.reservedAttemptCount,
+        input.claimedAttemptId,
+      ),
+  ),
+  "deliveryQueue.stageFailure": writeOperation(
+    "deliveryQueue.stageFailure",
+    (
+      database,
+      input: {
+        entry: OutboundDeliverySnapshot;
+        settlementEntry: OutboundDeliverySnapshot;
+        claimedAttemptId?: string;
+      },
+    ) => {
+      const entry = decodeOutboundDeliverySnapshot(input.entry);
+      const settlementEntry = decodeOutboundDeliverySnapshot(input.settlementEntry);
+      if (
+        settlementEntry.id !== entry.id ||
+        input.settlementEntry.queueName !== input.entry.queueName ||
+        !settlementEntry.settlement
+      ) {
+        throw new Error(`Invalid outbound delivery settlement snapshot: ${entry.id}`);
+      }
+      const staged = stageFailure(database, {
+        entry,
+        settlement: settlementEntry.settlement,
+        claimedAttemptId: input.claimedAttemptId,
+      });
+      return staged && encodeOutboundDeliverySnapshot(staged);
+    },
+  ),
+  "deliveryQueue.finalizeFailure": writeOperation(
+    "deliveryQueue.finalizeFailure",
+    (database, input: { entry: OutboundDeliverySnapshot }) => {
+      const entry = decodeOutboundDeliverySnapshot(input.entry);
+      return (
         terminalizePendingDeliveryQueueEntryInDatabase(
           database,
           prepareDeliveryQueueTerminalEntry({
-            queueName: OUTBOUND_DELIVERY_PREPARATION_QUEUE_NAME,
-            id: input.entry.id,
-            entry: input.entry,
+            queueName: outboundDeliveryQueueName(entry),
+            id: entry.id,
+            entry,
+            expectedStatus: "failed",
           }),
-        );
-      },
-      { database: open(), ...stateOptions() },
-      { operationLabel: "deliveryQueue.failPreparation" },
-    ),
-  "deliveryQueue.mutateOutbound": (input: OutboundDeliveryMutation, { open, stateOptions }) =>
-    runOpenClawStateWriteTransaction(
-      (database) => mutateOutbound(database, input),
-      { database: open(), ...stateOptions() },
-      { operationLabel: "deliveryQueue.mutateOutbound" },
-    ),
-  "deliveryQueue.reserveOutbound": (
-    input: { id: string; maxAttempts: number; expectedPlatformSendAttemptId?: string },
-    { open, stateOptions },
-  ) =>
-    runOpenClawStateWriteTransaction(
-      (database) =>
-        reserveDeliveryQueueEntryAttemptInDatabase(database, {
+        ).status === "terminalized"
+      );
+    },
+  ),
+  "deliveryQueue.retireUnsent": writeOperation(
+    "deliveryQueue.retireUnsent",
+    (
+      database,
+      input: { id: string; producerClaimId: string; stateDir?: string; terminalOutcome?: "failed" },
+    ) => retireUnsentDeliveryInDatabase(database, input, input.terminalOutcome),
+  ),
+  "deliveryQueue.claimPlatformSend": writeOperation(
+    "deliveryQueue.claimPlatformSend",
+    (
+      database,
+      input: Omit<
+        Parameters<typeof claimDeliveryQueueEntryPlatformSendInDatabase>[1],
+        "queueName"
+      > & { claimId: string },
+    ) =>
+      claimDeliveryQueueEntryPlatformSendInDatabase(
+        database,
+        {
           ...input,
           queueName: resolveOutboundDeliveryQueueNameInDatabase(database, input.id),
-        }),
-      { database: open(), ...stateOptions() },
-      { operationLabel: "deliveryQueue.reserveOutbound" },
-    ),
-  "deliveryQueue.restoreOutbound": (
-    input: {
-      entry: OutboundDeliverySnapshot;
-      reservedAttemptCount: number;
-      claimedAttemptId?: string;
-    },
-    { open, stateOptions },
-  ) =>
-    runOpenClawStateWriteTransaction(
-      (database) =>
-        restoreDeliveryAttemptBeforeDispatchInDatabase(
-          database,
-          decodeOutboundDeliverySnapshot(input.entry),
-          input.reservedAttemptCount,
-          input.claimedAttemptId,
-        ),
-      { database: open(), ...stateOptions() },
-      { operationLabel: "deliveryQueue.restoreOutbound" },
-    ),
-  "deliveryQueue.stageFailure": (
-    input: {
-      entry: OutboundDeliverySnapshot;
-      settlementEntry: OutboundDeliverySnapshot;
-      claimedAttemptId?: string;
-    },
-    { open, stateOptions },
-  ) =>
-    runOpenClawStateWriteTransaction(
-      (database) => {
-        const entry = decodeOutboundDeliverySnapshot(input.entry);
-        const settlementEntry = decodeOutboundDeliverySnapshot(input.settlementEntry);
-        if (
-          settlementEntry.id !== entry.id ||
-          input.settlementEntry.queueName !== input.entry.queueName ||
-          !settlementEntry.settlement
-        ) {
-          throw new Error(`Invalid outbound delivery settlement snapshot: ${entry.id}`);
-        }
-        const staged = stageFailure(database, {
-          entry,
-          settlement: settlementEntry.settlement,
-          claimedAttemptId: input.claimedAttemptId,
-        });
-        return staged && encodeOutboundDeliverySnapshot(staged);
-      },
-      { database: open(), ...stateOptions() },
-      { operationLabel: "deliveryQueue.stageFailure" },
-    ),
-  "deliveryQueue.finalizeFailure": (
-    input: { entry: OutboundDeliverySnapshot },
-    { open, stateOptions },
-  ) =>
-    runOpenClawStateWriteTransaction(
-      (database) => {
-        const entry = decodeOutboundDeliverySnapshot(input.entry);
-        return (
-          terminalizePendingDeliveryQueueEntryInDatabase(
-            database,
-            prepareDeliveryQueueTerminalEntry({
-              queueName: outboundDeliveryQueueName(entry),
-              id: entry.id,
-              entry,
-              expectedStatus: "failed",
-            }),
-          ).status === "terminalized"
-        );
-      },
-      { database: open(), ...stateOptions() },
-      { operationLabel: "deliveryQueue.finalizeFailure" },
-    ),
-  "deliveryQueue.retireUnsent": (
-    input: { id: string; producerClaimId: string; stateDir?: string; terminalOutcome?: "failed" },
-    { open, stateOptions },
-  ) =>
-    runOpenClawStateWriteTransaction(
-      (database) => retireUnsentDeliveryInDatabase(database, input, input.terminalOutcome),
-      { database: open(), ...stateOptions() },
-      { operationLabel: "deliveryQueue.retireUnsent" },
-    ),
-  "deliveryQueue.claimPlatformSend": (
-    input: Omit<
-      Parameters<typeof claimDeliveryQueueEntryPlatformSendInDatabase>[1],
-      "queueName"
-    > & { claimId: string },
-    { open, stateOptions },
-  ) =>
-    runOpenClawStateWriteTransaction(
-      (database) =>
-        claimDeliveryQueueEntryPlatformSendInDatabase(
-          database,
-          {
-            ...input,
-            queueName: resolveOutboundDeliveryQueueNameInDatabase(database, input.id),
-          },
-          input.claimId,
-        ),
-      { database: open(), ...stateOptions() },
-      { operationLabel: "deliveryQueue.claimPlatformSend" },
-    ),
-  "deliveryQueue.renewPlatformSendLease": (
-    input: Omit<
-      Parameters<typeof renewDeliveryQueueEntryPlatformSendLeaseInDatabase>[1],
-      "queueName"
-    >,
-    { open, stateOptions },
-  ) =>
-    runOpenClawStateWriteTransaction(
-      (database) =>
-        renewDeliveryQueueEntryPlatformSendLeaseInDatabase(database, {
-          ...input,
-          queueName: resolveOutboundDeliveryQueueNameInDatabase(database, input.id),
-        }),
-      { database: open(), ...stateOptions() },
-      { operationLabel: "deliveryQueue.renewPlatformSendLease" },
-    ),
+        },
+        input.claimId,
+      ),
+  ),
+  "deliveryQueue.renewPlatformSendLease": writeOperation(
+    "deliveryQueue.renewPlatformSendLease",
+    (
+      database,
+      input: Omit<
+        Parameters<typeof renewDeliveryQueueEntryPlatformSendLeaseInDatabase>[1],
+        "queueName"
+      >,
+    ) =>
+      renewDeliveryQueueEntryPlatformSendLeaseInDatabase(database, {
+        ...input,
+        queueName: resolveOutboundDeliveryQueueNameInDatabase(database, input.id),
+      }),
+  ),
   "deliveryQueue.ack": (
     input: Parameters<typeof executeDeliveryQueueAck>[0],
     { open, stateOptions },
@@ -476,36 +455,32 @@ export const deliveryQueueOperations = {
     countFailedDeliveryQueueEntriesInDatabase(open()),
   "deliveryQueue.pruneTombstones": (_input: undefined, { open }) =>
     pruneExpiredDeliveryQueueTombstonesInDatabase(open()),
-  "deliveryQueue.createMediaRetention": (
-    input: {
-      artifacts: string[];
-      entryKind: Parameters<typeof createDeliveryQueueMediaRetentionInDatabase>[2];
-      prepared: { id: string; enqueuedAt: number };
-    },
-    { open, stateOptions },
-  ) =>
-    runOpenClawStateWriteTransaction(
-      (database) =>
-        createDeliveryQueueMediaRetentionInDatabase(
-          database,
-          input.artifacts,
-          input.entryKind,
-          input.prepared,
-        ),
-      { database: open(), ...stateOptions() },
-      { operationLabel: "deliveryQueue.createMediaRetention" },
-    ),
-  "deliveryQueue.cancelMediaRetention": (input: { id: string }, { open, stateOptions }) =>
-    runOpenClawStateWriteTransaction(
-      (database) =>
-        deleteDeliveryQueueEntryInDatabase(
-          database,
-          DELIVERY_QUEUE_MEDIA_STAGING_QUEUE_NAME,
-          input.id,
-        ),
-      { database: open(), ...stateOptions() },
-      { operationLabel: "deliveryQueue.cancelMediaRetention" },
-    ),
+  "deliveryQueue.createMediaRetention": writeOperation(
+    "deliveryQueue.createMediaRetention",
+    (
+      database,
+      input: {
+        artifacts: string[];
+        entryKind: Parameters<typeof createDeliveryQueueMediaRetentionInDatabase>[2];
+        prepared: { id: string; enqueuedAt: number };
+      },
+    ) =>
+      createDeliveryQueueMediaRetentionInDatabase(
+        database,
+        input.artifacts,
+        input.entryKind,
+        input.prepared,
+      ),
+  ),
+  "deliveryQueue.cancelMediaRetention": writeOperation(
+    "deliveryQueue.cancelMediaRetention",
+    (database, input: { id: string }) =>
+      deleteDeliveryQueueEntryInDatabase(
+        database,
+        DELIVERY_QUEUE_MEDIA_STAGING_QUEUE_NAME,
+        input.id,
+      ),
+  ),
   "deliveryQueue.mediaRetentionSnapshot": (
     input: Parameters<typeof loadDeliveryQueueMediaRetentionSnapshotInDatabase>[1],
     { open },

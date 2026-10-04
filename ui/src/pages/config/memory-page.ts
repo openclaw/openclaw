@@ -40,7 +40,6 @@ import { renderMemoryOverview, type MemoryOverviewStatus } from "./memory-overvi
 import {
   canonicalMemoryRouteLocation,
   memoryTabForRoute,
-  memoryVisibleSchemaKeys,
   resolveMemoryEngineSelection,
   selectedEngineId,
   type MemoryEngineSelection,
@@ -88,8 +87,7 @@ class MemorySettingsPage extends OpenClawLightDomElement {
   @property() pluginsHref = "";
   @property() memoryImportHref = "";
   @property({ attribute: false }) routeData: ConfigRouteData | null = null;
-  @property({ attribute: false }) buildEditor: (keys: readonly string[]) => TemplateResult = () =>
-    html``;
+  @property({ attribute: false }) buildEditor: () => TemplateResult = () => html``;
 
   @state() private catalog: MemoryCatalog = { kind: "unavailable" };
   @state() private engineBusy = false;
@@ -673,7 +671,7 @@ class MemorySettingsPage extends OpenClawLightDomElement {
       dreams: agentId
         ? html`<openclaw-agent-memory-panel .agentId=${agentId}></openclaw-agent-memory-panel>`
         : html``,
-      editor: activeTab === "settings" ? this.buildEditor(memoryVisibleSchemaKeys()) : html``,
+      editor: activeTab === "settings" ? this.buildEditor() : html``,
       dreamingSettings: activeTab === "settings" ? this.renderDreamingControls() : html``,
     });
   }

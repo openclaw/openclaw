@@ -17,11 +17,15 @@ import {
 } from "../../../state/openclaw-state-db.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
 import {
+  persistRegistryFixture,
+  saveSubagentRegistryChangesToSqlite,
+  saveSubagentRegistryToSqlite,
+} from "./subagent-registry-state.fixture.test-support.js";
+import {
   clearSubagentRunsReadCacheForTest,
   getSubagentRunsSnapshotForRead,
   getSubagentSessionListRunsSnapshotForRead,
   getSubagentSessionListRunsSnapshotForSessions,
-  persistSubagentRunsToDiskOrThrow,
   prepareSubagentSessionListReadCache,
 } from "./subagent-registry-state.js";
 import { bindSubagentRunRecord } from "./subagent-registry.store.codec.js";
@@ -33,9 +37,7 @@ import {
   loadSubagentRegistryFromSqlite,
   loadSubagentSessionListRunsFromSqlite,
   loadSubagentRunsForSessionsInDatabase,
-  saveSubagentRegistryChangesToSqlite,
 } from "./subagent-registry.store.sqlite.js";
-import { saveSubagentRegistryToSqlite } from "./subagent-registry.store.test-support.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { resolveSubagentDisplayStatus } from "./subagent-session-metrics.js";
 
@@ -252,7 +254,7 @@ describe("subagent registry sqlite store", () => {
         expect(queries).not.toHaveBeenCalled();
 
         const replaced = { ...run, model: "updated-model" };
-        persistSubagentRunsToDiskOrThrow(new Map([[run.runId, replaced]]), [run.runId]);
+        persistRegistryFixture(new Map([[run.runId, replaced]]), [run.runId]);
         expect(getSubagentRunsSnapshotForRead(new Map()).get(run.runId)).toMatchObject({
           model: replaced.model,
           task: run.task,
@@ -277,13 +279,13 @@ describe("subagent registry sqlite store", () => {
         ).toBe(replaced.model);
 
         const published = { ...replaced, model: "published-model" };
-        persistSubagentRunsToDiskOrThrow(new Map([[run.runId, published]]), [run.runId]);
+        persistRegistryFixture(new Map([[run.runId, published]]), [run.runId]);
         expect(
           getSubagentSessionListRunsSnapshotForSessions(new Map(), keys).get(run.runId)?.model,
         ).toBe(published.model);
         expect(getSubagentRunsSnapshotForRead(new Map()).get(run.runId)?.task).toBe(run.task);
         expect(loadSubagentRegistryFromSqlite().get(run.runId)?.model).toBe(published.model);
-        persistSubagentRunsToDiskOrThrow(new Map(), [run.runId]);
+        persistRegistryFixture(new Map(), [run.runId]);
         expect(getSubagentSessionListRunsSnapshotForRead(new Map(), keys).size).toBe(0);
         expect(getSubagentRunsSnapshotForRead(new Map()).size).toBe(0);
         expect(loadSubagentRegistryFromSqlite().size).toBe(0);
@@ -603,6 +605,7 @@ describe("subagent registry sqlite store", () => {
 
   it("loads a canonical lightweight session-list projection", async () => {
     const run = createRun({
+      childAgentId: "main",
       model: "openai/gpt-5.6",
       swarmRunId: "stable-collector",
       generation: 3,
@@ -632,6 +635,7 @@ describe("subagent registry sqlite store", () => {
       runId: run.runId,
       swarmRunId: "stable-collector",
       childSessionKey: run.childSessionKey,
+      childAgentId: "main",
       requesterSessionKey: run.requesterSessionKey,
       model: "openai/gpt-5.6",
       generation: 3,
@@ -655,6 +659,82 @@ describe("subagent registry sqlite store", () => {
       },
     });
   });
+
+  it.each([
+    { first: "invalid", last: "terminal", admitted: true },
+    { first: "terminal", last: "invalid", admitted: false },
+  ])("uses the last duplicate JSON key: $first then $last", ({ first, last, admitted }) => {
+    for (const completionTarget of [undefined, "parent"] as const) {
+      const run = createRun({ completionTarget });
+      saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
+      const { db } = openOpenClawStateDatabase();
+      const original = bindSubagentRunRecord(run).payload_json;
+      const payload = original
+        .replace('"execution":{', `"execution":{"status":"${first}"},"execution":{`)
+        .replace('"status":"terminal","startedAt"', `"status":"${last}","startedAt"`);
+      db.prepare("UPDATE subagent_runs SET payload_json = ? WHERE run_id = ?").run(
+        payload,
+        run.runId,
+      );
+      expect(loadSubagentRegistryFromSqlite().has(run.runId), "canonical row eligibility").toBe(
+        admitted,
+      );
+      expect(
+        loadSubagentSessionListRunsFromSqlite().has(run.runId),
+        "compact row eligibility",
+      ).toBe(admitted);
+    }
+  });
+
+  it.each([undefined, "parent"] as const)(
+    "omits retained bodies from every duplicate envelope (completion target: %s)",
+    (completionTarget) => {
+      const marker = "retained-duplicate-body:" + "x".repeat(2_048);
+      const run = createRun({
+        completionTarget,
+        task: marker,
+        execution: { status: "terminal", outcome: { status: "ok", error: marker } },
+        completion: { required: true, resultText: marker },
+        delivery: { status: "pending", lastError: marker },
+      });
+      saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
+      let payload = bindSubagentRunRecord(run)
+        .payload_json.replace('"execution":', '"execution":{"status":"invalid"},"execution":')
+        .replace('"completion":', '"completion":{"required":false},"completion":')
+        .replace('"delivery":', '"delivery":{"status":"failed"},"delivery":');
+      if (completionTarget === "parent") {
+        payload = payload.replace(
+          '"parentCompletion":',
+          '"parentCompletion":{"completionTarget":"parent"},"parentCompletion":',
+        );
+      }
+      const { db } = openOpenClawStateDatabase();
+      db.prepare("UPDATE subagent_runs SET payload_json = ? WHERE run_id = ?").run(
+        payload,
+        run.runId,
+      );
+      expect(loadSubagentRegistryFromSqlite().get(run.runId)).toMatchObject({
+        execution: { status: "terminal" },
+        delivery: { status: "pending" },
+      });
+      const parse = vi.spyOn(JSON, "parse");
+      try {
+        expect(loadSubagentSessionListRunsFromSqlite().get(run.runId)).toMatchObject({
+          execution: { status: "terminal" },
+          delivery: { status: "pending" },
+        });
+        expect(parse.mock.calls.some(([text]) => text.includes("retained-duplicate-body:"))).toBe(
+          false,
+        );
+      } finally {
+        parse.mockRestore();
+      }
+      expect(
+        db.prepare("SELECT payload_json FROM subagent_runs WHERE run_id = ?").get(run.runId)
+          ?.payload_json,
+      ).toBe(payload);
+    },
+  );
 
   it.each([undefined, "parent"] as const)(
     "retains yielded pause reason in cold compact reads (completion target: %s)",

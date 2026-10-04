@@ -41,7 +41,6 @@ import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -74,24 +73,14 @@ internal fun CronJobManagementPanel(
   var showDeleteConfirmation by remember(job.id) { mutableStateOf(false) }
 
   if (showDeleteConfirmation) {
-    AppAlertDialog(
-      onDismissRequest = { showDeleteConfirmation = false },
-      confirmButton = {
-        TextButton(
-          onClick = {
-            showDeleteConfirmation = false
-            onDelete()
-          },
-        ) {
-          Text(nativeString("Delete"))
-        }
+    AppConfirmationDialog(
+      title = nativeString("Delete automation?"),
+      confirmLabel = nativeString("Delete"),
+      onConfirm = {
+        showDeleteConfirmation = false
+        onDelete()
       },
-      dismissButton = {
-        TextButton(onClick = { showDeleteConfirmation = false }) {
-          Text(nativeString("Cancel"))
-        }
-      },
-      title = { Text(nativeString("Delete automation?")) },
+      onDismiss = { showDeleteConfirmation = false },
       text = { Text(nativeString("This permanently removes the automation and its schedule from the gateway.")) },
     )
   }

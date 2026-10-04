@@ -1,6 +1,6 @@
 // Control UI tests cover config form behavior.
 import { render } from "lit";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { i18n } from "../i18n/index.ts";
 import { configHintTranslationKey } from "../i18n/lib/config-hint-translation.ts";
 import { renderAnalyzedFormFixture } from "../test-helpers/config-form-fixtures.ts";
@@ -113,6 +113,82 @@ describe("config form renderer", () => {
     expect(container.textContent).toContain("Token used to authenticate with the Gateway.");
   });
 
+  it.each([
+    ["approvals", "Approvals", "Onaylar"],
+    ["telemetry", "Telemetry", "Telemetri"],
+    ["cloudWorkers", "Cloud Workers", "Bulut çalışanları"],
+  ])(
+    "localizes top-level %s hints and preserves missing-copy fallbacks",
+    async (key, label, translatedLabel) => {
+      const help = "Section help from the Gateway.";
+      const labelHash = configHintTranslationKey(key, "label", label).split(".").at(-1)!;
+      const helpHash = configHintTranslationKey(key, "help", help).split(".").at(-1)!;
+      i18n.registerTranslation("tr", {
+        configHints: {
+          [key]: {
+            label: { [labelHash]: translatedLabel },
+            help: { [helpHash]: "Bölüm açıklaması." },
+          },
+        },
+      });
+      const container = document.createElement("div");
+      const analysis = analyzeConfigSchema({
+        type: "object",
+        properties: {
+          [key]: {
+            type: "object",
+            description: "Schema description.",
+            properties: { enabled: { type: "boolean" } },
+          },
+        },
+      });
+      const props = { value: {}, onPatch: vi.fn(), uiHints: { [key]: { label, help } } };
+      const heading = () =>
+        container.querySelector("h2.settings-section__heading")?.textContent?.trim();
+      const description = () =>
+        container.querySelector(".settings-section__desc")?.textContent?.trim();
+
+      await i18n.setLocale("tr");
+      renderAnalyzedFormFixture(container, analysis, props);
+      expect(heading()).toBe(translatedLabel);
+      expect(description()).toBe("Bölüm açıklaması.");
+
+      await i18n.setLocale("en");
+      renderAnalyzedFormFixture(container, analysis, props);
+      expect(heading()).toBe(label);
+      expect(description()).toBe(help);
+
+      await i18n.setLocale("tr");
+      renderAnalyzedFormFixture(container, analysis, {
+        ...props,
+        uiHints: { [key]: { label, help: "Updated Gateway help without a translation." } },
+      });
+      expect(heading()).toBe(translatedLabel);
+      expect(description()).toBe("Updated Gateway help without a translation.");
+
+      renderAnalyzedFormFixture(container, analysis, { ...props, uiHints: {} });
+      expect(heading()).toBe(key === "cloudWorkers" ? "CloudWorkers" : label);
+      expect(description()).toBe("Schema description.");
+    },
+  );
+
+  it("keeps page-owned section copy ahead of Gateway hints", () => {
+    const container = document.createElement("div");
+    renderAnalyzedFormFixture(container, rootAnalysis, {
+      value: {},
+      activeSection: "gateway",
+      uiHints: { gateway: { label: "Runtime gateway label", help: "Runtime gateway help" } },
+      onPatch: vi.fn(),
+    });
+
+    expect(container.querySelector("h2.settings-section__heading")?.textContent?.trim()).toBe(
+      "Gateway",
+    );
+    expect(container.querySelector(".settings-section__desc")?.textContent?.trim()).toBe(
+      "Gateway server settings (port, auth, binding)",
+    );
+  });
+
   it("conceals core-classified encryption, private-key, and local service env values", () => {
     const container = document.createElement("div");
     const analysis = analyzeConfigSchema({
@@ -154,6 +230,55 @@ describe("config form renderer", () => {
     expect(container.innerHTML).not.toContain("encrypt-value");
     expect(container.innerHTML).not.toContain("private-value");
     expect(container.innerHTML).not.toContain("env-value");
+  });
+
+  it.each([
+    ["string", { type: "string" }],
+    ["string or SecretRef", { type: ["string", "object"] }],
+  ])("keeps a masked sensitive %s field editable across keystrokes", async (_name, tokenSchema) => {
+    const { userEvent } = await import("vitest/browser");
+    const container = document.createElement("div");
+    document.body.append(container);
+    onTestFinished(() => container.remove());
+    const analysis = analyzeConfigSchema({ type: "object", properties: { token: tokenSchema } });
+    const revealed = new Set<string>();
+    let value: Record<string, unknown> = {};
+    const draw = () =>
+      render(
+        renderConfigForm({
+          schema: analysis.schema,
+          unsupportedPaths: analysis.unsupportedPaths,
+          uiHints: { token: { sensitive: true } },
+          value,
+          maskSensitive: true,
+          isSensitivePathRevealed: (path) => revealed.has(path.join(".")),
+          onToggleSensitivePath: (path) => {
+            revealed.add(path.join("."));
+            draw();
+          },
+          onPatch: (_path, next) => {
+            value = { token: next };
+            draw();
+          },
+        }),
+        container,
+      );
+    const token = () =>
+      expectElement(
+        container.querySelector<HTMLInputElement>("input[aria-label='Token']"),
+        "token",
+      );
+
+    draw();
+    await userEvent.click(token());
+    await userEvent.keyboard("xy");
+    await userEvent.click(token());
+
+    expect(value).toEqual({ token: "xy" });
+    expect(document.activeElement).toBe(token());
+    expect(token().readOnly).toBe(false);
+    expect(token().type).toBe("password");
+    expect(revealed.size).toBe(0);
   });
 
   it("renders inputs and patches values", () => {

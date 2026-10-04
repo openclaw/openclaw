@@ -20,8 +20,8 @@ Read `extended-stable-backports.md`; a clean cherry-pick, green
 release checks, or a regenerated baseline does not by itself explain the
 maintenance risk.
 
-Use this path only for a `.33+` Gateway distribution from either of the two
-trailing completed months: the `openclaw` npm package, official npm plugins,
+Use this path only for a `.33+` Gateway distribution from the trailing
+completed month: the `openclaw` npm package, official npm plugins,
 and matching Docker Gateway images. Use
 `scripts/openclaw-npm-extended-stable-release.mjs` and the release workflows
 on pinned current `main` for command and validation requirements.
@@ -69,9 +69,31 @@ on pinned current `main` for command and validation requirements.
    Docker, and finalization. Docker-only recovery may dispatch from `main` with
    `publish_openclaw_npm=false` and `publish_docker_only=true`; that path does
    not attach evidence or finalize the release.
-8. From a clean current-`main` checkout, run
-   `node --import tsx scripts/openclaw-npm-postpublish-verify.ts YYYY.M.P`.
-   Verify package signatures, source commits, inventories, exact versions, and selectors.
+8. Keep separate clean checkouts for trusted current-main tooling and the exact
+   frozen release source. Install the trusted tooling checkout with
+   `pnpm install --frozen-lockfile`, then run its verifier with the frozen
+   release checkout as the working directory. Use a disposable release
+   worktree with no existing `node_modules`, then expose only the trusted
+   tooling install through the same link used by the publication workflow:
+
+   ```bash
+   VERSION=YYYY.M.P
+   TOOLING_ROOT=/absolute/path/to/clean-current-main
+   RELEASE_ROOT=/absolute/path/to/frozen-release-source
+   test "$(node -e 'console.log(require(process.argv[1]).version)' "$RELEASE_ROOT/package.json")" = "$VERSION"
+   test ! -e "$RELEASE_ROOT/node_modules"
+   ln -s "$TOOLING_ROOT/node_modules" "$RELEASE_ROOT/node_modules"
+   (
+     cd "$RELEASE_ROOT"
+     node --import tsx "$TOOLING_ROOT/scripts/openclaw-npm-postpublish-verify.ts" "$VERSION"
+   )
+   ```
+
+   The script, external dependencies, and TypeScript loader come from trusted
+   current main. The frozen `cwd` supplies its immutable source manifests and
+   workspace path aliases, matching the release workflow's `.release-harness`
+   layout. A different source version must fail closed. Verify package
+   signatures, source commits, inventories, exact versions, and selectors.
    To promote an already-published core version to `extended-stable`, use
    `promote_extended_stable` in the `openclaw/releases` dist-tag workflow
    from that repository's `main`. Follow
@@ -82,6 +104,7 @@ on pinned current `main` for command and validation requirements.
    patch range. The same action can select an older extended-stable version
    for rollback. Repair other selectors separately with
    approved credential-isolated tooling. Never republish a version.
+
 9. Require `Docker Release` to verify default, slim, browser, and architecture
    images in GHCR and Docker Hub, including attestations and platform versions.
    It must advance only

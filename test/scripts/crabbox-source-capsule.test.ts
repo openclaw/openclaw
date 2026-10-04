@@ -247,51 +247,37 @@ describe.skipIf(process.platform === "win32")("persistent Crabbox source capsule
     }
   });
 
-  it.each(["empty", "changed source"])(
-    "reuses unchanged mirror files after a same-ref %s commit and seals the new witness",
-    (change) => {
-      const f = fixture();
-      const first = f.prepare();
-      const stable = fileIdentity(join(first.directory, "stable.txt"));
-      first.cleanup();
-      if (change === "changed source") {
-        writeFileSync(join(f.repository, "change.txt"), "committed newer bytes\r\n");
-        f.git(f.repository, "add", "change.txt");
-      }
-      f.git(
-        f.repository,
-        "-c",
-        "commit.gpgsign=false",
-        "commit",
-        "--quiet",
-        "--allow-empty",
-        "-m",
-        "next head",
+  it("reuses unchanged mirror files after a same-ref source commit and seals the new witness", () => {
+    const f = fixture();
+    const first = f.prepare();
+    const stable = fileIdentity(join(first.directory, "stable.txt"));
+    first.cleanup();
+    writeFileSync(join(f.repository, "change.txt"), "committed newer bytes\r\n");
+    f.git(f.repository, "add", "change.txt");
+    f.git(f.repository, "-c", "commit.gpgsign=false", "commit", "--quiet", "-m", "next head");
+    const head = f.git(f.repository, "rev-parse", "HEAD");
+    expect(head).not.toBe(first.sourceSha);
+    const next = f.prepare();
+    try {
+      expect(next.directory).toBe(first.directory);
+      expect(fileIdentity(join(next.directory, "stable.txt"))).toEqual(stable);
+      expect(next.sourceSha).toBe(head);
+      expect(readFileSync(join(next.directory, "change.txt"), "utf8")).toBe(
+        "committed newer bytes\r\n",
       );
-      const head = f.git(f.repository, "rev-parse", "HEAD");
-      expect(head).not.toBe(first.sourceSha);
-      const next = f.prepare();
-      try {
-        expect(next.directory).toBe(first.directory);
-        expect(fileIdentity(join(next.directory, "stable.txt"))).toEqual(stable);
-        expect(next.sourceSha).toBe(head);
-        expect(readFileSync(join(next.directory, "change.txt"), "utf8")).toBe(
-          change === "changed source" ? "committed newer bytes\r\n" : "original bytes\n",
-        );
-        const receipt: unknown = JSON.parse(
-          readFileSync(join(next.staging.root, "staging.json"), "utf8"),
-        );
-        expect(receipt).toHaveProperty("witness", {
-          gitDir: f.git(f.repository, "rev-parse", "--path-format=absolute", "--git-common-dir"),
-          ref: "refs/heads/main",
-          commit: head,
-        });
-        f.expectColdEquivalent(next);
-      } finally {
-        next.cleanup();
-      }
-    },
-  );
+      const receipt: unknown = JSON.parse(
+        readFileSync(join(next.staging.root, "staging.json"), "utf8"),
+      );
+      expect(receipt).toHaveProperty("witness", {
+        gitDir: f.git(f.repository, "rev-parse", "--path-format=absolute", "--git-common-dir"),
+        ref: "refs/heads/main",
+        commit: head,
+      });
+      f.expectColdEquivalent(next);
+    } finally {
+      next.cleanup();
+    }
+  });
 
   it.each(["ref", "Git directory"])(
     "rebuilds the mirror when its retained source %s changes",

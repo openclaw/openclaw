@@ -8,6 +8,7 @@ import { getRuntimeConfig } from "../../config/config.js";
 import { canonicalizeMainSessionAlias } from "../../config/sessions/main-session.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
+import { resolveSqliteSessionKey } from "../../config/sessions/session-accessor.sqlite-scope.js";
 import { resolvePersistedSessionStoreOwnerForKey } from "../../config/sessions/session-store-owner.js";
 import { normalizeStoreSessionKey } from "../../config/sessions/store-entry.js";
 import type { SessionAcpMeta, SessionEntry } from "../../config/sessions/types.js";
@@ -25,23 +26,6 @@ export type AcpSessionStoreEntry = {
   storeReadFailed?: boolean;
 };
 
-/** Join the logical ACP key to its canonical SQLite entry without renaming ACP metadata. */
-function resolveStoreEntryForSessionKey(params: {
-  agentId?: string;
-  storePath: string;
-  sessionKey: string;
-  clone?: boolean;
-}): { storeSessionKey: string; entry?: SessionEntry } {
-  const storeSessionKey = normalizeStoreSessionKey(params.sessionKey);
-  if (!storeSessionKey) {
-    return { storeSessionKey };
-  }
-  return {
-    storeSessionKey,
-    entry: loadSessionEntryReadOnly({ ...params, sessionKey: storeSessionKey }),
-  };
-}
-
 /** Resolves the session store path that owns an ACP session key. */
 export function resolveSessionStorePathForAcp(params: {
   sessionKey: string;
@@ -50,7 +34,8 @@ export function resolveSessionStorePathForAcp(params: {
   env?: NodeJS.ProcessEnv;
 }): { cfg: OpenClawConfig; agentId: string; storePath: string; storeSessionKey: string } {
   const cfg = params.cfg ?? getRuntimeConfig();
-  const parsed = parseAgentSessionKey(params.sessionKey);
+  const sessionKey = normalizeStoreSessionKey(params.sessionKey);
+  const parsed = parseAgentSessionKey(sessionKey);
   const requestedAgentId = params.agentId?.trim() ? normalizeAgentId(params.agentId) : undefined;
   const parsedAgentId = parsed?.agentId ? normalizeAgentId(parsed.agentId) : undefined;
   if (requestedAgentId && parsedAgentId && requestedAgentId !== parsedAgentId) {
@@ -59,7 +44,7 @@ export function resolveSessionStorePathForAcp(params: {
       hint: `Agent "${requestedAgentId}" does not own agent-scoped session key "${params.sessionKey}".`,
     });
   }
-  const persistedStoreOwner = resolvePersistedSessionStoreOwnerForKey(cfg, params.sessionKey);
+  const persistedStoreOwner = resolvePersistedSessionStoreOwnerForKey(cfg, sessionKey);
   const agentId = requestedAgentId ?? parsedAgentId;
   if (
     requestedAgentId &&
@@ -87,11 +72,10 @@ export function resolveSessionStorePathForAcp(params: {
       hint: "Pass an explicit agent owner for this ACP session.",
     });
   }
-  const storeSessionKey = canonicalizeMainSessionAlias({
-    cfg,
-    sessionKey: params.sessionKey,
-    agentId: resolvedAgentId,
-  });
+  const storeSessionKey = resolveSqliteSessionKey(
+    canonicalizeMainSessionAlias({ cfg, sessionKey, agentId: resolvedAgentId }),
+    resolvedAgentId,
+  );
   const canonicalOwner = resolvePersistedSessionStoreOwnerForKey(cfg, storeSessionKey);
   if (
     canonicalOwner.kind === "retired" ||
@@ -133,19 +117,17 @@ export function readSessionEntryFromStore(params: {
     agentId,
     storePath,
     storeSessionKey: canonicalKey,
-  } = resolveSessionStorePathForAcp({
-    sessionKey: params.sessionKey,
-    agentId: params.agentId,
-    cfg: params.cfg,
-    env: params.env,
-  });
+  } = resolveSessionStorePathForAcp(params);
   try {
-    const { storeSessionKey, entry } = resolveStoreEntryForSessionKey({
-      ...(agentId ? { agentId } : {}),
-      storePath,
-      sessionKey: canonicalKey,
-      ...(params.clone === false ? { clone: false } : {}),
-    });
+    const storeSessionKey = normalizeStoreSessionKey(canonicalKey);
+    const entry = storeSessionKey
+      ? loadSessionEntryReadOnly({
+          ...(agentId ? { agentId } : {}),
+          storePath,
+          sessionKey: storeSessionKey,
+          ...(params.clone === false ? { clone: false } : {}),
+        })
+      : undefined;
     return { cfg, agentId, storePath, storeSessionKey, entry };
   } catch {
     return {

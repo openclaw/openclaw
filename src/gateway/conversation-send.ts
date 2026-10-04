@@ -5,9 +5,8 @@ import {
   type ConversationDeliveryRecord,
 } from "../config/sessions/conversation-delivery-store.js";
 import {
-  resolveConversation,
-  resolveConversationRegistryScope,
-  runConversationDatabaseWrite,
+  readConversation,
+  prepareConversationRegistryScope,
 } from "../config/sessions/conversation-registry.js";
 import { resolveConversationRouteFingerprint } from "../config/sessions/conversation-route-fingerprint.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -37,20 +36,19 @@ export async function runGatewayConversationSend(params: {
   message: string;
   signal?: AbortSignal;
 }): Promise<ConversationSendResult> {
-  const scope = resolveConversationRegistryScope(params);
+  const scope = await prepareConversationRegistryScope(params);
+  params.signal?.throwIfAborted();
   try {
-    const operation: ConversationDeliveryRecord | undefined = await runConversationDatabaseWrite(
-      scope,
-      (writeScope) =>
-        getConversationDeliveryOperation(writeScope, params.operationId, {
-          operationKind: "send",
-          conversationRef: params.conversationRef,
-          ...(params.sourceSessionKey ? { sourceSessionKey: params.sourceSessionKey } : {}),
-          message: params.message,
-        }),
-    );
+    const operation: ConversationDeliveryRecord | undefined =
+      await getConversationDeliveryOperation(scope, params.operationId, {
+        operationKind: "send",
+        conversationRef: params.conversationRef,
+        ...(params.sourceSessionKey ? { sourceSessionKey: params.sourceSessionKey } : {}),
+        message: params.message,
+      });
 
-    const conversation = resolveConversation(scope, params.conversationRef);
+    const conversation = await readConversation(scope, params.conversationRef);
+    params.signal?.throwIfAborted();
     if (!conversation) {
       throw new ConversationInputError(
         `Conversation not found: ${params.conversationRef} (use conversations_list)`,

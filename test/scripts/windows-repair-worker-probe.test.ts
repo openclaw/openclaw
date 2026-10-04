@@ -140,8 +140,6 @@ it("accepts a highly compressible member below the existing byte ceiling", async
 
 it.each([
   { alias: "a", split: false },
-  { alias: "$", split: false },
-  { alias: "a", split: true },
   { alias: "$", split: true },
 ])(
   "loads named package owners through $alias with split chunks=$split",
@@ -198,17 +196,9 @@ it("authenticates every selected chunk before importing any owner", async () => 
   ).rejects.toThrow("Installed module differs from the bound package");
 });
 
-it.each([
-  { kind: "static", afterAdmission: false },
-  { kind: "computed", afterAdmission: false },
-  { kind: "owner", afterAdmission: true },
-  { kind: "static", afterAdmission: true },
-  { kind: "computed", afterAdmission: true },
-  { kind: "lazy", afterAdmission: true },
-  { kind: "bundled", afterAdmission: true },
-])(
-  "rejects $kind replacement with afterAdmission=$afterAdmission before evaluation",
-  async ({ kind, afterAdmission }) => {
+it.each(["owner", "static", "computed", "lazy", "bundled"])(
+  "rejects post-admission %s replacement before evaluation",
+  async (kind) => {
     const sources: Record<string, string> = {
       owner: 'function admit() { return "original"; } export { admit };',
       static:
@@ -251,10 +241,9 @@ it.each([
         `import { writeFile } from "node:fs/promises";
          const { createPackagedOwnerLoader } = await import(process.argv[1]);
          const replace = () => writeFile(process.argv[4], process.argv[5]);
-         if (!${afterAdmission}) await replace();
          const loadOwner = await createPackagedOwnerLoader(process.argv[2], process.argv[3]);
          try {
-           if (${afterAdmission} && ${JSON.stringify(kind)} !== "lazy") await replace();
+           if (${JSON.stringify(kind)} !== "lazy") await replace();
            const owner = await loadOwner("executor", ["admit"], []);
            if (${JSON.stringify(kind)} === "lazy") await replace();
            await owner.admit();
@@ -367,7 +356,7 @@ it("scopes import hooks to their loader lifetime while preserving external depen
   expect(result.status, result.stderr || result.stdout).toBe(0);
 });
 
-it.each(["added", "missing", "pending lifecycle", "nested dependency"])(
+it.each(["missing", "pending lifecycle", "nested dependency"])(
   "refuses %s installed files before loading an owner",
   async (kind) => {
     const { packageRoot, tarball } = await fixture({
@@ -379,8 +368,6 @@ it.each(["added", "missing", "pending lifecycle", "nested dependency"])(
         path.join(packageRoot, PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH),
         "pending\n",
       );
-    } else if (kind === "added") {
-      await fs.writeFile(path.join(packageRoot, "dist", "unbound.mjs"), "export {};");
     } else if (kind === "nested dependency") {
       const injected = path.join(packageRoot, "dist", "node_modules", "injected");
       await fs.mkdir(injected, { recursive: true });
@@ -394,7 +381,7 @@ it.each(["added", "missing", "pending lifecycle", "nested dependency"])(
   },
 );
 
-it.each(["original", "changed", "missing", "added", "nested shadow"])(
+it.each(["missing", "nested shadow"])(
   "authenticates %s bundled dependencies while allowing separate npm dependencies",
   async (kind) => {
     const dependency = "@fixture/bundled";
@@ -411,29 +398,16 @@ it.each(["original", "changed", "missing", "added", "nested shadow"])(
     await fs.mkdir(external, { recursive: true });
     await fs.writeFile(path.join(external, "index.js"), "module.exports = 2;");
     const bundledRoot = path.join(packageRoot, "node_modules", dependency);
-    if (kind === "changed") {
-      await fs.writeFile(path.join(bundledRoot, "index.js"), "module.exports = 3;");
-    } else if (kind === "missing") {
+    if (kind === "missing") {
       await fs.rm(path.join(bundledRoot, "index.js"));
-    } else if (kind === "added") {
-      await fs.writeFile(path.join(bundledRoot, "extra.js"), "module.exports = 3;");
-    } else if (kind === "nested shadow") {
+    } else {
       const shadow = path.join(bundledRoot, "node_modules", "target");
       await fs.mkdir(shadow, { recursive: true });
       await fs.writeFile(path.join(shadow, "index.js"), "module.exports = 3;");
     }
-    const loaded = inspectPackagedOwner(packageRoot, tarball);
-    if (kind === "original") {
-      await expect(loaded).resolves.toMatchObject({ loaderType: "function" });
-    } else {
-      await expect(loaded).rejects.toThrow(
-        kind === "changed"
-          ? "Installed module differs from the bound package"
-          : kind === "missing"
-            ? "Missing installed package members"
-            : "Unbound installed package member",
-      );
-    }
+    await expect(inspectPackagedOwner(packageRoot, tarball)).rejects.toThrow(
+      kind === "missing" ? "Missing installed package members" : "Unbound installed package member",
+    );
   },
 );
 

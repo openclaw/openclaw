@@ -5,7 +5,7 @@
  */
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { parseLegacyCredentialEntry } from "./auth-profiles/persisted.js";
+import { parseLegacyCredentialEntry } from "./auth-profiles/legacy-flat-credential.js";
 import type { OAuthCredential } from "./auth-profiles/types.js";
 import type { ProviderAuthAliasLookupParams } from "./provider-auth-aliases.js";
 

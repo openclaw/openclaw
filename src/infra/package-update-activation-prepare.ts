@@ -34,11 +34,13 @@ import {
 } from "./package-update-activation-sqlite.js";
 import {
   createPackageIntegrityReader,
+  isPackageIntegrityResourceError,
   type PackageIntegrityFingerprint,
 } from "./package-update-integrity.js";
 import type { PackageActivationOptions } from "./package-update-swap-contract.js";
 import { isSupportedNodeVersion } from "./runtime-guard.js";
 import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
+import { resolveUpdateInstallRoot } from "./update-install-root.js";
 
 export type PackageActivationPreparation = {
   options: PackageActivationOptions;
@@ -107,14 +109,21 @@ export async function preparePackageActivationJournal(
   assertCurrent();
   const authority = captureUpdateCommandExecutorAuthority(params.options.fence);
   assertCurrent();
-  if (process.platform === "win32" || authority.installKey !== params.liveRoot) {
+  const liveRoot = resolveUpdateInstallRoot(params.liveRoot);
+  if (process.platform === "win32" || authority.installKey !== liveRoot) {
     throw new Error("Package publication recovery requires its original POSIX npm directory.");
   }
   const anchor = resolvePackageActivationAnchor(authority.installKey);
   const parent = path.dirname(anchor);
-  if (fs.realpathSync(parent) !== parent || fs.realpathSync(params.binDir) !== params.binDir) {
+  if (fs.realpathSync(parent) !== parent) {
     throw new Error("Package publication recovery requires canonical installation parents.");
   }
+  const stageRoot = resolveUpdateInstallRoot(params.stageRoot);
+  const launcherRoot = resolveUpdateInstallRoot(params.launcherRoot);
+  const binDir = resolveUpdateInstallRoot(params.binDir);
+  const previousLauncherRoot = params.previousLauncherRoot
+    ? resolveUpdateInstallRoot(params.previousLauncherRoot)
+    : undefined;
   const runtime = params.options.runtime;
   const node = fs.realpathSync(runtime.path);
   const assertRuntime = () => {
@@ -123,7 +132,7 @@ export async function preparePackageActivationJournal(
     }
   };
   assertRuntime();
-  for (const root of [params.liveRoot, params.stageRoot, anchor]) {
+  for (const root of [liveRoot, stageRoot, anchor]) {
     if (node === root || node.startsWith(`${root}${path.sep}`)) {
       throw new Error("Recovery requires an external Node executable.");
     }
@@ -150,12 +159,28 @@ export async function preparePackageActivationJournal(
   }
   assertCurrent();
   assertRuntime();
+  let candidate: PackageActivationDescriptor["candidate"];
+  try {
+    candidate = await createPackageIntegrityReader().tree(stageRoot);
+  } catch (error) {
+    if (!isPackageIntegrityResourceError(error)) {
+      throw error;
+    }
+    const identity = await createPackageIntegrityReader().directoryIdentity(stageRoot);
+    if (!identity) {
+      throw error;
+    }
+    candidate = identity;
+    params.options.onWarning?.(
+      "candidate package fingerprint incomplete; activation requires the directory identity, package version and launchers; full package contents are unverified",
+    );
+  }
+  // Optional content verification must not consume the launcher reader's deadline.
   const reader = createPackageIntegrityReader();
-  const candidate = await reader.tree(params.stageRoot);
   const launchers = [];
   for (const entry of params.launchers) {
-    const source = path.join(params.launcherRoot, entry.name);
-    const destination = path.join(params.binDir, entry.name);
+    const source = path.join(launcherRoot, entry.name);
+    const destination = path.join(binDir, entry.name);
     launchers.push({
       ...entry,
       candidate: encodePackageActivationLauncher(await reader.launcher(source)),
@@ -165,7 +190,7 @@ export async function preparePackageActivationJournal(
     });
   }
   const parentIdentity = packageActivationIdentity(parent, true);
-  const binIdentity = packageActivationIdentity(params.binDir, true);
+  const binIdentity = packageActivationIdentity(binDir, true);
   if (
     candidate.identity.split(":")[0] !== parentIdentity.split(":")[0] ||
     params.previous.identity.split(":")[0] !== parentIdentity.split(":")[0]
@@ -185,18 +210,18 @@ export async function preparePackageActivationJournal(
     throw new Error("An unresolved package operation already owns this installation.");
   }
   const preparation: PackageActivationDescriptor["preparation"] = [
-    { name: "candidate" as const, source: params.stageRoot, identity: candidate.identity },
+    { name: "candidate" as const, source: stageRoot, identity: candidate.identity },
     {
       name: "launchers" as const,
-      source: params.launcherRoot,
-      identity: packageActivationIdentity(params.launcherRoot, true),
+      source: launcherRoot,
+      identity: packageActivationIdentity(launcherRoot, true),
     },
-    ...(params.previousLauncherRoot
+    ...(previousLauncherRoot
       ? [
           {
             name: "previous-launchers" as const,
-            source: params.previousLauncherRoot,
-            identity: packageActivationIdentity(params.previousLauncherRoot, true),
+            source: previousLauncherRoot,
+            identity: packageActivationIdentity(previousLauncherRoot, true),
           },
         ]
       : []),
@@ -216,13 +241,11 @@ export async function preparePackageActivationJournal(
   // These objects remain inside the existing stage cleanup owner's prefix
   // until the stable slot records their exact identities. A failed replacement
   // cannot create blocking artifacts over the prior completion receipt.
-  const stagedAnchor = await fsp.mkdtemp(
-    path.join(path.dirname(params.stageRoot), ".activation-anchor-"),
-  );
+  const stagedAnchor = await fsp.mkdtemp(path.join(path.dirname(stageRoot), ".activation-anchor-"));
   const anchorIdentity = packageActivationIdentity(stagedAnchor, true);
   const stagedControl = prior
     ? undefined
-    : await fsp.mkdtemp(path.join(path.dirname(params.stageRoot), ".activation-control-"));
+    : await fsp.mkdtemp(path.join(path.dirname(stageRoot), ".activation-control-"));
   const stagedHelper = stagedControl
     ? path.join(stagedControl, "recovery.mjs")
     : `${stagedAnchor}.recovery.mjs`;
@@ -273,14 +296,14 @@ export async function preparePackageActivationJournal(
       stagedControl ?? resolvePackageActivationControl(anchor),
       true,
     ),
-    binDir: params.binDir,
+    binDir,
     binIdentity,
-    originalStageRoot: params.stageRoot,
+    originalStageRoot: stageRoot,
     previous: params.previous,
     candidate,
-    launcherRootIdentity: packageActivationIdentity(params.launcherRoot, true),
-    previousLauncherRootIdentity: params.previousLauncherRoot
-      ? packageActivationIdentity(params.previousLauncherRoot, true)
+    launcherRootIdentity: packageActivationIdentity(launcherRoot, true),
+    previousLauncherRootIdentity: previousLauncherRoot
+      ? packageActivationIdentity(previousLauncherRoot, true)
       : null,
     helperDigest,
     helperIdentity,

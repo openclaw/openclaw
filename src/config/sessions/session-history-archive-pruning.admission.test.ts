@@ -352,107 +352,84 @@ it("rejects another agent's archive without changing its canonical row or file",
   expect(String(failure)).toContain("other");
 });
 
-it("native page reclamation does not wait for a pinned reader with free pages", async () => {
-  const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
-  database.db.exec("PRAGMA wal_autocheckpoint = 0");
-  database.db
-    .prepare("INSERT INTO cache_entries(scope, key, blob, updated_at) VALUES (?, ?, ?, ?)")
-    .run("checkpoint-proof", "padding", Buffer.alloc(4 * 1024 * 1024), 1);
-  database.db.prepare("DELETE FROM cache_entries WHERE scope = ?").run("checkpoint-proof");
-  expect(database.walMaintenance.checkpoint()).toBe(true);
-  const busyTimeout = database.db.prepare("PRAGMA busy_timeout").get();
-  const reader = realOpen(database.path, { readOnly: true });
-  try {
-    reader.exec("BEGIN");
-    reader.prepare("SELECT COUNT(*) FROM cache_entries").get();
+it.each(["reader", "writer"] as const)(
+  "native page reclamation defers without waiting for a pinned %s",
+  (peerKind) => {
+    const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
+    database.db.exec("PRAGMA wal_autocheckpoint = 0");
     database.db
       .prepare("INSERT INTO cache_entries(scope, key, blob, updated_at) VALUES (?, ?, ?, ?)")
-      .run("checkpoint-proof", "new-frame", Buffer.from("retained"), 2);
-    const freePages = () =>
-      Number(database.db.prepare("PRAGMA freelist_count").get()?.freelist_count);
-    const before = freePages();
-    expect(before).toBeGreaterThan(512);
-    const startedAt = performance.now();
-    const blocked = database.walMaintenance.reclaimFreePages();
-    expect(performance.now() - startedAt).toBeLessThan(1_000);
-    expect(reader.isTransaction).toBe(true);
-    expect(freePages()).toBe(before);
-    expect(blocked).toMatchObject({ checkpointCalls: 2, checkpointIncomplete: 1 });
-    expect(database.db.prepare("PRAGMA busy_timeout").get()).toEqual(busyTimeout);
-    reader.exec("ROLLBACK");
-    for (let remaining = freePages(); remaining > 0; remaining = freePages()) {
-      database.walMaintenance.reclaimFreePages();
-      expect(freePages()).toBeLessThan(remaining);
-    }
-    expect(freePages()).toBe(0);
-    expect(
-      database.db
-        .prepare("SELECT blob FROM cache_entries WHERE scope = ? AND key = ?")
-        .get("checkpoint-proof", "new-frame")?.blob,
-    ).toEqual(new Uint8Array(Buffer.from("retained")));
+      .run("checkpoint-proof", "padding", Buffer.alloc(4 * 1024 * 1024), 1);
+    database.db.prepare("DELETE FROM cache_entries WHERE scope = ?").run("checkpoint-proof");
     expect(database.walMaintenance.checkpoint()).toBe(true);
-    expect(fs.statSync(database.path + "-wal").size).toBe(0);
-    expect(database.db.prepare("PRAGMA busy_timeout").get()).toEqual(busyTimeout);
-  } finally {
-    if (reader.isTransaction) {
-      reader.exec("ROLLBACK");
+    const busyTimeout = database.db.prepare("PRAGMA busy_timeout").get();
+    const peer = realOpen(database.path, { readOnly: peerKind === "reader" });
+    let restoreCheckpoint: (() => void) | undefined;
+    try {
+      if (peerKind === "reader") {
+        peer.exec("BEGIN");
+        peer.prepare("SELECT COUNT(*) FROM cache_entries").get();
+        database.db
+          .prepare("INSERT INTO cache_entries(scope, key, blob, updated_at) VALUES (?, ?, ?, ?)")
+          .run("checkpoint-proof", "new-frame", Buffer.from("retained"), 2);
+      } else {
+        const prepare = database.db.prepare.bind(database.db);
+        let checkpointObserved = false;
+        const checkpoint = vi.spyOn(database.db, "prepare").mockImplementation((sql) => {
+          const statement = prepare(sql);
+          if (sql === "PRAGMA wal_checkpoint(TRUNCATE);" && !checkpointObserved) {
+            const get = statement.get.bind(statement);
+            statement.get = () => {
+              const row = get();
+              checkpointObserved = true;
+              peer.exec("BEGIN IMMEDIATE");
+              return row;
+            };
+          }
+          return statement;
+        });
+        restoreCheckpoint = () => checkpoint.mockRestore();
+      }
+      const freePages = () =>
+        Number(database.db.prepare("PRAGMA freelist_count").get()?.freelist_count);
+      const before = freePages();
+      expect(before).toBeGreaterThan(512);
+      const startedAt = performance.now();
+      const blocked = database.walMaintenance.reclaimFreePages();
+      expect(performance.now() - startedAt).toBeLessThan(1_000);
+      expect(peer.isTransaction).toBe(true);
+      expect(freePages()).toBe(before);
+      if (peerKind === "reader") {
+        expect(blocked).toMatchObject({ checkpointCalls: 2, checkpointIncomplete: 1 });
+      } else {
+        expect(database.db.isTransaction).toBe(false);
+      }
+      expect(database.db.prepare("PRAGMA busy_timeout").get()).toEqual(busyTimeout);
+      peer.exec("ROLLBACK");
+      for (let remaining = freePages(); remaining > 0; remaining = freePages()) {
+        database.walMaintenance.reclaimFreePages();
+        expect(freePages()).toBeLessThan(remaining);
+      }
+      expect(freePages()).toBe(0);
+      if (peerKind === "reader") {
+        expect(
+          database.db
+            .prepare("SELECT blob FROM cache_entries WHERE scope = ? AND key = ?")
+            .get("checkpoint-proof", "new-frame")?.blob,
+        ).toEqual(new Uint8Array(Buffer.from("retained")));
+        expect(database.walMaintenance.checkpoint()).toBe(true);
+        expect(fs.statSync(database.path + "-wal").size).toBe(0);
+      }
+      expect(database.db.prepare("PRAGMA busy_timeout").get()).toEqual(busyTimeout);
+    } finally {
+      restoreCheckpoint?.();
+      if (peer.isTransaction) {
+        peer.exec("ROLLBACK");
+      }
+      peer.close();
     }
-    reader.close();
-  }
-});
-
-it("native vacuum defers when another writer acquires its lock after checkpoint", () => {
-  const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
-  database.db.exec("PRAGMA wal_autocheckpoint = 0");
-  database.db
-    .prepare("INSERT INTO cache_entries(scope, key, blob, updated_at) VALUES (?, ?, ?, ?)")
-    .run("vacuum-admission", "padding", Buffer.alloc(4 * 1024 * 1024), 1);
-  database.db.prepare("DELETE FROM cache_entries WHERE scope = ?").run("vacuum-admission");
-  expect(database.walMaintenance.checkpoint()).toBe(true);
-  const freePages = () =>
-    Number(database.db.prepare("PRAGMA freelist_count").get()?.freelist_count);
-  const before = freePages();
-  expect(before).toBeGreaterThan(512);
-  const busyTimeout = database.db.prepare("PRAGMA busy_timeout").get();
-  const writer = realOpen(database.path);
-  const prepare = database.db.prepare.bind(database.db);
-  let checkpointObserved = false;
-  const checkpoint = vi.spyOn(database.db, "prepare").mockImplementation((sql) => {
-    const statement = prepare(sql);
-    if (sql === "PRAGMA wal_checkpoint(TRUNCATE);" && !checkpointObserved) {
-      const get = statement.get.bind(statement);
-      statement.get = () => {
-        const row = get();
-        checkpointObserved = true;
-        writer.exec("BEGIN IMMEDIATE");
-        return row;
-      };
-    }
-    return statement;
-  });
-  try {
-    const startedAt = performance.now();
-    database.walMaintenance.reclaimFreePages();
-    expect(performance.now() - startedAt).toBeLessThan(1_000);
-    expect(writer.isTransaction).toBe(true);
-    expect(database.db.isTransaction).toBe(false);
-    expect(freePages()).toBe(before);
-    expect(database.db.prepare("PRAGMA busy_timeout").get()).toEqual(busyTimeout);
-    writer.exec("ROLLBACK");
-    for (let remaining = freePages(); remaining > 0; remaining = freePages()) {
-      database.walMaintenance.reclaimFreePages();
-      expect(freePages()).toBeLessThan(remaining);
-    }
-    expect(freePages()).toBe(0);
-    expect(database.db.prepare("PRAGMA busy_timeout").get()).toEqual(busyTimeout);
-  } finally {
-    checkpoint.mockRestore();
-    if (writer.isTransaction) {
-      writer.exec("ROLLBACK");
-    }
-    writer.close();
-  }
-});
+  },
+);
 
 it("bounds broker page reclamation and stops when its owner is revoked between units", async () => {
   const options = { agentId: "main", env: state.env };

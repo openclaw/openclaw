@@ -227,6 +227,7 @@ describe("subagent registry scoped reads", () => {
       expect(mocks.getSubagentRunsSnapshotForChildSession).toHaveBeenCalledWith(
         mocks.liveRuns,
         childSessionKey,
+        undefined,
       );
       expect(mocks.getSubagentRunsSnapshotForRead).not.toHaveBeenCalled();
     },

@@ -11,7 +11,6 @@ import {
 import { wrapToolWithAbortSignal } from "../../agent-tools.abort.js";
 import { resolveToolLoopDetectionConfig } from "../../agent-tools.js";
 import { isCodeModeExecTool } from "../../code-mode-control-tools.js";
-import { addClientToolsToCodeModeCatalog } from "../../code-mode.js";
 import { isCoreToolResultMediaTrustedName } from "../../embedded-agent-tool-media.js";
 import type { AgentTool } from "../../runtime/index.js";
 import {
@@ -23,7 +22,8 @@ import {
   collectSideEffectToolOwners,
   isAgentToolReplaySafe,
 } from "../../tool-replay-safety.js";
-import { addClientToolsToToolSearchCatalog, type ToolSearchCatalogRef } from "../../tool-search.js";
+import { addClientToolsToToolCatalog } from "../../tool-search-catalog.js";
+import { resolveToolSearchConfig, type ToolSearchCatalogRef } from "../../tool-search.js";
 import { log } from "../logger.js";
 import {
   AGENT_RESERVED_TOOL_NAMES,
@@ -157,20 +157,11 @@ export function prepareEmbeddedAttemptClientTools(params: {
           ),
       },
     );
-    const addClientToolsToCatalog = params.codeModeControlsEnabledForRun
-      ? addClientToolsToCodeModeCatalog
-      : addClientToolsToToolSearchCatalog;
-    const clientToolSearch = addClientToolsToCatalog({
+    const search = resolveToolSearchConfig(params.toolSearchRuntimeConfig);
+    const clientToolSearch = addClientToolsToToolCatalog({
       tools: clientToolDefs,
-      // Activation was resolved for this attempt; only Tool Search still needs
-      // its runtime configuration to choose the catalog layout.
-      config: params.codeModeControlsEnabledForRun
-        ? params.attempt.config
-        : params.toolSearchRuntimeConfig,
-      sessionId: params.attempt.sessionId,
-      sessionKey: params.sandboxSessionKey,
-      agentId: params.sessionAgentId,
-      runId: params.attempt.runId,
+      enabled:
+        params.codeModeControlsEnabledForRun || (search.enabled && search.mode !== "directory"),
       catalogRef: params.toolSearchCatalogRef,
     });
     clientToolDefs = clientToolSearch.tools;

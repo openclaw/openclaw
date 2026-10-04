@@ -110,8 +110,9 @@ describe("devices exec approvals rendering", () => {
     const container = renderDevicesContainer({
       configForm: {
         agents: {
+          defaults: { systemAgent: { agentId: "main" } },
           entries: {
-            main: { name: "Main", default: true },
+            main: { name: "Main" },
             research: { name: "Research" },
           },
         },
@@ -262,8 +263,9 @@ describe("devices agent bindings", () => {
       ],
       configForm: {
         agents: {
+          defaults: { systemAgent: { agentId: "MAIN" } },
           entries: {
-            MAIN: { default: true },
+            MAIN: {},
             research: {},
           },
         },
@@ -315,8 +317,9 @@ describe("devices agent bindings", () => {
     const configForm = {
       tools: { exec: { node: defaultRef } },
       agents: {
+        defaults: { systemAgent: { agentId: "main" } },
         entries: {
-          main: { default: true },
+          main: {},
           research: { name: "Research", tools: { exec: { node: agentRef } } },
         },
       },

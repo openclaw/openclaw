@@ -97,6 +97,66 @@ describe("openclaw npm resume run identity", () => {
     });
   });
 
+  it("recovers a provenance-backed publish whose only failure was delayed registry readback", () => {
+    const jobs = [
+      { conclusion: "success", name: "validate_publish_request", steps: [] },
+      {
+        conclusion: "failure",
+        name: "publish_openclaw_npm",
+        steps: [
+          { conclusion: "success", name: "Publish" },
+          { conclusion: "failure", name: "Verify extended-stable registry readback" },
+        ],
+      },
+    ];
+    const runGh = publicationRun({ conclusion: "failure" });
+    runGh.mockImplementation((args: string[]) => {
+      if (args[0] === "run") {
+        return JSON.stringify(jobs);
+      }
+      const endpoint = args[1];
+      if (endpoint === "repos/openclaw/openclaw/actions/runs/456/attempts/1") {
+        return JSON.stringify({ ...fixture().run, conclusion: "failure" });
+      }
+      if (endpoint === "repos/openclaw/openclaw/actions/workflows/openclaw-npm-release.yml") {
+        return JSON.stringify({ id: 101 });
+      }
+      if (endpoint === `repos/openclaw/openclaw/git/ref/tags/${BRANCH}`) {
+        return JSON.stringify({ object: { sha: SHA, type: "commit" } });
+      }
+      throw new Error(`Unexpected gh invocation: ${args.join(" ")}`);
+    });
+
+    expect(recover(publicationEvidence(), runGh)).toMatchObject({
+      runId: "456",
+      runAttempt: 1,
+      workflowRef: `refs/tags/${BRANCH}`,
+      workflowSha: SHA,
+    });
+  });
+
+  it("rejects delayed readback recovery when another job failed", () => {
+    expect(() =>
+      validateOpenClawNpmResumeRun(
+        fixture({
+          run: { ...fixture().run, conclusion: "failure" },
+          jobs: [
+            { conclusion: "success", name: "validate_publish_request" },
+            {
+              conclusion: "failure",
+              name: "publish_openclaw_npm",
+              steps: [
+                { conclusion: "success", name: "Publish" },
+                { conclusion: "failure", name: "Verify extended-stable registry readback" },
+              ],
+            },
+            { conclusion: "failure", name: "unexpected_failure" },
+          ],
+        }),
+      ),
+    ).toThrow("untrusted workflow identity");
+  });
+
   it.each(["success", "failure"])(
     "retains the signed attempt after a later %s rerun",
     (conclusion) => {

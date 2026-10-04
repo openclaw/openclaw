@@ -169,11 +169,11 @@ function externalContentStamp(provider: string): WebSearchExternalContent {
 function normalizeCitations(
   value: unknown,
   budget: WebSearchOutputBudget,
-): Array<{ url: string; title?: string }> | undefined {
+): Array<Static<typeof WebSearchCitationSchema>> | undefined {
   if (!Array.isArray(value)) {
     return undefined;
   }
-  const citations: Array<{ url: string; title?: string }> = [];
+  const citations: Array<Static<typeof WebSearchCitationSchema>> = [];
   let scanned = 0;
   // A citation url must actually parse as http(s); free text in a url slot
   // would bypass the untrusted-content envelope.

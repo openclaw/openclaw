@@ -19,12 +19,7 @@ import {
 } from "../../../config/legacy.shared.js";
 import { mergeMissing } from "../../../config/merge-missing.js";
 import { isBlockedObjectKey } from "../../../infra/prototype-keys.js";
-import { LEGACY_CONFIG_MIGRATIONS_RUNTIME_AGENT_POLICY } from "./legacy-config-migrations.runtime.agent-policy.js";
-import {
-  someAgentEntry,
-  visitAgentConfigScopes,
-  visitAgentEntries,
-} from "./legacy-config-record-shared.js";
+import { someAgentEntry, visitAgentEntries } from "./legacy-config-record-shared.js";
 
 const LEGACY_MEMORY_SEARCH_FIELD_MAPPINGS = [
   { legacyKey: "chunkSize", parentKey: "chunking", canonicalKey: "tokens" },
@@ -72,26 +67,6 @@ const LEGACY_MEMORY_SEARCH_AUTO_PROVIDER_RULES: LegacyConfigRule[] = [
       someAgentEntry(value, (agent) =>
         isLegacyMemorySearchAutoProvider(getAgentMemorySearchRecord(agent)?.provider),
       ),
-  },
-];
-
-const LEGACY_MEMORY_SEARCH_STORE_PATH_RULES: LegacyConfigRule[] = [
-  {
-    path: ["memorySearch", "store", "path"],
-    message:
-      'memorySearch.store.path is legacy; memory indexes now live in each agent database. Run "openclaw doctor --fix".',
-  },
-  {
-    path: ["memory", "search", "store", "path"],
-    message:
-      'memory.search.store.path is legacy; memory indexes now live in each agent database. Run "openclaw doctor --fix".',
-  },
-  {
-    path: ["agents"],
-    message:
-      'agents.entries.*.memorySearch.store.path is legacy; memory indexes now live in each agent database. Run "openclaw doctor --fix".',
-    match: (value) =>
-      someAgentEntry(value, (agent) => hasMemorySearchStorePath(getAgentMemorySearchRecord(agent))),
   },
 ];
 
@@ -147,32 +122,6 @@ const UNSUPPORTED_SANDBOX_BROWSER_NETWORK_RULES: LegacyConfigRule[] = [
   },
 ];
 
-const IGNORED_AGENT_MODEL_TIMEOUT_RULES: LegacyConfigRule[] = [
-  {
-    path: ["agents", "defaults", "model"],
-    message:
-      'agents.defaults.model.timeoutMs is ignored; agent model config only selects primary/fallback models. Run "openclaw doctor --fix" to remove it.',
-    match: (value) => hasOwnTimeoutMs(value),
-  },
-  {
-    path: ["agents", "defaults", "subagents", "model"],
-    message:
-      'agents.defaults.subagents.model.timeoutMs is ignored; subagent model config only selects primary/fallback models. Run "openclaw doctor --fix" to remove it.',
-    match: (value) => hasOwnTimeoutMs(value),
-  },
-  {
-    path: ["agents"],
-    message:
-      'agents.entries.*.model.timeoutMs and agents.entries.*.subagents.model.timeoutMs are ignored; agent model config only selects primary/fallback models. Run "openclaw doctor --fix" to remove them.',
-    match: (value) =>
-      someAgentEntry(
-        value,
-        (agent) =>
-          hasOwnTimeoutMs(agent.model) || hasOwnTimeoutMs(getRecord(agent.subagents)?.model),
-      ),
-  },
-];
-
 const PROFILE_CONFIGURED_TOOL_SECTION_RULES: LegacyConfigRule[] = [
   {
     path: ["tools"],
@@ -205,57 +154,21 @@ const PROFILE_CONFIGURED_TOOL_SECTION_RULES: LegacyConfigRule[] = [
 
 const SILENT_REPLY_LEGACY_RULES: LegacyConfigRule[] = [
   {
-    path: ["agents", "defaults", "silentReplyRewrite"],
-    message:
-      'agents.defaults.silentReplyRewrite was removed; exact NO_REPLY is no longer rewritten to visible fallback text. Run "openclaw doctor --fix" to remove it.',
-  },
-  {
     path: ["agents", "defaults", "silentReply"],
     message:
-      'agents.defaults.silentReply.direct and agents.defaults.silentReply.internal were removed; only channel groups may use NO_REPLY. Run "openclaw doctor --fix" to remove them.',
-    match: (value) =>
-      hasOwnRecordProperty(value, "direct") || hasOwnRecordProperty(value, "internal"),
+      'agents.defaults.silentReply.internal was removed; only channel groups may use NO_REPLY. Run "openclaw doctor --fix" to remove it.',
+    match: (value) => hasOwnRecordProperty(value, "internal"),
   },
   {
     path: ["surfaces"],
     message:
-      'surfaces.*.silentReplyRewrite was removed; exact NO_REPLY is no longer rewritten to visible fallback text. Run "openclaw doctor --fix" to remove it.',
-    match: (value) => hasSurfaceSilentReplyRewrite(value),
-  },
-  {
-    path: ["surfaces"],
-    message:
-      'surfaces.*.silentReply.direct and surfaces.*.silentReply.internal were removed; only channel groups may use NO_REPLY. Run "openclaw doctor --fix" to remove them.',
+      'surfaces.*.silentReply.internal was removed; only channel groups may use NO_REPLY. Run "openclaw doctor --fix" to remove it.',
     match: (value) => hasSurfaceLegacySilentReplyPolicy(value),
   },
 ];
 
-const SYSTEM_PROMPT_OVERRIDE_LEGACY_RULES: LegacyConfigRule[] = [
-  {
-    path: ["agents", "defaults", "systemPromptOverride"],
-    message:
-      'agents.defaults.systemPromptOverride was removed; OpenClaw owns the generated system prompt. Run "openclaw doctor --fix" to remove it.',
-  },
-  {
-    path: ["agents"],
-    message:
-      'agents.entries.*.systemPromptOverride was removed; OpenClaw owns the generated system prompt. Run "openclaw doctor --fix" to remove it.',
-    match: (value) =>
-      someAgentEntry(value, (agent) => Object.hasOwn(agent, "systemPromptOverride")),
-  },
-];
-
-function hasOwnTimeoutMs(value: unknown): boolean {
-  const record = getRecord(value);
-  return Boolean(record && Object.hasOwn(record, "timeoutMs"));
-}
-
 function isLegacyMemorySearchAutoProvider(value: unknown): boolean {
   return typeof value === "string" && value.trim().toLowerCase() === "auto";
-}
-
-function hasMemorySearchStorePath(value: unknown): boolean {
-  return typeof getRecord(getRecord(value)?.store)?.path === "string";
 }
 
 function migrateLegacyMemorySearchFlatKeys(
@@ -290,19 +203,6 @@ function migrateLegacyMemorySearchFlatKeys(
     }
     delete memorySearch[legacyKey];
   }
-}
-
-function removeLegacyMemorySearchStorePath(
-  memorySearch: Record<string, unknown> | null,
-  pathLabel: string,
-  changes: string[],
-): void {
-  const store = getRecord(memorySearch?.store);
-  if (!store || typeof store.path !== "string") {
-    return;
-  }
-  delete store.path;
-  changes.push(`Removed ${pathLabel}.store.path; memory indexes now use each agent database.`);
 }
 
 function rewriteLegacyMemorySearchAutoProvider(
@@ -359,37 +259,6 @@ function migrateExplicitUnsupportedSandboxBrowserNetwork(
   );
 }
 
-function migrateAgentBrowserInheritedFromUnsupportedDefault(params: {
-  agent: unknown;
-  pathLabel: string;
-  defaultBrowserEnabled: boolean;
-  changes: string[];
-}): void {
-  const browser = getSandboxBrowserConfig(params.agent);
-  if (!browser) {
-    return;
-  }
-  const hasExplicitNetwork = typeof browser.network === "string";
-  const network = normalizeOptionalLowercaseString(browser.network);
-  if (network === "none") {
-    migrateExplicitUnsupportedSandboxBrowserNetwork(browser, params.pathLabel, params.changes);
-    return;
-  }
-  if (!hasExplicitNetwork && browser.enabled === true) {
-    browser.enabled = false;
-    params.changes.push(
-      `Disabled ${params.pathLabel} because it inherited unsupported browser network "none".`,
-    );
-    return;
-  }
-  if (hasExplicitNetwork && browser.enabled === undefined && params.defaultBrowserEnabled) {
-    browser.enabled = true;
-    params.changes.push(
-      `Set ${params.pathLabel}.enabled to true to preserve its explicit supported network while disabling the unsupported default browser network.`,
-    );
-  }
-}
-
 function migrateUnsupportedSandboxBrowserNetworks(
   raw: Record<string, unknown>,
   changes: string[],
@@ -400,19 +269,29 @@ function migrateUnsupportedSandboxBrowserNetworks(
   const defaultNetworkUnsupported = isUnsupportedSandboxBrowserNetwork(defaultBrowser?.network);
   const defaultBrowserEnabled = defaultBrowser?.enabled === true;
   visitAgentEntries(raw, (agent, path) => {
-    const pathLabel = `${path}.sandbox.browser`;
-    if (defaultNetworkUnsupported) {
-      migrateAgentBrowserInheritedFromUnsupportedDefault({
-        agent,
-        pathLabel,
-        defaultBrowserEnabled,
-        changes,
-      });
+    const browser = getSandboxBrowserConfig(agent);
+    if (!browser) {
       return;
     }
-    const browser = getSandboxBrowserConfig(agent);
-    if (browser) {
+    const pathLabel = `${path}.sandbox.browser`;
+    if (isUnsupportedSandboxBrowserNetwork(browser.network)) {
       migrateExplicitUnsupportedSandboxBrowserNetwork(browser, pathLabel, changes);
+      return;
+    }
+    if (!defaultNetworkUnsupported) {
+      return;
+    }
+    const hasExplicitNetwork = typeof browser.network === "string";
+    if (!hasExplicitNetwork && browser.enabled === true) {
+      browser.enabled = false;
+      changes.push(
+        `Disabled ${pathLabel} because it inherited unsupported browser network "none".`,
+      );
+    } else if (hasExplicitNetwork && browser.enabled === undefined && defaultBrowserEnabled) {
+      browser.enabled = true;
+      changes.push(
+        `Set ${pathLabel}.enabled to true to preserve its explicit supported network while disabling the unsupported default browser network.`,
+      );
     }
   });
 
@@ -425,40 +304,9 @@ function migrateUnsupportedSandboxBrowserNetworks(
   }
 }
 
-function removeIgnoredAgentModelTimeouts(
-  agent: Record<string, unknown>,
-  pathLabel: string,
-  changes: string[],
-): void {
-  for (const [suffix, model] of [
-    ["model", agent.model],
-    ["subagents.model", getRecord(agent.subagents)?.model],
-  ] as const) {
-    const modelRecord = getRecord(model);
-    if (!modelRecord || !Object.hasOwn(modelRecord, "timeoutMs")) {
-      continue;
-    }
-    delete modelRecord.timeoutMs;
-    changes.push(
-      `Removed ${pathLabel}.${suffix}.timeoutMs; agent model config only selects models.`,
-    );
-  }
-}
-
 function hasOwnRecordProperty(value: unknown, key: string): boolean {
   const record = getRecord(value);
   return Boolean(record && Object.hasOwn(record, key));
-}
-
-function hasSurfaceSilentReplyRewrite(value: unknown): boolean {
-  const surfaces = getRecord(value);
-  if (!surfaces) {
-    return false;
-  }
-  return Object.entries(surfaces).some(
-    ([surfaceId, surface]) =>
-      !isBlockedObjectKey(surfaceId) && hasOwnRecordProperty(surface, "silentReplyRewrite"),
-  );
 }
 
 function hasSurfaceLegacySilentReplyPolicy(value: unknown): boolean {
@@ -469,9 +317,7 @@ function hasSurfaceLegacySilentReplyPolicy(value: unknown): boolean {
   return Object.entries(surfaces).some(
     ([surfaceId, surface]) =>
       !isBlockedObjectKey(surfaceId) &&
-      ["direct", "internal"].some((key) =>
-        hasOwnRecordProperty(getRecord(surface)?.silentReply, key),
-      ),
+      hasOwnRecordProperty(getRecord(surface)?.silentReply, "internal"),
   );
 }
 
@@ -488,28 +334,11 @@ function removeLegacySilentReplyConfig(raw: Record<string, unknown>, changes: st
       continue;
     }
     const silentReply = getRecord(container.silentReply);
-    for (const conversationType of ["direct", "internal"]) {
-      if (silentReply && Object.hasOwn(silentReply, conversationType)) {
-        delete silentReply[conversationType];
-        changes.push(
-          `Removed ${path}.silentReply.${conversationType}; ${conversationType} sessions never use NO_REPLY.`,
-        );
-      }
-    }
-    if (Object.hasOwn(container, "silentReplyRewrite")) {
-      delete container.silentReplyRewrite;
-      changes.push(`Removed ${path}.silentReplyRewrite.`);
+    if (silentReply && Object.hasOwn(silentReply, "internal")) {
+      delete silentReply.internal;
+      changes.push(`Removed ${path}.silentReply.internal; internal sessions never use NO_REPLY.`);
     }
   }
-}
-
-function removeLegacySystemPromptOverride(raw: Record<string, unknown>, changes: string[]): void {
-  visitAgentConfigScopes(raw, (agent, path) => {
-    if (Object.hasOwn(agent, "systemPromptOverride")) {
-      delete agent.systemPromptOverride;
-      changes.push(`Removed ${path}.systemPromptOverride.`);
-    }
-  });
 }
 
 const CONFIGURED_TOOL_SECTION_GRANTS = [
@@ -888,72 +717,10 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_AGENTS: LegacyConfigMigrationSpec[
     },
   }),
   defineLegacyConfigMigration({
-    id: "silentReplyRewrite-removed",
-    describe: "Remove legacy silent reply rewrite, direct-chat, and internal silent reply config",
+    id: "silentReply.internal-removed",
+    describe: "Remove legacy internal silent reply config",
     legacyRules: SILENT_REPLY_LEGACY_RULES,
     apply: removeLegacySilentReplyConfig,
-  }),
-  defineLegacyConfigMigration({
-    id: "agents.systemPromptOverride-removed",
-    describe: "Remove legacy agent system prompt override config",
-    legacyRules: SYSTEM_PROMPT_OVERRIDE_LEGACY_RULES,
-    apply: removeLegacySystemPromptOverride,
-  }),
-  defineLegacyConfigMigration({
-    id: "agents.model.timeoutMs-ignored",
-    describe: "Remove ignored timeoutMs keys from agent model selection config",
-    legacyRules: IGNORED_AGENT_MODEL_TIMEOUT_RULES,
-    apply: (raw, changes) =>
-      visitAgentConfigScopes(raw, (agent, path) =>
-        removeIgnoredAgentModelTimeouts(agent, path, changes),
-      ),
-  }),
-  ...LEGACY_CONFIG_MIGRATIONS_RUNTIME_AGENT_POLICY,
-  defineLegacyConfigMigration({
-    id: "agents.sandbox.perSession->scope",
-    describe: "Move supported legacy sandbox perSession settings to scope",
-    legacyRules: [
-      {
-        path: ["agents"],
-        message:
-          'Agent sandbox.perSession settings moved to sandbox.scope. Run "openclaw doctor --fix".',
-        match: (value) => {
-          let found = false;
-          visitAgentConfigScopes({ agents: value }, (agent) => {
-            found ||= Object.hasOwn(getRecord(agent.sandbox) ?? {}, "perSession");
-          });
-          return found;
-        },
-      },
-    ],
-    apply: (raw, changes) => {
-      const inheritedScope = getRecord(getRecord(getRecord(raw.agents)?.defaults)?.sandbox)?.scope;
-      visitAgentConfigScopes(raw, (agent, path) => {
-        const sandbox = getRecord(agent.sandbox);
-        if (
-          !sandbox ||
-          !Object.hasOwn(sandbox, "perSession") ||
-          typeof sandbox.perSession !== "boolean"
-        ) {
-          return;
-        }
-        // An authored defaults scope already outranked per-agent legacy booleans.
-        const canonicalScope =
-          sandbox.scope !== undefined
-            ? sandbox.scope
-            : path === "agents.defaults"
-              ? undefined
-              : inheritedScope;
-        if (canonicalScope === undefined) {
-          const scope = sandbox.perSession ? "session" : "shared";
-          sandbox.scope = scope;
-          changes.push(`Moved ${path}.sandbox.perSession → ${path}.sandbox.scope (${scope}).`);
-        } else {
-          changes.push(`Removed ${path}.sandbox.perSession (canonical sandbox.scope already set).`);
-        }
-        delete sandbox.perSession;
-      });
-    },
   }),
   defineLegacyConfigMigration({
     id: "agents.sandbox.browser.network-none",
@@ -1023,13 +790,6 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_AGENTS: LegacyConfigMigrationSpec[
     legacyRules: LEGACY_MEMORY_SEARCH_AUTO_PROVIDER_RULES,
     apply: (raw, changes) =>
       migrateCanonicalMemorySearches(raw, changes, rewriteLegacyMemorySearchAutoProvider),
-  }),
-  defineLegacyConfigMigration({
-    id: "memorySearch.store.path->agent-database",
-    describe: "Remove legacy memory search sidecar index paths",
-    legacyRules: LEGACY_MEMORY_SEARCH_STORE_PATH_RULES,
-    apply: (raw, changes) =>
-      migrateCanonicalMemorySearches(raw, changes, removeLegacyMemorySearchStorePath),
   }),
   defineLegacyConfigMigration({
     id: "session.typingMode->agents.defaults.typingMode",

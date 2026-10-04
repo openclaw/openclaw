@@ -65,6 +65,26 @@ function hasPackedFile(packageFiles: Set<string>, entryPath: string) {
   return packageFiles.has(normalizePackagePath(entryPath));
 }
 
+export function isPluginTestFixturePath(packagePath: string) {
+  if (
+    packagePath.startsWith("dist/") ||
+    packagePath.startsWith("skills/") ||
+    packagePath.startsWith("node_modules/")
+  ) {
+    return false;
+  }
+  if (
+    /(?:^|\/)(?:fixture|fixtures|mock|mocks|spec|test|tests|test-harness|test-helper|test-helpers|test-support|__fixtures__|__tests__)\//u.test(
+      packagePath,
+    )
+  ) {
+    return true;
+  }
+  return /(?:^|[.-])(?:fixture|fixtures|mock|mocks|spec|test|test-helper|test-helpers|test-harness|test-support)(?:[.-]|$)/u.test(
+    path.posix.basename(packagePath),
+  );
+}
+
 function formatPackageLabel(packageJson: Record<string, unknown>, fallbackSpec = "") {
   const packageName = typeof packageJson.name === "string" ? packageJson.name.trim() : "";
   const packageVersion = typeof packageJson.version === "string" ? packageJson.version.trim() : "";
@@ -117,6 +137,12 @@ export function collectPluginNpmPublishedRuntimeErrors(params: {
   if (!hasPackedFile(packageFiles, "openclaw.plugin.json")) {
     errors.push(`${packageLabel} plugin npm package must include openclaw.plugin.json`);
     return errors;
+  }
+  const testFixturePaths = [...packageFiles].filter(isPluginTestFixturePath).toSorted();
+  if (testFixturePaths.length > 0) {
+    errors.push(
+      `${packageLabel} plugin npm package must not include test or fixture files: ${testFixturePaths.join(", ")}`,
+    );
   }
   const extensions = extensionsResult.entries;
   const runtimeExtensions = runtimeExtensionsResult.entries;

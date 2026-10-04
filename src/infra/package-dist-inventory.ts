@@ -53,6 +53,7 @@ const OMITTED_PLUGIN_SDK_TEST_FILES = new Set(
     "channel-contract-testing",
     "channel-target-testing",
     "channel-test-helpers",
+    "compiled-subprocess-testing",
     "plugin-test-api",
     "plugin-test-contracts",
     "plugin-test-runtime",
@@ -156,13 +157,6 @@ function collectPackageDistExclusionRules(rootPackageJson: unknown): PackageDist
     prefixes: [...excludedPrefixes].toSorted((left, right) => left.localeCompare(right)),
     patterns: excludedPatterns,
   };
-}
-
-async function collectPackageDistExclusionRulesForRoot(
-  packageRoot: string,
-): Promise<PackageDistExclusionRules> {
-  const packageJsonPath = path.join(packageRoot, "package.json");
-  return collectPackageDistExclusionRules(await readJsonIfExists<unknown>(packageJsonPath));
 }
 
 function isPackageFilesExcludedDistPath(
@@ -276,7 +270,9 @@ export async function collectPackageDistInventory(
   const rules = options.includePackageExcludedFiles
     ? { ...collectPackageDistExclusionRules({}), includePackageExcludedFiles: true }
     : options.packageManifest === undefined
-      ? await collectPackageDistExclusionRulesForRoot(packageRoot)
+      ? collectPackageDistExclusionRules(
+          await readJsonIfExists<unknown>(path.join(packageRoot, "package.json")),
+        )
       : collectPackageDistExclusionRules(options.packageManifest);
   const fsLimit = pLimit(PACKAGE_DIST_INVENTORY_SCAN_CONCURRENCY);
   return await collectRelativeFiles(
@@ -312,7 +308,6 @@ async function openPackageDistFsRootIfPresent(
 ): Promise<PackageDistFsRoot | null> {
   const packageFs = await openFsRoot(packageRoot, {
     hardlinks: "allow",
-    nonBlockingRead: true,
     symlinks: "reject",
   });
   let distStats;
@@ -342,7 +337,6 @@ async function readPackageDistJsonIfExists<T>(
     return await packageFs.readJson<T>(relativePath, {
       hardlinks: "allow",
       maxBytes: 16 * 1024 * 1024,
-      nonBlockingRead: true,
       symlinks: "reject",
     });
   } catch (error) {
@@ -373,7 +367,6 @@ export async function collectPackageDistContentInventory(
       fsLimit(async () => {
         await using opened = await packageFs.open(relativePath, {
           hardlinks: "allow",
-          nonBlockingRead: true,
           symlinks: "reject",
         });
         return createPackageDistContentInventoryEntry(

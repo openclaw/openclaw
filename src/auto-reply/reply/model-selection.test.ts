@@ -11,6 +11,7 @@ import type { SessionEntry } from "../../config/sessions.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import * as activeThinkingPolicy from "../../plugins/provider-thinking-active.js";
 import { prepareModelCatalogThinkingPolicies } from "../../plugins/provider-thinking.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { isThinkingLevelSupported } from "../thinking.js";
 import { prepareModelSelectionRuntime } from "./model-runtime-normalization.js";
 import {
@@ -406,21 +407,28 @@ describe("catalog and thinking selection", () => {
     prepareModelCatalogThinkingPolicies({
       catalog: preparedModelCatalog,
       metadataSnapshot: createPluginMetadataSnapshotFixture(),
-      providers: [
-        {
-          provider: {
-            id: provider,
-            ...(fixture.capturedPolicy
-              ? {
-                  resolveThinkingProfile: () => ({
-                    levels: [{ id: "off" }, { id: "max" }, { id: "ultra" }],
-                    defaultLevel: "ultra",
-                  }),
-                }
-              : {}),
+      pluginRegistry: {
+        ...createEmptyPluginRegistry(),
+        providers: [
+          {
+            pluginId: provider,
+            source: "test",
+            provider: {
+              id: provider,
+              label: provider,
+              auth: [],
+              ...(fixture.capturedPolicy
+                ? {
+                    resolveThinkingProfile: () => ({
+                      levels: [{ id: "off" }, { id: "max" }, { id: "ultra" }],
+                      defaultLevel: "ultra",
+                    }),
+                  }
+                : {}),
+            },
           },
-        },
-      ],
+        ],
+      },
     });
     const ambient = vi
       .spyOn(activeThinkingPolicy, "resolveActiveProviderThinkingProfile")

@@ -2011,20 +2011,11 @@ describe("diagnostics-otel service", () => {
       debug: vi.fn(),
     };
     const diagnosticsLogs = createDiagnosticsLogExporter({
-      contentCapturePolicy: {
-        inputMessages: false,
-        outputMessages: false,
-        toolInputs: false,
-        toolOutputs: false,
-        systemPrompt: false,
-        toolDefinitions: false,
-        logBodies: false,
-      },
+      captureContent: false,
       emitExporterEvent: createExporterHealthEventEmitter((event) => {
         events.push(event);
       }),
       logger,
-      logsEnabled: true,
       logsToOtlp: true,
       logsToStdout: false,
       resource: {} as never,
@@ -2043,7 +2034,7 @@ describe("diagnostics-otel service", () => {
       seq: number,
       recordAttributes: Record<string, string | number | boolean>,
     ) => {
-      diagnosticsLogs.recordLogRecord?.(
+      diagnosticsLogs.recordLogEvent?.(
         {
           type: "log.record",
           seq,
@@ -2454,6 +2445,7 @@ describe("diagnostics-otel service", () => {
       expect(record.attributes).toMatchObject({
         "openclaw.log.level": "WARN",
         "openclaw.subsystem": "diagnostic",
+        "openclaw.traceFlags": "01",
       });
       const tokenAttr = record.attributes?.["openclaw.token"];
       expect(tokenAttr).not.toBe("ghp_abcdefghijklmnopqrstuvwxyz123456"); // pragma: allowlist secret

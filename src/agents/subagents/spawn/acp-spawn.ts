@@ -83,6 +83,7 @@ import {
   resolveTargetAcpAgentId,
 } from "./acp-spawn-target.js";
 import { readParentExecutionIdentity } from "./execution-identity-spawn-context.js";
+import { captureSpawnParentLineage } from "./spawn-parent-lineage.js";
 import {
   isSubagentEnvelopeSession,
   resolveSubagentCapabilityStore,
@@ -116,6 +117,9 @@ type SpawnAcpContext = {
   onSpawnEffectsStart?: () => void;
   assertActive?: () => void;
   agentSessionKey?: string;
+  /** Trusted parent tool construction facts; never read from model arguments. */
+  senderIsOwner?: boolean;
+  expectedParentSessionId?: string;
   requesterTurnRunId?: string;
   completionOwnerKey?: string;
   requesterAgentIdOverride?: string;
@@ -453,26 +457,36 @@ export async function spawnAcpDirect(
         storePath: parentStorePath,
       });
       ctx.assertActive?.();
-      const inheritedGitContributorProfileIds = isIncognitoSessionKey(requesterInternalKey)
+      const readParentEntry = () =>
+        withSessionEntryReadOnlyInWorker(
+          {
+            agentId: requesterAgentId,
+            sessionKey: parentTarget.canonicalKey,
+            storePath: parentStorePath,
+          },
+          () => ctx.assertActive?.(),
+          async (read) => {
+            if (!read.ok) {
+              throw read.error;
+            }
+            return read.value;
+          },
+        );
+      const parentEntry = isIncognitoSessionKey(requesterInternalKey)
         ? undefined
-        : await withSessionEntryReadOnlyInWorker(
-            {
-              agentId: requesterAgentId,
-              sessionKey: parentTarget.canonicalKey,
-              storePath: parentStorePath,
-            },
-            () => ctx.assertActive?.(),
-            async (read) => {
-              if (!read.ok) {
-                throw read.error;
-              }
-              return inheritSessionGitContributorProfileIds(read.value);
-            },
-          );
+        : await readParentEntry();
+      // Incognito parents are never read here, so like rowless parents they record no incarnation.
+      const parentLineage = captureSpawnParentLineage({
+        parentEntry,
+        expectedParentSessionId: ctx.expectedParentSessionId,
+        senderIsOwner: ctx.senderIsOwner,
+        readParentEntry,
+      });
       const creationStamp = buildSessionCreationStamp({
         via: "spawn",
         actor: { type: "agent", id: requesterAgentId },
-        inheritedGitContributorProfileIds,
+        inheritedGitContributorProfileIds: inheritSessionGitContributorProfileIds(parentEntry),
+        conversationLink: parentEntry?.conversationLink,
       });
       const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId: targetAgentId });
       const childSessionPatch = admission.childSessionPatch
@@ -484,6 +498,8 @@ export async function spawnAcpDirect(
             subagentControlScope: admission.childSessionPatch.subagentControlScope,
           }
         : {};
+      await parentLineage.assertParentUnchanged();
+      ctx.assertActive?.();
       childCreationEntry =
         (await upsertSessionEntryCore(
           { storePath, sessionKey, agentId: targetAgentId },
@@ -499,6 +515,8 @@ export async function spawnAcpDirect(
             ...inheritedToolAllowPatch(ctx.inheritedToolAllowlist),
             ...inheritedToolDenyPatch(ctx.inheritedToolDenylist),
             ...(params.label ? { label: params.label } : {}),
+            // Same trust rules as native spawn: stamped last, from trusted host facts only.
+            ...parentLineage.receipt,
           },
           { assertCommitAllowed: ctx.assertActive },
         )) ?? undefined;
@@ -540,13 +558,13 @@ export async function spawnAcpDirect(
       });
       // ACP bypasses the native adapter, so seed the same child lineage before dispatch.
       if (childCreationEntry) {
-        recordSessionCreated(cfg, {
+        await recordSessionCreated(cfg, {
           sessionKey,
           agentId: targetAgentId,
           entry: childCreationEntry,
         });
       }
-      recordSubagentSpawned({
+      await recordSubagentSpawned({
         childSessionKey: sessionKey,
         childRunId: childIdem,
         requesterSessionKey: requesterInternalKey,
@@ -597,14 +615,15 @@ export async function spawnAcpDirect(
       });
       const runId = readGatewayRunId(response) ?? childIdem;
       if (state.parentRelay && runId !== childIdem) {
-        state.parentRelay.dispose();
+        // Seal the old relay now; its Gateway owner joins diagnostic settlement.
+        void state.parentRelay.dispose();
         state.parentRelay = startParentRelay(runId);
       }
       state.parentRelay?.notifyStarted();
       return { runId };
     },
     async cleanupOnFailure({ state }) {
-      state?.parentRelay?.dispose();
+      await state?.parentRelay?.dispose();
       await cleanupFailedAcpSpawn({
         cfg,
         sessionKey,

@@ -234,7 +234,7 @@ it.runIf(process.platform !== "win32").each([false, true])(
         vi.spyOn(writeAdmission, "runOpenClawAgentWorkerWrite").mockImplementation(
           <T>(...args: Parameters<typeof write<T>>) => {
             const result = write(...args);
-            if (observing && args[0].path === preparedPath) {
+            if (observing && !("target" in args[0]) && args[0].path === preparedPath) {
               requested.resolve();
             }
             return result;

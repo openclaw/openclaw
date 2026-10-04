@@ -63,14 +63,14 @@ describe("Control UI retained integrity", () => {
       vi.spyOn(fs, "readFile").mockImplementation(async (...args) => {
         if (args[0] === path.join(current.root, "asset-manifest.json")) {
           checkedAdmission = true;
-          expect(owner.resolveAsset(cached.assetPath)).toBeNull();
+          expect(await owner.resolveAsset(cached.assetPath)).toBeNull();
         }
         return readFile(...args);
       });
       await owner.prepare();
       expect(checkedAdmission).toBe(true);
-      expect(owner.resolveAsset(cached.assetPath)).toBeNull();
-      expect(owner.resolveAsset(current.assetPath)).not.toBeNull();
+      expect(await owner.resolveAsset(cached.assetPath)).toBeNull();
+      expect(await owner.resolveAsset(current.assetPath)).not.toBeNull();
       expect(await fs.readFile(path.join(outside, cached.assetPath), "utf8")).toContain("cached");
       expect((await fs.readdir(cache)).includes(path.basename(cachedDirectory))).toBe(
         fault === "directory-symlink",
@@ -124,7 +124,7 @@ describe("Control UI retained integrity", () => {
         const owner = createControlUiAssetRetention(build.root);
         if (fault === "inode-swap") {
           await owner.prepare();
-          expect(await fs.readFile(owner.resolveAsset(build.assetPath)!.filePath)).toEqual(
+          expect(await fs.readFile((await owner.resolveAsset(build.assetPath))!.filePath)).toEqual(
             outsideContents,
           );
           expect(await fs.readFile(source)).not.toEqual(outsideContents);
@@ -133,7 +133,7 @@ describe("Control UI retained integrity", () => {
           await expect(owner.prepare()).rejects.toMatchObject({
             code: fault === "leaf-symlink" ? "symlink" : "outside-workspace",
           });
-          expect(owner.resolveAsset(build.assetPath)).toBeNull();
+          expect(await owner.resolveAsset(build.assetPath)).toBeNull();
           expect(await fs.readdir(cache)).toEqual([]);
         }
         expect(await fs.readFile(path.join(outside, build.assetPath))).toEqual(outsideContents);
@@ -154,7 +154,9 @@ describe("Control UI retained integrity", () => {
       }
       const owner = createControlUiAssetRetention(build.root);
       await owner.prepare();
-      expect(await fs.readFile(owner.resolveAsset(build.assetPath)!.filePath)).toEqual(contents);
+      expect(await fs.readFile((await owner.resolveAsset(build.assetPath))!.filePath)).toEqual(
+        contents,
+      );
     });
   });
 
@@ -182,8 +184,8 @@ describe("Control UI retained integrity", () => {
       expect(open.mock.calls.some(([file]) => file === path.join(outside, cached.assetPath))).toBe(
         false,
       );
-      expect(owner.resolveAsset(cached.assetPath)).toBeNull();
-      expect(owner.resolveAsset(current.assetPath)).not.toBeNull();
+      expect(await owner.resolveAsset(cached.assetPath)).toBeNull();
+      expect(await owner.resolveAsset(current.assetPath)).not.toBeNull();
       expect(await fs.readFile(path.join(outside, cached.assetPath), "utf8")).toContain("cached");
     });
   });
@@ -220,8 +222,8 @@ describe("Control UI retained integrity", () => {
       const owner = createControlUiAssetRetention(current.root);
       await withEnvAsync({ FS_SAFE_NATIVE_MODE: "off" }, () => owner.prepare());
       expect(replaced).toBe(true);
-      expect(owner.resolveAsset(cached.assetPath)).toBeNull();
-      expect(owner.resolveAsset(current.assetPath)).not.toBeNull();
+      expect(await owner.resolveAsset(cached.assetPath)).toBeNull();
+      expect(await owner.resolveAsset(current.assetPath)).not.toBeNull();
       await expect(fs.access(cached.target)).rejects.toMatchObject({ code: "ENOENT" });
       expect((await fs.readdir(cache)).some((entry) => entry.startsWith(".staging-"))).toBe(false);
     });

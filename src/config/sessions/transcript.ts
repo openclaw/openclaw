@@ -33,7 +33,6 @@ import {
   isSessionTranscriptProjectionUnavailableError,
   persistSessionTranscriptTurn,
   readActiveTranscriptEntryAnchor,
-  readLatestSessionTranscriptMessageEvent,
   readLatestTranscriptAssistantText,
   readSessionTranscriptMessageEventPage,
   resolveSessionEntrySelection,
@@ -46,6 +45,7 @@ import {
   type TranscriptEvent,
 } from "./session-accessor.js";
 import type { LatestTranscriptAssistantText } from "./session-accessor.types.js";
+import { prepareSessionTranscriptHydration } from "./session-transcript-hydration.js";
 import type {
   SessionLifecycleRevisionExpectation,
   SessionTranscriptTurnLifecyclePatch,
@@ -149,20 +149,14 @@ class SessionTranscriptAgentScopeMismatchError extends Error {
 export type LatestAssistantTranscriptText = LatestTranscriptAssistantText;
 
 function parseAssistantTranscriptText(line: string): LatestAssistantTranscriptText | undefined {
-  const parsed = JSON.parse(line) as {
+  const { id, message } = JSON.parse(line) as {
     id?: unknown;
     message?: unknown;
   };
-  const message = parsed.message as
-    | { role?: unknown; timestamp?: unknown; provider?: unknown; model?: unknown }
-    | undefined;
-  if (!message || message.role !== "assistant") {
-    return undefined;
-  }
   if (isTranscriptOnlyOpenClawAssistantMessage(message)) {
     return undefined;
   }
-  return projectAssistantTranscriptText(message, parsed.id);
+  return projectAssistantTranscriptText(message, id);
 }
 
 function extractRecentConversationText(
@@ -372,6 +366,7 @@ type SessionTranscriptAssistantAppendOptions = {
   updateMode?: SessionTranscriptUpdateMode;
   config?: OpenClawConfig;
   beforeMessageWrite?: AssistantBeforeMessageWrite;
+  assertCurrent?: () => void;
   onMessageCommitted?: SessionTranscriptTurnPersistOptions["onMessageCommitted"];
 };
 
@@ -508,6 +503,7 @@ export async function appendExactAssistantMessageToSessionTranscript(
   // Keyed mirrors use strict replay identity; text-only suppression must not
   // hide conflicting media or collapse distinct source messages.
   const turn = await persistSessionTranscriptTurn(target, {
+    assertCurrent: params.assertCurrent,
     cwd: entry.spawnedCwd,
     ...(params.expectedSessionId ? { expectedSessionId: params.expectedSessionId } : {}),
     ...(params.expectedLifecycleRevision !== undefined
@@ -532,14 +528,16 @@ export async function appendExactAssistantMessageToSessionTranscript(
         ...(explicitIdempotencyKey ? { idempotencyLookup: "scan" } : {}),
         ...(explicitIdempotencyKey && params.beforeMessageWrite
           ? {
-              prepareMessageAfterIdempotencyCheck: (candidate: unknown) =>
-                applyBeforeMessageWriteToAssistant({
-                  message: candidate as Parameters<SessionManager["appendMessage"]>[0],
-                  beforeMessageWrite: params.beforeMessageWrite,
-                  explicitIdempotencyKey,
-                  agentId: transcriptAgentId,
-                  sessionKey: resolved.normalizedKey,
-                }),
+              workerPreparation: {
+                prepareMessageAfterIdempotencyCheck: (candidate: unknown) =>
+                  applyBeforeMessageWriteToAssistant({
+                    message: candidate as Parameters<SessionManager["appendMessage"]>[0],
+                    beforeMessageWrite: params.beforeMessageWrite,
+                    explicitIdempotencyKey,
+                    agentId: transcriptAgentId,
+                    sessionKey: resolved.normalizedKey,
+                  }),
+              },
             }
           : {}),
         shouldAppend: async (appendTarget) => {
@@ -635,13 +633,13 @@ function isRedundantDeliveryMirror(message: SessionTranscriptAssistantMessage): 
 }
 
 async function readLatestVisibleTranscriptMessage(scope: {
-  agentId?: string;
+  agentId: string;
   sessionId: string;
-  sessionKey?: string;
+  sessionKey: string;
   storePath: string;
 }): Promise<{ id?: string; message: unknown } | undefined> {
   try {
-    const event = readLatestSessionTranscriptMessageEvent(scope)?.event;
+    const event = (await prepareSessionTranscriptHydration(scope).readLatestActiveMessage())?.event;
     if (!event || typeof event !== "object" || Array.isArray(event)) {
       return undefined;
     }
@@ -688,11 +686,11 @@ async function findLatestEquivalentAssistantMessageId(
     return undefined;
   }
 
-  if (target.storePath && target.sessionId) {
+  if (target.storePath && target.sessionId && target.agentId && target.sessionKey) {
     const latest = await readLatestVisibleTranscriptMessage({
-      ...(target.agentId ? { agentId: target.agentId } : {}),
+      agentId: target.agentId,
       sessionId: target.sessionId,
-      ...(target.sessionKey ? { sessionKey: target.sessionKey } : {}),
+      sessionKey: target.sessionKey,
       storePath: target.storePath,
     });
     const latestMessage = latest?.message as { role?: unknown } | undefined;

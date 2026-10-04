@@ -10,6 +10,7 @@ import { resolveRuntimeWorkerArgv } from "./runtime-worker-url.js";
 import { readSqliteIntegrityFileIdentity } from "./sqlite-file-generation.js";
 import { SqliteIntegrityWorkerInterruptedError } from "./sqlite-integrity-worker-error.js";
 import type { SqliteIntegrityCheckTiming, SqliteIntegrityTableCheck } from "./sqlite-integrity.js";
+import { throwSqliteLifecycleErrors } from "./sqlite-lifecycle-errors.js";
 import {
   isSqliteInspectionDeadlineOwnedByCaller,
   readSqliteInspectionBudget,
@@ -122,14 +123,7 @@ export async function withSqliteIntegrityWorkerScope<T>(
           errors.push(error);
         }
       }
-      if (errors.length > 1) {
-        throw new AggregateError(errors, "SQLite integrity maintenance scope failed", {
-          cause: errors[0],
-        });
-      }
-      if (errors.length === 1) {
-        throw errors[0];
-      }
+      throwSqliteLifecycleErrors(errors, "SQLite integrity maintenance scope failed");
       if ("error" in outcome) {
         throw outcome.error;
       }

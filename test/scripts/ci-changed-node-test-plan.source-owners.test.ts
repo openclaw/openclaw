@@ -5,11 +5,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as changedDependencies from "../../scripts/lib/changed-dependencies.mts";
-import {
-  createChangedExtensionFallbackShards,
-  hasBuildArtifactAffectingChange,
-  hasCoreExtensionImpact,
-} from "../../scripts/lib/ci-changed-node-test-plan.mts";
+import { hasBuildArtifactAffectingChange } from "../../scripts/lib/ci-changed-node-test-plan.mts";
 import { resolvePolicyTestTargets } from "../../scripts/lib/ci-policy-test-watch.mts";
 import {
   isCiProofTestFile,
@@ -347,6 +343,8 @@ describe("CI changed Node test plan", () => {
       "src/agents/live-model-filter.test.ts",
       "src/agents/live-target-matcher.test.ts",
       "src/agents/model-compat.test.ts",
+      // Missing history retains this cross-area consumer's closed module mock.
+      "src/gateway/gateway-models.profiles.live.test-helpers.test.ts",
     ];
     expectProtectedOwnerExpansion(
       shards,
@@ -369,8 +367,6 @@ describe("CI changed Node test plan", () => {
     "src/plugins/contracts/registry.retry.test.ts",
     "src/channels/plugins/config-schema.test.ts",
   ])("keeps exact test leaf %s focused while retaining boundary coverage", (target) => {
-    expect(hasCoreExtensionImpact([target])).toBe(false);
-    expect(createChangedExtensionFallbackShards([target])).toEqual([]);
     const dedicatedContractShards = [{ task: "contracts-channels", includePatterns: [target] }];
     const shards = createChangedNodeTestShards([target], { dedicatedContractShards });
     expect(shards).toEqual([
@@ -501,30 +497,22 @@ describe("CI changed Node test plan", () => {
     "retains max-lines owner regressions beside its dedicated guard and $companions",
     ({ companions }) => {
       const paths = ["config/max-lines-baseline.txt", ...companions];
-      for (const options of [{}, { dedicatedMaxLinesRatchet: false }]) {
-        const uncredited = createChangedNodeTestShards(paths, options);
-        expect(uncredited).not.toBeNull();
-        const groups = fallbackGroups(uncredited ?? []);
-        const targets = groups.flatMap((group) => group.includePatterns ?? []);
-        expectProtectedOwnerExpansion(
-          uncredited,
-          [
-            "test/scripts/check-max-lines-ratchet.test.ts",
-            "test/scripts/ci-changed-node-test-plan.test.ts",
-            "test/scripts/ci-workflow-planning.test.ts",
-            ...companions,
-          ],
-          ["scripts", "src/scripts", "test/scripts"],
-        );
-        expect(targets).toEqual(expect.arrayContaining(companions));
-      }
-      const shards = createChangedNodeTestShards(paths, { dedicatedMaxLinesRatchet: true });
+      const shards = createChangedNodeTestShards(paths);
       expect(shards).not.toBeNull();
+      expectProtectedOwnerExpansion(
+        shards,
+        [
+          "test/scripts/check-max-lines-ratchet.test.ts",
+          "test/scripts/ci-changed-node-test-plan.test.ts",
+          "test/scripts/ci-workflow-planning.test.ts",
+          ...companions,
+        ],
+        ["scripts", "src/scripts", "test/scripts"],
+      );
       const groups = fallbackGroups(shards ?? []);
       const targets = groups.flatMap((group) => group.includePatterns ?? []);
       const configs = groups.flatMap((group) => group.configs);
       expect(configs).toContain("test/vitest/vitest.tooling.config.ts");
-      expect(shards).toEqual(createChangedNodeTestShards(paths));
       if (companions.length) {
         expect(targets).toContain("test/scripts/check-max-lines-ratchet.test.ts");
         expect(targets).toContain("extensions/matrix/src/matrix/actions/verification.test.ts");
@@ -552,9 +540,7 @@ describe("CI changed Node test plan", () => {
       ],
     },
   ])("retains owner coverage for max-lines baseline mixed with $owner", ({ owner, tests }) => {
-    const shards = createChangedNodeTestShards(["config/max-lines-baseline.txt", owner], {
-      dedicatedMaxLinesRatchet: true,
-    });
+    const shards = createChangedNodeTestShards(["config/max-lines-baseline.txt", owner]);
     expect(shards).not.toBeNull();
     const groups = fallbackGroups(shards ?? []);
     const targets = groups.flatMap((group) => group.includePatterns ?? []);
@@ -566,10 +552,10 @@ describe("CI changed Node test plan", () => {
   });
 
   it("retains planner regression coverage beside a dedicated max-lines guard", () => {
-    const shards = createChangedNodeTestShards(
-      ["config/max-lines-baseline.txt", "scripts/lib/ci-changed-node-test-plan.mts"],
-      { dedicatedMaxLinesRatchet: true },
-    );
+    const shards = createChangedNodeTestShards([
+      "config/max-lines-baseline.txt",
+      "scripts/lib/ci-changed-node-test-plan.mts",
+    ]);
     expect(shards).not.toBeNull();
     expect(selectedFiles(shards)).toContain("test/scripts/ci-changed-node-test-plan.test.ts");
   });
@@ -582,7 +568,7 @@ describe("CI changed Node test plan", () => {
       const unknown = "config/max-lines-baseline-other.txt";
       writeFileSync(path.join(cwd, baseline), "");
       writeFileSync(path.join(cwd, unknown), "");
-      const options = { cwd, dedicatedMaxLinesRatchet: true };
+      const options = { cwd };
       const live = createChangedNodeTestShards([baseline, unknown], options);
       expect(live).toEqual([
         expect.objectContaining({ configs: ["test/vitest/vitest.boundary.config.ts"] }),
@@ -816,7 +802,6 @@ describe("CI changed Node test plan", () => {
     const reasons: string[] = [];
     const options = {
       ...fixture,
-      dedicatedCoreTypeChecks: true,
       onFallback: (reason: string) => reasons.push(reason),
     };
     for (const source of ["src/example/entry.ts", "src/example/new-entry.ts"]) {
@@ -856,13 +841,11 @@ describe("CI changed Node test plan", () => {
     );
   });
 
-  it("keeps erased-source owner selection independent of history and dedicated type gates", () => {
+  it("keeps erased-source owner selection independent of history", () => {
     const fixture = createErasedCoreSourceFixture();
-    const options = { ...fixture, dedicatedCoreTypeChecks: true };
+    const options = fixture;
     for (const [label, paths, overrides] of [
-      ["missing gate", ["src/example/entry.ts"], { dedicatedCoreTypeChecks: undefined }],
-      ["disabled gate", ["src/example/entry.ts"], { dedicatedCoreTypeChecks: false }],
-      ["policy-only owner", ["src/test-utils/entry.ts"], { dedicatedCoreTypeChecks: false }],
+      ["policy-only owner", ["src/test-utils/entry.ts"], {}],
       ["missing base", ["src/example/entry.ts"], { baseRef: undefined }],
       ["moving base", ["src/example/entry.ts"], { baseRef: "HEAD" }],
       ["missing history", ["src/example/entry.ts"], { baseRef: "a".repeat(40) }],
@@ -969,11 +952,9 @@ describe("CI changed Node test plan", () => {
         writeFileSync(path.join(cwd, file), source);
       }
       materializeGatewayCallsitesFixture(cwd);
-      const dedicatedNativeChecks = { macos: true, ios: true, android: true };
       const reasons: string[] = [];
       const options = {
         cwd,
-        dedicatedNativeChecks,
         onFallback: (reason: string) => reasons.push(reason),
       };
       const expected = [
@@ -984,7 +965,6 @@ describe("CI changed Node test plan", () => {
       const shards = createChangedNodeTestShards([swift, android, runtime], options);
       expect(shards, reasons.join("\n")).not.toBeNull();
       expect(selectedFiles(shards).toSorted()).toEqual(expected);
-      expect(createChangedNodeTestShards([swift, android, runtime], { cwd })).toEqual(shards);
       expect(
         createChangedNodeTestShards(
           [swift, android, runtime, "apps/unknown/Example.swift"],
@@ -995,16 +975,6 @@ describe("CI changed Node test plan", () => {
         const readerOwned = createChangedNodeTestShards([swift, runtime], { cwd });
         expect(readerOwned).not.toBeNull();
         expect(selectedFiles(readerOwned).toSorted()).toEqual(expected);
-      } else {
-        for (const missing of ["macos", "ios", "android"] as const) {
-          expect(
-            createChangedNodeTestShards([swift, android, runtime], {
-              cwd,
-              dedicatedNativeChecks: { ...dedicatedNativeChecks, [missing]: false },
-            }),
-            missing,
-          ).toEqual(shards);
-        }
       }
     }
   });
@@ -1022,10 +992,7 @@ describe("CI changed Node test plan", () => {
       "apps/android/app/src/test/java/ai/openclaw/app/voice/TalkModeManagerTest.kt",
     ];
     const onFallback = vi.fn();
-    const dedicatedNativeChecks = { macos: false, ios: false, android: true };
     const shards = createChangedNodeTestShards(changedPaths, {
-      dedicatedNativeChecks,
-      includeReleaseOnlyToolingShards: false,
       onFallback,
     });
     expect(onFallback).not.toHaveBeenCalled();
@@ -1036,16 +1003,9 @@ describe("CI changed Node test plan", () => {
     );
     expect(files.filter((file) => file === "test/scripts/apple-app-i18n.test.ts")).toHaveLength(1);
     expect(files).toHaveLength(2);
-    expect(
-      createChangedNodeTestShards([...changedPaths, "apps/.i18n/unowned.json"], {
-        dedicatedNativeChecks,
-      }),
-    ).toEqual(shards);
-    expect(
-      createChangedNodeTestShards(changedPaths, {
-        dedicatedNativeChecks: { ...dedicatedNativeChecks, android: false },
-      }),
-    ).toEqual(shards);
+    expect(createChangedNodeTestShards([...changedPaths, "apps/.i18n/unowned.json"])).toEqual(
+      shards,
+    );
   });
 
   it.each([
@@ -1099,7 +1059,6 @@ describe("CI changed Node test plan", () => {
         const reasons: string[] = [];
         const shards = createChangedNodeTestShards([changedPath], {
           runnerBackend: "github",
-          includeReleaseOnlyToolingShards: false,
           includeReleaseOnlyRuntimeTests: false,
           includePrExemptRuntimeTests: false,
           onFallback: (reason) => reasons.push(reason),
@@ -1203,7 +1162,6 @@ describe("CI changed Node test plan", () => {
     (target) => {
       const cwd = mkdtempSync(path.join(tmpdir(), "openclaw-ci-deleted-test-"));
       try {
-        expect(createChangedExtensionFallbackShards([target], { cwd })).toEqual([]);
         expect(createChangedNodeTestShards([target], { cwd })).toEqual([
           {
             checkName: "checks-node-changed-boundary",

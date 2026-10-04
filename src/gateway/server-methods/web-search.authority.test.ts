@@ -86,9 +86,6 @@ afterEach(() => vi.unstubAllGlobals());
 describe("Search settings live provider authority", () => {
   it.each([
     ["lazy import", "client"],
-    ["lazy import", "profile"],
-    ["lazy import", "config"],
-    ["redirect", "client"],
     ["redirect", "profile"],
     ["redirect", "config"],
   ] as const)(

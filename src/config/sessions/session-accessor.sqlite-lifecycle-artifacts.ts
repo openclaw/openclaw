@@ -7,8 +7,13 @@ import {
 } from "../../infra/kysely-sync.js";
 import { coerceRequiredSqliteNumber as sqliteNumber } from "../../infra/sqlite-number.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import type { DatabaseFileIdentity } from "../../infra/sqlite-worker-identity.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
-import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
+import { assertOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
+import {
+  withOpenClawAgentDatabaseReadOnly,
+  type OpenClawAgentReadOnlyDatabase,
+} from "../../state/openclaw-agent-db-readonly.js";
 import {
   getOpenClawAgentDatabaseIfOpen,
   type OpenClawAgentDatabase,
@@ -21,10 +26,16 @@ import {
   collectProjectedReferencedSessionIds,
   planSessionStateDeleteIfUnreferenced,
 } from "./session-accessor.sqlite-lifecycle-state.js";
-import type { LifecycleArtifactCleanupPlan } from "./session-accessor.sqlite-lifecycle-types.js";
+import type {
+  LifecycleArtifactCleanupInput,
+  LifecycleArtifactCleanupPlan,
+} from "./session-accessor.sqlite-lifecycle-types.js";
 import { collectSessionStateIdsForEntry } from "./session-accessor.sqlite-references.js";
 import { getSessionKysely, withSqliteSessionDatabase } from "./session-accessor.sqlite-scope.js";
-import { assertCanonicalSqliteSessionKeysCurrent } from "./session-canonical-key.js";
+import {
+  assertCanonicalSqliteSessionKeysCurrent,
+  readWithCanonicalSessionReaderContinuation,
+} from "./session-canonical-key.js";
 import { transcriptEventJsonSql } from "./transcript-payload.js";
 
 function sessionKeySegmentStartsWith(sessionKey: string, prefix: string): boolean {
@@ -127,7 +138,7 @@ function planSqliteOrphanLifecycleTranscriptStateDeletes(params: {
   agentId?: string;
   archiveRemovedEntryTranscripts: boolean;
   archiveDirectory: string;
-  database: OpenClawAgentDatabase;
+  database: OpenClawAgentReadOnlyDatabase;
   excludedSessionIds?: ReadonlySet<string>;
   pluginOwnerId?: string;
   referencedSessionIds: ReadonlySet<string>;
@@ -292,19 +303,28 @@ export async function prepareSessionLifecycleArtifactCleanup(
   );
 }
 
-function planSessionLifecycleArtifactCleanup(
-  database: OpenClawAgentDatabase,
-  params: {
-    agentId?: string;
-    archiveRemovedEntryTranscripts: boolean;
-    archiveDirectory: string;
-    pluginOwnerId?: string;
-    sessionKeySegmentPrefix: string;
-    transcriptContentMarker: string;
-    orphanTranscriptMinAgeMs: number;
-    nowMs: number;
-    diagnostics?: SqliteSessionArtifactPreparationDiagnostics;
-  },
+export function readSessionLifecycleArtifactCleanup(
+  database: OpenClawAgentReadOnlyDatabase,
+  params: LifecycleArtifactCleanupInput,
+  expectedSource: DatabaseFileIdentity,
+): LifecycleArtifactCleanupPlan {
+  assertOpenClawAgentDatabaseIdentity(database, expectedSource);
+  const read = () => {
+    assertCanonicalSqliteSessionKeysCurrent(database);
+    return hasSessionLifecycleArtifactCleanupCandidates(database, params, false)
+      ? planSessionLifecycleArtifactCleanup(database, params)
+      : { entries: [], deletePlans: [] };
+  };
+  const plan = readWithCanonicalSessionReaderContinuation(database, params.continuation, () =>
+    database.db.isTransaction ? read() : runSqliteDeferredTransactionSync(database.db, read),
+  );
+  assertOpenClawAgentDatabaseIdentity(database, expectedSource);
+  return plan;
+}
+
+export function planSessionLifecycleArtifactCleanup(
+  database: OpenClawAgentReadOnlyDatabase,
+  params: LifecycleArtifactCleanupInput,
 ): LifecycleArtifactCleanupPlan {
   const diagnostics = params.diagnostics;
   type Phase = "nodeInventoryMs" | "referencePlanningMs" | "orphanPlanningMs";

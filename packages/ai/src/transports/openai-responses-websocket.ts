@@ -7,6 +7,7 @@ import type {
   ResponsesServerEvent,
 } from "openai/resources/responses/responses.js";
 import { ResponsesWS } from "openai/resources/responses/ws.js";
+import { racePromiseWithAbortSignal } from "../../../retry/src/index.js";
 import { getAiTransportHost, resolveAiTransportHeaderSentinels } from "../host.js";
 import {
   getSessionResourceOwnerId,
@@ -318,26 +319,10 @@ async function nextWebSocketMessage(
   iterator: AsyncIterator<ResponsesWebSocketStreamMessage>,
   signal: AbortSignal | undefined,
 ): Promise<IteratorResult<ResponsesWebSocketStreamMessage>> {
-  if (!signal) {
-    return iterator.next();
-  }
-  if (signal.aborted) {
+  if (signal?.aborted) {
     throw transportAbortError(signal);
   }
-  let onAbort: (() => void) | undefined;
-  try {
-    return await Promise.race([
-      iterator.next(),
-      new Promise<never>((_resolve, reject) => {
-        onAbort = () => reject(transportAbortError(signal));
-        signal.addEventListener("abort", onAbort, { once: true });
-      }),
-    ]);
-  } finally {
-    if (onAbort) {
-      signal.removeEventListener("abort", onAbort);
-    }
-  }
+  return await racePromiseWithAbortSignal(iterator.next(), signal, transportAbortError);
 }
 
 function readServerEvent(

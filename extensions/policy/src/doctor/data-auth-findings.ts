@@ -11,11 +11,7 @@ import {
 } from "./data-auth-shapes.js";
 import { policyEvidenceFinding } from "./policy-evidence-finding.js";
 import { authProfileHasMetadata, requiredAuthProfileMetadata } from "./policy-runtime.js";
-import {
-  agentScopedPolicyTargets,
-  dataHandlingPolicyHasRules,
-  scopedAgentIdMatches,
-} from "./policy-scope.js";
+import { agentScopedPolicyTargets, policyHasRules, scopedAgentIdMatches } from "./policy-scope.js";
 import { ocPathSegment, readPolicyBoolean, readStringList } from "./utils.js";
 
 export function secretAuthProvenanceFindings(
@@ -58,7 +54,7 @@ export function dataHandlingFindings(
     ...dataHandlingFindingsForRule(policy, policyDocName, "dataHandling", evidence, () => true),
   );
   for (const target of agentScopedPolicyTargets(policy)) {
-    if (!dataHandlingPolicyHasRules(target.overlay.dataHandling)) {
+    if (!policyHasRules(target.overlay, "dataHandling")) {
       continue;
     }
     findings.push(

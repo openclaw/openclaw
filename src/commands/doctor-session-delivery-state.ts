@@ -1,6 +1,9 @@
 import { note } from "../../packages/terminal-core/src/note.js";
 import { scanDoctorSessionEntriesTolerant } from "../config/sessions/session-accessor.js";
-import { hasLegacySessionEntryState } from "../config/sessions/session-entry-state-format.js";
+import {
+  hasLegacySessionEntryState,
+  hasLegacySessionProviderState,
+} from "../config/sessions/session-entry-state-format.js";
 import { stripRuntimeOnlySessionSkillsFields } from "../config/sessions/store-entry-shape.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -206,11 +209,16 @@ export async function repairLegacySessionEntryStates(params: {
       ...params,
       source: "raw",
       rawNeedsRepair: hasLegacySessionEntryState,
-      rawTransform: (entry, _sessionKey, updatedAt) =>
-        hasLegacySessionEntryState(entry)
-          ? migrateLegacySessionEntryState(entry, updatedAt)
-          : entry,
-      updateDeliveryProjection: false,
+      rawTransform: (entry, _sessionKey, updatedAt) => {
+        if (!hasLegacySessionEntryState(entry)) {
+          return entry;
+        }
+        const next = migrateLegacySessionEntryState(entry, updatedAt);
+        return hasLegacySessionProviderState(entry)
+          ? normalizeLegacySessionEntryDelivery(next)
+          : next;
+      },
+      updateDeliveryProjection: true,
     });
     const report = { found: plan.found, repaired: 0, scannedStores: plan.scannedStores };
     if (!params.apply || plan.found === 0) {

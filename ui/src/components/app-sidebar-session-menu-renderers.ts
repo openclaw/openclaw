@@ -159,16 +159,6 @@ const EMPTY_GROUPS_OPTIONS = [
   { mode: "never", labelKey: "sessionsView.emptyGroupsNever" },
 ] as const;
 
-function renderCompactSidebarOwnerFilter(params: {
-  owners: readonly SessionOwnerOption[];
-  ownerFilterId: string | null;
-  selfOwnerId: string | null;
-}) {
-  return renderCompactSessionMenuFrame(
-    html`${renderSidebarOwnerOptions({ ...params, submenu: false })}`,
-  );
-}
-
 function sidebarFilterMenuViewForValue(value: string | undefined): SidebarFilterMenuView | null {
   if (value === "compact:open-specific-owner") {
     return "specific-owner";
@@ -297,7 +287,9 @@ export function renderSidebarCatalogViewMenu(params: {
         ${renderSidebarMenuTrigger(position, t("chat.sidebar.catalogViewOptions"))}
         ${
           params.compact && params.view === "specific-owner"
-            ? renderCompactSidebarOwnerFilter(params)
+            ? renderCompactSessionMenuFrame(
+                html`${renderSidebarOwnerOptions({ ...params, submenu: false })}`,
+              )
             : html`<div class="sidebar-session-sort-menu__title">${t("sessionsView.groupBy")}</div>
                 ${groupingOptions.map((option) =>
                   renderSidebarMenuRadioItem({

@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { lstat, realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import { relative, resolve } from "node:path";
@@ -14,7 +13,7 @@ import {
   findClawExtensionPackageCollisions,
   planClawExtensions,
 } from "./application-plan.js";
-import { digestClawValue } from "./digest.js";
+import { digestClawBytes, digestClawValue } from "./digest.js";
 import { digestClawMcpServer } from "./mcp.js";
 import { clawManifestWorkspaceConflictsWithPath } from "./schema.js";
 import { MAX_MANAGED_FILE_BYTES, MAX_MANAGED_WORKSPACE_BYTES } from "./source-limits.js";
@@ -417,7 +416,7 @@ export async function buildClawAddPlan(params: {
   } else {
     for (const pending of pendingWorkspaceFiles) {
       if (pending.content) {
-        pending.action.digest = `sha256:${createHash("sha256").update(pending.content).digest("hex")}`;
+        pending.action.digest = digestClawBytes(pending.content);
         continue;
       }
       try {
@@ -433,7 +432,7 @@ export async function buildClawAddPlan(params: {
           symlinks: "reject",
         });
         pending.action.source = planSourcePath(pending.sourcePath, read.realPath);
-        pending.action.digest = `sha256:${createHash("sha256").update(read.buffer).digest("hex")}`;
+        pending.action.digest = digestClawBytes(read.buffer);
       } catch (error) {
         const code = workspaceSourceErrorCode(error);
         const message = workspaceSourceMessage(code, pending.sourcePath);

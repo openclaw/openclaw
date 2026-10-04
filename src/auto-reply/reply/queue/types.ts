@@ -18,6 +18,7 @@ import type { ChannelAdmissionEvidence } from "../../../channels/message-access/
 import type { SessionEntry, SessionToolOverrides } from "../../../config/sessions.js";
 import type { ReplyToMode } from "../../../config/types.base.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import type { QueueDropPolicy } from "../../../config/types.queue.js";
 import type { GroupToolPolicyConfig } from "../../../config/types.tools.js";
 import type { GatewayLocalUserIngress } from "../../../gateway/local-user-ingress.js";
 import type { GatewayUiCommandTarget } from "../../../gateway/ui-command-target.types.js";
@@ -47,7 +48,7 @@ import type {
 } from "../directives.js";
 import type { ReplyOperationRunState } from "../reply-operation-run-state.js";
 
-export type QueueDropPolicy = "old" | "new" | "summarize";
+export type { QueueDropPolicy } from "../../../config/types.queue.js";
 
 export type QueueSettings = {
   mode: QueueMode;
@@ -114,6 +115,11 @@ export type FollowupRun = {
   sourceTurnId?: string;
   /** Original operator capability retained by this turn's queue/run lifecycle. */
   operatorAuthority?: AdmittedRunOperatorAuthority;
+  /**
+   * Source turn's trusted owner status for memory audience resolution only. System-owned
+   * maintenance copies keep `run.senderIsOwner: false`, so they never gain owner tool authority.
+   */
+  memoryAudienceSenderIsOwner?: boolean;
   /** Latest session to claim without rewriting the queued run before store refresh. */
   admissionSessionId?: string;
   /** User-visible prompt body persisted to transcript; excludes runtime-only prompt context. */

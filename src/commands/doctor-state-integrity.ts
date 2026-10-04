@@ -1303,7 +1303,6 @@ export async function noteStateIntegrity(
       warnings,
       changes,
       confirmRepair: (params) => prompter.confirmRuntimeRepair(params),
-      countLabel,
     });
     // Session SQLite migration owns legacy transcript validation and archival.
     // Repeating it here turns healthy pending imports into integrity warnings.

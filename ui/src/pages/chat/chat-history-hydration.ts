@@ -5,13 +5,13 @@ import {
   shouldHideAssistantChatMessage,
   visibleChatHistoryMessages,
 } from "../../lib/chat/message-visibility.ts";
-import { formatUiError } from "../../lib/format-error.ts";
 import {
   formatMissingOperatorReadScopeMessage,
   isMissingOperatorReadScopeError,
 } from "../../lib/gateway-errors.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import { requestSharedHistory } from "./chat-history-request.ts";
+import { formatChatHistoryLoadError, isRetryableChatReadError } from "./chat-history-retry.ts";
 import {
   type ObservedChatHistoryResult,
   isHistoryCursor,
@@ -29,6 +29,7 @@ import {
   resetChatHistoryProjection,
   setChatError,
   setChatHistoryLoad,
+  setChatHistoryRetrying,
 } from "./chat-history-state.ts";
 import {
   materializeVisibleAssistantStreamMessages,
@@ -55,7 +56,6 @@ import type { ChatHistoryRunObservation } from "./run-lifecycle.ts";
 import { applySessionMessagePayload } from "./session-message-apply.ts";
 import { rolloverChatStream } from "./stream-causal-boundary.ts";
 import {
-  currentLiveToolCallIds,
   hasVisibleStreamParts,
   historyReplacedVisibleStream,
   maybeResetToolStream,
@@ -138,7 +138,15 @@ export async function hydrateChatHistory(
       sessionKey,
       requestAgentId,
       state,
-      { isCurrent, captureRun },
+      {
+        isCurrent,
+        captureRun,
+        onRetry: () => {
+          if (isCurrent()) {
+            setChatHistoryRetrying(state, "history", true);
+          }
+        },
+      },
       cursor,
       inputRunIds,
     );
@@ -159,7 +167,7 @@ export async function hydrateChatHistory(
               requestAgentId,
               startup: method === "chat.startup",
               message: requests.subscriptionError,
-              retryable: false,
+              retryable: requests.historyLoad.phase === "failed" && requests.historyLoad.retryable,
             });
             state.requestUpdate?.();
           }
@@ -344,7 +352,7 @@ export async function hydrateChatHistory(
         streamReconciliation,
       );
       pruneHistoryReplacedStreamSegments(state.chatMessages, state, streamReconciliation);
-      const liveToolIds = currentLiveToolCallIds(state);
+      const liveToolIds = state.toolStreamOrder ?? [];
       if (
         state.chatRunId &&
         (hasVisibleStream || liveToolIds.length > 0) &&
@@ -442,12 +450,15 @@ export async function hydrateChatHistory(
       startup: method === "chat.startup",
       message: missingReadScope
         ? formatMissingOperatorReadScopeMessage("existing chat history")
-        : formatUiError(err),
-      retryable: err instanceof GatewayRequestError && err.retryable,
+        : formatChatHistoryLoadError(err),
+      retryable:
+        isRetryableChatReadError(err, method) ||
+        (err instanceof GatewayRequestError && err.retryable),
     });
     state.requestUpdate?.();
   } finally {
     if (ownsHistoryRequest(state, ownership)) {
+      setChatHistoryRetrying(state, "history", false);
       state.chatLoading = false;
     }
   }

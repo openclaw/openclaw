@@ -38,7 +38,7 @@ export function registerDescendantWakeCurrencyTests({
       });
       const resolveGatewayContext: GatewayContextResolver = () => undefined;
       const signal = new AbortController().signal;
-      const replaceSubagentRunAfterSteer = vi.fn(() => true);
+      const replaceSubagentRunAfterSteer = vi.fn(async () => true);
       let accepted = false;
       const dispatch = vi.mocked(dispatchGatewayMethodInProcess);
       const dispatchWithRoleCheck = dispatch.getMockImplementation()!;

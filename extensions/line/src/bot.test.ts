@@ -57,8 +57,6 @@ async function resolveMediaMaxBytes(opts: {
   });
 
   createLineBot({
-    channelAccessToken: "test-token",
-    channelSecret: "test-secret",
     config: configWith(opts.configuredMediaMaxMb),
     ...(opts.optionMediaMaxMb === undefined ? {} : { mediaMaxMb: opts.optionMediaMaxMb }),
   });
@@ -132,8 +130,6 @@ describe("createLineBot pending history cap", () => {
       },
     };
     createLineBot({
-      channelAccessToken: "test-token",
-      channelSecret: "test-secret",
       accountId: "work",
       config: {
         messages: { groupChat: { historyLimit: 7 } },

@@ -134,6 +134,15 @@ export type SessionObserverRevisionFloor = Pick<
   "sessionId" | "lifecycleRevision" | "revision" | "previousDigest"
 >;
 
+export function snapshotSessionObserverRevisionFloor({
+  sessionId,
+  lifecycleRevision,
+  revision,
+  previousDigest,
+}: SessionObserverRevisionFloor): SessionObserverRevisionFloor {
+  return { sessionId, lifecycleRevision, revision, previousDigest };
+}
+
 export function rememberSessionObserverRevisionFloor(
   floors: Map<string, SessionObserverRevisionFloor>,
   sessionKey: string,
@@ -169,12 +178,7 @@ export function rememberSessionObserverDormantRun(
     rememberSessionObserverRevisionFloor(
       floors,
       resolveSessionSubscriptionKey(evicted.sessionKey, evicted.agentId),
-      {
-        sessionId: evicted.sessionId,
-        lifecycleRevision: evicted.lifecycleRevision,
-        revision: evicted.revision,
-        previousDigest: evicted.previousDigest,
-      },
+      snapshotSessionObserverRevisionFloor(evicted),
     );
   }
 }
@@ -284,7 +288,7 @@ const ModelDigestSchema = z.strictObject({
     .optional(),
 });
 
-function sanitizeSessionObserverModelText(value: string, maxChars: number): string {
+export function sanitizeSessionObserverModelText(value: string, maxChars: number): string {
   const normalized = redactToolPayloadText(value).replace(/\s+/gu, " ").trim();
   return truncateUtf16Safe(normalized, maxChars);
 }
@@ -476,7 +480,9 @@ export function normalizeSessionObserverModelOutput(text: string): {
   health: SessionObserverHealth;
   planProgress?: SessionObserverPlanProgress;
 } | null {
-  const digest = safeParseJsonWithSchema(ModelDigestSchema, text.trim());
+  const trimmed = text.trim();
+  const fenced = /^```(?:json)?\s*([\s\S]*?)\s*```$/iu.exec(trimmed);
+  const digest = safeParseJsonWithSchema(ModelDigestSchema, fenced?.[1]?.trim() ?? trimmed);
   if (!digest) {
     return null;
   }

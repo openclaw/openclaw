@@ -531,7 +531,9 @@ A supported sibling or `PATH` binary can run directly. The wrapper automatically
 replaces an outdated selection with the plugin-managed binary; rebuilding the
 sibling checkout is no longer a prerequisite for proof.
 
-The `blacksmith:` block in `.crabbox.yaml` already pins the org, workflow, job, and ref defaults, so the explicit flags below are optional. Explicit clean-machine changed-gate parity:
+The `blacksmith:` block in `.crabbox.yaml` pins the org, workflow, and job defaults.
+The wrapper enforces workflow ref `main` while syncing the selected local source,
+so the explicit flags below are optional. Explicit clean-machine changed-gate parity:
 
 ```bash
 pnpm crabbox:run -- --provider blacksmith-testbox \

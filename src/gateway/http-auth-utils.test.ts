@@ -14,7 +14,6 @@ import {
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import * as schemaFacts from "../infra/sqlite-schema-facts.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import {
@@ -23,7 +22,6 @@ import {
   setCanonicalUserProfileRole,
 } from "../state/user-profile-writes.js";
 import { linkEmail, setDisplayName } from "../state/user-profile-writes.worker.js";
-import * as profileSchema from "../state/user-profiles-schema.js";
 import { getUserProfileListItem } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { GatewayAuthResult } from "./auth.js";
@@ -163,8 +161,6 @@ describe("HTTP gateway owner profiles", () => {
       access.grant = new AbortController();
       expect((await authenticate("trusted-proxy", cfg, email)).ok).toBe(true);
       const observation = observeSqliteReadSql(StatementSync.prototype);
-      const facts = vi.spyOn(schemaFacts, "getAdmittedSqliteSchemaFacts");
-      const ensures = vi.spyOn(profileSchema, "ensureUserProfilesSchema");
       const exec = vi.spyOn(DatabaseSync.prototype, "exec");
       try {
         for (let index = 0; index < 200; index += 1) {
@@ -181,8 +177,6 @@ describe("HTTP gateway owner profiles", () => {
           });
         }
         const counts = {
-          schemaFacts: facts.mock.calls.length,
-          ensureCalls: ensures.mock.calls.length,
           profileSchemaWrites: exec.mock.calls.filter(([sql]) =>
             /CREATE TABLE IF NOT EXISTS user_profiles/iu.test(sql),
           ).length,
@@ -192,7 +186,6 @@ describe("HTTP gateway owner profiles", () => {
           dataVersionReads: observation.queries.filter((sql) => /PRAGMA data_version/iu.test(sql))
             .length,
         };
-        console.log("HTTP profile admission counters", counts);
         expect(counts).toMatchObject({
           profileSchemaWrites: 0,
           schemaReads: 0,
@@ -200,8 +193,6 @@ describe("HTTP gateway owner profiles", () => {
         expect(counts.dataVersionReads).toBeLessThanOrEqual(1000);
       } finally {
         observation.restore();
-        facts.mockRestore();
-        ensures.mockRestore();
         exec.mockRestore();
       }
     });
@@ -470,67 +461,55 @@ describe("HTTP gateway owner profiles", () => {
     });
   });
 
-  it.each(["token", "password"] as const)(
-    "keeps %s owner authority with configured roles",
-    async (method) => {
-      await withOpenClawTestState({ label: "http-owner-roles" }, async () => {
-        const result = await authenticate(method, { gateway: { roles } });
+  it.each([
+    ["token", true, false, undefined],
+    ["password", true, false, undefined],
+    ["none", true, false, undefined],
+    ["device-token", true, false, undefined],
+    ["trusted-proxy", true, false, "alice@example.test"],
+    ["token", false, true, undefined],
+    ["token", true, true, undefined],
+  ] as const)(
+    "resolves %s HTTP identity (roles=%s, storage failure=%s, user=%s)",
+    async (method, configured, storageFailure, user) => {
+      await withOpenClawTestState({ label: "http-profile-admission" }, async () => {
+        if (storageFailure) {
+          ensureOwner.mockImplementationOnce(() => {
+            throw new Error("profile storage unavailable");
+          });
+        }
+        const result = await authenticate(method, configured ? { gateway: { roles } } : {}, user);
+        if (method === "none" || method === "device-token") {
+          expect(result).toEqual({
+            ok: false,
+            authResult: { ok: false, reason: "user_profile_unavailable" },
+          });
+          expect(ensureOwner).not.toHaveBeenCalled();
+          return;
+        }
         expect(result.ok).toBe(true);
         if (!result.ok) {
           throw new Error("expected authenticated request");
         }
-        expect(result.requestAuth.authenticatedUserProfile).toBeDefined();
-        expect(result.requestAuth.operatorRolePolicy).toBeUndefined();
-        expect(result.requestAuth.trustDeclaredOperatorScopes).toBe(false);
-        expect(resolveSharedSecretHttpOperatorScopes(req, result.requestAuth)).toContain(
-          "operator.admin",
-        );
+        if (user) {
+          expect(result.requestAuth.user).toBe(user);
+          expect(result.requestAuth.authenticatedUserProfile?.displayName).toBe("alice");
+          expect(result.requestAuth.operatorRolePolicy?.scopes).toEqual(["operator.read"]);
+          expect(ensureOwner).not.toHaveBeenCalled();
+        } else {
+          expect(result.requestAuth.operatorRolePolicy).toBeUndefined();
+          if (storageFailure) {
+            expect(result).toMatchObject({ ok: true, requestAuth: { authMethod: "token" } });
+            expect(result.requestAuth.authenticatedUserProfile).toBeUndefined();
+          } else {
+            expect(result.requestAuth.authenticatedUserProfile).toBeDefined();
+            expect(result.requestAuth.trustDeclaredOperatorScopes).toBe(false);
+            expect(resolveSharedSecretHttpOperatorScopes(req, result.requestAuth)).toContain(
+              "operator.admin",
+            );
+          }
+        }
       });
-    },
-  );
-
-  it.each(["none", "device-token"] as const)(
-    "keeps configured-role %s requests without identity denied",
-    async (method) => {
-      expect(await authenticate(method, { gateway: { roles } })).toEqual({
-        ok: false,
-        authResult: { ok: false, reason: "user_profile_unavailable" },
-      });
-      expect(ensureOwner).not.toHaveBeenCalled();
-    },
-  );
-
-  it("preserves a verified user's profile and role ceiling", async () => {
-    await withOpenClawTestState({ label: "http-identified-profile" }, async () => {
-      const result = await authenticate(
-        "trusted-proxy",
-        { gateway: { roles } },
-        "alice@example.test",
-      );
-      expect(result.ok).toBe(true);
-      if (!result.ok) {
-        throw new Error("expected authenticated request");
-      }
-      expect(result.requestAuth.user).toBe("alice@example.test");
-      expect(result.requestAuth.authenticatedUserProfile?.displayName).toBe("alice");
-      expect(result.requestAuth.operatorRolePolicy?.scopes).toEqual(["operator.read"]);
-      expect(ensureOwner).not.toHaveBeenCalled();
-    });
-  });
-
-  it.each([false, true])(
-    "continues unidentified after owner storage failure (roles=%s)",
-    async (configured) => {
-      ensureOwner.mockImplementationOnce(() => {
-        throw new Error("profile storage unavailable");
-      });
-      const result = await authenticate("token", configured ? { gateway: { roles } } : {});
-      expect(result).toMatchObject({ ok: true, requestAuth: { authMethod: "token" } });
-      if (!result.ok) {
-        throw new Error("expected authenticated request");
-      }
-      expect(result.requestAuth.authenticatedUserProfile).toBeUndefined();
-      expect(result.requestAuth.operatorRolePolicy).toBeUndefined();
     },
   );
 });

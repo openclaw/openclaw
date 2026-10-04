@@ -3,6 +3,34 @@ import { expect } from "vitest";
 import { sessionGatewayTest as it } from "./control-ui-e2e.sessions.test-support.ts";
 import { flushMockTimers as flush } from "./mock-gateway-page.test-support.ts";
 
+it.for(["sessions.create", "sessions.catalog.continue"])(
+  "retains a terminal event before the %s acknowledgment",
+  async (method, { connect }) => {
+    const key = "agent:main:created-before-ack";
+    const runId = "created-run";
+    const { send, request, controls } = await connect({
+      deferredMethods: [method],
+      methodResponses: { [method]: { key, runStarted: true, runId } },
+    });
+    await send(method, { message: "Prepare workspace" });
+    controls.emit("chat", {
+      sessionKey: key,
+      runId,
+      state: "error",
+      errorMessage: "Workspace preparation failed",
+    });
+    controls.resolveDeferred(method);
+    await flush();
+    expect((await request("sessions.describe", { key })).payload.session).toMatchObject({
+      key,
+      activeRunIds: [],
+      hasActiveRun: false,
+      status: "failed",
+      lastRunError: "Workspace preparation failed",
+    });
+  },
+);
+
 it("commits targeted and session-wide aborts without replacing session edits or other runs", async ({
   connect,
 }) => {

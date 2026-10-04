@@ -1,6 +1,6 @@
 // Telegram Mini App owner checks.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { expandTelegramAllowFromWithAccessGroups } from "../access-groups.js";
+import { expandAllowFromWithAccessGroups } from "openclaw/plugin-sdk/security-runtime";
 import { mergeTelegramAccountConfig } from "../accounts.js";
 import { isNumericTelegramSenderUserId, normalizeTelegramAllowFromEntry } from "../allow-from.js";
 
@@ -17,11 +17,14 @@ export async function isTelegramMiniAppOwner(params: {
   const allowFrom = [...(account.allowFrom ?? []), ...(params.cfg.commands?.ownerAllowFrom ?? [])];
   // Dashboard access is stricter than core senderIsOwner: wildcard and username
   // allowFrom entries never grant the numeric-id match that mints an operator credential.
-  const expanded = await expandTelegramAllowFromWithAccessGroups({
+  const expanded = await expandAllowFromWithAccessGroups({
     cfg: params.cfg,
+    channel: "telegram",
     accountId: params.accountId,
     allowFrom,
     senderId: userId,
+    isSenderAllowed: (senderId, entries) =>
+      entries.some((entry) => normalizeTelegramAllowFromEntry(entry) === senderId),
   });
   return expanded.some((entry) => normalizeTelegramAllowFromEntry(entry) === userId);
 }

@@ -21,7 +21,7 @@ import {
   chatSendOwner,
   requireNonEmptyString,
 } from "./server.sessions.create.test-support.js";
-import { listSessionGroups } from "./session-groups.js";
+import { readSessionGroupCatalog } from "./session-group-catalog.js";
 import { loadGatewayTestConfig } from "./test-helpers.config-runtime.js";
 import { embeddedRunMock, testState, writeSessionStore } from "./test-helpers.js";
 import {
@@ -79,7 +79,7 @@ test("sessions.create registers a category only after the session commit succeed
   );
 
   expect(failed.ok).toBe(false);
-  expect(listSessionGroups().map((group) => group.name)).not.toContain(category);
+  expect(readSessionGroupCatalog().groups.map((group) => group.name)).not.toContain(category);
 
   const broadcastToConnIds = vi.fn();
   const created = await directSessionReq(
@@ -98,7 +98,9 @@ test("sessions.create registers a category only after the session commit succeed
   );
 
   expect(created.ok).toBe(true);
-  expect(listSessionGroups().filter((group) => group.name === category)).toHaveLength(1);
+  expect(readSessionGroupCatalog().groups.filter((group) => group.name === category)).toHaveLength(
+    1,
+  );
   expect(
     broadcastToConnIds.mock.calls.filter(([, payload]) => payload?.reason === "groups"),
   ).toHaveLength(1);
@@ -699,9 +701,9 @@ test("sessions.create adopting an existing key does not restamp node provenance"
     });
     // Adoption is not a node creation: no `created` event may enter the journal.
     expect(
-      listSessionStateEventsSince("agent:main:dashboard:adopted", "main", 0, 20).events.filter(
-        (event) => event.kind === "created",
-      ),
+      (
+        await listSessionStateEventsSince("agent:main:dashboard:adopted", "main", 0, 20)
+      ).events.filter((event) => event.kind === "created"),
     ).toEqual([]);
   } finally {
     chatSend.mockRestore();

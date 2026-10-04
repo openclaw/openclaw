@@ -251,15 +251,7 @@ export function resolveOfficialExternalPluginCatalogEntryKey(
   if (pluginId) {
     return `${normalizeOptionalString(entry.kind) ?? "plugin"}:${pluginId}`;
   }
-  const name = normalizeOptionalString(entry.name);
-  if (name) {
-    return name;
-  }
-  const id = normalizeOptionalString(entry.id);
-  if (id) {
-    return `${normalizeOptionalString(entry.kind) ?? normalizeOptionalString(entry.type) ?? "plugin"}:${id}`;
-  }
-  return undefined;
+  return normalizeOptionalString(entry.name);
 }
 
 export function getOfficialExternalPluginCatalogManifest(

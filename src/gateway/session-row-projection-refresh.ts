@@ -1,9 +1,9 @@
+import { WorkerTaskError } from "@openclaw/worker-runtime";
 import { MAX_SESSION_ROW_FACTS_KEYS } from "../config/sessions/session-transcript-worker.types.js";
 import {
   DEFAULT_WORKER_PENDING_BYTES,
   DEFAULT_WORKER_PENDING_TASKS,
 } from "../infra/worker-task-capacity.js";
-import { WorkerTaskError } from "../infra/worker-task-pool-core.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import { yieldSessionListWork } from "./session-projection-work.js";
@@ -68,6 +68,8 @@ export function createSessionRowRefresh(
         );
         if (selected.size > 0) {
           await owner.runAsOwner(() => readRows(selected, { archived: true }));
+          // Retained facts can finish through microtasks; let the loop run between row slices.
+          await yieldSessionListWork();
         }
       }
       for (const read of batch.values()) {

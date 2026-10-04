@@ -119,7 +119,8 @@ beforeEach(async () => {
     port,
   }: {
     port: number;
-  }): Promise<restartHealth.GatewayRestartSnapshot> => ({
+  }): Promise<Awaited<ReturnType<typeof restartHealth.waitForGatewayHealthyRestart>>> => ({
+    outcome: "failed",
     runtime: { status: "stopped" },
     portUsage: { port, status: "free", listeners: [], hints: [] },
     healthy: false,

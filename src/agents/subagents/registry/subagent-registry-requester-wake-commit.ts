@@ -5,20 +5,28 @@ import type {
   PendingRequesterSettleWakeCommit,
   SubagentLifecycleWakeContext,
 } from "./subagent-registry-lifecycle-context.js";
-import { maskLifecycleIdentifier } from "./subagent-registry-lifecycle-delivery.js";
+import { maskLifecycleIdentifier } from "./subagent-registry-lifecycle-log.js";
 import {
   assertSubagentRegistryWriteSourceCurrent,
-  captureSubagentRunMutationSnapshot,
-  captureSubagentRunPostimagePublication,
-  publishSubagentRunPostimages,
+  mutateSubagentRuns,
+  SubagentRegistryMutationRejectedError,
+  SubagentRegistryCommitReceiptError,
   SubagentRegistryWriteError,
 } from "./subagent-registry-persistence.js";
 import type { RequesterInitialTransfer } from "./subagent-registry-requester-yield.js";
+import { rowToSubagentRunRecord } from "./subagent-registry.store.codec.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import {
   captureRequesterSettleRunIdentity,
+  captureRequesterSettleWakeProgress,
   isRequesterCompletionCohortCurrent,
 } from "./subagent-requester-settle-identity.js";
+import {
+  bindSubagentRunRuntimeKey,
+  currentSubagentRunOrObserved,
+  getSubagentRunRuntimeKey,
+  isSameSubagentRunOwner,
+} from "./subagent-run-generation.js";
 
 // Reporting thresholds never change the durable obligation or retry cadence.
 const REQUESTER_SETTLE_WAKE_COMMIT_SUSTAINED_FAILURES = 5;
@@ -32,6 +40,19 @@ type WakeCommitFailureRetention =
   | boolean
   | ((error: unknown, pending: PendingRequesterSettleWakeCommit) => boolean);
 
+/** Release only the fence slots this episode still owns; a newer episode keeps its own. */
+function releasePendingWakeKeys(
+  context: SubagentLifecycleWakeContext,
+  pending: PendingRequesterSettleWakeCommit,
+): void {
+  for (const entry of pending.entries) {
+    const key = getSubagentRunRuntimeKey(entry);
+    if (context.pendingRequesterSettleWakeCommits.get(key) === pending) {
+      context.pendingRequesterSettleWakeCommits.delete(key);
+    }
+  }
+}
+
 function clearPendingWakeCommit(
   context: SubagentLifecycleWakeContext,
   pending: PendingRequesterSettleWakeCommit,
@@ -40,11 +61,7 @@ function clearPendingWakeCommit(
   if (pending.initialTransfer?.blocked) {
     return;
   }
-  for (const entry of pending.entries) {
-    if (context.pendingRequesterSettleWakeCommits.get(entry) === pending) {
-      context.pendingRequesterSettleWakeCommits.delete(entry);
-    }
-  }
+  releasePendingWakeKeys(context, pending);
   const suppressed = pending.suppressedFailureLogs ?? 0;
   if (suppressed > 0) {
     // Closing the episode accounts for what it withheld, so a log that went
@@ -87,7 +104,7 @@ export function getPendingWakeCommit(
   context: SubagentLifecycleWakeContext,
   entry: SubagentRunRecord,
 ): PendingRequesterSettleWakeCommit | undefined {
-  const pending = context.pendingRequesterSettleWakeCommits.get(entry);
+  const pending = context.pendingRequesterSettleWakeCommits.get(getSubagentRunRuntimeKey(entry));
   if (pending?.initialTransfer?.blocked) {
     return pending;
   }
@@ -98,7 +115,7 @@ export function getPendingWakeCommit(
     }
     // A changed row relinquishes only its own obligation. Surviving siblings
     // must keep the known outcome or replay budget ahead of transport.
-    context.pendingRequesterSettleWakeCommits.delete(entry);
+    context.pendingRequesterSettleWakeCommits.delete(getSubagentRunRuntimeKey(entry));
     return undefined;
   }
   return pending;
@@ -111,7 +128,8 @@ export function hasRequesterWakeOwner(
   const current = context.options.runs.get(entry.runId);
   const pending = getPendingWakeCommit(context, entry);
   return (
-    current === entry || (current === undefined && pending?.isPublishedRetirement(entry) === true)
+    isSameSubagentRunOwner(current, entry) ||
+    (current === undefined && pending?.ownsRetirement(entry) === true)
   );
 }
 
@@ -126,17 +144,8 @@ export function commitRequesterInitialTransfer(
 ): Promise<void> {
   try {
     params.assertCurrent();
-    if (params.alreadyPublished) {
-      params.assertHandoffCurrent();
-    }
   } catch (error) {
-    return Promise.reject(
-      new SubagentRegistryWriteError(
-        params.alreadyPublished ? "committed" : "not-committed",
-        error,
-        params.alreadyPublished ? "published" : undefined,
-      ),
-    );
+    return Promise.reject(new SubagentRegistryWriteError("not-committed", error));
   }
   const existing = params.entries.map((entry) => getPendingWakeCommit(context, entry));
   const existingEpisode = existing.find((pending) => pending !== undefined);
@@ -165,43 +174,33 @@ export function commitRequesterInitialTransfer(
       } catch (error) {
         reason = error;
       }
-      throw new SubagentRegistryWriteError(
-        params.alreadyPublished ? "committed" : "not-committed",
-        reason,
-        params.alreadyPublished ? "published" : undefined,
-      );
+      throw new SubagentRegistryWriteError("not-committed", reason);
     });
   }
   const completion = createDeferredCore();
-  const snapshot = () =>
-    new Map(
-      params.entries.map((entry) => [entry, captureSubagentRunMutationSnapshot(entry)] as const),
-    );
-  let previous = snapshot();
-  let custody = captureSubagentRunPostimagePublication({
-    runs: context.options.runs,
-    previous,
-    context: params.stateContext,
-    assertCurrent: () => {},
-    requireMutationOwnerIdentity: true,
-  });
-  let handoffOwners:
-    | {
-        entry: SubagentRunRecord;
-        identity: ReturnType<typeof captureRequesterSettleRunIdentity>;
-        killIntent: SubagentRunRecord["killIntent"];
-        killReconciliation: SubagentRunRecord["killReconciliation"];
-        suppressed: SubagentRunRecord["suppressCompletionDelivery"];
-        retired: boolean;
-      }[]
-    | undefined;
+  let entries = [...params.entries];
+  const identities = new Map(
+    entries.map((entry) => [entry.runId, captureRequesterSettleRunIdentity(entry)]),
+  );
+  const cancelled = new Map(
+    entries.map((entry) => [
+      entry.runId,
+      {
+        killIntent: entry.killIntent,
+        killReconciliation: entry.killReconciliation,
+        suppressed: entry.suppressCompletionDelivery,
+      },
+    ]),
+  );
+  const retiredRunIds = new Set<string>();
   let writeFailure: SubagentRegistryWriteError | undefined;
-  let finished = false;
   let retired = false;
   let prepared = false;
   let promoted = false;
   let released = !params.release;
-  let writing = false;
+  const currentOf = (entry: SubagentRunRecord) =>
+    currentSubagentRunOrObserved(context.options.runs, entry);
+  const currentEntries = () => entries.map(currentOf);
   const initialTransfer = {
     kind: params.kind,
     completion: completion.promise,
@@ -210,132 +209,146 @@ export function commitRequesterInitialTransfer(
     blocked: false,
     retire() {
       retired = true;
-      const retainsNativeOutcome = () =>
-        initialTransfer.published ||
-        writeFailure?.outcome === "committed" ||
-        writeFailure?.outcome === "unknown";
-      // A second claim must wait until an accepted attempt's outcome is known.
+      const retainsOutcome = () =>
+        !initialTransfer.completed &&
+        (initialTransfer.published ||
+          writeFailure?.outcome === "committed" ||
+          writeFailure?.outcome === "unknown");
       initialTransfer.blocked =
-        !finished && (pending.inFlight !== undefined || retainsNativeOutcome());
-      const rejectRetired = () => {
-        if (!finished) {
-          initialTransfer.blocked = retainsNativeOutcome();
-          if (!initialTransfer.blocked) {
-            for (const entry of pending.entries) {
-              if (context.pendingRequesterSettleWakeCommits.get(entry) === pending) {
-                context.pendingRequesterSettleWakeCommits.delete(entry);
-              }
-            }
-          }
-          let failure = writeFailure;
-          if (!failure || (failure.outcome === "not-committed" && initialTransfer.published)) {
-            failure = new SubagentRegistryWriteError(
-              initialTransfer.published ? "committed" : "not-committed",
-              failure ?? new Error("Initial requester transfer lost its original owner"),
-              initialTransfer.published ? "published" : undefined,
-            );
-          }
-          completion.reject(failure);
+        !initialTransfer.completed && (pending.inFlight !== undefined || retainsOutcome());
+      const finishRetirement = () => {
+        initialTransfer.blocked = retainsOutcome();
+        if (!initialTransfer.blocked) {
+          releasePendingWakeKeys(context, pending);
+        }
+        if (!initialTransfer.completed) {
+          const failure = writeFailure;
+          completion.reject(
+            failure && (failure.outcome !== "not-committed" || !initialTransfer.published)
+              ? failure
+              : new SubagentRegistryWriteError(
+                  initialTransfer.published ? "committed" : "not-committed",
+                  failure ?? new Error("Initial requester transfer lost its original owner"),
+                  initialTransfer.published ? "published" : undefined,
+                ),
+          );
         }
       };
       if (pending.inFlight) {
-        // Caller retirement still joins accepted native work and its publication.
-        void pending.inFlight.then(rejectRetired, rejectRetired);
+        void pending.inFlight.then(finishRetirement, finishRetirement);
       } else {
-        rejectRetired();
+        finishRetirement();
       }
     },
   };
-  function assertHandoffCurrent() {
-    assertSubagentRegistryWriteSourceCurrent(params.stateContext);
-    if (
-      !handoffOwners ||
-      handoffOwners.some(
-        (owner) =>
-          (owner.retired
-            ? context.options.runs.has(owner.entry.runId)
-            : context.options.runs.get(owner.entry.runId) !== owner.entry) ||
-          !isDeepStrictEqual(captureRequesterSettleRunIdentity(owner.entry), owner.identity) ||
-          owner.entry.killIntent !== owner.killIntent ||
-          owner.entry.killReconciliation !== owner.killReconciliation ||
-          owner.entry.suppressCompletionDelivery !== owner.suppressed,
-      )
-    ) {
-      throw new Error("Initial requester handoff lost its recorded cohort");
-    }
-    if (!params.release || !released) {
-      params.assertHandoffCurrent();
-    }
-  }
-  function adoptPublished() {
-    handoffOwners = params.entries.map((entry) => ({
-      entry,
-      identity: captureRequesterSettleRunIdentity(entry),
-      killIntent: entry.killIntent,
-      killReconciliation: entry.killReconciliation,
-      suppressed: entry.suppressCompletionDelivery,
-      retired: params.retire?.has(entry) === true,
-    }));
-    initialTransfer.published = true;
-  }
   function assertEpisodeCurrent() {
     params.assertCurrent();
+    assertSubagentRegistryWriteSourceCurrent(params.stateContext);
     if (
       retired ||
-      params.entries.some(
+      entries.some(
         (entry) =>
-          context.pendingRequesterSettleWakeCommits.get(entry) !== pending ||
-          !isRequesterCompletionCohortCurrent(entry, params.entries, (key, matches) =>
-            context.options.getLatestRunForChildSession(key, matches),
+          context.pendingRequesterSettleWakeCommits.get(getSubagentRunRuntimeKey(entry)) !==
+            pending ||
+          !isRequesterCompletionCohortCurrent(entry, (key, matches, childAgentId) =>
+            context.options.getLatestRunForChildSession(key, matches, childAgentId),
           ),
       )
     ) {
-      throw new Error("Initial requester transfer episode was superseded");
+      throw new SubagentRegistryMutationRejectedError(
+        "Initial requester transfer episode was superseded",
+      );
     }
-    if (initialTransfer.published && !writing) {
-      assertHandoffCurrent();
-    } else {
-      custody.assertCurrent();
+    for (const expected of entries) {
+      const current = context.options.runs.get(expected.runId);
+      if (
+        retiredRunIds.has(expected.runId)
+          ? current !== undefined
+          : !isSameSubagentRunOwner(current, expected) ||
+            !current ||
+            !isDeepStrictEqual(
+              captureRequesterSettleRunIdentity(current),
+              identities.get(expected.runId),
+            ) ||
+            !isDeepStrictEqual(
+              {
+                killIntent: current.killIntent,
+                killReconciliation: current.killReconciliation,
+                suppressed: current.suppressCompletionDelivery,
+              },
+              cancelled.get(expected.runId),
+            )
+      ) {
+        throw new SubagentRegistryMutationRejectedError(
+          "Initial requester handoff lost its recorded cohort",
+        );
+      }
+    }
+    if (initialTransfer.published && (!params.release || !released)) {
+      params.assertHandoffCurrent(currentEntries());
     }
   }
-  async function write(mutate: () => void, onPublished: () => void) {
-    assertEpisodeCurrent();
-    previous = snapshot();
-    custody = captureSubagentRunPostimagePublication({
-      runs: context.options.runs,
-      previous,
-      context: params.stateContext,
-      assertCurrent: () => {},
-      requireMutationOwnerIdentity: true,
-    });
-    writing = true;
-    let capturing = true;
+  function adoptPublished(next: readonly SubagentRunRecord[]) {
+    entries = [...next];
+    pending.entries = entries;
+    for (const entry of entries) {
+      identities.set(entry.runId, captureRequesterSettleRunIdentity(entry));
+    }
+    initialTransfer.published = true;
+    return entries;
+  }
+  async function write(
+    mutate: (drafts: SubagentRunRecord[]) => ReadonlySet<string> | void,
+    releasing = false,
+  ) {
+    const adoptWritten = (drafts: readonly SubagentRunRecord[]) => {
+      if (releasing) {
+        released = true;
+      }
+      adoptPublished(drafts.map(currentOf));
+    };
     try {
-      mutate();
-      const publication = publishSubagentRunPostimages({
-        runs: context.options.runs,
-        previous,
-        retire: params.retire,
-        persist: context.options.persistAsyncOrThrow,
-        context: params.stateContext,
-        assertCurrent: () => {
-          params.assertCurrent();
-          if (!capturing) {
-            assertEpisodeCurrent();
+      let publicationObserved = false;
+      const result = await mutateSubagentRuns(
+        entries.map((entry) => entry.runId),
+        (rows) => {
+          assertEpisodeCurrent();
+          if (!initialTransfer.published) {
+            params.validateSelection?.();
           }
+          const drafts = entries.map((entry) => {
+            const current = rows.get(entry.runId) ?? entry;
+            const draft = structuredClone(current);
+            bindSubagentRunRuntimeKey(draft, getSubagentRunRuntimeKey(current));
+            return draft;
+          });
+          const retiring = mutate(drafts);
+          const postimages = new Map<string, SubagentRunRecord | null>();
+          for (const entry of drafts) {
+            if (
+              !retiredRunIds.has(entry.runId) &&
+              (retiring?.has(entry.runId) || !isDeepStrictEqual(entry, rows.get(entry.runId)))
+            ) {
+              postimages.set(entry.runId, retiring?.has(entry.runId) ? null : entry);
+            }
+          }
+          return { value: { drafts, retiring }, postimages };
         },
-        // A retired caller cannot discard an ACK that still owns its target preimage.
-        assertPublicationCurrent: () => custody.assertCurrent(),
-        onPublished,
-      });
-      capturing = false;
-      const result = await publication;
-      if (result.publication !== "published") {
-        throw new SubagentRegistryWriteError(
-          "committed",
-          new Error("Initial requester transfer publication was superseded"),
-          "superseded",
-        );
+        {
+          runs: context.options.runs,
+          context: params.stateContext,
+          assertCurrent: assertEpisodeCurrent,
+          onPublished: (_postimages, value) => {
+            publicationObserved = true;
+            for (const runId of value.retiring ?? []) {
+              retiredRunIds.add(runId);
+            }
+            adoptWritten(value.drafts);
+          },
+        },
+      );
+      if (!publicationObserved) {
+        adoptWritten(result.drafts);
       }
       writeFailure = undefined;
     } catch (error) {
@@ -346,20 +359,18 @@ export function commitRequesterInitialTransfer(
       if (
         !initialTransfer.published ||
         writeFailure.outcome === "unknown" ||
-        (writeFailure.outcome === "committed" && writeFailure.publication !== "published")
+        writeFailure instanceof SubagentRegistryCommitReceiptError
       ) {
         completion.reject(writeFailure);
-        if (writeFailure.outcome === "committed" || writeFailure.outcome === "unknown") {
+        if (writeFailure.outcome !== "not-committed") {
           initialTransfer.retire();
         }
       }
       throw writeFailure;
-    } finally {
-      writing = false;
     }
   }
   const pending: PendingRequesterSettleWakeCommit = {
-    entries: [...params.entries],
+    entries,
     generation: undefined,
     stateContext: params.stateContext,
     initialTransfer,
@@ -374,15 +385,13 @@ export function commitRequesterInitialTransfer(
         return false;
       }
     },
-    isPublishedRetirement: (entry) =>
-      initialTransfer.published && params.retire?.has(entry) === true,
+    ownsRetirement: (entry) => initialTransfer.published && retiredRunIds.has(entry.runId),
     adoptPublished,
     async commit() {
       if (
         writeFailure?.outcome === "unknown" ||
-        (writeFailure?.outcome === "committed" && writeFailure.publication !== "published")
+        writeFailure instanceof SubagentRegistryCommitReceiptError
       ) {
-        // Canonical restore owns uncertain native outcomes; neither stage can replay them.
         throw writeFailure;
       }
       if (!prepared) {
@@ -392,43 +401,32 @@ export function commitRequesterInitialTransfer(
           assertEpisodeCurrent();
           prepared = true;
         } catch (error) {
-          writeFailure = new SubagentRegistryWriteError(
-            initialTransfer.published ? "committed" : "not-committed",
-            error,
-            initialTransfer.published ? "published" : undefined,
-          );
+          writeFailure = new SubagentRegistryWriteError("not-committed", error);
           completion.reject(writeFailure);
           initialTransfer.retire();
           throw writeFailure;
         }
       }
       if (!initialTransfer.published) {
-        await write(params.mutate, adoptPublished);
+        await write(params.mutate);
       }
       assertEpisodeCurrent();
       if (!promoted) {
-        params.finish();
+        params.finish(currentEntries());
         promoted = true;
       }
       if (!released && params.release) {
-        await write(params.release, () => {
-          released = true;
-          adoptPublished();
-        });
+        await write(params.release, true);
       }
       assertEpisodeCurrent();
-      params.afterRelease?.();
-      finished = true;
+      params.afterRelease?.(currentEntries());
       initialTransfer.completed = true;
       completion.resolve();
       return true;
     },
   };
-  if (params.alreadyPublished) {
-    adoptPublished();
-  }
-  for (const entry of params.entries) {
-    context.pendingRequesterSettleWakeCommits.set(entry, pending);
+  for (const entry of entries) {
+    context.pendingRequesterSettleWakeCommits.set(getSubagentRunRuntimeKey(entry), pending);
   }
   void runPendingWakeCommit(
     context,
@@ -439,7 +437,9 @@ export function commitRequesterInitialTransfer(
       writeFailure?.outcome === "committed",
     "initial",
   ).catch(() => {
-    const member = params.entries.find((entry) => getPendingWakeCommit(context, entry) === pending);
+    const member = currentEntries().find(
+      (entry) => getPendingWakeCommit(context, entry) === pending,
+    );
     if (member) {
       params.scheduleRetry(member);
     }
@@ -477,29 +477,59 @@ function deferWakeCommit(
 // that exact operation in the lifecycle owner, ahead of every later transport.
 export function commitRequesterWake(
   context: SubagentLifecycleWakeContext,
-  entries: readonly SubagentRunRecord[],
+  observedEntries: readonly SubagentRunRecord[],
   generation: number | undefined,
   commit: PendingRequesterSettleWakeCommit["commit"],
   retainOnFailure: WakeCommitFailureRetention,
   retryWholeBatch = false,
   stateContext?: OpenClawStateWorkerContext,
 ): Promise<void> {
+  const predecessors = new Set(
+    observedEntries.flatMap((entry) => {
+      const pending = getPendingWakeCommit(context, entry);
+      return pending ? [pending] : [];
+    }),
+  );
+  if (predecessors.size > 0) {
+    return Promise.all(
+      [...predecessors].map(
+        (pending) => pending.initialTransfer?.completion ?? pending.inFlight ?? Promise.resolve(),
+      ),
+    ).then(async () => {
+      // A failed episode retains its observed delivery and replay budget ahead of new work.
+      if (observedEntries.some((entry) => getPendingWakeCommit(context, entry))) {
+        return;
+      }
+      await commitRequesterWake(
+        context,
+        observedEntries,
+        generation,
+        commit,
+        retainOnFailure,
+        retryWholeBatch,
+        stateContext,
+      );
+    });
+  }
+  const entries = observedEntries;
   const owners = new Map(
     entries.map((entry) => [
-      entry,
+      getSubagentRunRuntimeKey(entry),
       {
         identity: captureRequesterSettleRunIdentity(entry),
-        wake: entry.requesterSettleWake,
-        wakeJson: JSON.stringify(entry.requesterSettleWake),
-        deliveryGeneration: entry.delivery?.generation,
-        execution: entry.execution,
-        cancellation: entry.killReconciliation,
-        suppressed: entry.suppressCompletionDelivery,
+        generation,
+        progress: captureRequesterSettleWakeProgress(entry),
+        killIntent: entry.killIntent,
+        killReconciliation: entry.killReconciliation,
         published: false,
-        retired: false,
       },
     ]),
   );
+  let acknowledgedReceipt: PendingRequesterSettleWakeCommit["committedWake"];
+  const acknowledgedProgress = new Map<
+    string,
+    ReturnType<typeof captureRequesterSettleWakeProgress>
+  >();
   const pending: PendingRequesterSettleWakeCommit = {
     entries: [...entries],
     generation,
@@ -508,62 +538,91 @@ export function commitRequesterWake(
     retryWholeBatch,
     failures: 0,
     nextAttemptAt: 0,
-    isPublishedRetirement: (entry) => {
-      const owner = owners.get(entry);
-      return owner?.published === true && owner.retired;
+    ownsRetirement: (entry) => {
+      const key = getSubagentRunRuntimeKey(entry);
+      const committed = pending.committedWake;
+      // A canonical conflict refresh may expose our deletion before its callback publishes.
+      return (
+        owners.has(key) &&
+        !context.options.runs.has(entry.runId) &&
+        committed?.result.applied === true &&
+        committed.result.retiredRunIds.includes(entry.runId) &&
+        committed.entries.some(({ subagent }) => isSameSubagentRunOwner(subagent, entry))
+      );
     },
     adoptPublished(members) {
+      const published = new Map<string, SubagentRunRecord>();
       for (const entry of members) {
-        const owner = owners.get(entry);
+        const owner = owners.get(getSubagentRunRuntimeKey(entry));
         if (!owner) {
           continue;
         }
+        const current = context.options.runs.get(entry.runId);
+        if (current && !isSameSubagentRunOwner(current, entry)) {
+          throw new SubagentRegistryMutationRejectedError(
+            "Requester wake publication lost its runtime owner",
+          );
+        }
         owner.published = true;
-        owner.retired =
-          pending.committedWake?.result.retiredRunIds.includes(owner.identity.runId) === true;
-        owner.wake = entry.requesterSettleWake;
-        owner.wakeJson = JSON.stringify(owner.wake);
-        owner.execution = entry.execution;
-        owner.cancellation = entry.killReconciliation;
-        owner.suppressed = entry.suppressCompletionDelivery;
+        owner.generation = current?.requesterSettleWake?.rearmGeneration;
+        owner.progress = current && captureRequesterSettleWakeProgress(current);
+        published.set(entry.runId, current ?? entry);
       }
+      pending.entries = pending.entries.map((entry) => published.get(entry.runId) ?? entry);
+      return [...published.values()];
     },
     isCurrent: (entry) => {
-      const owner = owners.get(entry);
+      const owner = owners.get(getSubagentRunRuntimeKey(entry));
+      if (!owner) {
+        return false;
+      }
+      const live = context.options.runs.get(entry.runId);
+      if (!live) {
+        return pending.ownsRetirement(entry);
+      }
       if (
-        !owner ||
-        !isDeepStrictEqual(captureRequesterSettleRunIdentity(entry), owner.identity) ||
-        !isRequesterCompletionCohortCurrent(entry, entries, (key, matches) =>
-          context.options.getLatestRunForChildSession(key, matches),
+        !isSameSubagentRunOwner(live, entry) ||
+        !isDeepStrictEqual(captureRequesterSettleRunIdentity(live), owner.identity) ||
+        !isDeepStrictEqual(live.killIntent, owner.killIntent) ||
+        !isDeepStrictEqual(live.killReconciliation, owner.killReconciliation) ||
+        !isRequesterCompletionCohortCurrent(live, (key, matches, childAgentId) =>
+          context.options.getLatestRunForChildSession(key, matches, childAgentId),
         )
       ) {
         return false;
       }
-      const live = context.options.runs.get(owner.identity.runId);
-      if (
-        (owner.published && owner.retired ? live !== undefined : live !== entry) ||
-        (!owner.published &&
-          (!entry.requesterSettleWake || entry.requesterSettleWake.rearmGeneration !== generation))
-      ) {
-        return false;
+      const progress = captureRequesterSettleWakeProgress(live);
+      // Canonical refresh can expose our committed state before its publication retry.
+      // A different wake must leave this episode, even when a native receipt is retained.
+      if (pending.committedWake && !owner.published) {
+        if (acknowledgedReceipt !== pending.committedWake) {
+          acknowledgedReceipt = pending.committedWake;
+          acknowledgedProgress.clear();
+          for (const { row } of acknowledgedReceipt.result.records) {
+            const intended = rowToSubagentRunRecord(row);
+            if (intended) {
+              acknowledgedProgress.set(
+                intended.runId,
+                captureRequesterSettleWakeProgress(intended),
+              );
+            }
+          }
+        }
+        if (
+          acknowledgedProgress.has(entry.runId) &&
+          isDeepStrictEqual(progress, acknowledgedProgress.get(entry.runId))
+        ) {
+          return true;
+        }
       }
-      if (
-        entry.requesterSettleWake === owner.wake &&
-        entry.execution === owner.execution &&
-        entry.killReconciliation === owner.cancellation &&
-        entry.suppressCompletionDelivery === owner.suppressed
-      ) {
-        return true;
+      const wake = live.requesterSettleWake;
+      if (owner.published && !owner.progress) {
+        return wake === undefined;
       }
-      // Independent blocking keeps the same closed member in its frozen wave.
-      return (
-        !owner.published &&
-        entry.execution.status === "terminal" &&
-        entry.pauseReason !== "sessions_yield" &&
-        entry.suppressCompletionDelivery === true &&
-        entry.delivery?.status === "failed" &&
-        entry.delivery.generation === owner.deliveryGeneration &&
-        JSON.stringify(entry.requesterSettleWake) === owner.wakeJson
+      return Boolean(
+        wake &&
+        wake.rearmGeneration === owner.generation &&
+        isDeepStrictEqual(progress, owner.progress),
       );
     },
   };
@@ -571,7 +630,7 @@ export function commitRequesterWake(
   // still settling, before a failure has established its retry deadline.
   for (const entry of entries) {
     if (pending.isCurrent(entry)) {
-      context.pendingRequesterSettleWakeCommits.set(entry, pending);
+      context.pendingRequesterSettleWakeCommits.set(getSubagentRunRuntimeKey(entry), pending);
     }
   }
   return runPendingWakeCommit(context, pending, retainOnFailure, "initial");

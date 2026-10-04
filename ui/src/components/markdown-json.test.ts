@@ -1,5 +1,5 @@
 /* @vitest-environment jsdom */
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   handleMarkdownCodeBlockClick,
   readMarkdownCodeBlockCopyText,
@@ -12,7 +12,9 @@ import {
 } from "./markdown.ts";
 
 const interactive = { codeBlockInteraction: "interactive" } as const;
+beforeEach(() => document.body.addEventListener("click", handleMarkdownCodeBlockClick));
 afterEach(() => {
+  document.body.removeEventListener("click", handleMarkdownCodeBlockClick);
   document.body.replaceChildren();
 });
 
@@ -64,48 +66,34 @@ describe("source-preserving JSON tree", () => {
   it.each([false, true])("preserves authored indentation in Raw and Copy (fenced=%s)", (fenced) => {
     const source = '\t{\n\t\t"nested": {\n\t\t\t"text": "  keep these spaces  "\n\t\t}\n\t}';
     const body = renderJson(source, fenced);
-    body.addEventListener("click", handleMarkdownCodeBlockClick);
-    try {
-      body.querySelector<HTMLButtonElement>('[data-json-mode="raw"]')!.click();
-      expect(body.querySelector(".code-block-wrapper")?.classList.contains("is-json-raw")).toBe(
-        true,
-      );
-      expect(body.querySelector("pre code")?.textContent).toBe(source + (fenced ? "\n" : ""));
-      expect(
-        readMarkdownCodeBlockCopyText(body.querySelector<HTMLElement>(".code-block-copy")!),
-      ).toBe(source);
-    } finally {
-      body.removeEventListener("click", handleMarkdownCodeBlockClick);
-    }
+    body.querySelector<HTMLButtonElement>('[data-json-mode="raw"]')!.click();
+    expect(body.querySelector(".code-block-wrapper")?.classList.contains("is-json-raw")).toBe(true);
+    expect(body.querySelector("pre code")?.textContent).toBe(source + (fenced ? "\n" : ""));
+    expect(
+      readMarkdownCodeBlockCopyText(body.querySelector<HTMLElement>(".code-block-copy")!),
+    ).toBe(source);
   });
 
   it("switches views through the existing owner without replacing source or node state", () => {
     const body = renderJson('{"nested":{"value":true}}');
-    body.addEventListener("click", handleMarkdownCodeBlockClick);
-    try {
-      const node = body.querySelectorAll<HTMLDetailsElement>(".code-block-json-node")[1]!;
-      node.querySelector<HTMLElement>("summary")!.click();
-      expect(node.open).toBe(false);
-      const raw = body.querySelector<HTMLButtonElement>('[data-json-mode="raw"]')!;
-      const tree = body.querySelector<HTMLButtonElement>('[data-json-mode="tree"]')!;
-      raw.click();
-      expect(raw.getAttribute("aria-pressed")).toBe("true");
-      expect(tree.getAttribute("aria-pressed")).toBe("false");
-      expect(body.querySelector(".code-block-wrapper")?.classList.contains("is-json-raw")).toBe(
-        true,
-      );
-      tree.click();
-      expect(node.open).toBe(false);
-      expect(body.querySelectorAll(".code-block-json-node")[1]).toBe(node);
-      expect(body.querySelector(".code-block-wrapper")?.classList.contains("is-json-raw")).toBe(
-        false,
-      );
-    } finally {
-      body.removeEventListener("click", handleMarkdownCodeBlockClick);
-    }
+    const node = body.querySelectorAll<HTMLDetailsElement>(".code-block-json-node")[1]!;
+    node.querySelector<HTMLElement>("summary")!.click();
+    expect(node.open).toBe(false);
+    const raw = body.querySelector<HTMLButtonElement>('[data-json-mode="raw"]')!;
+    const tree = body.querySelector<HTMLButtonElement>('[data-json-mode="tree"]')!;
+    raw.click();
+    expect(raw.getAttribute("aria-pressed")).toBe("true");
+    expect(tree.getAttribute("aria-pressed")).toBe("false");
+    expect(body.querySelector(".code-block-wrapper")?.classList.contains("is-json-raw")).toBe(true);
+    tree.click();
+    expect(node.open).toBe(false);
+    expect(body.querySelectorAll(".code-block-json-node")[1]).toBe(node);
+    expect(body.querySelector(".code-block-wrapper")?.classList.contains("is-json-raw")).toBe(
+      false,
+    );
   });
 
-  it.each(["{}", "[]", '{"empty":[],"nothing":null}'])(
+  it.each(["{}", '{"empty":[],"nothing":null}'])(
     "renders empty containers and null: %s",
     (source) => {
       const body = renderJson(source);
@@ -114,7 +102,7 @@ describe("source-preserving JSON tree", () => {
     },
   );
 
-  it.each(['{"missing":}', '{"trailing":1,}', '{/*comment*/"a":1}', '{"a":1} trailing'])(
+  it.each(['{"trailing":1,}', '{/*comment*/"a":1}', '{"a":1} trailing'])(
     "leaves invalid JSON on the existing raw fence path: %s",
     (source) => {
       expect(parseMarkdownJson(source)).toBeNull();

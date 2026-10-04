@@ -1,12 +1,11 @@
 import type { EmbeddedForegroundPromptContext } from "../../agents/embedded-agent-runner/run/params.js";
-import { runOutsidePreparedModelRuntimePluginGenerationScope } from "../../agents/prepared-model-runtime-generation-scope.js";
 import { getCanonicalSkillWorkspace } from "../../agents/skill-workshop-workspace-context.js";
 import type { TranscriptEntryAnchor } from "../../config/sessions/transcript-entry-anchor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { runOutsidePluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
+import { runInDetachedAsyncContext } from "../../shared/async-work-scope.js";
 import type { RunSkillUsage } from "../runtime/run-usage.js";
 import { resolveSkillWorkshopConfig } from "./config.js";
 import {
@@ -150,9 +149,7 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
     };
     // This timer outlives the foreground turn that armed it. Create its async
     // resource outside the parent scope so review work admits on the current generation.
-    const timer = runOutsidePreparedModelRuntimePluginGenerationScope(() =>
-      runOutsidePluginRuntimeGenerationScope(() => setTimer(timerCallback, delayMs)),
-    );
+    const timer = runInDetachedAsyncContext(() => setTimer(timerCallback, delayMs));
     pending.timer = timer;
     timer.unref?.();
   };

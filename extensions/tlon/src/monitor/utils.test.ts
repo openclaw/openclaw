@@ -1,5 +1,16 @@
 import { describe, expect, it } from "vitest";
-import { formatSummarizationHistoryText } from "./utils.js";
+import { formatModelName, formatSummarizationHistoryText } from "./utils.js";
+
+describe("formatModelName", () => {
+  it.each([
+    ["openai/gpt-4o", "GPT-4o"],
+    ["local/custom-model", "Custom Model"],
+    ["local/constructor", "Constructor"],
+    ["toString", "ToString"],
+  ])("formats %s as %s", (model, expected) => {
+    expect(formatModelName(model)).toBe(expected);
+  });
+});
 
 // 2026-07-01 12:00:00 UTC. The same instant in any zone, so assertions can
 // compare timezone-aware output deterministically.

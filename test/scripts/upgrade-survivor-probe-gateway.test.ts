@@ -431,7 +431,10 @@ describe("scripts/e2e/lib/upgrade-survivor/probe-gateway.mjs", () => {
 
       expect(result.error).toBeUndefined();
       expect(result.status).not.toBe(0);
-      expect(result.stderr).toContain("probe attempt timed out after 100ms");
+      const attemptDeadline = result.stderr.match(/probe attempt timed out after (\d+)ms/u);
+      expect(attemptDeadline).not.toBeNull();
+      expect(Number(attemptDeadline?.[1])).toBeGreaterThan(0);
+      expect(Number(attemptDeadline?.[1])).toBeLessThanOrEqual(100);
       expect(elapsedMs).toBeLessThan(2_500);
       expect(fs.existsSync(out)).toBe(false);
     } finally {

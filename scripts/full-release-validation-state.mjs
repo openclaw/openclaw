@@ -19,7 +19,6 @@ import {
   validateFullReleaseCandidateRequest,
   validateRecordedFullReleaseCandidateRequest,
 } from "./full-release-candidate-contract.mjs";
-import { loadFlakeClassifications } from "./full-release-flake-classification.mjs";
 import {
   createPublicationAdmission,
   publicationObservationJson,
@@ -39,7 +38,7 @@ import {
   composeReleaseChildAttemptEvidence,
   formatReleaseStateOutcome,
   releasePlanGateFailures,
-  releaseChildClassificationEvidence,
+  releaseManifestChildEvidence,
   MAX_RELEASE_ARTIFACT_BYTES,
   serializeReleaseArtifact,
   selectReleaseStateArtifacts,
@@ -277,25 +276,11 @@ export async function readChild(child, previous, signal, options = {}) {
       },
       run,
     });
-    const snapshot = validateChildBinding(child, run, {
+    return validateChildBinding(child, run, {
       jobs: evidence.jobs,
       observedRunAttempts: evidence.observedRunAttempts,
       sha256: evidence.compositeJobsSha256,
     });
-    if (snapshot.status === "completed" && snapshot.errors.length === 0) {
-      Object.assign(
-        snapshot,
-        await (options.loadFlakeClassifications ?? loadFlakeClassifications)({
-          repo: process.env.GITHUB_REPOSITORY,
-          child: snapshot,
-          parentRunId: options.parentRunId,
-          parentRunAttempt: options.parentRunAttempt,
-          targetSha: options.targetSha,
-          signal,
-        }),
-      );
-    }
-    return snapshot;
   } catch (error) {
     const degraded = classifyReleaseGhTransportError(error) === "transient";
     const provenanceMismatch =
@@ -728,6 +713,7 @@ function manifestContextFromEnvironment(source) {
     validationInputs: inputs,
     publicationArtifacts: {
       npmPreflight: JSON.parse(env.QUALIFIED_NPM_BUNDLE_JSON || "null"),
+      pluginNpm: JSON.parse(env.PREPARED_PLUGIN_NPM_JSON || "null"),
       docker: env.PREPARED_DOCKER_MANIFEST_SHA256
         ? {
             preparedRunId: env.PREPARED_DOCKER_RUN_ID,
@@ -1228,10 +1214,6 @@ async function collectMode(mode) {
     },
   );
   const plan = executionPlan.children;
-  const policy = {
-    releaseProfile,
-    workflowRef: expected.workflowRef,
-  };
   const gateFailures = releasePlanGateFailures(executionPlan.gates);
   const failFast = mode === "decision" && process.env.FAIL_FAST === "true";
   const pollIntervalMs =
@@ -1285,7 +1267,6 @@ async function collectMode(mode) {
         },
       ],
       localFailures: gateFailures,
-      ...policy,
     });
     writePayload(decision, { cancelledRunIds, requested: true });
     finished = true;
@@ -1344,9 +1325,6 @@ async function collectMode(mode) {
       plan.map((child, index) =>
         readChild(child, snapshots[index], abortController.signal, {
           reuseSelection: executionPlan.childReuse?.[child.key],
-          parentRunId: executionPlan.parentRunId,
-          parentRunAttempt: executionPlan.parentRunAttempt,
-          targetSha: executionPlan.targetSha,
         }),
       ),
     );
@@ -1357,7 +1335,6 @@ async function collectMode(mode) {
       extraBlockers: [...executionPlan.blockers, ...decisionReuse.blockers],
       extraErrors: [...transportReadErrors, ...executionPlan.errors, ...decisionReuse.errors],
       localFailures: gateFailures,
-      ...policy,
     });
     if (Date.now() >= nextHeartbeat) {
       console.log(formatReleaseStateHeartbeat(mode, decision));
@@ -1385,7 +1362,6 @@ async function collectMode(mode) {
             ...cancellationErrors,
           ],
           localFailures: gateFailures,
-          ...policy,
         });
       }
     }
@@ -1513,26 +1489,7 @@ async function validateManifestMode() {
     ? Object.fromEntries(
         Object.entries(drain.children).map(([key, child]) => [
           key,
-          {
-            ...releaseChildClassificationEvidence(child),
-            compositeJobsSha256: child.compositeJobsSha256,
-            dispatchActor: child.dispatchActor,
-            effectiveRunAttempt: child.runAttempt,
-            jobs: child.timing.jobs.map((job) => ({
-              acceptedRunAttempt: job.acceptedRunAttempt,
-              completedAt: job.completedAt,
-              conclusion: job.conclusion,
-              name: job.name,
-              startedAt: job.startedAt,
-              status: job.status,
-              url: job.url,
-            })),
-            observedRunAttempts: child.observedRunAttempts,
-            plannedRunAttempt: child.plannedRunAttempt,
-            repository: child.repository,
-            runId: child.runId,
-            triggeringActor: child.triggeringActor,
-          },
+          releaseManifestChildEvidence(child),
         ]),
       )
     : undefined;

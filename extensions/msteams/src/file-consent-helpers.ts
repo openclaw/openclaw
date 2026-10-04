@@ -53,24 +53,16 @@ export function prepareFileConsentActivity(params: {
 }
 
 /** Persist consent bytes for callbacks received by another process after the CLI exits. */
-export async function prepareFileConsentActivityFs(params: {
-  media: FileConsentMedia;
-  conversationId: string;
-  description?: string;
-}): Promise<FileConsentActivityResult> {
-  const { media, conversationId, description } = params;
-
-  // Both stores must use the same upload ID from the consent card.
-  const upload = {
-    buffer: media.buffer,
-    filename: media.filename,
-    contentType: media.contentType,
-    conversationId,
-  };
-  const uploadId = storePendingUpload(upload);
-  await storePendingUploadFs({ id: uploadId, ...upload });
-
-  return { activity: buildConsentActivity({ media, description, uploadId }), uploadId };
+export async function prepareFileConsentActivityFs(
+  params: Parameters<typeof prepareFileConsentActivity>[0],
+): Promise<FileConsentActivityResult> {
+  const result = prepareFileConsentActivity(params);
+  await storePendingUploadFs({
+    id: result.uploadId,
+    ...params.media,
+    conversationId: params.conversationId,
+  });
+  return result;
 }
 
 export function requiresFileConsent(params: {

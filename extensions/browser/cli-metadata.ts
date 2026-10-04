@@ -25,7 +25,6 @@ export function registerBrowserCliMetadata(api: OpenClawPluginApi) {
   );
 }
 
-/** Plugin entry that contributes Browser CLI commands. */
 export default definePluginEntry({
   id: "browser",
   name: "Browser",

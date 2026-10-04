@@ -1,4 +1,4 @@
-import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { AgentHarnessSessionRuntimeParamsV1 } from "openclaw/plugin-sdk/codex-mcp-projection";
 import type {
   CodexAppServerLiveThreadOwnership,
   CodexEphemeralThreadPolicy,
@@ -11,6 +11,7 @@ import type { CodexNativeSkillIsolation } from "./native-skill-isolation.js";
 import type { CodexPluginThreadConfig } from "./plugin-thread-config.js";
 import type { CodexDynamicToolSpec, JsonObject } from "./protocol.js";
 import type {
+  CodexBindingAuthority,
   CodexAppServerBindingIdentity,
   CodexAppServerBindingStore,
   CodexAppServerContextEngineBinding,
@@ -73,8 +74,9 @@ export type CodexStartOrResumeThreadParams = Omit<
   abandonClient?: () => Promise<void>;
   reserveResumeThread?: (threadId: string) => { release: () => void };
   bindingStore: CodexAppServerBindingStore;
-  params: EmbeddedRunAttemptParams;
-  /** Retained host-generation proof; the opaque host capability remains unchanged. */
+  params: AgentHarnessSessionRuntimeParamsV1;
+  authority?: CodexBindingAuthority;
+  /** Caller liveness; durable lineage is owned by authority. */
   assertCurrent?: () => void;
   /** Private execution identity resolved by this harness's catalog generation. */
   runtimeModelId?: string;

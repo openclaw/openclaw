@@ -28,7 +28,11 @@ describe("session sharing board ticket authority", () => {
         },
       );
       const cfg = {
-        agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+        agents: {
+          ownership: "explicit",
+          defaults: { systemAgent: { agentId: "main" } },
+          entries: { main: {}, work: {} },
+        },
       } as ReturnType<GatewayRequestContext["getRuntimeConfig"]>;
       let gatewayAActive = true;
       const gatewayARef: { value?: GatewayRequestContext } = {};

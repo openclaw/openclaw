@@ -89,7 +89,7 @@ function prepareSequencedEntry(params: PluginStateSequencedJournalParams, sequen
   const journalKey = validatePluginStoreKey({
     value: `${params.journalKeyPrefix}${sequence.toString().padStart(16, "0")}`,
     label: "plugin state",
-    errors: { invalid: journalValueErrors.invalid, limit: journalValueErrors.invalid },
+    invalid: journalValueErrors.invalid,
   });
   return {
     cursorValueJson: serializeJournalValue({ kind: "cursor", lastSequence: sequence }),

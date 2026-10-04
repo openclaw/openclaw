@@ -1,3 +1,5 @@
+import { resolveConfiguredGitHubHost } from "../agents/github-host.js";
+
 const GITHUB_PATH_SEGMENT = /^[A-Za-z0-9_.-]+$/u;
 
 type ParsedProjectGitUrl = {
@@ -26,16 +28,22 @@ function githubPathParts(pathname: string): { owner: string; repo: string } | nu
 }
 
 /** Canonicalizes the GitHub clone forms accepted by projects.add. */
-export function parseProjectGitUrl(raw: string): ParsedProjectGitUrl | null {
+export function parseProjectGitUrl(
+  raw: string,
+  githubHost = resolveConfiguredGitHubHost(),
+): ParsedProjectGitUrl | null {
   const trimmed = raw.trim();
   if (!trimmed || trimmed.startsWith("-") || trimmed.includes("\0") || /[\r\n\t ]/u.test(trimmed)) {
     return null;
   }
 
-  const scp = /^git@github\.com:(.+)$/iu.exec(trimmed);
+  const scpPrefix = `git@${githubHost}:`;
+  const scpPath = trimmed.toLowerCase().startsWith(scpPrefix)
+    ? trimmed.slice(scpPrefix.length)
+    : undefined;
   let parts: { owner: string; repo: string } | null;
-  if (scp) {
-    parts = githubPathParts(scp[1] ?? "");
+  if (scpPath !== undefined) {
+    parts = githubPathParts(scpPath);
   } else {
     try {
       const url = new URL(trimmed);
@@ -44,7 +52,7 @@ export function parseProjectGitUrl(raw: string): ParsedProjectGitUrl | null {
         url.protocol === "ssh:" && url.username === "git" && (!url.port || url.port === "22");
       if (
         (!isHttps && !isDefaultSsh) ||
-        url.hostname.toLowerCase() !== "github.com" ||
+        url.hostname.toLowerCase() !== githubHost ||
         url.password ||
         (isHttps && url.username) ||
         url.search ||
@@ -61,7 +69,7 @@ export function parseProjectGitUrl(raw: string): ParsedProjectGitUrl | null {
     return null;
   }
   return {
-    url: `https://github.com/${parts.owner.toLowerCase()}/${parts.repo.toLowerCase()}.git`,
+    url: `https://${githubHost}/${parts.owner.toLowerCase()}/${parts.repo.toLowerCase()}.git`,
     name: parts.repo,
   };
 }

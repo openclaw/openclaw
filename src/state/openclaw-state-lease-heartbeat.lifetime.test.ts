@@ -43,7 +43,7 @@ vi.mock("../infra/node-sqlite.js", () => ({
 
 vi.mock("../infra/runtime-worker-url.js", () => ({
   resolveRuntimeWorkerUrl: () => new URL("file:///synthetic/heartbeat.worker.js"),
-  resolveRuntimeWorkerArgv: () => ["/synthetic/heartbeat.worker.js"],
+  resolveRuntimeWorkerThreadExecArgv: () => [],
 }));
 
 // Error graph semantics have separate codec tests; keep this lifetime fixture JS-only.
@@ -340,6 +340,43 @@ describe("state lease heartbeat lifetime", () => {
     }
   });
 
+  it.each([false, true])(
+    "preserves raw worker errors with received loss diagnostics=%s",
+    async (receivedLoss) => {
+      const params = options();
+      const heartbeat = startOpenClawStateLeaseHeartbeat(params);
+      const outcome = heartbeat.ready.catch((error: unknown) => error);
+      const worker = controls.workers[0];
+      assert(worker);
+      const cause = new Error("synthetic storage failure");
+      const error = Object.assign(new Error("worker activation failed", { cause }), {
+        code: "ERR_SQLITE_ERROR",
+        errcode: 266,
+      });
+      try {
+        if (receivedLoss) {
+          Atomics.store(worker.shared, state.status, state.lost);
+          worker.emit("message", { loss: { path: "activation", outcome: "operation-error" } });
+        }
+        expect(params.onLost).not.toHaveBeenCalled();
+        worker.emit("error", error);
+        worker.finishExit();
+        expect(params.onLost).toHaveBeenCalledExactlyOnceWith(error);
+        expect(await outcome).toBe(error);
+        expect(error).toMatchObject({
+          message: receivedLoss
+            ? "worker activation failed (lossPath=activation, lossOutcome=operation-error)"
+            : "worker activation failed",
+          code: "ERR_SQLITE_ERROR",
+          errcode: 266,
+        });
+        expect(error.cause).toBe(cause);
+      } finally {
+        await finish(heartbeat, worker);
+      }
+    },
+  );
+
   it("bounds an unanswered command even when the worker keeps renewing", async () => {
     const params = options();
     const heartbeat = startOpenClawStateLeaseHeartbeat(params);
@@ -501,6 +538,48 @@ describe("state lease heartbeat lifetime", () => {
           expect(() => heartbeat.assertResponsive(now + 3_000)).toThrow("not responsive");
         }
         expect(waits).toBe(2);
+      } finally {
+        await finish(heartbeat, worker);
+      }
+    },
+  );
+
+  it.each(["current", "stale", "expired"] as const)(
+    "validates %s acknowledgment after a delayed synchronous wake",
+    async (ending) => {
+      const params = options();
+      const heartbeat = startOpenClawStateLeaseHeartbeat(params);
+      const worker = await constructedWorker();
+      try {
+        await heartbeat.ready;
+        const now = Date.now();
+        let elapsed = 0;
+        vi.spyOn(performance, "now").mockImplementation(() => elapsed);
+        vi.spyOn(Date, "now").mockImplementation(() => now + elapsed);
+        Atomics.store(worker.shared, state.request, 4n);
+        Atomics.store(worker.shared, state.ack, 4n);
+        let waits = 0;
+        vi.spyOn(Atomics, "wait").mockImplementation(() => {
+          if (++waits !== 1) {
+            throw new Error("Unexpected additional synchronous wait");
+          }
+          if (ending !== "stale") {
+            Atomics.store(worker.shared, state.ack, Atomics.load(worker.shared, state.request));
+          }
+          // The worker answered before the parent resumed from its synchronous wait.
+          elapsed = 1_500;
+          return "ok";
+        });
+        const check = () =>
+          heartbeat.assertResponsive(now + (ending === "expired" ? 1_000 : 60_000));
+        if (ending === "current") {
+          expect(check).not.toThrow();
+          expect(params.onLost).not.toHaveBeenCalled();
+        } else {
+          expect(check).toThrow("not responsive");
+          expect(params.onLost).toHaveBeenCalledOnce();
+        }
+        expect(waits).toBe(1);
       } finally {
         await finish(heartbeat, worker);
       }

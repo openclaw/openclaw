@@ -4,16 +4,6 @@ import { resolvePinnedHostnameWithPolicy, type SsrFPolicy } from "openclaw/plugi
 import { isHttpsUrl } from "./media-url.js";
 import type { LineOutboundMediaKind } from "./types.js";
 
-type LineOutboundMediaResolved = {
-  mediaUrl: string;
-  /** "unsupported" names a known format LINE cannot carry as native media. */
-  mediaKind: LineOutboundMediaKind | "unsupported";
-  kindSource: "declared" | "metadata" | "url" | "fallback";
-  previewImageUrl?: string;
-  durationMs?: number;
-  trackingId?: string;
-};
-
 type ResolveLineOutboundMediaOpts = {
   mediaKind?: LineOutboundMediaKind;
   previewImageUrl?: string;
@@ -67,7 +57,10 @@ function detectLineMediaKindFromUrl(
 function resolveLineMediaKind(
   url: string,
   opts: ResolveLineOutboundMediaOpts,
-): Pick<LineOutboundMediaResolved, "mediaKind" | "kindSource"> {
+): {
+  mediaKind: LineOutboundMediaKind | "unsupported";
+  kindSource: "declared" | "metadata" | "url" | "fallback";
+} {
   if (opts.mediaKind !== undefined) {
     return { mediaKind: opts.mediaKind, kindSource: "declared" };
   }
@@ -83,38 +76,6 @@ function resolveLineMediaKind(
     : { mediaKind: detected, kindSource: "url" };
 }
 
-async function resolveLineOutboundMedia(
-  mediaUrl: string,
-  opts: ResolveLineOutboundMediaOpts = {},
-): Promise<LineOutboundMediaResolved> {
-  const trimmedUrl = mediaUrl.trim();
-  if (isHttpsUrl(trimmedUrl)) {
-    await validateLineMediaUrl(trimmedUrl);
-    const previewImageUrl = opts.previewImageUrl?.trim();
-    if (previewImageUrl) {
-      await validateLineMediaUrl(previewImageUrl);
-    }
-    return {
-      mediaUrl: trimmedUrl,
-      ...resolveLineMediaKind(trimmedUrl, opts),
-      ...(previewImageUrl ? { previewImageUrl } : {}),
-      ...(typeof opts.durationMs === "number" ? { durationMs: opts.durationMs } : {}),
-      ...(opts.trackingId ? { trackingId: opts.trackingId } : {}),
-    };
-  }
-
-  let parsed: URL | undefined;
-  try {
-    parsed = new URL(trimmedUrl);
-  } catch {
-    // Local paths reach the generic public-HTTPS error below.
-  }
-  if (parsed) {
-    throw new Error("LINE outbound media URL must use HTTPS");
-  }
-  throw new Error("LINE outbound media currently requires a public HTTPS URL");
-}
-
 function isLineUserTarget(target: string): boolean {
   const normalized = target
     .trim()
@@ -126,50 +87,63 @@ function isLineUserTarget(target: string): boolean {
 // An image bubble LINE cannot fill renders as blank space the sender never sees,
 // so media the platform will not carry degrades to the URL it was made of — the
 // same shape createLocationMessage uses for a pin LINE will not draw.
-function lineMediaUrlFallback(mediaUrl: string): messagingApi.TextMessage {
-  return { type: "text", text: mediaUrl };
-}
-
 // Reply-token and push delivery share media validation and provider payload construction.
 export async function buildLineMediaMessage(
   mediaUrl: string,
   opts: ResolveLineOutboundMediaOpts,
   target: string,
 ): Promise<messagingApi.Message> {
-  const resolved = await resolveLineOutboundMedia(mediaUrl, opts);
-  const allowTrackingId = isLineUserTarget(target);
-  switch (resolved.mediaKind) {
+  const trimmedUrl = mediaUrl.trim();
+  if (!isHttpsUrl(trimmedUrl)) {
+    let parsed: URL | undefined;
+    try {
+      parsed = new URL(trimmedUrl);
+    } catch {
+      // Local paths reach the generic public-HTTPS error below.
+    }
+    throw new Error(
+      parsed
+        ? "LINE outbound media URL must use HTTPS"
+        : "LINE outbound media currently requires a public HTTPS URL",
+    );
+  }
+  await validateLineMediaUrl(trimmedUrl);
+  const previewImageUrl = opts.previewImageUrl?.trim();
+  if (previewImageUrl) {
+    await validateLineMediaUrl(previewImageUrl);
+  }
+  const { mediaKind, kindSource } = resolveLineMediaKind(trimmedUrl, opts);
+  switch (mediaKind) {
     case "unsupported":
-      return lineMediaUrlFallback(resolved.mediaUrl);
+      return { type: "text", text: trimmedUrl };
     case "video": {
-      const previewImageUrl = resolved.previewImageUrl?.trim();
       if (previewImageUrl) {
         return {
           type: "video",
-          originalContentUrl: resolved.mediaUrl,
+          originalContentUrl: trimmedUrl,
           previewImageUrl,
           // LINE accepts tracking ids for users although its SDK omits the field.
-          ...(allowTrackingId && resolved.trackingId ? { trackingId: resolved.trackingId } : {}),
+          ...(isLineUserTarget(target) && opts.trackingId ? { trackingId: opts.trackingId } : {}),
         };
       }
       // LINE always needs a poster for a video. Explicit kind or video-only
       // metadata keeps the missing field visible; only URL inference degrades.
-      if (resolved.kindSource !== "url") {
+      if (kindSource !== "url") {
         throw new Error("LINE video messages require previewImageUrl to reference an image URL");
       }
-      return lineMediaUrlFallback(resolved.mediaUrl);
+      return { type: "text", text: trimmedUrl };
     }
     case "audio":
       return {
         type: "audio",
-        originalContentUrl: resolved.mediaUrl,
-        duration: resolved.durationMs ?? 60000,
+        originalContentUrl: trimmedUrl,
+        duration: typeof opts.durationMs === "number" ? opts.durationMs : 60000,
       };
     default:
       return {
         type: "image",
-        originalContentUrl: resolved.mediaUrl,
-        previewImageUrl: resolved.previewImageUrl ?? resolved.mediaUrl,
+        originalContentUrl: trimmedUrl,
+        previewImageUrl: previewImageUrl || trimmedUrl,
       };
   }
 }

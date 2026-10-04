@@ -64,12 +64,6 @@ export async function prepareGatewayKernelState(params: {
   logPlugins: GatewayLogger;
   gatewayRuntime: ReturnType<typeof import("../logging/subsystem.js").runtimeForLogger>;
   resolveChannelRuntime: () => Promise<ChannelRuntime>;
-  loadWorkerEnvironmentStartupModule: () => Promise<
-    typeof import("./server-worker-environment-startup.js")
-  >;
-  loadWorkerPlacementStartupModule: () => Promise<
-    typeof import("./server-worker-placement-startup.js")
-  >;
 }) {
   const {
     bootstrap,
@@ -83,8 +77,6 @@ export async function prepareGatewayKernelState(params: {
     logPlugins,
     gatewayRuntime,
     resolveChannelRuntime: getChannelRuntime,
-    loadWorkerEnvironmentStartupModule,
-    loadWorkerPlacementStartupModule,
   } = params;
   const {
     pluginBootstrap,
@@ -133,7 +125,7 @@ export async function prepareGatewayKernelState(params: {
   });
   const workerEnvironmentRuntime = workerEnvironmentStartup
     ? await startupTrace.measure("worker-environments.runtime-imports", async () => {
-        const workerModule = await loadWorkerEnvironmentStartupModule();
+        const workerModule = await import("./server-worker-environment-startup.js");
         return await workerModule.createGatewayWorkerEnvironmentRuntime({
           scheduler,
           getPluginRegistry: () => pluginRuntime.registry,
@@ -168,7 +160,7 @@ export async function prepareGatewayKernelState(params: {
   const workerPlacementModule = workerEnvironmentStartup
     ? await startupTrace.measure(
         "worker-environments.placement-module",
-        loadWorkerPlacementStartupModule,
+        () => import("./server-worker-placement-startup.js"),
       )
     : undefined;
   const getCommittedRuntimeConfig = () => {
@@ -449,13 +441,14 @@ export async function prepareGatewayKernelState(params: {
     getStartupPendingReason: () => startupState.pendingReason,
     getGatewayDraining: () => lifecycle.closePreludeStarted || isGatewayDraining(),
   };
-  const getStartup = createStartupChecker(startupCheckerDeps);
+  const getStartup = createStartupChecker(startupCheckerDeps, listAgentDatabaseAdmissionRefusals);
   const getReadiness = createReadinessChecker({
     channelManager,
     ...startupCheckerDeps,
     getEventLoopHealth: readinessEventLoopHealth.snapshot,
     getStateDatabaseFailure: () =>
       openClawStateDatabaseCache.getOpenClawStateDatabaseRecordedFailure(resolveDatabasePath()),
+    allowPendingAgentDatabases: !opts.updateCanary,
     getAgentDatabaseAdmissionRefusals: () => {
       const cfg = getRuntimeConfig();
       return listAgentDatabaseAdmissionRefusals().filter(

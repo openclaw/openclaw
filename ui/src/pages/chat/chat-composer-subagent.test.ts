@@ -595,10 +595,7 @@ describe("subagent composer", () => {
     expect(banner?.textContent).toContain("Investigation request");
     banner?.querySelector<HTMLButtonElement>("button")?.click();
     expect(pane.onPaneSessionChange).toHaveBeenCalledWith(pane.paneId, parent.key);
-    const stop = container.querySelector<HTMLButtonElement>('[aria-label="Stop generating"]');
-    expect(stop).not.toBeNull();
-    stop?.click();
-    expect(onAbort).toHaveBeenCalledOnce();
+    expect(container.querySelector('[aria-label="Stop generating"]')).toBeNull();
   });
   it.each([false, true])("keeps an unresolved subagent view-only with metadata=%s", (hasRow) => {
     const { pane, state } = createRefreshChatPane();

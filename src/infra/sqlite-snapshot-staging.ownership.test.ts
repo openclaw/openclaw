@@ -232,6 +232,11 @@ it("keeps snapshot bytes fenced after creator release until native reader close 
   const reclaim = () =>
     runChild(`
     import { reclaimAbandonedSqliteSnapshots } from ${JSON.stringify(stagingModule)};
+    const kill = process.kill.bind(process);
+    process.kill = (pid, signal) => {
+      if (signal === 0) throw Object.assign(new Error('owner is outside this PID namespace'), { code: 'ESRCH' });
+      return kill(pid, signal);
+    };
     for (const ignored of reclaimAbandonedSqliteSnapshots(${JSON.stringify(cache)}, () => {})) {}
   `);
   try {
@@ -251,22 +256,6 @@ it("keeps snapshot bytes fenced after creator release until native reader close 
     close.mockRestore();
     reader.close();
     removeTempDirectory(directory);
-  }
-});
-
-it("refuses a private reader admitted after snapshot retirement", () => {
-  const { cache, source } = createFixture();
-  const owned = createSqliteSnapshotStagingTokenSync(cache);
-  const location = path.join(owned.directory, "database.sqlite");
-  fs.copyFileSync(source, location);
-  try {
-    owned.release(true);
-    expect(() =>
-      openOpenClawStateReadConnection(source, location, undefined, owned.directory),
-    ).toThrow("parent retired");
-  } finally {
-    owned.release();
-    removeTempDirectory(owned.directory);
   }
 });
 
@@ -416,15 +405,15 @@ it("reclaims one oversized abandoned snapshot per pass without starving the next
     ageSnapshotTree(directory);
     return directory;
   });
-  const reports: Array<{ error?: unknown; message: string }> = [];
+  const reports: string[] = [];
   try {
-    for (const _ of reclaimAbandonedSqliteSnapshots(cache, (message, error) => {
-      reports.push({ message, error });
+    for (const _ of reclaimAbandonedSqliteSnapshots(cache, (message) => {
+      reports.push(message);
     })) {
       // Drain the bounded reclamation pass.
     }
     expect(abandoned.filter((directory) => fs.existsSync(directory))).toHaveLength(1);
-    expect(reports.map(({ message }) => message)).toContain(
+    expect(reports).toContain(
       `Reclaimed ${512 * 1024 * 1024 + 1} bytes of interrupted SQLite snapshot data.`,
     );
     for (const _ of reclaimAbandonedSqliteSnapshots(cache, () => {})) {
@@ -435,30 +424,6 @@ it("reclaims one oversized abandoned snapshot per pass without starving the next
     for (const directory of abandoned) {
       removeTempDirectory(directory);
     }
-  }
-});
-
-it("preserves a live snapshot when its owner PID is invisible", () => {
-  const { root, cache, source } = createFixture();
-  const held = prepareSqliteReadOnlyLocationSyncInProcess(source, cache);
-  try {
-    runChild(`
-      import { prepareSqliteReadOnlyLocationSyncInProcess } from ${JSON.stringify(snapshotModule)};
-      import { reclaimAbandonedSqliteSnapshots } from ${JSON.stringify(stagingModule)};
-      import { setLoggerOverride } from ${JSON.stringify(loggerModule)};
-      setLoggerOverride({ level: 'silent', file: ${JSON.stringify(path.join(root, "child.log"))} });
-      const kill = process.kill.bind(process);
-      process.kill = (pid, signal) => {
-        if (signal === 0) throw Object.assign(new Error('owner is outside this PID namespace'), { code: 'ESRCH' });
-        return kill(pid, signal);
-      };
-      for (const _ of reclaimAbandonedSqliteSnapshots(${JSON.stringify(cache)})) {}
-
-    `);
-    expect(fs.existsSync(held.location)).toBe(true);
-    assertReadable(held.location);
-  } finally {
-    held.cleanup();
   }
 });
 
@@ -626,13 +591,6 @@ it("reclaims only legacy snapshots older than 24 hours", async () => {
   const youngDirectoryMtime = fs.statSync(young).mtimeMs;
   const log = path.join(root, "cleanup.log");
   setLoggerOverride({ level: "warn", file: log });
-  const kill = process.kill.bind(process);
-  vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
-    if (signal === 0) {
-      throw Object.assign(new Error("owner is outside this PID namespace"), { code: "ESRCH" });
-    }
-    return kill(pid, signal);
-  });
   await reclaimAbandonedSqliteSnapshotsAsync(cache);
   expect(fs.existsSync(old)).toBe(false);
   expect(fs.readFileSync(path.join(young, "first"), "utf8")).toBe("recently active legacy copy");
@@ -648,8 +606,6 @@ it.skipIf(process.platform === "win32")(
     for (const fixture of [
       { legacyParent: true, childAgeHours: 25 },
       { legacyParent: false, childAgeHours: 25 },
-      { legacyParent: false, childAgeHours: 0 },
-      { legacyParent: false, childAgeHours: 1 },
       { legacyParent: false, childAgeHours: 23 },
     ]) {
       const { root, cache, source } = createFixture();

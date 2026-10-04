@@ -108,6 +108,7 @@ describe("registered gateway install runtime default", () => {
         if (!retainedPath) {
           expect(installed.programArguments).toEqual([
             bunPath,
+            "--no-install",
             entrypoint,
             "gateway",
             "--port",

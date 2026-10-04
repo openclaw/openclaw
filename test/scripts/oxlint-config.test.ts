@@ -741,6 +741,8 @@ describe("oxlint config", () => {
         {
           cwd: root,
           encoding: "utf8",
+          // Capture the complete JSON and owner trace when temporary paths are long.
+          maxBuffer: 8 * 1024 * 1024,
           timeout: 30_000,
           env: {
             ...process.env,
@@ -1281,8 +1283,13 @@ describe("oxlint config", () => {
 
   it("preserves the indexed-access and test-file policies", () => {
     const config = readJson(".oxlintrc.json") as OxlintConfig;
+    const policyOverrides = [
+      "extensions/browser/src/browser/routes/*.ts",
+      "packages/markdown-core/**/*.ts",
+      "**/*.{test,suite}.ts",
+    ].map((file) => config.overrides?.find((override) => override.files?.includes(file)));
 
-    expect(config.overrides?.slice(0, 3)).toEqual([
+    expect(policyOverrides).toEqual([
       {
         files: ["extensions/browser/src/browser/routes/*.ts"],
         rules: {

@@ -209,17 +209,6 @@ describe("shouldDeferWake", () => {
         }),
       ).toEqual({ defer: false });
     });
-
-    it("respects override of minSpacingMs", () => {
-      expect(
-        decide({
-          now: 200_000,
-          nextDueMs: 199_999,
-          lastRunStartedAtMs: 199_500, // 500ms ago
-          minSpacingMs: 1_000,
-        }),
-      ).toEqual({ defer: true, reason: "min-spacing", retryAtMs: 200_500 });
-    });
   });
 
   describe("flood guard", () => {

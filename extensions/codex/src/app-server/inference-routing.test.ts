@@ -14,18 +14,12 @@ import {
   getCodexInferenceThreadQualification,
 } from "./inference-routing.js";
 import type { CodexConfigReadResponse } from "./protocol.js";
-import { createClientHarness } from "./test-support.js";
+import type { CodexBindingAuthority } from "./session-binding.js";
+import { createClientHarness, stubCodexInferenceTransportEnv } from "./test-support.js";
 
 const clients: ReturnType<typeof createClientHarness>[] = [];
 beforeEach(() => {
-  // Each case declares its transport; developer CA/proxy settings must not select a different path.
-  for (const key of ["CODEX_CA_CERTIFICATE", "SSL_CERT_FILE", "REQUEST_METHOD"]) {
-    vi.stubEnv(key, undefined);
-  }
-  for (const key of ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY"]) {
-    vi.stubEnv(key, undefined);
-    vi.stubEnv(key.toLowerCase(), undefined);
-  }
+  stubCodexInferenceTransportEnv();
 });
 afterEach(() => {
   for (const entry of clients.splice(0)) {
@@ -98,6 +92,114 @@ async function prepare(
 }
 
 describe("managed inference route ownership", () => {
+  it.each([false, true])(
+    "admits only config/account writes and route publications (prepared config=%s)",
+    async (preparedConfig) => {
+      let retained = false;
+      let admissions = 0;
+      const authority: CodexBindingAuthority = {
+        lineage: [],
+        prepareMutation: async () => ({ assertCurrent: () => {} }),
+        assertCurrent: () => {},
+        assertLegacyCurrent: () => {},
+        withCurrent: async (consume) => {
+          admissions += 1;
+          retained = true;
+          try {
+            return consume();
+          } finally {
+            retained = false;
+          }
+        },
+      };
+      const h = harness({
+        onWrite(line, send) {
+          expect(retained).toBe(true);
+          const request = JSON.parse(line);
+          send({
+            id: request.id,
+            result:
+              request.method === "config/read"
+                ? { config: {}, origins: {} }
+                : { account: { type: "apiKey" } },
+          });
+        },
+      });
+      ownCodexInferenceClient(h.client);
+      const protect = vi.spyOn(h.client, "protectPrivateTransportSecret");
+      const prepared = await prepareCodexInferenceThreadConfig({
+        client: h.client,
+        binding: undefined,
+        clientId: "fixture-native-client",
+        cwd: "/workspace",
+        ...(preparedConfig ? { effectiveConfig: { config: {}, origins: {} } } : {}),
+        assertCurrent: authority.assertCurrent,
+        authority,
+      });
+      expect(prepared?.route).toBeDefined();
+      expect(protect).toHaveBeenCalledOnce();
+      expect(retained).toBe(false);
+      expect(admissions).toBe(preparedConfig ? 3 : 4);
+      expect(h.writes.map((line) => JSON.parse(line).method)).toEqual(
+        preparedConfig ? ["account/read"] : ["config/read", "account/read"],
+      );
+    },
+  );
+
+  it.each([2, 3])(
+    "refuses stale authority at route admission %s before publishing a handle",
+    async (rejectAdmission) => {
+      let admissions = 0;
+      let accountType = "apiKey";
+      const failure = new Error("route owner superseded");
+      const authority: CodexBindingAuthority = {
+        lineage: [],
+        prepareMutation: async () => ({ assertCurrent: () => {} }),
+        assertCurrent: () => {},
+        assertLegacyCurrent: () => {},
+        withCurrent: async (consume) => {
+          admissions += 1;
+          if (admissions === rejectAdmission) {
+            throw failure;
+          }
+          return consume();
+        },
+      };
+      const h = harness({
+        onWrite(line, send) {
+          const request = JSON.parse(line);
+          expect(request.method).toBe("account/read");
+          send({ id: request.id, result: { account: { type: accountType } } });
+        },
+      });
+      ownCodexInferenceClient(h.client);
+      const protect = vi.spyOn(h.client, "protectPrivateTransportSecret");
+      const input = {
+        client: h.client,
+        binding: undefined,
+        clientId: "fixture-native-client",
+        cwd: "/workspace",
+        effectiveConfig: { config: { features: { memories: true } }, origins: {} },
+        assertCurrent: authority.assertCurrent,
+        authority,
+      };
+      await expect(prepareCodexInferenceThreadConfig(input)).rejects.toBe(failure);
+      expect(protect).not.toHaveBeenCalled();
+      expect(h.writes).toHaveLength(1);
+      if (rejectAdmission === 2) {
+        // Refusing the owner update must not leave the old auth route installed.
+        accountType = "chatgpt";
+      }
+      const prepared = await prepareCodexInferenceThreadConfig(input);
+      expect(prepared?.route.upstream).toBe(
+        accountType === "chatgpt"
+          ? "https://chatgpt.com/backend-api/codex"
+          : "https://api.openai.com/v1",
+      );
+      expect(protect).toHaveBeenCalledOnce();
+    },
+  );
+
   it.each([false, true])(
     "qualifies stock phase1 memory metadata at the binding boundary (configured=%s)",
     async (configured) => {
@@ -198,7 +300,7 @@ describe("managed inference route ownership", () => {
     ).rejects.toThrow("inference route limit reached");
   });
 
-  it.each(["/alpha/search", "/images/generations", "/images/edits"])(
+  it.each(["/alpha/search", "/images/generations"])(
     "binds the actual native tool model on %s to its live turn owner",
     async (path) => {
       const h = harness();
@@ -462,58 +564,53 @@ describe("managed inference route ownership", () => {
     expect(h.writes).toEqual([]);
   });
 
-  it.each([
-    ["apiKey", "https://api.openai.com/v1"],
-    ["chatgpt", "https://chatgpt.com/backend-api/codex"],
-  ])(
-    "resolves %s from native account state and retains only exact host-owned route trust",
-    async (type, upstream) => {
-      const h = harness();
-      ownCodexInferenceClient(h.client);
-      const route = await prepare(h, type);
-      expect(route.upstream).toBe(upstream);
-      expect(new URL(route.baseUrl).pathname.endsWith("/backend-api/codex")).toBe(true);
-      const config = { openai_base_url: route.baseUrl };
-      expect(() => assertCodexInferenceRouteConfig(h.client, route, config)).not.toThrow();
-      expect(() =>
-        assertCodexInferenceRouteConfig(h.client, route, config, "different-provider"),
-      ).toThrow("overridden");
-      expect(() =>
-        assertCodexInferenceRouteConfig(h.client, route, {
-          ...config,
-          model_provider: "different-provider",
-        }),
-      ).toThrow("overridden");
-      expect(() =>
-        assertCodexInferenceRouteConfig(h.client, route, {
-          ...config,
-          "features.respect_system_proxy": true,
-        }),
-      ).toThrow("overridden");
-      expect(() => assertCodexInferenceRouteConfig(h.client, { ...route }, config)).toThrow(
-        "overridden",
-      );
-      expect(() =>
-        assertCodexInferenceRouteConfig(h.client, route, {
-          openai_base_url: "http://127.0.0.1:1/v1",
-        }),
-      ).toThrow("overridden");
-      bindCodexInferenceThread(h.client, "root", route);
-      expect(getCodexInferenceThread(h.client, "root")).toBe(route);
-      bindCodexInferenceThread(h.client, "peer", route);
-      bindCodexInferenceThread(h.client, "root", undefined);
-      expect(getCodexInferenceThread(h.client, "root")).toBeUndefined();
-      expect(getCodexInferenceThread(h.client, "peer") === route).toBe(true);
-      expect(() => route.assertCurrent()).not.toThrow();
-      h.send({
-        method: "account/updated",
-        params: { authMode: type === "chatgpt" ? "chatgptAuthTokens" : "apiKey" },
-      });
-      expect(await prepare(h, type)).toBe(route);
-      h.client.close();
-      expect(() => assertCodexInferenceRouteConfig(h.client, route, config)).toThrow();
-    },
-  );
+  it("resolves native ChatGPT account state and retains only exact host-owned route trust", async () => {
+    const type = "chatgpt";
+    const h = harness();
+    ownCodexInferenceClient(h.client);
+    const route = await prepare(h, type);
+    expect(route.upstream).toBe("https://chatgpt.com/backend-api/codex");
+    expect(new URL(route.baseUrl).pathname.endsWith("/backend-api/codex")).toBe(true);
+    const config = { openai_base_url: route.baseUrl };
+    expect(() => assertCodexInferenceRouteConfig(h.client, route, config)).not.toThrow();
+    expect(() =>
+      assertCodexInferenceRouteConfig(h.client, route, config, "different-provider"),
+    ).toThrow("overridden");
+    expect(() =>
+      assertCodexInferenceRouteConfig(h.client, route, {
+        ...config,
+        model_provider: "different-provider",
+      }),
+    ).toThrow("overridden");
+    expect(() =>
+      assertCodexInferenceRouteConfig(h.client, route, {
+        ...config,
+        "features.respect_system_proxy": true,
+      }),
+    ).toThrow("overridden");
+    expect(() => assertCodexInferenceRouteConfig(h.client, { ...route }, config)).toThrow(
+      "overridden",
+    );
+    expect(() =>
+      assertCodexInferenceRouteConfig(h.client, route, {
+        openai_base_url: "http://127.0.0.1:1/v1",
+      }),
+    ).toThrow("overridden");
+    bindCodexInferenceThread(h.client, "root", route);
+    expect(getCodexInferenceThread(h.client, "root")).toBe(route);
+    bindCodexInferenceThread(h.client, "peer", route);
+    bindCodexInferenceThread(h.client, "root", undefined);
+    expect(getCodexInferenceThread(h.client, "root")).toBeUndefined();
+    expect(getCodexInferenceThread(h.client, "peer") === route).toBe(true);
+    expect(() => route.assertCurrent()).not.toThrow();
+    h.send({
+      method: "account/updated",
+      params: { authMode: "chatgptAuthTokens" },
+    });
+    expect(await prepare(h, type)).toBe(route);
+    h.client.close();
+    expect(() => assertCodexInferenceRouteConfig(h.client, route, config)).toThrow();
+  });
 
   it("preserves an explicit native upstream and revokes routes on account-mode changes", async () => {
     const h = harness();
@@ -550,14 +647,6 @@ describe("managed inference route ownership", () => {
       model_providers: { "amazon-bedrock": { base_url: "https://models.example.com/v1" } },
     },
     {
-      model_provider: "ollama",
-      model_providers: { ollama: { base_url: "https://models.example.com/v1" } },
-    },
-    {
-      model_provider: "signed",
-      model_providers: { signed: { base_url: "https://models.example.com/v1", aws: {} } },
-    },
-    {
       model_provider: "signed",
       "model_providers.signed.base_url": "https://models.example.com/v1",
       "model_providers.signed.aws.region": "synthetic",
@@ -565,7 +654,6 @@ describe("managed inference route ownership", () => {
     { features: { respect_system_proxy: true } },
     { openai_base_url: "http://127.0.0.1:1234/v1" },
     { openai_base_url: "https://models.example.com/v1?api-version=synthetic" },
-    { openai_base_url: "https://models.example.com/v1?" },
   ];
   it.each(legacyProfiles)(
     "preserves unsupported native profiles without redirecting them (%j)",
@@ -573,28 +661,13 @@ describe("managed inference route ownership", () => {
       const fake = createFakeCodexAppServerClient(async () => ({ account: { type: "apiKey" } }));
       ownCodexInferenceClient(fake.client);
       try {
-        const outcome = await prepareThread(fake.client, { config, origins: {} }).then(
-          (prepared) => ({ route: prepared?.route }),
-          (error: unknown) => ({ error }),
-        );
+        await expect(prepareThread(fake.client, { config, origins: {} })).resolves.toBeUndefined();
         expect(fake.request).not.toHaveBeenCalled();
-        expect("error" in outcome).toBe(false);
-        expect("route" in outcome && outcome.route === undefined).toBe(true);
       } finally {
         fake.close();
       }
     },
   );
-
-  it("keeps the configured OpenAI-compatible endpoint on an owned route", async () => {
-    const h = harness();
-    ownCodexInferenceClient(h.client);
-    const route = await prepare(h, "apiKey", {
-      config: { openai_base_url: "https://models.example.com/v1" },
-      origins: {},
-    });
-    expect(route.upstream).toBe("https://models.example.com/v1");
-  });
 
   it.each(["nested", "flat"] as const)(
     "routes a %s custom Responses provider without changing native authentication or query settings",

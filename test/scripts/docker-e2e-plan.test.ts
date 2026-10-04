@@ -18,6 +18,7 @@ import {
 } from "../../scripts/lib/docker-e2e-plan.mts";
 import { createFrozenTargetSource } from "../../scripts/lib/frozen-target-source.mjs";
 import {
+  UPDATE_FIRST_HOP_MISSING_LOAD_PATH_LANE,
   listRecordedFirstHopSourceVersions,
   updateFirstHopCompatLaneName,
 } from "../../scripts/lib/update-first-hop-lanes.mjs";
@@ -60,7 +61,8 @@ function copyCurrentScenarioMetadata(targetRoot: string) {
 }
 
 const firstHopSourceVersions = listRecordedFirstHopSourceVersions();
-const firstHopLaneNames = firstHopSourceVersions.map(updateFirstHopCompatLaneName);
+const sourceFirstHopLaneNames = firstHopSourceVersions.map(updateFirstHopCompatLaneName);
+const firstHopLaneNames = [...sourceFirstHopLaneNames, UPDATE_FIRST_HOP_MISSING_LOAD_PATH_LANE];
 
 function planFor(
   overrides: Partial<Parameters<typeof resolveDockerE2ePlan>[0]> = {},
@@ -330,8 +332,8 @@ describe("scripts/lib/docker-e2e-plan", () => {
       selectedLaneNames: parseLaneSelection("update-first-hop-compat"),
       upgradeSurvivorTargetRoot: targetRoot,
     });
-    expect(plan.lanes.map((lane) => lane.name)).toEqual(firstHopLaneNames);
-    expect(plan.omittedUnsupportedLanes).toEqual([]);
+    expect(plan.lanes.map((lane) => lane.name)).toEqual(sourceFirstHopLaneNames);
+    expect(plan.omittedUnsupportedLanes).toEqual([UPDATE_FIRST_HOP_MISSING_LOAD_PATH_LANE]);
   });
 
   it("omits only the first-hop sources a target's own inventory does not record", () => {
@@ -352,7 +354,52 @@ describe("scripts/lib/docker-e2e-plan", () => {
     });
     expect(plan.lanes.map((lane) => lane.name)).toEqual([updateFirstHopCompatLaneName(oldest)]);
     expect(plan.lanes[0]?.timeoutMs).toBe(3_500_000);
-    expect(plan.omittedUnsupportedLanes).toEqual(newer.map(updateFirstHopCompatLaneName));
+    expect(plan.omittedUnsupportedLanes).toEqual([
+      ...newer.map(updateFirstHopCompatLaneName),
+      UPDATE_FIRST_HOP_MISSING_LOAD_PATH_LANE,
+    ]);
+  });
+
+  it("keeps source hops and gates post-convergence proof on candidate admission", () => {
+    for (const version of firstHopSourceVersions) {
+      expect(findLaneByName(updateFirstHopCompatLaneName(version))?.command).toBe(
+        `OPENCLAW_QA_ALLOW_UPDATE_FIRST_HOP=1 OPENCLAW_UPDATE_FIRST_HOP_SCENARIO=source OPENCLAW_UPDATE_FIRST_HOP_SOURCE_VERSIONS=${version} OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:update-first-hop-compat`,
+      );
+    }
+    const targetRoot = tempDirs.make("openclaw-first-hop-admission-target-");
+    writeFileSync(
+      join(targetRoot, "package.json"),
+      JSON.stringify({ openclaw: { updateAdmissionProtocol: 1 } }),
+    );
+    const plan = planFor({
+      selectedLaneNames: [UPDATE_FIRST_HOP_MISSING_LOAD_PATH_LANE],
+      upgradeSurvivorTargetRoot: targetRoot,
+    });
+    expect(plan.lanes.map(summarizeLane)).toEqual([
+      {
+        command:
+          "OPENCLAW_QA_ALLOW_UPDATE_FIRST_HOP=1 OPENCLAW_UPDATE_FIRST_HOP_SCENARIO=missing-load-path OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:update-first-hop-compat",
+        imageKind: "bare",
+        live: false,
+        name: UPDATE_FIRST_HOP_MISSING_LOAD_PATH_LANE,
+        resources: ["docker", "npm", "service"],
+        stateScenario: "upgrade-survivor",
+        timeoutMs: 3_500_000,
+        weight: 2,
+      },
+    ]);
+    expect(plan.omittedUnsupportedLanes).toEqual([]);
+
+    writeFileSync(
+      join(targetRoot, "package.json"),
+      JSON.stringify({ openclaw: { updateAdmissionProtocol: 2 } }),
+    );
+    const unsupported = planFor({
+      selectedLaneNames: [UPDATE_FIRST_HOP_MISSING_LOAD_PATH_LANE],
+      upgradeSurvivorTargetRoot: targetRoot,
+    });
+    expect(unsupported.lanes).toEqual([]);
+    expect(unsupported.omittedUnsupportedLanes).toEqual([UPDATE_FIRST_HOP_MISSING_LOAD_PATH_LANE]);
   });
 
   it.each([
@@ -677,7 +724,6 @@ describe("scripts/lib/docker-e2e-plan", () => {
       upgradeSurvivorScenarios: "legacy-operator-state",
     });
     expect(plan.lanes.map((lane) => lane.name)).toEqual([
-      "published-upgrade-survivor-2026.6.34-legacy-operator-state",
       "published-upgrade-survivor-2026.9.1-legacy-operator-state",
       "published-upgrade-survivor-2026.9.4-legacy-operator-state",
       "published-upgrade-survivor-2026.9.6-legacy-operator-state",
@@ -697,10 +743,10 @@ describe("scripts/lib/docker-e2e-plan", () => {
       expect(
         planFor({
           selectedLaneNames: ["published-upgrade-survivor"],
-          upgradeSurvivorBaselines: "2026.6.34",
+          upgradeSurvivorBaselines: "2026.9.1",
           upgradeSurvivorScenarios: alias,
         }).lanes.map((lane) => lane.name),
-      ).toContain("published-upgrade-survivor-2026.6.34-legacy-operator-state");
+      ).toContain("published-upgrade-survivor-2026.9.1-legacy-operator-state");
     }
   });
 
@@ -712,7 +758,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
     });
     const plan = planFor({
       selectedLaneNames: ["published-upgrade-survivor"],
-      upgradeSurvivorBaselines: "2026.7.35 2026.6.34",
+      upgradeSurvivorBaselines: "2026.9.1",
       upgradeSurvivorScenarios: "legacy-operator-state",
       frozenTarget: {
         mode: "inert",

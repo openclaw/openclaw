@@ -171,43 +171,6 @@ export async function inferImageGenerationResolution(
   return DEFAULT_RESOLUTION;
 }
 
-const SUPPORTED_ASPECT_RATIOS = new Set([
-  "1:1",
-  "2:1",
-  "20:9",
-  "19.5:9",
-  "2:3",
-  "3:2",
-  "2.35:1",
-  "3:4",
-  "4:3",
-  "4:5",
-  "5:4",
-  "9:16",
-  "9:19.5",
-  "9:20",
-  "16:9",
-  "21:9",
-  "1:2",
-  "4:1",
-  "1:4",
-  "8:1",
-  "1:8",
-]);
-
-export function normalizeImageGenerationAspectRatio(raw: string | undefined): string | undefined {
-  const normalized = raw?.trim();
-  if (!normalized) {
-    return undefined;
-  }
-  if (SUPPORTED_ASPECT_RATIOS.has(normalized)) {
-    return normalized;
-  }
-  throw new ToolInputError(
-    "aspectRatio must be one of 1:1, 2:1, 20:9, 19.5:9, 2:3, 3:2, 2.35:1, 3:4, 4:3, 4:5, 5:4, 9:16, 9:19.5, 9:20, 16:9, 21:9, 1:2, 4:1, 1:4, 8:1, or 1:8",
-  );
-}
-
 export function normalizeImageGenerationResolution(
   raw: string | undefined,
 ): ImageGenerationResolution | undefined {

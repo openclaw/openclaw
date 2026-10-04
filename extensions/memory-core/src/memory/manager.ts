@@ -1,4 +1,3 @@
-// Memory Core plugin module implements the concrete memory index manager.
 import { formatErrorMessage, toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import {
   createSubsystemLogger,
@@ -505,7 +504,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
     this.syncing = this.syncOutcomes.track(run, true).finally(() => {
       this.syncing = null;
     });
-    return this.syncing ?? Promise.resolve();
+    return this.syncing;
   }
 
   status(): MemoryProviderStatus {

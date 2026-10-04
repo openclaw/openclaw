@@ -39,32 +39,25 @@ beforeEach(() => {
 });
 
 describe("prepared workspace mutation admission", () => {
-  it.each(["complete", "close"] as const)(
-    "fences legacy reads through permit %s",
-    async (outcome) => {
-      const store = new NodeWorkerPreparedWorkspaceStore({});
-      const admitted = createDeferredCore<NodeWorkerPreparedWorkspaceRow>();
-      mock.execute.mockReturnValueOnce(admitted.promise);
+  it("fences legacy reads until the admitted permit closes", async () => {
+    const store = new NodeWorkerPreparedWorkspaceStore({});
+    const admitted = createDeferredCore<NodeWorkerPreparedWorkspaceRow>();
+    mock.execute.mockReturnValueOnce(admitted.promise);
+    expect(store.findSync(bound.environment_id)).toBe(bound);
+    const pending = store.beginMutation(bound);
+    let permit: Awaited<typeof pending> | undefined;
+    try {
+      expect(() => store.findSync(bound.environment_id)).toThrow(/mutation/i);
+      admitted.resolve(retiring);
+      permit = await pending;
+      expect(() => store.findSync(bound.environment_id)).toThrow(/mutation/i);
+      permit.close();
       expect(store.findSync(bound.environment_id)).toBe(bound);
-      const pending = store.beginMutation(bound);
-      let permit: Awaited<typeof pending> | undefined;
-      try {
-        expect(() => store.findSync(bound.environment_id)).toThrow(/mutation/i);
-        admitted.resolve(retiring);
-        permit = await pending;
-        expect(() => store.findSync(bound.environment_id)).toThrow(/mutation/i);
-        if (outcome === "complete") {
-          await permit.complete();
-        } else {
-          permit.close();
-        }
-        expect(store.findSync(bound.environment_id)).toBe(bound);
-      } finally {
-        admitted.resolve(retiring);
-        (permit ?? (await pending)).close();
-      }
-    },
-  );
+    } finally {
+      admitted.resolve(retiring);
+      (permit ?? (await pending)).close();
+    }
+  });
 
   it("releases the local fence when retirement is refused", async () => {
     const store = new NodeWorkerPreparedWorkspaceStore({});

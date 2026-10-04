@@ -11,44 +11,41 @@ export type MacOSDesktopCodexAppPathCandidate = {
 };
 
 const MACOS_DESKTOP_CODEX_APP_PATH_CANDIDATES: readonly MacOSDesktopCodexAppPathCandidate[] = (
-  [
+  ["ChatGPT.app", "Codex.app"] as const
+).flatMap((appName) => {
+  const appBundlePath = `/Applications/${appName}`;
+  const resources = `${appBundlePath}/Contents/Resources`;
+  const computerUseServiceAppPaths = [
+    `${resources}/cua_node/lib/node_modules/@oai/sky/Codex Computer Use.app`,
+    `${resources}/plugins/openai-bundled/plugins/computer-use/Codex Computer Use.app`,
+  ];
+  if (appName === "Codex.app") {
+    computerUseServiceAppPaths.reverse();
+  }
+  const candidate: MacOSDesktopCodexAppPathCandidate = {
+    appName,
+    appBundlePath,
+    appServerCommandPath: `${resources}/codex`,
+    bundledMarketplacePath: `${resources}/plugins/openai-bundled`,
+    computerUseServiceAppPaths,
+  };
+  return [
     {
-      appName: "ChatGPT.app",
-      appBundlePath: "/Applications/ChatGPT.app",
-      appServerCommandPath: "/Applications/ChatGPT.app/Contents/Resources/codex",
-      bundledMarketplacePath: "/Applications/ChatGPT.app/Contents/Resources/plugins/openai-bundled",
-      computerUseServiceAppPaths: [
-        "/Applications/ChatGPT.app/Contents/Resources/cua_node/lib/node_modules/@oai/sky/Codex Computer Use.app",
-        "/Applications/ChatGPT.app/Contents/Resources/plugins/openai-bundled/plugins/computer-use/Codex Computer Use.app",
-      ],
+      ...candidate,
+      appServerCommandPath: path.join(
+        appBundlePath,
+        "Contents",
+        "Resources",
+        "codex-cli",
+        "CodexCLI.app",
+        "Contents",
+        "MacOS",
+        "codex",
+      ),
     },
-    {
-      appName: "Codex.app",
-      appBundlePath: "/Applications/Codex.app",
-      appServerCommandPath: "/Applications/Codex.app/Contents/Resources/codex",
-      bundledMarketplacePath: "/Applications/Codex.app/Contents/Resources/plugins/openai-bundled",
-      computerUseServiceAppPaths: [
-        "/Applications/Codex.app/Contents/Resources/plugins/openai-bundled/plugins/computer-use/Codex Computer Use.app",
-        "/Applications/Codex.app/Contents/Resources/cua_node/lib/node_modules/@oai/sky/Codex Computer Use.app",
-      ],
-    },
-  ] as const
-).flatMap((candidate) => [
-  {
-    ...candidate,
-    appServerCommandPath: path.join(
-      candidate.appBundlePath,
-      "Contents",
-      "Resources",
-      "codex-cli",
-      "CodexCLI.app",
-      "Contents",
-      "MacOS",
-      "codex",
-    ),
-  },
-  candidate,
-]);
+    candidate,
+  ];
+});
 
 export function resolveMacOSDesktopCodexAppPathCandidates(
   platform: NodeJS.Platform = process.platform,

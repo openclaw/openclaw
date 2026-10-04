@@ -1,9 +1,9 @@
 // Verifies simple-completion model selection preserves provider, model, and profile refs.
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import { createPluginManifestRecordFixture } from "../plugins/plugin-metadata.test-support.js";
+import { createCanonicalAgentConfigFixture } from "../test-utils/config-roster.js";
 import {
   acquireSimpleCompletionModelForAgent,
   resolveSimpleCompletionSelectionForAgent as resolveSimpleCompletionSelectionForAgentBase,
@@ -15,7 +15,7 @@ function resolveSimpleCompletionSelectionForAgent(
 ) {
   return resolveSimpleCompletionSelectionForAgentBase({
     ...params,
-    cfg: migratePersistedImplicitMainRoster(params.cfg).config as OpenClawConfig,
+    cfg: createCanonicalAgentConfigFixture(params.cfg).config,
   });
 }
 
@@ -187,7 +187,7 @@ describe("resolveSimpleCompletionSelectionForAgent", () => {
           model: "anthropic/claude-opus-4-6",
           utilityModel: "openai/gpt-5.4-mini",
         },
-        list: [{ id: "ops", utilityModel: "google/gemini-3.1-flash-lite-preview" }],
+        entries: { ops: { utilityModel: "google/gemini-3.1-flash-lite-preview" } },
       },
     } as OpenClawConfig;
 

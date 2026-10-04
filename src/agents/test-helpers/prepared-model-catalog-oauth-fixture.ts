@@ -41,7 +41,7 @@ export async function withHeldCatalogOAuthRefresh(
   run: (fixture: HeldCatalogOAuthRefresh) => Promise<void>,
 ): Promise<void> {
   const { makeTempDir, signal } = params;
-  const fixture = createCatalogFixture(makeTempDir, 0);
+  const fixture = await createCatalogFixture(makeTempDir, 0);
   const profileId = `${PROVIDER_ID}:oauth`;
   const credential: OAuthCredential = {
     type: "oauth",

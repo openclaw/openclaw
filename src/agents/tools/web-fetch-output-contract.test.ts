@@ -1,4 +1,6 @@
 import { readFile, rm } from "node:fs/promises";
+import { setImmediate as nextTurn } from "node:timers/promises";
+import { queryObjects } from "node:v8";
 import { Value } from "typebox/value";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { wrapExternalContent, wrapWebContent } from "../../security/external-content.js";
@@ -190,6 +192,90 @@ describe("web_fetch output contract", () => {
       expect(providerExecute).toHaveBeenCalledTimes(1);
     },
   );
+
+  it("releases discarded provider strings while caching bounded protocol metadata", async () => {
+    const fields = [
+      ["contentType", 256],
+      ["extractor", 128],
+      ["fetchedAt", 64],
+    ] as const;
+    const modes = ["oversized", "already-sliced"] as const;
+    const prefix = "metadata-λ🦞\ud800x\udfff";
+    const donorBytes = 2 * 1024 * 1024;
+    const copies = 3;
+    let providerCalls = 0;
+    fetchWithWebToolsNetworkGuardMock.mockRejectedValue(new Error("direct fetch failed"));
+    const tool = createContractTool({ cacheTtlMinutes: 1 });
+    // Warm the real fallback, payload, serialization, and cache paths before measuring.
+    resolveWebFetchDefinitionMock.mockReturnValue({
+      provider: { id: "mock-provider" },
+      definition: { execute: async () => ({ text: "Useful provider body." }) },
+    });
+    await tool?.execute("warm-retention", { url: "https://example.com/metadata-retention-warm" });
+    async function heapUsed() {
+      await nextTurn();
+      queryObjects(WeakRef);
+      return process.memoryUsage().heapUsed;
+    }
+    const before = await heapUsed();
+    for (const [field, limit] of fields) {
+      for (const mode of modes) {
+        resolveWebFetchDefinitionMock.mockReturnValue({
+          provider: { id: "mock-provider" },
+          definition: {
+            // Do not use a spy here: its settled promises would retain the raw payloads.
+            execute: async () => {
+              providerCalls += 1;
+              const bytes = Buffer.alloc(donorBytes);
+              bytes.fill(Buffer.from("x", "utf16le"));
+              // Oversized inputs split a surrogate pair at the limit; short inputs
+              // already share backing storage with a much larger discarded response.
+              bytes.write(
+                mode === "oversized" ? `${prefix.padEnd(limit - 1, "x")}🦞` : prefix,
+                0,
+                "utf16le",
+              );
+              const donor = bytes.toString("utf16le");
+              return {
+                text: "Useful provider body.",
+                [field]: mode === "oversized" ? donor : donor.slice(0, prefix.length),
+              };
+            },
+          },
+        });
+        for (let index = 0; index < copies; index++) {
+          // Discard the returned result: the process cache must be the surviving owner.
+          await tool?.execute("retain-metadata", {
+            url: `https://example.com/metadata-retention-${field}-${mode}-${index}`,
+          });
+        }
+      }
+    }
+    const retainedBytes = (await heapUsed()) - before;
+    // Even one uncopied field/mode retains 6 MiB. Allow 2 MiB of runtime noise.
+    expect(retainedBytes, "cache retained discarded provider backing strings").toBeLessThan(
+      2 * 1024 * 1024,
+    );
+    // Inspect only after collection so comparisons cannot flatten the cached strings.
+    for (const [field, limit] of fields) {
+      for (const mode of modes) {
+        for (let index = 0; index < copies; index++) {
+          const details = requireDetails(
+            (await tool?.execute("cached-metadata", {
+              url: `https://example.com/metadata-retention-${field}-${mode}-${index}`,
+            }))!,
+          );
+          expect(details.cached).toBe(true);
+          expect(details[field]).toBe(
+            mode === "oversized" ? prefix.padEnd(limit - 1, "x") : prefix,
+          );
+          expect(details.truncated).toBe(mode === "oversized");
+          expect(details.spill).toBeUndefined();
+        }
+      }
+    }
+    expect(providerCalls).toBe(fields.length * modes.length * copies);
+  });
 
   it.each(["title", "warning"])("retains already-wrapped provider %s prose", async (field) => {
     fetchWithWebToolsNetworkGuardMock.mockRejectedValue(new Error("direct fetch failed"));

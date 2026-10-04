@@ -22,6 +22,16 @@ Calling with `{}` preserves the acknowledgment-only response
 List parameters select the snapshot; they do not filter the connection's session
 event subscription.
 
+List views can pass `rowMode: "compact"` to omit repeated detail-only metadata:
+`contextWindows`, `contextWindowDefault`, `thinkingLevels`, `thinkingOptions`,
+`thinkingDefault`, `toolOverrides`, `providerReview`, `nativeRuntimeConsent`,
+`contextBudgetStatus`, `agentRuntime`, and `pluginExtensions`. Each returned row
+carries `rowMode: "compact"`; those omissions mean the detail was not requested,
+and must not clear previously admitted detail fields. Use `sessions.describe`
+or the full `chat.history.sessionInfo` for details. Omitting `rowMode` preserves
+the full row contract. Title, preview, and Activity recap enrichment remain
+controlled by their existing include flags.
+
 The Gateway registers the subscription before projecting the list. Clients must
 listen for `sessions.changed` before making the request: events can arrive while
 the snapshot is being built. Reconcile those events with the response and issue
@@ -36,7 +46,10 @@ completed-page cache or one-second staleness window. Keyed descriptions,
 resolution, and chat startup prepare their requested row without waiting for the
 bulk refresh. Newly admitted or replaced stores load their metadata once, and
 rows disappear when their store leaves the current topology. Each response
-applies the current viewer's visibility and current activity time.
+applies the current viewer's visibility and current activity time. Equivalent
+viewers share immutable row presentations and encoded row bytes until their
+projection facts change; `snapshotAt` retains the row's sampling time. Runtime
+authority, permission changes, and clock-expiring facts are checked before reuse.
 
 Resident rows use stored titles and usage. Optional message previews and terminal
 fallback-model metadata fill in through bounded read-only background transcript
@@ -173,6 +186,10 @@ or protocol-version change.
 - `session.observer`: safe live session headline and status digest. A model-authored
   preamble can update the headline immediately; utility-model assessments replace
   it later when available. Web, iOS, and Android use the same run-scoped digest.
+  Utility-model replies may wrap the JSON digest in one plain or `json` Markdown
+  fence; surrounding prose and invalid digest fields are rejected. If repeated
+  invalid replies disable the observer for a run, the warning includes a redacted,
+  whitespace-collapsed prefix of the last rejected reply, capped at 160 characters.
   The optional `sessionId` and opaque `lifecycleRevision` identify the session
   lifecycle; `lifecycleRevision` can be absent before the first reset. Revisions
   increase across runs within that lifecycle but can restart after a reset.

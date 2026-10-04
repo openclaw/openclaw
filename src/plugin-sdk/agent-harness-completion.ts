@@ -136,13 +136,21 @@ export async function deliverAgentHarnessCompletion(params: {
       };
     }
     if (requester.agentId && requester.storePath) {
-      const custody = reconcileHarnessCompletionDelivery({
+      const custody = await reconcileHarnessCompletionDelivery({
         agentId: requester.agentId,
         storePath: requester.storePath,
         sessionKey: requester.canonicalKey,
         sourceRunId: buildAnnounceIdempotencyKey(params.announceId),
         taskRunId: childSessionKey,
       });
+      if (!isRequesterCurrent()) {
+        return {
+          delivered: false,
+          path: "none",
+          recoveryBlocked: true,
+          error: "completion requester locator is missing or replaced",
+        };
+      }
       if (custody === "delivered") {
         return { delivered: true, path: "direct" };
       }

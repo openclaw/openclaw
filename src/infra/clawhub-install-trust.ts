@@ -4,6 +4,7 @@ import { stripAnsi, visibleWidth } from "../../packages/terminal-core/src/ansi.j
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { resolveClawHubBaseUrl } from "./clawhub-client.js";
+import { encodeClawHubPackagePath, formatClawHubReleaseLabel } from "./clawhub-display.js";
 import {
   fetchClawHubPackageSecurity,
   type ClawHubPackageSecurityResponse,
@@ -99,22 +100,18 @@ function hasClawHubRiskReasons(trust: ClawHubPackageSecurityTrust): boolean {
 }
 
 function isBlockingClawHubTrust(trust: ClawHubPackageSecurityTrust): boolean {
-  if (trust.blockedFromDownload) {
-    return true;
-  }
-  if (normalizeClawHubTrustToken(trust.scanStatus) === "malicious") {
-    return true;
-  }
-  if (CLAWHUB_BLOCKING_MODERATION_STATES.has(normalizeClawHubTrustToken(trust.moderationState))) {
-    return true;
-  }
-  return trust.reasons.some((reason) => {
-    const normalized = normalizeClawHubTrustToken(reason);
-    return normalized === "scan:malicious" || normalized === "static:malicious";
-  });
+  return (
+    trust.blockedFromDownload ||
+    normalizeClawHubTrustToken(trust.scanStatus) === "malicious" ||
+    CLAWHUB_BLOCKING_MODERATION_STATES.has(normalizeClawHubTrustToken(trust.moderationState)) ||
+    trust.reasons.some((reason) => {
+      const normalized = normalizeClawHubTrustToken(reason);
+      return normalized === "scan:malicious" || normalized === "static:malicious";
+    })
+  );
 }
 
-function assessClawHubTrust(trust: ClawHubPackageSecurityTrust): ClawHubTrustDisposition {
+export function assessClawHubTrust(trust: ClawHubPackageSecurityTrust): ClawHubTrustDisposition {
   const hasRiskReasons = hasClawHubRiskReasons(trust);
   if (!hasRiskReasons && !trust.pending && !trust.stale) {
     return "clean";
@@ -144,13 +141,6 @@ function buildClawHubTrustInstallRecordFields(params: {
     ...(params.trust.stale ? { clawhubTrustStale: true } : {}),
     clawhubTrustCheckedAt: params.checkedAt,
   };
-}
-
-function encodeClawHubPackagePath(packageName: string): string {
-  return packageName
-    .split("/")
-    .map((part) => encodeURIComponent(part).replaceAll("%40", "@"))
-    .join("/");
 }
 
 function resolveClawHubSubjectUrl(params: {
@@ -249,10 +239,6 @@ function formatClawHubSecurityAudit(params: {
   ]);
 }
 
-function formatClawHubReleaseLabel(packageName: string, version: string): string {
-  return `${sanitizeTerminalText(packageName)}@${sanitizeTerminalText(version)}`;
-}
-
 function formatClawHubSubjectPackageName(subject: ClawHubTrustSubject): string {
   return subject.kind === "skill" && subject.ownerHandle
     ? `@${subject.ownerHandle}/${subject.packageName}`
@@ -310,12 +296,6 @@ function readSkillVerdictSecurityPassed(
   }
   const passed = (item.security as { passed?: unknown }).passed;
   return typeof passed === "boolean" ? passed : undefined;
-}
-
-function hasUsablePassingSkillVerdictSecurity(item: ClawHubSkillSecurityVerdictItem): boolean {
-  return (
-    Boolean(readSkillVerdictSecurityStatus(item)) && readSkillVerdictSecurityPassed(item) === true
-  );
 }
 
 function hasSkillVerdictSecurityError(item: ClawHubSkillSecurityVerdictItem): boolean {
@@ -379,14 +359,15 @@ function mapSkillSecurityVerdictToPackageSecurity(params: {
     );
   }
   const decision = normalizeClawHubTrustToken(params.item.decision);
-  if (params.item.ok && decision === "pass" && !hasUsablePassingSkillVerdictSecurity(params.item)) {
+  const rawSecurityStatus = readSkillVerdictSecurityStatus(params.item);
+  const securityPassed = readSkillVerdictSecurityPassed(params.item);
+  if (params.item.ok && decision === "pass" && !(rawSecurityStatus && securityPassed === true)) {
     throw new Error(
       `ClawHub skill trust check for "${formatClawHubReleaseLabel(params.packageName, params.version)}" did not return a usable security verdict.`,
     );
   }
 
-  const securityStatus = normalizeClawHubTrustToken(readSkillVerdictSecurityStatus(params.item));
-  const securityPassed = readSkillVerdictSecurityPassed(params.item);
+  const securityStatus = normalizeClawHubTrustToken(rawSecurityStatus);
   const reasons = params.item.reasons
     .map((reason) => normalizeOptionalString(reason))
     .filter((reason): reason is string => Boolean(reason));

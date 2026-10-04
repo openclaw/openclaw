@@ -23,8 +23,9 @@ import {
   type WorkboardUiState,
   WORKBOARD_CHANGED_EVENT,
 } from "../../lib/workboard/index.ts";
-import { invalidateWorkboardLiveRefresh } from "../../lib/workboard/live-refresh.ts";
+import { invalidateWorkboardLoads } from "../../lib/workboard/runtime.ts";
 import { createWorkboardSessionResolver } from "../../lib/workboard/session-resolution.ts";
+import type { WorkboardBoardMetadata } from "../../lib/workboard/types.ts";
 import { matchesAgentScope } from "./agent-filter.ts";
 import { matchesBoardFilter, WORKBOARD_ALL_BOARDS_FILTER } from "./board-filter.ts";
 import { createSessionsBoardController } from "./sessions-board-controller.ts";
@@ -64,7 +65,10 @@ function reconcileCardOverlays(state: WorkboardUiState, visible: (card: Workboar
   }
 }
 
-export function createWorkboardPage(workboard: WorkboardCapability): ControlUiView {
+export function createWorkboardPage(
+  workboard: WorkboardCapability,
+  registerBoardNavigation: (board: WorkboardBoardMetadata) => void,
+): ControlUiView {
   return (container, initialContext) => {
     const host = initialContext.host;
     let context = initialContext;
@@ -393,11 +397,7 @@ export function createWorkboardPage(workboard: WorkboardCapability): ControlUiVi
                 refreshDiagnostics: host.connection.canWrite,
               });
             },
-            onBoardFilterChange: (boardFilter) =>
-              host.navigation.openPage(workboardPageTarget(boardFilter), {
-                replace: true,
-                preserveSearch: true,
-              }),
+            onBoardFilterChange: onBoardChange,
             onNewBoard,
             onRequestUpdate: requestUpdate,
           })}
@@ -417,9 +417,17 @@ export function createWorkboardPage(workboard: WorkboardCapability): ControlUiVi
                     boardDraft = null;
                     requestUpdate();
                   },
-                  onSaved: (savedId) => {
+                  onSaved: (board) => {
+                    if (disposed) {
+                      return;
+                    }
                     const creating = boardDraft?.create;
                     boardDraft = null;
+                    if (creating) {
+                      invalidateWorkboardLoads(workboard);
+                      registerBoardNavigation(board);
+                      host.ui.pinNavigation(`board-${board.id}`);
+                    }
                     void refreshWorkboard({
                       host: workboard,
                       client,
@@ -430,7 +438,7 @@ export function createWorkboardPage(workboard: WorkboardCapability): ControlUiVi
                         return;
                       }
                       if (creating) {
-                        onBoardChange(savedId);
+                        onBoardChange(board.id);
                       } else if (selectedBoard?.kind === "sessions") {
                         void sessionsBoard.read();
                       }
@@ -474,20 +482,6 @@ export function createWorkboardPage(workboard: WorkboardCapability): ControlUiVi
         requestUpdate();
       }
     });
-    const unsubscribeObserver = host.onEvent("session.observer", (payload) => {
-      if (disposed || !connected || !context.presented || !isRecord(payload)) {
-        return;
-      }
-      if (
-        sessionsBoard.snapshot?.sessions.some(
-          (session) =>
-            session.key === payload.sessionKey &&
-            (!host.agents.scopeId || session.agentId === host.agents.scopeId),
-        )
-      ) {
-        invalidateWorkboardLiveRefresh(workboard);
-      }
-    });
     document.addEventListener("visibilitychange", onVisibilityChange);
     update();
     return {
@@ -502,7 +496,6 @@ export function createWorkboardPage(workboard: WorkboardCapability): ControlUiVi
         unsubscribeState();
         unsubscribeEvents();
         unsubscribeCron();
-        unsubscribeObserver();
         sessionsBoard.dispose();
         sessionResolver.dispose();
         document.removeEventListener("visibilitychange", onVisibilityChange);

@@ -1,15 +1,4 @@
 import { randomUUID } from "node:crypto";
-import {
-  buildQaBusSnapshot,
-  cloneMessage,
-  normalizeAccountId,
-  normalizeConversationFromTarget,
-  pollQaBusEvents,
-  requireQaBusMessageForAccount,
-  searchQaBusMessages,
-} from "./bus-queries.js";
-import { createQaBusWaiterStore, throwQaBusClosed } from "./bus-waiters.js";
-import { sanitizeQaBusToolCalls } from "./qa-bus-protocol.js";
 import type {
   QaBusConversation,
   QaBusCreateThreadInput,
@@ -25,7 +14,18 @@ import type {
   QaBusSearchMessagesInput,
   QaBusSnapshotConversation,
   QaBusThread,
-} from "./runtime-api.js";
+} from "openclaw/plugin-sdk/qa-channel-protocol";
+import {
+  buildQaBusSnapshot,
+  cloneMessage,
+  normalizeAccountId,
+  normalizeConversationFromTarget,
+  pollQaBusEvents,
+  requireQaBusMessageForAccount,
+  searchQaBusMessages,
+} from "./bus-queries.js";
+import { createQaBusWaiterStore, throwQaBusClosed } from "./bus-waiters.js";
+import { sanitizeQaBusToolCalls } from "./qa-bus-protocol.js";
 
 const DEFAULT_BOT_ID = "openclaw";
 const DEFAULT_BOT_NAME = "OpenClaw QA";

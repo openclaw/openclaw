@@ -63,10 +63,10 @@ import {
   readProjectedSessionMutationTarget,
   readSessionMutationTarget,
 } from "./session-sharing-target-read.js";
+import type { GatewaySessionStoreDiscoveryCache } from "./session-utils-store-candidates.js";
 import {
   resolveGatewaySessionStoreTarget,
   type GatewaySessionStoreCache,
-  type GatewaySessionStoreDiscoveryCache,
 } from "./session-utils-store-lookup.js";
 import { prepareTalkSessionTarget, assertTalkSessionStorageTarget } from "./talk/session-target.js";
 import type { PreparedTalkSessionTarget } from "./talk/session-target.types.js";
@@ -433,7 +433,7 @@ export function resolveSessionMutationAuthorization(params: {
           }
         : null,
       sessionId: target?.entry.sessionId?.trim() || null,
-      ...(!target && ["sessions.send", "sessions.create"].includes(params.method)
+      ...(!target && ["sessions.send", "sessions.create", "sessions.patch"].includes(params.method)
         ? {
             absentTarget: resolveGatewaySessionStoreTarget({
               cfg: getCfg(),

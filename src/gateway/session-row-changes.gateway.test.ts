@@ -62,61 +62,51 @@ function observeChanges() {
 }
 
 describe("gateway session row change publications", () => {
-  it.each(["start", "end", "error"] as const)(
-    "publishes lifecycle %s only after an accepted commit",
-    async (phase) => {
+  it.each(["lifecycle errors", "observer digests"] as const)(
+    "publishes %s only after an accepted commit",
+    async (source) => {
       const { changed, facts, unsubscribe } = observeChanges();
       const write = (sessionId = entry.sessionId) =>
-        persistGatewaySessionLifecycleEvent({
-          sessionKey: target.sessionKey,
-          agentId: target.agentId,
-          event: { sessionId, runId: "row-run", ts: 2_000, data: { phase } },
-        });
+        source === "lifecycle errors"
+          ? persistGatewaySessionLifecycleEvent({
+              sessionKey: target.sessionKey,
+              agentId: target.agentId,
+              event: { sessionId, runId: "row-run", ts: 2_000, data: { phase: "error" } },
+            })
+          : defaultPersistDigest({
+              ...target,
+              sessionId,
+              digest: {
+                sessionKey: target.sessionKey,
+                runId: "row-run",
+                revision: 1,
+                updatedAt: 2_000,
+                headline: "Checking files",
+                health: "on-track",
+              },
+            });
       try {
         rejectCommit = true;
         await expect(write()).rejects.toThrow("commit rejected");
         expect(changed).not.toHaveBeenCalled();
         rejectCommit = false;
-        await write();
+        const committed = await write();
+        if (source === "observer digests") {
+          expect(committed).toBe(true);
+        }
         expect(changed).toHaveBeenCalledExactlyOnceWith(target);
         expect(facts).toHaveBeenCalledExactlyOnceWith({ ...target, facts: { kind: "unchanged" } });
-        await write("replaced-generation");
+        if (source === "lifecycle errors") {
+          await write("replaced-generation");
+        } else {
+          expect(await write()).toBe(false);
+        }
         expect(changed).toHaveBeenCalledTimes(1);
       } finally {
         unsubscribe();
       }
     },
   );
-
-  it("publishes observer digests only after an accepted commit", async () => {
-    const { changed, facts, unsubscribe } = observeChanges();
-    const write = () =>
-      defaultPersistDigest({
-        ...target,
-        sessionId: entry.sessionId,
-        digest: {
-          sessionKey: target.sessionKey,
-          runId: "row-run",
-          revision: 1,
-          updatedAt: 2_000,
-          headline: "Checking files",
-          health: "on-track",
-        },
-      });
-    try {
-      rejectCommit = true;
-      await expect(write()).rejects.toThrow("commit rejected");
-      expect(changed).not.toHaveBeenCalled();
-      rejectCommit = false;
-      expect(await write()).toBe(true);
-      expect(changed).toHaveBeenCalledExactlyOnceWith(target);
-      expect(facts).toHaveBeenCalledExactlyOnceWith({ ...target, facts: { kind: "unchanged" } });
-      expect(await write()).toBe(false);
-      expect(changed).toHaveBeenCalledTimes(1);
-    } finally {
-      unsubscribe();
-    }
-  });
 
   it("publishes activity admission, updates, and owner-held drops", () => {
     const changed = vi.fn();

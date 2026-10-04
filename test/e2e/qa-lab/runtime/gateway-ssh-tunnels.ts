@@ -1,5 +1,6 @@
 // Real OpenSSH and Gateway status proof for the SSH tunnel fallback path.
-import { execFile as execFileCallback, spawn, type ChildProcess } from "node:child_process";
+import { execFile as execFileCallback, spawn } from "node:child_process";
+import { once } from "node:events";
 import fs from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
@@ -174,19 +175,6 @@ async function waitForPortState(port: number, open: boolean, timeoutMs = PROCESS
   throw new Error(`localhost:${port} did not become ${open ? "reachable" : "unreachable"}`);
 }
 
-async function waitForExit(child: ChildProcess, timeoutMs: number) {
-  if (child.exitCode !== null || child.signalCode !== null) {
-    return;
-  }
-  await new Promise<void>((resolve) => {
-    const timer = setTimeout(resolve, timeoutMs);
-    child.once("exit", () => {
-      clearTimeout(timer);
-      resolve();
-    });
-  });
-}
-
 async function generateKey(sshKeygen: string, filePath: string) {
   await runChecked(sshKeygen, ["-q", "-t", "ed25519", "-N", "", "-f", filePath]);
 }
@@ -282,6 +270,8 @@ async function startIsolatedSshd(
   const child = spawn(invocation.command, invocation.args, {
     stdio: ["ignore", "ignore", "pipe"],
   });
+  const exited = once(child, "exit");
+  void exited.catch(() => {});
   let stderr = "";
   child.stderr?.setEncoding("utf8");
   child.stderr?.on("data", (chunk) => {
@@ -293,7 +283,17 @@ async function startIsolatedSshd(
     stopPromise ??= (async () => {
       if (child.exitCode === null && child.signalCode === null) {
         child.kill("SIGTERM");
-        await waitForExit(child, 2_000);
+        // Escalation never settles cleanup: retain the controller's one exit completion.
+        const escalation = setTimeout(() => {
+          if (child.exitCode === null && child.signalCode === null) {
+            child.kill("SIGKILL");
+          }
+        }, 2_000);
+        try {
+          await exited;
+        } finally {
+          clearTimeout(escalation);
+        }
       }
       if (await canConnect(port)) {
         const pid = (await fs.readFile(pidPath, "utf8").catch(() => "")).trim();
@@ -301,10 +301,6 @@ async function startIsolatedSshd(
           await runPrivileged("/bin/kill", ["-TERM", pid]).catch(() => {});
           await waitForPortState(port, false, 2_000).catch(() => {});
         }
-      }
-      if (child.exitCode === null && child.signalCode === null) {
-        child.kill("SIGKILL");
-        await waitForExit(child, 2_000);
       }
       if (await canConnect(port)) {
         const pid = (await fs.readFile(pidPath, "utf8").catch(() => "")).trim();

@@ -103,9 +103,8 @@ export function captureAbortedPartial(params: {
         expectedLifecycleRevision: entry.lifecycleRevision ?? null,
         agentId,
         storePath,
-        cfg,
+        config: cfg,
         message: params.text,
-        createIfMissing: true,
         idempotencyKey: `${runId}:assistant`,
         abortMeta: { aborted: true, origin: abortOrigin, runId },
       },
@@ -154,6 +153,7 @@ export function deferAbortedPartialPersistence(
               sessionKey: snapshot.value.sessionKey,
               agentId: snapshot.value.agentId,
               errorMessage: warning,
+              stopReason: "aborted-partial-persistence-failed",
             });
           } catch (error) {
             // Delivery failure cannot retain a finished producer's successor fence.

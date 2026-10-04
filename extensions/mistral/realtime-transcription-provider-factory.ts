@@ -24,15 +24,6 @@ type MistralRealtimeTranscriptionEncoding =
   | "pcm_mulaw"
   | "pcm_alaw";
 
-type MistralRealtimeTranscriptionProviderConfig = {
-  apiKey?: string;
-  baseUrl?: string;
-  model?: string;
-  sampleRate?: number;
-  encoding?: MistralRealtimeTranscriptionEncoding;
-  targetStreamingDelayMs?: number;
-};
-
 type MistralRealtimeTranscriptionSessionConfig = RealtimeTranscriptionSessionCreateRequest & {
   apiKey: string;
   baseUrl: string;
@@ -126,9 +117,7 @@ function toMistralRealtimeWsUrl(config: MistralRealtimeTranscriptionSessionConfi
   return url.toString();
 }
 
-function normalizeProviderConfig(
-  config: RealtimeTranscriptionProviderConfig,
-): MistralRealtimeTranscriptionProviderConfig {
+function normalizeProviderConfig(config: RealtimeTranscriptionProviderConfig) {
   const raw = readNestedMistralConfig(config);
   return {
     apiKey: normalizeMistralApiKey(raw.apiKey),

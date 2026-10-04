@@ -7,6 +7,9 @@ import {
   searchInstalledSkills,
   type InstalledSkill,
 } from "../installed-skill-catalog.js";
+import * as ranking from "../tool-search-ranking.js";
+
+afterEach(() => vi.restoreAllMocks());
 
 const temps = useAutoCleanupTempDirTracker(afterEach);
 
@@ -21,6 +24,7 @@ function skill(name: string, description: string, content = "Whole instructions"
 
 describe("installed skill catalog", () => {
   it("ranks an exact identity first and searches the entire prepared catalog", async () => {
+    const build = vi.spyOn(ranking, "buildLexicalIndex");
     const skills = [
       skill("alpha", "Release checks"),
       skill("releases", "Prepare a software release"),
@@ -35,7 +39,39 @@ describe("installed skill catalog", () => {
       hasMore: false,
       coverage: { bodyIndexed: 0, metadataOnly: 3, truncatedBodies: 0 },
     });
+    expect(build).toHaveBeenCalledTimes(1);
+    const refreshed = skills.map(({ name, description }) => skill(name, description));
+    for (const item of refreshed) {
+      item.location = `/current/${item.name}`;
+    }
+    expect((await searchInstalledSkills(refreshed, "database migration")).skills[0]?.location).toBe(
+      "/current/zulu",
+    );
+    expect(build).toHaveBeenCalledTimes(1);
+    refreshed[2]!.description = "Inspect nebulae";
+    expect((await searchInstalledSkills(refreshed, "nebulae")).skills[0]?.name).toBe("zulu");
+    expect(build).toHaveBeenCalledTimes(2);
   });
+
+  it.each([
+    [["deploy", "Deploy"], "Deploy", "Deploy"],
+    [["Deploy", "deploy"], "deploy", "deploy"],
+    [["Deploy", "deploy"], "Deploy", "Deploy"],
+    [["deploy", "Deploy"], "deploy", "deploy"],
+    [["deploy"], "DEPLOY", "deploy"],
+  ] as const)(
+    "preserves exact identity with catalog %j and query %s",
+    async (names, query, expected) => {
+      const skills = names.map((name) =>
+        skill(name, "Deployment workflow", `${name} instructions`),
+      );
+      const result = await searchInstalledSkills(skills, query, 1);
+      expect(result.skills[0]?.name).toBe(expected);
+      expect(await readInstalledSkill(skills, result.skills[0]?.name ?? "")).toBe(
+        `${expected} instructions`,
+      );
+    },
+  );
 
   it("bounds metadata and uses deterministic ties without tool-specific expansions", async () => {
     const skills = Array.from({ length: 25 }, (_, i) =>
@@ -84,20 +120,28 @@ describe("installed skill catalog", () => {
     await expect(readInstalledSkill([guide], "guide", controller.signal)).rejects.toThrow();
   });
 
-  it("bounds local file reads even when an admitted instruction file grows", async () => {
+  it("indexes local prefixes without truncating whole instruction reads", async () => {
     const directory = temps.make("installed-skill-read-");
     const filePath = path.join(directory, "SKILL.md");
-    await fs.writeFile(filePath, "Complete instructions");
+    const prefix = "Canary ".padEnd(16 * 1024, "x");
+    await fs.writeFile(filePath, prefix);
     const guide = skill("guide", "Guide");
     guide.source = { filePath };
-    expect(await readInstalledSkill([guide], "guide")).toBe("Complete instructions");
-    await fs.writeFile(filePath, `Canary ${"x".repeat(16 * 1024)}`);
-    expect(await searchInstalledSkills([guide], "canary", 5, undefined, () => true)).toMatchObject({
-      skills: [],
-      coverage: { bodyIndexed: 0, metadataOnly: 1 },
+    const complete = await searchInstalledSkills([guide], "canary", 5, undefined, () => true);
+    expect(complete.skills[0]?.name).toBe("guide");
+    expect(complete.coverage).toBeUndefined();
+    const instructions = `${prefix}\nHidden-tail instructions.\n`;
+    await fs.writeFile(filePath, instructions);
+    const catalog = [guide];
+    expect(await searchInstalledSkills(catalog, "canary", 5, undefined, () => true)).toMatchObject({
+      skills: [{ name: "guide" }],
+      coverage: { bodyIndexed: 1, metadataOnly: 0, truncatedBodies: 1 },
     });
-    expect(await readInstalledSkill([guide], "guide")).toContain("Canary");
+    expect(
+      (await searchInstalledSkills(catalog, "hidden-tail", 5, undefined, () => true)).skills,
+    ).toEqual([]);
+    expect(await readInstalledSkill(catalog, "guide")).toBe(instructions);
     await fs.truncate(filePath, 256 * 1024 + 1);
-    await expect(readInstalledSkill([guide], "guide")).rejects.toThrow(/large|size|limit/i);
+    await expect(readInstalledSkill(catalog, "guide")).rejects.toThrow(/large|size|limit/i);
   });
 });

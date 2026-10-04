@@ -7,6 +7,7 @@ import {
   normalizeOptionalStringifiedId,
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
+import type { ReplyMediaAttachment } from "../auto-reply/reply-payload.js";
 import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
 import type { ChannelMessageActionName } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -59,31 +60,23 @@ export function extractMessagingToolSourceReplyPayload(
       if (!attachment) {
         return [];
       }
-      const durationMs = asNonNegativeFiniteNumber(attachment.durationMs);
-      const width = asNonNegativeFiniteNumber(attachment.width);
-      const height = asNonNegativeFiniteNumber(attachment.height);
-      const attachmentPath = readStringValue(attachment.path);
-      const attachmentUrl = readStringValue(attachment.url);
-      const attachmentMediaUrl = readStringValue(attachment.mediaUrl);
-      const filePath = readStringValue(attachment.filePath);
-      const mimeType = readStringValue(attachment.mimeType);
-      const name = readStringValue(attachment.name);
-      return [
-        {
-          ...(attachmentPath ? { path: attachmentPath } : {}),
-          ...(attachmentUrl ? { url: attachmentUrl } : {}),
-          ...(attachmentMediaUrl ? { mediaUrl: attachmentMediaUrl } : {}),
-          ...(filePath ? { filePath } : {}),
-          ...(mimeType ? { mimeType } : {}),
-          ...(name ? { name } : {}),
-          ...(typeof attachment.trustedLocalMedia === "boolean"
-            ? { trustedLocalMedia: attachment.trustedLocalMedia }
-            : {}),
-          ...(durationMs !== undefined ? { durationMs } : {}),
-          ...(width !== undefined ? { width } : {}),
-          ...(height !== undefined ? { height } : {}),
-        },
-      ];
+      const projected: ReplyMediaAttachment = {};
+      for (const key of ["path", "url", "mediaUrl", "filePath", "mimeType", "name"] as const) {
+        const fieldText = readStringValue(attachment[key]);
+        if (fieldText) {
+          projected[key] = fieldText;
+        }
+      }
+      if (typeof attachment.trustedLocalMedia === "boolean") {
+        projected.trustedLocalMedia = attachment.trustedLocalMedia;
+      }
+      for (const key of ["durationMs", "width", "height"] as const) {
+        const number = asNonNegativeFiniteNumber(attachment[key]);
+        if (number !== undefined) {
+          projected[key] = number;
+        }
+      }
+      return [projected];
     });
     if (attachments.length > 0) {
       payload.attachments = attachments;

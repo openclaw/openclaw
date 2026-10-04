@@ -6,13 +6,15 @@ import * as stateReads from "../../state/openclaw-state-db-readonly.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createSubagentRunRecord } from "../subagent-test-fixtures.test-helpers.js";
 import {
+  persistRegistryFixture,
+  saveSubagentRegistryToSqlite,
+} from "../subagents/registry/subagent-registry-state.fixture.test-support.js";
+import {
   clearSubagentRunsReadCacheForTest,
-  persistSubagentRunsToDiskOrThrow,
   prepareSubagentSessionListReadCache,
   withSubagentRunReadSnapshot,
 } from "../subagents/registry/subagent-registry-state.js";
 import * as registryState from "../subagents/registry/subagent-registry-state.js";
-import { saveSubagentRegistryToSqlite } from "../subagents/registry/subagent-registry.store.test-support.js";
 import { createSubagentsTool } from "./subagents-tool.js";
 
 it("keeps persisted subagent wait selection off the calling thread", async () => {
@@ -31,7 +33,7 @@ it("keeps persisted subagent wait selection off the calling thread", async () =>
         completion: { required: false },
         delivery: { status: "not_required" },
       });
-      persistSubagentRunsToDiskOrThrow(new Map([[run.runId, run]]), [run.runId]);
+      persistRegistryFixture(new Map([[run.runId, run]]));
       clearSubagentRunsReadCacheForTest();
       let registryReads = 0;
       const statements = (["get", "all", "iterate"] as const).map((method) => {
@@ -188,10 +190,17 @@ it.each([
         } else if (!trigger.includes("without publication")) {
           const publisher = new AsyncWorkScope();
           publisher.run(() => {
-            run.execution = { status: "terminal", endedAt: Date.now(), outcome: { status: "ok" } };
-            persistSubagentRunsToDiskOrThrow(
-              new Map([run, replacement].map((entry) => [entry.runId, entry])),
-              trigger === "named run publication" ? [run.runId] : [run.runId, replacement.runId],
+            const completed = {
+              ...run,
+              execution: {
+                status: "terminal" as const,
+                endedAt: Date.now(),
+                outcome: { status: "ok" as const },
+              },
+            };
+            persistRegistryFixture(
+              new Map([completed, replacement].map((entry) => [entry.runId, entry])),
+              trigger === "named run publication" ? [run.runId] : undefined,
             );
           });
           await publisher.drain();

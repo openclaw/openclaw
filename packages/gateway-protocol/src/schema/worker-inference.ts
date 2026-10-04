@@ -8,6 +8,7 @@ import {
   WorkerIdentifierSchema,
   checkWorkerProtocolJson,
   workerMessageSchemas,
+  WORKER_TRANSCRIPT_MAX_CONTENT_PARTS,
   WorkerTranscriptUsageSchema,
   WORKER_PROTOCOL_MAX_MEDIA_PAYLOAD_BYTES,
   workerErrorResponseSchema,
@@ -42,11 +43,28 @@ const WorkerInferenceAssistantMessageSchema = closedObject({
 });
 
 const WorkerInferenceMessageSchema = Type.Union([
+  // Inference is admitted only for the exact prepared worker bundle. Reject the
+  // retired carrier shape instead of creating a steady-state mixed-build dialect.
+  closedObject({
+    role: Type.Literal("user"),
+    content: Type.Union([
+      InferenceTextSchema,
+      Type.Array(
+        closedObject({
+          type: Type.Literal("text"),
+          text: InferenceTextSchema,
+          textSignature: Type.Optional(InferenceTextSchema),
+        }),
+        { minItems: 1, maxItems: WORKER_TRANSCRIPT_MAX_CONTENT_PARTS },
+      ),
+    ]),
+    timestamp: LiveIntegerSchema,
+    runtimeContext: closedObject({ retained: Type.Optional(Type.Boolean()) }),
+  }),
   closedObject({
     role: Type.Literal("user"),
     content: Type.Union([InferenceTextSchema, inferenceSchemas.userContent]),
     timestamp: LiveIntegerSchema,
-    runtimeContextCarrier: Type.Optional(Type.Boolean()),
   }),
   inferenceSchemas.contextAssistant,
   inferenceSchemas.toolResult,

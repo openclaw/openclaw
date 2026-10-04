@@ -52,6 +52,7 @@ vi.mock("../auto-reply/reply/dispatch-acp-manager.runtime.js", async (importOrig
     resolveSessionAsync: async ({ sessionKey }: { sessionKey: string }) => ({
       kind: "ready",
       sessionKey,
+      agentId: "main",
       meta: createAcpSessionMeta({ agent: "main" }),
       entry: loadSessionEntryReadOnly({
         agentId: "main",
@@ -378,7 +379,10 @@ describe("Gateway ACP completion ownership", () => {
           },
           { timeout: 10_000 },
         );
-        expect.soft(replayPayload).toMatchObject({ runId, status: expectedStatus });
+        expect.soft(replayPayload, JSON.stringify(replayPayload)).toMatchObject({
+          runId,
+          status: expectedStatus,
+        });
         if (scenario.cancel) {
           expect
             .soft(replayPayload)

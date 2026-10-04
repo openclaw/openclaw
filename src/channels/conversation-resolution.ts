@@ -24,7 +24,7 @@ import {
   resolveBundledChannelThreadBindingInboundConversation,
 } from "./plugins/thread-binding-api.js";
 import type { ChannelCommandConversationContext } from "./plugins/types.adapters.js";
-import type { ChannelPlugin } from "./plugins/types.plugin.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "./plugins/types.plugin.js";
 import { normalizeAnyChannelId } from "./registry.js";
 
 type ConversationResolution = {
@@ -203,25 +203,6 @@ function resolveChannelTargetId(params: {
   return target;
 }
 
-function buildThreadingContext(params: {
-  fallbackTo?: string;
-  originatingTo?: string;
-  threadId?: string;
-  from?: string;
-  chatType?: string;
-  nativeChannelId?: string;
-}) {
-  const to =
-    normalizeOptionalString(params.originatingTo) ?? normalizeOptionalString(params.fallbackTo);
-  return {
-    ...(to ? { To: to } : {}),
-    ...(params.from ? { From: params.from } : {}),
-    ...(params.chatType ? { ChatType: params.chatType } : {}),
-    ...(params.threadId ? { MessageThreadId: params.threadId } : {}),
-    ...(params.nativeChannelId ? { NativeChannelId: params.nativeChannelId } : {}),
-  };
-}
-
 /**
  * Resolves whether top-level bindings default to the current conversation or a child thread.
  */
@@ -274,6 +255,8 @@ export function resolveCommandConversationResolution(
   });
   const threadId = stringifyRouteThreadId(params.threadId);
   const resolutionScope = { channel, accountId, threadId, plugin };
+  const from = normalizeOptionalString(params.from);
+  const chatType = normalizeOptionalString(params.chatType);
 
   const commandParams: ChannelCommandConversationContext = {
     accountId,
@@ -282,8 +265,8 @@ export function resolveCommandConversationResolution(
     senderId: normalizeOptionalString(params.senderId),
     sessionKey: normalizeOptionalString(params.sessionKey),
     parentSessionKey: normalizeOptionalString(params.parentSessionKey),
-    from: normalizeOptionalString(params.from),
-    chatType: normalizeOptionalString(params.chatType),
+    from,
+    chatType,
     originatingTo: params.originatingTo ?? undefined,
     commandTo: params.commandTo ?? undefined,
     fallbackTo: params.fallbackTo ?? undefined,
@@ -295,17 +278,19 @@ export function resolveCommandConversationResolution(
     return providerResolution;
   }
 
+  const to =
+    normalizeOptionalString(params.originatingTo) ?? normalizeOptionalString(params.fallbackTo);
+  const nativeChannelId = normalizeOptionalString(params.nativeChannelId);
   const focusedBinding = plugin?.threading?.resolveFocusedBinding?.({
     cfg: params.cfg,
     accountId,
-    context: buildThreadingContext({
-      fallbackTo: params.fallbackTo ?? undefined,
-      originatingTo: params.originatingTo ?? undefined,
-      threadId,
-      from: normalizeOptionalString(params.from),
-      chatType: normalizeOptionalString(params.chatType),
-      nativeChannelId: normalizeOptionalString(params.nativeChannelId),
-    }),
+    context: {
+      ...(to ? { To: to } : {}),
+      ...(from ? { From: from } : {}),
+      ...(chatType ? { ChatType: chatType } : {}),
+      ...(threadId ? { MessageThreadId: threadId } : {}),
+      ...(nativeChannelId ? { NativeChannelId: nativeChannelId } : {}),
+    },
   });
   const focusedResolution = normalizeResolutionTarget(resolutionScope, focusedBinding);
   if (focusedResolution) {

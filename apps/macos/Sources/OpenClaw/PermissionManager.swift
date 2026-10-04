@@ -16,14 +16,16 @@ enum CapabilityAuthorizationStatus: Equatable, Sendable {
     case granted
     case notGranted
     case unknown
-
-    var isGranted: Bool {
-        self == .granted
-    }
 }
 
 enum PermissionManager {
     @MainActor static let screenRecordingPermissions = PermissionsService()
+    private static let logger = Logger(subsystem: "ai.openclaw", category: "permissions")
+
+    static func reportDeferredRequest() {
+        self.logger.warning(
+            "Permission dialog deferred by --no-activate; relaunch without the flag to grant access, then retry.")
+    }
 
     /// UNUserNotificationCenter.current() aborts with NSInternalInconsistencyException
     /// ("bundleProxyForCurrentProcess is nil") in unbundled processes such as
@@ -57,9 +59,28 @@ enum PermissionManager {
     }
 
     static func ensure(_ caps: [Capability], interactive: Bool) async -> [Capability: Bool] {
+        if interactive, !AppLaunchRuntimePlan.current.allowsActivation {
+            self.reportDeferredRequest()
+        }
+        let interactive = interactive && AppLaunchRuntimePlan.current.allowsActivation
         var results: [Capability: Bool] = [:]
         for cap in caps {
-            results[cap] = await self.ensureCapability(cap, interactive: interactive)
+            results[cap] = switch cap {
+            case .notifications:
+                await self.ensureNotifications(interactive: interactive)
+            case .accessibility:
+                await self.ensureAccessibility(interactive: interactive)
+            case .screenRecording:
+                await self.ensureScreenRecording(interactive: interactive)
+            case .microphone:
+                await self.ensureCapture(.audio, capability: .microphone, interactive: interactive)
+            case .speechRecognition:
+                await self.ensureSpeechRecognition(interactive: interactive)
+            case .camera:
+                await self.ensureCapture(.video, capability: .camera, interactive: interactive)
+            case .location:
+                await self.ensureLocation(interactive: interactive)
+            }
         }
         if interactive {
             await MainActor.run {
@@ -67,25 +88,6 @@ enum PermissionManager {
             }
         }
         return results
-    }
-
-    private static func ensureCapability(_ cap: Capability, interactive: Bool) async -> Bool {
-        switch cap {
-        case .notifications:
-            await self.ensureNotifications(interactive: interactive)
-        case .accessibility:
-            await self.ensureAccessibility(interactive: interactive)
-        case .screenRecording:
-            await self.ensureScreenRecording(interactive: interactive)
-        case .microphone:
-            await self.ensureCapture(.audio, capability: .microphone, interactive: interactive)
-        case .speechRecognition:
-            await self.ensureSpeechRecognition(interactive: interactive)
-        case .camera:
-            await self.ensureCapture(.video, capability: .camera, interactive: interactive)
-        case .location:
-            await self.ensureLocation(interactive: interactive)
-        }
     }
 
     private static func ensureNotifications(interactive: Bool) async -> Bool {
@@ -102,7 +104,7 @@ enum PermissionManager {
             return granted && self.isNotificationAuthorized(status: updated.authorizationStatus)
         }
         if settings.authorizationStatus == .denied, interactive {
-            SystemSettingsURLSupport.openFirst(SystemSettingsURLSupport.settingsCandidates(for: .notifications))
+            await SystemSettingsURLSupport.openFirst(SystemSettingsURLSupport.settingsCandidates(for: .notifications))
         }
         return false
     }
@@ -140,7 +142,7 @@ enum PermissionManager {
             return await AVCaptureDevice.requestAccess(for: mediaType)
         case .denied, .restricted:
             if interactive {
-                SystemSettingsURLSupport.openPrivacySettings(for: capability)
+                await SystemSettingsURLSupport.openPrivacySettings(for: capability)
             }
             return false
         @unknown default:
@@ -151,7 +153,7 @@ enum PermissionManager {
     private static func ensureSpeechRecognition(interactive: Bool) async -> Bool {
         let status = SFSpeechRecognizer.authorizationStatus()
         if self.shouldOpenSpeechRecognitionSettings(status: status, interactive: interactive) {
-            SystemSettingsURLSupport.openPrivacySettings(for: .speechRecognition)
+            await SystemSettingsURLSupport.openPrivacySettings(for: .speechRecognition)
         }
         if status == .notDetermined, interactive {
             await withUnsafeContinuation { (cont: UnsafeContinuation<Void, Never>) in
@@ -206,52 +208,11 @@ enum PermissionManager {
     static func authorizationStatus(
         _ caps: [Capability] = Capability.allCases) async -> [Capability: CapabilityAuthorizationStatus]
     {
-        var results: [Capability: CapabilityAuthorizationStatus] = [:]
-        for cap in caps {
-            switch cap {
-            case .notifications:
-                guard self.notificationCenterAvailable else {
-                    results[cap] = .notGranted
-                    break
-                }
-                let center = UNUserNotificationCenter.current()
-                let settings = await center.notificationSettings()
-                results[cap] = self.isNotificationAuthorized(status: settings.authorizationStatus)
-                    ? .granted : .notGranted
-
-            case .accessibility:
-                results[cap] = await MainActor.run { AXIsProcessTrusted() } ? .granted : .notGranted
-
-            case .screenRecording:
-                // CoreGraphics can retain a denial after a grant. Peekaboo retains confirmed grants
-                // and only unlocks live probes after an explicit permission request.
-                results[cap] = await self.screenRecordingPermissions.checkScreenRecordingPermissionLive()
-                    ? .granted : .notGranted
-
-            case .microphone:
-                results[cap] = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
-                    ? .granted : .notGranted
-
-            case .speechRecognition:
-                results[cap] = SFSpeechRecognizer.authorizationStatus() == .authorized
-                    ? .granted : .notGranted
-
-            case .camera:
-                results[cap] = AVCaptureDevice.authorizationStatus(for: .video) == .authorized
-                    ? .granted : .notGranted
-
-            case .location:
-                let status = await self.locationAuthorizationStatus()
-                results[cap] = CLLocationManager.locationServicesEnabled()
-                    && self.isLocationAuthorized(status: status, requireAlways: false) ? .granted : .notGranted
-            }
-        }
-        return results
+        await self.grantedStatus(caps).mapValues { $0 ? .granted : .notGranted }
     }
 
     static func grantedStatus(_ caps: [Capability] = Capability.allCases) async -> [Capability: Bool] {
-        let statuses = await self.authorizationStatus(caps)
-        return statuses.mapValues(\.isGranted)
+        await self.ensure(caps, interactive: false)
     }
 }
 
@@ -305,6 +266,10 @@ final class LocationPermissionRequester: NSObject, CLLocationManagerDelegate {
     func request(always: Bool) async -> CLAuthorizationStatus {
         let current = self.manager.authorizationStatus
         if PermissionManager.isLocationAuthorized(status: current, requireAlways: always) {
+            return current
+        }
+        guard AppLaunchRuntimePlan.current.allowsActivation else {
+            PermissionManager.reportDeferredRequest()
             return current
         }
 
