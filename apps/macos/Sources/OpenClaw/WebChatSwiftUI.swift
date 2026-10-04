@@ -177,6 +177,13 @@ struct MacGatewayChatTransport: OpenClawChatGatewayTransport {
         true
     }
 
+    func requestHistoryPage(sessionKey: String, offset: Int) async throws -> OpenClawChatHistoryPayload {
+        guard let route = await self.connection.captureRoute() else { throw CancellationError() }
+        let target = self.sessionTarget(for: sessionKey)
+        return try await self.connection.chatHistory(
+            sessionKey: target.sessionKey, agentID: target.agentID, offset: offset, ifCurrentRoute: route)
+    }
+
     func requestHistory(sessionKey: String) async throws -> OpenClawChatHistoryPayload {
         let target = self.sessionTarget(for: sessionKey)
         return try await self.connection.chatHistory(

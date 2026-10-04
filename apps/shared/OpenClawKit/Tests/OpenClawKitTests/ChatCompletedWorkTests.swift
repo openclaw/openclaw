@@ -5,6 +5,17 @@ import Testing
 
 @Suite("Completed transcript work")
 struct ChatCompletedWorkTests {
+    @Test func `spoken rendition stays visible when a consult answer is persisted later`() throws {
+        let voice = try Self.decode(#"""
+        {"role":"assistant","content":"The latest build is on your phone.","timestamp":1000,
+         "model":"realtime-voice","provenance":{"kind":"realtime_voice","sourceChannel":"talk"}}
+        """#)
+        let consult = Self.message("assistant", "The build went on at about 14:15.", at: 2000, phase: "final_answer")
+        let rows = Self.collapse([voice, consult])
+        #expect(Self.visibleIDs(rows) == [voice.id, consult.id])
+        #expect(Self.work(in: rows).isEmpty)
+    }
+
     @Test func `completed work folds around visible answers and leaves unresolved tails exposed`() throws {
         let user = Self.message("user", "Check the layout", at: 1000)
         let progress = Self.message("assistant", "Checking", at: 2000, phase: "commentary")
@@ -275,6 +286,81 @@ struct ChatCompletedWorkTests {
          "content":[{"type":"text","text":"A complete unkeyed reply"}]}
         """#)
         #expect(Self.visibleIDs(Self.collapse([failed, unkeyed])) == [unkeyed.id])
+    }
+
+    @Test func `paging a missing steer predecessor preserves the exposed reading row`() {
+        let original = Self.message("user", "Check the repair", at: 1000, run: "original")
+        let reading = Self.message(
+            "assistant",
+            "Because the repair was not implemented",
+            at: 2000,
+            run: "original",
+            phase: "commentary")
+        let work = Self.message(
+            "assistant",
+            "Checking the importer",
+            at: 2500,
+            run: "original",
+            phase: "commentary")
+        let steer = Self.message("user", "Keep checking", at: 3000, run: "steer", steer: "original")
+        let continued = Self.message(
+            "assistant",
+            "Checking grouping",
+            at: 4000,
+            run: "original",
+            phase: "commentary")
+        let answer = Self.message(
+            "assistant",
+            "The repair is complete",
+            at: 5000,
+            run: "original",
+            phase: "final_answer")
+        let current = [reading, work, steer, continued, answer]
+        #expect(Self.visibleIDs(Self.collapse(current)).contains(reading.id))
+        // Discovering the predecessor resolves the steer chain and used to hide this row.
+        #expect(!Self.visibleIDs(Self.collapse([original] + current)).contains(reading.id))
+        let preserved = ChatTranscriptRow.collapseCompletedWork(
+            ChatTranscriptRow.build(from: [original] + current),
+            runWorking: false,
+            preservedRowID: reading.id)
+        #expect(Self.visibleIDs(preserved) == [original.id, reading.id, steer.id, answer.id])
+        #expect(!Self.work(in: preserved).flatMap(\.messages).contains { $0.id == reading.id })
+        #expect(Self.work(in: preserved).flatMap(\.messages).contains { $0.id == work.id })
+    }
+
+    @Test func `history anchor skips a disclosure that changes when its predecessor arrives`() {
+        let original = Self.message("user", "Original", at: 1000, run: "original")
+        let work = Self.message("assistant", "Working", at: 2000, run: "original", phase: "commentary")
+        let reading = Self.message("assistant", "Reading", at: 3000, run: "original", phase: "final_answer")
+        let steer = Self.message("user", "Continue", at: 4000, run: "steer", steer: "original")
+        let answer = Self.message("assistant", "Finished", at: 5000, run: "original", phase: "final_answer")
+        let current = Self.collapse([work, reading, steer, answer])
+        let presentation = ChatTranscriptPresentation(rows: current, metadata: [:])
+        #expect(current.first?.id != reading.id)
+        #expect(presentation.historyAnchorID == reading.id)
+        let loaded = ChatTranscriptRow.collapseCompletedWork(
+            ChatTranscriptRow.build(from: [original, work, reading, steer, answer]),
+            runWorking: false,
+            preservedRowID: presentation.historyAnchorID)
+        #expect(Self.visibleIDs(loaded).contains(reading.id))
+        #expect(!loaded.contains { $0.id == current.first?.id })
+    }
+
+    @MainActor
+    @Test func `retained consult answer keeps its place when later history arrives`() {
+        let question = Self.message("user", "Count files", at: 1)
+        let consult = Self.message("assistant", "Thirteen files.", at: 2)
+        let spoken = Self.message("assistant", "Thirteen.", at: 3)
+        let typed = Self.message("user", "Thanks", at: 4)
+        let reply = Self.message("assistant", "You are welcome.", at: 5)
+        let merged = OpenClawChatViewModel.insertingRetainedMessages(
+            [consult.id],
+            from: [question, consult, spoken],
+            into: [question, spoken, typed, reply])
+        #expect(merged.map(\.id) == [question.id, consult.id, spoken.id, typed.id, reply.id])
+        let orphan = OpenClawChatViewModel.insertingRetainedMessages(
+            [consult.id], from: [consult, question], into: [question, spoken])
+        #expect(orphan.map(\.id) == [consult.id, question.id, spoken.id])
     }
 
     private static func decode(_ json: String) throws -> OpenClawChatMessage {

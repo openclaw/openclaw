@@ -167,6 +167,8 @@ struct RootTabs: View {
     private var uiTestReadinessMarker: some View {
         #if DEBUG
         if ProcessInfo.processInfo.arguments.contains("--openclaw-ui-test-readiness") {
+            let toolCount = ProcessInfo.processInfo.arguments.contains("--openclaw-reader-tool-churn-fixture")
+                ? self.appModel.chatPresentation.viewModel?.toolActivities.count ?? 0 : 0
             Color.clear
                 .frame(width: 1, height: 1)
                 .allowsHitTesting(false)
@@ -174,7 +176,8 @@ struct RootTabs: View {
                 .accessibilityIdentifier("RootTabs.Ready")
                 .accessibilityLabel(Text(verbatim: "OpenClaw test readiness"))
                 .accessibilityValue(
-                    "\(self.scenePhase == .active ? "ready" : "inactive"):\(self.selectedSidebarDestination.rawValue)")
+                    "\(self.scenePhase == .active ? "ready" : "inactive"):\(self.selectedSidebarDestination.rawValue)" +
+                        (toolCount > 0 ? ":tools=\(toolCount)" : ""))
         }
         #endif
     }
@@ -974,7 +977,9 @@ extension RootTabs {
     private func applyInitialChatSessionIfNeeded() {
         guard !self.didApplyInitialChatSession else { return }
         self.didApplyInitialChatSession = true
-        self.appModel.focusChatSession(Self.initialChatSessionKey)
+        // Without the launch argument, keep the restored last chat instead of forcing Home.
+        guard let initialChatSessionKey = Self.initialChatSessionKey else { return }
+        self.appModel.focusChatSession(initialChatSessionKey)
     }
 
     private func maybeShowQuickSetup() {
