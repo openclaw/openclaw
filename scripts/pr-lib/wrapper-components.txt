@@ -571,6 +571,7 @@ src/config/sessions/session-entry-state-format.ts
 src/config/sessions/types.ts
 src/config/sessions/session-history-worker-errors.ts
 src/acp/runtime/session-meta-worker-mutation.ts
+src/acp/runtime/session-meta-access.types.ts
 src/acp/runtime/session-control-owner.ts
 src/acp/runtime/session-meta-entry.kernel.ts
 src/acp/runtime/session-meta-keys.ts

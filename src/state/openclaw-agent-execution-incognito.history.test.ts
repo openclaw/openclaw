@@ -301,11 +301,14 @@ it("composes hydration navigation and maintenance on the captured actor", async 
   const snapshot = await reader.read();
   assert(snapshot.kind === "full");
   const entryId = second.value.append.messageId;
-  const current = await reader.readCurrentTurnEntry({
+  const request = {
     entryId,
     version: snapshot.snapshot.version,
     includeEntry: true,
-  });
+    sessionKey: `${target.sessionKey}-another-session`,
+    sessionId: "another-session",
+  };
+  const current = await reader.readCurrentTurnEntry(request);
   expect(current.event).toEqual(message("latest hydration entry"));
   expect(current.anchor?.entryId).toBe(entryId);
   expect(await reader.readLatestActiveMessage()).toMatchObject({ event: { id: entryId } });

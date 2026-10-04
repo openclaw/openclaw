@@ -261,25 +261,26 @@ export function createIncognitoSessionFacts(
               if (!outcome.ok) {
                 throw outcome.error;
               }
+              const value = outcome.value;
               if (!changing) {
                 // Read results carry current worker facts, never authority captured before a wait.
                 withGrant(() => {
                   authority.assertCurrent();
                   assertActorCurrent();
-                  for (const facts of outcome.value.facts) {
+                  for (const facts of value.facts) {
                     authorizeSessionFacts(authority, "commit", facts);
                   }
                   authority.assertCurrent();
                   assertActorCurrent();
                 });
-                outcome.value.facts.forEach(install);
+                value.facts.forEach(install);
               }
               for (const key of targets) {
                 pending.delete(key);
               }
               authority.assertCurrent();
               assertActorCurrent();
-              return receive(outcome.value);
+              return receive(value);
             } finally {
               for (const key of targets) {
                 pending.delete(key);

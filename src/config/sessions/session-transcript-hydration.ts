@@ -83,7 +83,12 @@ export function prepareIncognitoSessionTranscriptHydration(params: {
     assertCurrent,
     read: () => read("session.history.hydrate", { ...captured, limits }),
     readCurrentTurnEntry: (request) =>
-      read("session.history.current-turn-entry", { ...captured, ...request }),
+      read("session.history.current-turn-entry", {
+        ...captured,
+        entryId: request.entryId,
+        version: { ...request.version },
+        includeEntry: request.includeEntry,
+      }),
     readMaintenance: (request) => read("session.history.maintenance", { ...captured, request }),
     readRecentActiveEvents: (maxEvents) =>
       read("session.history.recent-active-events", { ...captured, maxEvents }),

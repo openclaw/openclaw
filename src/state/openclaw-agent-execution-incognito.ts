@@ -1,9 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
-import type {
-  readIncognitoAcpSessionEntry,
-  upsertIncognitoAcpSessionMeta,
-} from "../acp/runtime/session-meta-worker-mutation.js";
+import type { IncognitoAcpSessionAccess } from "../acp/runtime/session-meta-access.types.js";
 import { resolveStateDir } from "../config/paths.js";
 import {
   createIncognitoSessionFacts,
@@ -52,14 +49,7 @@ export type IncognitoAgentDatabaseExecution = {
   readonly path: string;
   readonly identity: AgentDatabaseIncognitoIdentity;
   readonly sessions: ReturnType<ReturnType<typeof createIncognitoSessionFacts>["bind"]>;
-  readonly acp: {
-    readEntry(
-      params: Omit<Parameters<typeof readIncognitoAcpSessionEntry>[0], "actor">,
-    ): ReturnType<typeof readIncognitoAcpSessionEntry>;
-    upsertMeta(
-      params: Omit<Parameters<typeof upsertIncognitoAcpSessionMeta>[0], "actor">,
-    ): ReturnType<typeof upsertIncognitoAcpSessionMeta>;
-  };
+  readonly acp: IncognitoAcpSessionAccess;
   assertCurrent(): void;
   /** Retains the actor across preparation/publication, independently of its writer turn. */
   run<T>(
