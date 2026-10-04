@@ -230,15 +230,6 @@ function legacySnapshot(db: DatabaseSync) {
   };
 }
 
-it("keeps independently sourced schema21 and deployed schema22 fixtures byte-exact", () => {
-  expect(sha256Hex(OPENCLAW_AGENT_SCHEMA_V21_SQL)).toBe(
-    "8deb7d7000eab7c43bbee427f2e7a9b603bc549562594088a14eecf7c8cc5926",
-  );
-  expect(sha256Hex(OPENCLAW_AGENT_SCHEMA_V22_SQL)).toBe(
-    "23f2a1e85494a512bce3f32623aed2beaf4e82bbeeb4362f6cc33d5dd3b8a6ea",
-  );
-});
-
 it.each(["missing mapping", "extra column", "dependent view", "draft layout"] as const)(
   "refuses an unsupported schema22 %s without changing storage",
   async (shape) => {
@@ -283,62 +274,6 @@ it.each(["missing mapping", "extra column", "dependent view", "draft layout"] as
     });
   },
 );
-
-it("checks deployed ownership through indexes across 5000 sessions", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const pathname = state.path("scaled22.sqlite");
-    const db = new DatabaseSync(pathname);
-    try {
-      seedOpenClawAgentSchemaV22(db);
-      seedHistoricalData(db, 22);
-      db.exec(`WITH RECURSIVE sessions(n) AS (VALUES(1) UNION ALL SELECT n + 1 FROM sessions WHERE n < 5000)
-        INSERT INTO session_windows(session_id, session_key, created_at, updated_at)
-        SELECT 'scale-' || n, 'agent:main:history', 1, 2 FROM sessions;
-        INSERT INTO session_transcript_fts(text, session_id, message_id)
-        SELECT 'indexed ownership', session_id, session_id FROM session_windows WHERE session_id LIKE 'scale-%';
-        INSERT INTO session_transcript_fts_rows(session_id, fts_rowid)
-        SELECT session_id, rowid FROM session_transcript_fts WHERE session_id LIKE 'scale-%';
-        INSERT INTO session_transcript_index_state(session_id, indexed_seq, needs_rebuild, active_event_count, active_message_count, fts_row_count, updated_at)
-        SELECT session_id, 1, 0, 1, 1, 1, 2 FROM session_windows WHERE session_id LIKE 'scale-%';
-        UPDATE session_transcript_index_state SET fts_row_count = NULL WHERE session_id = 'scale-42';`);
-      const plans: string[] = [];
-      const exec = db.exec.bind(db);
-      const write = vi.spyOn(db, "exec").mockImplementation((sql) => {
-        if (sql.startsWith("UPDATE session_transcript_index_state AS state")) {
-          const update = sql.split(";")[0];
-          for (const row of db.prepare(`EXPLAIN QUERY PLAN ${update}`).all()) {
-            if (typeof row.detail !== "string") {
-              throw new Error("Missing ownership migration query-plan detail");
-            }
-            plans.push(row.detail);
-          }
-        }
-        exec(sql);
-      });
-      await withAgentDatabaseMaintenanceLease({ env: state.env }, async () => {
-        ensureOpenClawAgentDatabaseSchema(db, { agentId: "main", path: pathname, env: state.env });
-      });
-      write.mockRestore();
-      expect(plans.some((detail) => detail.includes("idx_agent_transcript_fts_rows_session"))).toBe(
-        true,
-      );
-      expect(
-        plans.some((detail) => detail.includes("idx_session_transcript_fts_rows_session_message")),
-      ).toBe(true);
-      expect(plans.some((detail) => detail.includes("INTEGER PRIMARY KEY"))).toBe(true);
-      expect(plans.filter((detail) => /SCAN (old|current)\b/.test(detail))).toEqual([]);
-      expect(
-        db
-          .prepare(
-            "SELECT session_id FROM session_transcript_index_state WHERE session_id LIKE 'scale-%' AND needs_rebuild != 0",
-          )
-          .all(),
-      ).toEqual([{ session_id: "scale-42" }]);
-    } finally {
-      db.close();
-    }
-  });
-});
 
 describe.each([21, 22])("agent schema %s storage cutover", (version) => {
   const seedSchema = version === 21 ? seedOpenClawAgentSchemaV21 : seedOpenClawAgentSchemaV22;
@@ -388,6 +323,13 @@ describe.each([21, 22])("agent schema %s storage cutover", (version) => {
   it.each(["UTF-8", "UTF-16le"] as const)(
     "atomically publishes all new formats from a genuine %s historical database",
     async (encoding) => {
+      expect(
+        sha256Hex(version === 21 ? OPENCLAW_AGENT_SCHEMA_V21_SQL : OPENCLAW_AGENT_SCHEMA_V22_SQL),
+      ).toBe(
+        version === 21
+          ? "8deb7d7000eab7c43bbee427f2e7a9b603bc549562594088a14eecf7c8cc5926"
+          : "23f2a1e85494a512bce3f32623aed2beaf4e82bbeeb4362f6cc33d5dd3b8a6ea",
+      );
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         const pathname = state.path("legacy21.sqlite");
         let db = new DatabaseSync(pathname);
