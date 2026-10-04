@@ -103,7 +103,10 @@ export function createMockProviderMap(
   );
   return {
     [primaryProviderId]: primaryProvider,
-    openai: { ...primaryProvider, models: primaryProvider.models.map((model) => ({ ...model })) },
+    openai: {
+      ...primaryProvider,
+      models: primaryProvider.models.map((model) => Object.assign({}, model)),
+    },
     anthropic: createMockAnthropicMessagesProvider(providerBaseUrl),
   };
 }

@@ -23,7 +23,7 @@ export function cloneMessage(message: QaBusMessage): QaBusMessage {
   return {
     ...message,
     conversation: { ...message.conversation },
-    attachments: (message.attachments ?? []).map((attachment) => ({ ...attachment })),
+    attachments: (message.attachments ?? []).map((attachment) => Object.assign({}, attachment)),
     ...(message.nativeCommand ? { nativeCommand: { ...message.nativeCommand } } : {}),
     toolCalls: message.toolCalls?.map(cloneToolCall),
     reactions: message.reactions.map((reaction) => ({ ...reaction })),

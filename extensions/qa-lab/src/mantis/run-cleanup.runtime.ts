@@ -234,6 +234,18 @@ async function listRegisteredWorktreePaths(params: {
   );
 }
 
+function createCleanupVerificationAggregate(params: {
+  errors: [unknown, unknown];
+  lane: "baseline" | "candidate";
+  worktreeDir: string;
+}): AggregateError {
+  return new AggregateError(
+    params.errors,
+    `${params.lane} worktree cleanup could not verify complete registration state for ${params.worktreeDir}`,
+    { cause: params.errors[0] },
+  );
+}
+
 function createRetainedDirectoryError(params: {
   cause: unknown;
   lane: "baseline" | "candidate";
@@ -351,12 +363,11 @@ async function removeMantisWorktreeBeforeDeadline(
     registeredWorktreePaths = await listRegisteredPaths();
   } catch (listError) {
     rethrowMantisCleanupBoundaryError(listError);
-    const removalOutcome = removeError ?? new Error("Git worktree removal completed");
-    throw new AggregateError(
-      [removalOutcome, listError],
-      `${params.lane} worktree cleanup could not verify complete registration state for ${params.worktreeDir}`,
-      { cause: removalOutcome },
-    );
+    throw createCleanupVerificationAggregate({
+      errors: [removeError ?? new Error("Git worktree removal completed"), listError],
+      lane: params.lane,
+      worktreeDir: params.worktreeDir,
+    });
   }
   if (registeredWorktreePaths.includes(normalizedWorktreeDir)) {
     throw new Error(`${params.lane} worktree cleanup left registered path ${params.worktreeDir}`, {
