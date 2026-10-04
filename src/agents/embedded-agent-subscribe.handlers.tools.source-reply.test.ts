@@ -10,7 +10,8 @@ import {
 
 const persistInternalSourceReply = vi.hoisted(() => vi.fn(async () => undefined));
 
-vi.mock("../gateway/internal-source-reply-persistence.js", () => ({
+vi.mock("../gateway/internal-source-reply-persistence.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../gateway/internal-source-reply-persistence.js")>()),
   persistInternalSourceReply,
 }));
 

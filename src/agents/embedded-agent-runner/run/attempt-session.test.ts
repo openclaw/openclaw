@@ -77,7 +77,8 @@ vi.mock("../../sessions/resource-loader.js", () => ({
 vi.mock("./attempt-client-tools.js", () => ({
   prepareEmbeddedAttemptClientTools: hoisted.prepareEmbeddedAttemptClientTools,
 }));
-vi.mock("./message-tool-terminal.js", () => ({
+vi.mock("./message-tool-terminal.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./message-tool-terminal.js")>()),
   installMessageToolOnlyTerminalHook: hoisted.installMessageToolOnlyTerminalHook,
   installToolAuthoredSourceReplyTerminalHook: hoisted.installToolAuthoredSourceReplyTerminalHook,
 }));

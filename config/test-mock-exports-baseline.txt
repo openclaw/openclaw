@@ -2774,7 +2774,6 @@
 ["src/agents/embedded-agent-runner/run/attempt-session.test.ts","../extensions.js","9ae32b6c62ec8d22912d8eef50a22e76bfd7cce68bf83ee566039ddc46d0e451",1]
 ["src/agents/embedded-agent-runner/run/attempt-session.test.ts","../logger.js","bd5cfd702fe9d62248a73ac8e3af09ddb7b75cecc7392c4b040d4f30fbe0824e",1]
 ["src/agents/embedded-agent-runner/run/attempt-session.test.ts","./attempt-client-tools.js","a7dfadd7f56b381b75b79f558737a8ba90f8a9fd25f984caba8b68c58a94b5be",1]
-["src/agents/embedded-agent-runner/run/attempt-session.test.ts","./message-tool-terminal.js","44f37b1584e9e924190f075797701373ce152b466b0858703a9ddb75a35dfc63",1]
 ["src/agents/embedded-agent-runner/run/attempt-setup.test.ts","../../sandbox.js","dea033beccf964a810ef82ffee5cb61616b16308947fc95eddd1b02029c80893",1]
 ["src/agents/embedded-agent-runner/run/attempt-skills-mock.test-support.ts","../../../skills/runtime/embedded-run-entries.js","62fab0646adaa7a3b036a696bef676bebbb901df2deb02224dd2666ed7e79366",1]
 ["src/agents/embedded-agent-runner/run/attempt-skills-mock.test-support.ts","../../../skills/runtime/env-overrides.js","0925b48e9a01961380584e911783523b73abc5f82f80c6d62db5eaaf563a468d",1]
