@@ -7,7 +7,10 @@ import {
   SessionGoalOperationError,
   type SessionGoalOperationErrorCode,
 } from "../config/sessions/goals-operations.types.js";
-import { SqliteSessionMutationConflictError } from "../config/sessions/session-mutation-conflict-error.js";
+import {
+  SessionEntryLifecycleUpsertConflictError,
+  SqliteSessionMutationConflictError,
+} from "../config/sessions/session-mutation-conflict-error.js";
 import { SessionPendingInputCustodyError } from "../config/sessions/session-pending-input-custody-error.js";
 import { WorkerSessionAlreadyAttachedError } from "../gateway/worker-environments/session-attachment.js";
 import { GatewayStateOwnerContentionError } from "../infra/gateway-state-owner.js";
@@ -67,6 +70,7 @@ export type ErrorIdentity =
   | MessageOnlyErrorIdentity
   | { type: "session-goal-operation"; goalCode: SessionGoalOperationErrorCode }
   | { type: "session-mutation-conflict"; operationLabel: string }
+  | { type: "session-lifecycle-upsert-conflict"; sessionKey: string }
   | { type: "worker-session-already-attached"; sessionId: string; environmentId: string }
   | {
       type: "workspace-alias-repointed";
@@ -150,6 +154,9 @@ export function identifyError(error: Error): ErrorIdentity {
   }
   if (error instanceof SessionGoalOperationError) {
     return { type: "session-goal-operation", goalCode: error.code };
+  }
+  if (error instanceof SessionEntryLifecycleUpsertConflictError) {
+    return { type: "session-lifecycle-upsert-conflict", sessionKey: error.sessionKey };
   }
   if (error instanceof SqliteSessionMutationConflictError) {
     return { type: "session-mutation-conflict", operationLabel: error.operationLabel };
@@ -329,6 +336,10 @@ export function parseIdentity(node: Record<string, unknown>): ErrorIdentity | un
       const goalCode = SESSION_GOAL_OPERATION_ERROR_CODES.find((code) => code === node.goalCode);
       return goalCode && node.code === goalCode ? { type: node.type, goalCode } : undefined;
     }
+    case "session-lifecycle-upsert-conflict":
+      return typeof node.sessionKey === "string"
+        ? { type: node.type, sessionKey: node.sessionKey }
+        : undefined;
     case "session-mutation-conflict":
       return typeof node.operationLabel === "string"
         ? { type: node.type, operationLabel: node.operationLabel }
@@ -412,6 +423,8 @@ export function createError(node: ErrorIdentity & { message: string }): Error {
       return new WorkspaceAliasRepointedError(node);
     case "session-goal-operation":
       return new SessionGoalOperationError(node.goalCode, node.message);
+    case "session-lifecycle-upsert-conflict":
+      return new SessionEntryLifecycleUpsertConflictError(node.sessionKey);
     case "session-mutation-conflict":
       return new SqliteSessionMutationConflictError(node.operationLabel);
     case "session-metadata":

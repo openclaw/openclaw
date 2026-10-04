@@ -241,7 +241,7 @@ export async function commitReplySessionInitialization(params: {
       maintenanceOverride: params.maintenanceConfig,
       storePath,
       upserts,
-      beforeCommitInTransaction: params.commitGuard,
+      commitGuard: params.commitGuard,
     });
   } catch (error) {
     if (

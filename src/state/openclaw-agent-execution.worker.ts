@@ -372,6 +372,7 @@ function openAgentDatabaseBackend(
     "session.turn.prepare": loadAgentCompoundOperations,
     "session.turn.commit": loadAgentCompoundOperations,
     "session.lifecycle.reset": loadAgentCompoundOperations,
+    "session.lifecycle.project": loadAgentCompoundOperations,
     "session.nativeBindings.delete": loadAgentNativeBindingOperations,
     "trajectory.events.append": loadAgentTrajectoryOperations,
     "session.archives.preparePublication": loadAgentArchiveOperations,
