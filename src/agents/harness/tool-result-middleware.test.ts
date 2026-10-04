@@ -106,6 +106,63 @@ describe("createAgentToolResultMiddlewareRunner", () => {
     }
   });
 
+  it("hands a replaced plugin's stale handler over to its replacement", async () => {
+    // A run resolved generation 1; a plugin reload replaces the plugin before the next tool call.
+    const record = createPluginRecord({ id: "replaced-between-calls" });
+    const registry = createEmptyPluginRegistry();
+    registry.plugins.push(record);
+    setActivePluginRegistry(registry);
+    const gateway = createPluginRegistryOwner(registry);
+    const retired = new PluginInstance(record.id, { record, registry });
+    let staleCalls = 0;
+    const stale = retired.wrap<AgentToolResultMiddleware>(() => {
+      staleCalls += 1;
+      return undefined;
+    });
+    const runner = createAgentToolResultMiddlewareRunner({ runtime: "openclaw" }, [stale]);
+    try {
+      const nextRecord = createPluginRecord({ id: record.id });
+      const next = createEmptyPluginRegistry();
+      next.plugins.push(nextRecord);
+      const replacement = new PluginInstance(nextRecord.id, { record: nextRecord, registry: next });
+      // Like a matcher-scoped middleware: rewrites memory_search and leaves other tools alone.
+      const handler = replacement.wrap<AgentToolResultMiddleware>((event) =>
+        event.toolName === "memory_search"
+          ? { result: { ...event.result, content: [{ type: "text", text: "replacement" }] } }
+          : undefined,
+      );
+      next.agentToolResultMiddlewares.push({
+        pluginId: nextRecord.id,
+        source: "test",
+        rawHandler: handler,
+        handler,
+        runtimes: ["openclaw"],
+      });
+      setActivePluginRegistry(next);
+      gateway.publish(next);
+      await retired.dispose();
+
+      const exec = await runner.applyToolResultMiddleware({
+        toolCallId: "call-1",
+        toolName: "exec",
+        args: {},
+        result: { content: [{ type: "text", text: "exit 0" }], details: {} },
+      });
+      const memory = await runner.applyToolResultMiddleware({
+        toolCallId: "call-2",
+        toolName: "memory_search",
+        args: {},
+        result: { content: [{ type: "text", text: "hits" }], details: {} },
+      });
+
+      expect(exec).toEqual({ content: [{ type: "text", text: "exit 0" }], details: {} });
+      expect(memory.content).toEqual([{ type: "text", text: "replacement" }]);
+      expect(staleCalls).toBe(0);
+    } finally {
+      resetPluginRuntimeStateForTest();
+    }
+  });
+
   it("fails closed for invalid middleware results", async () => {
     const original = { content: [{ type: "text" as const, text: "raw" }], details: {} };
     const runner = createAgentToolResultMiddlewareRunner({ runtime: "codex" }, [

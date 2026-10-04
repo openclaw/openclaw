@@ -1328,7 +1328,7 @@ ${channelPluginSource({
 
   it.each([
     { successor: "removed", preserved: true },
-    { successor: "replaced", replaced: true, preserved: false },
+    { successor: "replaced", replaced: true, preserved: false, reapplied: true },
     { successor: "removed while Gateway B is live and active", gatewayB: true, preserved: true },
     {
       successor: "removed and Gateway A is closing while Gateway B is live and active",
@@ -1345,7 +1345,7 @@ ${channelPluginSource({
     },
   ])(
     "keeps a run's tool result only when its middleware plugin was $successor",
-    async ({ successor, replaced, gatewayB, closeGatewayA, unlinked, preserved }) => {
+    async ({ successor, replaced, gatewayB, closeGatewayA, unlinked, preserved, reapplied }) => {
       useNoBundledPlugins();
       const pluginId = `tool-result-middleware-${successor}`;
       const plugin = writePlugin({
@@ -1382,10 +1382,10 @@ ${channelPluginSource({
         { type: "text", text: "compacted" },
       ]);
 
-      const next = createEmptyPluginRegistry();
-      if (replaced) {
-        next.plugins.push({ ...record });
-      }
+      // A replacement reloads the same plugin into a new instance with its own middleware.
+      const next = replaced
+        ? loadRegistryFromSinglePlugin({ plugin, pluginConfig: { allow: [pluginId] } })
+        : createEmptyPluginRegistry();
       setActivePluginRegistry(next);
       gatewayA?.publish(next);
       if (gatewayB) {
@@ -1412,8 +1412,12 @@ ${channelPluginSource({
             [],
           ).applyToolResultMiddleware({ ...event, result: raw }),
         ).toBe(raw);
+      } else if (reapplied) {
+        // The replacement's middleware applies, as for a run started after the reload.
+        expect(result.content).toEqual([{ type: "text", text: "compacted" }]);
+        expect(result.details).not.toEqual({ status: "error", middlewareError: true });
       } else {
-        // A replacement, a closing owner or no owner link: the stale handler fails closed.
+        // A closing owner or no owner link: the stale handler fails closed.
         expect(result.details).toEqual({ status: "error", middlewareError: true });
       }
     },

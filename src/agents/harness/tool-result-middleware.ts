@@ -389,24 +389,42 @@ function reconcileDeliveredMessagingFailure(
 }
 
 /**
- * A run resolves middleware once. When a handler's own plugin was retired and is
- * gone from its Gateway's current registry, its post-processing no longer applies. The runner
- * checks this before choosing a path and again before each call, so a skipped
- * plugin never runs and cannot have touched the result.
+ * A run resolves middleware once. When a handler's own plugin instance was
+ * retired, its Gateway's current registry decides what post-processing applies
+ * now: a removed plugin's handler is dropped, and a replaced plugin's handler
+ * gives way to the replacement's handlers for this runtime, exactly as a run
+ * started after the reload would resolve them. The runner checks this before
+ * choosing a path and again before each call, so a retired instance never runs.
+ * Without a live owner (closing or unlinked Gateway) the stale handler is kept
+ * and fails closed.
  */
-function isRemovedPluginMiddleware(handler: AgentToolResultMiddleware): boolean {
+function resolveCurrentPluginMiddleware(
+  handler: AgentToolResultMiddleware,
+  runtime: AgentToolResultMiddlewareContext["runtime"],
+): readonly AgentToolResultMiddleware[] {
   const instance = getPluginValueInstance(handler);
   if (!instance?.owner || (!instance.disposing && instance.acceptingCalls)) {
-    return false;
+    return [handler];
   }
-  // Decide against the plugin's own Gateway; without that owner a stale handler fails closed.
   const successor = getPluginRegistryGatewayOwner(instance.owner.registry)?.current();
-  return (
-    successor !== undefined &&
+  if (successor === undefined || successor === instance.owner.registry) {
+    return [handler];
+  }
+  if (
     !successor.plugins.some(
       (record) => record.id === instance.pluginId && record.enabled && record.status === "loaded",
     )
-  );
+  ) {
+    return [];
+  }
+  return successor.agentToolResultMiddlewares
+    .filter(
+      (entry) =>
+        entry.pluginId === instance.pluginId &&
+        entry.runtimes.includes(runtime) &&
+        entry.handler !== handler,
+    )
+    .map((entry) => entry.handler);
 }
 
 export function createAgentToolResultMiddlewareRunner(
@@ -424,10 +442,10 @@ export function createAgentToolResultMiddlewareRunner(
     async applyToolResultMiddleware(
       event: AgentToolResultMiddlewareEvent,
     ): Promise<OpenClawAgentToolResult> {
-      // Drop removed plugins' handlers before choosing a path, so a run whose
+      // Re-resolve retired plugins' handlers before choosing a path, so a run whose
       // only middleware was removed keeps the untouched no-middleware result.
-      const handlersForRun = (await (handlers ?? resolvedHandlersLoader.load())).filter(
-        (handler) => !isRemovedPluginMiddleware(handler),
+      const handlersForRun = (await (handlers ?? resolvedHandlersLoader.load())).flatMap(
+        (handler) => resolveCurrentPluginMiddleware(handler, ctx.runtime),
       );
       // Fast path: with no middleware registered the result is delivered
       // unchanged; skip validation entirely so tool emitters that produce
@@ -443,9 +461,12 @@ export function createAgentToolResultMiddlewareRunner(
         event.result,
       );
       let current = sanitizeToolResultForMiddleware(event.result);
-      for (const handler of handlersForRun) {
-        // An earlier handler can await while a later handler's plugin is removed.
-        if (isRemovedPluginMiddleware(handler)) {
+      // An earlier handler can await while a later handler's plugin is removed or replaced.
+      const pending = [...handlersForRun];
+      for (let handler = pending.shift(); handler; handler = pending.shift()) {
+        const resolved = resolveCurrentPluginMiddleware(handler, ctx.runtime);
+        if (resolved.length !== 1 || resolved[0] !== handler) {
+          pending.unshift(...resolved);
           continue;
         }
         try {
