@@ -510,6 +510,63 @@ it("pins a dragged session and rereads the selected people view", async () => {
   expect(page.request.mock.calls.some(([method]) => method === "workboard.cards.move")).toBe(false);
 });
 
+it("links up to four pull requests by state without opening or dragging the session", async () => {
+  const page = sessionsPage();
+  page.result.sessions[0]!.pullRequests = [
+    { number: 10, state: "closed" },
+    { number: 11, state: "merged" },
+    { number: 12, state: "draft" },
+    {
+      number: 13,
+      state: "open",
+      url: "https://github.com/example/project/pull/13",
+      title: "Fix session retries",
+    },
+    { number: 14, state: "closed" },
+    { number: 15, state: "closed" },
+  ];
+  await page.connect();
+  const tile = expectDefined(
+    page.container.querySelector<HTMLElement>('[data-session-key="agent:main:working"]'),
+    "session tile",
+  );
+  const pullRequests = [...tile.querySelectorAll<HTMLElement>(".workboard-session-pr")];
+  expect(pullRequests.map((entry) => entry.textContent?.trim())).toEqual([
+    "#13 · Open",
+    "#12 · Draft",
+    "#11 · Merged",
+    "#10 · Closed",
+  ]);
+  expect(tile.querySelector(".workboard-session-tile__prs")?.textContent).toContain("+2");
+  const link = expectDefined(tile.querySelector<HTMLAnchorElement>("a"), "pull-request link");
+  expect(link.href).toBe("https://github.com/example/project/pull/13");
+  expect(link.target).toBe("_blank");
+  expect(link.rel).toBe("noreferrer");
+  expect(link.title).toBe("Fix session retries");
+  expect(link.closest("button")).toBeNull();
+  expect(pullRequests.slice(1).every((entry) => entry.tagName === "SPAN")).toBe(true);
+
+  const icon = expectDefined(link.querySelector("svg"), "pull-request state icon");
+  const click = new MouseEvent("click", { bubbles: true, cancelable: true });
+  icon.dispatchEvent(click);
+  expect(click.defaultPrevented).toBe(false);
+  expect(page.fixture.host.sessions.open).not.toHaveBeenCalled();
+  link.dispatchEvent(new Event("dragstart", { bubbles: true, cancelable: true }));
+  expectDefined(
+    page.container.querySelector('[data-session-column="done"]'),
+    "destination",
+  ).dispatchEvent(new Event("drop", { bubbles: true, cancelable: true }));
+  await vi.advanceTimersByTimeAsync(0);
+  expect(
+    page.request.mock.calls.some(([method]) => method === "workboard.sessionsBoard.move"),
+  ).toBe(false);
+  expectDefined(tile.querySelector<HTMLButtonElement>("button"), "session title").click();
+  expect(page.fixture.host.sessions.open).toHaveBeenCalledExactlyOnceWith({
+    sessionKey: "agent:main:working",
+    agentId: "main",
+  });
+});
+
 it.each(["cards", "sessions"] as const)(
   "registers and pins a created %s board before its catalog refresh completes",
   async (kind) => {
