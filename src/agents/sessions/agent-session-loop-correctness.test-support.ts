@@ -12,7 +12,7 @@ import { DEFAULT_THINKING_LEVEL } from "./defaults.js";
 import type { ToolDefinition } from "./extensions/types.js";
 import { ModelRegistry } from "./model-registry.js";
 import type { ResourceLoader } from "./resource-loader.js";
-import { createAgentSession, createAgentSessionForEmbeddedRunner } from "./sdk.js";
+import { createAgentSession } from "./sdk.js";
 import { SessionManager } from "./session-manager.js";
 import { SettingsManager } from "./settings-manager.js";
 
@@ -164,14 +164,13 @@ export async function createTestSession(
     modelRegistry,
     withSessionWriteSettlement: options.withSessionWriteSettlement,
   };
-  const internalOptions = {
+  const result = await createAgentSession({
+    ...sessionOptions,
     contextOverflowRecoveryOwner: options.contextOverflowRecoveryOwner ?? "session",
     resolveCompactionThinkingLevel: options.resolveCompactionThinkingLevel,
-  };
-  const result =
-    options.contextOverflowRecoveryOwner || options.resolveCompactionThinkingLevel
-      ? await createAgentSessionForEmbeddedRunner(sessionOptions, internalOptions)
-      : await createAgentSession(sessionOptions);
+    cleanupProviderSessionResourcesOnDispose:
+      !options.contextOverflowRecoveryOwner && !options.resolveCompactionThinkingLevel,
+  });
   sessions.push(result.session);
   return { ...result, modelRegistry, settingsManager, sessionManager };
 }

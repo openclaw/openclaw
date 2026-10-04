@@ -806,6 +806,7 @@ src/infra/fs-safe-env.ts
 src/infra/fs-safe.ts
 src/infra/gateway-lock-process.ts
 src/infra/gateway-owner-lease.read.ts
+src/infra/gateway-owner-lease.worker.ts
 src/infra/gateway-owner-lease.ts
 src/infra/gateway-lock-payload.ts
 src/infra/gateway-state-owner-directory.ts
@@ -957,6 +958,7 @@ src/infra/sqlite-snapshot-policy.ts
 src/infra/sqlite-snapshot-retirement.ts
 src/infra/sqlite-snapshot-single-flight.ts
 src/infra/sqlite-snapshot-source.ts
+src/infra/sqlite-snapshot-staging-allocation.ts
 src/infra/sqlite-snapshot-staging-error.ts
 src/infra/sqlite-snapshot-staging-owner.ts
 src/infra/sqlite-snapshot-staging.ts
@@ -1268,6 +1270,7 @@ src/plugins/plugin-instance-settlement.ts
 src/plugins/plugin-instance-bindings.ts
 src/plugins/plugin-instance.ts
 src/plugins/plugin-lifecycle-trace.ts
+src/plugins/plugin-manifest-id-normalizer.ts
 src/plugins/plugin-metadata-contributions.ts
 src/plugins/plugin-metadata-env.ts
 src/plugins/plugin-metadata-lifecycle.ts
@@ -1452,6 +1455,7 @@ src/shared/avatar-limits.ts
 src/shared/avatar-policy.ts
 src/shared/dedupe-by-key.ts
 src/shared/deferred.ts
+src/shared/detached-async-context.ts
 src/shared/dot-path.ts
 src/shared/env-var-candidates.ts
 src/shared/freebsd-process-identity-native.ts

@@ -322,6 +322,32 @@ describe("plugins cli policy mutations", () => {
     },
   );
 
+  it("toggles mixed-case manifest ids using their canonical policy key", async () => {
+    mockCurrentConfig({
+      plugins: {
+        entries: { "MiXeD-demo": { enabled: true, config: { label: "keep" } } },
+      },
+    });
+    mockPluginRegistry(["MiXeD-demo"]);
+
+    await runPluginsCommand(["plugins", "disable", "MiXeD-demo"]);
+    await runPluginsCommand(["plugins", "enable", "mixed-demo"]);
+
+    expect(configWriteMock.mock.calls).toEqual([
+      [{ plugins: { entries: { "mixed-demo": { enabled: false, config: { label: "keep" } } } } }],
+      [{ plugins: { entries: { "mixed-demo": { enabled: true, config: { label: "keep" } } } } }],
+    ]);
+    expect(refreshPluginRegistryMock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ policyPluginIds: ["mixed-demo"] }),
+    );
+    expect(refreshPluginRegistryMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ policyPluginIds: ["mixed-demo"] }),
+    );
+    expect(runtimeErrors).toEqual([]);
+  });
+
   it.each(["missing", "blocked"])(
     "stops at a %s plugin while retaining earlier enables",
     async (failure) => {

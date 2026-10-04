@@ -24,6 +24,7 @@ import {
 } from "./memory-state.js";
 import { getPluginValueInstance, runPluginCleanup } from "./plugin-instance-scope.js";
 import { runPluginCleanupScope } from "./plugin-invocation-scope.js";
+import { normalizePluginPolicyId } from "./plugin-policy-id.js";
 import type {
   MemoryPluginRuntime,
   MemoryProviderRuntime,
@@ -101,7 +102,8 @@ function resolveMemoryRuntimePluginIds(config: OpenClawConfig): string[] {
   if (!plugins.enabled || !pluginId) {
     return [];
   }
-  if (plugins.deny.includes(pluginId) || plugins.entries[pluginId]?.enabled === false) {
+  const policyId = normalizePluginPolicyId(pluginId);
+  if (plugins.deny.includes(policyId) || plugins.entries[policyId]?.enabled === false) {
     return [];
   }
   return [pluginId];

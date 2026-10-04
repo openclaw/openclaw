@@ -58,7 +58,7 @@ import {
   attemptServerEndpointCompactionMock,
   applyExtraParamsToAgentMock,
   buildAgentRuntimePlanMock,
-  buildEmbeddedSystemPromptMock,
+  buildConfiguredAgentSystemPromptMock,
   resolveBootstrapContextForRunMock,
   contextEngineCompactMock,
   createAgentSessionMock,
@@ -404,11 +404,11 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
         execute: vi.fn(),
       })),
     );
-    buildEmbeddedSystemPromptMock.mockImplementation((params) =>
+    buildConfiguredAgentSystemPromptMock.mockImplementation((params) =>
       JSON.stringify({
         promptMode: params.promptMode,
         skillsPrompt: params.skillsPrompt ?? null,
-        toolNames: params.tools.map((tool) => tool.name),
+        toolNames: params.tools?.map((tool) => tool.name),
       }),
     );
     let endpointSystemPrompt: string | undefined;
@@ -691,7 +691,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
           workspaceDir: join(TEST_WORKSPACE_DIR, "workspace"),
         }),
       );
-      expect(buildEmbeddedSystemPromptMock).toHaveBeenCalledWith(
+      expect(buildConfiguredAgentSystemPromptMock).toHaveBeenCalledWith(
         expect.objectContaining({
           runtimeInfo: expect.objectContaining({
             activeProcessSessions: [expect.objectContaining({ sessionId: owned.id })],
@@ -719,7 +719,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       expect(listRegisteredPluginAgentPromptGuidanceMock).toHaveBeenCalledWith({
         surface: promptSurface,
       });
-      expect(buildEmbeddedSystemPromptMock).toHaveBeenCalledWith(
+      expect(buildConfiguredAgentSystemPromptMock).toHaveBeenCalledWith(
         expect.objectContaining({
           promptMode,
           promptSurface,
@@ -754,9 +754,12 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
           : [file],
         contextFiles: [{ path: file.path, content: file.content }],
       });
-      const actual =
-        await vi.importActual<typeof import("./system-prompt.js")>("./system-prompt.js");
-      buildEmbeddedSystemPromptMock.mockImplementation(actual.buildEmbeddedSystemPrompt);
+      const actual = await vi.importActual<typeof import("../system-prompt-config.js")>(
+        "../system-prompt-config.js",
+      );
+      buildConfiguredAgentSystemPromptMock.mockImplementation(
+        actual.buildConfiguredAgentSystemPrompt,
+      );
       await compactEmbeddedAgentSessionDirect(directCompactionArgs());
       const created = (await createAgentSessionMock.mock.results[0]?.value) as {
         session: { agent: { state: { systemPrompt?: string } }; setBaseSystemPrompt: Mock };
@@ -1084,7 +1087,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
 
     it("returns a structured automatic retention skip without reporting compaction failure", async () => {
       const { isBenignCompactionSkipResult } = await import("./compact-reasons.js");
-      const { createAgentSessionForEmbeddedRunner } = await import("../sessions/sdk.js");
+      const { createAgentSession } = await import("../sessions/sdk.js");
       const { guardSessionManager } = await import("../session-tool-result-guard-wrapper.js");
       const { resolveEmbeddedAgentStream } = await import("./stream-resolution.js");
       const { attachCompactionAccountingRecorder } =
@@ -1113,7 +1116,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
         streamFn: stream,
         strategy: "session-custom",
       });
-      vi.mocked(createAgentSessionForEmbeddedRunner).mockImplementation(async ({ model }) => {
+      vi.mocked(createAgentSession).mockImplementation(async ({ model }) => {
         if (!model) {
           throw new Error("Expected prepared compaction model");
         }
@@ -1158,7 +1161,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       "keeps model fallback boundaries for %s",
       async (scenario, errorMessage, outcome) => {
         const [
-          { createAgentSessionForEmbeddedRunner },
+          { createAgentSession },
           { guardSessionManager },
           { resolveEmbeddedAgentStream },
           { buildEmbeddedExtensionFactories },
@@ -1242,26 +1245,24 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
           });
           return [];
         });
-        vi.mocked(createAgentSessionForEmbeddedRunner).mockImplementation(
-          async ({ model, thinkingLevel }) => {
-            if (!model) {
-              throw new Error("Expected the prepared compaction model");
-            }
-            const created = await createTestSession({
-              model: {
-                ...testModel,
-                ...model,
-                reasoning: outcome === "thinking",
-                maxTokens: 1_024,
-              },
-              sessionManager,
-              settingsManager,
-              resourceLoader: createResourceLoader(extension.handlers),
-            });
-            await created.session.setThinkingLevel(thinkingLevel ?? "off");
-            return created;
-          },
-        );
+        vi.mocked(createAgentSession).mockImplementation(async ({ model, thinkingLevel }) => {
+          if (!model) {
+            throw new Error("Expected the prepared compaction model");
+          }
+          const created = await createTestSession({
+            model: {
+              ...testModel,
+              ...model,
+              reasoning: outcome === "thinking",
+              maxTokens: 1_024,
+            },
+            sessionManager,
+            settingsManager,
+            resourceLoader: createResourceLoader(extension.handlers),
+          });
+          await created.session.setThinkingLevel(thinkingLevel ?? "off");
+          return created;
+        });
         const config = {
           agents: {
             defaults: {

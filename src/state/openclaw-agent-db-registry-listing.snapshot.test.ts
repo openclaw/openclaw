@@ -56,11 +56,14 @@ beforeEach(() => {
   invalidateRegisteredAgentDatabasesMemo(options);
 });
 
-it("captures authority without activating or reading an unused registry", () => {
+it("lazily reads in its captured scope and publishes complete rows to the canonical memo", async () => {
   const other = { path: "/fixture/other/state.sqlite" };
   const token = readOpenClawAgentDatabaseRegistryToken(other);
   const env = { ...options.env };
-  prepareOpenClawAgentDatabaseRegistrySnapshotRead({ ...options, env });
+  const scope = new AsyncLocalStorage<string>();
+  const prepared = scope.run("captured", () =>
+    prepareOpenClawAgentDatabaseRegistrySnapshotRead({ ...options, env }),
+  );
   env.OPENCLAW_STATE_DIR = "/fixture/changed";
   expect(mocks.capture).toHaveBeenCalledWith(
     expect.objectContaining({
@@ -69,17 +72,39 @@ it("captures authority without activating or reading an unused registry", () => 
   );
   expect(readOpenClawAgentDatabaseRegistryToken(other)).toBe(token);
   expect(mocks.read).not.toHaveBeenCalled();
+  const incompatible = {
+    ...entry,
+    agentId: "future",
+    schemaVersion: OPENCLAW_AGENT_SCHEMA_VERSION + 1,
+  };
+  mocks.read.mockImplementationOnce(async () => {
+    expect(scope.getStore()).toBe("captured");
+    return { status: "available", entries: [...entries, incompatible] };
+  });
+  const snapshot = await scope.run("replacement", () => prepared.read());
+  expect(snapshot.result).toEqual({ status: "available", entries });
+  expect(
+    listOpenClawRegisteredAgentDatabases({ ...options, includeIncompatibleSchemaVersions: true }),
+  ).toEqual([...entries, incompatible]);
+  expect(mocks.read).toHaveBeenCalledOnce();
 });
 
-it("defers a capture refusal until the registry is actually demanded", async () => {
-  const failure = new Error("capture refused");
-  mocks.capture.mockImplementation(() => {
-    throw failure;
-  });
-  const prepared = prepareOpenClawAgentDatabaseRegistrySnapshotRead(options);
-  expect(mocks.read).not.toHaveBeenCalled();
-  await expect(prepared.read()).rejects.toBe(failure);
-});
+it.each(["capture", "reader"] as const)(
+  "propagates %s failure when the registry is demanded",
+  async (stage) => {
+    const failure = new Error(`${stage} refused`);
+    if (stage === "capture") {
+      mocks.capture.mockImplementation(() => {
+        throw failure;
+      });
+    } else {
+      mocks.read.mockRejectedValueOnce(failure);
+    }
+    const prepared = prepareOpenClawAgentDatabaseRegistrySnapshotRead(options);
+    expect(mocks.read).not.toHaveBeenCalled();
+    await expect(prepared.read()).rejects.toBe(failure);
+  },
+);
 
 it("retains scoped revocation before native registry rows are needed", async () => {
   const prepared = prepareOpenClawAgentDatabaseRegistrySnapshotRead(options, () => true);
@@ -90,21 +115,6 @@ it("retains scoped revocation before native registry rows are needed", async () 
   await expect(prepared.read()).rejects.toThrow("registry changed");
   expect(() => prepared.assertCurrent()).toThrow("registry changed");
   expect(mocks.read).not.toHaveBeenCalled();
-});
-
-it("publishes full successful rows into the existing canonical memo", async () => {
-  const incompatible = {
-    ...entry,
-    agentId: "future",
-    schemaVersion: OPENCLAW_AGENT_SCHEMA_VERSION + 1,
-  };
-  mocks.read.mockResolvedValue({ status: "available", entries: [...entries, incompatible] });
-  const snapshot = await prepareOpenClawAgentDatabaseRegistrySnapshotRead(options).read();
-  expect(snapshot.result).toEqual({ status: "available", entries });
-  expect(
-    listOpenClawRegisteredAgentDatabases({ ...options, includeIncompatibleSchemaVersions: true }),
-  ).toEqual([...entries, incompatible]);
-  expect(mocks.read).toHaveBeenCalledOnce();
 });
 
 it.each([false, true])(
@@ -132,30 +142,28 @@ it.each([false, true])(
   },
 );
 
-it("does not cache a certified unavailable read", async () => {
-  mocks.read.mockResolvedValueOnce({ status: "unavailable" });
-  const prepared = prepareOpenClawAgentDatabaseRegistrySnapshotRead(options);
-  expect((await prepared.read()).result).toEqual({ status: "unavailable" });
-  expect((await prepared.read()).result).toEqual({ status: "available", entries });
-  expect(mocks.read).toHaveBeenCalledTimes(2);
-});
-
-it("does not cache an absent registry after its file appears before publication", async () => {
-  await withTempDir("registry-absence-race-", async (stateDir) => {
-    const local = {
-      path: path.join(stateDir, "registry.sqlite"),
-      env: { OPENCLAW_STATE_DIR: stateDir },
-    };
-    mocks.read.mockImplementationOnce(async () => {
-      fs.writeFileSync(local.path, "synthetic newly created registry");
-      return undefined;
+it.each(["unavailable", "appeared"] as const)(
+  "does not memoize a registry that is %s before publication",
+  async (state) => {
+    await withTempDir("registry-absence-race-", async (stateDir) => {
+      const local = {
+        path: path.join(stateDir, "registry.sqlite"),
+        env: { OPENCLAW_STATE_DIR: stateDir },
+      };
+      mocks.read.mockImplementationOnce(async () => {
+        if (state === "unavailable") {
+          return { status: "unavailable" };
+        }
+        fs.writeFileSync(local.path, "synthetic newly created registry");
+        return undefined;
+      });
+      const prepared = prepareOpenClawAgentDatabaseRegistrySnapshotRead(local);
+      expect((await prepared.read()).result).toEqual({ status: "unavailable" });
+      expect((await prepared.read()).result).toEqual({ status: "available", entries });
+      expect(mocks.read).toHaveBeenCalledTimes(2);
     });
-    const prepared = prepareOpenClawAgentDatabaseRegistrySnapshotRead(local);
-    expect((await prepared.read()).result).toEqual({ status: "unavailable" });
-    expect((await prepared.read()).result).toEqual({ status: "available", entries });
-    expect(mocks.read).toHaveBeenCalledTimes(2);
-  });
-});
+  },
+);
 
 it.each(["authority", "memo"])("rejects unavailable facts after %s changes", async (kind) => {
   const failure = new Error("authority revoked");
@@ -172,24 +180,4 @@ it.each(["authority", "memo"])("rejects unavailable facts after %s changes", asy
   await expect(prepareOpenClawAgentDatabaseRegistrySnapshotRead(options).read()).rejects.toThrow(
     kind === "authority" ? failure : "registry changed",
   );
-});
-
-it("propagates an unsettled worker failure without producing an unavailable fact", async () => {
-  const failure = new Error("reader retirement failed");
-  mocks.read.mockRejectedValueOnce(failure);
-  await expect(prepareOpenClawAgentDatabaseRegistrySnapshotRead(options).read()).rejects.toBe(
-    failure,
-  );
-});
-
-it("uses captured async scope when demand runs elsewhere", async () => {
-  const scope = new AsyncLocalStorage<string>();
-  const prepared = scope.run("captured", () =>
-    prepareOpenClawAgentDatabaseRegistrySnapshotRead(options),
-  );
-  mocks.read.mockImplementationOnce(async () => {
-    expect(scope.getStore()).toBe("captured");
-    return { status: "available", entries };
-  });
-  await scope.run("replacement", () => prepared.read());
 });

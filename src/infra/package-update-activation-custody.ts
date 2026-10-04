@@ -47,7 +47,7 @@ export function inspectPackageActivationCustody(anchor: string, record: PackageA
       entry.source === descriptor.authority.installKey ||
       entry.source.startsWith(`${anchor}${path.sep}`) ||
       fs.realpathSync(path.dirname(entry.source)) !== path.dirname(entry.source) ||
-      packageActivationIdentity(path.dirname(entry.source), true) !== entry.sourceParentIdentity
+      packageActivationIdentity(path.dirname(entry.source), "parent") !== entry.sourceParentIdentity
     ) {
       throw new Error("Package preparation source parent changed.");
     }

@@ -19,7 +19,7 @@ import {
   SqliteWorkerError,
 } from "../infra/sqlite-worker-store.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { runInDetachedAsyncContext } from "../shared/async-work-scope.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { isStateDatabaseReadAdmissionInvalidatedError } from "./openclaw-state-db-async-lifecycle.js";
 import {
@@ -647,6 +647,7 @@ function createSharedStateWorkerOwner() {
             stores.delete(admitted);
             refreshPressureSubscription();
           }
+          admitted.openingAdmission.assertCurrent = undefined;
           return store;
         });
         stores.add(entry);
@@ -654,6 +655,7 @@ function createSharedStateWorkerOwner() {
         context.maintenanceScope?.own(entry, "shared-resources", () => retire(admitted));
         void entry.opening.catch(() => {
           stores.delete(admitted);
+          admitted.openingAdmission.assertCurrent = undefined;
           if (hasPendingCleanup(admitted) && !retiring.has(admitted)) {
             retiring.set(admitted, {});
           }
