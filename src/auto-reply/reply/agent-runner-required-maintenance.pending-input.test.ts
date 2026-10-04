@@ -288,6 +288,7 @@ describe("required maintenance with restart-safe admitted input", () => {
             entry,
             initialSessionEntry: entry,
             now: Date.now(),
+            placement: undefined,
             request,
             sessionId,
             sessionKey,

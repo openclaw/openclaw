@@ -6,7 +6,7 @@ import {
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import type {
-  SessionTranscriptContextVersion,
+  TranscriptWriteSnapshot,
   SessionTranscriptWriteScope,
   TranscriptAppendRefusal,
 } from "./session-accessor.sqlite-contract.js";
@@ -29,13 +29,6 @@ export class SqliteTranscriptMutationConflictError extends Error {
     this.name = "SqliteTranscriptMutationConflictError";
   }
 }
-
-export type TranscriptWriteSnapshot<T> = {
-  result: T;
-  lifecycleRevision?: string;
-  before: SessionTranscriptContextVersion;
-  after: SessionTranscriptContextVersion;
-};
 
 export type TranscriptWriteViewGuard = {
   assertCurrent: () => void;

@@ -721,6 +721,44 @@ test("sessions.search searches a retired per-agent store without explicit sessio
   expect(searched.payload?.results).toEqual([expect.objectContaining({ sessionKey })]);
 });
 
+test("sessions.search accepts an ACP allowlist owner absent from the agent roster", async () => {
+  const agentId = "codex";
+  const sessionKey = `agent:${agentId}:acp:search-owner`;
+  const sessionId = "session-acp-owner-search";
+  const storePath = path.join(requireStateDir(), "agents", agentId, "sessions", "sessions.json");
+  await setAgentsConfig({ entries: { main: {} } });
+  const { getRuntimeConfig } = await getGatewayConfigModule();
+  getRuntimeConfig().acp = { allowedAgents: [agentId] };
+  await replaceSessionEntry({ agentId, sessionKey, storePath }, { sessionId, updatedAt: 42 });
+  await seedLinearSessionTranscript({
+    agentId,
+    contents: ["ACP owner search needle"],
+    sessionId,
+    sessionKey,
+    storePath,
+  });
+
+  const searched = await directSessionReq<{ results: Array<{ sessionKey: string }> }>(
+    "sessions.search",
+    { agentId, query: "ACP owner search needle", sessionKeys: [sessionKey] },
+  );
+
+  expect(searched).toMatchObject({
+    ok: true,
+    payload: { results: [expect.objectContaining({ sessionKey })] },
+  });
+  const mismatchedOwner = await directSessionReq("sessions.search", {
+    agentId,
+    query: "ACP owner search needle",
+    sessionKeys: [`agent:claude:acp:search-owner`],
+  });
+  expect(mismatchedOwner).toMatchObject({
+    ok: false,
+    error: { code: "INVALID_REQUEST" },
+  });
+  expect(await listAgentIdsViaRpc()).toEqual(["main"]);
+});
+
 test("session reads find a retired store only reachable through its deterministic template", async () => {
   const agentId = "template-retired";
   const sessionKey = `agent:${agentId}:existing`;

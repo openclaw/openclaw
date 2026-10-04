@@ -34,7 +34,10 @@ import {
   type PersistRecordResult,
   type PersistWorkerRecordResult,
 } from "./session-manager-persistence-entry.js";
-import { isSqliteTranscriptMutationConflict } from "./session-manager-persistence-error.js";
+import {
+  isSqliteTranscriptMutationConflict,
+  SessionManagerActorCommittedError,
+} from "./session-manager-persistence-error.js";
 import { SessionManagerSuffixPersistence } from "./session-manager-suffix-persistence.js";
 import type {
   AppendPersistenceOptions,
@@ -73,6 +76,7 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
       if (
         !admission ||
         (isIncognitoSessionKey(this.persistenceTarget?.sessionKey) &&
+          "db" in admission.database &&
           !(canonical.type === "compaction" && persistCompaction))
       ) {
         // Incognito retains its host-owned store until actor activation; detached views do not write.
@@ -289,6 +293,9 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
     appended: boolean;
     viewWasSuperseded?: true;
   } {
+    if (committed.viewFailure instanceof SessionManagerActorCommittedError) {
+      throw committed.viewFailure;
+    }
     if (this.hasNewerPublishedTranscriptView(committed.committedVersion)) {
       if (
         committed.result?.adoptedMessageId &&

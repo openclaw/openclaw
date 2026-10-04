@@ -3,7 +3,6 @@ import { readOpenClawAgentDatabase } from "../../state/openclaw-agent-db-readonl
 import { assertAgentDatabaseTerminalOpenAllowed } from "../../state/openclaw-agent-db-terminal.js";
 import { getOpenClawAgentDatabaseIfOpen } from "../../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
-import type { IncognitoAgentDatabaseExecution } from "../../state/openclaw-agent-execution-incognito.js";
 import { readSessionTranscriptBoundedActiveContextCore } from "./session-accessor.sqlite-active-context.js";
 import {
   readLatestSessionTranscriptMessageEvent,
@@ -18,6 +17,7 @@ import {
   type ResolvedTranscriptReadScope,
 } from "./session-accessor.sqlite-scope.js";
 import type { SessionTranscriptRuntimeTarget } from "./session-accessor.types.js";
+import type { IncognitoSessionActor } from "./session-incognito-actor.js";
 import type { IncognitoSessionAuthority } from "./session-incognito-contract.js";
 import type {
   IncognitoHistoryOperations,
@@ -40,7 +40,7 @@ import { captureSessionTranscriptTargetBinding } from "./transcript-target-bindi
 
 /** Inactive until P7d: the caller supplies the sole actor for this captured session. */
 export function prepareIncognitoSessionTranscriptHydration(params: {
-  actor: IncognitoAgentDatabaseExecution;
+  actor: IncognitoSessionActor;
   authority: IncognitoSessionAuthority;
   target: IncognitoHistoryTarget;
   limits?: { maxBytes: number; maxEvents: number };

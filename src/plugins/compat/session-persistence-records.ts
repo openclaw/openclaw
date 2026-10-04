@@ -2,6 +2,29 @@ import type { PluginCompatRecord } from "./types.js";
 
 export const SESSION_PERSISTENCE_COMPAT_RECORDS = [
   {
+    code: "agent-end-sync-side-effects",
+    status: "deprecated",
+    owner: "agent-runtime",
+    introduced: "2026-05-30",
+    deprecated: "2026-10-04",
+    warningStarts: "2026-10-04",
+    removalGate: "next-plugin-sdk-major",
+    replacement:
+      "Await runAgentEndSideEffectsAsync before releasing the turn lease. The released runAgentEndSideEffects helper retains its synchronous void result and scheduling behavior until the next Plugin SDK major and explicit breaking-release approval.",
+    docsPath: "/plugins/sdk-agent-harness/attempt-runtime#agent-end-side-effects",
+    surfaces: ["openclaw/plugin-sdk/agent-harness-runtime.runAgentEndSideEffects"],
+    diagnostics: [
+      "TypeScript @deprecated annotation and migration documentation; no runtime warnings",
+    ],
+    tests: [
+      "src/plugin-sdk/agent-harness-runtime.test.ts",
+      "src/agents/harness/agent-end-side-effects.test.ts",
+      "src/plugins/compat/registry.test.ts",
+    ],
+    releaseNote:
+      "Harness plugins can await transcript-anchor preparation before releasing turn authority. The synchronous agent-end helper remains compatible for published plugins; stored data and update behavior are unchanged.",
+  },
+  {
     code: "native-session-generation-sync-authority",
     status: "deprecated",
     owner: "agent-runtime",

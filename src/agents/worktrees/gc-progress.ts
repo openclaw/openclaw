@@ -1,8 +1,8 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { OpenClawStateLeaseError } from "../../state/openclaw-state-lease.js";
+import { WorktreeRemovalContentionError } from "./errors.js";
 import { classifyWorktreeRemovalError, WorktreeBranchMovedError } from "./removal-errors.js";
-import { WorktreeRemovalContentionError } from "./run-lease-owner.js";
 import type { ManagedWorktreeGcResult } from "./types.js";
 
 const MAX_WORKTREE_GC_ISSUES = 64;

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { MessagePort } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { IncognitoSessionActor } from "../../config/sessions/session-incognito-actor.js";
 import {
   mergeSessionEntry,
   type SessionAcpMeta,
@@ -14,7 +15,6 @@ import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-work
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
-import type { IncognitoAgentDatabaseExecution } from "../../state/openclaw-agent-execution-incognito.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
 import { captureAcpSessionEntryBinding } from "./session-meta-entry.kernel.js";
@@ -182,10 +182,7 @@ export async function commitAcpSessionMutation(
 }
 
 type Target = IncognitoAcpSessionParams & {
-  actor: Pick<
-    IncognitoAgentDatabaseExecution,
-    "agentId" | "path" | "identity" | "sessions" | "assertCurrent"
-  >;
+  actor: IncognitoSessionActor;
 };
 
 function captureTarget(params: Target) {

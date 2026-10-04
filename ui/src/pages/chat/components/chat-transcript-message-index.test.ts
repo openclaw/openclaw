@@ -198,150 +198,128 @@ describe("completed reply frame ownership", () => {
       .flatMap((group) => group.messages.map(({ message }) => message));
   }
 
-  it.each([
-    { name: "ordinary run", workRunIds: ["run-1"], prompt: true },
-    { name: "missing prompt", workRunIds: ["run-1"], prompt: false },
-    { name: "resumed run", workRunIds: ["run-u", "run-1"], prompt: true },
-    { name: "resumed run without prompt", workRunIds: ["run-u", "run-1"], prompt: false },
-    { name: "untagged work", workRunIds: [undefined, "run-1"], prompt: true },
-    { name: "all untagged work without prompt", workRunIds: [undefined], prompt: false },
+  it.each<[string, (string | undefined)[], boolean, string?, boolean?]>([
+    ["ordinary run", ["run-1"], true],
+    ["missing prompt", ["run-1"], false],
+    ["resumed run", ["run-u", "run-1"], true],
+    ["resumed run without prompt", ["run-u", "run-1"], false],
+    ["untagged work", [undefined, "run-1"], true],
+    ["all untagged work without prompt", [undefined], false],
+    ["channel reload", ["run-1"], false, "agent:main:telegram:direct:42"],
+    ["recovered failure", ["run-u", "run-1"], true, sessionKey, true],
   ])(
-    "keeps $name under its final reply without rewriting execution IDs",
-    ({ workRunIds, prompt }) => {
+    "keeps %s in its final reply frame with stable navigation",
+    (_name, workRunIds, prompt, key = sessionKey, failed = false) => {
       const messages = replyHistory(workRunIds, prompt);
+      const failure = {
+        role: "assistant",
+        content: "Interrupted attempt",
+        stopReason: "error",
+        timestamp: 25,
+        __openclaw: { id: "failed-attempt", seq: 5, runId: "run-u" },
+      };
+      if (failed) {
+        messages.splice(-1, 0, failure);
+      }
       const original = structuredClone(messages);
-      const chain = project(messages);
+      const options = { ...chainOptions, sessionKey: key };
+      const chain = project(messages, options);
       const [frame] = frames(chain);
       expect(chain.transcriptItems).toEqual([
         ...(prompt ? [expect.objectContaining({ role: "user" })] : []),
         frame,
       ]);
       expect(frame).toMatchObject({
+        key: 'agent-run:["run-1","send:run-1"]',
         runId: "run-1",
         boundaryId: "send:run-1",
         outcome: { kind: "completed", actionOwner: { message: messages.at(-1) } },
-        parts: [{ kind: "work-group" }, { kind: "group", role: "assistant" }],
+        parts: [
+          { kind: key === sessionKey ? "work-group" : "group" },
+          { kind: "group", role: "assistant" },
+        ],
       });
-      const work = frame?.parts[0];
-      if (work?.kind !== "work-group") {
-        throw new Error("expected work inside the reply frame");
+      const work = frame!.parts[0]!;
+      if (key === sessionKey) {
+        if (work.kind !== "work-group") {
+          throw new Error("expected work inside the reply frame");
+        }
+        if (failed) {
+          expect(messagesIn([work])).toContain(failure);
+        } else {
+          expect(work.groups.map((group) => group.runId)).toEqual(workRunIds);
+        }
       }
-      expect(work.groups.map((group) => group.runId)).toEqual(workRunIds);
       expect(messagesIn([frame!])).toEqual(messages.slice(prompt ? 1 : 0));
       expect(messages).toEqual(original);
       const index = projectTranscriptIndex(chain, new Map(), labels);
-      expect(index.transcriptMessageKeys.get(work.groups[0]!.messages[0]!.key)).toBe(frame?.key);
-      expect(index.messageRowKeysById.get("final")).toBe(frame?.key);
-    },
-  );
-
-  it.each([sessionKey, "agent:main:telegram:direct:42"])(
-    "keeps frame and navigation identity through reload and prompt prepend in %s",
-    (key) => {
-      const messages = replyHistory(["run-1"], false);
-      const options = { ...chainOptions, sessionKey: key };
-      const initial = project(messages, options);
-      const [frame] = frames(initial);
-      expect(initial.transcriptItems).toHaveLength(1);
-      expect(frame?.key).toBe('agent-run:["run-1","send:run-1"]');
-      expect(frame?.parts.map((part) => part.kind)).toEqual(
-        key === sessionKey ? ["work-group", "group"] : ["group", "group"],
+      expect(index.transcriptMessageKeys.get(chatItemGroups(work)[0]!.messages[0]!.key)).toBe(
+        frame?.key,
       );
-      expect(messagesIn([frame!])).toEqual(messages);
-      const index = projectTranscriptIndex(initial, new Map(), labels);
-      for (const restored of [structuredClone(messages), [history[0], ...messages]]) {
-        const next = project(restored, options);
-        expect(frames(next)[0]?.key).toBe(frame?.key);
-        const nextIndex = projectTranscriptIndex(next, new Map(), labels);
-        for (const id of ["work-0", "final"]) {
-          expect(nextIndex.messageRowKeysById.get(id)).toBe(index.messageRowKeysById.get(id));
+      expect(index.messageRowKeysById.get("final")).toBe(frame?.key);
+      if (!prompt) {
+        for (const restored of [structuredClone(messages), [history[0], ...messages]]) {
+          const next = project(restored, options);
+          expect(frames(next)[0]?.key).toBe(frame?.key);
+          const nextIndex = projectTranscriptIndex(next, new Map(), labels);
+          for (const id of ["work-0", "final"]) {
+            expect(nextIndex.messageRowKeysById.get(id)).toBe(index.messageRowKeysById.get(id));
+          }
         }
       }
     },
   );
 
-  it("keeps a recovered failure in the work log rather than failing the final reply", () => {
-    const messages = replyHistory(["run-u", "run-1"]);
-    const failure = {
-      role: "assistant",
-      content: "Interrupted attempt",
-      stopReason: "error",
-      timestamp: 25,
-      __openclaw: { id: "failed-attempt", seq: 5, runId: "run-u" },
-    };
-    messages.splice(-1, 0, failure);
-    const [frame] = frames(project(messages));
-    expect(frame).toMatchObject({
-      outcome: { kind: "completed", actionOwner: { message: messages.at(-1) } },
-      parts: [{ kind: "work-group" }, { kind: "group" }],
-    });
-    expect(messagesIn([frame!.parts[0]!])).toContain(failure);
-  });
-
-  it.each(["run-1", "run-other"])(
-    "preserves an earlier answer from %s without swallowing it",
-    (earlierRunId) => {
-      const messages = replyHistory(["run-u", "run-1"]);
-      const earlier = {
-        role: "assistant",
-        phase: "final_answer",
-        stopReason: "stop",
-        content: "Earlier delivered answer",
-        timestamp: 20.5,
-        __openclaw: { id: "earlier-final", seq: 3, runId: earlierRunId },
-      };
-      messages.splice(2, 0, earlier);
-      const chain = project(messages);
-      expect(
-        messagesIn(
-          parts(chain).filter((item) => item.kind === "group" && item.role === "assistant"),
-        ),
-      ).toEqual([earlier, messages.at(-1)]);
-      expect(frames(chain).map((frame) => frame.runId)).toEqual(
-        earlierRunId === "run-1" ? ["run-1"] : ["run-other", "run-1"],
-      );
-      expect(frames(chain).at(-1)?.outcome).toMatchObject({
-        kind: "completed",
-        actionOwner: { message: messages.at(-1) },
-      });
-      const work = parts(chain).find((item) => item.kind === "work-group");
-      expect(work).toBeDefined();
-      expect(earlierRunId === "run-1" ? frames(chain)[0]?.parts[0] : chain.transcriptItems[1]).toBe(
-        work,
-      );
-    },
-  );
-
   it.each([
-    { phase: undefined, workRunIds: ["run-u", "run-1"], prompt: true },
-    { phase: "final_answer", workRunIds: ["run-u", "run-1"], prompt: true },
-    { phase: undefined, workRunIds: ["run-1", "run-1"], prompt: false },
-    { phase: "final_answer", workRunIds: ["run-1", "run-1"], prompt: false },
-  ])(
-    "does not lend completed-work ownership to a projected source, phase=$phase prompt=$prompt",
-    ({ phase, workRunIds, prompt }) => {
-      const messages = replyHistory(workRunIds, prompt);
-      const forwarded = {
+    ["earlier reply in the same run", "run-1", false, "final_answer", true],
+    ["earlier reply in another run", "run-other", false, "final_answer", true],
+    ["forwarded commentary", "run-1", true, undefined, true],
+    ["forwarded answer", "run-1", true, "final_answer", true],
+    ["promptless forwarded commentary", "run-1", true, undefined, false],
+    ["promptless forwarded answer", "run-1", true, "final_answer", false],
+  ] as const)(
+    "preserves the presentation boundary of %s",
+    (_name, runId, forwarded, phase, prompt) => {
+      const messages = replyHistory(prompt ? ["run-u", "run-1"] : ["run-1", "run-1"], prompt);
+      const inserted = {
         role: "assistant",
         phase,
-        content: "Report from another session",
+        ...(forwarded
+          ? { senderSession: { sessionKey: "agent:other:main", agentId: "other" } }
+          : { stopReason: "stop" }),
+        content: "Earlier answer",
         timestamp: 20.5,
-        senderSession: { sessionKey: "agent:other:main", agentId: "other" },
-        __openclaw: { id: "forwarded", seq: 3, runId: "run-1" },
+        __openclaw: { id: "earlier", seq: 3, runId },
       };
-      messages.splice(prompt ? 2 : 1, 0, forwarded);
+      messages.splice(prompt ? 2 : 1, 0, inserted);
       const chain = project(messages);
-      const work = chain.transcriptItems.find((item) => item.kind === "work-group");
-      expect(work).toBeDefined();
-      expect(messagesIn(frames(chain))).not.toContain(forwarded);
-      const standalone = phase
-        ? chain.transcriptItems.filter((item) => item.kind === "group")
-        : [work!];
-      expect(messagesIn(standalone)).toContain(forwarded);
       expect(frames(chain).at(-1)?.outcome).toMatchObject({
         kind: "completed",
         actionOwner: { message: messages.at(-1) },
       });
+      const work = (forwarded ? chain.transcriptItems : parts(chain)).find(
+        (item) => item.kind === "work-group",
+      );
+      expect(work).toBeDefined();
+      if (forwarded) {
+        expect(messagesIn(frames(chain))).not.toContain(inserted);
+        const standalone = phase
+          ? chain.transcriptItems.filter((item) => item.kind === "group")
+          : [work!];
+        expect(messagesIn(standalone)).toContain(inserted);
+      } else {
+        expect(
+          messagesIn(
+            parts(chain).filter((item) => item.kind === "group" && item.role === "assistant"),
+          ),
+        ).toEqual([inserted, messages.at(-1)]);
+        expect(frames(chain).map((frame) => frame.runId)).toEqual(
+          runId === "run-1" ? ["run-1"] : ["run-other", "run-1"],
+        );
+        expect(runId === "run-1" ? frames(chain)[0]?.parts[0] : chain.transcriptItems[1]).toBe(
+          work,
+        );
+      }
     },
   );
 
@@ -372,34 +350,42 @@ describe("completed reply frame ownership", () => {
     );
   });
 
-  it.each([false, true])(
-    "joins promptless history to the live stream without duplicate frames, persisted answer=%s",
-    (withAnswer) => {
+  it.each([
+    { working: true, withAnswer: false },
+    { working: true, withAnswer: true },
+    { working: false, withAnswer: false },
+  ])(
+    "projects promptless history without duplicate frames: working=$working answer=$withAnswer",
+    ({ working, withAnswer }) => {
       const persistedHistory = replyHistory(["run-1"], false);
       const messages = withAnswer ? persistedHistory : persistedHistory.slice(0, -1);
       const chain = projectTranscriptChain(
         chatItems({
           messages,
-          runId: "run-1",
-          runWorking: true,
-          stream: "Verifying the evidence",
-          streamStartedAt: 50,
+          runId: working ? "run-1" : null,
+          runWorking: working,
+          stream: working ? "Verifying the evidence" : null,
+          streamStartedAt: working ? 50 : null,
         }),
-        { ...chainOptions, runWorking: true },
+        { ...chainOptions, runWorking: working },
       );
-      expect(chain.transcriptItems).toMatchObject([
-        {
-          kind: "agent-run-frame",
-          runId: "run-1",
-          boundaryId: "send:run-1",
-          outcome: { kind: "active" },
-          parts: [
-            { kind: "group", role: "tool" },
-            ...(withAnswer ? [{ kind: "group", role: "assistant" }] : []),
-            { kind: "stream-run" },
-          ],
-        },
-      ]);
+      expect(chain.transcriptItems).toMatchObject(
+        working
+          ? [
+              {
+                kind: "agent-run-frame",
+                runId: "run-1",
+                boundaryId: "send:run-1",
+                outcome: { kind: "active" },
+                parts: [
+                  { kind: "group", role: "tool" },
+                  ...(withAnswer ? [{ kind: "group", role: "assistant" }] : []),
+                  { kind: "stream-run" },
+                ],
+              },
+            ]
+          : [{ kind: "group", role: "tool" }],
+      );
       expect(chain.transcriptItems).toHaveLength(1);
       expect(messagesIn(chain.transcriptItems)).toEqual(messages);
     },
@@ -416,13 +402,6 @@ describe("completed reply frame ownership", () => {
     if (options.searchActive) {
       expect(chain.transcriptItems.every((item) => item.kind === "group")).toBe(true);
     }
-  });
-
-  it("leaves promptless reply-less work standalone", () => {
-    const messages = replyHistory(["run-1"], false).slice(0, -1);
-    const chain = project(messages);
-    expect(chain.transcriptItems).toMatchObject([{ kind: "group", role: "tool" }]);
-    expect(messagesIn(chain.transcriptItems)).toEqual(messages);
   });
 });
 

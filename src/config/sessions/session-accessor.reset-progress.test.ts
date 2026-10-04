@@ -77,7 +77,7 @@ it.each(
       });
       const entry = {
         ...previous,
-        ...(rollback && writer === "single" ? { parentSessionKey: "invalid-reset-parent" } : {}),
+        ...(rollback ? { parentSessionKey: "invalid-reset-parent" } : {}),
         lifecycleRevision: "after",
         updatedAt: 2,
       };
@@ -100,19 +100,10 @@ it.each(
           });
         }
       };
-      if (rollback && writer === "batched") {
-        // Native batches can use a connection-local trigger. The worker rejects the
-        // invalid lineage after the boundary/card write without changing canonical DDL.
-        database.db.exec(`CREATE TEMP TRIGGER reject_reset_entry
-          BEFORE UPDATE OF entry_json ON session_nodes
-          BEGIN SELECT RAISE(ABORT, 'injected reset entry failure'); END;`);
-      }
       try {
         if (rollback) {
           await expect(reset()).rejects.toThrow(
-            writer === "single"
-              ? "refusing non-canonical session key write invalid-reset-parent"
-              : "injected reset entry failure",
+            "refusing non-canonical session key write invalid-reset-parent",
           );
           expect(loadSessionEntry(scope)).toEqual(entryBefore);
           expect(await loadTranscriptEvents(scope)).toEqual(historyBefore);
@@ -121,9 +112,6 @@ it.each(
         }
       } finally {
         unsubscribe();
-        if (rollback && writer === "batched") {
-          database.db.exec("DROP TRIGGER reject_reset_entry");
-        }
       }
       // A fresh read-only connection proves this is durable state, not client/cache invalidation.
       expect(readSessionProgressCard(database.path, sessionKey)).toEqual(

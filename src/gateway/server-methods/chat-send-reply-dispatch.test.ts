@@ -201,6 +201,44 @@ describe("buildTranscriptReplyTextFromInputs", () => {
 });
 
 describe("chat delivery watermark preparation", () => {
+  it("refuses a final anchor snapshot changed by an unpublished native append", async () => {
+    await withOpenClawTestState({ label: "chat-anchor-delay" }, async () => {
+      const { dispatch, append, scope } = await createReplyTranscriptFixture();
+      dispatch.captureAgentTranscriptStart();
+      await append("answer", { role: "assistant", content: "Committed answer." });
+      const createReaders = historyReaders.createSessionHistoryWorkerReaders;
+      let changed = false;
+      const readerSpy = vi
+        .spyOn(historyReaders, "createSessionHistoryWorkerReaders")
+        .mockImplementation((runRequest) => {
+          const readers = createReaders(runRequest);
+          return {
+            ...readers,
+            readAnchors: async (input, signal) => {
+              const facts = await readers.readAnchors(input, signal);
+              if (!changed && input.selection.entryIds.includes("answer")) {
+                changed = true;
+                expect(
+                  appendTranscriptMessageSync(scope, {
+                    eventId: "late-user",
+                    message: { role: "user", content: "A newly admitted question." },
+                  }).ok,
+                ).toBe(true);
+              }
+              return facts;
+            },
+          };
+        });
+      try {
+        expect(await dispatch.resolveReplyDelivery()).toBe("pending");
+        expect(changed).toBe(true);
+      } finally {
+        readerSpy.mockRestore();
+      }
+      expect(await dispatch.resolveReplyDelivery()).toBe("missing");
+    });
+  });
+
   it("retires a shared-store watermark with its physical owner", async () => {
     await withOpenClawTestState({ label: "chat-watermark-shared" }, async (state) => {
       const storePath = state.statePath("shared.sqlite");

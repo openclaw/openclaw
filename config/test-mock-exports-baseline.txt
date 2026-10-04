@@ -2719,7 +2719,6 @@
 ["src/agents/embedded-agent-runner/run/attempt-nested-tool-activity.test.ts","../runs.js","e80a6f849fb08cc1716e8de6df5f18537d635b0b6e2b5c36b328e55ffda64068",1]
 ["src/agents/embedded-agent-runner/run/attempt-normalization.test.ts","../../../config/sessions/session-accessor.js","92b815886a0f2fa5a04d24a2d137e51bebf6b2019dddca8251cb1f2854ae4225",1]
 ["src/agents/embedded-agent-runner/run/attempt-normalization.test.ts","../../../config/sessions/session-entry-read-runtime.js","4d91817bd544953750fd5b5517b61f6953514c9a6b8438090c32687863a56b44",1]
-["src/agents/embedded-agent-runner/run/attempt-phase-lifecycle.test.ts","../../harness/agent-end-side-effects.js","82d032719d20b8ce27c3220fcabbde0268d4698f3d7bfbc0c951c4cd809a7efd",1]
 ["src/agents/embedded-agent-runner/run/attempt-phase-lifecycle.test.ts","./agent-end-context.js","39475b4cf48e07490a30af6e8ee96be309750139c9e0ab0fff72059326b86976",1]
 ["src/agents/embedded-agent-runner/run/attempt-phase-lifecycle.test.ts","./attempt-async-tasks.js","2feaa4cf11f2e46d3d226641455e5d827590cb2a6aa905b04734851022127dae",1]
 ["src/agents/embedded-agent-runner/run/attempt-prompt-build.decision.test.ts","../../../plugins/host-hook-state.js","4f59917eafe31de0daa5ac8ea33557fd38cdfb9e788b067adc5ba27611a5cdd0",1]
