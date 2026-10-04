@@ -40,6 +40,7 @@ function observationHarness(
     waitForExtinction?: NodeWorkerChildAdapter["waitForExtinction"];
     cleanupContainer?: () => Promise<void>;
     expectedKind?: "confirmed" | "deferred";
+    consumeError?: Error;
     onResult?: (frame: WorkerProcessMessage) => Promise<void>;
   } = {},
 ) {
@@ -48,9 +49,10 @@ function observationHarness(
   const stderr = new PassThrough();
   const journal = createDeferred();
   const exit = createDeferred<{ code: number | null; signal: NodeJS.Signals | null }>();
+  const stopped = createDeferred();
   const firstChunkConsumed = createDeferred();
   const unsubscribe: Array<() => void> = [];
-  const kill = vi.fn((_signal?: NodeJS.Signals) => {});
+  const kill = vi.fn((_signal?: NodeJS.Signals) => stopped.resolve());
   const dispose = () => {
     consumption.close();
     for (const stop of unsubscribe) {
@@ -66,6 +68,9 @@ function observationHarness(
     },
     consumeStdout: (listener) =>
       consumption.consume(async (chunk) => {
+        if (options.consumeError) {
+          throw options.consumeError;
+        }
         await listener(chunk);
         firstChunkConsumed.resolve();
       }),
@@ -115,6 +120,9 @@ function observationHarness(
     })());
   return {
     stdout,
+    stopped: stopped.promise,
+    drainOutput: () => consumption.drain(),
+    completeExit: () => exit.resolve({ code: 0, signal: null }),
     firstChunkConsumed: firstChunkConsumed.promise,
     frames,
     kill,
@@ -133,6 +141,34 @@ function observationHarness(
 }
 
 describe("node worker output framing", () => {
+  it("requests stop after consumer failure and joins separately completed child output", async () => {
+    const failure = new Error("synthetic stdout consumer failed");
+    const harness = observationHarness({ consumeError: failure });
+    const settled = vi.fn();
+    void harness.outcome.then(settled, settled);
+    try {
+      await harness.releaseJournal();
+      harness.stdout.write(encodeResult("first"));
+      await harness.stopped;
+      await expect(harness.drainOutput()).rejects.toBe(failure);
+      // Let rejection handlers settle before checking that child exit still owns completion.
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(harness.kill).toHaveBeenCalledExactlyOnceWith("SIGKILL");
+      expect(settled).not.toHaveBeenCalled();
+      harness.completeExit();
+      expect(await harness.outcome).toEqual({
+        state: "failed",
+        errorText: failure.message,
+      });
+      expect(harness.kill).toHaveBeenCalledExactlyOnceWith("SIGKILL");
+    } finally {
+      harness.completeExit();
+      await harness.close();
+    }
+  });
+
   const retained = { ...resultFrame("first"), retainWorker: true, retention: "background" };
   const idle = { type: "idle-ready", turnId: "first" };
   const unicode = encodeResult("first", "hello 漢😀");

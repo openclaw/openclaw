@@ -103,6 +103,7 @@ describe("fail-closed Windows ACL probe", () => {
 
   it.each([
     { role: "root", rightsMask: 0x100000, inheritOnly: false, allowed: true },
+    { role: "root", rightsMask: 0x80000000, inheritOnly: false, allowed: false },
     { role: "ancestor", rightsMask: 0x000001, inheritOnly: false, allowed: true },
     { role: "ancestor", rightsMask: 0x040000, inheritOnly: false, allowed: false },
     { role: "ancestor", rightsMask: 0x040000, inheritOnly: true, allowed: true },

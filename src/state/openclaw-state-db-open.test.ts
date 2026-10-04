@@ -9,6 +9,7 @@ import { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import * as kyselyCache from "../infra/kysely-sync-cache-state.js";
 import * as kyselySync from "../infra/kysely-sync.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
+import * as busyTimeout from "../infra/sqlite-busy-timeout.js";
 import * as sqliteWal from "../infra/sqlite-wal.js";
 import { setConsoleSubsystemFilter } from "../logging/console.js";
 import { setLoggerOverride } from "../logging/logger.js";
@@ -362,13 +363,19 @@ describe("unpublished state database acquisition", () => {
     });
   });
 
-  it.each(["statement cache", "schema", "hardening"])(
+  it.each(["statement cache", "busy timeout finalization", "schema", "hardening"])(
     "releases every acquisition after failed %s and preserves committed state",
     async (phase) => {
       const { params, opened, maintenanceOwnerCount } = acquisitionFixture();
       const failure = new Error(`${phase} failed`);
       if (phase === "statement cache") {
         vi.spyOn(kyselySync, "enableNodeSqliteKyselyStatementCache").mockImplementation(() => {
+          throw failure;
+        });
+      } else if (phase === "busy timeout finalization") {
+        const run = busyTimeout.runWithSqliteBusyTimeout;
+        vi.spyOn(busyTimeout, "runWithSqliteBusyTimeout").mockImplementation((...args) => {
+          run(...args);
           throw failure;
         });
       } else if (phase === "hardening") {

@@ -26,6 +26,8 @@ import {
 } from "./node-worker-lineage-completion.js";
 import { requireNodeWorkerProcessIdentity } from "./node-worker-process-identity.js";
 import { projectNodeWorkerSupervisorReceipt } from "./node-worker-supervisor-contract.js";
+import { createNodeWorkerSupervisor } from "./node-worker-supervisor.js";
+import { writeNodeWorkerFixture } from "./node-worker-supervisor.test-support.js";
 
 const DAY_MS = 24 * 60 * 60 * 1_000;
 const NOW_MS = 10 * DAY_MS;
@@ -356,6 +358,31 @@ describe("node worker launch store pruning", () => {
     expect(await store.pruneExpiredTerminal({ nowMs: NOW_MS, limit: 2 })).toBe(1);
     expect(launchIds(database)).toEqual(["pending", "recent-completed", "running"]);
     expect(containerLaunchIds()).toEqual(["recent-completed", "running"]);
+  });
+
+  it("prunes expired terminal receipts after restart reconciliation", async () => {
+    const workerFixture = writeNodeWorkerFixture(tempDirs.make("node-worker-launch-restart-"));
+    const store = new NodeWorkerLaunchStore(
+      new NodeWorkerJournalWorker({ env: workerFixture.env }),
+    );
+    await store.get("schema-probe");
+    const database = openOpenClawStateDatabase({ env: workerFixture.env }).db;
+    insertLaunch({
+      database,
+      launchId: "expired-after-restart",
+      state: "completed",
+      completedAtMs: 1,
+    });
+    const supervisor = createNodeWorkerSupervisor({
+      bundleRoot: workerFixture.bundleRoot,
+      env: workerFixture.env,
+    });
+    try {
+      await supervisor.initialize();
+      expect(await store.get("expired-after-restart")).toBeUndefined();
+    } finally {
+      await supervisor.close();
+    }
   });
 
   it("keeps the exact replay fence while a new claim prunes unrelated receipts", async () => {
