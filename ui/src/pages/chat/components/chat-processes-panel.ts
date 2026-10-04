@@ -18,7 +18,7 @@ class ChatProcessesPanel extends OpenClawLightDomElement {
   @property({ attribute: false }) agentId = "main";
   @property({ type: Boolean }) presented = true;
   @state() private selected: string | null = null;
-  @state() private finishedOpen = true;
+  @state() private finishedOpen = false;
   private data: ProcessesPanelData | null = null;
   private dataContext: ApplicationContext | null = null;
 
