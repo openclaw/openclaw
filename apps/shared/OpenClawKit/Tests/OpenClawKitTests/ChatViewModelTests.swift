@@ -9713,9 +9713,10 @@ struct ChatViewModelTests {
         var refresh: Task<Void, Never>?
         do {
             viewModel?.load()
-            try await waitUntil("abandonment fixture bootstraps") {
-                await MainActor.run { discarded.value?.isLoading == false && discarded.value?.healthOK == true }
-            }
+            let bootstrap = try #require(viewModel?.bootstrapTask)
+            await bootstrap.value
+            #expect(discarded.value?.isLoading == false)
+            #expect(discarded.value?.healthOK == true)
             transport.emit(.sessionsChanged(.init(sessionKey: "main", agentId: "main", phase: "message")))
             try await waitUntil("abandonment history refusal starts") { await historyCalls.current() == 2 }
             refresh = viewModel?.historyInvalidationRefresh?.task
