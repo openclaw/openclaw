@@ -441,7 +441,7 @@ export function createTalkRealtimeRelaySession(
         role,
         text,
         final,
-        ...metadata,
+        ...(metadata?.textMode ? { textMode: metadata.textMode } : {}),
         ...transcriptIdentity,
       };
       if (relay.closing) {
