@@ -70,7 +70,7 @@ and resolved values still fail startup or reject the update.
 
   <Accordion title="ElevenLabs">
     <ParamField path="apiKey" type="string">Falls back to `ELEVENLABS_API_KEY` or `XI_API_KEY`.</ParamField>
-    <ParamField id="param-model" path="modelId" type="string">Model id. Default `eleven_multilingual_v2`; set `modelId: "eleven_v3"` for v3. The config key `model` is ignored. Legacy ids `eleven_turbo_v2_5`/`eleven_turbo_v2` are normalized to the matching `flash` model.</ParamField>
+    <ParamField id="param-model" path="modelId" type="string">Model id. Default `eleven_multilingual_v2`; set `modelId: "eleven_v3"` for v3. The config key `model` is accepted as a fallback alias; when both `modelId` and `model` are set, `modelId` takes precedence. Legacy ids `eleven_turbo_v2_5`/`eleven_turbo_v2` are normalized to the matching `flash` model.</ParamField>
     <ParamField path="speakerVoiceId" type="string">ElevenLabs voice id. Default `pMsXgVXv3BLzUgSXRplE`. Legacy alias: `voiceId`.</ParamField>
     <ParamField path="voiceSettings" type="object">
       `stability`, `similarityBoost`, `style` (each `0..1`, defaults `0.5`/`0.75`/`0`), `useSpeakerBoost` (`true|false`, default `true`), `speed` (`0.5..2.0`, default `1.0`).
