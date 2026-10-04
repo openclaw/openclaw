@@ -13,6 +13,7 @@ import {
   claimAgentRunDelegatedAuthority,
   releaseAgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
+import { buildSystemRunApprovalBinding } from "../../infra/system-run-approval-binding.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -103,6 +104,92 @@ function requestOptions(
 }
 
 describe("exec approval signed agent runtime", () => {
+  it("keeps routed node approval ownership separate from its policy identity", async (testContext) => {
+    const fixture = await createPreparedTestApprovalManager(testContext, {
+      validateAgentRuntimeDelegatedAuthority: () => true,
+    });
+    const handlers = createExecApprovalHandlers(fixture.manager);
+    const requestHandler = handlers["exec.approval.request"];
+    const resolveHandler = handlers["exec.approval.resolve"];
+    if (!requestHandler || !resolveHandler) {
+      throw new Error("exec approval handlers are unavailable");
+    }
+    const runtimeIdentity = {
+      ...identity(false),
+      agentId: "worker",
+      sessionKey: "agent:worker:subagent:run-1",
+    };
+    const opts = requestOptions(runtimeIdentity);
+    if (!opts.client?.internal) {
+      throw new Error("expected internal runtime client");
+    }
+    opts.client.internal.approvalRuntime = true;
+    const approvalId = "approval-routed-node-runtime";
+    const policyAgentId = "main";
+    const policySessionKey = "agent:main:main";
+    const plan = {
+      argv: ["/usr/bin/echo", "ok"],
+      cwd: "/tmp",
+      commandText: "/usr/bin/echo ok",
+      agentId: policyAgentId,
+      sessionKey: policySessionKey,
+    };
+    Object.assign(opts.params, {
+      id: approvalId,
+      host: "node",
+      nodeId: "node-1",
+      systemRunPlan: plan,
+      suppressDelivery: true,
+      requireDeliveryRoute: false,
+    });
+
+    await fixture.run(async () => {
+      const pending = fixture.track(Promise.resolve(requestHandler(opts)));
+      await vi.waitFor(() => {
+        expect(vi.mocked(opts.respond)).toHaveBeenCalledWith(
+          true,
+          expect.objectContaining({ status: "accepted", id: approvalId }),
+          undefined,
+        );
+      });
+      expect((await fixture.manager.getSnapshot(approvalId))?.request).toMatchObject({
+        agentId: runtimeIdentity.agentId,
+        sessionKey: runtimeIdentity.sessionKey,
+        systemRunPlan: {
+          agentId: policyAgentId,
+          sessionKey: policySessionKey,
+        },
+        systemRunBinding: buildSystemRunApprovalBinding({
+          argv: plan.argv,
+          cwd: plan.cwd,
+          agentId: policyAgentId,
+          sessionKey: policySessionKey,
+        }).binding,
+      });
+
+      const resolveParams = { id: approvalId, decision: "allow-once" };
+      const resolveRespond = vi.fn();
+      await resolveHandler({
+        ...opts,
+        req: {
+          id: "req-resolve-routed-node",
+          type: "req",
+          method: "exec.approval.resolve",
+          params: resolveParams,
+        },
+        params: resolveParams,
+        respond: resolveRespond,
+      });
+      await pending;
+
+      expect(resolveRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+      expect(await fixture.manager.getSnapshot(approvalId)).toMatchObject({
+        decision: "allow-once",
+        resolutionSource: "auto-review",
+      });
+    });
+  });
+
   it.for([false, true])(
     "checks live worker claims without host SQL in a registered approval (revoked: %s)",
     async (revoked, testContext) => {
