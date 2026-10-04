@@ -250,9 +250,12 @@ async function runMixedBatch(params: { capableDelayMs: number; capableDetails: u
         throw new Error(`unexpected provider request ${requests}`);
       }
       const stream = createAssistantMessageEventStream();
-      const message = assistant(content);
+      const reason: "toolUse" | "stop" = content.some((entry) => entry.type === "toolCall")
+        ? "toolUse"
+        : "stop";
+      const message = { ...assistant(content), stopReason: reason };
       queueMicrotask(() => {
-        stream.push({ type: "done", reason: message.stopReason, message });
+        stream.push({ type: "done", reason, message });
         stream.end();
       });
       return stream;
