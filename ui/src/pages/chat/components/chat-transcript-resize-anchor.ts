@@ -1,4 +1,5 @@
 import type { VirtualItem, Virtualizer } from "@tanstack/virtual-core";
+import { maxTranscriptScrollOffset } from "./chat-transcript-geometry.ts";
 
 // Messages and their text blocks: the first of these at or below the viewport
 // top is what the reader is looking at. Media is never an anchor, because it
@@ -69,6 +70,9 @@ export class TranscriptResizeAnchor {
   // of scrollTop, and fold into scrollTop once the fling rests.
   private heldShift = 0;
   private heldContent: HTMLElement | null = null;
+  // Part of a correction the browser clamped at the old scroll end. The row
+  // sizes are already recorded, so nothing else replays it once the range grows.
+  private clampedShortfall = 0;
 
   constructor(private readonly host: TranscriptResizeAnchorHost) {}
 
@@ -78,6 +82,8 @@ export class TranscriptResizeAnchor {
    */
   noteReaderScroll(from: number): void {
     this.toggledRow = null;
+    // The reader moved on; a late catch-up would yank them.
+    this.clampedShortfall = 0;
     // The first scroll of a frame starts where the previous frame painted.
     if (!this.scrollFrameOpen) {
       this.scrollFrameOpen = true;
@@ -175,6 +181,30 @@ export class TranscriptResizeAnchor {
     }
   }
 
+  /**
+   * Apply a correction the old scroll end clamped, once the grown range has
+   * committed. Old iOS keeps it until the fling rests, like a held shift.
+   */
+  reconcile(instance: Virtualizer<HTMLDivElement, HTMLElement>): void {
+    const scrollElement = instance.scrollElement;
+    if (
+      this.clampedShortfall === 0 ||
+      !scrollElement ||
+      (this.deferToTanStack && (instance.isScrolling || this.host.touching()))
+    ) {
+      return;
+    }
+    if ((maxTranscriptScrollOffset(scrollElement) ?? 0) > scrollElement.scrollTop + 0.5) {
+      this.write(0, instance);
+    }
+  }
+
+  /** Drop every pending correction; an explicit target replaces them. */
+  clear(): void {
+    this.clampedShortfall = 0;
+    this.clearHeld();
+  }
+
   /** Drop a held shift; the caller writes a target in row coordinates. */
   clearHeld(): void {
     this.heldShift = 0;
@@ -200,8 +230,18 @@ export class TranscriptResizeAnchor {
 
   private write(amount: number, instance: Virtualizer<HTMLDivElement, HTMLElement>): void {
     const scrollElement = instance.scrollElement;
-    if (scrollElement) {
-      this.host.writeOffset(this.readerOffset(scrollElement.scrollTop) + amount, instance);
+    if (!scrollElement) {
+      return;
+    }
+    const target = this.readerOffset(scrollElement.scrollTop) + this.clampedShortfall + amount;
+    this.clampedShortfall = 0;
+    this.host.writeOffset(target, instance);
+    // The range grows only after the virtualizer commits the new row sizes.
+    // Keep what the browser clamped at the old end; shrink never clamps here.
+    const reached = scrollElement.scrollTop;
+    const max = maxTranscriptScrollOffset(scrollElement);
+    if (max !== null && target > reached + 0.5 && reached >= max - 0.5) {
+      this.clampedShortfall = target - reached;
     }
   }
 

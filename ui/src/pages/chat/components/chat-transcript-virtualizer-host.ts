@@ -350,6 +350,8 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
     for (const controller of this.controllers) {
       controller.hostUpdated?.();
     }
+    // The grown range has committed; replay a correction its old end clamped.
+    this.offsetState.resizeAnchor.reconcile(this.virtualizer);
     const interactionResizePending = this.offsetState.pendingInteractionAnchor !== null;
     this.reconcileInteractionResize();
     if (

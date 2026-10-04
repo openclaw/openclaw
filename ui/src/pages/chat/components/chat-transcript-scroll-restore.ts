@@ -11,7 +11,7 @@ import {
 export type TranscriptScrollRestoreHost = {
   readonly offsetState: {
     pendingScrollOffset: ChatTranscriptPendingScrollOffset | null;
-    readonly resizeAnchor: Pick<TranscriptResizeAnchor, "clearHeld">;
+    readonly resizeAnchor: Pick<TranscriptResizeAnchor, "clear">;
   };
   getScrollElement(): HTMLDivElement | null;
   isContentReady(): boolean;
@@ -66,7 +66,7 @@ export function applyPendingScrollOffset(owner: TranscriptScrollRestoreHost): vo
   const targetOffset = Math.min(pending.offset, maxOffset);
   const element = owner.getScrollElement();
   // An absolute restore replaces any shift held on screen during a fling.
-  owner.offsetState.resizeAnchor.clearHeld();
+  owner.offsetState.resizeAnchor.clear();
   if (element) {
     element.scrollTop = targetOffset;
   }

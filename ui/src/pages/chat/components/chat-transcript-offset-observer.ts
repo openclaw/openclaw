@@ -38,7 +38,12 @@ export class TranscriptOffsetState {
     interactionRow: () => this.pendingInteractionAnchor?.row ?? null,
     touching: () => this.touching,
     writeOffset: (offset, instance) => {
-      scrollTranscriptOffset(this, offset, { adjustments: undefined, behavior: undefined }, instance);
+      scrollTranscriptOffset(
+        this,
+        offset,
+        { adjustments: undefined, behavior: undefined },
+        instance,
+      );
       instance.scrollOffset = instance.scrollElement?.scrollTop ?? offset;
     },
   });
@@ -131,7 +136,12 @@ export function scrollTranscriptOffset(
   instance: Virtualizer<HTMLDivElement, HTMLElement>,
 ): void {
   // Targets are in row coordinates, which already include a shift held on screen.
-  state.resizeAnchor.clearHeld();
+  // An explicit command also replaces a correction still waiting for range.
+  if (options.behavior === undefined) {
+    state.resizeAnchor.clearHeld();
+  } else {
+    state.resizeAnchor.clear();
+  }
   const element = instance.scrollElement;
   const before = element?.scrollTop ?? 0;
   elementScroll(offset, options, instance);
@@ -441,7 +451,7 @@ export function observeTranscriptOffset(
     }
     cleanup?.();
     stopCorrections?.();
-    owner.state.resizeAnchor.clearHeld();
+    owner.state.resizeAnchor.clear();
     contactIds.clear();
     owner.state.touching = false;
     owner.state.touchScrolling = false;
