@@ -10,6 +10,7 @@ import {
   withinTest,
 } from "../../test/helpers/promise.js";
 import { isPidAlive } from "../shared/pid-alive.js";
+import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { killPidIfAlive } from "../test-utils/process-tree.js";
 
 const mocks = vi.hoisted(() => ({
@@ -241,18 +242,19 @@ describe("terminal PTY invocation", () => {
     "passes arbitrary Codex initial-message text literally through an npm shim",
     async () => {
       const { entrypoint, shimPath } = createWindowsNpmShim("codex");
+      const nodePath = resolveTestNodeExecPath();
       mocks.spawn.mockReturnValueOnce(fakePty());
 
       await spawnDirectTerminalPty({
         file: shimPath,
         args: ["exec", "--", "Fix A&B and 100%"],
-        env: { PATH: path.dirname(process.execPath), PATHEXT: ".EXE;.CMD" },
+        env: { PATH: path.dirname(nodePath), PATHEXT: ".EXE;.CMD" },
         cols: 80,
         rows: 24,
       });
 
       expect(mocks.spawn).toHaveBeenCalledWith(
-        process.execPath,
+        nodePath,
         [entrypoint, "exec", "--", "Fix A&B and 100%"],
         expect.objectContaining({ cols: 80, rows: 24 }),
       );
@@ -266,7 +268,7 @@ describe("terminal PTY invocation", () => {
       const nodeDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-terminal-pty-node-"));
       tempDirs.push(nodeDir);
       const nodePath = path.join(nodeDir, "node.exe");
-      fs.copyFileSync(process.execPath, nodePath);
+      fs.copyFileSync(resolveTestNodeExecPath(), nodePath);
       vi.spyOn(process, "execPath", "get").mockReturnValue(
         "C:\\Program Files\\OpenClaw\\openclaw.exe",
       );
