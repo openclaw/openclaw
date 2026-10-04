@@ -15,6 +15,8 @@ export const HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS =
 // A fallback backend may lack the direct-only tool; preserve both quiet and alert outcomes.
 const HEARTBEAT_RESPONSE_TOOL_FALLBACK_INSTRUCTIONS = `If the heartbeat_respond tool is not available in this run, reply ${SILENT_REPLY_TOKEN} when nothing needs the user's attention; when the user should be interrupted, reply with only the alert text instead of a prose report.`;
 export const HEARTBEAT_RESPONSE_TOOL_PROMPT = `${HEARTBEAT_CONTEXT_PROMPT} ${HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS} ${HEARTBEAT_RESPONSE_TOOL_FALLBACK_INSTRUCTIONS}`;
+/** Tool instructions for non-default heartbeat prompt writers; keeps the fallback sentence attached. */
+export const HEARTBEAT_RESPONSE_TOOL_COMPLETION_INSTRUCTIONS = `${HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS} ${HEARTBEAT_RESPONSE_TOOL_FALLBACK_INSTRUCTIONS}`;
 export const INTERNAL_WAKE_TRANSCRIPT_PROMPTS = {
   heartbeat: "[OpenClaw heartbeat poll]",
   exec: "[OpenClaw exec completion]\nDisable automatic completion turns with tools.exec.notifyOnExit=false; check per-agent overrides. Background exec and process poll remain available.",
