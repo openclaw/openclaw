@@ -14,7 +14,7 @@ import {
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
 import { resolveOwnerPromptNumbers } from "../../agents/owner-display.js";
-import { revokeRequesterCronAuthority } from "../../agents/subagents/requester-cron-authority.js";
+import { admitRequesterCronAuthorityUserTurn } from "../../agents/subagents/requester-cron-authority.js";
 import {
   attachToolAllowlistIntersection,
   readToolAllowlistIntersection,
@@ -209,8 +209,9 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     suppressNextUserMessagePersistence: opts?.suppressNextUserMessagePersistence,
   });
   if (freshChannelCronAuthorityTurn && sessionKey) {
-    // A new channel request replaces the pending task, even when its sender is not an owner.
-    revokeRequesterCronAuthority(sessionKey);
+    // Channel ingress has no retained live access-source capability. Identity or
+    // command-owner metadata alone cannot establish continuity of that source.
+    admitRequesterCronAuthorityUserTurn({ sessionKey });
   }
   const currentTurnImages = await traceRunPhase("reply.resolve_current_turn_images", () =>
     resolveCurrentTurnImages({
@@ -633,7 +634,10 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
           },
           undefined,
           channelRequester,
-          { isCurrent: isCurrentChannelOwner, ...cronOwner },
+          {
+            isCurrent: isCurrentChannelOwner,
+            ...cronOwner,
+          },
         )
       : undefined;
   const cronCreatorAuthorityCapability =

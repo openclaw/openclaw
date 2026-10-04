@@ -59,7 +59,7 @@ import * as sessionEntryRuntime from "../announce/subagent-announce-delivery.run
 import { readSubagentRunAnnounceResultUsing } from "../announce/subagent-announce-result.js";
 import {
   consumeRequesterCronAuthorityAdmission,
-  revokeRequesterCronAuthority,
+  admitRequesterCronAuthorityUserTurn,
   withRequesterCronAuthority,
 } from "../requester-cron-authority.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "./subagent-control.types.js";
@@ -5507,7 +5507,7 @@ describe("requester settle wake trigger", () => {
           },
         );
       } finally {
-        revokeRequesterCronAuthority(requesterSessionKey);
+        admitRequesterCronAuthorityUserTurn({ sessionKey: requesterSessionKey });
         subagentRuns.delete(entry.runId);
         releaseAgentRunDelegatedAuthority(authority);
         clearAgentRunContext(requesterTurnRunId);

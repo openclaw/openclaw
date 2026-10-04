@@ -26,7 +26,7 @@ import * as completionDelivery from "../../agents/subagents/announce/subagent-an
 import { SessionFollowupCompletion } from "../../agents/subagents/completion/session-followup-completion.js";
 import {
   captureRequesterFollowupAuthority,
-  revokeRequesterCronAuthority,
+  admitRequesterCronAuthorityUserTurn,
 } from "../../agents/subagents/requester-cron-authority.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
@@ -96,7 +96,7 @@ describe("Gateway followup owner final effect", () => {
     );
   });
   afterEach(async () => {
-    revokeRequesterCronAuthority(SESSION);
+    admitRequesterCronAuthorityUserTurn({ sessionKey: SESSION });
     await describe1AfterEach1();
   });
 

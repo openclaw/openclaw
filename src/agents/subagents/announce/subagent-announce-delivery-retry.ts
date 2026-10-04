@@ -9,6 +9,7 @@ import { isPlatformMessageRejectedError } from "../../../infra/outbound/deliver-
 import { defaultRuntime } from "../../../runtime.js";
 import { isFailoverError } from "../../failover-error.js";
 import { isSessionTranscriptTurnMismatchErrorMessage } from "../../sessions/transcript-turn-error.js";
+import { RequesterAuthorityError } from "../requester-authority-error.js";
 
 const DEFAULT_SUBAGENT_ANNOUNCE_TIMEOUT_MS = 120_000;
 
@@ -93,6 +94,7 @@ function isPermanentNonWriterAnnounceError(error: unknown): boolean {
   return hasAnnounceErrorMatch(
     error,
     (candidate) =>
+      candidate instanceof RequesterAuthorityError ||
       isPlatformMessageRejectedError(candidate) ||
       isSessionTranscriptTurnMismatchErrorMessage(summarizeDeliveryError(candidate)) ||
       (!isWriterClaimReboundAnnounceError(candidate) &&
@@ -109,6 +111,9 @@ function isTransientAnnounceDeliveryError(error: unknown): boolean {
     return false;
   }
 
+  if (hasAnnounceErrorMatch(error, (candidate) => candidate instanceof RequesterAuthorityError)) {
+    return false;
+  }
   const typedRetryability = resolveDeliveryNotSentRetryability(error);
   if (typedRetryability !== undefined) {
     return typedRetryability;
@@ -143,6 +148,9 @@ function isTransientAnnounceDeliveryError(error: unknown): boolean {
 }
 
 export function isPermanentAnnounceDeliveryError(error: unknown): boolean {
+  if (hasAnnounceErrorMatch(error, (candidate) => candidate instanceof RequesterAuthorityError)) {
+    return true;
+  }
   const typedRetryability = resolveDeliveryNotSentRetryability(error);
   if (typedRetryability !== undefined) {
     return !typedRetryability;

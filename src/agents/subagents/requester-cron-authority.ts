@@ -11,10 +11,7 @@ import {
 } from "../../infra/agent-run-registry.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
-import {
-  assertAdmittedRunOperatorAuthority,
-  type AdmittedRunOperatorAuthority,
-} from "../admitted-run-context.js";
+import { assertAdmittedRunOperatorAuthority } from "../admitted-run-context.js";
 import {
   captureActiveCronManagementAuthority,
   type CronCreatorAuthorityCapability,
@@ -34,36 +31,12 @@ import {
   getSubagentRunRuntimeKey,
   isSameSubagentRunOwner,
 } from "./registry/subagent-run-generation.js";
-
-type RequesterCronAuthority = {
-  managementEntitlement?: NonNullable<CronCreatorAuthorityCapability["managementEntitlement"]>;
-  operatorAuthority?: AdmittedRunOperatorAuthority;
-  releaseOperatorAuthority?: () => void;
-  requesterOwner?: CronCreatorAuthorityCapability["requesterOwner"];
-  requesterSessionKey: string;
-  requesterSessionId: string;
-  requesterAgentId: string;
-  requesterTurnRunId: string;
-  lifecycleGeneration: string;
-  sessionLifecycleRevision?: string;
-  admittedRunId?: string;
-  runScopeBound?: true;
-  active: boolean;
-} & (
-  | {
-      kind: "yield";
-      sessionFacts: SessionFactsRead<PreparedSessionMutationFacts>;
-      runs: ReadonlyMap<string, SubagentRunRecord>;
-      batch: readonly SubagentRunRecord[];
-      rearmGeneration?: number;
-    }
-  | {
-      kind: "followup";
-      sourceSessionKey: string;
-      isFollowupCurrent: () => boolean;
-      releaseFollowup: () => void;
-    }
-);
+import { RequesterAuthorityError } from "./requester-authority-error.js";
+import {
+  haveSameRequesterUserTurnSource,
+  type RequesterUserTurnSource,
+} from "./requester-cron-authority-source.js";
+import type { RequesterCronAuthority } from "./requester-cron-authority.types.js";
 
 type RequesterCronAuthorityState = {
   byEntry: WeakMap<object, RequesterCronAuthority>;
@@ -419,10 +392,14 @@ export function replaceRequesterCronAuthorityEntry(params: {
   }
 }
 
-/** A new direct user turn cannot lend its identity to an older pending batch. */
-export function revokeRequesterCronAuthority(sessionKey: string): void {
-  for (const authority of state.bySession.get(sessionKey) ?? []) {
-    discard(authority);
+/** A followup can preserve only the still-live source that accepted each pending cohort. */
+export function admitRequesterCronAuthorityUserTurn(
+  params: RequesterUserTurnSource & { sessionKey: string },
+): void {
+  for (const authority of state.bySession.get(params.sessionKey) ?? []) {
+    if (!isCurrent(authority) || !haveSameRequesterUserTurnSource(authority, params)) {
+      discard(authority);
+    }
   }
 }
 
@@ -490,7 +467,9 @@ export async function withRequesterCronAuthority<T>(
       : sameRequesterSettleBatch(authority.batch, params.batch))
   ) {
     if (authority?.operatorAuthority) {
-      throw new Error("Requester operator authority does not own this continuation");
+      throw new RequesterAuthorityError(
+        "Requester operator authority does not own this continuation",
+      );
     }
     return await run();
   }
@@ -512,7 +491,7 @@ export async function withRequesterCronAuthority<T>(
   if (!current()) {
     discard(authority);
     if (authority.operatorAuthority) {
-      throw new Error("Requester operator authority is no longer current");
+      throw new RequesterAuthorityError("Requester operator authority is no longer current");
     }
     return await run();
   }
@@ -530,7 +509,7 @@ export async function withRequesterCronAuthority<T>(
     const { withOperatorToolGatewayAuthority } =
       await import("../../gateway/server-plugin-in-process-dispatch.js");
     if (!current()) {
-      throw new Error("Requester operator authority is no longer current");
+      throw new RequesterAuthorityError("Requester operator authority is no longer current");
     }
     return await withOperatorToolGatewayAuthority(
       {
@@ -538,12 +517,19 @@ export async function withRequesterCronAuthority<T>(
         scopes: authority.operatorAuthority.scopes,
         assertCurrent: () => {
           if (!current()) {
-            throw new Error("Requester operator authority is no longer current");
+            throw new RequesterAuthorityError("Requester operator authority is no longer current");
           }
         },
       },
       () => activeDispatch.run(dispatch, run),
     );
+  } catch (error) {
+    if (!current()) {
+      throw new RequesterAuthorityError("Requester operator authority is no longer current", {
+        cause: error,
+      });
+    }
+    throw error;
   } finally {
     // The committed settlement owner retires this cohort. A returned delivery
     // failure can still need a retry, just like a thrown transport error.
@@ -594,7 +580,7 @@ export function captureRequesterFollowupAuthority(params: {
     },
     async run<T>(runId: string, run: () => Promise<T>): Promise<T> {
       if (!isCurrent(authority) || authority.admittedRunId !== undefined) {
-        throw new Error("Requester followup authority is no longer current");
+        throw new RequesterAuthorityError("Requester followup authority is no longer current");
       }
       // The followup owner retains caller restrictions separately. This scope
       // supplies only the captured channel identity to the returning parent.
@@ -639,12 +625,12 @@ export function captureRequesterCronAuthorityAdmissionAssertion(params: Requeste
     return undefined;
   }
   if (!matchesAdmissionTarget(dispatch, params)) {
-    throw new Error("Requester authority does not own this continuation");
+    throw new RequesterAuthorityError("Requester authority does not own this continuation");
   }
   // Storage can invoke the pre-commit guard outside this dispatch's async context.
   return () => {
     if (!dispatch.consumed && !dispatch.isCurrent()) {
-      throw new Error("Requester authority is no longer current");
+      throw new RequesterAuthorityError("Requester authority is no longer current");
     }
   };
 }

@@ -156,6 +156,7 @@ async function handleChatSendWithOptions(
     sessionKey,
     spawnedBy: entry?.spawnedBy,
     client,
+    operatorAuthority: admitted.value.operatorAuthority,
     isCurrent: hasCurrentClientAuthority,
     inputProvenance: systemInputProvenance,
     hasExplicitOrigin: request.explicitOrigin !== undefined,

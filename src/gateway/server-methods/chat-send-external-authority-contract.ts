@@ -1,3 +1,4 @@
+import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import type { CronCreatorAuthorityCapability } from "../../agents/cron-creator-authority-context.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
@@ -7,6 +8,7 @@ type ChatSendExternalAdmissionParams = {
   sessionKey: string;
   spawnedBy?: string;
   client: GatewayRequestHandlerOptions["client"];
+  operatorAuthority?: AdmittedRunOperatorAuthority;
   isCurrent?: () => boolean;
   inputProvenance?: InputProvenance;
   hasExplicitOrigin: boolean;

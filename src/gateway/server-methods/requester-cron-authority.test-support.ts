@@ -20,7 +20,7 @@ import {
   type CronCreatorAuthorityCapability,
 } from "../../agents/cron-creator-authority-context.js";
 import { withPreparedEmbeddedGatewayTools } from "../../agents/embedded-agent-runner/run/attempt-gateway-tools.js";
-import { revokeRequesterCronAuthority } from "../../agents/subagents/requester-cron-authority.js";
+import { admitRequesterCronAuthorityUserTurn } from "../../agents/subagents/requester-cron-authority.js";
 import {
   captureFinalEffectiveCronCreatorToolAllowlist,
   type CronCreatorToolAllowlistEntry,
@@ -83,7 +83,7 @@ export function installRequesterCronAuthorityTestHooks() {
 
   afterEach(async () => {
     cron?.stop();
-    revokeRequesterCronAuthority(SESSION);
+    admitRequesterCronAuthorityUserTurn({ sessionKey: SESSION });
     await cleanupSessionStateForTest({ stateDir });
     clearRuntimeConfigSnapshot();
     vi.unstubAllEnvs();
