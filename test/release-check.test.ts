@@ -188,7 +188,7 @@ describe("packed CLI smoke", () => {
     });
   });
 
-  it("keeps bundled plugin activation independent of model runtimes", () => {
+  it("keeps bundled plugin activation on the built-in runtime", () => {
     const homeDir = mkdtempSync(join(tmpdir(), "openclaw-release-activation-config-"));
     try {
       writePackedBundledPluginActivationConfig(homeDir);
@@ -197,10 +197,14 @@ describe("packed CLI smoke", () => {
       ) as Record<string, unknown>;
 
       expect(config).toMatchObject({
+        agents: {
+          defaults: {
+            models: { "openai/*": { agentRuntime: { id: "openclaw" } } },
+          },
+        },
         channels: { telegram: { enabled: true } },
         plugins: { enabled: true, allow: ["telegram"], entries: { telegram: { enabled: true } } },
       });
-      expect(config).not.toHaveProperty("agents");
       expect(config).not.toHaveProperty("models");
     } finally {
       rmSync(homeDir, { recursive: true, force: true });

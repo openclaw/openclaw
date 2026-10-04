@@ -13,6 +13,7 @@ import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runt
 import * as sqliteSource from "../infra/sqlite-source-handle.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
+  confirmDatabaseVerifyWorker,
   runDatabaseVerifyWorker,
   terminateDatabaseVerifyWorker,
 } from "./openclaw-database-verify.impl.js";
@@ -130,6 +131,22 @@ describe("database verifier child process entrypoint", () => {
 });
 
 describe("database verifier worker lifetime", () => {
+  it("refuses to launch a confirmation child after its owner retired", async () => {
+    const onWorker = vi.fn();
+    await expect(
+      confirmDatabaseVerifyWorker(
+        { path: "synthetic.sqlite", kind: "agent", label: "synthetic database" },
+        {
+          onWorker,
+          assertCurrent() {
+            throw new Error("owner retired");
+          },
+        },
+      ),
+    ).rejects.toThrow("owner retired");
+    expect(onWorker).not.toHaveBeenCalled();
+  });
+
   function observeWorkerExit(child: ChildProcess): Promise<void> {
     // Signal errors are not native exit; the error fixtures must still join the child.
     return new Promise((resolve) => {

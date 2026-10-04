@@ -1,6 +1,6 @@
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { transitionMainSessionRecovery } from "../../agents/main-session-recovery/main-session-recovery-state.js";
@@ -15,6 +15,8 @@ import {
   updateSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import type { InternalSessionEntry, SessionEntry } from "../../config/sessions/types.js";
+import * as placementContext from "../../gateway/session-worker-placement-context.js";
+import { createWorkerSessionPlacementStore } from "../../gateway/worker-environments/placement-store.js";
 import {
   getAgentEventLifecycleGeneration,
   rotateAgentEventLifecycleGeneration,
@@ -25,6 +27,8 @@ import type {
   UserTurnTranscriptRecorder,
   UserTurnTranscriptTarget,
 } from "../../sessions/user-turn-transcript.types.js";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import { useStateDatabaseTempDirs } from "../../test-utils/state-database-temp-dirs.js";
 import { createReplyOperation } from "./reply-run-registry.js";
 import { createReplyRestartRecoveryClaimController } from "./restart-recovery-claim.js";
 
@@ -52,6 +56,182 @@ function createTestAdmission(params: {
 }
 
 describe("createReplyRestartRecoveryClaimController", () => {
+  describe("placement observations", () => {
+    const placementDirs = useStateDatabaseTempDirs();
+
+    async function createPlacementAdmission() {
+      const root = placementDirs.make("openclaw-reply-placement-admission-");
+      const scope = {
+        agentId: "main",
+        storePath: path.join(root, "sessions.json"),
+        sessionKey: "agent:main:placement",
+      };
+      const entry: InternalSessionEntry = { sessionId: "placement-session", updatedAt: 1 };
+      await replaceSessionEntry(scope, entry);
+      const service = createWorkerSessionPlacementStore({
+        database: openOpenClawStateDatabase({ path: path.join(root, "placement.sqlite") }),
+      });
+      await service.startDispatch({
+        agentId: scope.agentId,
+        sessionKey: scope.sessionKey,
+        sessionId: entry.sessionId,
+      });
+      const context: placementContext.SessionWorkerPlacementContext = {
+        workerSessionPlacementService: service,
+      };
+      vi.spyOn(placementContext, "resolveSessionWorkerPlacementContext").mockImplementation(
+        () => context,
+      );
+      const sourceTurnId = "placement-source";
+      const recorder = createUserTurnTranscriptRecorder({
+        message: { role: "user", content: "continue", timestamp: 1, idempotencyKey: sourceTurnId },
+        target: { ...scope, sessionId: entry.sessionId, sessionEntry: entry },
+        updateMode: "none",
+      });
+      await expect(
+        recorder.stageApproved?.({ runId: "placement-run", assertCurrent: () => {} }),
+      ).resolves.toBe(true);
+      const persistApproved = vi.spyOn(recorder, "persistApproved");
+      const setEntry = vi.fn();
+      let sessionId = entry.sessionId;
+      const controller = createReplyRestartRecoveryClaimController({
+        ...scope,
+        lifecycleGeneration: getAgentEventLifecycleGeneration(),
+        getEntry: () => entry,
+        getSessionId: () => sessionId,
+        isRestartAbort: () => false,
+        resolveDeliveryContext: () => undefined,
+        setEntry,
+        sourceTurnId,
+      });
+      return {
+        context,
+        controller,
+        entry,
+        persistApproved,
+        recorder,
+        scope,
+        service,
+        setEntry,
+        sourceTurnId,
+        retarget: () => {
+          sessionId = "successor-session";
+        },
+      };
+    }
+
+    it("leaves staged worker input with placement admission without caller-thread SQL", async () => {
+      const fixture = await createPlacementAdmission();
+      const hostSql = observeHostDataSql();
+      try {
+        expect(fixture.service.getMany([fixture.entry.sessionId]).size).toBe(1);
+        expect(hostSql.queries.length).toBeGreaterThan(0);
+        hostSql.calls.forEach((call) => call.mockClear());
+        hostSql.queries.length = 0;
+
+        await expect(fixture.controller.admitUserTurn(fixture.recorder)).resolves.toBe("admitted");
+
+        expect(hostSql.queries).toEqual([]);
+        expect(fixture.persistApproved).not.toHaveBeenCalled();
+        expect(fixture.recorder.hasPersisted()).toBe(false);
+        expect(fixture.setEntry).not.toHaveBeenCalled();
+      } finally {
+        hostSql.restore();
+      }
+    });
+
+    it("refuses an unavailable placement observation instead of reading synchronously", async () => {
+      const fixture = await createPlacementAdmission();
+      fixture.context.workerSessionPlacementService = {
+        getMany: (ids) => fixture.service.getMany(ids),
+      };
+      const hostSql = observeHostDataSql();
+      try {
+        await expect(fixture.controller.admitUserTurn(fixture.recorder)).rejects.toThrow(
+          "Worker placement observation service is unavailable",
+        );
+        expect(hostSql.queries).toEqual([]);
+        expect(fixture.persistApproved).not.toHaveBeenCalled();
+      } finally {
+        hostSql.restore();
+      }
+    });
+
+    it.each([
+      "placement-publication",
+      "session-retarget",
+      "lifecycle-rotation",
+      "service-replacement",
+      "service-removal",
+      "pending-input-persisted",
+      "terminal-source",
+    ] as const)("revalidates %s while placement preparation is pending", async (change) => {
+      const fixture = await createPlacementAdmission();
+      const prepared = createDeferred();
+      const resume = createDeferred();
+      const prepare = fixture.service.prepareRuntimeRefresh.bind(fixture.service);
+      vi.spyOn(fixture.service, "prepareRuntimeRefresh").mockImplementation(async (sessionId) => {
+        const observation = await prepare(sessionId);
+        prepared.resolve();
+        await resume.promise;
+        return observation;
+      });
+      const admission = fixture.controller.admitUserTurn(fixture.recorder);
+      const outcome = admission.catch((error: unknown) => error);
+      try {
+        await awaitGateBeforeSettlement(
+          prepared.promise,
+          admission,
+          "admission settled before placement preparation",
+        );
+        if (change === "placement-publication") {
+          await fixture.service.fail({
+            sessionId: fixture.entry.sessionId,
+            recoveryError: "placement interrupted",
+          });
+        } else if (change === "session-retarget") {
+          fixture.retarget();
+        } else if (change === "lifecycle-rotation") {
+          rotateAgentEventLifecycleGeneration();
+        } else if (change === "service-replacement") {
+          fixture.context.workerSessionPlacementService = { ...fixture.service };
+        } else if (change === "service-removal") {
+          fixture.context.workerSessionPlacementService = undefined;
+        } else if (change === "pending-input-persisted") {
+          fixture.recorder.markRuntimePersisted(fixture.recorder.getPendingInputMessage?.());
+        } else {
+          await updateSessionEntry(fixture.scope, () => ({
+            restartRecoveryTerminalRunIds: [fixture.sourceTurnId],
+          }));
+        }
+        resume.resolve();
+        const result = await outcome;
+        if (change === "terminal-source") {
+          expect(result).toBe("duplicate-source");
+        } else if (change === "lifecycle-rotation") {
+          expect(isAgentRunStaleLifecycleError(result)).toBe(true);
+        } else {
+          const message = {
+            "placement-publication": `Session ${fixture.entry.sessionId} placement authority changed`,
+            "session-retarget": "session changed before durable user-turn admission",
+            "service-replacement":
+              "Worker placement service changed before durable user-turn admission",
+            "service-removal":
+              "Worker placement service changed before durable user-turn admission",
+            "pending-input-persisted":
+              "pending user turn changed before durable user-turn admission",
+          }[change];
+          expect(result).toMatchObject({ message });
+        }
+        expect(fixture.persistApproved).not.toHaveBeenCalled();
+        expect(fixture.setEntry).not.toHaveBeenCalled();
+      } finally {
+        resume.resolve();
+        await outcome;
+      }
+    });
+  });
+
   it.each(["session-retarget", "lifecycle-rotation"] as const)(
     "does not adopt a recovery claim after %s while its row read is pending",
     async (change) => {

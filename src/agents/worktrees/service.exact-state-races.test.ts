@@ -99,9 +99,9 @@ describe("exact-state retirement admission and recovery", () => {
       const f = await fixture();
       let token = "";
       const claim = leases.claimWorktreeRemoval;
-      vi.spyOn(leases, "claimWorktreeRemoval").mockImplementation((environment, request) => {
+      vi.spyOn(leases, "claimWorktreeRemoval").mockImplementation(async (environment, request) => {
         token = request.token;
-        claim(environment, request);
+        await claim(environment, request);
       });
       let current = true;
       let injected = false;
@@ -132,7 +132,7 @@ describe("exact-state retirement admission and recovery", () => {
             updateRegistryWorktree(env, f.record.id, { lastActiveAt: f.record.lastActiveAt + 1 });
           }
           if (kind === "claim") {
-            leases.abortWorktreeRemoval(env, f.record.id, token);
+            await leases.abortWorktreeRemoval(env, f.record.id, token);
           }
           if (kind === "authority") {
             current = false;

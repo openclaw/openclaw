@@ -67,7 +67,7 @@ describe("managed worktree registry", () => {
     const token = "synthetic-shared-removal-token";
     for (const id of ["first", "second", "unrelated"]) {
       insertRegistryWorktree(env, { ...isolatedWorktreeRecord(root), id });
-      claimWorktreeRemovalRow(env, {
+      await claimWorktreeRemovalRow(env, {
         worktreeId: id,
         token,
         pid: process.pid,
@@ -80,7 +80,7 @@ describe("managed worktree registry", () => {
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     expect(assertClaims).not.toThrow();
-    abortWorktreeRemovalRow(env, "second", token);
+    await abortWorktreeRemovalRow(env, "second", token);
     expect(assertClaims).toThrow("Worktree removal claim changed");
   });
 
@@ -95,7 +95,7 @@ describe("managed worktree registry", () => {
       expect(getRegistryWorktree(env, record.id)).toEqual(record);
       await insertRegistryWorktreeProvisionedChunk(env, { ...chunk, data: bytes });
       expect(Buffer.from((await getRegistryWorktreeProvisionedChunk(env, chunk))!)).toEqual(bytes);
-      await clearRegistryWorktreeProvisionedChunks(env, record.id, () => {});
+      await clearRegistryWorktreeProvisionedChunks(env, record.id);
       expect(await getRegistryWorktreeProvisionedChunk(env, chunk)).toBeUndefined();
       await insertRegistryWorktreeProvisionedChunk(env, { ...chunk, data: bytes });
       updateRegistryWorktree(env, record.id, { lastActiveAt: 20 });

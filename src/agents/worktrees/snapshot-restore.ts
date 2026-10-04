@@ -106,7 +106,18 @@ export async function restoreManagedWorktreeSnapshot(
   };
   const token = randomUUID();
   const assertClaim = createWorktreeRemovalClaimsGuard(context.env, [record.id], token);
-  claimWorktreeRemoval(context.env, { worktreeId: record.id, token, assertCurrent: assertOwner });
+  await claimWorktreeRemoval(context.env, {
+    worktreeId: record.id,
+    token,
+    assertCurrent: assertOwner,
+    workerAuthority: {
+      ...input.workerAuthority,
+      assertCurrent: input.workerAuthority
+        ? input.workerAuthority.assertCurrent
+        : input.commitGuard,
+      predicates: [...(input.workerAuthority?.predicates ?? []), { kind: "exact-owner", record }],
+    },
+  });
   try {
     return await restoreSnapshot(
       {
@@ -119,7 +130,7 @@ export async function restoreManagedWorktreeSnapshot(
       { ...context, recoveryClaim: token },
     );
   } finally {
-    abortWorktreeRemoval(context.env, record.id, token);
+    await abortWorktreeRemoval(context.env, record.id, token);
   }
 }
 
@@ -143,6 +154,13 @@ async function restoreSnapshot(
     const callerGuard = params.commitGuard;
     params = {
       ...params,
+      workerAuthority: {
+        ...params.workerAuthority,
+        predicates: [
+          ...(params.workerAuthority?.predicates ?? []),
+          { kind: "exact-snapshot", record: original },
+        ],
+      },
       commitGuard: () => {
         callerGuard?.();
         if (finalized) {
@@ -559,9 +577,6 @@ async function finishRestoredSnapshot(
   delete restored.runEndCleanup;
   const finishRecovery = async () => {
     params.commitGuard?.();
-    if (!context.recoveryClaim) {
-      finalizeWorktreeRemoval(env, params.id);
-    }
     await requireGit(
       record.repoRoot,
       ["update-ref", "-d", `refs/openclaw/removals/${record.id}`],
@@ -574,6 +589,14 @@ async function finishRestoredSnapshot(
       async () => {},
     );
   };
+  // Settle old leases while the row still refuses new runs. Revival must not race this await.
+  if (!context.recoveryClaim) {
+    await finalizeWorktreeRemoval(
+      env,
+      { worktreeId: params.id, lastActiveAt: record.lastActiveAt, removedAt: record.removedAt },
+      params.workerAuthority,
+    );
+  }
   // Exact recovery keeps the row removed until every idempotent cleanup step
   // completes. A live-row retry must never delete leases from a newly admitted run.
   if (exact) {

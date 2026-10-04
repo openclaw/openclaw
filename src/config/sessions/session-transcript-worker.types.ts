@@ -114,6 +114,7 @@ import type {
   SessionStoreTargetReadRequest,
   SessionStoreTargetReadResult,
 } from "./session-store-target-inventory.js";
+import type { SessionTranscriptAnchorFacts } from "./session-transcript-anchor-read.kernel.js";
 import type {
   PreparedSessionTranscriptHydration,
   SessionTranscriptCurrentTurnEntryRead,
@@ -130,11 +131,14 @@ import type {
   SessionTranscriptInventoryWorkerValues,
   SessionTranscriptInventoryReaders,
 } from "./session-transcript-inventory.types.js";
-import type {
-  SessionTranscriptSearchParams,
-  SessionTranscriptSearchResult,
-} from "./session-transcript-search.types.js";
+import type { SessionTranscriptSearchResult } from "./session-transcript-search.types.js";
 import type { SessionTranscriptWorkerReadError } from "./session-transcript-worker-error.types.js";
+import type {
+  SessionTranscriptMatchWorkerInput,
+  SessionTranscriptSearchWorkerInput,
+  SessionTranscriptAnchorsWorkerInput,
+  SessionProgressCardWorkerInput,
+} from "./session-transcript-worker-read.types.js";
 import type {
   ConversationDeliveryWorkerInput,
   SessionGoalOperationReceiptWorkerInput,
@@ -149,18 +153,6 @@ export type {
   SessionTranscriptHydrationChunk,
   SessionTranscriptHydrationWorkerResult,
 } from "./session-transcript-hydration.types.js";
-
-type SessionTranscriptMatchWorkerInput = {
-  kind: "transcript-match";
-  database: { agentId: string; path: string };
-  request: import("./session-transcript-match.js").SessionTranscriptEventMatchRequest;
-};
-
-type SessionTranscriptSearchWorkerInput = {
-  kind: "transcript-search";
-  database: { agentId: string; path: string };
-  params: SessionTranscriptSearchParams;
-};
 
 export type SessionModelContextWorkerInput = {
   kind: "model-context";
@@ -280,13 +272,6 @@ type SessionProjectionStatusWorkerInput = {
   database: { agentId: string; path: string };
   env: NodeJS.ProcessEnv;
   sessionId?: string;
-};
-
-type SessionProgressCardWorkerInput = {
-  kind: "session-progress-card";
-  database: { agentId: string; path: string };
-  sessionKey: string;
-  env: NodeJS.ProcessEnv;
 };
 
 type SessionUsageCacheWorkerInput = {
@@ -463,6 +448,7 @@ export type SessionHistoryWorkerInput =
   | SessionPreviewWorkerInput
   | SessionTitleFieldsWorkerInput
   | SessionTranscriptWatermarkWorkerInput
+  | SessionTranscriptAnchorsWorkerInput
   | SessionActivitySummarySourceWorkerInput
   | SessionRowBackfillWorkerInput
   | SessionRowPresenceWorkerInput
@@ -544,6 +530,7 @@ export type SessionTranscriptWorkerValues = SessionTranscriptInventoryWorkerValu
   "session-preview": { kind: "session-preview"; items: SessionPreviewItem[] };
   "session-title-fields": { kind: "session-title-fields"; fields: SessionTitleFields };
   "transcript-watermark": { kind: "transcript-watermark"; watermark: SessionTranscriptWatermark };
+  "transcript-anchors": { kind: "transcript-anchors"; facts: SessionTranscriptAnchorFacts };
   "session-activity-summary-source": {
     kind: "session-activity-summary-source";
     source: SessionActivitySummaryBatchResult;
@@ -635,6 +622,10 @@ type CancellableSessionHistoryReader<
 > = (input: Omit<Input, "kind" | "database">, signal?: AbortSignal) => Promise<Value>;
 
 export type SessionHistoryWorkerDatabase = SessionTranscriptInventoryReaders & {
+  readAnchors: CancellableSessionHistoryReader<
+    SessionTranscriptAnchorsWorkerInput,
+    SessionTranscriptAnchorFacts
+  >;
   readConversations: SessionHistoryReader<ConversationRowsWorkerInput, ConversationRecord[]>;
   prewarm: (input: { env: NodeJS.ProcessEnv }) => Promise<void>;
   readPendingArchives: CancellableSessionHistoryReader<SessionPendingArchivesWorkerInput, boolean>;

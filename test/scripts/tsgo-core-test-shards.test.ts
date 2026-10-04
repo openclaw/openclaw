@@ -220,36 +220,35 @@ describe("tsgo core test shards", () => {
     );
   });
 
-  it("warns about oversized shards without treating them as violations", () => {
-    const shards = [
-      { name: "big", roots: ["src/a.test.ts", "src/b.test.ts"] },
-      { name: "small", roots: ["src/c.test.ts"] },
-    ];
-    expect(findOversizedTsgoCoreTestShards({ maxRoots: 1, shards })).toEqual([
-      "big: 2 test roots exceeds the advisory 1 limit; rebalance when convenient",
-    ]);
-    expect(
-      findTsgoCoreTestShardViolations({
-        canonicalRoots: ["src/a.test.ts", "src/b.test.ts", "src/c.test.ts"],
-        shards,
-      }),
-    ).toEqual([]);
-  });
-
-  it("reports missing, duplicate, and extra shard roots", () => {
-    expect(
-      findTsgoCoreTestShardViolations({
-        canonicalRoots: ["src/a.test.ts", "src/b.test.ts", "src/missing.test.ts"],
-        shards: [
-          { name: "first", roots: ["src/a.test.ts", "src/b.test.ts"] },
-          { name: "second", roots: ["src/b.test.ts", "src/extra.test.ts"] },
-        ],
-      }),
-    ).toEqual([
-      "assigned 2 times (first, second): src/b.test.ts",
-      "unassigned: src/missing.test.ts",
-      "not in the canonical core-test graph (second): src/extra.test.ts",
-    ]);
+  it.each([
+    {
+      name: "oversized shards remain advisory",
+      canonicalRoots: ["src/a.test.ts", "src/b.test.ts", "src/c.test.ts"],
+      shards: [
+        { name: "big", roots: ["src/a.test.ts", "src/b.test.ts"] },
+        { name: "small", roots: ["src/c.test.ts"] },
+      ],
+      warnings: ["big: 2 test roots exceeds the advisory 1 limit; rebalance when convenient"],
+      violations: [],
+    },
+    {
+      name: "missing, duplicate, and extra roots are violations",
+      canonicalRoots: ["src/a.test.ts", "src/b.test.ts", "src/missing.test.ts"],
+      shards: [
+        { name: "first", roots: ["src/a.test.ts", "src/b.test.ts"] },
+        { name: "second", roots: ["src/b.test.ts", "src/extra.test.ts"] },
+      ],
+      violations: [
+        "assigned 2 times (first, second): src/b.test.ts",
+        "unassigned: src/missing.test.ts",
+        "not in the canonical core-test graph (second): src/extra.test.ts",
+      ],
+    },
+  ])("$name", ({ canonicalRoots, shards, warnings, violations }) => {
+    if (warnings) {
+      expect(findOversizedTsgoCoreTestShards({ maxRoots: 1, shards })).toEqual(warnings);
+    }
+    expect(findTsgoCoreTestShardViolations({ canonicalRoots, shards })).toEqual(violations);
   });
 
   it("routes aggregate package aliases through bounded processes", () => {

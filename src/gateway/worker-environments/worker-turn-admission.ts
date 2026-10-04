@@ -237,6 +237,26 @@ export function resolvePlacementIdentity(
   };
 }
 
+export async function resolveWorkerPlacementRuntimeOverride(
+  placements: Pick<WorkerSessionPlacementStore, "prepareRuntimeRefresh">,
+  identity: Omit<LocalTurnPlacementClaim, "runId">,
+): Promise<string | undefined> {
+  const prepared = await placements.prepareRuntimeRefresh(identity.sessionId);
+  try {
+    prepared.assertCurrent();
+    const placement = prepared.placement;
+    return placement &&
+      placement.state !== "local" &&
+      placement.executionMode === "worker-turn" &&
+      (identity.agentId === undefined || placement.agentId === identity.agentId) &&
+      (identity.sessionKey === undefined || placement.sessionKey === identity.sessionKey)
+      ? "openclaw"
+      : undefined;
+  } finally {
+    prepared.release();
+  }
+}
+
 export function requireActivePlacement(
   placement: WorkerSessionPlacementRecord,
 ): ActiveWorkerPlacement {

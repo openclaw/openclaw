@@ -305,9 +305,12 @@ export function authorizeGatewaySessionCreation(
     return undefined;
   }
   const profileId = actor?.profileId ?? params.profileId;
+  // Keep the client's prepared identity and live run authority at this boundary.
   const role = prepared
     ? prepared.policy
-    : resolveOperatorRolePolicyForProfile(profileId, params.cfg);
+    : "client" in params
+      ? resolveOperatorRolePolicy(params.client ?? null, params.cfg)
+      : resolveOperatorRolePolicyForProfile(profileId, params.cfg);
   if (!role || role.agents === "*" || role.agents.includes(params.agentId)) {
     return undefined;
   }

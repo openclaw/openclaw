@@ -28,67 +28,25 @@ beforeEach(async () => {
 });
 afterEach(resetPluginsPageTestState);
 
-it.each([false, true])(
-  "refreshes a published plugin generation with a delayed route: %s",
-  async (delayed) => {
-    const result = {
-      ...createResult(createPlugin({ enabled: true, state: "enabled" })),
-      generation: 1,
-    };
-    const { client, request } = createClient(async (method) => {
-      if (method === "plugins.list") {
-        return result;
-      }
-      throw new Error(`Unexpected request: ${method}`);
-    });
-    const harness = createGateway(client);
-    const route = createPluginsRouteData(harness.gateway, { ...createResult(), generation: 0 });
-    const { page } = await mountPage(
-      createContext(harness.gateway),
-      delayed ? undefined : route,
-      "settings",
-    );
-    const connect = vi.spyOn(harness.gateway, "connect");
-    const before = harness.gateway.snapshot;
-    harness.emit(client, true, {
-      hello: before.hello,
-      pluginCapabilities: {
-        ok: true,
-        generation: 1,
-        descriptors: [],
-        methods: [],
-        controlUiTabs: [],
-        controlUiWidgetKinds: [],
-        pluginSurfaceUrls: {},
-      },
-    });
-    if (delayed) {
-      page.routeData = route;
-      await page.updateComplete;
-    }
-    await waitForFast(() =>
-      expect(
-        page.querySelector('[data-plugin-id="workboard"] [data-plugin-state="enabled"]'),
-      ).not.toBeNull(),
-    );
-    expect(page.result?.generation).toBe(1);
-    expect(request).toHaveBeenCalledWith(
-      "plugins.list",
-      {},
-      expect.objectContaining({ signal: expect.any(AbortSignal) }),
-    );
-    expect(connect).not.toHaveBeenCalled();
-  },
-);
-
 it.each([
-  { path: "/plugins", surface: "discovery", selector: ".plugin-catalog-card" },
-  { path: "/plugins/catalog-workboard", surface: "discovery", selector: ".plugin-catalog-detail" },
-  { path: "/settings/plugins/workboard", surface: "settings", selector: ".plugin-catalog-detail" },
+  ["/settings/plugins", "settings", false],
+  ["/settings/plugins", "settings", true],
+  ["/plugins", "discovery", true],
+  ["/plugins/catalog-workboard", "discovery", true],
+  ["/settings/plugins/workboard", "settings", true],
 ] as const)(
-  "opens $path when its preload arrives after publication",
-  async ({ path, surface, selector }) => {
-    const plugin = createPlugin({ name: "Fresh route plugin" });
+  "refreshes published inventory on %s (%s, delayed preload: %s)",
+  async (path, surface, delayed) => {
+    const inventoryOnly = path === "/settings/plugins";
+    const selector = inventoryOnly
+      ? '[data-plugin-id="workboard"] [data-plugin-state="enabled"]'
+      : path === "/plugins"
+        ? ".plugin-catalog-card"
+        : ".plugin-catalog-detail";
+    const plugin = createPlugin({
+      name: "Fresh route plugin",
+      ...(inventoryOnly ? { enabled: true, state: "enabled" } : {}),
+    });
     const result = { ...createResult(plugin), generation: 1 };
     const detail = createDiscoveryDetail(plugin);
     detail.plugin.id = "catalog-workboard";
@@ -97,7 +55,7 @@ it.each([
       if (method === "plugins.list") {
         return result;
       }
-      if (method === "plugins.catalog.browse") {
+      if (!inventoryOnly && method === "plugins.catalog.browse") {
         return {
           items: [detail.plugin],
           categories: [
@@ -111,10 +69,10 @@ it.each([
           ],
         };
       }
-      if (method === "plugins.catalog.get") {
+      if (!inventoryOnly && method === "plugins.catalog.get") {
         return detail;
       }
-      if (method === "plugins.inspect") {
+      if (!inventoryOnly && method === "plugins.inspect") {
         return createInspectResult({
           plugin: {
             id: plugin.id,
@@ -133,7 +91,11 @@ it.each([
       { ...createResult(), generation: 0 },
       createPluginsRouteLocation(path),
     );
-    const { page } = await mountPage(createContext(harness.gateway), undefined, surface);
+    const { page } = await mountPage(
+      createContext(harness.gateway),
+      delayed ? undefined : route,
+      surface,
+    );
     const connect = vi.spyOn(harness.gateway, "connect");
     harness.emit(client, true, {
       hello: harness.gateway.snapshot.hello,
@@ -147,23 +109,37 @@ it.each([
         pluginSurfaceUrls: {},
       },
     });
-    await page.updateComplete;
-    page.routeData = route;
-    await page.updateComplete;
-    await waitForFast(() =>
-      expect(page.querySelector(selector)?.textContent).toContain(plugin.name),
-    );
+    if (delayed) {
+      await page.updateComplete;
+      page.routeData = route;
+      await page.updateComplete;
+    }
+    await waitForFast(() => {
+      expect(page.querySelector(selector)).not.toBeNull();
+      if (!inventoryOnly) {
+        expect(page.querySelector(selector)?.textContent).toContain(plugin.name);
+      }
+    });
     expect(page.result?.generation).toBe(1);
     expect(connect).not.toHaveBeenCalled();
+    if (inventoryOnly) {
+      expect(request).toHaveBeenCalledWith(
+        "plugins.list",
+        {},
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      );
+    }
     expect(
       request.mock.calls.some(
         ([method]) =>
           method ===
-          (surface === "settings"
-            ? "plugins.inspect"
-            : path === "/plugins"
-              ? "plugins.catalog.browse"
-              : "plugins.catalog.get"),
+          (inventoryOnly
+            ? "plugins.list"
+            : surface === "settings"
+              ? "plugins.inspect"
+              : path === "/plugins"
+                ? "plugins.catalog.browse"
+                : "plugins.catalog.get"),
       ),
     ).toBe(true);
   },

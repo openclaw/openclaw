@@ -155,7 +155,8 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   // +1: bounded structured-input compiler/executor for native harness protocol adapters.
   "agent-harness": 2,
   // +1: owner-approved synchronous watched-session compatibility during async migration.
-  "agent-harness-runtime": 11,
+  // +1: owner-approved synchronous agent-end compatibility during async migration.
+  "agent-harness-runtime": 12,
   // +4: deprecated media projection type, builder, and turn aliases.
   "channel-inbound": 18,
   // +2: Slack progress-draft render bridge (function + mode type).
@@ -190,7 +191,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +11: ten service-lifetime type exports and the owner-bound scheduler resolver.
       // +1: owner-approved async watched-session preparation with retained sync compatibility.
       // +1: captureToolAuthoredSourceReply lets the Codex harness deliver canDeliverSourceReply tool replies.
-      3645,
+      // +1: owner-approved async agent-end preparation with retained sync compatibility.
+      3646,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -200,7 +202,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: resolvePluginServiceScheduler borrows an existing service/account/CLI owner.
       // +1: owner-approved async watched-session preparation with retained sync compatibility.
       // +1: captureToolAuthoredSourceReply lets the Codex harness deliver canDeliverSourceReply tool replies.
-      2110,
+      // +1: owner-approved async agent-end preparation with retained sync compatibility.
+      2111,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

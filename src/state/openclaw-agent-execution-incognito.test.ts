@@ -11,9 +11,9 @@ import type { IncognitoSessionAuthority } from "../config/sessions/session-incog
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
 import * as workerStores from "../infra/sqlite-worker-store.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { IncognitoSessionEndedError } from "./incognito-session-error.js";
 import { getOpenClawAgentDatabaseIfOpen } from "./openclaw-agent-db.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
-import { IncognitoSessionEndedError } from "./openclaw-agent-execution-contract.js";
 import type { IncognitoAgentDatabaseExecution } from "./openclaw-agent-execution-incognito.js";
 import {
   captureOpenClawAgentDatabaseExecution,

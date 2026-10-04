@@ -322,6 +322,10 @@ export async function dispatchGatewayMethodInProcessRaw(
       onSignalAbort: options?.onSignalAbort,
       requestIdPrefix: "plugin-subagent",
       prepareDispatchCurrent: options?.prepareDispatchCurrent,
+      assertPreparationCurrent: () => {
+        resolved.assertContextCurrent();
+        resolved.assertInvocationCurrent();
+      },
       sessionMutationCommitGuard: () => {
         resolved.assertContextCurrent();
         resolved.assertInvocationCurrent();
