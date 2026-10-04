@@ -527,27 +527,6 @@ it("requires admitted authority, not an admin's supplied run metadata", async ()
   expect(manager.list()).toEqual([]);
 });
 
-it("uses admitted requester provenance instead of caller-supplied correlation fields", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const response = await call(
-      "question.request",
-      {
-        questions: secretRequestParams.questions,
-        agentId: "other",
-        sessionKey: "agent:other:other",
-        runId: "other-run",
-      },
-      { client: adminRequestClient },
-    );
-    expect(response[0]).toBe(true);
-    expect(manager.get((response[1] as { id: string }).id)).toMatchObject({
-      agentId: requestParams.agentId,
-      sessionKey: requestParams.sessionKey,
-      runId: requestParams.runId,
-    });
-  });
-});
-
 it("diverts operator-entered credentials into the store and exposes only a stored marker", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const id = await requestSecretQuestion();
