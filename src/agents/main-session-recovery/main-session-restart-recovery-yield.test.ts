@@ -109,9 +109,10 @@ describe("restart recovery discovery yield", () => {
 
       const storeSpy = vi.spyOn(recoveryStore, "recoverStore");
       let shouldContinueCalls = 0;
-      // Call 1: the first target's pre-yield check passes; call 2 is the
-      // post-yield recheck, so store 2's synchronous load must never happen
-      // and store 1's recovery must be skipped entirely (#149935 Rev 2).
+      // Calls 1-2: discovery probes both stores (discovery shares the callback
+      // now). Call 3: the first target's pre-yield check passes. Call 4: the
+      // post-yield recheck cancels, so store 1's recoverStore must never run —
+      // this pins the recovery-yield guard specifically (#149935 Rev 2/4).
       const result = await recoverRestartAbortedMainSessions({
         cfg,
         stateDir: tmpDir,
@@ -121,7 +122,7 @@ describe("restart recovery discovery yield", () => {
           waitForAgent: vi.fn(),
           sendRecoveryNotice: vi.fn(),
         } as unknown as Parameters<typeof recoverRestartAbortedMainSessions>[0]["gatewayRuntime"],
-        shouldContinue: () => ++shouldContinueCalls <= 1,
+        shouldContinue: () => ++shouldContinueCalls <= 3,
       });
 
       expect(storeSpy).toHaveBeenCalledTimes(0);
