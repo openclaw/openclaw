@@ -141,6 +141,8 @@ construction reads trajectory history and uses temporary disk for its probe and
 replacement. Writes maintain the expression index. Older same-version writable
 owners can restore their prior definition on downgrade or rollback without
 changing event rows; strict read-only admission can require that repair first.
+During the v17 upgrade, Doctor completes the legacy data migrations before
+repairing canonical indexes and validating the target schema in the same transaction.
 See the [storage design](/reference/database-schemas/storage-changes#trajectory-retention-covering-index).
 
 Removing the Tasks and TaskFlow runtime does not change the shared-state or agent

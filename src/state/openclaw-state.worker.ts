@@ -3,6 +3,7 @@ import {
   loadDeviceIdentityIfPresent,
   loadOrCreateDeviceIdentity,
 } from "../infra/device-identity.js";
+import { refreshSqlitePlannerStatistics } from "../infra/sqlite-planner-statistics.js";
 import { assertNoActiveSqliteReaders } from "../infra/sqlite-reader-lifecycle.js";
 import { assertTransactionUsable } from "../infra/sqlite-transaction.js";
 import { SQLITE_WORKER_PREPARE_COMMAND } from "../infra/sqlite-worker-contract.js";
@@ -282,10 +283,22 @@ function createSharedStateWorkerBackend(
         );
       }
       if (command.type === "database.walMaintenance") {
+        const database = open();
+        const admit = (stage: "transaction" | "commit") => {
+          requestSqliteWorkerOperationAdmission({ stage, facts: undefined });
+        };
         return (
-          open().walMaintenance.maintainPeriodic?.(command.input, (stage) => {
-            requestSqliteWorkerOperationAdmission({ stage, facts: undefined });
-          }) ?? { reclaimedPages: 0 }
+          database.walMaintenance.maintainPeriodic?.(command.input, admit, () =>
+            runOpenClawStateWriteTransaction(
+              ({ db }) => {
+                admit("transaction");
+                refreshSqlitePlannerStatistics(db);
+                admit("commit");
+              },
+              { database },
+              { busyTimeoutMs: 0, operationLabel: "state.planner-statistics" },
+            ),
+          ) ?? { reclaimedPages: 0 }
         );
       }
       if (command.type === "database.inspectIdle") {

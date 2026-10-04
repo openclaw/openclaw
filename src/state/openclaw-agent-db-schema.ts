@@ -8,7 +8,6 @@ import {
 import { migrateSessionCostUsageRollupStorage } from "../infra/session-cost-usage-cache-migration.js";
 import {
   repairCanonicalSqliteIndexes,
-  verifyAndRepairCanonicalSqliteIndexes,
   verifyAndRepairCanonicalSqliteIndexSteps,
 } from "../infra/sqlite-index-schema.js";
 import {
@@ -77,10 +76,7 @@ import {
   isPersistentOpenClawAgentDatabasePath,
   resolveOpenClawAgentSqlitePath,
 } from "./openclaw-agent-db.paths.js";
-import {
-  migrateSessionParticipantsSchema,
-  withLegacySessionParticipantsSchema,
-} from "./openclaw-agent-participants-migration.js";
+import { migrateSessionParticipantsSchema } from "./openclaw-agent-participants-migration.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 import { migrateSessionEntrySnapshotsInTransaction } from "./openclaw-agent-session-snapshots-migration.js";
 import {
@@ -389,19 +385,10 @@ function ensureAgentSchema(
         return;
       }
       if (previousVersion === AGENT_MEDIA_SCHEMA_VERSION) {
-        const legacySql = withLegacySessionParticipantsSchema(
-          withLegacyAgentStorageSchema(OPENCLAW_AGENT_SCHEMA_SQL),
-        );
         ensureSessionAdditiveColumns(db);
-        verifyAndRepairCanonicalSqliteIndexes(db, pathname, legacySql, {
-          validateAfterRepair: () => {
-            assertAgentSchemaVersion(
-              db,
-              { agentId, pathname, version: AGENT_MEDIA_SCHEMA_VERSION },
-              legacySql,
-            );
-          },
-        });
+        assertSqliteIntegrity(db, pathname);
+        // Index repair and whole-schema validation run in finishAgentSchemaMigration
+        // after legacy memory and participant shapes converge, in this transaction.
       }
       migrateRetiredAgentStateLeaseSchema(db, pathname, targetVersion);
       if (previousVersion === targetVersion) {

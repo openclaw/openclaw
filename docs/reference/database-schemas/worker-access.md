@@ -1680,6 +1680,14 @@ refreshed by direct reads while a reply is pending keep their newer facts; a dir
 replacement retries under its own generation. Related rows use resident facts and
 existing invalidations to converge across batches.
 
+Cold resident-store admission reads its initial entry inventory through the same
+projection worker. The host captures every physical file before yielding, retains
+reader custody through publication, and rejects replies after a store replacement
+or a concurrent session publication. Existing stores reuse resident entries;
+canonical comparison-schema validation and metadata admission remain with the
+worker connection owner and its admitted schema facts. Schema, stored bytes,
+retention, and update behavior are unchanged.
+
 Dirty resident row refreshes also prepare ACP metadata in the shared-state read
 worker. Explicit absence travels with the row facts, so presentation does not
 repeat ACP lookups or their schema admission checks. ACP publications invalidate

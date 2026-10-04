@@ -156,6 +156,12 @@ describe("trusted P qualification admission", () => {
     ).not.toEqual(original);
   });
 
+  it("accepts admitted empty strings omitted from the child run inputs context", () => {
+    const f = fixture();
+    const { codex_plugin_spec: _omitted, ...observed } = f.selected.inputs;
+    expect(f.verify(observed)).toEqual(f.receipt);
+  });
+
   it.each([
     { reviewed: false },
     { qualificationSha: publisherSha },

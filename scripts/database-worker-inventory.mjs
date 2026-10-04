@@ -548,7 +548,7 @@ const reviewedOperations = new Map([
         operations: [
           "ensureSkillLibrarySchema",
           "requireSelectedSkillLibraryUpload",
-          "selectSkillLibraryRow",
+          "selectSkillLibraryEntries",
           "selectSkillLibraryRevision",
           "selectSkillLibraryRevisionMetadata",
           "assertSkillLibraryNameAvailable",
