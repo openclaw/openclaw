@@ -1,5 +1,6 @@
 // Tool schema projection tests cover runtime/provider filtering for plugin tool
 // schemas before they are exposed to model providers.
+import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import {
   filterProviderNormalizableTools,
@@ -85,6 +86,7 @@ describe("runtime tool input schema projection", () => {
       overflow,
       { type: "object", properties: { score: { default: overflow } } },
       { type: "object", anyOf: [{ $dynamicRef: "#value", default: overflow }] },
+      { type: "object", examples: [{ document: { $dynamicRef: "#node", limit: overflow } }] },
     ]) {
       expect(projectRuntimeToolInputSchema(schema)).toEqual({
         schema: {},
@@ -244,6 +246,51 @@ describe("runtime tool input schema projection", () => {
         },
       }).violations,
     ).toEqual([]);
+  });
+
+  it.each(["const", "default", "enum", "examples"])(
+    "keeps tools whose %s contains literal schema documents",
+    (keyword) => {
+      const instance = {
+        document: {
+          $dynamicAnchor: "node",
+          properties: { child: { $dynamicRef: "#node" } },
+        },
+      };
+      const parameters = Type.Object(
+        { document: Type.Record(Type.String(), Type.Unknown()) },
+        { [keyword]: keyword === "enum" || keyword === "examples" ? [instance] : instance },
+      );
+      const original = structuredClone(parameters);
+      const tool = { name: "store_schema", parameters };
+
+      expect(projectRuntimeToolInputSchema(parameters)).toEqual({
+        schema: original,
+        violations: [],
+      });
+      expect(filterRuntimeCompatibleTools([tool])).toEqual({ tools: [tool], diagnostics: [] });
+      expect(parameters).toEqual(original);
+    },
+  );
+
+  it("still checks schemas whose property or definition names match literal keywords", () => {
+    const names = ["const", "default", "enum", "examples"];
+    const schema = {
+      type: "object",
+      $defs: Object.fromEntries(names.map((name) => [name, { $dynamicAnchor: name }])),
+      properties: Object.fromEntries(names.map((name) => [name, { $dynamicRef: `#${name}` }])),
+    };
+
+    expect(projectRuntimeToolInputSchema(schema).violations).toEqual([
+      "parameters.$defs.const.$dynamicAnchor",
+      "parameters.$defs.default.$dynamicAnchor",
+      "parameters.$defs.enum.$dynamicAnchor",
+      "parameters.$defs.examples.$dynamicAnchor",
+      "parameters.properties.const.$dynamicRef",
+      "parameters.properties.default.$dynamicRef",
+      "parameters.properties.enum.$dynamicRef",
+      "parameters.properties.examples.$dynamicRef",
+    ]);
   });
 
   it("filters unsupported schemas without dropping healthy tools", () => {

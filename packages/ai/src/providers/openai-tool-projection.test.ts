@@ -1,3 +1,4 @@
+import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import {
   projectOpenAITools,
@@ -102,8 +103,13 @@ describe("OpenAI tool projection", () => {
     ]);
   });
 
-  it("quarantines OpenAI tools with unsupported dynamic schema references", () => {
+  it("keeps literal reference examples while quarantining dynamic schema references", () => {
+    const parameters = Type.Object(
+      { document: Type.Record(Type.String(), Type.Unknown()) },
+      { examples: [{ document: { $dynamicAnchor: "node", $dynamicRef: "#node" } }] },
+    );
     const projection = projectOpenAITools([
+      { name: "store_schema", parameters },
       {
         name: "dynamic",
         parameters: {
@@ -115,14 +121,17 @@ describe("OpenAI tool projection", () => {
       },
     ]);
 
-    expect(projection.tools).toEqual([]);
+    expect(projection.tools).toEqual([{ toolIndex: 0, name: "store_schema", parameters }]);
     expect(projection.diagnostics).toEqual([
       {
-        toolIndex: 0,
+        toolIndex: 1,
         toolName: "dynamic",
         violations: ["dynamic.parameters.properties.value.$dynamicRef"],
       },
     ]);
+    expect(
+      reconcileOpenAIResponsesToolChoice({ type: "function", name: "store_schema" }, projection),
+    ).toEqual({ type: "function", name: "store_schema" });
   });
 
   it("quarantines OpenAI tools with non-finite numeric schema values", () => {
