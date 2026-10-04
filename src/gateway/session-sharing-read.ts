@@ -293,7 +293,7 @@ export function prepareProjectedSessionSharing(params: {
         Boolean(client?.authenticatedGitHubIdentitySync),
         client?.connect.scopes?.toSorted(),
         profile?.profileId,
-        profile && [...profile.aliases].sort(),
+        profile && [...profile.aliases].toSorted(),
         policy,
         Boolean(cfg.gateway?.roles),
       ]));
