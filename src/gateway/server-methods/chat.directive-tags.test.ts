@@ -2363,6 +2363,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     await createTranscriptFixture("openclaw-chat-send-plugin-binding-history-");
     const targetSessionKey = "plugin-binding:codex:history123";
     const targetSessionId = "plugin-binding-history-session";
+    mockState.sessionIdsByKey.set(targetSessionKey, targetSessionId);
     await replaceSessionEntry(
       {
         agentId: "main",

@@ -519,7 +519,11 @@ it.each([
       getRuntimeConfig: () => cfg,
       workerSessionPlacementService: change === "unavailable reader" ? { getMany } : placements,
     });
-    const prepared = await prepareChatSendSession({ request: request.value, client: null, context });
+    const prepared = await prepareChatSendSession({
+      request: request.value,
+      client: null,
+      context,
+    });
     if (!prepared.ok) {
       throw new Error("Session preparation failed");
     }
