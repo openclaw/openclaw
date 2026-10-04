@@ -23,7 +23,7 @@ import {
 import { createApplicationRouter, routeIdFromPath, type RouteId } from "./app-routes.ts";
 import { sessionRefFromPath } from "./app-session-route-paths.ts";
 import { sessionNavigationTarget } from "./lib/sessions/route-navigation.ts";
-import { pluginTabKey, pluginTabRefFromSearch } from "./pages/plugin/route.ts";
+import { pluginTabKey, pluginTabRefFromSearch } from "./pages/plugin/target.ts";
 
 /**
  * All route identifiers derived from core sidebar routes, plugin-owned native

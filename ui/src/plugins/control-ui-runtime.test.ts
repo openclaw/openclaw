@@ -242,6 +242,29 @@ it.each(["plugins.changed", "plugins.controlUi.changed"] as const)(
       runtime.selectReplacement("composer", "review/composer");
       const first = runtime.selectedReplacement("composer")!;
 
+      const route = {
+        id: "preview",
+        pageId: "documents",
+        from: "chat" as const,
+        resolve: () => null,
+      };
+      expect(() => first.host.navigation.registerLinkRoute(route)).toThrow("owned registered page");
+      const removePage = first.host.ui.registerPage({
+        id: "documents",
+        label: "Documents",
+        mount() {},
+      });
+      const removeRoute = first.host.navigation.registerLinkRoute(route);
+      expect(() => first.host.navigation.registerLinkRoute({ ...route, id: "second" })).toThrow(
+        "one link route",
+      );
+      removeRoute();
+      const nextRoute = first.host.navigation.registerLinkRoute(route);
+      removeRoute();
+      expect(runtime.registrations("linkRoutes")).toHaveLength(1);
+      nextRoute();
+      removePage();
+
       // Optional contributions can be absent at activation or registered later.
       expect(runtime.errors).toEqual([]);
       first.host.ui.registerWidget({ id: "late", label: "Late widget", mount: () => undefined });

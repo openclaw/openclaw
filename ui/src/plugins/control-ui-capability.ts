@@ -4,6 +4,7 @@ import type {
   ControlUiAccessory,
   ControlUiDisposer,
   ControlUiHost,
+  ControlUiLinkRoute,
   ControlUiNavigationItem,
   ControlUiPage,
   ControlUiPanel,
@@ -23,6 +24,7 @@ export type ControlUiRegistration<T> = {
 export type ControlUiContributions = {
   pages: ControlUiPage;
   navigation: ControlUiNavigationItem;
+  linkRoutes: ControlUiLinkRoute;
   panels: ControlUiPanel;
   actions: ControlUiAction;
   accessories: ControlUiAccessory;

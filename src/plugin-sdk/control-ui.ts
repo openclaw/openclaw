@@ -73,6 +73,21 @@ export type ControlUiPageTarget = {
   /** Unescaped path segments for a page with an advertised native route placement. */
   path?: readonly string[];
 };
+export type ControlUiPanelTarget = {
+  id: string;
+  params?: Readonly<Record<string, string>>;
+};
+export type ControlUiPanelProps = BoardGetParams & {
+  /** Plugin resource scope; independent of the conversation's sessionKey and agentId. */
+  params?: Readonly<Record<string, string>>;
+};
+export type ControlUiLinkRoute = {
+  id: string;
+  pageId: string;
+  from: "chat";
+  /** Pure synchronous mapping. Return null to retain ordinary page navigation. */
+  resolve: (page: ControlUiPageTarget) => ControlUiPanelTarget | null;
+};
 export type ControlUiPageNavigationOptions = {
   /** Replace the current history entry when canonicalizing a page or changing its filters. */
   replace?: boolean;
@@ -150,7 +165,7 @@ export type ControlUiNavigationItem = {
 export type ControlUiPanel = {
   id: string;
   label: string;
-  mount: ControlUiView<BoardGetParams>;
+  mount: ControlUiView<ControlUiPanelProps>;
 };
 
 export type ControlUiAction = {
@@ -255,6 +270,8 @@ export type ControlUiHost = {
     readonly openSessionKey: string | null;
   };
   navigation: {
+    /** One route per owned registered page/source. Duplicates throw; disposal releases it. */
+    registerLinkRoute: (route: ControlUiLinkRoute) => ControlUiDisposer;
     openPage: (target: ControlUiPageTarget, options?: ControlUiPageNavigationOptions) => void;
     pageHref: (
       target: ControlUiPageTarget,
@@ -270,7 +287,11 @@ export type ControlUiHost = {
     pinNavigation: (id: string) => void;
     registerPanel: (panel: ControlUiPanel) => ControlUiDisposer;
     /** Open an owned registered panel beside the supplied or currently selected session. */
-    openPanel: (id: string, session?: BoardGetParams) => void;
+    openPanel: {
+      (id: string, session?: BoardGetParams): void;
+      /** True accepts the destination, not resource loading or authorization. */
+      (target: ControlUiPanelTarget, session?: BoardGetParams): boolean;
+    };
     registerAction: (action: ControlUiAction) => ControlUiDisposer;
     registerAccessory: (accessory: ControlUiAccessory) => ControlUiDisposer;
     registerWidget: (widget: ControlUiWidget) => ControlUiDisposer;

@@ -101,6 +101,8 @@ export type ChatPageHost = ChatHost &
     chatStreamRenderFrame: number | null;
     chatLastScrollHeight: number;
     sidebarLayout: SidebarLayout;
+    /** Transient plugin destinations; never persist resource scope in saved layouts. */
+    pluginPanelParams?: Map<string, Readonly<Record<string, string>>>;
     sidebarContent: SidebarSelection | null;
     sidebarFocusPanelId: string;
     sidebarFocusVersion: number;

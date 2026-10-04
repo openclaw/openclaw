@@ -174,6 +174,17 @@ function renderTranscriptShell(
           if (shouldHandleNavigationClick(event) && navigateCronRunLink(event, props)) {
             return;
           }
+          const anchor = anchorFromNavigationEvent(event);
+          if (
+            shouldHandleNavigationClick(event) &&
+            anchor &&
+            !anchor.hasAttribute("download") &&
+            (!anchor.target || anchor.target === "_self") &&
+            props.onOpenPluginChatLink?.(anchor.href)
+          ) {
+            event.preventDefault();
+            return;
+          }
           const target = markdownFileLinkFromEvent(event);
           if (target) {
             props.onOpenWorkspaceFile?.(target);

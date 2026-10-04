@@ -26,7 +26,7 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../lib/sessions/session-key.ts";
-import { pluginTabKey } from "../pages/plugin/route.ts";
+import { pluginTabKey } from "../pages/plugin/target.ts";
 import { renderSidebarPluginTab } from "./app-sidebar-nav-menus.ts";
 import { renderSidebarSessionFilter } from "./app-sidebar-session-filter-summary.ts";
 import type { AppSidebarSessionNavigationElement } from "./app-sidebar-session-navigation.ts";

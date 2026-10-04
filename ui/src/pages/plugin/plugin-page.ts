@@ -31,7 +31,7 @@ import { renderCustomPluginUiDisabled } from "../../plugins/control-ui-disabled.
 import { renderPluginContribution } from "../../plugins/control-ui-view.ts";
 import type { renderLogbook } from "./logbook-view.ts";
 import { openPluginFrameSession } from "./plugin-frame-session-navigation.ts";
-import { pluginTabKey } from "./route.ts";
+import { pluginTabKey } from "./target.ts";
 
 registerLoginEnglish();
 

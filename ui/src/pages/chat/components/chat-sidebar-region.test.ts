@@ -339,6 +339,7 @@ describe("chat sidebar region", () => {
         contributions: {
           pages: new Map(),
           navigation: new Map(),
+          linkRoutes: new Map(),
           panels: new Map(),
           actions: new Map(),
           replacements: new Map(),

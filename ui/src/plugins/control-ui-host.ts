@@ -268,6 +268,7 @@ export function createControlUiPluginHost(
         }
       : undefined,
     navigation: {
+      registerLinkRoute: (value) => runtime.register(owner, "linkRoutes", value),
       openPage(target, options) {
         const location = pageLocation(target, options);
         const context = current();
@@ -301,18 +302,26 @@ export function createControlUiPluginHost(
         }
       },
       registerPanel: (value) => runtime.register(owner, "panels", value),
-      openPanel(id, session) {
+      openPanel(target, session) {
+        const id = typeof target === "string" ? target : target.id;
         const context = current();
         if (!owner.contributions.panels.has(id)) {
+          if (typeof target !== "string") {
+            return false;
+          }
           throw new Error("A plugin can open only its own registered panel.");
         }
         const sessionKey = session?.sessionKey ?? context.gateway.snapshot.sessionKey;
         if (!sessionKey) {
+          if (typeof target !== "string") {
+            return false;
+          }
           throw new Error("Select a session before opening a plugin panel.");
         }
         const detail: PluginPanelToggleDetail = {
           pluginId: owner.descriptor.pluginId,
           panelId: id,
+          ...(typeof target !== "string" && target.params ? { params: { ...target.params } } : {}),
           sessionKey,
           agentId:
             session?.agentId ??
@@ -325,6 +334,7 @@ export function createControlUiPluginHost(
         rememberSessionPanelToggle(`plugin:${detail.pluginId}/${id}`, event);
         openPreferredApplicationSession(context, sessionKey, session?.agentId);
         window.dispatchEvent(event);
+        return true;
       },
       registerAction: (value) => runtime.register(owner, "actions", value),
       registerAccessory: (value) => runtime.register(owner, "accessories", value),

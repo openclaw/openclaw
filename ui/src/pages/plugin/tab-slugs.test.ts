@@ -8,7 +8,7 @@ import {
   routeIdFromPath,
   setPluginTabSlugs,
 } from "../../app-route-paths.ts";
-import { pluginTabRefFromSearch } from "./route.ts";
+import { pluginTabRefFromSearch } from "./target.ts";
 
 const ref = { pluginId: "reports-fixture", id: "summary" };
 const tab = { ...ref, slug: "reports" };

@@ -186,6 +186,7 @@ export type ChatThreadProps = ChatSendStatusActions & {
   typingOverflow?: ChatTypingOverflow;
   onOpenSidebar?: (content: SidebarContent) => void;
   onOpenWorkspaceFile?: (target: MarkdownFileLinkTarget) => void;
+  onOpenPluginChatLink?: (href: string) => boolean;
   onOpenSessionLink?: (target: SessionLinkTarget) => void;
   onNavigate?: (routeId: "cron", options: { search: string }) => void;
   onRequestOpenImage?: () => number;

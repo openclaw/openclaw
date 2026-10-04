@@ -167,10 +167,50 @@ opening from a plugin page before the session pane has mounted. Only the same
 plugin's registered panels can be opened; retained handles expire with their
 view or activation.
 
-For a document link, use `host.navigation.pageHref(...)` to build a link to a
-registered plugin page. That page can resolve its document and call `openPanel`
-with the target session. This does not intercept ordinary file links or change
-the Files plugin's ownership.
+### Open chat citations in a panel
+
+Use `host.navigation.pageHref(...)` for ordinary links to a plugin page. To open
+those links beside the originating conversation, register the page and panel,
+then add a synchronous route:
+
+```typescript
+host.navigation.registerLinkRoute({
+  id: "document-preview",
+  pageId: "documents",
+  from: "chat",
+  resolve(page) {
+    return page.params?.collection && page.params?.document
+      ? { id: "document-preview", params: page.params }
+      : null;
+  },
+});
+```
+
+The resolver must be a pure mapping. Its page and returned panel must belong to
+the same plugin. There is one route per page/source; duplicate route IDs or
+page/source registrations throw. The returned disposer releases the route and
+is safe to call repeatedly. View disposal or plugin retirement also removes it.
+
+Ordinary primary clicks in chat route only same-origin plugin-page URLs under
+the configured Control UI base path, including registered page slugs. Modified
+clicks, middle clicks, explicit new-tab links, and external links retain browser
+behavior. Missing pages, panels or routes, a `null` result, and resolver errors
+fall back to the original page link. `host.navigation.openPage(...)` always opens
+the full page and never runs chat routing.
+
+Use `host.ui.openPanel({ id: "document-preview", params }, session)` for a direct
+targeted open. It returns `true` when the host accepts the destination, not when
+the resource loads or passes authorization; an unavailable panel or absent
+session returns `false`. Expired host handles still throw. The string overload
+remains available with its existing error behavior.
+
+Panels receive `ControlUiPanelProps`: conversation `sessionKey`/`agentId` plus a
+separate optional `params` map for plugin resource scope. New targets arrive in
+`update(context)` without remounting the panel. Opening without parameters clears
+the previous target. Parameters are transient and are not saved in layout
+preferences. The host owns docking, focus and lifetime; the plugin owns resource
+validation, authorization, Back/history, and rejecting stale asynchronous results.
+The conversation, draft and transcript remain mounted.
 
 Use `host.ui.invalidate()` when plugin-owned state changes the presentation of
 an action or another contribution. Namespace custom elements and CSS with the

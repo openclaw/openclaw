@@ -189,7 +189,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +4: owner-approved replay V2 types on core and plugin-entry (2026-10-01).
       // +11: ten service-lifetime type exports and the owner-bound scheduler resolver.
       // +1: owner-approved async watched-session preparation with retained sync compatibility.
-      3644,
+      // +3: requested generic Control UI panel target, props, and owned chat-link route types.
+      3647,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(

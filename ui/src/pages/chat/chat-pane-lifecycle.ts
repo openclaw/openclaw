@@ -14,10 +14,12 @@ import {
 } from "../../app/question-prompt.ts";
 import { readPresenceEntries } from "../../app/user-profile.ts";
 import { BROWSER_ANNOTATION_EVENT } from "../../components/browser/browser-annotation.ts";
+import { PLUGIN_PANEL_TOGGLE_EVENT } from "../../components/panel-toggle-contract.ts";
 import { matchesShortcutCombo } from "../../lib/keyboard-shortcut-contract.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { resolveSessionKey } from "../../lib/sessions/index.ts";
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
+import { routeControlUiChatLink } from "../../plugins/control-ui-link-routing.ts";
 import * as chatAvatars from "./chat-avatar.ts";
 import { CHAT_ROUTE_READY_EVENT } from "./chat-history-events.ts";
 import { retireInitialChatSnapshot } from "./chat-history-state.ts";
@@ -60,6 +62,7 @@ import {
   refreshChatMetadata,
   retireChatMetadataRequests,
 } from "./chat-state-refresh.ts";
+import { resolveChatAgentId } from "./chat-state-route.ts";
 import { resetChatViewState } from "./chat-view-state.ts";
 import { publishChatWorkContext } from "./chat-work-context.ts";
 import { resolveChatAttachmentLimits } from "./components/chat-attachment-admission.ts";
@@ -74,9 +77,9 @@ import { closeSlot, isSidebarSlotVisible } from "./sidebar-layout.ts";
 
 export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
   private readonly sessionPanelToggles = new ChatPaneSessionPanelToggleController({
-    current: () => {
+    current: (targeted) => {
       const state = this.state;
-      return state && this.active && this.presented
+      return state && (targeted || this.active) && this.presented
         ? {
             renderRoot: this.renderRoot,
             state,
@@ -90,6 +93,32 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
     requestUpdate: () => this.requestUpdate(),
     updateSidebarLayout: (layout) => this.commitSidebarLayout(layout),
   });
+
+  protected readonly openPluginChatLink = (href: string): boolean => {
+    const state = this.state;
+    if (!state || !this.presented) {
+      return false;
+    }
+    return routeControlUiChatLink(
+      this.context.plugins,
+      this.context.basePath,
+      href,
+      (pluginId, target) =>
+        this.sessionPanelToggles.handlePluginPanel(
+          new CustomEvent(PLUGIN_PANEL_TOGGLE_EVENT, {
+            detail: {
+              pluginId,
+              panelId: target.id,
+              params: target.params,
+              sessionKey: state.sessionKey,
+              agentId: resolveChatAgentId(state),
+              open: true,
+            },
+          }),
+          true,
+        ),
+    );
+  };
 
   private readonly mcpApps = new ChatPaneMcpAppController({
     element: this,

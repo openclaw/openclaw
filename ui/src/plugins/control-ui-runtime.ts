@@ -42,6 +42,7 @@ export type ControlUiPluginOwner = {
 const UI_CAPABILITY_BY_CONTRIBUTION = {
   pages: "page",
   navigation: "navigation",
+  linkRoutes: "navigation",
   panels: "panel",
   actions: "action",
   accessories: "accessory",
@@ -307,6 +308,7 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
       contributions: {
         pages: new Map(),
         navigation: new Map(),
+        linkRoutes: new Map(),
         panels: new Map(),
         actions: new Map(),
         replacements: new Map(),
@@ -441,10 +443,28 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
   register<K extends keyof ControlUiContributions>(
     owner: Omit<ControlUiPluginOwner, "host">,
     kind: K,
-    value: ControlUiContributions[K],
+    definition: ControlUiContributions[K],
   ): ControlUiDisposer {
+    let value = definition;
     if (!this.isCurrent(owner)) {
       throw new Error("This plugin UI activation has ended.");
+    }
+    if (kind === "linkRoutes") {
+      // SAFETY: register ties the value to kind; TypeScript cannot narrow the generic pair.
+      const route = value as ControlUiContributions["linkRoutes"];
+      if (route.from !== "chat" || !owner.contributions.pages.has(route.pageId)) {
+        throw new Error("A link route requires an owned registered page and chat source.");
+      }
+      if (
+        [...owner.contributions.linkRoutes.values()].some(
+          (entry) => entry.value.pageId === route.pageId && entry.value.from === route.from,
+        )
+      ) {
+        throw new Error("A page can have only one link route per source.");
+      }
+      // Capture routing identity so plugin mutation cannot claim a different page later.
+      // SAFETY: this branch preserves the linkRoutes contribution kind and complete contract.
+      value = { ...route } as ControlUiContributions[K];
     }
     const entries = owner.contributions[kind];
     // A disposer owns the registered ID even if the plugin later mutates its definition.

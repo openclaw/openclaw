@@ -81,6 +81,7 @@ export function createWorkboardTestHost() {
       refresh: vi.fn(async () => undefined),
     },
     navigation: {
+      registerLinkRoute: vi.fn(() => () => undefined),
       openPage: vi.fn(),
       pageHref: ({ id, path, params }) =>
         `/${id}${path?.length ? `/${path.join("/")}` : params?.boardId ? `/${params.boardId}` : ""}`,

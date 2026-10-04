@@ -42,6 +42,7 @@ describe("AppSidebar session-list replacement", () => {
       contributions: {
         pages: new Map(),
         navigation: new Map(),
+        linkRoutes: new Map(),
         panels: new Map(),
         actions: new Map(),
         accessories: new Map(),

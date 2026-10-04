@@ -28,6 +28,7 @@ export const PLUGIN_PANEL_TOGGLE_EVENT = "openclaw:plugin-panel-toggle";
 export type PluginPanelToggleDetail = {
   pluginId: string;
   panelId: string;
+  params?: Readonly<Record<string, string>>;
   sessionKey: string;
   agentId?: string;
   open: boolean;

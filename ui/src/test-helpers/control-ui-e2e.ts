@@ -1037,7 +1037,7 @@ export function createControlUiMockBootstrapConfig(scenario: ControlUiMockGatewa
       : []
     ).map(({ pluginId }) => ({
       pluginId,
-      path: `/__openclaw__/plugins/control-ui/${encodeURIComponent(pluginId)}/`,
+      path: `${normalizedScenario.basePath}/__openclaw__/plugins/control-ui/${encodeURIComponent(pluginId)}/`,
       match: "prefix",
     })),
     allowExternalEmbedUrls: false,

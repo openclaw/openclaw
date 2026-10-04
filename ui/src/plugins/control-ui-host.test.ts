@@ -589,6 +589,7 @@ describe("native UI plugin panels", () => {
     window.addEventListener(PLUGIN_PANEL_TOGGLE_EVENT, listener);
     try {
       expect(() => host.ui.openPanel("foreign/document")).toThrow("own registered panel");
+      expect(host.ui.openPanel({ id: "foreign/document" })).toBe(false);
       const view = new AbortController();
       const open = scopeControlUiHost(host, view.signal).ui.openPanel;
       open("document", { sessionKey: "global", agentId: "writer" });
@@ -625,6 +626,17 @@ describe("native UI plugin panels", () => {
       expect(
         takeSessionPanelToggle("plugin:review/document", "agent:writer:document", "writer"),
       ).not.toBeNull();
+      expect(
+        open(
+          { id: "document", params: { agent: "resource-owner", record: "one" } },
+          { sessionKey: "agent:writer:document", agentId: "writer" },
+        ),
+      ).toBe(true);
+      expect(
+        takeSessionPanelToggle("plugin:review/document", "agent:writer:document", "writer"),
+      ).toMatchObject({
+        detail: { agentId: "writer", params: { agent: "resource-owner", record: "one" } },
+      });
       view.abort();
       expect(() => open("document")).toThrow("view has ended");
       abort.abort();

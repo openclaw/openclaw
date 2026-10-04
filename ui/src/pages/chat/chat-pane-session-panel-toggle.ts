@@ -40,7 +40,7 @@ export type PendingSessionPanelToggle = {
 };
 
 interface SessionPanelToggleControllerOptions {
-  current: () => ActivePanelOwner | null;
+  current: (targeted?: boolean) => ActivePanelOwner | null;
   pending: Map<SessionPanelToggleSlot, PendingSessionPanelToggle>;
   requestUpdate: () => void;
   updateSidebarLayout: (layout: ChatPageHost["sidebarLayout"]) => void;
@@ -85,8 +85,8 @@ export class ChatPaneSessionPanelToggleController {
     };
   }
 
-  private handlePluginPanel(event: Event): boolean {
-    const owner = this.options.current();
+  handlePluginPanel(event: Event, targeted = false): boolean {
+    const owner = this.options.current(targeted);
     if (!owner || !(event instanceof CustomEvent)) {
       return false;
     }
@@ -108,7 +108,23 @@ export class ChatPaneSessionPanelToggleController {
     if (detail.dock) {
       layout = setSidebarDock(layout, detail.dock);
     }
+    if (detail.open) {
+      owner.state.pluginPanelParams ??= new Map();
+      if (detail.params) {
+        owner.state.pluginPanelParams.set(key, { ...detail.params });
+      } else {
+        owner.state.pluginPanelParams.delete(key);
+      }
+    } else {
+      owner.state.pluginPanelParams?.delete(key);
+    }
     this.options.updateSidebarLayout(layout);
+    const panel = layout.columns
+      .flatMap((column) => column.panels)
+      .find((entry) => entry.slot === slot);
+    if (detail.open && panel) {
+      owner.state.updateSidebarActivePanel(panel.id);
+    }
     return true;
   }
 
