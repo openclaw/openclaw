@@ -58,6 +58,11 @@ function packageTarball(
 }
 
 const SPAWN_SOURCE = 'import { spawn } from "node:child_process";\nspawn("owned-child");\n';
+const BUNDLED_HELPER_EXEC_SOURCE = `
+import type { ChildProcess } from "node:child_process";
+const exec = compileMatcher();
+exec(value);
+`;
 
 describe("plugin npm artifact security scan", () => {
   it("accepts reviewed production behavior from the exact tarball", () => {
@@ -151,6 +156,17 @@ describe("plugin npm artifact security scan", () => {
       tarball: packageTarball("@openclaw/acpx", {
         "dist/.setup/index.mjs": "export const value = 1;\n",
         "dist/mcp-proxy.mjs": SPAWN_SOURCE,
+      }),
+    });
+    expect(result.criticalFindingCount).toBe(1);
+  });
+
+  it("keeps the reviewed iMessage setup helper finding exact", () => {
+    const result = scanPluginNpmArtifactSecurity({
+      packageName: "@openclaw/imessage",
+      packageVersion: "1.0.0",
+      tarball: packageTarball("@openclaw/imessage", {
+        "dist/.setup/sanitize-outbound-3MLljgtY.mjs": BUNDLED_HELPER_EXEC_SOURCE,
       }),
     });
     expect(result.criticalFindingCount).toBe(1);

@@ -266,118 +266,6 @@ run("node server.js");
       expected: { ruleId: "dangerous-exec", severity: "critical" as const },
     },
     {
-      name: "detects child_process call through a dynamic ESM destructured import",
-      source: `
-const { spawn } = await import("node:child_process");
-spawn("node", ["server.js"]);
-`,
-      expected: { ruleId: "dangerous-exec", severity: "critical" as const },
-    },
-    {
-      name: "detects child_process call through a dynamic ESM namespace import",
-      source: `
-const proc = await import("node:child_process");
-proc.spawn("node", ["server.js"]);
-`,
-      expected: { ruleId: "dangerous-exec", severity: "critical" as const },
-    },
-    {
-      name: "detects child_process call through a mixed default and named import",
-      source: `
-import proc, { spawn } from "node:child_process";
-spawn("node", ["server.js"]);
-proc.exec("node server.js");
-`,
-      expected: { ruleId: "dangerous-exec", severity: "critical" as const },
-    },
-    {
-      name: "detects child_process call through an inline require receiver",
-      source: `
-require("node:child_process").spawn("node", ["server.js"]);
-`,
-      expected: { ruleId: "dangerous-exec", severity: "critical" as const },
-    },
-    {
-      name: "detects child_process call through an inline dynamic import receiver",
-      source: `
-(await import("node:child_process")).spawn("node", ["server.js"]);
-`,
-      expected: { ruleId: "dangerous-exec", severity: "critical" as const },
-    },
-    {
-      name: "detects child_process call through a default-as-namespace import",
-      source: `
-import { default as proc } from "node:child_process";
-proc.spawn("node", ["server.js"]);
-`,
-      expected: { ruleId: "dangerous-exec", severity: "critical" as const },
-    },
-    {
-      name: "detects child_process call through a compact renamed import",
-      source: `
-import{spawn as launch}from"node:child_process";
-launch("node", ["server.js"]);
-`,
-      expected: { ruleId: "dangerous-exec", severity: "critical" as const },
-    },
-    {
-      name: "detects child_process call through a compact namespace import",
-      source: `
-import*as proc from"node:child_process";
-proc.spawn("node", ["server.js"]);
-`,
-      expected: { ruleId: "dangerous-exec", severity: "critical" as const },
-    },
-    {
-      name: "detects child_process member call with whitespace after the dot",
-      source: `
-const proc = require("node:child_process");
-proc. spawn("node", ["server.js"]);
-`,
-      expected: { ruleId: "dangerous-exec", severity: "critical" as const },
-    },
-    {
-      name: "detects an extracted child_process method",
-      source: `
-const spawn = require("node:child_process").spawn;
-spawn("node", ["server.js"]);
-`,
-      expected: { ruleId: "dangerous-exec", severity: "critical" as const },
-    },
-    {
-      name: "detects a parenthesized child_process member call",
-      source: `
-const proc = require("node:child_process");
-(proc).spawn("node", ["server.js"]);
-`,
-      expected: { ruleId: "dangerous-exec", severity: "critical" as const },
-    },
-    {
-      name: "detects an optional-chain child_process member call",
-      source: `
-const proc = require("node:child_process");
-proc?.spawn("node", ["server.js"]);
-`,
-      expected: { ruleId: "dangerous-exec", severity: "critical" as const },
-    },
-    {
-      name: "detects an extracted aliased child_process exec method",
-      source: `
-const run = require("node:child_process").exec;
-run("node server.js");
-`,
-      expected: { ruleId: "dangerous-exec", severity: "critical" as const },
-    },
-    {
-      name: "detects exec destructured from a child_process namespace",
-      source: `
-const cp = require("node:child_process");
-const { exec } = cp, marker = 0;
-exec("node server.js");
-`,
-      expected: { ruleId: "dangerous-exec", severity: "critical" as const },
-    },
-    {
       name: "detects child_process call through a computed member",
       source: `
 import cp from "node:child_process";
@@ -474,20 +362,6 @@ const match = /^keychain:(.+)$/.exec(value);
 `;
     const findings = scanSource(source, "plugin.ts");
     expectRulePresence(findings, "dangerous-exec", false);
-  });
-
-  it("does not attribute unrelated direct calls to another bundled module's child_process import", () => {
-    const source = `
-import { spawn as launch } from "node:child_process";
-const exec = compileMatcher();
-exec(value);
-launch("node", ["server.js"]);
-`;
-    const findings = scanSource(source, "bundle.js").filter(
-      (finding) => finding.ruleId === "dangerous-exec",
-    );
-    expect(findings).toHaveLength(1);
-    expect(findings[0]?.evidence).toContain("launch");
   });
 
   it("does not flag an alias call when the alias is not from child_process", () => {

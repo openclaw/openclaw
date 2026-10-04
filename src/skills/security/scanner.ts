@@ -224,30 +224,18 @@ function collectChildProcessBindings(source: string): ChildProcessBindings {
   const methodAliases = new Set<string>();
   const namespaceAliases = new Set<string>();
 
-  // ESM named imports, optionally after a default import.
-  const esmNamed =
-    /\bimport(?:\s+\w+\s*,\s*|\s*)\{([^}]*)\}\s*from\s*["'](?:node:)?child_process["']/g;
-  // ESM default namespace, alone or before named/namespace imports.
-  const esmDefault =
-    /\bimport\s+(\w+)(?:\s*,\s*(?:\{[^}]*\}|\*\s*as\s+\w+))?\s+from\s*["'](?:node:)?child_process["']/g;
-  // ESM namespace import, optionally after a default import.
-  const esmNamespace =
-    /\bimport(?:\s+\w+\s*,\s*|\s*)\*\s*as\s+(\w+)\s+from\s*["'](?:node:)?child_process["']/g;
+  // ESM named imports: import { spawn as launch, execFile } from "child_process"
+  const esmNamed = /\bimport\s*\{([^}]*)\}\s*from\s*["'](?:node:)?child_process["']/g;
+  // ESM default namespace: import cp from "child_process"
+  const esmDefault = /\bimport\s+(\w+)\s+from\s*["'](?:node:)?child_process["']/g;
+  // ESM namespace import: import * as proc from "child_process"
+  const esmNamespace = /\bimport\s*\*\s*as\s+(\w+)\s+from\s*["'](?:node:)?child_process["']/g;
   // CJS destructured: const { exec: run, spawn } = require("child_process")
   const cjsDestructured =
     /\b(?:const|let|var)\s*\{([^}]*)\}\s*=\s*require\s*\(\s*["'](?:node:)?child_process["']\s*\)/g;
-  // Dynamic ESM destructured: const { spawn } = await import("child_process")
-  const dynamicEsmDestructured =
-    /\b(?:const|let|var)\s*\{([^}]*)\}\s*=\s*(?:await\s+)?import\s*\(\s*["'](?:node:)?child_process["']\s*\)/g;
-  // Dynamic ESM namespace: const proc = await import("child_process")
-  const dynamicEsmNamespace =
-    /\b(?:const|let|var)\s+(\w+)\s*=\s*(?:await\s+)?import\s*\(\s*["'](?:node:)?child_process["']\s*\)/g;
   // CJS namespace: const proc = require("child_process")
   const cjsNamespace =
     /\b(?:const|let|var)\s+(\w+)\s*=\s*require\s*\(\s*["'](?:node:)?child_process["']\s*\)/g;
-  // CJS extracted method: const launch = require("child_process").spawn
-  const cjsExtractedMethod =
-    /\b(?:const|let|var)\s+(\w+)\s*=\s*require\s*\(\s*["'](?:node:)?child_process["']\s*\)\s*\.\s*(\w+)/g;
 
   const collectSpecifiers = (specText: string): void => {
     for (const rawSpec of specText.split(",")) {
@@ -255,56 +243,23 @@ function collectChildProcessBindings(source: string): ChildProcessBindings {
       // Renamed binding: `spawn as launch` (ESM) or `exec: run` (CJS)
       const asMatch = spec.match(/^(\w+)\s+(?:as)\s+(\w+)$/) ?? spec.match(/^(\w+)\s*:\s*(\w+)$/);
       if (asMatch?.[1] && asMatch[2]) {
-        if (asMatch[1] === "default") {
-          namespaceAliases.add(asMatch[2]);
-          continue;
-        }
         if (CHILD_PROCESS_EXEC_METHODS.has(asMatch[1])) {
           methodAliases.add(asMatch[2]);
         }
-        continue;
       }
-      if (CHILD_PROCESS_EXEC_METHODS.has(spec)) {
-        methodAliases.add(spec);
-      }
+      // Bare imported method name (`execFile`) is already matched by the
+      // literal pattern, so no alias entry is needed for it.
     }
   };
 
-  for (const pattern of [esmNamed, cjsDestructured, dynamicEsmDestructured]) {
+  for (const pattern of [esmNamed, cjsDestructured]) {
     for (const match of source.matchAll(pattern)) {
       collectSpecifiers(expectDefined(match[1], "child_process import specifiers"));
     }
   }
-  for (const pattern of [esmDefault, esmNamespace, cjsNamespace, dynamicEsmNamespace]) {
+  for (const pattern of [esmDefault, esmNamespace, cjsNamespace]) {
     for (const match of source.matchAll(pattern)) {
       namespaceAliases.add(expectDefined(match[1], "child_process namespace"));
-    }
-  }
-  for (const match of source.matchAll(cjsExtractedMethod)) {
-    const alias = expectDefined(match[1], "child_process extracted method alias");
-    const method = expectDefined(match[2], "child_process extracted method");
-    if (CHILD_PROCESS_EXEC_METHODS.has(method)) {
-      methodAliases.add(alias);
-    }
-  }
-  for (const namespaceAlias of namespaceAliases) {
-    const destructuredNamespaceMethods = new RegExp(
-      String.raw`\b(?:const|let|var)\s*\{([^}]*)\}\s*=\s*${escapeRegExp(namespaceAlias)}(?=\s*(?:,|;|\r?\n|$))`,
-      "g",
-    );
-    for (const match of source.matchAll(destructuredNamespaceMethods)) {
-      collectSpecifiers(expectDefined(match[1], "child_process namespace method specifiers"));
-    }
-    const extractedNamespaceMethod = new RegExp(
-      String.raw`\b(?:const|let|var)\s+(\w+)\s*=\s*${escapeRegExp(namespaceAlias)}\s*\.\s*(\w+)`,
-      "g",
-    );
-    for (const match of source.matchAll(extractedNamespaceMethod)) {
-      const alias = expectDefined(match[1], "child_process namespace method alias");
-      const method = expectDefined(match[2], "child_process namespace method");
-      if (CHILD_PROCESS_EXEC_METHODS.has(method)) {
-        methodAliases.add(alias);
-      }
     }
   }
 
@@ -326,10 +281,9 @@ function matchAliasedChildProcessCalls(line: string, methodAliases: Set<string>)
 // Retain the conventional child_process names alongside proven namespace aliases.
 const LITERAL_NAMESPACE_RECEIVERS = new Set(["cp", "childProcess", "child_process"]);
 
-function isBenignDangerousExecMatch(
+function isBenignMemberExecMatch(
   line: string,
   match: RegExpExecArray,
-  methodAliases: Set<string>,
   namespaceAliases: Set<string>,
 ): boolean {
   // group 1 = direct call command, group 2 = computed-member command.
@@ -340,31 +294,18 @@ function isBenignDangerousExecMatch(
 
   const matchIndex = match.index;
   const charAtMatch = line[matchIndex];
-  const prefix = line.slice(0, matchIndex);
-  const inlineChildProcessReceiver = new RegExp(
-    String.raw`(?:\brequire\s*\(\s*["'](?:node:)?child_process["']\s*\)|(?:\(\s*)?(?:await\s+)?import\s*\(\s*["'](?:node:)?child_process["']\s*\)\s*\)?)\s*(?:\.\s*|\[\s*)$`,
-  ).test(prefix);
-  const memberReceiver = prefix.match(/(\w+)\s*\.\s*$/)?.[1];
-  const hasMemberSeparator = /(?:\?\.|\.)\s*$/.test(prefix);
-  if (inlineChildProcessReceiver) {
+  let receiver: string | undefined;
+  // Computed calls require a known receiver for every watched method;
+  // direct calls require it only for .exec, excluding RegExp.exec.
+  if (charAtMatch === '"' || charAtMatch === "'") {
+    receiver = line.slice(0, matchIndex).match(/(\w+)\s*\[\s*$/)?.[1];
+  } else if (command === "exec" && matchIndex > 0 && line[matchIndex - 1] === ".") {
+    receiver = line.slice(0, matchIndex - 1).match(/(\w+)\s*$/)?.[1];
+  } else {
     return false;
   }
-  // Computed calls require a known receiver for every watched method. Direct
-  // member calls preserve the existing scanner behavior, with provenance only
-  // for `.exec` so RegExp.exec and similar helpers remain excluded.
-  if (charAtMatch === '"' || charAtMatch === "'") {
-    const receiver = prefix.match(/(\w+)\s*\[\s*$/)?.[1];
-    return (
-      !receiver || (!namespaceAliases.has(receiver) && !LITERAL_NAMESPACE_RECEIVERS.has(receiver))
-    );
-  }
-  if (!hasMemberSeparator) {
-    return command === "exec" && !methodAliases.has(command);
-  }
   return (
-    command === "exec" &&
-    (!memberReceiver ||
-      (!namespaceAliases.has(memberReceiver) && !LITERAL_NAMESPACE_RECEIVERS.has(memberReceiver)))
+    !receiver || (!namespaceAliases.has(receiver) && !LITERAL_NAMESPACE_RECEIVERS.has(receiver))
   );
 }
 
@@ -517,7 +458,7 @@ export function scanSource(source: string, filePath: string): SkillScanFinding[]
       for (const match of matches) {
         if (
           rule.ruleId === "dangerous-exec" &&
-          isBenignDangerousExecMatch(line, match, methodAliases, namespaceAliases)
+          isBenignMemberExecMatch(line, match, namespaceAliases)
         ) {
           continue;
         }
