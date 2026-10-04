@@ -99,5 +99,23 @@ export function resolveHookEntries<T extends HookPolicyEntry>(
     });
   }
 
-  return Array.from(merged.values());
+  const resolved = Array.from(merged.values());
+  const reservedKeys = new Map<string, T>();
+  for (const entry of resolved) {
+    if (entry.hook.source !== "openclaw-workspace") {
+      reservedKeys.set(entry.hook.name, entry);
+      reservedKeys.set(resolveHookKey(entry.hook.name, entry), entry);
+    }
+  }
+  return resolved.filter((entry) => {
+    if (entry.hook.source !== "openclaw-workspace") {
+      return true;
+    }
+    const kept = reservedKeys.get(resolveHookKey(entry.hook.name, entry));
+    if (!kept) {
+      return true;
+    }
+    opts?.onCollisionIgnored?.({ name: entry.hook.name, kept, ignored: entry });
+    return false;
+  });
 }
