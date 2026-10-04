@@ -39,7 +39,7 @@ describe("next-turn injection identity", () => {
     "keeps an absent queue absent and reads a later enqueue for %s",
     async (sessionKey) => {
       const cfg: OpenClawConfig = {
-        agents: { entries: { main: { default: true }, unrelated: {} } },
+        agents: { entries: { main: {}, unrelated: {} } },
       };
       const scope = { agentId: "main", sessionKey };
       await expect(drainPluginNextTurnInjectionContext({ cfg, ...scope })).resolves.toMatchObject({
@@ -60,7 +60,7 @@ describe("next-turn injection identity", () => {
   );
 
   it("validates only the selected injection row beside a noncanonical sibling", async () => {
-    const cfg: OpenClawConfig = { agents: { entries: { main: { default: true } } } };
+    const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
     const scope = { agentId: "main", sessionKey: "agent:main:healthy" };
     const sibling = "agent:main:matrix:channel:!mixed:example.org";
     await replaceSessionEntry(scope, { sessionId: "healthy", updatedAt: 1 });
