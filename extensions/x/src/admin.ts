@@ -140,7 +140,9 @@ export function registerXAllowlistMethods(
           if (error instanceof XAdminError) {
             request.respond(false, undefined, { code: error.code, message: error.message });
           } else {
-            api.logger.error(`X allowlist operation failed (${method}).`);
+            api.logger.error(
+              `X allowlist operation failed (${method}): ${error instanceof Error ? error.message : String(error)}`,
+            );
             request.respond(false, undefined, {
               code: "UNAVAILABLE",
               message: "X allowlist operation failed. Check the account credentials and try again.",
