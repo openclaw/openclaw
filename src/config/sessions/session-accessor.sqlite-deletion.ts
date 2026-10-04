@@ -447,7 +447,6 @@ async function withSqliteSessionMutations<T>(
             env: scope.env,
             assertCurrent,
             assertRepositoryCurrent: () => repositorySource?.admission.assertCurrent(),
-            workerBacked: execution !== undefined,
           })
         : undefined;
       return await deletions.run(

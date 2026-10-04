@@ -10,6 +10,7 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import type { IncognitoAgentDatabaseExecution } from "../../state/openclaw-agent-execution-incognito.js";
+import { supportsOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { readSessionEntryRow } from "./session-accessor.sqlite-entry-read.js";
 
 export type IncognitoDeletionSource = Pick<
@@ -24,9 +25,11 @@ export function pinSqliteSessionReceiptDeletionDatabase(
   actor?: IncognitoDeletionSource,
 ) {
   // File custody survives native maintenance closing and revoking the captured execution.
-  const receiptDatabase = actor
-    ? undefined
-    : readDatabasePathIdentitySync(resolveOpenClawAgentSqlitePath(databaseOptions));
+  // Native-only scopes keep main's unpinned read; they may not be regular files.
+  const receiptDatabase =
+    !actor && supportsOpenClawAgentDatabaseExecution(databaseOptions)
+      ? readDatabasePathIdentitySync(resolveOpenClawAgentSqlitePath(databaseOptions))
+      : undefined;
   return { databaseOptions, actor, receiptDatabase };
 }
 
@@ -37,11 +40,10 @@ export async function prepareSqliteSessionReceiptDeletions(
     env?: NodeJS.ProcessEnv;
     assertCurrent: () => void;
     assertRepositoryCurrent: () => void;
-    workerBacked: boolean;
   },
 ): Promise<() => Promise<void>> {
   const { databaseOptions, actor, receiptDatabase } = source;
-  const { env, assertCurrent, assertRepositoryCurrent, workerBacked } = options;
+  const { env, assertCurrent, assertRepositoryCurrent } = options;
   const receiptOnlyDeletions = new Map<
     string,
     Awaited<ReturnType<typeof preparePersonalGitHubSessionReceiptDeletion>>
@@ -82,14 +84,14 @@ export async function prepareSqliteSessionReceiptDeletions(
       let present: boolean;
       if (actor) {
         present = actor.sessions.readSharing(target.sessionKey)?.entry !== undefined;
-      } else if (workerBacked) {
+      } else if (receiptDatabase) {
         const { withSessionEntryReadOnlyInWorker } =
           await import("./session-entry-read-runtime.js");
         // Read the database this deletion wrote; legacy rows can carry another agent's key.
         const readScope = {
           agentId: databaseOptions.agentId,
           defaultAgentId: databaseOptions.agentId,
-          storePath: receiptDatabase?.canonicalPath,
+          storePath: receiptDatabase.canonicalPath,
           sessionKey: target.sessionKey,
           env,
         };
@@ -102,7 +104,7 @@ export async function prepareSqliteSessionReceiptDeletions(
             }
             if (
               owner.kind !== "file" ||
-              owner.selectedStore?.physicalPath !== receiptDatabase?.canonicalPath ||
+              owner.selectedStore?.physicalPath !== receiptDatabase.canonicalPath ||
               owner.scope?.databaseAgentId !== databaseOptions.agentId
             ) {
               throw new Error("Receipt cleanup lost its pinned session database");
@@ -112,13 +114,8 @@ export async function prepareSqliteSessionReceiptDeletions(
         );
       } else {
         present =
-          readSessionEntryRow(
-            openOpenClawAgentDatabase({
-              ...databaseOptions,
-              path: receiptDatabase?.canonicalPath,
-            }),
-            target.sessionKey,
-          ) !== undefined;
+          readSessionEntryRow(openOpenClawAgentDatabase(databaseOptions), target.sessionKey) !==
+          undefined;
       }
       if (!present) {
         await receiptOnlyDeletions.get(target.sessionKey)!(assertSourceCurrent);
