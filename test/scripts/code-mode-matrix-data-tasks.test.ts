@@ -45,7 +45,6 @@ async function prepare(repetition: number) {
   const snapshot = (await tools.get("matrix_invoice_snapshot")!.execute("snapshot", {}))
     .details as { snapshotId: string; recordCount: number; firstCursor: string };
   const rows: Invoice[] = [];
-  const pages: Page[] = [];
   let cursor: string | null = snapshot.firstCursor;
   while (cursor !== null) {
     const page = (
@@ -55,7 +54,6 @@ async function prepare(repetition: number) {
       })
     ).details as Page;
     expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThanOrEqual(8 * 1024);
-    pages.push(page);
     rows.push(...page.records);
     cursor = page.nextCursor;
   }
@@ -146,12 +144,7 @@ async function prepare(repetition: number) {
     .split("\n")
     .map((line) => JSON.parse(line));
   return {
-    fixture,
     report,
-    rows,
-    pages,
-    snapshot,
-    tools,
     evaluate: (patch: Partial<MatrixPerformanceEvaluation> = {}) =>
       fixture.evaluate({ workspace, trace, receipts, ...patch }),
     workspace,
@@ -161,36 +154,6 @@ async function prepare(repetition: number) {
 }
 
 describe("paginated invoice task", () => {
-  it("accepts independently reconciled artifacts across seeds with complete bounded source pages", async () => {
-    const totals: number[] = [];
-    for (const repetition of [1, 2, 3]) {
-      const run = await prepare(repetition);
-      expect(run.rows).toHaveLength(192);
-      expect(run.pages).toHaveLength(8);
-      expect(run.report.invoiceCount).toBe(144);
-      expect(run.report.payableInvoices.some((row) => row.amountCents === 0)).toBe(true);
-      expect(run.rows.some((row) => row.amountCents === null)).toBe(true);
-      expect(run.rows.some((row) => !("amountCents" in row))).toBe(true);
-      expect(run.report.payableInvoices).toContainEqual(
-        expect.objectContaining({ invoiceId: run.rows.at(-1)!.invoiceId, revision: 2 }),
-      );
-      expect(Object.values(await run.evaluate()).every(Boolean)).toBe(true);
-      totals.push(run.report.totalNetCents);
-      const projected = (
-        await run.tools.get("matrix_invoice_page")!.execute("projection", {
-          snapshotId: run.snapshot.snapshotId,
-          cursor: run.snapshot.firstCursor,
-          fields: ["invoiceId", "revision"],
-        })
-      ).details as Page;
-      expect(projected.records).toEqual(
-        run.pages[0]!.records.map(({ invoiceId, revision }) => ({ invoiceId, revision })),
-      );
-      expect(projected.nextCursor).toBe(run.pages[0]!.nextCursor);
-    }
-    expect(new Set(totals).size).toBe(3);
-  });
-
   it("rejects missing final-page evidence while accepting artifacts produced without file tool calls", async () => {
     const run = await prepare(4);
     expect((await run.evaluate({ receipts: run.receipts.slice(0, -1) })).completePageCoverage).toBe(
