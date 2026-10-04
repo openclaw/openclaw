@@ -364,24 +364,20 @@ export function markdownToText(markdown: string): string {
     text += lineEnd;
     pos = close + 3;
   }
-  // Escaped input NUL pairs stay paired through prose formatting, so only our
-  // single-NUL markers can restore code. Replacement output is not rescanned.
-  text = stripMarkdownFormatting(text).replace(
-    /\0(?:\0|(\d+)\0)/g,
-    (_match, index: string | undefined) =>
-      index === undefined ? "\0" : codeBlocks[Number(index)]!,
-  );
-  return normalizeWhitespace(text);
-}
-
-function stripMarkdownFormatting(text: string): string {
   text = text.replace(/!\[[^\]]*]\([^)]+\)/g, "");
   text = text.replace(/\[([^\]]+)]\([^)]+\)/g, "$1");
   text = text.replace(/`([^`]+)`/g, "$1");
   text = text.replace(/^#{1,6}\s+/gm, "");
   text = text.replace(/^[^\S\n]*[-*+]\s+/gm, "");
   text = text.replace(/^[^\S\n]*\d+\.\s+/gm, "");
-  return text;
+  // Escaped input NUL pairs stay paired through prose formatting, so only our
+  // single-NUL markers can restore code. Replacement output is not rescanned.
+  text = text.replace(
+    /\0(?:\0|(\d+)\0)/g,
+    (_match, index: string | undefined) =>
+      index === undefined ? "\0" : codeBlocks[Number(index)]!,
+  );
+  return normalizeWhitespace(text);
 }
 
 export function truncateWebFetchText(
