@@ -12,8 +12,13 @@ import { serveWorkerTasks } from "../infra/worker-task-server.js";
 import type { Model } from "../llm/types.js";
 import { withRemoteModelCatalogSnapshot } from "../model-catalog/remote-overlay.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
+import {
+  clearRegistryTransferRollbacks,
+  getRegistryTransferRollbacks,
+} from "../plugins/loader-runtime-core.js";
 import { isManifestPluginAvailableForControlPlane } from "../plugins/manifest-contract-eligibility.js";
 import { restorePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { withPluginSourceCaptureDirectory } from "../plugins/plugin-package-metadata-capture.js";
 import { captureProviderCatalogExpiries } from "../plugins/provider-catalog-expiry.js";
 import { planRuntimePluginDiscovery } from "../plugins/provider-discovery.js";
@@ -135,7 +140,56 @@ function restoreWorkerConfig(value: PreparedModelCatalogWorkerInput) {
   setRuntimeConfigSnapshot(value.input.config, value.sourceConfigForSecrets);
 }
 
-async function prepareWorkerGeneration(
+/**
+ * Default base plugin-id scope for a model-catalog worker generation.
+ *
+ * The static eligibility filter (`manifestPluginResolvesRuntimeModelCatalogAugment` +
+ * `isManifestPluginAvailableForControlPlane`) only covers plugins whose manifest declares
+ * model-catalog augmentation up front. Provider discovery can later prove that an *additional*
+ * plugin (one selected only via runtime credentials/config, not a static manifest flag) is
+ * required -- that is the scope-expansion branch in `runCatalogRequest`, which rebuilds via
+ * `prepareWorkerGeneration(value, prepared, pluginIds)`.
+ *
+ * Once that expanded build succeeds, its plugin-id set must keep being the *default* base scope
+ * for this workspace on every later call, even though `prepareWorkerGeneration` recomputes
+ * basePluginIds from scratch (no explicit `pluginIds`) on every fingerprint miss. Without this,
+ * the freshly recomputed static-only set is a strict subset of what the previously-built registry
+ * actually has loaded, so `reusableAgentRuntimeRegistry`'s exact containment check (registry ids
+ * == requested ids) can never match again -- forcing a full rebuild on every single call that
+ * needs the expanded scope, forever. This helper carries the previously-proven ids forward (only
+ * while they remain installed) so the default scope never regresses below what discovery already
+ * established.
+ */
+export function resolveWorkerGenerationBasePluginIds(params: {
+  metadata: PluginMetadataSnapshot;
+  config: PreparedModelCatalogWorkerInput["input"]["config"];
+  env: NodeJS.ProcessEnv;
+  normalizedConfig: ReturnType<typeof normalizePluginsConfig>;
+  previousPluginIds?: ReadonlySet<string>;
+}): string[] {
+  const staticEligiblePluginIds = params.metadata.plugins
+    .filter(
+      (plugin) =>
+        manifestPluginResolvesRuntimeModelCatalogAugment(plugin) &&
+        isManifestPluginAvailableForControlPlane({
+          snapshot: params.metadata,
+          plugin,
+          config: params.config,
+          normalizedConfig: params.normalizedConfig,
+          ...(params.env ? { env: params.env } : {}),
+        }),
+    )
+    .map((plugin) => plugin.id);
+  const knownInstalledPluginIds = new Set(params.metadata.plugins.map((plugin) => plugin.id));
+  return [
+    ...new Set([
+      ...staticEligiblePluginIds,
+      ...[...(params.previousPluginIds ?? [])].filter((id) => knownInstalledPluginIds.has(id)),
+    ]),
+  ].toSorted((left, right) => left.localeCompare(right));
+}
+
+export async function prepareWorkerGeneration(
   value: PreparedModelCatalogWorkerInput,
   previous?: WorkerGeneration,
   pluginIds?: readonly string[],
@@ -151,20 +205,13 @@ async function prepareWorkerGeneration(
   const normalizedConfig = normalizePluginsConfig(value.input.config.plugins);
   const basePluginIds =
     pluginIds ??
-    metadata.plugins
-      .filter(
-        (plugin) =>
-          manifestPluginResolvesRuntimeModelCatalogAugment(plugin) &&
-          isManifestPluginAvailableForControlPlane({
-            snapshot: metadata,
-            plugin,
-            config: value.input.config,
-            normalizedConfig,
-            ...(value.input.env ? { env: value.input.env } : {}),
-          }),
-      )
-      .map((plugin) => plugin.id)
-      .toSorted((left, right) => left.localeCompare(right));
+    resolveWorkerGenerationBasePluginIds({
+      metadata,
+      config: value.input.config,
+      env: value.input.env,
+      normalizedConfig,
+      previousPluginIds: previous?.pluginIds,
+    });
   await using resources = new PreparedModelRuntimeBuildResources(retainPreparedPluginRegistry);
   const pluginRegistry = await resources.load(
     {
@@ -192,9 +239,13 @@ async function prepareWorkerGeneration(
     preparedStaticProviderCatalog: undefined,
     preferBuiltPluginArtifacts: value.preferBuiltPluginArtifacts,
   });
+  const finalPluginIds = new Set([
+    ...basePluginIds,
+    ...pluginRegistry.plugins.map((plugin) => plugin.id),
+  ]);
   return {
     pluginGeneration,
-    pluginIds: new Set([...basePluginIds, ...pluginRegistry.plugins.map((plugin) => plugin.id)]),
+    pluginIds: finalPluginIds,
     staticProviderIds: previous?.staticProviderIds ?? new Set(),
     release: ownPreparedPluginGeneration(pluginGeneration).retain(),
   };
@@ -303,6 +354,8 @@ async function runCatalogRequest(
       ...resolveAgentCredentialMapFromStore(authStore, { config: value.input.config }),
     };
     if (request.kind === "auth-refresh") {
+      // Clear any rollbacks since the ownership transfer is now permanent
+      clearRegistryTransferRollbacks(prepared.pluginGeneration.pluginRegistry);
       return {
         status: "ok",
         kind: "auth-refresh",
@@ -507,17 +560,39 @@ async function runCatalogRequest(
     };
     work.beginClose();
     await work.runWhenIdle(() => undefined);
+    // On success, clear any rollbacks since the ownership transfer is now permanent
+    const registry = prepared.pluginGeneration.pluginRegistry;
+    // Clear rollbacks by removing them from the WeakMap
+    clearRegistryTransferRollbacks(registry);
     if (acquiredGeneration) {
       const releasePrevious = prepared.release;
       prepared.pluginGeneration = acquiredGeneration.pluginGeneration;
       prepared.pluginIds = acquiredGeneration.pluginIds;
       prepared.staticProviderIds = acquiredGeneration.staticProviderIds;
       prepared.release = acquiredGeneration.release;
+      // Also clear rollbacks on the acquired generation's registry
+      clearRegistryTransferRollbacks(acquiredGeneration.pluginGeneration.pluginRegistry);
       acquiredGeneration = undefined;
       await releasePrevious();
     }
     return result;
   } catch (error) {
+    // Before returning failure, execute any pending ownership transfer rollbacks
+    // to restore ownership to the previous generation
+    if (acquiredGeneration) {
+      const rollbacks = getRegistryTransferRollbacks(
+        acquiredGeneration.pluginGeneration.pluginRegistry,
+      );
+      if (rollbacks) {
+        for (const rollback of rollbacks) {
+          try {
+            rollback();
+          } catch (rollbackError) {
+            // Ignore rollback errors during error handling
+          }
+        }
+      }
+    }
     return {
       status: "failed",
       error: error instanceof Error ? error.message : String(error),
@@ -592,7 +667,10 @@ if (parentPort) {
                     if (previous?.fingerprint === fingerprint) {
                       return previous.prepared;
                     }
-                    return (attempted = await prepareWorkerGeneration(value));
+                    // A fingerprint miss still owns a live plugin registry: pass it through so
+                    // acquireAgentRuntimePluginRegistry can reuse it (avoiding a full rebuild)
+                    // whenever the plugin-id scope hasn't actually changed.
+                    return (attempted = await prepareWorkerGeneration(value, previous?.prepared));
                   }),
                 ),
             );
@@ -607,6 +685,21 @@ if (parentPort) {
             }
             return result;
           } finally {
+            // Before releasing a failed generation that didn't commit, roll back any ownership transfers
+            if (attempted && attempted.pluginGeneration?.pluginRegistry) {
+              const rollbacks = getRegistryTransferRollbacks(
+                attempted.pluginGeneration.pluginRegistry,
+              );
+              if (rollbacks) {
+                for (const rollback of rollbacks) {
+                  try {
+                    rollback();
+                  } catch {
+                    // Ignore rollback errors
+                  }
+                }
+              }
+            }
             await attempted?.release();
           }
         },

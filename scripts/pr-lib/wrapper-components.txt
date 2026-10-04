@@ -1316,6 +1316,7 @@ src/plugins/plugin-instance-scope.ts
 src/plugins/plugin-instance-settlement.ts
 src/plugins/plugin-instance-bindings.ts
 src/plugins/plugin-instance.ts
+src/plugins/plugin-invocation-scope.ts
 src/plugins/plugin-lifecycle-trace.ts
 src/plugins/plugin-manifest-id-normalizer.ts
 src/plugins/plugin-metadata-contributions.ts
@@ -1381,7 +1382,9 @@ src/plugins/public-surface-loader.ts
 src/plugins/public-surface-runtime.ts
 src/plugins/record-groups.ts
 src/plugins/registry-empty.ts
+src/plugins/registry-inspection-resources.ts
 src/plugins/registry-lifecycle.ts
+src/plugins/registry-registration-resources.ts
 src/plugins/root-artifact-path.ts
 src/plugins/roots.ts
 src/plugins/runtime-channel-state.ts

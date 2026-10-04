@@ -9,6 +9,7 @@ import type {
   PluginInstanceDisposalResult,
   PluginInstanceExecution,
 } from "./plugin-instance.types.js";
+import { getPluginRegistryInspectionResources } from "./registry-inspection-resources.js";
 import type { PluginRecord, PluginRegistry } from "./registry-types.js";
 
 /** Runtime consumers retain capabilities, never the concrete loader implementation. */
@@ -92,6 +93,65 @@ export function resolvePluginInstanceOwner(record: PluginRecord, registry: Plugi
     pluginInstanceState.records.set(record, owner);
   }
   return owner;
+}
+
+/**
+ * Move disposal custody of a `previousRegistry`-retained record's instance forward to the
+ * registry that just retained it (strict successor handoff, not a concurrent loan). Call this at
+ * the moment a candidate record is projected into a new registry via `previousRegistry` reuse
+ * (see `resolvePluginRecordRetention` in `loader-runtime-core.ts`), BEFORE the predecessor can be
+ * released. Every disposal/activity consumer reads `owner.registry` as the current custodian
+ * (`getPluginRecordRegistry`, `isPluginRecordActive`, the inspection retire filter in
+ * `loader-runtime-load.ts`), so this single write keeps a reused instance from being torn down by
+ * a retiring predecessor while guaranteeing some registry in the chain still owns it for eventual
+ * disposal. Never used for `borrowRegistry` loans: a lender keeps permanent custody there while
+ * concurrent borrowers hold fenced views instead.
+ *
+ * Also transfers registration resources (disposers) when both predecessor and successor have
+ * PluginRegistryInspectionResources.
+ */
+export function transferPluginInstanceOwner(
+  record: PluginRecord,
+  registry: PluginRegistry,
+  options?: { temporary?: boolean },
+): { rollback: () => void } | void {
+  const owner = pluginInstanceState.records.get(record);
+  if (owner && !owner.revoked) {
+    const previousRegistry = owner.registry;
+    const pluginId = record.id;
+
+    // Transfer registration resources if both registries have inspection resources
+    const predecessorInspection = getPluginRegistryInspectionResources(previousRegistry);
+    const successorInspection = getPluginRegistryInspectionResources(registry);
+    let registrationTransferred = false;
+
+    if (
+      predecessorInspection &&
+      successorInspection &&
+      predecessorInspection !== successorInspection
+    ) {
+      // Transfer registration resources for this plugin
+      predecessorInspection.transferRegistrationTo(pluginId, successorInspection);
+      registrationTransferred = true;
+    }
+
+    owner.registry = registry;
+
+    if (options?.temporary) {
+      return {
+        rollback: () => {
+          if (owner.registry === registry && !owner.revoked) {
+            owner.registry = previousRegistry;
+            // Rollback registration resource transfer if it was transferred
+            if (registrationTransferred && predecessorInspection && successorInspection) {
+              // Transfer back to predecessor
+              successorInspection.transferRegistrationTo(pluginId, predecessorInspection);
+            }
+          }
+        },
+      };
+    }
+  }
 }
 
 /** Record and resource keys resolve the same owner through adoption and failed registration. */

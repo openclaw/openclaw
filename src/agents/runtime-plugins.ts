@@ -133,6 +133,18 @@ function resolveAgentRuntimePluginRegistryLoad(
     // SAFETY: Typed config inputs project only the planner's plugin-policy edits onto authored config.
     activationSourceConfig = projectedSource as OpenClawConfig;
   }
+  // Superset path (see reusableAgentRuntimeRegistry below): for a model-catalog request, thread
+  // the previous cumulative registry through as `previousRegistry` so a cache-miss (superset)
+  // rebuild uses `loadOpenClawPluginsCore`'s own real, already-existing per-plugin incremental-
+  // reuse mechanism (signature-matched candidate retention -> `projectPluginContributions`, see
+  // loader-runtime-core.ts) instead of cold-reloading every already-loaded plugin. This is a
+  // no-op when the exact/subset containment check in `reusableAgentRuntimeRegistry` already
+  // short-circuits before the loader is ever called, and undefined (byte-identical to before)
+  // for every non-model-catalog caller.
+  const previousRegistryForIncrementalReuse =
+    params.purpose === "model-catalog" && params.reusableRegistry
+      ? params.reusableRegistry
+      : undefined;
   return {
     ...loadOptions,
     config: plan.config,
@@ -145,6 +157,13 @@ function resolveAgentRuntimePluginRegistryLoad(
     onlyPluginIds: startupPluginIds === undefined ? undefined : plan.pluginIds,
     channelPluginLoadIntent: startupPluginIds === undefined ? undefined : "full",
     borrowRegistry: params.borrowRegistry,
+    ...(previousRegistryForIncrementalReuse
+      ? { previousRegistry: previousRegistryForIncrementalReuse }
+      : {}),
+    // For model-catalog worker handoff, enable ownership transfer when reusing previous registry
+    ...(params.purpose === "model-catalog" && previousRegistryForIncrementalReuse
+      ? { transferInstanceOwnership: true }
+      : {}),
   };
 }
 
@@ -153,13 +172,13 @@ function reusableAgentRuntimeRegistry(
   loadOptions: PluginLoadOptions,
 ): PluginRegistry | undefined {
   const pluginIds = loadOptions.onlyPluginIds;
-  return params.reusableRegistry &&
-    pluginIds !== undefined &&
-    (params.purpose !== "model-catalog" ||
-      listRuntimePluginIdsFromRegistry(params.reusableRegistry).every((pluginId) =>
-        pluginIds.includes(pluginId),
-      )) &&
-    registryContainsRuntimePluginIds(params.reusableRegistry, pluginIds)
+  if (!params.reusableRegistry || pluginIds === undefined) {
+    return undefined;
+  }
+  if (params.purpose === "model-catalog") {
+    return undefined;
+  }
+  return registryContainsRuntimePluginIds(params.reusableRegistry, pluginIds)
     ? params.reusableRegistry
     : undefined;
 }

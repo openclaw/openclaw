@@ -29,6 +29,7 @@ import {
 } from "./loader-shared.js";
 import type { PluginLoadOptions } from "./loader-types.js";
 import { getPluginCache } from "./plugin-cache.js";
+import { transferPluginInstanceOwner } from "./plugin-instance-scope.js";
 import { normalizePluginPolicyId } from "./plugin-policy-id.js";
 import { createPluginIdScopeSet, normalizePluginIdScope } from "./plugin-scope.js";
 import { projectPluginContributions } from "./registry-contributions.js";
@@ -60,6 +61,7 @@ type PluginLoadInput = {
   config: PreparedPluginConfig;
 };
 const registryInputs = new WeakMap<PluginRegistry, Map<string, PluginLoadInput>>();
+const registryTransferRollbacks = new WeakMap<PluginRegistry, Array<() => void>>();
 
 /** Captured JSON inputs ignore object key order, but preserve array order and values. */
 function samePluginLoadInput(left: string | undefined, right: string | undefined): boolean {
@@ -79,7 +81,14 @@ function resolvePluginRecordRetention(
   { previousRegistry, borrowRegistry }: PluginLoadOptions,
   pluginId: string,
   params: { signature?: string; borrowSignature?: string; replaced: boolean },
-): { registry: PluginRegistry; record: PluginRecord; input: PluginLoadInput } | undefined {
+):
+  | {
+      registry: PluginRegistry;
+      record: PluginRecord;
+      input: PluginLoadInput;
+      transferRollback?: { rollback: () => void };
+    }
+  | undefined {
   const previous = previousRegistry?.plugins.find((record) => record.id === pluginId);
   const previousInput = previousRegistry && registryInputs.get(previousRegistry)?.get(pluginId);
   if (
@@ -205,6 +214,7 @@ export function loadOpenClawPluginsCore(
 
   context.cacheState.beginLoad(context.cacheKey);
   let registryBuilder: ReturnType<typeof createPluginRegistry> | undefined;
+  const transferRollbacks: Array<() => void> = [];
   try {
     // Module and runtime loading stay lazy for discovery-only or disabled-plugin paths.
     const loadPluginModule = createPluginModuleLoader({
@@ -415,6 +425,25 @@ export function loadOpenClawPluginsCore(
           retained.set(manifest.id, retention.record);
           if (retention.registry === options.borrowRegistry) {
             markPluginRecordBorrowed(registry, retention.record);
+          } else if (
+            retention.registry === options.previousRegistry &&
+            options.transferInstanceOwnership
+          ) {
+            // Strict successor handoff (not a concurrent loan): move disposal custody forward
+            // to this registry before the predecessor can be released, so a retiring
+            // predecessor cannot revoke an instance the successor is still relying on, and the
+            // instance still ends up disposed exactly once when some registry in the chain
+            // finally retires without a further successor.
+            // This transfer is opt-in (options.transferInstanceOwnership) because not all
+            // previousRegistry retention cases need custody transfer (e.g., Gateway reload
+            // preflight is speculative and doesn't own publication yet).
+            const transferResult = transferPluginInstanceOwner(retention.record, registry, {
+              temporary: true,
+            });
+            if (transferResult) {
+              retention.transferRollback = transferResult;
+              transferRollbacks.push(transferResult.rollback);
+            }
           }
           projectPluginContributions(retention.registry, retention.record, registry);
         }
@@ -581,6 +610,9 @@ export function loadOpenClawPluginsCore(
       }
     }
     registryInputs.set(registry, inputs);
+    if (transferRollbacks.length > 0) {
+      registryTransferRollbacks.set(registry, transferRollbacks);
+    }
     return registry;
   } catch (error) {
     // Published generations retain their callbacks until retirement joins admitted users.
@@ -595,8 +627,27 @@ export function loadOpenClawPluginsCore(
         }
       }
     }
+    // Roll back ownership transfers that happened before the error
+    for (const rollback of transferRollbacks) {
+      try {
+        rollback();
+      } catch {
+        // Don't let rollback failure obscure the original error
+        // Swallow rollback errors to maintain original error propagation
+      }
+    }
     throw error;
   } finally {
     context.cacheState.finishLoad(context.cacheKey);
   }
+}
+
+export function getRegistryTransferRollbacks(
+  registry: PluginRegistry,
+): Array<() => void> | undefined {
+  return registryTransferRollbacks.get(registry);
+}
+
+export function clearRegistryTransferRollbacks(registry: PluginRegistry): void {
+  registryTransferRollbacks.delete(registry);
 }

@@ -37,14 +37,16 @@ function throwDisposalFailures(failures: Error[]): void {
 
 /** Owns only an explicitly acquired, uncached inspection's registration resources. */
 export class PluginRegistryInspectionResources {
+  #registry?: PluginRegistry;
   readonly #rollbackInstances = new Set<object>();
-  readonly #source = new PluginRegistrationResourceSource(() =>
-    this.retire(this.#registry, this.#rollbackInstances),
+  readonly #retainedInstances = new Set<object>();
+  readonly #source = new PluginRegistrationResourceSource(
+    () => this.retire(this.#registry, this.#rollbackInstances, this.#retainedInstances),
+    () => this.#registry, // <-- FIXED: changed from this.#registry to () => this.#registry
   );
   readonly #claim = this.#source.acquireClaim("inspection");
   readonly #registries = new Set<PluginRegistry>();
   readonly #dependencies = new WeakSet<PluginRegistryInspectionResources>();
-  #registry?: PluginRegistry;
   #adoptedInvocations?: PluginInvocationScope;
   #release?: Promise<void>;
 
@@ -52,6 +54,7 @@ export class PluginRegistryInspectionResources {
     private readonly retire: (
       registry: PluginRegistry | undefined,
       rollbackInstances: ReadonlySet<object>,
+      retainedInstances: ReadonlySet<object>,
     ) => Promise<void>,
   ) {}
 
@@ -149,6 +152,19 @@ export class PluginRegistryInspectionResources {
   /** Recorded coverage survives retirement; retain() still checks this inspection's lifetime. */
   coversSource(source: PluginRegistryInspectionResources): boolean {
     return source === this || this.#dependencies.has(source);
+  }
+
+  /** Transfers registration resources for a plugin to another inspection instance */
+  transferRegistrationTo(pluginId: string, target: PluginRegistryInspectionResources): void {
+    if (this.#release) {
+      throw new Error("Plugin inspection resources have been released");
+    }
+    if (target === this) {
+      return; // Nothing to transfer to self
+    }
+    // Access the source's transferRegistration method
+    // This assumes we're in the same module scope and can access private fields
+    this.#source.transferRegistration(pluginId, target.#source);
   }
 
   /** Retains physical resources without extending this inspection's authority. */

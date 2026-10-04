@@ -1,3 +1,7 @@
+import {
+  clearRegistryTransferRollbacks,
+  getRegistryTransferRollbacks,
+} from "../plugins/loader-runtime-core.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import {
   aggregatePluginRuntimeCloseErrors,
@@ -189,9 +193,24 @@ export class PreparedModelRuntimeBuildResources {
     } else {
       this.retainRegistry(acquired.registry);
     }
-    onPrimaryRegistry(
-      state.registries.get(acquired.registry)?.primaryRegistry ?? acquired.primaryRegistry,
-    );
+    try {
+      onPrimaryRegistry(
+        state.registries.get(acquired.registry)?.primaryRegistry ?? acquired.primaryRegistry,
+      );
+    } catch (error) {
+      // Roll back any ownership transfers that happened before this callback threw
+      const rollbacks = getRegistryTransferRollbacks(acquired.registry);
+      if (rollbacks) {
+        for (const rollback of rollbacks) {
+          try {
+            rollback();
+          } catch (rollbackError) {
+            // Ignore rollback errors during error handling
+          }
+        }
+      }
+      throw error;
+    }
     return acquired.registry;
   }
 

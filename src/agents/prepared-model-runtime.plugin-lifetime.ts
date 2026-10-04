@@ -127,15 +127,22 @@ export function retainPreparedPluginRegistry(
   registryView: PluginRegistry,
 ): (() => void | Promise<void>) | undefined {
   registerPreparedPluginLifetime();
+  // Disposal custody for a `previousRegistry`-retained plugin now follows the record forward via
+  // `transferPluginInstanceOwner` at the moment it is retained (`loader-runtime-core.ts`), so
+  // every retire path here can trust the exact same `owner.registry` check it already used before
+  // the worker's scope-growth promotion existed: a registry only disposes instances it still
+  // currently owns, and some registry in the retention chain always ends up owning (and thus
+  // disposing) a reused instance exactly once. No successor bookkeeping is needed here.
+  const owner = getPluginRegistryResourceOwner(registryView);
+  const inspection = getPluginRegistryInspectionResources(registryView);
   const prepared = retainPreparedModelRuntimeSnapshotResources({ pluginRegistry: registryView });
   if (prepared) {
-    return prepared.release;
+    return () => prepared.release();
   }
-  const inspection = getPluginRegistryInspectionResources(registryView);
   if (inspection) {
     return inspection.retain().release;
   }
-  const registry = getPluginRegistryResourceOwner(registryView);
+  const registry = owner;
   let lifetime = getPluginRegistryLifetime(registry);
   if (!lifetime) {
     // Gateway-root and other externally activated registries remain borrowed.

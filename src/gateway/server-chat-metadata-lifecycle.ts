@@ -79,6 +79,9 @@ export async function createGatewayChatMetadataLifecycle(params: {
               gatewayLifecycle: true,
               catalogMode: "static",
               allowGatewaySubagentBinding: true,
+              // This poll only reacts to catalog/skill/auth metadata drift; it never carries a
+              // plugin-relevant change, so it must not force a full plugin-generation rebuild.
+              resetPluginGeneration: false,
             });
           },
           refreshOnRead: true,

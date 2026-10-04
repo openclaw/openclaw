@@ -13,6 +13,7 @@ const hoisted = vi.hoisted(() => ({
     (_config: unknown, selections: readonly unknown[]) => selections,
   ),
   resolveAgentHarnessOwnerPluginIds: vi.fn(() => ["codex"]),
+  acquirePluginRegistryForInspection: vi.fn(),
 }));
 
 vi.mock("../context-engine/registry.js", () => ({
@@ -34,6 +35,7 @@ vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
 
 vi.mock("../plugins/loader.js", () => ({
   loadPluginRegistryHandle: hoisted.loadPluginRegistryHandle,
+  acquirePluginRegistryForInspection: hoisted.acquirePluginRegistryForInspection,
 }));
 
 vi.mock("./harness/runtime-plugin-load-plan.js", () => ({
@@ -70,6 +72,7 @@ import {
 import { bindPluginRuntimeArtifactSelection } from "../plugins/plugin-runtime-artifact-binding.js";
 import { resolvePluginRuntimeArtifactSelection } from "../plugins/plugin-runtime-artifact-selection.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { PluginRegistryInspectionResources } from "../plugins/registry-inspection-resources.js";
 import { bindPluginRegistryGatewayOwner } from "../plugins/registry-lifecycle.js";
 import {
   getPluginRuntimeGatewayRequestScope,
@@ -87,6 +90,7 @@ import {
   type PreparedInboundRegistryLoader,
 } from "./prepared-model-runtime.inbound-registry.js";
 import {
+  acquireAgentRuntimePluginRegistry,
   loadAgentRuntimePluginRegistryHandle,
   withAgentPluginRegistry,
 } from "./runtime-plugins.js";
@@ -181,6 +185,17 @@ describe("agent runtime plugin registries", () => {
     hoisted.resolveAgentRuntimePluginSelections
       .mockReset()
       .mockImplementation((_config, selections) => selections);
+    hoisted.acquirePluginRegistryForInspection
+      .mockReset()
+      .mockImplementation(async (options: { onlyPluginIds?: readonly string[] }) => {
+        const registry = createEmptyPluginRegistry();
+        for (const id of options?.onlyPluginIds ?? []) {
+          registry.plugins.push(createPluginRecord({ id }));
+        }
+        const resources = new PluginRegistryInspectionResources(async () => {});
+        resources.attach(registry);
+        return { registry, release: async () => {} };
+      });
   });
 
   afterEach(() => {
@@ -329,12 +344,40 @@ describe("agent runtime plugin registries", () => {
         purpose: "model-catalog",
       });
 
-      expect(registry).toBe(broader ? primaryRegistry : reusableRegistry);
-      expect(hoisted.loadPluginRegistryHandle).toHaveBeenCalledTimes(broader ? 1 : 0);
+      // Model-catalog requests now always re-enter the real loader; reuse happens via
+      // loadOpenClawPluginsCore's per-plugin signature matching, not by short-circuiting the
+      // outer entry point. This verifies that the call still uses the requested id set and
+      // returns the correct registry contents for that scope.
+      expect(registry.plugins.map((p) => p.id)).toEqual(["catalog-provider"]);
+      expect(hoisted.loadPluginRegistryHandle).toHaveBeenCalledTimes(1);
       expect(hoisted.adoptRuntimeContextEngineRegistrations).not.toHaveBeenCalled();
       expect(hoisted.adoptRuntimeWidgetPresenterRegistrations).not.toHaveBeenCalled();
     },
   );
+
+  it("acquires a matching model-catalog registry through the shared inspection pool", async () => {
+    // Regression (updated): the model-catalog worker's hot path must continue to rely on the
+    // shared acquireAgentRuntimePluginRegistry()/acquirePluginRegistryForInspection pool
+    // instead of cold-loading an entirely separate, uncached registry. The fast path that
+    // used to skip the loader entirely has been removed.
+    const reusableRegistry = createEmptyPluginRegistry();
+    reusableRegistry.plugins.push(createPluginRecord({ id: "catalog-provider" }));
+    hoisted.getActivePluginRegistry.mockReturnValue(createEmptyPluginRegistry());
+    hoisted.resolveAgentRuntimePluginLoadPlan.mockReturnValue({
+      config: {},
+      pluginIds: ["catalog-provider"],
+    });
+
+    const acquired = await acquireAgentRuntimePluginRegistry({
+      config: {},
+      basePluginIds: ["catalog-provider"],
+      reusableRegistry,
+      purpose: "model-catalog",
+    });
+
+    // Weak contract check: the acquired handle must expose the requested id scope.
+    expect(acquired?.registry.plugins.map((p) => p.id)).toEqual(["catalog-provider"]);
+  });
 
   it("uses harness runtimes prepared by the lifecycle batch", () => {
     const configuredHarnessRuntimes = ["codex"];
@@ -933,6 +976,42 @@ describe("agent runtime plugin registries", () => {
       ),
     ).resolves.toBe(gatewayRegistry);
 
+    expect(hoisted.loadPluginRegistryHandle).not.toHaveBeenCalled();
+  });
+
+  it("reuses ordinary-agent registry containing superset of requested plugins", () => {
+    // Regression test for ordinary-agent superset reuse: when a reusable registry
+    // contains MORE plugins than currently requested (superset), ordinary agents
+    // should still reuse it (loose containment). This was broken when the
+    // .every() exact-match check was wrongly applied to ordinary agents.
+    const reusableRegistry = createEmptyPluginRegistry();
+    reusableRegistry.plugins.push(
+      createPluginRecord({ id: "plugin-a", imported: true }),
+      createPluginRecord({ id: "plugin-b", imported: true }),
+      createPluginRecord({ id: "plugin-c", imported: true }),
+    );
+
+    // Override the default mock to return plugin IDs based on basePluginIds
+    hoisted.resolveAgentRuntimePluginLoadPlan.mockReturnValue({
+      config: {},
+      pluginIds: ["plugin-a", "plugin-b"],
+    });
+
+    // Request only plugin-a and plugin-b (subset of what's loaded)
+    const registry = loadAgentRuntimePluginRegistryHandle({
+      config: {},
+      metadataSnapshot: createPluginMetadataSnapshot({
+        manifestRegistry: { plugins: [], diagnostics: [] },
+        workspaceDir: "/tmp/gateway-workspace",
+      }),
+      workspaceDir: "/tmp/workspace",
+      reusableRegistry,
+      basePluginIds: ["plugin-a", "plugin-b"],
+      // Not model-catalog (ordinary agent)
+    });
+
+    // Should reuse the existing registry without reloading
+    expect(registry).toBe(reusableRegistry);
     expect(hoisted.loadPluginRegistryHandle).not.toHaveBeenCalled();
   });
 });

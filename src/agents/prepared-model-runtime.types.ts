@@ -192,6 +192,14 @@ export type PreparedModelRuntimeRefreshOptions = {
   joinSupersedingPublication?: boolean;
   /** Restricts replacement to configured owners whose normalized agent id is present. */
   agentIds?: ReadonlySet<string>;
+  /**
+   * Whether this refresh may invalidate the shared plugin generation (forcing a full plugin
+   * rebuild on the next publish). Defaults to true for backward compatibility, but callers that
+   * have no plugin-relevant change to publish (secrets reload, chat-metadata polling, per-agent
+   * database startup reusing an already-captured pluginMetadataSnapshot, etc.) should pass
+   * `false` so unrelated refreshes stop forcing a fresh plugin load/registry rebuild.
+   */
+  resetPluginGeneration?: boolean;
 };
 
 export type PreparedModelRuntimeBuildStats = Readonly<{
