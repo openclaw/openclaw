@@ -6,6 +6,7 @@ import { createStorageMock } from "./storage.ts";
 
 export function setupSidebarTest() {
   let originalLocalStorage: PropertyDescriptor | undefined;
+  let originalRangeBounds: PropertyDescriptor | undefined;
   let layoutGlobals: Array<[string, PropertyDescriptor | undefined]>;
 
   beforeEach(() => {
@@ -13,7 +14,7 @@ export function setupSidebarTest() {
       name,
       Object.getOwnPropertyDescriptor(globalThis, name),
     ]);
-    // JSDOM has no media queries or layout observation. Real browser tests keep
+    // JSDOM has no media queries or layout geometry. Real browser tests keep
     // their native implementations and own the motion and resize assertions.
     if (typeof matchMedia === "undefined") {
       Object.defineProperty(globalThis, "matchMedia", {
@@ -44,6 +45,14 @@ export function setupSidebarTest() {
       });
     }
 
+    originalRangeBounds = Object.getOwnPropertyDescriptor(Range.prototype, "getBoundingClientRect");
+    if (Range.prototype.getBoundingClientRect === undefined) {
+      Object.defineProperty(Range.prototype, "getBoundingClientRect", {
+        configurable: true,
+        value: () => new DOMRect(),
+      });
+    }
+
     originalLocalStorage = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
     Object.defineProperty(globalThis, "localStorage", {
       configurable: true,
@@ -68,6 +77,11 @@ export function setupSidebarTest() {
     disposeSidebarContextLifecycles();
     // Disconnection queues Lit updates; finish them before retiring the DOM globals.
     await settleLitElements(sidebars);
+    if (originalRangeBounds) {
+      Object.defineProperty(Range.prototype, "getBoundingClientRect", originalRangeBounds);
+    } else {
+      Reflect.deleteProperty(Range.prototype, "getBoundingClientRect");
+    }
     for (const [name, descriptor] of layoutGlobals) {
       if (descriptor) {
         Object.defineProperty(globalThis, name, descriptor);

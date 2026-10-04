@@ -9,6 +9,8 @@ openclaw-sidebar-agent-roster {
 }
 
 .sidebar-agent-roster__header {
+  --roster-badge-bg: var(--sidebar-bg);
+  position: relative;
   display: grid;
   grid-template-columns: 20px minmax(0, 1fr) auto;
   align-items: center;
@@ -31,7 +33,7 @@ openclaw-sidebar-agent-roster {
   background: transparent;
   color: var(--text);
   font: inherit;
-  text-align: left;
+  text-align: start;
   text-decoration: none;
 }
 
@@ -91,6 +93,7 @@ openclaw-sidebar-agent-roster {
 }
 
 .sidebar-agent-roster__row {
+  padding-inline: 0;
   grid-area: 1 / 2;
   flex: 1;
 }
@@ -133,26 +136,95 @@ openclaw-sidebar-agent-roster {
 .sidebar-agent-roster__group {
   margin-bottom: 12px;
 }
+.sidebar-agent-roster__header:has(.sidebar-agent-roster__row:is(:hover, [aria-current="page"])) {
+  --roster-badge-bg: var(--bg-hover);
+}
 .sidebar-agent-roster__signals {
-  grid-area: 2 / 2 / auto / -1;
+  pointer-events: none;
+  grid-area: 1 / 2;
+  justify-self: end;
   display: flex;
-  flex-wrap: wrap;
-  min-width: 0;
   align-items: center;
   gap: var(--team-slot-gap);
-  padding: 0 4px 4px;
+  padding-inline-end: 4px;
 }
-.sidebar-agent-roster__signals:not(
-  :has(
-    > .sidebar-session-team-state,
-    .sidebar-recent-session__details-endcap > :not(openclaw-viewer-facepile),
-    .viewer-facepile
-  )
-) {
-  display: none;
-}
-.sidebar-agent-roster__signals > .sidebar-recent-session__details-endcap {
+.sidebar-agent-roster__signals > .sidebar-recent-session__details-endcap,
+.sidebar-agent-roster__signals .session-row-badges,
+.sidebar-agent-roster__signals .sidebar-session-team-state,
+.sidebar-agent-roster__signals .sidebar-session-team-state__counts {
   display: contents;
+}
+.sidebar-agent-roster__signals .sidebar-session-indicator {
+  width: auto;
+  min-width: 0;
+  flex: none;
+}
+.sidebar-agent-roster__signals .sidebar-agent-roster__indicator {
+  /* Tooltip hosts normally use inline display: contents; each fitted item needs a box. */
+  display: inline-flex !important;
+  flex: none;
+  align-items: center;
+}
+.sidebar-agent-roster__signals .sidebar-agent-roster__indicator[hidden],
+.sidebar-agent-roster__overflow[hidden] {
+  display: none !important;
+}
+.sidebar-agent-roster__overflow {
+  pointer-events: none;
+  grid-area: 1 / 2;
+  justify-self: end;
+  margin-inline-end: 4px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 500;
+}
+.sidebar-agent-roster__header:has(.sidebar-agent-roster__overflow:not([hidden]))
+  .sidebar-agent-roster__signals {
+  margin-inline-end: var(--roster-overflow-width, 24px);
+}
+.sidebar-agent-roster__signals .sidebar-agent-roster__avatar-badge {
+  position: absolute;
+  inset-inline-start: 52px;
+  inset-block-start: calc(50% + 8px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--roster-badge-bg);
+  box-shadow: 0 0 0 2px var(--roster-badge-bg);
+  pointer-events: none;
+}
+.sidebar-agent-roster__signals .sidebar-agent-roster__avatar-badge.session-unread-dot {
+  inset-inline-start: 56px;
+  inset-block-start: calc(50% + 12px);
+  width: 8px;
+  height: 8px;
+  background: var(--accent);
+}
+.sidebar-agent-roster__avatar-badge
+  .session-glyph--running:not(:has(.session-glyph__ring--queued)) {
+  animation: pulse-subtle 2s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .sidebar-agent-roster__avatar-badge
+    .session-glyph--running:not(:has(.session-glyph__ring--queued)) {
+    animation: none;
+  }
+}
+.sidebar-agent-roster__avatar-badge .session-glyph,
+.sidebar-agent-roster__avatar-badge .sidebar-session-attention__icon {
+  width: 12px;
+  height: 12px;
+  flex-basis: 12px;
+}
+.sidebar-agent-roster__avatar-badge .session-glyph__ring {
+  inset: 0;
+}
+.sidebar-agent-roster__avatar-badge svg {
+  width: 12px;
+  height: 12px;
 }
 .sidebar-agent-roster__actions {
   grid-area: 1 / 3;

@@ -21,6 +21,7 @@ import { icons } from "./icons.ts";
 import { renderAgentIdentityAvatar } from "./identity-avatar-view.ts";
 import { renderNewSessionLink } from "./new-session-link.ts";
 import { renderTeamSessionSlots } from "./session-attention-presentation.ts";
+import { rosterHeaderIndicators } from "./sidebar-agent-roster-indicators.ts";
 import "../styles/sidebar-agent-roster.css";
 
 registerAgentsHomeEnglish();
@@ -122,7 +123,10 @@ class SidebarAgentRoster extends AgentRosterElement {
                 data-agent-group=${card.id}
                 aria-label=${card.name}
               >
-                <div class="sidebar-agent-roster__header">
+                <div
+                  class="sidebar-agent-roster__header"
+                  ${rosterHeaderIndicators(`${card.name} · ${t("agentsHome.openChat")}`)}
+                >
                   ${
                     hasSessions
                       ? html`<button
@@ -144,7 +148,6 @@ class SidebarAgentRoster extends AgentRosterElement {
                     aria-current=${active ? "page" : nothing}
                     data-agent-id=${card.id}
                     href=${card.target.href}
-                    title=${t("agentsHome.openChat")}
                     @click=${(event: MouseEvent) => {
                       if (shouldHandleNavigationClick(event)) {
                         event.preventDefault();
@@ -165,6 +168,11 @@ class SidebarAgentRoster extends AgentRosterElement {
                         : renderTeamSessionSlots(...teamSummary)
                     }
                   </span>
+                  <openclaw-tooltip
+                    class="sidebar-agent-roster__tooltip"
+                    .describe=${false}
+                  ></openclaw-tooltip>
+                  <span class="sidebar-agent-roster__overflow" aria-hidden="true" hidden></span>
                   <span
                     class="sidebar-agent-roster__actions"
                     @keydown=${(event: KeyboardEvent) => {

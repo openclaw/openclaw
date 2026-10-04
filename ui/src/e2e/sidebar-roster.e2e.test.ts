@@ -426,7 +426,7 @@ suite.define(() => {
   });
 
   it.each([false, true])(
-    "keeps main-chat identity, activity, metadata and actions visible (touch=%s)",
+    "keeps dense main-chat headers on one line with accessible overflow (touch=%s)",
     async (touch) => {
       await suite.withPage(
         { viewport: { width: 390, height: 900 }, hasTouch: touch, isMobile: touch },
@@ -484,79 +484,165 @@ suite.define(() => {
           const action = headerLocator.locator('button[slot="trigger"]');
           await action.focus();
           await expectSignals();
-          const boxes = await sidebar.evaluate(async (sidebarElement, key) => {
-            const host = sidebarElement as AppSidebarSessionNavigationElement;
-            const main = host.rosterMainSessions.get(key);
-            if (!main) {
-              throw new Error("Missing projected Forge main session");
-            }
-            // The shell owns draft/outbox callbacks. Supply their projected facts
-            // at the renderer boundary to exercise dense metadata geometry.
-            host.sessionOwnershipVisible = true;
-            host.rosterMainSessions = new Map(host.rosterMainSessions).set(key, {
-              ...main,
-              hasComposerDraft: true,
-              outboxAttentionCount: 2,
-              pullRequest: { numbers: [103], state: "open" },
-            });
-            const roster = host.querySelector<LitElement>("openclaw-sidebar-agent-roster")!;
-            roster.requestUpdate();
-            await roster.updateComplete;
-            const header = roster.querySelector(
-              '[data-agent-group="forge"] .sidebar-agent-roster__header',
-            )!;
-            const box = (element: Element) => {
-              const rect = element.getBoundingClientRect();
-              return {
-                left: rect.left,
-                right: rect.right,
-                top: rect.top,
-                bottom: rect.bottom,
+          const renderDenseFixture = () =>
+            sidebar.evaluate(async (sidebarElement, key) => {
+              const host = sidebarElement as AppSidebarSessionNavigationElement;
+              await host.updateComplete;
+              const main = host.rosterMainSessions.get(key);
+              if (!main) {
+                throw new Error("Missing projected Forge main session");
+              }
+              // Shell renders rebuild this projection from draft/outbox owners.
+              // Restore the same renderer inputs after each layout transition.
+              host.sessionOwnershipVisible = true;
+              host.rosterMainSessions = new Map(host.rosterMainSessions).set(key, {
+                ...main,
+                hasComposerDraft: true,
+                unreadChildCount: 3,
+                outboxAttentionCount: 2,
+                pullRequest: { numbers: [103], state: "open" },
+              });
+              const roster = host.querySelector<LitElement>("openclaw-sidebar-agent-roster")!;
+              roster.requestUpdate();
+              await roster.updateComplete;
+            }, mainKey);
+          await renderDenseFixture();
+          const measure = () =>
+            headerLocator.evaluate((header) => {
+              const box = (element: Element) => {
+                const rect = element.getBoundingClientRect();
+                return {
+                  left: rect.left,
+                  right: rect.right,
+                  top: rect.top,
+                  bottom: rect.bottom,
+                  height: rect.height,
+                };
               };
-            };
-            const name = header.querySelector<HTMLElement>(".sidebar-agent-roster__copy > span")!;
-            return {
-              header: box(header),
-              signals: box(header.querySelector(".sidebar-agent-roster__signals")!),
-              actions: box(header.querySelector(".sidebar-agent-roster__actions")!),
-              nameFits: name.clientWidth > 0 && name.scrollWidth <= name.clientWidth,
-              badges: [...header.querySelectorAll(".session-row-badge, .session-owner-chip")].map(
-                (badge) => ({
-                  label: badge.getAttribute("aria-label"),
-                  visible: badge.checkVisibility({ checkVisibilityCSS: true, checkOpacity: true }),
-                  box: box(badge),
-                }),
-              ),
-            };
-          }, mainKey);
-          expect(boxes.nameFits).toBe(true);
-          expect(
-            boxes.signals.right <= boxes.actions.left ||
-              boxes.actions.right <= boxes.signals.left ||
-              boxes.signals.bottom <= boxes.actions.top ||
-              boxes.actions.bottom <= boxes.signals.top,
-          ).toBe(true);
-          expect(boxes.badges.map((badge) => badge.label)).toEqual(
-            expect.arrayContaining([
-              "Created by Riley",
-              "Incognito session",
-              "#103 · Open",
+              const name = header.querySelector<HTMLElement>(".sidebar-agent-roster__copy > span")!;
+              const badge = header.querySelector(".sidebar-session-team-state__status");
+              const visibleBadges = [
+                ...header.querySelectorAll(".session-row-badge, .session-owner-chip"),
+              ].filter((element) =>
+                element.checkVisibility({ checkVisibilityCSS: true, checkOpacity: true }),
+              );
+              const empty = header
+                .closest("openclaw-sidebar-agent-roster")!
+                .querySelector('[data-agent-group="main"] .sidebar-agent-roster__header')!;
+              return {
+                header: box(header),
+                empty: box(empty),
+                avatar: box(header.querySelector(".sidebar-agent-roster__avatar")!),
+                badge: badge ? box(badge) : null,
+                actions: box(header.querySelector(".sidebar-agent-roster__actions")!),
+                nameFits: name.clientWidth > 0 && name.scrollWidth <= name.clientWidth,
+                name: box(name),
+                visibleBadges: visibleBadges.map((element) => ({
+                  label: element.getAttribute("aria-label"),
+                  box: box(element),
+                })),
+              };
+            });
+          const expectCompactHeader = async (nameMustFit = true) => {
+            // This fails on the stacked base: metadata makes Forge taller than
+            // the signal-free Harbor header even when every icon fits.
+            await expect
+              .poll(async () => {
+                const boxes = await measure();
+                return Math.abs(boxes.header.height - boxes.empty.height);
+              })
+              .toBeLessThanOrEqual(1);
+            const boxes = await measure();
+            if (nameMustFit) {
+              expect(boxes.nameFits).toBe(true);
+            } else {
+              expect(boxes.name.right - boxes.name.left).toBeGreaterThan(0);
+              expect(
+                await headerLocator
+                  .locator(".sidebar-agent-roster__indicator:not([hidden])")
+                  .count(),
+              ).toBe(1);
+            }
+            expect(boxes.badge).not.toBeNull();
+            expect(boxes.badge!.left).toBeLessThan(boxes.avatar.right);
+            expect(boxes.badge!.right).toBeGreaterThan(boxes.avatar.right);
+            expect(boxes.badge!.top).toBeLessThan(boxes.avatar.bottom);
+            expect(boxes.badge!.bottom).toBeGreaterThan(boxes.avatar.bottom);
+            expect(boxes.visibleBadges.map((badge) => badge.label)).toContain(
               "2 messages need attention",
-              "Unsent draft",
-            ]),
-          );
-          for (const badge of boxes.badges) {
-            expect(badge.visible).toBe(true);
+            );
+            for (const box of [
+              boxes.name,
+              boxes.actions,
+              ...boxes.visibleBadges.map((badge) => badge.box),
+            ]) {
+              expect(box.left).toBeGreaterThanOrEqual(boxes.header.left);
+              expect(box.right).toBeLessThanOrEqual(boxes.header.right);
+              expect(box.top).toBeGreaterThanOrEqual(boxes.header.top);
+              expect(box.bottom).toBeLessThanOrEqual(boxes.header.bottom);
+            }
+            for (const badge of boxes.visibleBadges) {
+              expect(badge.box.left).toBeGreaterThanOrEqual(boxes.name.right);
+              expect(badge.box.right).toBeLessThanOrEqual(boxes.actions.left);
+            }
+          };
+          await expectCompactHeader();
+          const overflow = headerLocator.locator(".sidebar-agent-roster__overflow");
+          if (touch) {
+            await expect.poll(() => overflow.isVisible()).toBe(true);
+            expect(await overflow.textContent()).toMatch(/^\+\d+$/);
           }
-          for (const box of [
-            boxes.actions,
-            boxes.signals,
-            ...boxes.badges.map((badge) => badge.box),
+          const link = headerLocator.locator(".sidebar-agent-roster__row");
+          await link.focus();
+          await page.keyboard.press("Tab");
+          await page.keyboard.press("Shift+Tab");
+          expect(await link.evaluate((element) => element === document.activeElement)).toBe(true);
+          const tooltip = headerLocator.locator("openclaw-tooltip.sidebar-agent-roster__tooltip");
+          await expect.poll(() => tooltip.getAttribute("open")).not.toBeNull();
+          const summary = await tooltip.locator(".tooltip-content").textContent();
+          for (const label of [
+            "Forge",
+            "Created by Riley",
+            "Incognito session",
+            "#103",
+            "2 messages need attention",
+            "Unsent draft",
+            "Unread: 4",
           ]) {
-            expect(box.left).toBeGreaterThanOrEqual(boxes.header.left);
-            expect(box.right).toBeLessThanOrEqual(boxes.header.right);
-            expect(box.top).toBeGreaterThanOrEqual(boxes.header.top);
-            expect(box.bottom).toBeLessThanOrEqual(boxes.header.bottom);
+            expect(summary).toContain(label);
+          }
+          expect(await link.getAttribute("aria-label")).toBe(summary);
+          await page.keyboard.press("Escape");
+          await expect.poll(() => tooltip.getAttribute("open")).toBeNull();
+          expect(await link.evaluate((element) => element === document.activeElement)).toBe(true);
+
+          if (!touch) {
+            await page.setViewportSize({ width: 1440, height: 900 });
+            const resizer = page.getByRole("separator", { name: "Resize sidebar" });
+            await resizer.waitFor({ state: "visible" });
+            await renderDenseFixture();
+            await expectCompactHeader();
+            await resizer.focus();
+            await page.keyboard.press("End");
+            await renderDenseFixture();
+            await expect.poll(() => overflow.isVisible()).toBe(false);
+            await expectCompactHeader();
+            expect(await headerLocator.locator(".session-row-badge--draft").isVisible()).toBe(true);
+            expect(await headerLocator.locator(".session-row-badge--incognito").isVisible()).toBe(
+              true,
+            );
+            await resizer.focus();
+            await page.keyboard.press("Home");
+            await renderDenseFixture();
+            await expect.poll(() => overflow.isVisible()).toBe(true);
+            expect(await overflow.textContent()).toMatch(/^\+\d+$/);
+            await expectCompactHeader(false);
+            await page.setViewportSize({ width: 390, height: 900 });
+            if ((await drawer.getAttribute("aria-expanded")) === "false") {
+              await drawer.click();
+            }
+            await renderDenseFixture();
+            await expectCompactHeader();
           }
         },
       );
