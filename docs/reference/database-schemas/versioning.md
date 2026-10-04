@@ -125,6 +125,16 @@ can read and write the database safely, leaving the new index intact and recreat
 their day index; reopening with the current build retires it again. Binary rollback
 requires no row conversion or schema-version change.
 
+Trajectory retention replaces the existing `idx_agent_trajectory_runtime_run`
+definition with a full covering index on `(session_id, run_id, created_at,
+octet_length(event_json))`, including null run IDs. Agent schema 24 is unchanged.
+The canonical index owner rebuilds same-name drift on writable admission; initial
+construction reads trajectory history and uses temporary disk for its probe and
+replacement. Writes maintain the expression index. Older same-version writable
+owners can restore their prior definition on downgrade or rollback without
+changing event rows; strict read-only admission can require that repair first.
+See the [storage design](/reference/database-schemas/storage-changes#trajectory-retention-covering-index).
+
 Removing the Tasks and TaskFlow runtime does not change the shared-state or agent
 schema. The existing tables, indexes, and optional execution-owner columns
 remain part of the released storage contract. Cron reads and writes its existing
