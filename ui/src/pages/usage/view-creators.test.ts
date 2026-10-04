@@ -10,28 +10,6 @@ afterEach(() => {
   document.body.replaceChildren();
 });
 
-it("keeps an unavailable selected identity distinct from All when a date range removes its option", () => {
-  const selected: SessionUsageCreator = {
-    key: "opaque-selected",
-    actor: { type: "human", id: "alex", label: "Alex" },
-  };
-  const onSelect = vi.fn();
-  const container = document.createElement("div");
-  document.body.append(container);
-  render(
-    renderUsageCreatorFilter({ options: [selected], selectedKey: selected.key, onSelect }),
-    container,
-  );
-  render(renderUsageCreatorFilter({ options: [], selectedKey: selected.key, onSelect }), container);
-  const select = container.querySelector("select")!;
-  expect(select.value).toBe(selected.key);
-  expect(select.selectedOptions[0]?.textContent?.trim()).toBe("Selected identity");
-  expect(container.textContent).not.toContain(selected.key);
-  select.value = "";
-  select.dispatchEvent(new Event("change", { bubbles: true }));
-  expect(onSelect).toHaveBeenCalledWith(null);
-});
-
 it("keeps all creator choices after filtering and passes opaque identities through row and select actions", () => {
   const alex: SessionUsageCreator = {
     key: "profile:opaque-alex",
@@ -49,24 +27,26 @@ it("keeps all creator choices after filtering and passes opaque identities throu
   const onSelect = vi.fn<(key: string | null) => void>();
   const container = document.createElement("div");
   document.body.append(container);
-  render(
-    html`${renderUsageCreatorFilter({ options: [alex, jordan], selectedKey: alex.key, onSelect })}
-    ${renderUsageCreators({
-      groups: [
-        {
-          ...alex,
-          totals: { ...createEmptyCostUsageTotals(), totalTokens: 1200, totalCost: 2.5 },
-          sessionCount: 3,
-          daily: [],
-          sessionActivity: [],
-        },
-      ],
-      selectedKey: alex.key,
-      mode: "tokens",
-      onSelect,
-    })}`,
-    container,
-  );
+  const draw = (options: SessionUsageCreator[]) =>
+    render(
+      html`${renderUsageCreatorFilter({ options, selectedKey: alex.key, onSelect })}
+      ${renderUsageCreators({
+        groups: [
+          {
+            ...alex,
+            totals: { ...createEmptyCostUsageTotals(), totalTokens: 1200, totalCost: 2.5 },
+            sessionCount: 3,
+            daily: [],
+            sessionActivity: [],
+          },
+        ],
+        selectedKey: alex.key,
+        mode: "tokens",
+        onSelect,
+      })}`,
+      container,
+    );
+  draw([alex, jordan]);
 
   const select = container.querySelector("select")!;
   expect(select.getAttribute("aria-label")).toBe("Filter by session creator");
@@ -86,6 +66,17 @@ it("keeps all creator choices after filtering and passes opaque identities throu
   rowButton.click();
   expect(onSelect).toHaveBeenLastCalledWith(alex.key);
 
+  draw([]);
+  const unavailable = container.querySelector("select")!;
+  expect(unavailable).toBe(select);
+  expect(unavailable.value).toBe(alex.key);
+  expect(unavailable.selectedOptions[0]?.textContent?.trim()).toBe("Selected identity");
+  expect(container.textContent).not.toContain(alex.key);
+  unavailable.value = "";
+  unavailable.dispatchEvent(new Event("change", { bubbles: true }));
+  expect(onSelect).toHaveBeenLastCalledWith(null);
+
+  draw([alex, jordan]);
   select.value = jordan.key;
   select.dispatchEvent(new Event("change", { bubbles: true }));
   expect(onSelect).toHaveBeenLastCalledWith(jordan.key);
