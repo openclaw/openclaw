@@ -7,7 +7,8 @@ import {
   describeCurrentCaller,
 } from "./lobster-gateway-scope.js";
 
-vi.mock("openclaw/plugin-sdk/plugin-runtime", () => ({
+vi.mock("openclaw/plugin-sdk/plugin-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/plugin-runtime")>()),
   getPluginRuntimeGatewayRequestScope: vi.fn(),
 }));
 const scopeMock = vi.mocked(getPluginRuntimeGatewayRequestScope);
