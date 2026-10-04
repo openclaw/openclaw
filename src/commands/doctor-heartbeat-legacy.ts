@@ -228,9 +228,9 @@ export function projectRetiredHeartbeatConfig(cfg: OpenClawConfigWithLegacyRoste
         if (!isRecord(account)) {
           continue;
         }
-        const visibility = selectLegacyHeartbeatVisibility(channel, account);
-        if (visibility) {
-          delete account[visibility.key];
+        const accountVisibility = selectLegacyHeartbeatVisibility(channel, account);
+        if (accountVisibility) {
+          delete account[accountVisibility.key];
         }
       }
     }

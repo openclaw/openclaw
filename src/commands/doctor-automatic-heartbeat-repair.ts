@@ -1,5 +1,4 @@
 import { isDeepStrictEqual } from "node:util";
-import { listAgentIds } from "../agents/agent-scope-config.js";
 import { resolveFutureConfigActionBlock } from "../config/future-version-guard.js";
 import { createConfigIO } from "../config/io.factory.js";
 import { resolveIsConfigReadOnly } from "../config/paths.js";
@@ -68,41 +67,6 @@ export async function projectHeartbeatConfigForUpdateAdmission(
   );
 }
 
-async function hasPendingHeartbeatData(config: OpenClawConfig, env: NodeJS.ProcessEnv) {
-  const [
-    { resolveCronJobsStorePathFromConfig },
-    { readDoctorHeartbeatJobs },
-    { isHeartbeatTaskCronJob },
-    { readDefaultProactiveJobReceiptInDatabase },
-    { withExistingOpenClawStateDatabaseReadOnly },
-  ] = await Promise.all([
-    import("../cron/store/paths.js"),
-    import("./doctor-heartbeat-jobs.js"),
-    import("./doctor-heartbeat-task-identity.js"),
-    import("../cron/proactive-job-receipt.kernel.js"),
-    import("../state/openclaw-state-db-readonly.js"),
-  ]);
-  const storePath = resolveCronJobsStorePathFromConfig(config, env);
-  const jobs = readDoctorHeartbeatJobs(storePath, env);
-  if (jobs.some((job) => job.payload.kind === "heartbeat" || isHeartbeatTaskCronJob(job))) {
-    return true;
-  }
-  const agentIds = new Set([
-    ...listAgentIds(config),
-    ...jobs.flatMap((job) => (job.agentId ? [job.agentId] : [])),
-  ]);
-  return (
-    withExistingOpenClawStateDatabaseReadOnly(
-      ({ db }) =>
-        [...agentIds].some(
-          (agentId) =>
-            readDefaultProactiveJobReceiptInDatabase(db, storePath, agentId)?.phase === "pending",
-        ),
-      { env },
-    ) ?? false
-  );
-}
-
 /** Published updater fallback invocations omit --fix but advertise config-write support. */
 export async function prepareAutomaticHeartbeatRepair(
   options: DoctorOptions,
@@ -127,11 +91,12 @@ export async function prepareAutomaticHeartbeatRepair(
     return undefined;
   }
   const config = projectRetiredHeartbeatConfig(snapshot.sourceConfig);
-  if (
-    isDeepStrictEqual(config, snapshot.sourceConfig) &&
-    !(await hasPendingHeartbeatData(snapshot.sourceConfig, env))
-  ) {
-    return undefined;
+  if (isDeepStrictEqual(config, snapshot.sourceConfig)) {
+    const { hasPendingHeartbeatCadenceMigration } =
+      await import("./doctor-heartbeat-cadence-migration.js");
+    if (!hasPendingHeartbeatCadenceMigration(snapshot.sourceConfig, env)) {
+      return undefined;
+    }
   }
   if (!planAutomaticConfigRepair(snapshot, { config, changes, pendingStateMigration: true })) {
     return undefined;

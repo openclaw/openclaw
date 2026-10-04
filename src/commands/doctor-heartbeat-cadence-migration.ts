@@ -437,34 +437,51 @@ export async function ensureHeartbeatMonitorJobs(
   );
 }
 
+/** Inspection errors remain failures until the findings renderer translates them. */
+export function hasPendingHeartbeatCadenceMigration(
+  cfg: OpenClawConfig,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  const storePath = resolveCronJobsStorePathFromConfig(cfg, env);
+  const loaded = readDoctorHeartbeatJobs(storePath, env);
+  const configured = new Set(
+    resolveHeartbeatAgents(cfg)
+      .filter((agent) => agent.heartbeat !== undefined)
+      .map((agent) => agent.agentId),
+  );
+  const agentIds = new Set([
+    ...listAgentIds(cfg),
+    ...loaded.flatMap((job) => (job.agentId ? [job.agentId] : [])),
+  ]);
+  if (
+    loaded.some(
+      (job) =>
+        job.payload.kind === "heartbeat" ||
+        isHeartbeatTaskCronJob(job) ||
+        isPendingLegacyHeartbeatRetry(job),
+    )
+  ) {
+    return true;
+  }
+  return (
+    withExistingOpenClawStateDatabaseReadOnly(
+      ({ db }) =>
+        [...agentIds].some((agentId) => {
+          const receipt = readDefaultProactiveJobReceiptInDatabase(db, storePath, agentId);
+          return receipt?.phase === "pending" || (configured.has(agentId) && !receipt);
+        }),
+      { env },
+    ) ?? configured.size > 0
+  );
+}
+
 export async function collectHeartbeatCadenceMigrationFindings(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<readonly HealthFinding[]> {
   const storePath = resolveCronJobsStorePathFromConfig(cfg, env);
   try {
-    const loaded = readDoctorHeartbeatJobs(storePath, env);
-    const configured = new Set(
-      resolveHeartbeatAgents(cfg)
-        .filter((agent) => agent.heartbeat !== undefined)
-        .map((agent) => agent.agentId),
-    );
-    const pending = listAgentIds(cfg).filter((agentId) => {
-      const receipt = withExistingOpenClawStateDatabaseReadOnly(
-        ({ db }) => readDefaultProactiveJobReceiptInDatabase(db, storePath, agentId),
-        { env },
-      );
-      return receipt?.phase === "pending" || (configured.has(agentId) && !receipt);
-    });
-    if (
-      !pending.length &&
-      !loaded.some(
-        (job) =>
-          job.payload.kind === "heartbeat" ||
-          isHeartbeatTaskCronJob(job) ||
-          isPendingLegacyHeartbeatRetry(job),
-      )
-    ) {
+    if (!hasPendingHeartbeatCadenceMigration(cfg, env)) {
       return [];
     }
     return [

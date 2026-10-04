@@ -28,6 +28,30 @@ import {
 } from "../state/openclaw-agent-db.js";
 import { deliveryContextFromSession } from "../utils/delivery-context.read.js";
 
+function readPendingHeartbeatOutcomes(agentId: string, storePath: string, env: NodeJS.ProcessEnv) {
+  return withOpenClawAgentDatabaseReadOnly(
+    ({ db }) =>
+      executeSqliteQuerySync(
+        db,
+        getNodeSqliteKysely<Pick<DB, "heartbeat_outcomes">>(db)
+          .selectFrom("heartbeat_outcomes")
+          .selectAll()
+          .where("context_run_id", "is", null),
+      ).rows,
+    toDatabaseOptions(
+      resolveSqliteScope({ agentId, storePath, env, sessionKey: `agent:${agentId}:main` }),
+    ),
+  );
+}
+
+export function hasPendingHeartbeatOutcomes(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
+  return listAgentIds(cfg).some((agentId) => {
+    const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId, env });
+    const read = readPendingHeartbeatOutcomes(agentId, storePath, env);
+    return read.found && read.value.length > 0;
+  });
+}
+
 /** The inert source table stays at the current agent schema; transcript idempotency owns import. */
 export async function migrateHeartbeatOutcomes(
   cfg: OpenClawConfig,
@@ -35,19 +59,7 @@ export async function migrateHeartbeatOutcomes(
 ): Promise<void> {
   for (const agentId of listAgentIds(cfg)) {
     const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId, env });
-    const read = withOpenClawAgentDatabaseReadOnly(
-      ({ db }) =>
-        executeSqliteQuerySync(
-          db,
-          getNodeSqliteKysely<Pick<DB, "heartbeat_outcomes">>(db)
-            .selectFrom("heartbeat_outcomes")
-            .selectAll()
-            .where("context_run_id", "is", null),
-        ).rows,
-      toDatabaseOptions(
-        resolveSqliteScope({ agentId, storePath, env, sessionKey: `agent:${agentId}:main` }),
-      ),
-    );
+    const read = readPendingHeartbeatOutcomes(agentId, storePath, env);
     if (!read.found) {
       continue;
     }

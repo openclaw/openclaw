@@ -3,9 +3,12 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { prepareDoctorHealthDatabaseBackups } from "../flows/doctor-health-database-backup.js";
 import * as directoryDurability from "../infra/directory-durability.js";
 import * as sqliteSnapshot from "../infra/sqlite-snapshot.js";
+import { prepareAgentDatabaseMigrationDiscovery } from "../infra/state-migrations.media-persistence-targets.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import * as version from "../version.js";
 import { backupDoctorMigrationDatabases } from "./doctor-migration-backup.js";
 import { inspectSessionSqliteRecovery } from "./doctor-session-sqlite-recovery-inventory.js";
@@ -90,6 +93,68 @@ describe("Doctor migration backup retries", () => {
         ),
       ),
     );
+  });
+
+  it("preserves the whole rollback group when verified coverage omits a current-schema agent", async () => {
+    const fixture = createFixture();
+    fs.unlinkSync(fixture.shared);
+    const currentAgent = path.join(
+      fixture.env.OPENCLAW_STATE_DIR,
+      "agents",
+      "current",
+      "agent",
+      "openclaw-agent.sqlite",
+    );
+    seedDatabase(currentAgent, "current agent before repair");
+    const current = new DatabaseSync(currentAgent);
+    current.exec("PRAGMA user_version = 24");
+    current.close();
+    const priorSnapshot = `${fixture.agent}.verified.bak`;
+    await sqliteSnapshot.createVerifiedSqliteSnapshot({
+      sourcePath: fixture.agent,
+      targetPath: priorSnapshot,
+    });
+    const { dev, ino } = fs.statSync(fixture.agent);
+    const targets = [
+      { agentId: "main", path: fixture.agent },
+      { agentId: "current", path: currentAgent },
+    ];
+    const maintenance = createOpenClawDatabaseMaintenanceScope({
+      schemaMaintenance: true,
+      assertOwnerCurrent: () => {},
+    });
+    try {
+      await withEnvAsync({ OPENCLAW_STATE_DIR: fixture.env.OPENCLAW_STATE_DIR }, () =>
+        maintenance.run(() =>
+          prepareDoctorHealthDatabaseBackups({
+            automaticHeartbeatRepair: false,
+            schemas: {
+              incompatible: [],
+              indeterminate: [],
+              pendingMigrations: [
+                { kind: "agent", ...targets[0]!, foundVersion: 1, supportedVersion: 24 },
+              ],
+              agentDatabaseMigrationDiscovery: prepareAgentDatabaseMigrationDiscovery({
+                env: fixture.env,
+                configuredAgentDatabaseTargets: targets,
+                registeredAgentDatabases: [],
+                deletionJournal: { status: "empty" },
+              }),
+            },
+            verifiedSnapshots: [
+              { role: "agent", agentId: "main", sourcePath: fixture.agent, dev, ino },
+            ],
+            runtime: { log() {} },
+          }),
+        ),
+      );
+      expect(listBackups(currentAgent)).toHaveLength(1);
+      expect(readPreservedValue(listBackups(currentAgent)[0]!)).toBe("current agent before repair");
+      expect(readPreservedValue(priorSnapshot)).toBe("agent before migration");
+      expect(fs.existsSync(fixture.shared)).toBe(false);
+    } finally {
+      await maintenance.close();
+    }
   });
 
   it("does not reuse a completed group until capture-marker removal is durable", async () => {

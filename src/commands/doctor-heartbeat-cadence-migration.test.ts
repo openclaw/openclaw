@@ -37,6 +37,7 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { prepareAutomaticHeartbeatRepair } from "./doctor-automatic-heartbeat-repair.js";
 import {
   collectHeartbeatCadenceMigrationFindings,
   ensureHeartbeatMonitorJobs,
@@ -211,6 +212,64 @@ describe("heartbeat cadence Doctor cutover", () => {
     });
     expect(await fs.readdir(f.root)).toEqual([]);
   });
+
+  it.each(["removed-owner-receipt", "invalid-legacy-row"])(
+    "preserves automatic admission semantics for %s",
+    async (storedState) => {
+      const f = fixture();
+      const job = (await ensureHeartbeatMonitorJobs(f.cfg, f.storePath, f.env)).get("main")!;
+      if (storedState === "invalid-legacy-row") {
+        runOpenClawStateWriteTransaction(
+          ({ db }) => {
+            db.prepare(
+              "UPDATE cron_jobs SET payload_kind = 'heartbeat', job_json = '{' WHERE job_id = ?",
+            ).run(job.id);
+          },
+          { env: f.env },
+        );
+      }
+      const config: OpenClawConfigWithLegacyRoster = {
+        agents: {
+          ownership: "explicit",
+          entries: { other: { workspace: path.join(f.root, "other") } },
+        },
+        gateway: { mode: "local" },
+        plugins: { enabled: false },
+      };
+      const configPath = path.join(f.root, "openclaw.json");
+      const original = JSON.stringify(config);
+      await fs.writeFile(configPath, original);
+      vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
+      const env = {
+        ...f.env,
+        OPENCLAW_CONFIG_PATH: configPath,
+        OPENCLAW_UPDATE_IN_PROGRESS: "1",
+        OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: "1",
+      };
+      const readRows = () =>
+        withExistingOpenClawStateDatabaseReadOnly(({ db }) => loadCronRows(db, f.storeKey), {
+          env,
+        });
+      const before = readRows();
+      const admission = prepareAutomaticHeartbeatRepair({ nonInteractive: true }, env);
+      if (storedState === "invalid-legacy-row") {
+        await expect(admission).rejects.toThrow("invalid stored JSON");
+        expect(await collectHeartbeatCadenceMigrationFindings(config, env)).toEqual([
+          expect.objectContaining({
+            severity: "error",
+            requirement: "heartbeat-retirement-inspection",
+          }),
+        ]);
+      } else {
+        expect(await admission).toBeDefined();
+        expect(await collectHeartbeatCadenceMigrationFindings(config, env)).toEqual([
+          expect.objectContaining({ severity: "warning", requirement: "heartbeat-retirement" }),
+        ]);
+      }
+      expect(readRows()).toEqual(before);
+      expect(await fs.readFile(configPath, "utf8")).toBe(original);
+    },
+  );
 
   it.each([true, false])(
     "preserves July-era identity, anchors, history, scratch, pending work, and authority (enabled: %s)",

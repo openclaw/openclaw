@@ -416,12 +416,12 @@ export function registerLegacyHeartbeatDriverTests() {
     { version: "2026.9.8", explicitConfig: false, repair: true },
     { version: "2026.9.8", explicitConfig: true, repair: true },
   ])(
-    "migrates heartbeat through published $version Doctor (config=$explicitConfig, fix=$repair)",
+    "migrates heartbeat with $version updater markers (config=$explicitConfig, fix=$repair)",
     async ({ version, explicitConfig, repair }) => {
       await withOpenClawTestState(
         {
           scenario: "minimal",
-          // Both published package drivers use these markers in their fallback argv path.
+          // Published package drivers use these markers in their fallback argv path.
           env: {
             OPENCLAW_UPDATE_IN_PROGRESS: "1",
             OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: "1",
@@ -499,6 +499,16 @@ export function registerLegacyHeartbeatDriverTests() {
           } else {
             await closeOpenClawStateDatabaseAsync();
           }
+          const originalJobs = (() => {
+            const originalDatabase = new DatabaseSync(databasePath, { readOnly: true });
+            try {
+              return originalDatabase
+                .prepare("SELECT * FROM cron_jobs ORDER BY store_key, sort_order, job_id")
+                .all();
+            } finally {
+              originalDatabase.close();
+            }
+          })();
           const result = await runBuiltRuntime(
             runtimeRoot,
             disableUpdatedPackageCompileCacheEnv({
@@ -520,7 +530,7 @@ export function registerLegacyHeartbeatDriverTests() {
           expect(result.signal, output).toBeNull();
           expect(result.code, output).toBe(0);
           if (!repair) {
-            expect(output).toContain(
+            expect(output.replaceAll("│", " ").replace(/\s+/gu, " ")).toContain(
               "Retired heartbeat configuration after ordinary automation data was verified.",
             );
           }
@@ -575,15 +585,31 @@ export function registerLegacyHeartbeatDriverTests() {
           } finally {
             db.close();
           }
-          expect(
-            fs
-              .readdirSync(path.dirname(databasePath))
-              .some(
-                (name) =>
-                  name.startsWith(`${path.basename(databasePath)}.pre-startup-migration-`) &&
-                  name.endsWith(".bak"),
-              ),
-          ).toBe(true);
+          const databaseBackups = fs
+            .readdirSync(path.dirname(databasePath))
+            .filter(
+              (name) =>
+                name.startsWith(`${path.basename(databasePath)}.pre-startup-migration-`) &&
+                name.endsWith(".bak"),
+            );
+          expect(databaseBackups.length).toBeGreaterThan(0);
+          for (const name of databaseBackups) {
+            const backup = new DatabaseSync(path.join(path.dirname(databasePath), name), {
+              readOnly: true,
+            });
+            try {
+              expect(backup.prepare("PRAGMA integrity_check").all()).toEqual([
+                { integrity_check: "ok" },
+              ]);
+              expect(
+                backup
+                  .prepare("SELECT * FROM cron_jobs ORDER BY store_key, sort_order, job_id")
+                  .all(),
+              ).toEqual(originalJobs);
+            } finally {
+              backup.close();
+            }
+          }
         },
       );
     },
