@@ -514,8 +514,9 @@ function normalizeUtterance(text: string): string {
       // STT commonly emits typographic apostrophes; fold them so "don't" (U+2019)
       // matches the refusal pattern and cannot slip past as a non-refusal.
       .replace(/[‘’ʼ]/g, "'")
-      .replace(/[,;:.!?]+/g, "")
+      .replace(/[,;:.!?]+/g, " ")
       .replace(/\s+/g, " ")
+      .trim()
   );
 }
 
@@ -524,8 +525,11 @@ function isExplicitAffirmation(text: string): boolean {
   if (REFUSAL_PATTERN.test(normalized)) {
     return false;
   }
-  // English-only phrases are an accepted first version; localized matching is follow-up work.
-  return /^(yes|yes do it|do it|confirm|confirmed|go ahead|proceed|send it|make the change|restart it)$/.test(
+  // Match the whole utterance, not a substring or its last word: reported,
+  // conditional, and qualified assent must not authorize an action. Finalized
+  // speech may include bounded conversational padding before explicit assent.
+  // English-only phrases remain an accepted first version.
+  return /^(?:(?:oh|ok|okay|alright|all right|uh|um|well|bro|this (?:thing )?again) ){0,6}(yes(?: do it)?|do it|confirm|confirmed|go ahead|proceed|send it|make the change|restart it)(?: please)?$/.test(
     normalized,
   );
 }

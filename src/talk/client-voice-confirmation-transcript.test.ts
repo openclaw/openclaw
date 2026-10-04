@@ -108,7 +108,7 @@ describe("voice confirmation transcript admission", () => {
     block("B");
     await append("yes-original", "yes");
     expect(authorizeObservedClientVoiceConfirmation(scope)).toBeUndefined();
-    await append("yes-new", "yes");
+    await append("yes-new", "Oh, this thing again, bro. Okay, yes");
     expect(authorizeObservedClientVoiceConfirmation(scope)).toBeDefined();
   });
 
