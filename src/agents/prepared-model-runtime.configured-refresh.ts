@@ -320,7 +320,7 @@ export async function refreshPreparedModelRuntimeSnapshotsNow(
       catalogMode,
       existing?.provenance === "configured" ? existing : undefined,
     );
-    owner.onPluginGenerationRetired = () => context.onPluginGenerationRetired(owner);
+    owner.onPluginGenerationRetired = context.onPluginGenerationRetired.bind(context, owner);
     owner.catalogInventory = inventories.get(
       ownerKey({ ...input, runtimePluginSelections: undefined }),
     );
