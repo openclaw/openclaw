@@ -40,7 +40,11 @@ import {
   resolveGenerateAction,
   resolveSelectedCapabilityProvider,
 } from "./media-tool-shared.js";
-import { hasAuthForProvider, coerceToolModelConfig } from "./model-config.helpers.js";
+import {
+  hasAuthForProvider,
+  coerceToolModelConfig,
+  prepareToolAuthProfileStoreSource,
+} from "./model-config.helpers.js";
 import {
   createVideoGenerateDuplicateGuardResult,
   createVideoGenerateListActionResult,
@@ -333,11 +337,13 @@ export function createVideoGenerateTool(options?: MediaGenerateToolOptions): Any
       const action = resolveGenerateAction(args);
 
       if (action === "list") {
+        const authProfileStoreSource = await prepareToolAuthProfileStoreSource(options);
+        signal?.throwIfAborted();
         return createVideoGenerateListActionResult(cfg, {
           workspaceDir: options?.workspaceDir,
           agentDir: options?.agentDir,
           authStore: options?.authProfileStore,
-          authProfileStoreSource: options?.authProfileStoreSource,
+          authProfileStoreSource,
         });
       }
 

@@ -174,7 +174,11 @@ export function readAuthProfileRows(
   const inspect = (target: "store" | "state"): PersistedAuthProfileStoreInspection => {
     try {
       return inspectAuthProfileJsonCell(database, target, databaseKind);
-    } catch {
+    } catch (error) {
+      // Shared-state read ownership handles native failures and poisoned-handle eviction.
+      if (databaseKind === "shared-state") {
+        throw error;
+      }
       // A broken state table must not turn an absent credential row into a present source.
       return { status: "unreadable" };
     }

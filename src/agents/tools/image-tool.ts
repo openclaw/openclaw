@@ -62,6 +62,7 @@ import {
 import {
   buildToolModelConfigFromCandidates,
   hasToolModelConfig,
+  prepareToolAuthProfileStoreSource,
   resolveDefaultModelRef,
   resolveOpenAiImageMediaCandidate,
 } from "./model-config.helpers.js";
@@ -468,20 +469,24 @@ export function createImageTool(options?: {
         if (modelHasVision) {
           imageRoute = { kind: "native" };
         } else {
-          const imageModelConfig =
+          let imageModelConfig =
             resolvedImageModelConfig ??
             resolveImageModelConfigForOverride({
               cfg: options?.config,
               modelOverride,
-            }) ??
-            resolveImageModelConfigForTool({
+            });
+          if (!imageModelConfig) {
+            const authProfileStoreSource = await prepareToolAuthProfileStoreSource(options);
+            assertCurrent();
+            imageModelConfig = resolveImageModelConfigForTool({
               cfg: options?.config,
               agentDir,
               workspaceDir: options?.workspaceDir,
               authStore: options?.authProfileStore,
-              authProfileStoreSource: options?.authProfileStoreSource,
+              authProfileStoreSource,
               preparedModelRuntime: options?.preparedModelRuntime,
             });
+          }
           if (!imageModelConfig) {
             throw new Error(
               "No image model is configured. Set agents.defaults.imageModel or configure an image-capable provider.",

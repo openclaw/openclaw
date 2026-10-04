@@ -3,9 +3,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import * as authSource from "../auth-profiles/source-check.js";
+import * as authStoreRuntime from "../auth-profiles/store-runtime.js";
 import type { AuthProfileCredential, AuthProfileStore } from "../auth-profiles/types.js";
 import {
-  hasAuthProfileForProvider,
   hasProviderAuthForTool,
   resolveOpenAiImageMediaCandidate,
 } from "./model-config.helpers.js";
@@ -118,16 +118,23 @@ describe("hasProviderAuthForTool", () => {
     const probe = vi.spyOn(authSource, "hasAnyAuthProfileStoreSource").mockImplementation(() => {
       throw new Error("unexpected caller-thread auth source probe");
     });
+    const load = vi
+      .spyOn(authStoreRuntime, "ensureAuthProfileStoreWithoutExternalProfiles")
+      .mockImplementation(() => {
+        throw new Error("unexpected caller-thread credential store load");
+      });
     const params = {
       provider: "unconfigured-provider",
       agentDir: AGENT_DIR,
       authProfileStoreSource: false,
     };
     try {
-      expect(hasAuthProfileForProvider(params)).toBe(false);
+      expect(hasProviderAuthForTool(params)).toBe(false);
       expect(probe).not.toHaveBeenCalled();
+      expect(load).not.toHaveBeenCalled();
     } finally {
       probe.mockRestore();
+      load.mockRestore();
     }
   });
 
@@ -187,7 +194,9 @@ describe("hasProviderAuthForTool", () => {
       },
     });
 
-    expect(hasProviderAuthForTool({ provider: "hatchery", authStore })).toBe(true);
+    expect(
+      hasProviderAuthForTool({ provider: "hatchery", authStore, authProfileStoreSource: false }),
+    ).toBe(true);
   });
 
   it("rejects providers without config, env, or profile auth", () => {

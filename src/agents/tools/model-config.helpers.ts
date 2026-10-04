@@ -10,6 +10,7 @@ import {
   ensureAuthProfileStore,
   ensureAuthProfileStoreWithoutExternalProfiles,
   hasAnyAuthProfileStoreSource,
+  hasAnyAuthProfileStoreSourceAsync,
   listProfilesForProvider,
   resolveAuthProfileOrder,
 } from "../auth-profiles.js";
@@ -156,8 +157,26 @@ export function hasAuthProfileForProvider(params: {
   });
 }
 
+/** A construction-time absence cannot outlive credential publication before a deferred action. */
+export async function prepareToolAuthProfileStoreSource(options?: {
+  agentDir?: string;
+  authProfileStore?: AuthProfileStore;
+  authProfileStoreSource?: boolean;
+}): Promise<boolean | undefined> {
+  if (
+    options?.authProfileStoreSource !== false ||
+    options.authProfileStore ||
+    !options.agentDir?.trim()
+  ) {
+    return options?.authProfileStoreSource;
+  }
+  return hasAnyAuthProfileStoreSourceAsync(options.agentDir);
+}
+
 export function hasProviderAuthForTool(params: Parameters<typeof hasAuthForProvider>[0]): boolean {
-  const store = loadAuthStoreForProvider(params);
+  const store =
+    params.authStore ??
+    (params.authProfileStoreSource === false ? undefined : loadAuthStoreForProvider(params));
   if (params.capability && store) {
     const binding = resolveProviderEntryApiKeyProfileReference({ ...params, store });
     // An explicitly selected credential owns the operation; discovery must not

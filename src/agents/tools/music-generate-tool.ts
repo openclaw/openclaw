@@ -29,6 +29,7 @@ import {
   resolveGenerateAction,
   resolveSelectedCapabilityProvider,
 } from "./media-tool-shared.js";
+import { prepareToolAuthProfileStoreSource } from "./model-config.helpers.js";
 import {
   createMusicGenerateDuplicateGuardResult,
   createMusicGenerateListActionResult,
@@ -122,11 +123,13 @@ export function createMusicGenerateTool(options?: MediaGenerateToolOptions): Any
       const action = resolveGenerateAction(args);
 
       if (action === "list") {
+        const authProfileStoreSource = await prepareToolAuthProfileStoreSource(options);
+        signal?.throwIfAborted();
         return createMusicGenerateListActionResult(cfg, {
           workspaceDir: options?.workspaceDir,
           agentDir: options?.agentDir,
           authStore: options?.authProfileStore,
-          authProfileStoreSource: options?.authProfileStoreSource,
+          authProfileStoreSource,
         });
       }
 

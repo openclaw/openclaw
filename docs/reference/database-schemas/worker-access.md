@@ -2122,6 +2122,8 @@ remain absent; a present unreadable credential store still selects the canonical
 loader's refusal instead of environment fallback. An unreadable state cell does
 not change an independently missing credential row into a present source. Tool
 discovery carries prepared presence facts while keeping credential loading lazy.
+Deferred media selection and listing refresh a negative presence fact before use;
+explicitly supplied auth-store snapshots retain their existing lifetime.
 Doctor, CLI discovery, and released synchronous coding-tool construction retain
 their native compatibility paths. Bundled callers prepare presence before
 invoking that factory. Schemas, stored bytes, retention, and update behavior are
