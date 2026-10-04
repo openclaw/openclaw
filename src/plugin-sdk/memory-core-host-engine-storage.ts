@@ -20,6 +20,7 @@ export {
   ensureMemoryIndexSchema,
   hashText,
   INVALID_PROJECT_ANNOTATION_KEY,
+  isAutomaticMemoryEntryEligible,
   isFileMissingError,
   listMemoryFiles,
   loadSqliteVecExtension,

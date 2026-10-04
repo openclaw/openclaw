@@ -33,6 +33,7 @@ export {
 } from "./host/read-file-shared.js";
 export {
   formatMemoryIndexRebuildGuidance,
+  isAutomaticMemoryEntryEligible,
   resolveMemoryIndexIdentityDiagnostic,
   resolveMemoryIndexIdentityReason,
   resolveMemoryIndexSearchDiagnostic,

@@ -216,6 +216,7 @@ function resolveTelegramTokenHelper() {
 
 const telegramChannelOutbound = createTelegramOutboundAdapter({
   resolveSend: resolveTelegramSend,
+  loadSendModule: loadTelegramSendModule,
   shouldSuppressLocalPayloadPrompt: shouldSuppressLocalTelegramExecApprovalPrompt,
   beforeDeliverPayload: async ({ cfg, target, hint }) => {
     if (hint?.kind !== "approval-pending" || hint.approvalKind !== "exec") {

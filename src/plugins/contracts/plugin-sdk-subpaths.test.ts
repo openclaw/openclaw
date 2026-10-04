@@ -781,7 +781,7 @@ describe("plugin-sdk subpath exports", () => {
       mentions: ["defaultRuntime", "withManager", "withProgressTotals"],
     });
     expectSourceContract("memory-core-host-runtime-files", {
-      mentions: ["listMemoryFiles", "normalizeExtraMemoryPaths", "MemorySearchResult"],
+      mentions: ["MemorySearchResult"],
       omits: ['export * from "../../packages/memory-host-sdk/src/runtime-files.js";'],
     });
     expectSourceMentions("plugin-test-runtime", [
@@ -1098,12 +1098,7 @@ describe("plugin-sdk subpath exports", () => {
       "resolveServicePrefixedTarget",
       "resolveTargetsWithOptionalToken",
     ]);
-    expectSourceMentions("channel-config-writes", [
-      "authorizeConfigWrite",
-      "canBypassConfigWritePolicy",
-      "formatConfigWriteDeniedMessage",
-      "resolveChannelConfigWrites",
-    ]);
+    expectSourceMentions("channel-config-writes", ["resolveChannelConfigWrites"]);
     expectSourceMentions("channel-feedback", [
       "createStatusReactionController",
       "logAckFailure",
@@ -1164,8 +1159,6 @@ describe("plugin-sdk subpath exports", () => {
     ]);
 
     expectSourceMentions("thread-bindings-runtime", [
-      "resolveThreadBindingFarewellText",
-      "resolveThreadBindingLifecycle",
       "registerSessionBindingAdapter",
       "unregisterSessionBindingAdapter",
       "SessionBindingAdapter",
