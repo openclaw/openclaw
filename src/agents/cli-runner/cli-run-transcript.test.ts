@@ -89,6 +89,68 @@ it.each([
   },
 );
 
+it("persists a completed CLI segment once before its distinct final reply", async () => {
+  const root = sessionDirs.make();
+  const target = {
+    agentId: "main",
+    sessionId: "cli-segment-session",
+    sessionKey: "agent:main:cli-segments",
+    storePath: path.join(root, "agents", "main", "agent", "openclaw-agent.sqlite"),
+  };
+  await upsertSessionEntry({
+    ...target,
+    entry: { sessionId: target.sessionId, updatedAt: Date.now() },
+  });
+  const runParams = {
+    ...target,
+    sessionFile: `sqlite://agents/main/${target.sessionId}`,
+    workspaceDir: root,
+    prompt: "Explain, then check a tool",
+    provider: "claude-cli",
+    runId: "cli-segment-run",
+    timeoutMs: 1_000,
+    persistAssistantTranscript: true,
+  };
+  const segment = {
+    runParams,
+    text: "The answer is here.",
+    modelId: "claude-sonnet-4-6",
+    stopReason: "stop" as const,
+    segmentKey: "message-1:0",
+    timestamp: 1_790_000_000_000,
+    nativeEntry: { entryId: "native-entry-1", sessionId: "native-session-1" },
+  };
+  await persistCliAssistantTranscript(segment);
+  await persistCliAssistantTranscript(segment);
+  await persistCliAssistantTranscript({
+    runParams,
+    text: "Final answer.",
+    modelId: segment.modelId,
+    stopReason: "stop",
+  });
+  const messages = (await loadTranscriptEvents(target)).flatMap((event) =>
+    typeof event === "object" && event !== null && "message" in event ? [event.message] : [],
+  );
+  expect(messages).toMatchObject([
+    {
+      content: [{ type: "text", text: "The answer is here." }],
+      timestamp: segment.timestamp,
+      idempotencyKey: "cli-assistant:cli-segment-run:seg:message-1:0",
+      __openclaw: {
+        cliNativeRef: {
+          externalId: "native-entry-1",
+          importedFrom: "claude-cli",
+          cliSessionId: "native-session-1",
+        },
+      },
+    },
+    {
+      content: [{ type: "text", text: "Final answer." }],
+      idempotencyKey: "cli-assistant:cli-segment-run",
+    },
+  ]);
+});
+
 it.each([
   { kind: "completed", yielded: undefined, stopReason: "stop" },
   { kind: "yielded", yielded: true, stopReason: "stop" },

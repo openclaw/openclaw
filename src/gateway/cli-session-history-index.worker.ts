@@ -166,6 +166,13 @@ function resolveImportedExternalIdentityKey(message: unknown): string | undefine
     : undefined;
 }
 
+// A canonical record that names its native CLI twin claims that twin by identity,
+// even when display transforms made the two texts differ.
+function resolveCanonicalNativeIdentityKey(message: unknown): string | undefined {
+  const meta = asOptionalRecord(asOptionalRecord(message)?.["__openclaw"]);
+  return resolveImportedExternalIdentityKey({ __openclaw: meta?.cliNativeRef });
+}
+
 type HistoryRow = {
   id: number;
   local_seq: number | null;
@@ -317,7 +324,9 @@ export class CliSessionHistoryIndex {
   private row(message: unknown, id: number, localSeq?: number): HistoryRow {
     const record = asOptionalRecord(message);
     const meta = asOptionalRecord(record?.["__openclaw"]);
-    const externalIdentityKey = resolveImportedExternalIdentityKey(message);
+    const externalIdentityKey =
+      resolveImportedExternalIdentityKey(message) ??
+      (localSeq === undefined ? undefined : resolveCanonicalNativeIdentityKey(message));
     const comparable: ComparableHistoryMessage =
       record?.role === "user" || record?.role === "assistant"
         ? prepareComparableMessage(record, externalIdentityKey)

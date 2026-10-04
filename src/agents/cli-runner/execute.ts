@@ -18,7 +18,7 @@ import {
 } from "../cli-auth-epoch.js";
 import { resolveCliExecutableIdentity } from "../cli-executable-identity.js";
 import { hashCliImageTurnEntryId } from "../cli-image-turn-correlation.js";
-import type { CliOutput } from "../cli-output-contracts.js";
+import type { CliCommentarySegment, CliOutput } from "../cli-output-contracts.js";
 import {
   detectImageReferences,
   hasHydratableMediaImages,
@@ -110,6 +110,7 @@ function assertExactToolAvailabilityRuntimeVersion(params: {
 
 type ExecutePreparedCliRunOptions = {
   onPhase?: (phase: "send" | "resolve" | "cleanup") => void;
+  onCommentarySegment?: (segment: CliCommentarySegment) => void;
 };
 
 type PreparedCliRunInternalParams = PreparedCliRunContext["params"] & {
@@ -583,6 +584,7 @@ export async function executePreparedCliRun(
         cliTurnStartedAt,
         observeForkSuccessor,
         options,
+        onCommentarySegment: options?.onCommentarySegment,
       });
     } catch (error) {
       recordRunError(error);
