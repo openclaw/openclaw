@@ -314,7 +314,7 @@ describe("scripts/plan-targeted-docker-lane-groups", () => {
     ).toThrow("must be 2026.6.1 or newer");
   });
 
-  it("extends only groups containing expanded survivor lanes", () => {
+  it("isolates expanded survivor scenarios without extending normal lanes", () => {
     expect(
       planTargetedDockerLaneGroups({
         groupSize: 2,
@@ -323,21 +323,37 @@ describe("scripts/plan-targeted-docker-lane-groups", () => {
         upgradeSurvivorScenarios: "base plugin-deps-cleanup",
       }),
     ).toEqual([
+      { docker_lanes: "doctor-switch", label: "doctor-switch" },
       {
-        docker_lanes: "doctor-switch published-upgrade-survivor",
-        label: "doctor-switch--published-upgrade-survivor",
+        docker_lanes: "published-upgrade-survivor",
+        label: "published-upgrade-survivor-scenarios-1",
+        published_upgrade_survivor_scenarios: "base",
         timeout_minutes: 90,
       },
       {
-        docker_lanes: "plugins-offline update-migration",
-        label: "plugins-offline--update-migration",
+        docker_lanes: "published-upgrade-survivor",
+        label: "published-upgrade-survivor-scenarios-2",
+        published_upgrade_survivor_scenarios: "plugin-deps-cleanup",
+        timeout_minutes: 90,
+      },
+      { docker_lanes: "plugins-offline", label: "plugins-offline" },
+      {
+        docker_lanes: "update-migration",
+        label: "update-migration-scenarios-1",
+        published_upgrade_survivor_scenarios: "base",
+        timeout_minutes: 90,
+      },
+      {
+        docker_lanes: "update-migration",
+        label: "update-migration-scenarios-2",
+        published_upgrade_survivor_scenarios: "plugin-deps-cleanup",
         timeout_minutes: 90,
       },
       { docker_lanes: "plugin-update", label: "plugin-update" },
     ]);
   });
 
-  it("groups the weekly mobile and watch matrix into two baseline runners", () => {
+  it("isolates the weekly mobile and watch scenarios by baseline", () => {
     const baselines = "2026.7.1 2026.8.1";
     const scenarios = "mobile-pairing-reconnect watchos-direct-node";
     const groups = planTargetedDockerLaneGroups({
@@ -356,14 +372,23 @@ describe("scripts/plan-targeted-docker-lane-groups", () => {
     expect(groups).toEqual([
       {
         docker_lanes: "update-migration",
-        label: "update-migration-2026.7.1",
+        label: "update-migration-2026.7.1-scenarios-1",
         published_upgrade_survivor_baselines: "openclaw@2026.7.1",
+        published_upgrade_survivor_scenarios: "mobile-pairing-reconnect",
         timeout_minutes: 90,
       },
       {
         docker_lanes: "update-migration",
-        label: "update-migration-2026.8.1",
+        label: "update-migration-2026.8.1-scenarios-1",
         published_upgrade_survivor_baselines: "openclaw@2026.8.1",
+        published_upgrade_survivor_scenarios: "mobile-pairing-reconnect",
+        timeout_minutes: 90,
+      },
+      {
+        docker_lanes: "update-migration",
+        label: "update-migration-2026.8.1-scenarios-2",
+        published_upgrade_survivor_baselines: "openclaw@2026.8.1",
+        published_upgrade_survivor_scenarios: "watchos-direct-node",
         timeout_minutes: 90,
       },
     ]);
