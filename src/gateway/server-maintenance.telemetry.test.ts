@@ -46,6 +46,7 @@ vi.mock("../agents/worktrees/owner-protection.js", () => ({
   createManagedWorktreeOwnerPolicy: () => forbiddenDefaultAdapter("worktree owner policy"),
 }));
 
+// mock-isolation: Worker-free timers inject GC and reject accidental default worktree access.
 vi.mock("../agents/worktrees/service.js", () => ({
   WORKTREE_GC_INTERVAL_MS: 60 * 60_000,
   managedWorktrees: { gc: () => forbiddenDefaultAdapter("worktree GC") },

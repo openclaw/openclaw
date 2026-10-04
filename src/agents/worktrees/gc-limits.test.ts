@@ -4,6 +4,7 @@ import { WorktreeGcProgress } from "./gc-progress.js";
 import type { ManagedWorktreeRecord } from "./types.js";
 
 const inventory = vi.hoisted(() => ({ records: [] as ManagedWorktreeRecord[] }));
+// mock-isolation: Rank synthetic inventories without admitting a state database or worker.
 vi.mock("./registry-read.js", () => ({
   readRegistryWorktrees: async () => inventory.records,
   readLiveRegistryWorktreeIds: async () => inventory.records.map((item) => item.id),

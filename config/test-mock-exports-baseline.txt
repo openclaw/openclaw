@@ -7721,7 +7721,6 @@
 ["src/gateway/server-maintenance.delivery-queue.test.ts","../infra/outbound/delivery-queue-media-spool.js","fcd9c5b2310ed05071740eff752f8e8a7c326e1df1f1d38924c737fd2a6d891a",1]
 ["src/gateway/server-maintenance.recipients.test.ts","../infra/device-bootstrap.js","e2fc54081e5193c7e343c2e9e8a6443ef29a974093ce883b2b4ff9078cb93fc1",1]
 ["src/gateway/server-maintenance.telemetry.test.ts","../agents/worktrees/owner-protection.js","bb84e72966ca9f70b8ebd518e528e422c90458e081adfb7a78ee0820377aa85f",1]
-["src/gateway/server-maintenance.telemetry.test.ts","../agents/worktrees/service.js","c73ca20ecfe1ee84d8c6a50422f86ea848eee3030ec4c33da9896acadbb5e97d",1]
 ["src/gateway/server-maintenance.telemetry.test.ts","../infra/delivery-queue-sqlite.js","529c18b51e4ea83e2b09f8198c9c73d3724c83d1fb90edc926b06b6dcd30759f",1]
 ["src/gateway/server-maintenance.telemetry.test.ts","../infra/device-bootstrap.js","4f1654f52522f4632d881338f0afb64bb65dc361344e36a72fdacff43206213f",1]
 ["src/gateway/server-maintenance.telemetry.test.ts","../infra/outbound/delivery-queue-media-spool.js","dee3a2620b0bb928366938beb1b4925dd7b74421b8dc5b351245b52057201087",1]
