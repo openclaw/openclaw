@@ -22,7 +22,8 @@ import {
   type WikiClaim,
 } from "./markdown.js";
 import { withMemoryWikiVaultMutation } from "./mutation-coordinator.js";
-import { readQueryableWikiPages, resolveQueryableWikiPageByLookup } from "./query.js";
+import { resolveQueryableWikiPageByLookup } from "./query-page-lookup.js";
+import { readQueryableWikiPages } from "./query.js";
 import { readExistingWikiPage } from "./vault-page-write.js";
 import { initializeMemoryWikiVault } from "./vault.js";
 
