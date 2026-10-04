@@ -59,7 +59,10 @@ describe("web_fetch visibility through the real tool execute path", () => {
     });
   });
 
-  async function extract(path: string, extractMode: "markdown" | "text" = "markdown"): Promise<string> {
+  async function extract(
+    path: string,
+    extractMode: "markdown" | "text" = "markdown",
+  ): Promise<string> {
     const tool = createWebFetchTool({
       config: {
         // The visibility sanitizer runs on the basic-extraction fallback path

@@ -368,7 +368,8 @@ export function markdownToText(markdown: string): string {
   // single-NUL markers can restore code. Replacement output is not rescanned.
   text = stripMarkdownFormatting(text).replace(
     /\0(?:\0|(\d+)\0)/g,
-    (_match, index: string | undefined) => (index === undefined ? "\0" : codeBlocks[Number(index)]!),
+    (_match, index: string | undefined) =>
+      index === undefined ? "\0" : codeBlocks[Number(index)]!,
   );
   return normalizeWhitespace(text);
 }
