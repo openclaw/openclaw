@@ -12,8 +12,12 @@ import {
   isDeliveredMessagingToolSendToCurrentSource,
 } from "../../embedded-agent-messaging-extraction.js";
 import type { AfterToolCallContext, AfterToolCallResult, Agent } from "../../runtime/index.js";
+import {
+  getInternalToolTurnCompletion,
+  setInternalToolTurnCompletion,
+} from "../../runtime/internal-hooks.js";
 import { normalizeToolPolicyName } from "../../tool-policy-shared.js";
-import { readToolResultDetails } from "../../tool-result-error.js";
+import { isToolResultError, readToolResultDetails } from "../../tool-result-error.js";
 
 type MessageToolTerminalRoute = Omit<
   Parameters<typeof isDeliveredMessagingToolSendToCurrentSource>[0],
@@ -75,13 +79,12 @@ function isDeliveredMessageToolOnlySourceReply(
 }
 
 /**
- * Stops the tool batch after a `canDeliverSourceReply` tool authored a final source reply.
- * The host delivers that reply itself, so another model turn would only restate it.
- *
- * The agent loop ends a batch only when every result is terminal. Other calls from
- * the same assistant message still run to completion and are recorded; they carry
- * the terminal hint so the captured reply completes the turn. The capable call's own
- * result decides: if it captured no final reply, the batch continues as usual.
+ * Ends the turn after a tool batch settles in which a `canDeliverSourceReply` tool
+ * authored a final source reply. The host delivers that reply itself, so another
+ * model turn would only restate it. The decision runs once per assistant message,
+ * after every call (capable or not, executed or rejected) has settled, so no sibling
+ * outcome can reopen the turn. It admits exactly what the tool completion handler
+ * captures: a direct, non-error result with a deliverable final reply.
  */
 export function installToolAuthoredSourceReplyTerminalHook(params: {
   agent: Agent;
@@ -91,37 +94,19 @@ export function installToolAuthoredSourceReplyTerminalHook(params: {
   if (!capableToolNames?.size) {
     return;
   }
-  const isCapable = (name: string) => capableToolNames.has(normalizeToolPolicyName(name));
-  const previousAfterToolCall = params.agent.afterToolCall?.bind(params.agent);
-  params.agent.afterToolCall = async (context, signal) => {
-    const hookResult = await previousAfterToolCall?.(context, signal);
-    if (!isCapable(context.toolCall.name)) {
-      const batchHasCapableCall = context.assistantMessage.content.some(
-        (item) =>
-          item.type === "toolCall" && item.id !== context.toolCall.id && isCapable(item.name),
-      );
-      return batchHasCapableCall
-        ? { ...hookResult, terminate: hookResult?.terminate ?? context.result.terminate ?? true }
-        : hookResult;
-    }
-    const isError = hookResult?.isError ?? context.isError;
-    if (isError) {
-      return hookResult;
-    }
-    // An earlier hook returns a partial override: only the fields it supplies
-    // replace the executed result, exactly as the agent loop applies them.
-    const result = hookResult
-      ? {
-          ...context.result,
-          ...(hookResult.content !== undefined ? { content: hookResult.content } : {}),
-          ...(hookResult.details !== undefined ? { details: hookResult.details } : {}),
-        }
-      : context.result;
-    if (extractToolAuthoredSourceReplyPayload(result)) {
-      return { ...hookResult, terminate: true };
-    }
-    return hookResult;
-  };
+  const previous = getInternalToolTurnCompletion(params.agent);
+  setInternalToolTurnCompletion(
+    params.agent,
+    (context) =>
+      previous?.(context) === true ||
+      context.toolResults.some(
+        (toolResult) =>
+          !toolResult.isError &&
+          !isToolResultError(toolResult) &&
+          capableToolNames.has(normalizeToolPolicyName(toolResult.toolName)) &&
+          extractToolAuthoredSourceReplyPayload(toolResult) !== undefined,
+      ),
+  );
 }
 
 export function installMessageToolOnlyTerminalHook(
