@@ -135,8 +135,8 @@ export function prepareProjectedSessionPresentation(
     client === undefined
       ? undefined
       : prepareOperatorModelPresentation({ cfg, policyConfig, client });
-  const published = publication?.(rowContext);
-  const publicationRows = published?.rows;
+  const publicationState = publication?.(rowContext);
+  const publicationRows = publicationState?.rows;
   const subagentRuns = rowContext.subagentRuns.atTime(now);
   const active = (key: string, entry: records.MaterializedRow["entry"], agentId: string) =>
     projectRun?.({
@@ -173,9 +173,9 @@ export function prepareProjectedSessionPresentation(
       client === undefined,
       sharing.cacheKey,
       presentFastMode("ultrafast"),
-      Object.entries(query).sort(([left], [right]) => left.localeCompare(right)),
+      Object.entries(query).toSorted(([left], [right]) => left.localeCompare(right)),
     ]);
-    const lists = published?.lists;
+    const lists = publicationState?.lists;
     let view = lists?.get(key);
     if (!view) {
       view = {};
