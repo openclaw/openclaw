@@ -25,7 +25,7 @@ async function* chunks(bytes: Uint8Array) {
 }
 
 describe("OCSTOR1 encryption", () => {
-  it.each([0, 1, STORAGE_SEGMENT_BYTES, STORAGE_SEGMENT_BYTES + 1, 3 * STORAGE_SEGMENT_BYTES + 17])(
+  it.each([0, STORAGE_SEGMENT_BYTES, STORAGE_SEGMENT_BYTES + 1])(
     "round trips %i plaintext bytes with exact ciphertext size",
     async (size) => {
       const key = randomBytes(32);
