@@ -143,10 +143,13 @@ export function createCrabboxWorkerProvider(
     if (!resolution) {
       providerAbort.signal.throwIfAborted();
       // Acquisition belongs to the provider; cancelling one waiter cannot cancel discovery.
+      // Only a deliberately configured binary warrants a fallback warning; default discovery
+      // stays silent so managed auto-installation does not become routine noise.
       resolution = ensureManagedCrabboxBinary({
         binary: candidate,
         runCommand,
         signal: providerAbort.signal,
+        ...(explicit ? { warn } : {}),
       })
         .then(({ binary }) => {
           providerAbort.signal.throwIfAborted();
