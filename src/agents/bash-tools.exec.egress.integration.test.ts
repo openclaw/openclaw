@@ -89,7 +89,7 @@ describe.skipIf(process.platform === "win32")("exec secret egress final spawn", 
     ]) {
       vi.stubEnv(key, decoyUrl);
     }
-    writeSecretStoreEntry({
+    await writeSecretStoreEntry({
       name: "EGRESS_EXEC_TOKEN",
       value,
       kind: "secret",
