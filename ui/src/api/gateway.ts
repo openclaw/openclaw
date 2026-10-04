@@ -515,7 +515,13 @@ export class GatewayBrowserClient {
 
   private handleConnectFailure(err: GatewayProtocolRequestError, plan: ConnectPlan) {
     const pairing = readPairingConnectErrorDetails(err.details);
-    if (err instanceof GatewayRequestError && pairing?.waitForResolution && pairing.requestId && pairing.deviceId && pairing.deviceId === plan.deviceIdentity?.deviceId) {
+    if (
+      err instanceof GatewayRequestError &&
+      pairing?.waitForResolution &&
+      pairing.requestId &&
+      pairing.deviceId &&
+      pairing.deviceId === plan.deviceIdentity?.deviceId
+    ) {
       this.pendingPairing = { requestId: pairing.requestId, deviceId: pairing.deviceId };
       this.opts.onClose?.({
         code: CONNECT_FAILED_CLOSE_CODE,
@@ -523,7 +529,11 @@ export class GatewayBrowserClient {
         error: toGatewayErrorInfo(err),
         willRetry: true,
       });
-      return { closeCode: CONNECT_FAILED_CLOSE_CODE, closeReason: "pairing approval pending", keepOpen: true };
+      return {
+        closeCode: CONNECT_FAILED_CLOSE_CODE,
+        closeReason: "pairing approval pending",
+        keepOpen: true,
+      };
     }
     const connectErrorCode =
       err instanceof GatewayRequestError ? resolveGatewayErrorDetailCode(err) : null;
@@ -572,19 +582,34 @@ export class GatewayBrowserClient {
       return;
     }
     const payload = event.payload;
-    if (!isRecord(payload) || payload.requestId !== this.pendingPairing.requestId || payload.deviceId !== this.pendingPairing.deviceId) {
+    if (
+      !isRecord(payload) ||
+      payload.requestId !== this.pendingPairing.requestId ||
+      payload.deviceId !== this.pendingPairing.deviceId
+    ) {
       return;
     }
     const decision = payload.decision;
-    if (decision !== "approved" && decision !== "rejected" && decision !== "expired" && decision !== "superseded") {
+    if (
+      decision !== "approved" &&
+      decision !== "rejected" &&
+      decision !== "expired" &&
+      decision !== "superseded"
+    ) {
       return;
     }
     if (decision === "rejected" || decision === "expired") {
       this.pairingFailure = new GatewayRequestError({
         code: "NOT_PAIRED",
-        message: decision === "rejected" ? "This browser's access request was declined." : "This browser's access request expired.",
+        message:
+          decision === "rejected"
+            ? "This browser's access request was declined."
+            : "This browser's access request expired.",
         details: {
-          code: decision === "rejected" ? ConnectErrorDetailCodes.PAIRING_REJECTED : ConnectErrorDetailCodes.PAIRING_EXPIRED,
+          code:
+            decision === "rejected"
+              ? ConnectErrorDetailCodes.PAIRING_REJECTED
+              : ConnectErrorDetailCodes.PAIRING_EXPIRED,
           ...this.pendingPairing,
           pauseReconnect: true,
         },

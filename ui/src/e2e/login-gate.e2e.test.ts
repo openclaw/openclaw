@@ -1,7 +1,8 @@
 // Control UI tests cover the responsive disconnected login gate.
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import { beforeEach, expect, it } from "vitest";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { assert, beforeEach, expect, it } from "vitest";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
@@ -484,42 +485,66 @@ suite.define(() => {
     }
   });
 
-  it.each(["rejected", "expired"])("shows a terminal pairing %s until Request again", async (decision) => {
-    const context = await suite.browser.newContext({ viewport: { height: 900, width: 1280 } });
-    const page = await context.newPage();
-    await page.clock.install();
-    const gateway = await installMockGateway(page, { deferredMethods: ["connect"] });
-    try {
-      await page.goto(suite.server.baseUrl);
-      const request = await gateway.waitForRequest("connect");
-      const deviceId = (request.params.device as { id: string }).id;
-      await gateway.rejectDeferred("connect", {
-        code: "NOT_PAIRED",
-        message: "pairing required",
-        details: { code: "PAIRING_REQUIRED", requestId: "waiting-request", deviceId, waitForResolution: true, pauseReconnect: false },
-      });
-      await page.getByRole("button", { name: "Check now", exact: true }).waitFor();
-      await page.clock.runFor(60_000);
-      expect(await gateway.getRequests("connect")).toHaveLength(1);
-      await gateway.emit("device.pair.resolved", { requestId: "waiting-request", deviceId, decision, ts: Date.now() });
-      await page.getByText(decision === "rejected" ? "Access request declined" : "Access request expired", { exact: true }).waitFor();
-      await page.evaluate(() => {
-        window.dispatchEvent(new Event("online"));
-        window.dispatchEvent(new PageTransitionEvent("pageshow", { persisted: true }));
-      });
-      await page.clock.runFor(60_000);
-      expect(await gateway.getRequests("connect")).toHaveLength(1);
-      expect(await page.getByText("Waiting for approval", { exact: false }).count()).toBe(0);
-      await page.screenshot({ path: path.join(RECOVERY_ARTIFACT_DIR, `pairing-${decision}.png`), fullPage: true });
-      await gateway.deferNext("connect");
-      await page.getByRole("button", { name: "Request again", exact: true }).click();
-      await gateway.waitForRequest("connect", { after: 1 });
-      await gateway.resolveDeferred("connect");
-      await page.locator("openclaw-app-shell").waitFor();
-    } finally {
-      await closeContext(context);
-    }
-  });
+  it.each(["rejected", "expired"])(
+    "shows a terminal pairing %s until Request again",
+    async (decision) => {
+      const context = await suite.browser.newContext({ viewport: { height: 900, width: 1280 } });
+      const page = await context.newPage();
+      await page.clock.install();
+      const gateway = await installMockGateway(page, { deferredMethods: ["connect"] });
+      try {
+        await page.goto(suite.server.baseUrl);
+        const request = await gateway.waitForRequest("connect");
+        assert(isRecord(request.params) && isRecord(request.params.device));
+        const deviceId = request.params.device.id;
+        assert(typeof deviceId === "string");
+        await gateway.rejectDeferred("connect", {
+          code: "NOT_PAIRED",
+          message: "pairing required",
+          details: {
+            code: "PAIRING_REQUIRED",
+            requestId: "waiting-request",
+            deviceId,
+            waitForResolution: true,
+            pauseReconnect: false,
+          },
+        });
+        await page.getByRole("button", { name: "Check now", exact: true }).waitFor();
+        await page.clock.runFor(60_000);
+        expect(await gateway.getRequests("connect")).toHaveLength(1);
+        await gateway.emitGatewayEvent("device.pair.resolved", {
+          requestId: "waiting-request",
+          deviceId,
+          decision,
+          ts: Date.now(),
+        });
+        await page
+          .getByText(
+            decision === "rejected" ? "Access request declined" : "Access request expired",
+            { exact: true },
+          )
+          .waitFor();
+        await page.evaluate(() => {
+          window.dispatchEvent(new Event("online"));
+          window.dispatchEvent(new PageTransitionEvent("pageshow", { persisted: true }));
+        });
+        await page.clock.runFor(60_000);
+        expect(await gateway.getRequests("connect")).toHaveLength(1);
+        expect(await page.getByText("Waiting for approval", { exact: false }).count()).toBe(0);
+        await page.screenshot({
+          path: path.join(RECOVERY_ARTIFACT_DIR, `pairing-${decision}.png`),
+          fullPage: true,
+        });
+        await gateway.deferNext("connect");
+        await page.getByRole("button", { name: "Request again", exact: true }).click();
+        await gateway.waitForRequest("connect", { after: 1 });
+        await gateway.resolveDeferred("connect");
+        await page.locator("openclaw-app-shell").waitFor();
+      } finally {
+        await closeContext(context);
+      }
+    },
+  );
 
   it("copies an exact recovery command from the application gateway snapshot", async () => {
     const context = await suite.browser.newContext({

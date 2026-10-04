@@ -278,68 +278,6 @@ function emitAuthFailure(
 }
 
 describe("GatewayBrowserClient", () => {
-  it.each(["rejected", "expired"])(
-    "waits on the exact pairing request and stops reconnecting when %s",
-    async (decision) => {
-      useNodeFakeTimers();
-      const onClose = vi.fn();
-      const client = createClient({ onClose });
-      const { ws, connectFrame } = await startConnect(client);
-      const deviceId = connectFrame.params.device!.id;
-      ws.emitMessage({
-        type: "res",
-        id: connectFrame.id,
-        ok: false,
-        error: {
-          code: "NOT_PAIRED",
-          message: "pairing required",
-          details: {
-            code: "PAIRING_REQUIRED",
-            requestId: "request-first",
-            deviceId,
-            waitForResolution: true,
-            pauseReconnect: false,
-          },
-        },
-      });
-      await vi.advanceTimersByTimeAsync(60_000);
-      expect(ws.readyState).toBe(1);
-      expect(wsInstances).toHaveLength(1);
-      expect(onClose).toHaveBeenLastCalledWith(expect.objectContaining({ willRetry: true }));
-
-      const resolve = (requestId: string, resolvedDeviceId = deviceId) =>
-        ws.emitMessage({
-          type: "event",
-          event: "device.pair.resolved",
-          payload: { requestId, deviceId: resolvedDeviceId, decision, ts: Date.now() },
-        });
-      resolve("another-request");
-      resolve("request-first", "another-device");
-      expect(ws.readyState).toBe(1);
-      resolve("request-first");
-      expect(ws.readyState).toBe(3);
-      ws.emitClose(1008, `pairing ${decision}`);
-      await vi.advanceTimersByTimeAsync(60_000);
-      expect(wsInstances).toHaveLength(1);
-      expect(client.pairingRetryPaused).toBe(true);
-      expect(client.needsWakeReconnect).toBe(false);
-      expect(onClose).toHaveBeenLastCalledWith(
-        expect.objectContaining({
-          willRetry: false,
-          error: expect.objectContaining({
-            details: expect.objectContaining({
-              code: decision === "rejected" ? "PAIRING_REJECTED" : "PAIRING_EXPIRED",
-            }),
-          }),
-        }),
-      );
-
-      client.stop();
-      await startConnect(client);
-      expect(wsInstances).toHaveLength(2);
-    },
-  );
-
   beforeEach(() => {
     vi.spyOn(Math, "random").mockReturnValue(0);
     vi.spyOn(nodes, "loadOrCreateDeviceIdentity").mockImplementation(

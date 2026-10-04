@@ -121,9 +121,11 @@ const enLogin = {
           "Waiting for approval… this page connects on its own once the request is approved.",
         checkNow: "Check now",
         declinedTitle: "Access request declined",
-        declinedSummary: "The operator declined this browser's access request. Automatic retries have stopped. You can request approval again when you are ready.",
+        declinedSummary:
+          "The operator declined this browser's access request. Automatic retries have stopped. You can request approval again when you are ready.",
         expiredTitle: "Access request expired",
-        expiredSummary: "This browser's access request timed out without approval. Request approval again to continue.",
+        expiredSummary:
+          "This browser's access request timed out without approval. Request approval again to continue.",
         requestAgain: "Request again",
       },
       insecure: {

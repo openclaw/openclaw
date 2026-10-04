@@ -219,13 +219,20 @@ export function resolveLoginFailureFeedback(
     });
   }
 
-  if (lastErrorCode === ConnectErrorDetailCodes.PAIRING_REJECTED || lastErrorCode === ConnectErrorDetailCodes.PAIRING_EXPIRED) {
+  if (
+    lastErrorCode === ConnectErrorDetailCodes.PAIRING_REJECTED ||
+    lastErrorCode === ConnectErrorDetailCodes.PAIRING_EXPIRED
+  ) {
     const declined = lastErrorCode === ConnectErrorDetailCodes.PAIRING_REJECTED;
     return buildFeedback(rawError, {
       kind: declined ? "pairing-rejected" : "pairing-expired",
       tone: "warn",
-      titleKey: declined ? "login.failure.pairing.declinedTitle" : "login.failure.pairing.expiredTitle",
-      summaryKey: declined ? "login.failure.pairing.declinedSummary" : "login.failure.pairing.expiredSummary",
+      titleKey: declined
+        ? "login.failure.pairing.declinedTitle"
+        : "login.failure.pairing.expiredTitle",
+      summaryKey: declined
+        ? "login.failure.pairing.declinedSummary"
+        : "login.failure.pairing.expiredSummary",
       stepKeys: [],
       docsHref: "https://docs.openclaw.ai/web/control-ui/connect-and-pair",
     });

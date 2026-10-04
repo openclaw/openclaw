@@ -1,7 +1,9 @@
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 
 type PageActivationGateway = {
-  readonly snapshot: { readonly client: Pick<GatewayBrowserClient, "needsWakeReconnect" | "pairingRetryPaused"> | null };
+  readonly snapshot: {
+    readonly client: Pick<GatewayBrowserClient, "needsWakeReconnect" | "pairingRetryPaused"> | null;
+  };
   connect: () => void;
 };
 
@@ -33,7 +35,11 @@ export function startGatewayPageActivation(
         return;
       }
       const client = gateway.snapshot.client;
-      if (client && !client.pairingRetryPaused && (forceQueuedRecovery || client.needsWakeReconnect)) {
+      if (
+        client &&
+        !client.pairingRetryPaused &&
+        (forceQueuedRecovery || client.needsWakeReconnect)
+      ) {
         // Replacing the client retires Safari's ghost socket synchronously. A
         // socket close would depend on the suspended transport firing `close`.
         gateway.connect();

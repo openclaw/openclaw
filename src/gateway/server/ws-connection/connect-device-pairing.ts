@@ -2,6 +2,7 @@ import {
   normalizeSortedUniqueTrimmedStringList,
   uniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
+import { GATEWAY_CLIENT_CAPS } from "../../../../packages/gateway-protocol/src/client-info.js";
 import {
   buildPairingConnectCloseReason,
   buildPairingConnectErrorDetails,
@@ -10,12 +11,12 @@ import {
   type ConnectPairingRequiredReason,
 } from "../../../../packages/gateway-protocol/src/connect-error-details.js";
 import { ErrorCodes } from "../../../../packages/gateway-protocol/src/index.js";
-import { GATEWAY_CLIENT_CAPS } from "../../../../packages/gateway-protocol/src/client-info.js";
 import { getRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
 import {
   approveBootstrapDevicePairing,
   approveDevicePairing,
 } from "../../../infra/device-pairing-approval.js";
+import { waitForDevicePairingResolution } from "../../../infra/device-pairing-resolution.js";
 import {
   getPairedDevice,
   hasEffectivePairedDeviceRole,
@@ -25,7 +26,6 @@ import {
   requestDevicePairing,
   updatePairedDeviceMetadata,
 } from "../../../infra/device-pairing.js";
-import { waitForDevicePairingResolution } from "../../../infra/device-pairing-resolution.js";
 import { roleScopesAllow } from "../../../shared/operator-scope-compat.js";
 import { isBrowserCopilotClient } from "../../../utils/message-channel.js";
 import { pruneSupersededSilentPairingsAfterApproval } from "../../device-pairing-prune.js";
@@ -221,32 +221,40 @@ export async function authorizeGatewayConnectDevice(
         );
       }
       const waitForResolution =
-        state.isControlUi && role === "operator" && connectParams.caps?.includes(GATEWAY_CLIENT_CAPS.DEVICE_PAIRING_WAIT);
+        state.isControlUi &&
+        role === "operator" &&
+        connectParams.caps?.includes(GATEWAY_CLIENT_CAPS.DEVICE_PAIRING_WAIT);
       const pairingAbort = new AbortController();
       const cancelPairingWait = () => pairingAbort.abort();
       let resolution: ReturnType<typeof waitForDevicePairingResolution> | undefined;
-      const pairing = await requestDevicePairing({
-        deviceId: device.id,
-        publicKey: devicePublicKey,
-        ...clientPairingMetadata,
-        scopes,
-        ...(plan.bootstrapPairingRoles
-          ? {
-              roles: plan.bootstrapPairingRoles,
-              scopes: plan.bootstrapPairingScopes ?? [],
+      const pairing = await requestDevicePairing(
+        {
+          deviceId: device.id,
+          publicKey: devicePublicKey,
+          ...clientPairingMetadata,
+          scopes,
+          ...(plan.bootstrapPairingRoles
+            ? {
+                roles: plan.bootstrapPairingRoles,
+                scopes: plan.bootstrapPairingScopes ?? [],
+              }
+            : {}),
+          silent: plan.silent,
+        },
+        undefined,
+        waitForResolution
+          ? (pending) => {
+              context.handler.socket.once("close", cancelPairingWait);
+              resolution = waitForDevicePairingResolution(pending.request, {
+                expiresAtMs: pending.expiresAtMs,
+                signal: pairingAbort.signal,
+              }).finally(() => context.handler.socket.off("close", cancelPairingWait));
+              if (context.handler.isClosed()) {
+                cancelPairingWait();
+              }
             }
-          : {}),
-        silent: plan.silent,
-      }, undefined, waitForResolution ? (pending) => {
-        context.handler.socket.once("close", cancelPairingWait);
-        resolution = waitForDevicePairingResolution(pending.request, {
-          expiresAtMs: pending.expiresAtMs,
-          signal: pairingAbort.signal,
-        }).finally(() => context.handler.socket.off("close", cancelPairingWait));
-        if (context.handler.isClosed()) {
-          cancelPairingWait();
-        }
-      } : undefined);
+          : undefined,
+      );
       const trustedProxyApprovalScopes =
         pairing.request.isRepair !== true || plan.isTrustedProxySameKeyUpgrade
           ? plan.trustedProxyAutoApproveScopes
@@ -444,23 +452,30 @@ export async function authorizeGatewayConnectDevice(
           sshVerifyStarted ||
           retryWhileNodeApprovalPending ||
           retryWhileControlUiApprovalPending;
+        const details = buildPairingConnectErrorDetails({
+          reason,
+          requestId: resolution ? pairing.request.requestId : recoveryRequestId,
+          ...(resolution || retryWhileApprovalPending
+            ? {
+                recommendedNextStep: "wait_then_retry",
+                retryable: true,
+                pauseReconnect: false,
+              }
+            : {}),
+          ...(resolution ? { waitForResolution: true } : {}),
+          deviceId: device.id,
+          requestedRole: role,
+          requestedScopes: scopes,
+          ...(approvedRoles.length > 0 ? { approvedRoles } : {}),
+          ...(approvedScopes.length > 0 ? { approvedScopes } : {}),
+        });
         if (resolution) {
           context.onPairingWait();
-          sendHandshakeErrorResponse(ErrorCodes.NOT_PAIRED, buildPairingConnectErrorMessage(reason), {
-            details: buildPairingConnectErrorDetails({
-              reason,
-              requestId: pairing.request.requestId,
-              deviceId: device.id,
-              requestedRole: role,
-              requestedScopes: scopes,
-              ...(approvedRoles.length > 0 ? { approvedRoles } : {}),
-              ...(approvedScopes.length > 0 ? { approvedScopes } : {}),
-              recommendedNextStep: "wait_then_retry",
-              retryable: true,
-              pauseReconnect: false,
-              waitForResolution: true,
-            }),
-          });
+          sendHandshakeErrorResponse(
+            ErrorCodes.NOT_PAIRED,
+            buildPairingConnectErrorMessage(reason),
+            { details },
+          );
           void resolution.then((decision) => {
             if (!decision || context.handler.isClosed()) {
               return;
@@ -468,7 +483,12 @@ export async function authorizeGatewayConnectDevice(
             context.handler.send({
               type: "event",
               event: "device.pair.resolved",
-              payload: { requestId: pairing.request.requestId, deviceId: device.id, decision, ts: Date.now() },
+              payload: {
+                requestId: pairing.request.requestId,
+                deviceId: device.id,
+                decision,
+                ts: Date.now(),
+              },
             });
             close(1008, `pairing ${decision}`);
           });
@@ -476,22 +496,7 @@ export async function authorizeGatewayConnectDevice(
         }
         failPairingHandshake({
           message: buildPairingConnectErrorMessage(reason),
-          details: buildPairingConnectErrorDetails({
-            reason,
-            requestId: recoveryRequestId,
-            ...(retryWhileApprovalPending
-              ? {
-                  recommendedNextStep: "wait_then_retry",
-                  retryable: true,
-                  pauseReconnect: false,
-                }
-              : {}),
-            deviceId: device.id,
-            requestedRole: role,
-            requestedScopes: scopes,
-            ...(approvedRoles.length > 0 ? { approvedRoles } : {}),
-            ...(approvedScopes.length > 0 ? { approvedScopes } : {}),
-          }),
+          details,
           closeCause: {
             cause: "pairing-required",
             meta: {

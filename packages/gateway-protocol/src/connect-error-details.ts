@@ -237,7 +237,9 @@ function createPairingConnectErrorDetails(
     ...(params.recommendedNextStep ? { recommendedNextStep: params.recommendedNextStep } : {}),
     ...(params.retryable !== undefined ? { retryable: params.retryable } : {}),
     ...(params.pauseReconnect !== undefined ? { pauseReconnect: params.pauseReconnect } : {}),
-    ...(params.waitForResolution !== undefined ? { waitForResolution: params.waitForResolution } : {}),
+    ...(params.waitForResolution !== undefined
+      ? { waitForResolution: params.waitForResolution }
+      : {}),
     ...(params.deviceId ? { deviceId: params.deviceId } : {}),
     ...(params.requestedRole ? { requestedRole: params.requestedRole } : {}),
     ...(params.requestedScopes ? { requestedScopes: params.requestedScopes } : {}),

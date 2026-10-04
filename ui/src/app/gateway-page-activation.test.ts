@@ -16,6 +16,12 @@ afterEach(() => {
 describe("Gateway page activation", () => {
   it("preserves a declined pairing request across page restoration and online signals", async () => {
     const connect = vi.fn();
+    const refreshed = new Promise<void>((resolve) => {
+      vi.mocked(refreshControlUiServiceWorker).mockImplementationOnce(async () => {
+        resolve();
+        return false;
+      });
+    });
     const dispose = startGatewayPageActivation(
       { snapshot: { client: { needsWakeReconnect: false, pairingRetryPaused: true } }, connect },
       document,
@@ -23,7 +29,7 @@ describe("Gateway page activation", () => {
     );
     window.dispatchEvent(new PageTransitionEvent("pageshow", { persisted: true }));
     window.dispatchEvent(new Event("online"));
-    await Promise.resolve();
+    await refreshed;
     expect(connect).not.toHaveBeenCalled();
     dispose();
   });

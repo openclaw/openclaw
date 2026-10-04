@@ -37,7 +37,11 @@ export function registerControlUiPairingSuite(): void {
     testState.gatewayControlUi = { allowedOrigins: [origin] };
     await mutateConfigFile({
       mutate(config) {
-        config.gateway = { ...config.gateway, trustedProxies: ["127.0.0.1"], controlUi: { allowedOrigins: [origin] } };
+        config.gateway = {
+          ...config.gateway,
+          trustedProxies: ["127.0.0.1"],
+          controlUi: { allowedOrigins: [origin] },
+        };
       },
       afterWrite: { mode: "auto" },
     });
@@ -53,14 +57,16 @@ export function registerControlUiPairingSuite(): void {
           client: CONTROL_UI_CLIENT,
           caps: ["device-pairing-wait"],
           scopes: ["operator.admin"],
-          device: (await createSignedDevice({
-            identityPath,
-            clientId: CONTROL_UI_CLIENT.id,
-            clientMode: CONTROL_UI_CLIENT.mode,
-            token,
-            scopes: ["operator.admin"],
-            nonce: await readConnectChallengeNonce(socket),
-          })).device,
+          device: (
+            await createSignedDevice({
+              identityPath,
+              clientId: CONTROL_UI_CLIENT.id,
+              clientMode: CONTROL_UI_CLIENT.mode,
+              token,
+              scopes: ["operator.admin"],
+              nonce: await readConnectChallengeNonce(socket),
+            })
+          ).device,
         });
         return { socket, response };
       };
@@ -84,23 +90,48 @@ export function registerControlUiPairingSuite(): void {
         const resolutions = [requester, sibling].map(({ socket }) =>
           onceMessage(socket, (frame) => frame.event === "device.pair.resolved"),
         );
-        expect((await rpcReq(admin, "device.pair.reject", { requestId: request.requestId })).ok).toBe(true);
+        expect(
+          (await rpcReq(admin, "device.pair.reject", { requestId: request.requestId })).ok,
+        ).toBe(true);
         for (const event of await Promise.all(resolutions)) {
-          expect(event.payload).toMatchObject({ requestId: request.requestId, deviceId: first.identity.deviceId, decision: "rejected" });
+          expect(event.payload).toMatchObject({
+            requestId: request.requestId,
+            deviceId: first.identity.deviceId,
+            decision: "rejected",
+          });
         }
-        expect((await listDevicePairing()).pending.map((entry) => entry.requestId)).toEqual([other.requestId]);
+        expect((await listDevicePairing()).pending.map((entry) => entry.requestId)).toEqual([
+          other.requestId,
+        ]);
         expect(unrelated.socket.readyState).toBe(1);
 
         const retried = await connectBrowser(first.identityPath);
-        const retryRequest = (await listDevicePairing()).pending.find((entry) => entry.deviceId === first.identity.deviceId)!;
+        const retryRequest = (await listDevicePairing()).pending.find(
+          (entry) => entry.deviceId === first.identity.deviceId,
+        )!;
         expect(retryRequest.requestId).not.toBe(request.requestId);
-        const approval = onceMessage(retried.socket, (frame) => frame.event === "device.pair.resolved");
-        expect((await rpcReq(admin, "device.pair.approve", { requestId: retryRequest.requestId })).ok).toBe(true);
-        expect((await approval).payload).toMatchObject({ requestId: retryRequest.requestId, decision: "approved" });
+        const approval = onceMessage(
+          retried.socket,
+          (frame) => frame.event === "device.pair.resolved",
+        );
+        expect(
+          (await rpcReq(admin, "device.pair.approve", { requestId: retryRequest.requestId })).ok,
+        ).toBe(true);
+        expect((await approval).payload).toMatchObject({
+          requestId: retryRequest.requestId,
+          decision: "approved",
+        });
         expect((await connectBrowser(first.identityPath)).response.ok).toBe(true);
 
         const closed = new Promise<number>((resolve) => unrelated.socket.once("close", resolve));
-        unrelated.socket.send(JSON.stringify({ type: "req", id: "pending-rpc", method: "device.pair.list", params: {} }));
+        unrelated.socket.send(
+          JSON.stringify({
+            type: "req",
+            id: "pending-rpc",
+            method: "device.pair.list",
+            params: {},
+          }),
+        );
         expect(await closed).toBe(1008);
       } finally {
         for (const socket of sockets) {

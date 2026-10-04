@@ -94,7 +94,11 @@ export async function approveDevicePairing(
       },
     );
     if (result?.status === "approved") {
-      publishDevicePairingResolution({ requestId, deviceId: result.device.deviceId }, "approved", baseDir);
+      publishDevicePairingResolution(
+        { requestId, deviceId: result.device.deviceId },
+        "approved",
+        baseDir,
+      );
     }
     return result;
   });
@@ -139,7 +143,11 @@ export async function approveBootstrapDevicePairing(
       },
     );
     if (result?.status === "approved") {
-      publishDevicePairingResolution({ requestId, deviceId: result.device.deviceId }, "approved", baseDir);
+      publishDevicePairingResolution(
+        { requestId, deviceId: result.device.deviceId },
+        "approved",
+        baseDir,
+      );
     }
     return result;
   });

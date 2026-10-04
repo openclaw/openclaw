@@ -12,7 +12,10 @@ import type {
 } from "./device-pairing-core.types.js";
 import type { NodePairingGeneration } from "./device-pairing-identity.js";
 import { withDevicePairingLock } from "./device-pairing-lock.js";
-import { publishDevicePairingResolution, refreshDevicePairingResolutionWaiters } from "./device-pairing-resolution.js";
+import {
+  publishDevicePairingResolution,
+  refreshDevicePairingResolutionWaiters,
+} from "./device-pairing-resolution.js";
 import { loadDevicePairingStateForMutation } from "./device-pairing-state.kernel.js";
 import {
   listDevicePairingStoreRecordsReadOnly,
