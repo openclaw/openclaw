@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { onLlmRequestActivity } from "../utils/llm-request-activity.js";
 import { processCompletionsStream } from "./openai-completions-stream.js";
 import {
   type CapturedStreamEvent,
@@ -273,5 +274,39 @@ describe("openai completions stream", () => {
       (block) => (block as { type?: string }).type === "toolCall",
     );
     expect(toolCalls).toHaveLength(1);
+  });
+
+  it("does not notify activity for content-free chunks but preserves reasoning usage", async () => {
+    const model = makeCompletionsModel();
+    const output = createAssistantOutput(model);
+    const controller = new AbortController();
+    let activityCount = 0;
+    const off = onLlmRequestActivity(controller.signal, () => {
+      activityCount++;
+    });
+
+    // Case A: empty choices + empty delta → no activity
+    const emptyChoices = {
+      id: "c1",
+      object: "chat.completion.chunk",
+      created: 1,
+      model: "m",
+      choices: [],
+    };
+    const emptyDelta = makeCompletionsChunk({});
+    const contentChunk = makeCompletionsChunk({ content: "hi" });
+    const doneChunk = makeCompletionsChunk({}, "stop" as const);
+
+    await processCompletionsStream(
+      streamChunks([emptyChoices, emptyDelta, contentChunk, doneChunk]),
+      output,
+      model,
+      { push: () => {} },
+      { signal: controller.signal },
+    );
+    off();
+    // Only content + finish should trigger (2), not the empty chunks.
+    expect(activityCount).toBeGreaterThanOrEqual(1);
+    expect(activityCount).toBeLessThan(4);
   });
 });
