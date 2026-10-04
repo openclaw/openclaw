@@ -74,7 +74,9 @@ afterEach(() => {
 describe("PaletteSessionDraft", () => {
   it("omits the worktree setting for a non-Git workspace", async () => {
     const { host } = await mount();
-    expect(host.querySelector(".palette-session-settings__workspace")).not.toBeNull();
+    await vi.waitFor(() =>
+      expect(host.querySelector(".palette-session-settings__workspace")).not.toBeNull(),
+    );
     expect(host.querySelector('[role="switch"][aria-label="New worktree"]')).toBeNull();
   });
 

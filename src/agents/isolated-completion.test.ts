@@ -33,6 +33,41 @@ const { resolveIsolatedCompletionRuntime } = await import("./isolated-completion
 beforeEach(resetIsolatedCompletionTestState);
 
 describe("runIsolatedCompletion", () => {
+  it.each(["cli", "host-v2", "harness-v2", "v1"] as const)(
+    "blocks required worker policy before isolated %s execution using the admitted config",
+    async (route) => {
+      const dispatch = vi.fn(async () => ({
+        assistant: isolatedAssistant([{ type: "text", text: "must not run" }]),
+      }));
+      if (route === "cli") {
+        mocks.isCliRuntimeAliasForProvider.mockReturnValue(true);
+        mocks.runCliAgent.mockResolvedValue({ payloads: [{ text: "must not run" }] });
+      } else {
+        registerIsolatedHarness({
+          authBootstrap: route === "harness-v2" ? "harness" : undefined,
+          ...(route === "v1"
+            ? { runIsolatedCompletion: dispatch }
+            : { runIsolatedCompletionV2: dispatch }),
+        });
+      }
+      mocks.acquireAgentRunPreparedModelRuntime.mockImplementationOnce(async () => {
+        Object.assign(preparedModelRuntime, {
+          config: { cloudWorkers: { requiredProfile: "dedicated" } },
+        });
+        return { snapshot: preparedModelRuntime, [Symbol.asyncDispose]: releaseRuntimeLease };
+      });
+      await expect(runIsolatedCompletion(isolatedRequest())).rejects.toMatchObject({
+        code: "unsupported",
+        message: expect.stringContaining("requiredProfile"),
+      });
+      expect(mocks.runCliAgent).not.toHaveBeenCalled();
+      expect(dispatch).not.toHaveBeenCalled();
+      expect(mocks.prepareSimpleCompletionModel).not.toHaveBeenCalled();
+      expect(mocks.resolveModelAsync).not.toHaveBeenCalled();
+      expect(releaseRuntimeLease).toHaveBeenCalledOnce();
+    },
+  );
+
   function prepareQuotaProfiles() {
     const profileIds = ["openai:first", "openai:backup"];
     mocks.ensureAuthProfileStore.mockReturnValue({

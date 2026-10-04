@@ -47,5 +47,7 @@ export type ChatMetadataResult = {
   modelSelectionPolicy?: ModelsListResult["modelSelectionPolicy"];
   swarmEnabled: boolean;
   runtimeSelectionLocked?: boolean;
+  /** Current required worker-inference policy, not placement readiness or send authority. */
+  requiredWorkerInferenceProfileId?: string;
   accountSelection?: ChatAccountSelection;
 };

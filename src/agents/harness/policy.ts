@@ -37,6 +37,11 @@ export function resolveAgentHarnessPolicy(
   // Configured selectors can reuse a normalized lookup without losing their route input.
   configured = resolveModelRuntimePolicy(params),
 ): AgentHarnessPolicy {
+  // The required worker owns runtime selection, before implicit provider harness routing.
+  // Explicit session overrides are rejected at session mutation and run admission.
+  if (params.config?.cloudWorkers?.requiredProfile) {
+    return { runtime: "openclaw", runtimeSource: "implicit" };
+  }
   const configuredRuntime = normalizeOptionalAgentRuntimeId(configured.policy?.id);
   const runtime =
     configuredRuntime && configuredRuntime !== "default"

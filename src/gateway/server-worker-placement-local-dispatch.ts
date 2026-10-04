@@ -22,7 +22,7 @@ const loadWorkerWorkspacePreflight = createLazyRuntimeModule(async () => {
 });
 
 export function createGatewayWorkerPlacementLocalDispatchBarrier(params: {
-  placements: Pick<WorkerSessionPlacementStore, "waitForTurnClaimRelease">;
+  placements: Pick<WorkerSessionPlacementStore, "get" | "waitForTurnClaimRelease">;
   awaitTurnClaimRelease: (sessionId: string, wait: () => Promise<void>) => Promise<void>;
   revokeSessionAuthority: (request: { sessionId: string; sessionKeys: readonly string[] }) => void;
 }): Parameters<typeof createWorkerPlacementDispatchService>[0]["runLocalBarrier"] {
@@ -31,6 +31,7 @@ export function createGatewayWorkerPlacementLocalDispatchBarrier(params: {
     sessionKey,
     agentId,
     executionMode,
+    requiredProfile,
     authorize,
     signal,
     startDispatch,
@@ -94,6 +95,20 @@ export function createGatewayWorkerPlacementLocalDispatchBarrier(params: {
         }
         assertCurrent(getRuntimeConfig());
         authorize?.();
+        if (requiredProfile) {
+          if (
+            getRuntimeConfig().cloudWorkers?.requiredProfile !== requiredProfile ||
+            params.placements.get(sessionId)?.turnClaim
+          ) {
+            throw new WorkerDispatchTargetChangedError(
+              "Required worker admission changed or a local turn is still active.",
+            );
+          }
+          // Initial placement belongs to this held input. There is no executing local
+          // owner to revoke, and clearing queues would discard the pending first turn.
+          placement = await startDispatch();
+          return;
+        }
         placement = await startDispatch();
         clearSessionLifecycleQueues({
           keys: lifecycleIdentities,

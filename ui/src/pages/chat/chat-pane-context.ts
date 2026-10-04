@@ -46,6 +46,7 @@ import { retireChatModelSelectionOwnership } from "./chat-session.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import {
   refreshChatModelAuthStatus,
+  readChatRequiredWorkerInferenceProfileId,
   refreshPageChat,
   retireChatMetadataRequests,
 } from "./chat-state-refresh.ts";
@@ -110,6 +111,9 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       restartingKey: this.headerPlacementRestartingKey,
       row,
       startupPending,
+      requiredWorkerInferenceProfileId: this.state
+        ? readChatRequiredWorkerInferenceProfileId(this.state)
+        : undefined,
       workspaceResultReconciling:
         (row?.placement?.state === "active" || row?.placement?.state === "draining") &&
         row.placement.workspaceResultReconciling === true,

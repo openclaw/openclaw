@@ -4,8 +4,8 @@ import type { SandboxContext } from "../../agents/sandbox/types.js";
 import type {
   LocalTurnPlacementClaim,
   SessionPlacementAdmissionProvider,
+  SessionPlacementSandboxParams,
 } from "../../agents/session-placement-admission.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { emitAgentRunStatusEvent } from "../../infra/agent-run-status-events.js";
 import { markDiagnosticRunProgress } from "../../logging/diagnostic-run-activity.js";
 import { getGatewayRestartDrainSignal } from "../../process/gateway-work-admission.js";
@@ -31,6 +31,7 @@ import {
 } from "./tunnel-contract.js";
 import {
   claimWorkerTurn,
+  createRequiredWorkerTurnAdmission,
   executeLocalTurn,
   releaseClaimIfOwned,
   requireActivePlacement,
@@ -63,6 +64,7 @@ type RedispatchableWorkerPlacement = Extract<
 >;
 
 type WorkerTurnLauncherOptions = {
+  prepareRequiredSession?: SessionPlacementAdmissionProvider["prepareRequiredSession"];
   environments: WorkerTurnEnvironmentService;
   placements: WorkerSessionPlacementStore;
   /** Read-only resolution; a cancelled turn may stop waiting for these facts. */
@@ -90,15 +92,12 @@ type WorkerTurnLauncherOptions = {
 
 export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLauncherOptions) {
   const activeWorkerTurns = new Map<string, ActiveWorkerTurn>();
+  const requiredAdmission = createRequiredWorkerTurnAdmission(options);
   const provider: SessionPlacementAdmissionProvider & {
-    resolveSandbox(params: {
-      agentId: string;
-      config?: OpenClawConfig;
-      sessionId: string;
-      sessionKey?: string;
-      workspaceDir: string;
-    }): Promise<SandboxContext | null>;
+    resolveSandbox(params: SessionPlacementSandboxParams): Promise<SandboxContext | null>;
   } = {
+    prepareRequiredSession: options.prepareRequiredSession,
+    usesWorkerInference: requiredAdmission.usesWorkerInference,
     resolveRuntimeOverride: (identity) =>
       resolveWorkerPlacementRuntimeOverride(options.placements, identity),
     assertCompactionSuccessorAllowed({ currentTarget }) {
@@ -178,6 +177,7 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
       runLocal: () => Promise<T>,
       assertCurrent?: () => void,
     ) {
+      requiredAdmission.assertLocalAllowed();
       return await executeLocalTurn({
         claim,
         placements: options.placements,
@@ -187,6 +187,7 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
     },
     async executeTurn(claim, inputTurn, runLocal, onAdmitted, assertRunCurrent) {
       const restartSignal = getGatewayRestartDrainSignal();
+      await requiredAdmission.prepare(claim, inputTurn, assertRunCurrent);
       const runLocalTurn = () =>
         executeLocalTurn({
           claim,
@@ -235,6 +236,7 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
         inputTurn.abortSignal?.throwIfAborted();
         assertRunCurrent?.();
         assertInitialSetupCurrent?.();
+        requiredAdmission.assertCurrent(claim);
       };
       // An admission wait ends without authority; retry from the durable placement.
       const readRoutablePlacement = (message: string, cause?: unknown) => {

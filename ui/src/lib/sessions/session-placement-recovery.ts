@@ -20,7 +20,7 @@ import {
 export type SessionPlacementStartMode = "dispatch" | "recover" | "retry";
 
 export type SessionPlacementTarget =
-  | { kind: "profile"; profileId: string; os?: string; machineClass?: string }
+  | { kind: "profile"; profileId: string; os?: string; machineClass?: string; required?: true }
   | { kind: "device"; deviceId: string }
   | { kind: "auto-device" };
 
@@ -164,9 +164,15 @@ function parseSessionPlacementTarget(value: unknown): SessionPlacementTarget | n
   if (
     value.kind === "profile" &&
     Object.keys(value).every(
-      (key) => key === "kind" || key === "profileId" || key === "os" || key === "machineClass",
+      (key) =>
+        key === "kind" ||
+        key === "profileId" ||
+        key === "os" ||
+        key === "machineClass" ||
+        key === "required",
     ) &&
     isNonEmptyString(value.profileId) &&
+    (value.required === undefined || value.required === true) &&
     (value.os === undefined || (isNonEmptyString(value.os) && value.os.length <= 64)) &&
     (value.machineClass === undefined ||
       (isNonEmptyString(value.machineClass) && value.machineClass.length <= 128))

@@ -869,9 +869,9 @@ describe("worker turn execution", () => {
       environment.sshEndpoint = null;
       environment.profileSnapshot = { settings: inference === undefined ? {} : { inference } };
       environment.bootstrapReceipt!.protocolFeatures.push(WORKER_LOCAL_INFERENCE_PROTOCOL_FEATURE);
-      let descriptor: WorkerLaunchPlan | undefined;
+      let out: WorkerLaunchPlan | undefined;
       const launchTurn = vi.fn<NonNullable<WorkerTunnelHandle["launchTurn"]>>(async ({ plan }) => {
-        descriptor = roundTripWorkerLaunchDescriptor(
+        out = roundTripWorkerLaunchDescriptor(
           completeWorkerLaunchDescriptor(plan, {
             kind: "unix",
             socketPath: "/tmp/worker-local-inference.sock",
@@ -923,16 +923,16 @@ describe("worker turn execution", () => {
       expect(environments.acquireTurnCredential).toHaveBeenCalledOnce();
       expect(environments.startTunnel).toHaveBeenCalledOnce();
       expect(runLocal).not.toHaveBeenCalled();
-      expect(descriptor?.assignment.modelRef).toEqual({ provider: "openai", model: "gpt-test" });
+      expect(out?.assignment.modelRef).toEqual({ provider: params.provider, model: params.model });
       if (providerId === "device" && inference === "worker") {
-        expect(descriptor?.assignment.inference).toBe("runtime-local");
+        expect(out?.assignment.inference).toBe("runtime-local");
       } else {
-        expect(descriptor?.assignment).not.toHaveProperty("inference");
+        expect(out?.assignment).not.toHaveProperty("inference");
       }
-      expect(descriptor?.assignment).not.toHaveProperty("baseUrl");
-      expect(descriptor?.assignment).not.toHaveProperty("apiKey");
-      expect(JSON.stringify(descriptor)).not.toContain(baseUrl);
-      expect(JSON.stringify(descriptor)).not.toContain(apiKey);
+      expect(out?.assignment).not.toHaveProperty("baseUrl");
+      expect(out?.assignment).not.toHaveProperty("apiKey");
+      expect(JSON.stringify(out)).not.toContain(baseUrl);
+      expect(JSON.stringify(out)).not.toContain(apiKey);
       expect(placements.get(SESSION_ID)).toMatchObject({ state: "active", turnClaim: null });
     },
   );
