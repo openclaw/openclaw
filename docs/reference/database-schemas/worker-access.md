@@ -1088,6 +1088,19 @@ execution. Other placement lifecycle reads remain separate migration work; the
 released synchronous placement SDK contract is unchanged. No schema, retention,
 durability, or update change is required.
 
+Session maintenance prepares placement preservation through the shared-state
+reader before lifecycle or entry-replacement worker admission. A scan-wide
+observation from the placement authority owner fences newly created placements,
+pending mutations, uncertain outcomes, and physical-store replacement. Transaction
+and commit grants consume those prepared rows and the environment owner's current
+inventory without SQL or worker requests. Confirmed rollback restores observation
+availability; committed changes require fresh preparation outside the grant.
+Prepared custody lasts through settlement. Native SDK, process-held incognito,
+and offline maintenance keep their existing synchronous transaction view. Entry
+replacement also carries the prepared subagent basis into the existing worker
+validation before mutation and after the final host grant. Schemas,
+retention, durability, and update behavior are unchanged.
+
 Placement turn claims and releases execute through the shared-state writer,
 including their coordinator acquisition. Local turns retain durable claims:
 cloud dispatch closes admission and joins their settlement before preparing the
@@ -1881,8 +1894,10 @@ session authority from worktree ownership so host admission callbacks do not rer
 worktree rows. Native receipts acknowledge lost replies, while unknown outcomes
 retain recovery custody without replay or compensating
 chunk deletion. Capacity eviction awaits each removal claim and validates all
-held claims inside the transaction. Once deletion is admitted, its allocation
-lease owns final settlement independently of caller cancellation.
+held claims inside the transaction. Registered retirement holds its per-checkout
+mutation lease; creation and restore retain their allocation lease too. Worker
+admission and commit validate every retained lease. Once deletion is admitted,
+those leases own final settlement independently of caller cancellation.
 Restoration settles old leases before publishing a live row, so
 an awaited finalizer cannot remove a successor run's lease. The final Gateway close seals
 new worktree operations and joins accepted settlement before worker teardown,

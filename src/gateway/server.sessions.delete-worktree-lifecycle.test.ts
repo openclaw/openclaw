@@ -107,7 +107,7 @@ test.each(["restore-failed", "placement-changed"] as const)(
             .mockRejectedValueOnce(new Error("worktree checkout unavailable"))
         : undefined;
     const worktreeLifecycle = await import("../sessions/session-worktree-lifecycle.js");
-    const synchronize = worktreeLifecycle.synchronizeSessionWorktreeArchive;
+    const synchronize = worktreeLifecycle.restoreSessionWorktree;
     const sqliteScope = resolveSqliteScope({ storePath, sessionKey: key });
     const writerQueuePath = resolveOpenClawAgentSqlitePath(toDatabaseOptions(sqliteScope));
     const writerStarted = createDeferredCore();
@@ -116,7 +116,7 @@ test.each(["restore-failed", "placement-changed"] as const)(
     let admission: ReturnType<typeof coordinator.ensureDispatchReplyOperation> | undefined;
     const placementChange = placements
       ? vi
-          .spyOn(worktreeLifecycle, "synchronizeSessionWorktreeArchive")
+          .spyOn(worktreeLifecycle, "restoreSessionWorktree")
           .mockImplementationOnce(async (params) => {
             const assertCurrent = await synchronize(params);
             heldWriter = runExclusiveSqliteSessionWrite(

@@ -17,12 +17,10 @@ import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { resolveOperatorSessionCreation } from "../session-creation-provenance.js";
 import { recordSessionStatusModelPatchOutcome } from "../session-model-patch-origin.js";
 import { resolvePluginSessionOwnershipError } from "../session-plugin-ownership.js";
-import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
 import { invalidSessionRequest } from "../session-request-error.js";
 import {
   resolveCanonicalGatewaySessionStoreKey,
   resolveCanonicalSessionEntryFromStoreKeys,
-  resolveGatewaySessionStoreTargetWithStore,
 } from "../session-utils.js";
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
 import * as sessionUnreadAck from "./session-unread-ack.js";
@@ -37,6 +35,7 @@ import {
   type SessionPatchCatalogResult,
 } from "./sessions-patch-catalog-preparation.js";
 import type { SessionPatchDiagnostics } from "./sessions-patch-diagnostics.js";
+import { discoverSessionPatchTargets } from "./sessions-patch-discovery.js";
 import * as patchEffects from "./sessions-patch-effects.js";
 import {
   assertSessionPatchCommitAllowed,
@@ -95,35 +94,9 @@ export async function executeSessionPatchMutations(params: {
   const callerScopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
   const callerIsAdmin = client === null || callerScopes.includes(ADMIN_SCOPE);
   const pluginOwnerId = client?.internal?.pluginRuntimeOwnerId;
-  const targetDiscoveryCache = new Map();
-  const preflightTargets = params.targets.map((input) => {
-    const key = input.key.trim();
-    const requestedAgent = resolveRequestedGlobalAgentId(cfg, key, input.agentId);
-    return {
-      input,
-      key,
-      requestedAgent,
-      resolved: requestedAgent.ok
-        ? resolveGatewaySessionStoreTargetWithStore({
-            cfg,
-            key,
-            agentId: requestedAgent.agentId,
-            exactRead: true,
-            targetDiscoveryCache,
-          })
-        : undefined,
-    };
-  });
-  const logicalTargets = new Set<string>();
-  for (const { key, resolved } of preflightTargets) {
-    if (!resolved) {
-      continue;
-    }
-    const logicalId = `${resolved.storePath}\0${resolved.canonicalKey ?? key}`;
-    if (logicalTargets.has(logicalId)) {
-      return invalidSessionRequest("Duplicate target.");
-    }
-    logicalTargets.add(logicalId);
+  const discovery = discoverSessionPatchTargets(cfg, params.targets);
+  if (!discovery.ok) {
+    return discovery;
   }
 
   const outcomes = Array.from<MutationOutcome | undefined>({ length: params.targets.length });
@@ -132,7 +105,7 @@ export async function executeSessionPatchMutations(params: {
   const preparedByIndex = Array.from<PreparedPatchTarget | undefined>({
     length: params.targets.length,
   });
-  for (const [index, { input, key, requestedAgent, resolved }] of preflightTargets.entries()) {
+  for (const [index, { input, key, requestedAgent, resolved }] of discovery.value.entries()) {
     const unreadAckError = validateSessionUnreadAck(params.patch, input);
     if (unreadAckError) {
       outcomes[index] = invalidSessionRequest(unreadAckError);
@@ -669,11 +642,6 @@ export async function executeSessionPatchMutations(params: {
                         catalog: (await catalogs.available(target.targetAgentId))?.entries,
                       });
                     }
-                    const afterCommit = archiveTransitions.get(target.index)?.afterCommit;
-                    if (outcome.ok && outcome.applied && afterCommit) {
-                      groupTiming?.mark("worktreeCleanup");
-                      await afterCommit(outcome.entry);
-                    }
                   }
                 } catch (error) {
                   for (const target of group) {
@@ -717,7 +685,7 @@ export async function executeSessionPatchMutations(params: {
   }
 
   timing?.mark("effects");
-  await patchEffects.publishSessionPatchEffects({
+  const archivedSessionsCommitted = await patchEffects.publishSessionPatchEffects({
     cfg,
     context: params.context,
     callerScopes,
@@ -738,6 +706,7 @@ export async function executeSessionPatchMutations(params: {
   }
   return {
     ok: true,
+    archivedSessionsCommitted,
     cfg,
     outcomes: outcomes as MutationOutcome[],
     preparedByIndex,

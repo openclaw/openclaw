@@ -1,4 +1,5 @@
-import type { OpenClawStateLeaseContext } from "../../state/openclaw-state-lease-context.js";
+import type { OpenClawStateAsyncLeaseContext } from "../../state/openclaw-state-lease-context.js";
+import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 
 export type ManagedWorktreeOwnerKind = "manual" | "workboard" | "session";
 
@@ -71,16 +72,21 @@ export type WorktreeRegistryPredicate =
       repoFingerprint: string;
     };
 
+export type WorktreeLeaseSet = {
+  context: OpenClawStateWorkerContext;
+  leases: readonly OpenClawStateAsyncLeaseContext[];
+};
+
 /** Explicit worker authority replaces the native guard, including predicate-only authority. */
 export type WorktreeWorkerAuthority = {
-  lease?: OpenClawStateLeaseContext;
+  leaseSet?: WorktreeLeaseSet;
   assertCurrent?: () => void;
   predicates?: readonly WorktreeRegistryPredicate[];
 };
 
 type WorktreeSourceCurrent = {
   assertCurrent: () => void;
-  workerAuthority?: Omit<WorktreeWorkerAuthority, "lease">;
+  workerAuthority?: Omit<WorktreeWorkerAuthority, "leaseSet">;
   /** Checkout custody for rollback within this callback, independent of caller/source freshness. */
   assertCheckoutCurrent?: () => void;
   signal?: AbortSignal;

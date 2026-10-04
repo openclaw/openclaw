@@ -26,7 +26,7 @@ import {
   prepareLogicalVisibleModelCatalog,
 } from "../../agents/model-catalog-visibility.js";
 import type { ModelCatalogSnapshot, ModelCatalogEntry } from "../../agents/model-catalog.types.js";
-import { createModelFastModeResolver } from "../../agents/model-fast-mode.js";
+import { createModelSpeedPolicyResolver } from "../../agents/model-fast-mode.js";
 import { modelKey } from "../../agents/model-ref-shared.js";
 import { dedupeModelCatalogEntries } from "../../agents/model-selection-shared.js";
 import {
@@ -417,7 +417,7 @@ export async function prepareModelsListResult(
     const preserveUnknownAvailability = view === "provider-config" || includeDetails;
     const projectionIsCurrent =
       view === "provider-config" ? isCurrent : () => isCurrent() && decisions.isCurrent();
-    const fastMode = createModelFastModeResolver({
+    const fastMode = createModelSpeedPolicyResolver({
       cfg,
       agentId,
       catalog: modelCatalog,
@@ -502,7 +502,8 @@ export async function prepareModelsListResult(
       const projectedAvailability = preserveUnknownAvailability
         ? evaluation.availability
         : (evaluation.availability ?? false);
-      const supportsFastMode = fastMode(entry, evaluation, preparedEntry.agentRuntime?.id);
+      const speedPolicy = fastMode(entry, evaluation, preparedEntry.agentRuntime?.id);
+      const supportsFastMode = speedPolicy.supportsFastMode;
       const serviceTiers = projectModelServiceTiers({
         config: cfg,
         agentId,
@@ -512,6 +513,7 @@ export async function prepareModelsListResult(
         evaluation,
         runtimeId: preparedEntry.agentRuntime?.id ?? "openclaw",
         accountCatalog,
+        modelServiceTiers: speedPolicy.serviceTiers,
         isCurrent: projectionIsCurrent,
       });
       return Object.assign(
@@ -526,6 +528,9 @@ export async function prepareModelsListResult(
             }
           : {},
         supportsFastMode === undefined ? {} : { supportsFastMode },
+        speedPolicy.supportsServiceTierRecovery === true
+          ? { supportsServiceTierRecovery: true }
+          : {},
         serviceTiers === undefined ? {} : { serviceTiers },
         projectedAvailability === undefined ? {} : { available: projectedAvailability },
         projectedAvailability === false && evaluation.unavailableReason

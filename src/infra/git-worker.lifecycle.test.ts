@@ -459,9 +459,18 @@ describe("Git operation host lifecycle", () => {
             type: "worktree.directory-size",
             input: { root: peer, excludeGit: true },
           }),
+          runGitWorkerOperation({
+            type: "worktree.eviction-source",
+            input: {
+              sourceRoot: peer,
+              commonDir: path.join(peer, ".git"),
+              requiredPaths: [],
+              records: [{ id: "preparation-source", path: peer, repoRoot: peer }],
+            },
+          }),
         ]);
         pending.push(settle(preparation));
-        const [gitBytes, provisioned, transition, directoryBytes] = await within(
+        const [gitBytes, provisioned, transition, directoryBytes, source] = await within(
           preparation,
           "Worktree preparation waited behind maintenance Git requests",
         );
@@ -473,6 +482,7 @@ describe("Git operation host lifecycle", () => {
           requiresFullCheckout: false,
         });
         expect(directoryBytes).toBe(43);
+        expect(source).toEqual({ worktreeIds: ["preparation-source"], complete: true });
         expect(heldRequests).toBe(1);
       } finally {
         release.resolve();

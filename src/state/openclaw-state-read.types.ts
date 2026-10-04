@@ -55,7 +55,10 @@ import type {
   WorkerPlacementRecoveryCandidate,
   WorkerSessionPlacementReadResult,
 } from "../gateway/worker-environments/placement-read-projection.types.js";
-import type { WorkerSessionPlacementChangeSnapshot } from "../gateway/worker-environments/placement-record.js";
+import type {
+  WorkerSessionPlacementChangeSnapshot,
+  WorkerSessionPlacementRecord,
+} from "../gateway/worker-environments/placement-record.js";
 import type {
   WorkspaceJournalReadCommand,
   WorkspaceJournalReadResult,
@@ -262,6 +265,7 @@ export type OpenClawStateReadCommand =
   | { type: "sandboxRegistry.browsers" }
   | WorkspaceJournalReadCommand
   | { type: "workers.placementRecoveryCandidates" }
+  | { type: "workers.placementPreservation" }
   | { type: "workers.placementPendingResults"; sessionId?: string }
   | {
       type: "workers.placementProjection";
@@ -542,6 +546,7 @@ export type OpenClawStateReadResult =
     }
   | WorkspaceJournalReadResult
   | { type: "workers.placementRecoveryCandidates"; candidates: WorkerPlacementRecoveryCandidate[] }
+  | { type: "workers.placementPreservation"; placements: WorkerSessionPlacementRecord[] }
   | {
       type: "workers.placementPendingResults";
       pendingResults: import("../gateway/worker-environments/placement-workspace-result.types.js").WorkerWorkspacePendingResult[];

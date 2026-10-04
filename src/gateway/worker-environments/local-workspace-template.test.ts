@@ -19,10 +19,6 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../../agents/worktrees/filesystem-backend.js", () => ({
   detectWorktreeFilesystemBackend: mocks.backend,
 }));
-vi.mock("../../agents/worktrees/capacity.js", () => ({
-  requireWorktreeDiskSpace: vi.fn(),
-  WORKTREE_SETUP_HEADROOM_BYTES: 4 * 1024 ** 3,
-}));
 vi.mock("../../agents/sandbox/dependency-template.js", () => ({
   resolveSandboxDependencyTemplateIdentity: async () => ({
     key: "pinned-guest-image",
@@ -139,6 +135,7 @@ async function fixture(signal: AbortSignal) {
           signal,
           commitGuard: () => signal.throwIfAborted(),
           rollbackGuard: () => {},
+          requireDiskSpace: async () => {},
         },
       }),
     ).toBe(true);

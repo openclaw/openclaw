@@ -139,6 +139,87 @@ describe("renderAssistantRequestFailureCopy", () => {
     );
   });
 
+  it.each([
+    { errorMessage: "Invalid service_tier argument", errorType: "invalid_request_error" },
+    {
+      errorMessage: "Invalid service_tier argument",
+      errorType: "invalid_request_error",
+      errorBody: "PRIVATE_NON_ERROR_BODY",
+    },
+    {
+      errorMessage:
+        '400 {"error":{"type":"invalid_request_error","message":"Invalid service_tier argument"}}',
+    },
+    {
+      errorMessage: "400 Bad Request",
+      errorBody:
+        '{"error":{"type":"invalid_request_error","message":"Invalid service_tier argument"}}',
+    },
+  ])("preserves the provider rejection across live and saved replies: %j", (error) => {
+    const assistant = makeAssistantMessageFixture({ ...target, ...error });
+    const expected = String.raw`LLM request rejected: Invalid service\_tier argument`;
+    expect(formatUserFacingAssistantErrorText(assistant)).toBe(expected);
+    expect(renderRecordedAssistantFailureCopy(assistant)).toBe(expected);
+  });
+
+  it.each([
+    "400 [messages.0] is required",
+    JSON.stringify({
+      error: { type: "invalid_request_error", message: "[messages.0] is required" },
+    }),
+  ])("retains a field-path diagnostic: %s", (errorMessage) => {
+    const assistant = makeAssistantMessageFixture({ ...target, errorMessage });
+    const expected = String.raw`LLM request rejected: \[messages\.0\] is required`;
+    expect(formatUserFacingAssistantErrorText(assistant)).toBe(expected);
+    expect(renderRecordedAssistantFailureCopy(assistant)).toBe(expected);
+  });
+
+  it.each([{ request: { input: "PRIVATE_PROMPT" } }, [{ input: "PRIVATE_PROMPT" }]])(
+    "does not display an envelope serialized inside error.message: %j",
+    (envelope) => {
+      const errorMessage = JSON.stringify({
+        error: { type: "invalid_request_error", message: JSON.stringify(envelope) },
+      });
+      const assistant = makeAssistantMessageFixture({ ...target, errorMessage });
+      expect(formatUserFacingAssistantErrorText(assistant)).not.toContain("PRIVATE");
+      expect(renderRecordedAssistantFailureCopy(assistant)).not.toContain("PRIVATE");
+    },
+  );
+
+  it.each(["", "400 Bad Request: ", "422 Unprocessable Entity: ", "422 Unprocessable Content: "])(
+    "unwraps direct and nested upstream rejections with status prefix %j",
+    (prefix) => {
+      const inner = JSON.stringify({
+        error: { type: "invalid_request_error", message: "Unsupported parameter" },
+        request: { input: "PRIVATE_PROMPT" },
+      });
+      for (const errorMessage of [
+        prefix + inner,
+        JSON.stringify({ error: { type: "invalid_request_error", message: prefix + inner } }),
+      ]) {
+        const assistant = makeAssistantMessageFixture({ ...target, errorMessage });
+        expect(formatUserFacingAssistantErrorText(assistant)).toBe(
+          "LLM request rejected: Unsupported parameter",
+        );
+        expect(renderRecordedAssistantFailureCopy(assistant)).toBe(
+          "LLM request rejected: Unsupported parameter",
+        );
+      }
+    },
+  );
+
+  it.each([
+    "400 Bad Request: { malformed PRIVATE_PROMPT",
+    "422 Unprocessable Content: <html>PRIVATE_PROMPT</html>",
+    '400 Bad Request: [{"input":"PRIVATE_PROMPT"}]',
+    '400 Bad Request: [{"input":"PRIVATE_PROMPT"}] trailing text',
+    '422 Unprocessable Entity: [{"input":"PRIVATE_PROMPT"',
+  ])("does not display a status-prefixed raw response body: %s", (errorMessage) => {
+    const assistant = makeAssistantMessageFixture({ ...target, errorMessage });
+    expect(formatUserFacingAssistantErrorText(assistant)).not.toContain("PRIVATE");
+    expect(renderRecordedAssistantFailureCopy(assistant)).not.toContain("PRIVATE");
+  });
+
   it("keeps provider bodies containing SQLite text redacted", () => {
     const errorMessage = '{"error":{"message":"database is locked PRIVATE_CANARY"}}';
     expect(

@@ -111,7 +111,6 @@ function poolFor(state: GitWorkerRuntime, command: GitWorkerCommand): GitPool {
     command.type === "worktree.cleanup-inspection" ||
     command.type === "worktree.cleanup-fingerprint" ||
     command.type === "worktree.eviction-classify" ||
-    command.type === "worktree.eviction-source" ||
     command.type === "worktree.eviction-repositories" ||
     command.type === "worktree.eviction-purge"
       ? "worktreeMaintenance"

@@ -22,12 +22,15 @@ import { sessionTranscriptIndexNeedsReconcile } from "../config/sessions/session
 import { waitForSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
 import { sqliteWorkerPreloadEnv } from "../infra/sqlite-worker-preload.test-support.js";
 import * as workerCpu from "../infra/worker-cpu.js";
+import * as logging from "../logging/subsystem.js";
 import { runExec } from "../process/exec.js";
 import * as spawnBroker from "../process/spawn-broker/context.js";
 import { getActiveSecretsRuntimeSnapshot } from "../secrets/runtime.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   AgentDatabaseAdmissionError,
+  listAgentDatabaseAdmissionRefusals,
   readAgentDatabaseAdmissionRefusal,
 } from "../state/agent-database-admission.js";
 import { withAgentDatabaseStartupAdmission } from "../state/agent-database-startup.js";
@@ -41,6 +44,7 @@ import {
 } from "../state/openclaw-agent-db.js";
 import { assertOpenClawDatabasesReady } from "../state/openclaw-database-preflight.js";
 import { clearOpenClawAgentIntegrityVerification } from "../state/openclaw-quarantine-store.js";
+import { resolveQuarantineStorePath } from "../state/openclaw-state-db.paths.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { acquireTestPortBlock, type TestPortClaim } from "../test-utils/port-claims.js";
 import { loadGatewayTestConfig } from "./test-helpers.config-runtime.js";
@@ -611,21 +615,38 @@ it.for([
   },
 );
 
-it("recovers queued agents after both inspection slots expire without refusing an absent database", async () => {
+it("admits a version-changed fleet in parallel without gating readiness on an unconfigured leftover", async ({
+  signal,
+}) => {
   testState.agentsConfig = {
     ownership: "explicit",
-    entries: { a: {}, b: {}, main: {}, absent: {} },
+    entries: { "worker-a": {}, "worker-b": {}, main: {}, absent: {} },
   };
   testState.agentConfig = { systemAgent: { agentId: "main" } };
   const env = { ...process.env };
   const cfg = loadGatewayTestConfig();
-  const agentIds = ["a", "b", "main"];
+  const agentIds = ["worker-a", "worker-b", "main"];
   const paths = agentIds.map((agentId) => openOpenClawAgentDatabase({ agentId, env }).path);
+  const leftover = openOpenClawAgentDatabase({ agentId: "openclaw", env }).path;
   await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
   await closeStateDatabaseForTest();
+  const receipts = new DatabaseSync(resolveQuarantineStorePath(env));
+  try {
+    expect(
+      receipts
+        .prepare(
+          "SELECT COUNT(*) AS count FROM agent_integrity_verifications WHERE clean_close = 1",
+        )
+        .get()?.count,
+    ).toBe(4);
+    receipts.prepare("UPDATE agent_integrity_verifications SET app_version = ?").run("2026.9.7");
+  } finally {
+    receipts.close();
+  }
+  fs.writeFileSync(leftover, "unconfigured leftover must not be inspected or repaired");
+  const leftoverBytes = fs.readFileSync(leftover);
   for (const pathname of paths) {
-    clearOpenClawAgentIntegrityVerification(pathname, env);
     const database = new DatabaseSync(pathname);
     try {
       database.exec("PRAGMA journal_mode=DELETE");
@@ -633,16 +654,55 @@ it("recovers queued agents after both inspection slots expire without refusing a
       database.close();
     }
   }
-  const pause = pauseIntegrityInspections({
-    root: resolveStateDir(env),
-    paths,
-    pausePaths: paths.slice(0, 2),
-    pauseSchema: true,
+  const warnings = vi.fn();
+  const createLogger = logging.createSubsystemLogger;
+  vi.spyOn(logging, "createSubsystemLogger").mockImplementation((name) => {
+    const logger = createLogger(name);
+    return name === "state/agent-admission" ? { ...logger, warn: warnings } : logger;
   });
-  Object.assign(env, pause.env);
+  const openings: string[] = [];
+  let activeOpenings = 0;
+  let peakOpenings = 0;
+  const openingEntered = agentIds.map(() => createDeferredCore());
+  const openingReleases = new Map(agentIds.map((id) => [id, createDeferredCore()]));
+  const admitted = new Set<string>();
+  const allAdmitted = createDeferredCore();
+  const unsubscribe = sessionChanges.subscribe((change) => {
+    if ("all" in change && typeof change.scope === "object" && change.scope.topology) {
+      const id = change.scope.agentId;
+      if (
+        id &&
+        agentIds.includes(id) &&
+        !listAgentDatabaseAdmissionRefusals({ env }).some((refusal) => refusal.agentId === id)
+      ) {
+        admitted.add(id);
+        if (admitted.size === agentIds.length) {
+          allAdmitted.resolve();
+        }
+      }
+    }
+  });
   let server: Awaited<ReturnType<typeof startTestGatewayServer>> | undefined;
   try {
-    const started = await withAgentDatabaseStartupAdmission(async () => {
+    const started = await withAgentDatabaseStartupAdmission(async (admission) => {
+      const activate = admission.activate.bind(admission);
+      vi.spyOn(admission, "activate").mockImplementation((activation) =>
+        activate({
+          ...activation,
+          openAgent: async (input) => {
+            activeOpenings += 1;
+            peakOpenings = Math.max(peakOpenings, activeOpenings);
+            openings.push(input.agentId);
+            openingEntered[openings.length - 1]!.resolve();
+            try {
+              await withinTest(openingReleases.get(input.agentId)!.promise, signal);
+              await activation.openAgent(input);
+            } finally {
+              activeOpenings -= 1;
+            }
+          },
+        }),
+      );
       await assertOpenClawDatabasesReady({ env, operation: "gateway-startup", config: cfg });
       const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
       return {
@@ -657,12 +717,6 @@ it("recovers queued agents after both inspection slots expire without refusing a
     await server.startupSettled;
     expect((await fetch(`http://127.0.0.1:${started.port}/healthz`)).status).toBe(200);
     expect((await fetch(`http://127.0.0.1:${started.port}/readyz`)).status).toBe(200);
-    await vi.waitFor(() => {
-      for (const marker of pause.enteredPaths.slice(0, 2)) {
-        expect(fs.existsSync(marker)).toBe(true);
-      }
-    });
-    expect(fs.existsSync(pause.enteredPaths[2]!)).toBe(false);
     for (const agentId of agentIds) {
       expect(readAgentDatabaseAdmissionRefusal(agentId, { env })).toMatchObject({
         code: "agent-database-inspection-pending",
@@ -672,27 +726,37 @@ it("recovers queued agents after both inspection slots expire without refusing a
     const absentOptions = { agentId: "absent", env };
     expect(fs.existsSync(resolveOpenClawAgentSqlitePath(absentOptions))).toBe(false);
     expect(openOpenClawAgentDatabase(absentOptions).agentId).toBe("absent");
-    fs.writeFileSync(pause.releasePaths[1]!, "resume b");
-    await vi.waitFor(
-      () => {
-        expect(fs.existsSync(pause.enteredPaths[2]!)).toBe(true);
-        for (const agentId of ["b", "main"]) {
-          expect(readAgentDatabaseAdmissionRefusal(agentId, { env })).toBeUndefined();
-        }
-      },
-      { timeout: 10000 },
-    );
-    expect(readAgentDatabaseAdmissionRefusal("a", { env })).toMatchObject({
-      code: "agent-database-inspection-pending",
-    });
+    expect(readAgentDatabaseAdmissionRefusal("openclaw", { env })).toBeUndefined();
+    expect(fs.readFileSync(leftover)).toEqual(leftoverBytes);
+    await withinTest(openingEntered[1]!.promise, signal);
+    expect(openings).toHaveLength(2);
     expect((await fetch(`http://127.0.0.1:${started.port}/readyz`)).status).toBe(200);
-    fs.writeFileSync(pause.releasePaths[0]!, "resume a");
-    await vi.waitFor(
-      () => expect(readAgentDatabaseAdmissionRefusal("a", { env })).toBeUndefined(),
-      { timeout: 10000 },
-    );
+    openingReleases.get(openings[0]!)!.resolve();
+    await withinTest(openingEntered[2]!.promise, signal);
+    expect(openings).toHaveLength(3);
+    for (const release of openingReleases.values()) {
+      release.resolve();
+    }
+    await withinTest(allAdmitted.promise, signal);
+    expect(peakOpenings).toBe(2);
+    expect(
+      warnings.mock.calls.filter(([message]) => message.includes("unconfigured agent database")),
+    ).toEqual([
+      [
+        "Skipped openclaw-agent.sqlite: unconfigured agent database; run openclaw doctor to inspect retained data.",
+      ],
+    ]);
+    for (const agentId of agentIds) {
+      expect(readAgentDatabaseAdmissionRefusal(agentId, { env })).toBeUndefined();
+    }
+    expect(readAgentDatabaseAdmissionRefusal("openclaw", { env })).toBeUndefined();
+    expect(fs.readFileSync(leftover)).toEqual(leftoverBytes);
+    expect((await fetch(`http://127.0.0.1:${started.port}/readyz`)).status).toBe(200);
   } finally {
-    fs.writeFileSync(pause.releasePath, "resume");
+    unsubscribe();
+    for (const release of openingReleases.values()) {
+      release.resolve();
+    }
     await server?.close();
   }
 });
