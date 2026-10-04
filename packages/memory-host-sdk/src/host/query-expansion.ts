@@ -666,7 +666,7 @@ function tokenize(text: string, opts?: { ftsTokenizer?: "unicode61" | "trigram" 
         // Chinese default queries use unigrams; Japanese and trigram queries
         // retain whole runs. Trigram FTS cannot match individual characters.
         if (!japanese && han && !useTrigram) {
-          tokens.push(...part);
+          tokens.push(...Array.from(part));
         } else {
           tokens.push(part);
         }
