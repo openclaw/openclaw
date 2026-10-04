@@ -3,8 +3,6 @@ import {
   PluginRuntimeApplicationError,
   type PluginRuntimeApplication,
 } from "../plugins/lifecycle.js";
-import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
-import { getActivePluginRegistry } from "../plugins/runtime.js";
 import type { GatewayReloadPlan } from "./config-reload-plan.js";
 import { PluginAdmittedWorkTimeoutError } from "./server-plugin-reload-cleanup.js";
 import { GatewayConfigReloadSupersededError } from "./server-reload-contracts.js";
@@ -88,13 +86,8 @@ export function createConfigPluginDrainTracker(params: {
         }
         // The rolled-back generation keeps serving and accepting work. Retry a timed-out
         // drain when it would pass immediately; other drain failures need an operator.
-        const pluginIds = new Set(timeout.pluginIds);
         const signal = AbortSignal.any([params.signal, current.observation.signal]);
-        void Promise.all(
-          (getActivePluginRegistry()?.plugins ?? []).map((record) =>
-            pluginIds.has(record.id) ? getPluginInstance(record)?.waitForIdle(signal) : undefined,
-          ),
-        ).then(
+        void Promise.all(timeout.instances.map((instance) => instance.waitForIdle(signal))).then(
           () => {
             if (failure === current) {
               clear();
