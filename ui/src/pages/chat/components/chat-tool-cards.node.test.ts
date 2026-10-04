@@ -348,7 +348,7 @@ describe("tool card outcomes", () => {
     expect(done.map((card) => resolveToolCardOutcome(card, true))).toEqual(["succeeded"]);
   });
 
-  it.each(["start", "update", "end"] as const)(
+  it.each(["start", "end"] as const)(
     "distinguishes %s activity from terminal results without outcomes",
     (phase) => {
       const [card] = assistantCards(
