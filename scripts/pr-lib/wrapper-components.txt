@@ -1212,7 +1212,6 @@ src/plugins/doctor-compatibility-migration.ts
 src/plugins/doctor-contract-artifact.ts
 src/plugins/doctor-contract-legacy-setup.ts
 src/plugins/doctor-contract-module.ts
-src/plugins/doctor-contract-registry-loader-state.ts
 src/plugins/doctor-contract-registry.ts
 src/plugins/doctor-contract-relevance.ts
 src/plugins/loader-channel-setup.ts
