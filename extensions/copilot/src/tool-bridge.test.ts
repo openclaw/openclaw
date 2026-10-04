@@ -969,6 +969,57 @@ describe("createCopilotToolBridge tool conversion", () => {
     });
   });
 
+  it("passes dispatcher-prepared catalog arguments through without re-preparing them", async () => {
+    type CatalogExecutor = (params: {
+      tool: AnyAgentTool;
+      toolName: string;
+      source: "openclaw";
+      sourceName: string;
+      toolCallId: string;
+      parentToolCallId: string;
+      input: unknown;
+    }) => Promise<unknown>;
+    let catalogExecutor: CatalogExecutor | undefined;
+    await createCopilotToolBridge({
+      attemptParams: {
+        config: { tools: { toolSearch: true } },
+        runId: "run-tool-search",
+        sessionKey: "agent:agent-1:main",
+      } as never,
+      createOpenClawCodingTools: (options: unknown) => {
+        catalogExecutor = (options as { toolSearchCatalogExecutor?: CatalogExecutor })
+          .toolSearchCatalogExecutor;
+        return [makeTool({ name: "tool_search_code" })];
+      },
+    });
+    const prepareArguments = vi.fn((args: unknown) => ({ rePrepared: args }));
+    const target = makeTool({ name: "memory_search", prepareArguments });
+    const preparedInput = { memory_recall: "release notes" };
+
+    await expectDefined(
+      catalogExecutor,
+      "Copilot catalog executor",
+    )({
+      tool: target as unknown as AnyAgentTool,
+      toolName: "memory_search",
+      source: "openclaw",
+      sourceName: "memory-lancedb",
+      toolCallId: "catalog-search-1",
+      parentToolCallId: "tool-search-1",
+      input: preparedInput,
+    });
+
+    // The catalog dispatcher prepares arguments before validation; preparing
+    // again here would run a non-idempotent preparer twice.
+    expect(prepareArguments).not.toHaveBeenCalled();
+    expect(target.execute).toHaveBeenCalledWith(
+      "catalog-search-1",
+      preparedInput,
+      undefined,
+      undefined,
+    );
+  });
+
   it("drains earlier calls after rejection and resumes parallel work after an exclusive call", async () => {
     const started = Array.from({ length: 5 }, () => createDeferred<void>());
     const gates = Array.from({ length: 5 }, () => createDeferred<void>());

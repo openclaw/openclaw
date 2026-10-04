@@ -539,13 +539,13 @@ async function executeCatalogTool(
   const ownerKey = getPluginToolSideEffectOwnerKey(sourceTool);
   const ownerMutation = ownerKey ? { ownerKey } : undefined;
   const startedAt = Date.now();
+  // The catalog dispatcher owns argument preparation before validation
+  // (tool-search-runtime executeEntry); preparing here would run a
+  // non-idempotent preparer twice.
   let preparedArgs: unknown = params.input;
   let executionStarted = false;
   let terminalObserved = false;
   try {
-    preparedArgs = sourceTool.prepareArguments
-      ? sourceTool.prepareArguments(params.input)
-      : params.input;
     executionStarted = true;
     const result = await sourceTool.execute(
       params.toolCallId,
