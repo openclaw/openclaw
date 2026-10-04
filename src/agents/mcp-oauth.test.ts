@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
+import { InvalidClientMetadataError } from "@modelcontextprotocol/sdk/server/auth/errors.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { McpServerConfig } from "../config/types.mcp.js";
 import { handleMcpOAuthCallback } from "../gateway/mcp-oauth-callback.js";
@@ -40,6 +41,7 @@ const ROTATED_ACCESS = "gateway-token";
 const LEGACY_ACCESS = "example";
 const REMOTE_IDENTITY = operatorMcpOAuthIdentity("Remote Docs", "https://mcp.example.com/mcp");
 const CALENDLY_IDENTITY = operatorMcpOAuthIdentity("Calendly", "https://mcp.calendly.com/");
+const CALENDLY_OAUTH_CONFIG = resolvedOAuthConfig(CALENDLY_IDENTITY);
 async function runGatewayOAuthCallback(params: {
   serverName: string;
   server: McpServerConfig;
@@ -784,70 +786,70 @@ describe("MCP OAuth provider", () => {
     );
   });
 
-  it("persists the localhost retry for completion and then clears the session", async () => {
-    await withTempHome(
-      async () => {
-        authMock
-          .mockRejectedValueOnce(new Error("invalid_client_metadata: redirect_uri rejected"))
-          .mockImplementationOnce(persistRedirect);
+  it.each([
+    ["SDK error without a description", new InvalidClientMetadataError("")],
+    ["text error", new Error("invalid_client_metadata: redirect_uri rejected")],
+  ])(
+    "persists the localhost retry after %s for completion and then clears the session",
+    async (_label, error) => {
+      await withTempHome(
+        async () => {
+          authMock.mockRejectedValueOnce(error).mockImplementationOnce(persistRedirect);
 
-        const session = await startMcpOAuthAuthorization(
-          CALENDLY_IDENTITY,
-          resolvedOAuthConfig(CALENDLY_IDENTITY),
-          {},
-        );
-        if (session.status !== "redirect") {
-          throw new Error("expected MCP OAuth redirect");
-        }
+          const session = await startMcpOAuthAuthorization(
+            CALENDLY_IDENTITY,
+            CALENDLY_OAUTH_CONFIG,
+            {},
+          );
+          if (session.status !== "redirect") {
+            throw new Error("expected MCP OAuth redirect");
+          }
 
-        expect(session.redirectUrl).toBe("http://localhost:8989/oauth/callback");
-        expect(authMock.mock.calls[1]?.[0]?.clientMetadata.redirect_uris).toEqual([
-          "http://localhost:8989/oauth/callback",
-        ]);
-        expect(await readMcpOAuthStore(CALENDLY_IDENTITY.storeKey)).toMatchObject({
-          codeVerifier: "verifier",
-          redirectUrl: "http://localhost:8989/oauth/callback",
-        });
+          expect(session.redirectUrl).toBe("http://localhost:8989/oauth/callback");
+          expect(authMock.mock.calls[1]?.[0]?.clientMetadata.redirect_uris).toEqual([
+            "http://localhost:8989/oauth/callback",
+          ]);
+          expect(await readMcpOAuthStore(CALENDLY_IDENTITY.storeKey)).toMatchObject({
+            codeVerifier: "verifier",
+            redirectUrl: "http://localhost:8989/oauth/callback",
+          });
 
-        authMock.mockReset();
-        authMock.mockImplementationOnce(async (provider, options) => {
-          expect(options.authorizationCode).toBe("code-123");
-          expect(provider.redirectUrl).toBe("http://localhost:8989/oauth/callback");
-          expect(await provider.codeVerifier()).toBe("verifier");
-          return "AUTHORIZED";
-        });
-        await expect(
-          completeMcpOAuthAuthorization(CALENDLY_IDENTITY, resolvedOAuthConfig(CALENDLY_IDENTITY), {
-            code: "code-123",
-          }),
-        ).resolves.toBe("authorized");
-        expect(await readMcpOAuthStore(CALENDLY_IDENTITY.storeKey)).not.toMatchObject({
-          codeVerifier: expect.anything(),
-          redirectUrl: expect.anything(),
-        });
-      },
-      {
-        prefix: "openclaw-mcp-oauth-localhost-persist-",
-        skipSessionCleanup: true,
-        env: { OPENCLAW_CONFIG_PATH: undefined, OPENCLAW_STATE_DIR: undefined },
-      },
-    );
-  });
+          authMock.mockReset();
+          authMock.mockImplementationOnce(async (provider, options) => {
+            expect(options.authorizationCode).toBe("code-123");
+            expect(provider.redirectUrl).toBe("http://localhost:8989/oauth/callback");
+            expect(await provider.codeVerifier()).toBe("verifier");
+            return "AUTHORIZED";
+          });
+          await expect(
+            completeMcpOAuthAuthorization(CALENDLY_IDENTITY, CALENDLY_OAUTH_CONFIG, {
+              code: "code-123",
+            }),
+          ).resolves.toBe("authorized");
+          expect(await readMcpOAuthStore(CALENDLY_IDENTITY.storeKey)).not.toMatchObject({
+            codeVerifier: expect.anything(),
+            redirectUrl: expect.anything(),
+          });
+        },
+        {
+          prefix: "openclaw-mcp-oauth-localhost-persist-",
+          skipSessionCleanup: true,
+          env: { OPENCLAW_CONFIG_PATH: undefined, OPENCLAW_STATE_DIR: undefined },
+        },
+      );
+    },
+  );
 
   it("does not retry a code exchange redirect mismatch", async () => {
     await withTempHome(
       async () => {
         authMock.mockImplementationOnce(persistRedirect);
-        await startMcpOAuthAuthorization(
-          CALENDLY_IDENTITY,
-          resolvedOAuthConfig(CALENDLY_IDENTITY),
-          {},
-        );
+        await startMcpOAuthAuthorization(CALENDLY_IDENTITY, CALENDLY_OAUTH_CONFIG, {});
         authMock.mockReset();
         authMock.mockRejectedValueOnce(new Error("invalid_grant: redirect_uri mismatch"));
 
         await expect(
-          completeMcpOAuthAuthorization(CALENDLY_IDENTITY, resolvedOAuthConfig(CALENDLY_IDENTITY), {
+          completeMcpOAuthAuthorization(CALENDLY_IDENTITY, CALENDLY_OAUTH_CONFIG, {
             code: "code-123",
           }),
         ).rejects.toThrow("redirect_uri mismatch");
@@ -870,7 +872,7 @@ describe("MCP OAuth provider", () => {
           .mockRejectedValueOnce(new Error("localhost redirect also rejected"));
 
         await expect(
-          startMcpOAuthAuthorization(CALENDLY_IDENTITY, resolvedOAuthConfig(CALENDLY_IDENTITY), {}),
+          startMcpOAuthAuthorization(CALENDLY_IDENTITY, CALENDLY_OAUTH_CONFIG, {}),
         ).rejects.toThrow("localhost redirect also rejected");
 
         expect(await readMcpOAuthStore(CALENDLY_IDENTITY.storeKey)).toEqual({});

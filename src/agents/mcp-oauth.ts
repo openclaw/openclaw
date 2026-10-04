@@ -1,5 +1,6 @@
 /** MCP OAuth credential provider, flow coordinator, and login helpers. */
 import { auth } from "@modelcontextprotocol/sdk/client/auth.js";
+import { InvalidClientMetadataError } from "@modelcontextprotocol/sdk/server/auth/errors.js";
 import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -49,7 +50,11 @@ const MCP_OAUTH_LEASE_MS = 60_000;
 const MCP_OAUTH_LEASE_WAIT_MS = 30_000;
 
 function isMcpOAuthRedirectRegistrationError(error: unknown): boolean {
-  return /invalid_client_metadata|redirect_uri/i.test(String(error));
+  // Providers may omit error_description; the SDK then retains only the typed error.
+  return (
+    error instanceof InvalidClientMetadataError ||
+    /invalid_client_metadata|redirect_uri/i.test(String(error))
+  );
 }
 
 async function withMcpOAuthLease<T>(
