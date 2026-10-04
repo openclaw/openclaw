@@ -6,6 +6,10 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { assertExistingOpenClawStateRuntimeSchema } from "./openclaw-state-db-existing-schema.js";
 import { isOpenClawStateSchemaFastPathEligible } from "./openclaw-state-db-fast-path.js";
 import {
+  closeTrackedStateDatabase,
+  openTrackedStateDatabase,
+} from "./openclaw-state-db-handle.js";
+import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "./openclaw-state-db.js";
@@ -41,12 +45,14 @@ function countFullIntegrityChecks(): { readonly count: number } {
   return counter;
 }
 
+// Receipts name the file the handle owner bound at open time, so admission in a test has to come
+// through that owner exactly as production admission does.
 function withFreshConnection<T>(pathname: string, run: (database: DatabaseSync) => T): T {
-  const database = new DatabaseSync(pathname, { readOnly: true });
+  const database = openTrackedStateDatabase(pathname, { readOnly: true });
   try {
     return run(database);
   } finally {
-    database.close();
+    closeTrackedStateDatabase(database);
   }
 }
 
@@ -74,6 +80,7 @@ async function fastPathInFreshWorker(
   pathname: string,
 ): Promise<{ checks: number; eligible: boolean }> {
   const fastPathUrl = new URL("./openclaw-state-db-fast-path.ts", import.meta.url).href;
+  const handleUrl = new URL("./openclaw-state-db-handle.ts", import.meta.url).href;
   const source = [
     'const { parentPort, workerData } = await import("node:worker_threads");',
     'const { DatabaseSync } = await import("node:sqlite");',
@@ -84,17 +91,18 @@ async function fastPathInFreshWorker(
     "  return prepare.call(this, sql, ...rest);",
     "};",
     "const { isOpenClawStateSchemaFastPathEligible } = await import(workerData.fastPathUrl);",
-    "const database = new DatabaseSync(workerData.pathname, { readOnly: true });",
+    "const { openTrackedStateDatabase, closeTrackedStateDatabase } = await import(workerData.handleUrl);",
+    "const database = openTrackedStateDatabase(workerData.pathname, { readOnly: true });",
     "try {",
     "  const eligible = isOpenClawStateSchemaFastPathEligible(database, workerData.pathname);",
     "  parentPort.postMessage({ checks, eligible });",
     "} finally {",
-    "  database.close();",
+    "  closeTrackedStateDatabase(database);",
     "}",
   ].join("\n");
   const worker = new Worker(new URL("data:text/javascript," + encodeURIComponent(source)), {
     execArgv: ["--import", import.meta.resolve("tsx")],
-    workerData: { pathname, fastPathUrl },
+    workerData: { pathname, fastPathUrl, handleUrl },
   });
   try {
     return await new Promise<{ checks: number; eligible: boolean }>((resolve, reject) => {

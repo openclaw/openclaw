@@ -4,6 +4,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { isOpenClawStateSchemaFastPathEligible } from "./openclaw-state-db-fast-path.js";
 import {
+  closeTrackedStateDatabase,
+  openTrackedStateDatabase,
+} from "./openclaw-state-db-handle.js";
+import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "./openclaw-state-db.js";
@@ -23,12 +27,14 @@ function createStateDatabase(prefix: string): string {
   return pathname;
 }
 
+// Receipts name the file the handle owner bound at open time, so admission in a test has to come
+// through that owner exactly as production admission does.
 function fastPath(pathname: string): boolean {
-  const database = new DatabaseSync(pathname, { readOnly: true });
+  const database = openTrackedStateDatabase(pathname, { readOnly: true });
   try {
     return isOpenClawStateSchemaFastPathEligible(database, pathname);
   } finally {
-    database.close();
+    closeTrackedStateDatabase(database);
   }
 }
 
