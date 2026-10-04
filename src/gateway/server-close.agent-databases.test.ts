@@ -368,7 +368,7 @@ it("releases agent leases for Doctor after the final Gateway stops while its pro
 });
 
 it.skipIf(process.platform !== "linux")(
-  "joins agent resources and records a clean witness after a managed SIGTERM drain",
+  "releases idle agent leases before sidecar settlement and joins managed SIGTERM cleanup",
   async () => {
     const fixture = await createGatewayMetadataCloseFixture("gateway-agent-resource-close");
     const entered = createDeferredCore();
@@ -514,14 +514,17 @@ it.skipIf(process.platform !== "linux")(
       ]);
       expect(isAgentRunRestartAbortReason(operation.abortSignal.reason)).toBe(true);
       await writerReleased.promise;
-      expect(agentLeases.all(agent.path)).toHaveLength(1);
+      expect(agentLeases.all(agent.path)).toEqual([]);
       await vi.advanceTimersByTimeAsync(10_001);
       expect(exit).not.toHaveBeenCalled();
-      expect(agent.db.isOpen).toBe(true);
+      expect(agent.db.isOpen).toBe(false);
       expect(shared.isOpen).toBe(true);
-      expect(() => assertNoOpenClawAgentDatabaseLeasesReadOnly({ env: fixture.state.env })).toThrow(
-        OpenClawAgentDatabaseLeaseActiveError,
-      );
+      expect(() =>
+        assertNoOpenClawAgentDatabaseLeasesReadOnly({ env: fixture.state.env }),
+      ).not.toThrow();
+      expect(
+        readOpenClawAgentIntegrityVerification(agent.path, fixture.state.env)?.clean_close,
+      ).toBe(1);
       await vi.advanceTimersByTimeAsync(4_999);
       release.resolve();
       await closing;
