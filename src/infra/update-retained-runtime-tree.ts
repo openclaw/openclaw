@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { collectPluginSafetyInspectedFiles } from "../plugins/plugin-safety-inspected-files.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
-import { root as openRoot } from "./fs-safe.js";
+import { copyInPreferringClone, root as openRoot } from "./fs-safe.js";
 import { hasNodeErrorCode } from "./path-guards.js";
 import {
   assertUpdateCandidatePluginEntryStat,
@@ -100,13 +100,12 @@ export async function linkUpdateCandidatePluginTrees(
     const root = await (destinationRoot ??= openRoot(privateRoot));
     // copyIn owns portable create-only publication; recheck the inventory before
     // its private stage is published.
-    await root.copyIn(path.relative(privateRoot, destination), entry.path, {
+    await copyInPreferringClone(root, path.relative(privateRoot, destination), entry.path, {
       overwrite: false,
       // The entry loop already prepares each destination parent.
       mkdir: false,
       // Process-lifetime scratch like the unsynced hard-link path, never a recovery backup.
       durable: false,
-      clone: "auto",
       maxBytes: entry.size,
       mode: entry.mode | 0o600,
       sourceHardlinks: "allow",

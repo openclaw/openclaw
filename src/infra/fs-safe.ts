@@ -6,9 +6,16 @@ import {
   findExistingAncestor,
   readLocalFileFromRoots as readFsSafeLocalFileFromRoots,
 } from "@openclaw/fs-safe/advanced";
-import "@openclaw/fs-safe/errors";
+import { FsSafeError } from "@openclaw/fs-safe/errors";
 import { writeExternalFileWithinRoot as writeExternalFileWithinRootBase } from "@openclaw/fs-safe/output";
-import { root as fsSafeRoot, type ReadResult, type RootDefaults } from "@openclaw/fs-safe/root";
+import { hasNodeErrorCode } from "@openclaw/fs-safe/path";
+import {
+  root as fsSafeRoot,
+  type ReadResult,
+  type RootCopyOptions,
+  type RootCopySource,
+  type RootDefaults,
+} from "@openclaw/fs-safe/root";
 import type { CompatibleFsSafeRoot, LegacyNonBlockingReadOption } from "./fs-safe-compat.js";
 
 export { FsSafeError, type FsSafeErrorCode } from "@openclaw/fs-safe/errors";
@@ -71,6 +78,46 @@ export async function root(
   defaults?: RootDefaults & LegacyNonBlockingReadOption,
 ): Promise<Root> {
   return await fsSafeRoot(rootDir, defaults);
+}
+
+/**
+ * True when a native copy failed because the kernel refused the FICLONE ioctl itself.
+ * Seccomp policies (as seen in unprivileged LXC containers, #164113) answer that ioctl with
+ * EPERM before any filesystem sees it. In fs-safe 0.23, copyIn's native path treats only
+ * ENOTSUP as "clone unavailable" and reports this as a helper failure whose cause carries the
+ * native "FICLONE: ..." message (its link-or-copy publication already falls back on EPERM).
+ * Nothing was published, and a plain copy of the same file is unaffected. Retire this once
+ * fs-safe classifies the denial itself.
+ */
+export function isCloneDeniedError(error: unknown): boolean {
+  return (
+    error instanceof FsSafeError &&
+    error.code === "helper-failed" &&
+    error.cause instanceof Error &&
+    hasNodeErrorCode(error.cause, "EPERM") &&
+    /\bFICLONE\b/u.test(error.cause.message)
+  );
+}
+
+/**
+ * copyIn with `clone: "auto"` that keeps working where the clone ioctl is denied: the
+ * denied attempt is retried once as a plain copy with identical guards and create-only
+ * publication. Any other failure propagates unchanged.
+ */
+export async function copyInPreferringClone(
+  target: Pick<Root, "copyIn">,
+  relativePath: string,
+  source: RootCopySource,
+  options: Omit<RootCopyOptions, "clone">,
+): Promise<void> {
+  try {
+    await target.copyIn(relativePath, source, { ...options, clone: "auto" });
+  } catch (error) {
+    if (!isCloneDeniedError(error)) {
+      throw error;
+    }
+    await target.copyIn(relativePath, source, { ...options, clone: "never" });
+  }
 }
 
 export type ExternalFileWriteOptions = {
