@@ -648,7 +648,6 @@ extensions/nextcloud-talk/src/setup-core.ts	8
 extensions/nextcloud-talk/src/setup-surface.ts	11
 extensions/nostr/index.ts	2
 extensions/nostr/src/gateway.ts	1
-extensions/nostr/src/metrics.ts	1
 extensions/nostr/src/nostr-bus.ts	7
 extensions/nostr/src/nostr-cursor.ts	2
 extensions/nostr/src/nostr-ingress.ts	4

@@ -43,19 +43,17 @@ describe("RequestClient", () => {
     vi.useRealTimers();
   });
 
-  it("defaults non-finite REST client numeric options before scheduling requests", async () => {
+  it("defaults non-finite REST client timeouts before scheduling requests", async () => {
     const fetchSpy = vi.fn(async (input: string | URL | Request) => {
       expect(new URL(readRequestUrl(input)).pathname).toBe("/api/v10/guilds/g1/roles");
       return createJsonResponse({ ok: true });
     });
     const client = new RequestClient("test-token", {
       fetch: fetchSpy,
-      apiVersion: Number.NaN,
       timeout: Number.NaN,
     });
 
     await expect(client.get("/guilds/g1/roles")).resolves.toEqual({ ok: true });
-    expect(client.getSchedulerMetrics().maxConcurrentWorkers).toBe(4);
   });
 
   it("caps oversized REST client request timeouts before scheduling aborts", async () => {
@@ -135,9 +133,7 @@ describe("RequestClient", () => {
     await expect(first).resolves.toEqual({ ok: "first" });
     await expect(stale).rejects.toThrow(/Dropped stale background request/);
     expect(fetchSpy).toHaveBeenCalledTimes(1);
-    const metrics = client.getSchedulerMetrics();
-    expect(metrics.droppedByLane).toEqual({ critical: 0, standard: 0, background: 1 });
-    expect(metrics.queueSize).toBe(0);
+    expect(client.queueSize).toBe(0);
   });
 
   it("keeps standard mutations queued until Discord accepts or rejects them", async () => {
@@ -185,9 +181,7 @@ describe("RequestClient", () => {
       { ok: true },
     ]);
     expect(fetchSpy).toHaveBeenCalledTimes(requests.length + active.length);
-    const metrics = client.getSchedulerMetrics();
-    expect(metrics.droppedByLane).toEqual({ critical: 0, standard: 0, background: 0 });
-    expect(metrics.queueSize).toBe(0);
+    expect(client.queueSize).toBe(0);
   });
 
   it("drains same-bucket requests when the active request finishes without polling", async () => {
@@ -277,10 +271,8 @@ describe("RequestClient", () => {
 
     await expect(client.get("/channels/c1/messages")).resolves.toEqual({ id: "first" });
 
-    const metrics = client.getSchedulerMetrics();
-    expect(metrics.activeBuckets).toBe(0);
-    expect(metrics.routeBucketMappings).toBe(0);
-    expect(metrics.buckets).toStrictEqual([]);
+    expect(client).toHaveProperty("scheduler.buckets.size", 0);
+    expect(client).toHaveProperty("scheduler.routeBuckets.size", 0);
   });
 
   it("waits for a learned bucket reset before dispatching the next request", async () => {
@@ -323,7 +315,6 @@ describe("RequestClient", () => {
     const client = new RequestClient("test-token", { fetch: fetchSpy });
 
     await expect(client.get("/channels/c1/messages")).resolves.toEqual({ id: "first" });
-    expect(client.getSchedulerMetrics().routeBucketMappings).toBe(1);
 
     const second = client.get("/channels/c1/messages");
     await Promise.resolve();
@@ -388,7 +379,7 @@ describe("RequestClient", () => {
     await expect(request).resolves.toEqual({ id: "retried" });
     expect(fetchSpy).toHaveBeenCalledTimes(2);
     expect(client.queueSize).toBe(0);
-    expect(client.getSchedulerMetrics().buckets).toStrictEqual([]);
+    expect(client).toHaveProperty("scheduler.buckets.size", 0);
   });
 
   it("limits queued rate-limited requests to three retries", async () => {
@@ -603,26 +594,6 @@ describe("RequestClient", () => {
     await expectRateLimitError(client.get("/channels/c1/messages"), { retryAfter: 1 });
   });
 
-  it("tracks invalid requests and exposes bucket scheduler metrics", async () => {
-    const client = new RequestClient("test-token", {
-      queueRequests: false,
-      fetch: async () =>
-        createJsonResponse(
-          { message: "Forbidden", code: 50013 },
-          {
-            status: 403,
-            headers: { "X-RateLimit-Bucket": "permissions" },
-          },
-        ),
-    });
-
-    await expectDiscordErrorStatus(client.get("/channels/c1/messages"), 403);
-
-    const metrics = client.getSchedulerMetrics();
-    expect(metrics.invalidRequestCount).toBe(1);
-    expect(metrics.invalidRequestCountByStatus).toEqual({ 403: 1 });
-  });
-
   it("bounds oversized REST response bodies instead of buffering them unbounded", async () => {
     const encoder = new TextEncoder();
     let pullCount = 0;
@@ -815,7 +786,6 @@ describe("RequestClient", () => {
       }
       const client = new RequestClient("test-token", {
         baseUrl: `http://127.0.0.1:${address.port}`,
-        apiVersion: 10,
         queueRequests: false,
       });
 

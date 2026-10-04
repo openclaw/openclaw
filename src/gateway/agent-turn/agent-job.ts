@@ -622,14 +622,10 @@ function getCanonicalAgentRunSnapshot(
 function getAgentRunSnapshot(params: {
   runId: string;
   source?: "agent" | "chat";
-  afterVersion: number;
 }): AgentRunSnapshot | undefined {
   pruneAgentRunCache();
   const job = agentJobs.get(params.runId);
-  const snapshot = job
-    ? getCanonicalAgentRunSnapshot(job.snapshotsBySource, params.source)
-    : undefined;
-  return snapshot && snapshot.version > params.afterVersion ? snapshot : undefined;
+  return job ? getCanonicalAgentRunSnapshot(job.snapshotsBySource, params.source) : undefined;
 }
 
 function addAgentRunWaiter(runId: string, waiter: AgentJobWaiter): () => void {
@@ -671,16 +667,10 @@ export function projectAgentJobObservation(snapshot: AgentJobObservation): Agent
 export async function waitForAgentJob(params: {
   runId: string;
   timeoutMs: number;
-  ignoreCachedSnapshot?: boolean;
   source?: "agent" | "chat";
 }): Promise<AgentJobObservation | null> {
   ensureAgentRunListener();
-  const afterVersion = params.ignoreCachedSnapshot ? agentJobState.version : -1;
-  const cached = getAgentRunSnapshot({
-    runId: params.runId,
-    source: params.source,
-    afterVersion,
-  });
+  const cached = getAgentRunSnapshot(params);
   if (cached) {
     return projectAgentJobObservation(cached);
   }
@@ -710,11 +700,7 @@ export async function waitForAgentJob(params: {
         finish({ status: "timeout", timeoutPhase: "gateway_draining" });
         return;
       }
-      const snapshot = getAgentRunSnapshot({
-        runId: params.runId,
-        source: params.source,
-        afterVersion,
-      });
+      const snapshot = getAgentRunSnapshot(params);
       if (snapshot) {
         finish(projectAgentJobObservation(snapshot));
       }
@@ -724,7 +710,7 @@ export async function waitForAgentJob(params: {
       if (!params.source) {
         const pending = pendingAgentRunErrors.get(params.runId);
         const pendingError = pending?.snapshot;
-        if (pendingError && pendingError.version > afterVersion) {
+        if (pendingError) {
           finish(
             !pending.timer ||
               isStickyAgentRunTerminalOutcome(terminalOutcomeFromSnapshot(pendingError))
@@ -736,7 +722,6 @@ export async function waitForAgentJob(params: {
         const pendingTimeout = pendingAgentRunTimeouts.get(params.runId)?.snapshot;
         if (
           pendingTimeout &&
-          pendingTimeout.version > afterVersion &&
           terminalOutcomeFromSnapshot(pendingTimeout)?.reason === "hard_timeout"
         ) {
           finish(projectAgentJobObservation(pendingTimeout));

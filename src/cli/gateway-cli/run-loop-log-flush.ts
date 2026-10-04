@@ -50,8 +50,6 @@ export function createGatewayStabilityReporter(
       error,
       ...(shutdownStep ? [{ shutdownStep }] : []),
     );
-    if ("message" in result) {
-      logger.warn(result.message);
-    }
+    logger.warn(result.message);
   };
 }

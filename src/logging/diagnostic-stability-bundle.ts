@@ -31,8 +31,7 @@ import { redactSensitiveText } from "./redact.js";
 import { formatDiagnosticFilenameTimestamp } from "./timestamps.js";
 
 export const DIAGNOSTIC_STABILITY_BUNDLE_VERSION = 1;
-const DEFAULT_DIAGNOSTIC_STABILITY_BUNDLE_LIMIT = MAX_DIAGNOSTIC_STABILITY_LIMIT;
-const DEFAULT_DIAGNOSTIC_STABILITY_BUNDLE_RETENTION = 20;
+const DIAGNOSTIC_STABILITY_BUNDLE_RETENTION = 20;
 export const MAX_DIAGNOSTIC_STABILITY_BUNDLE_BYTES = 5 * 1024 * 1024;
 
 const SAFE_REASON_CODE = /^[A-Za-z0-9_.:-]{1,120}$/u;
@@ -125,21 +124,10 @@ export type DiagnosticStabilityBundle = {
   snapshot: DiagnosticStabilitySnapshot;
 };
 
-type WriteDiagnosticStabilityBundleResult =
-  | { status: "written"; path: string; bundle: DiagnosticStabilityBundle }
-  | { status: "skipped"; reason: "empty" }
-  | { status: "failed"; error: unknown };
-
-type WriteDiagnosticStabilityBundleOptions = {
-  reason: string;
-  error?: unknown;
-  includeEmpty?: boolean;
-  limit?: number;
+type WriteDiagnosticStabilityBundleForFailureOptions = {
   now?: Date;
   env?: NodeJS.ProcessEnv;
   stateDir?: string;
-  retention?: number;
-  evidence?: DiagnosticStabilityBundleEvidence;
   shutdownStep?: string;
 };
 
@@ -160,13 +148,7 @@ export type ReadDiagnosticStabilityBundleResult =
 
 type DiagnosticStabilityBundleFailureWriteOutcome =
   | { status: "written"; message: string; path: string }
-  | { status: "failed"; message: string; error: unknown }
-  | { status: "skipped"; reason: "empty" };
-
-type WriteDiagnosticStabilityBundleForFailureOptions = Omit<
-  WriteDiagnosticStabilityBundleOptions,
-  "error" | "includeEmpty" | "reason"
->;
+  | { status: "failed"; message: string; error: unknown };
 
 let fatalHookUnsubscribe: (() => void) | null = null;
 
@@ -821,10 +803,7 @@ export function readLatestDiagnosticStabilityBundleSync(
   }
 }
 
-function pruneOldBundles(dir: string, retention: number, retainedFile: string): void {
-  if (!Number.isFinite(retention) || retention < 1) {
-    return;
-  }
+function pruneOldBundles(dir: string, retainedFile: string): void {
   try {
     const entries = fs
       .readdirSync(dir, { withFileTypes: true })
@@ -842,7 +821,7 @@ function pruneOldBundles(dir: string, retention: number, retainedFile: string): 
       .filter((entry) => entry.file !== retainedFile)
       .toSorted((a, b) => b.mtimeMs - a.mtimeMs || b.file.localeCompare(a.file));
 
-    for (const entry of entries.slice(retention - 1)) {
+    for (const entry of entries.slice(DIAGNOSTIC_STABILITY_BUNDLE_RETENTION - 1)) {
       try {
         fs.unlinkSync(entry.file);
       } catch {
@@ -854,33 +833,31 @@ function pruneOldBundles(dir: string, retention: number, retainedFile: string): 
   }
 }
 
-export function writeDiagnosticStabilityBundleSync(
-  options: WriteDiagnosticStabilityBundleOptions,
-): WriteDiagnosticStabilityBundleResult {
+export function writeDiagnosticStabilityBundleForFailureSync(
+  reason: string,
+  error?: unknown,
+  options: WriteDiagnosticStabilityBundleForFailureOptions = {},
+): DiagnosticStabilityBundleFailureWriteOutcome {
   try {
     const now = options.now ?? new Date();
     const snapshot = getDiagnosticStabilitySnapshot({
-      limit: options.limit ?? DEFAULT_DIAGNOSTIC_STABILITY_BUNDLE_LIMIT,
+      limit: MAX_DIAGNOSTIC_STABILITY_LIMIT,
     });
-    if (!options.includeEmpty && snapshot.count === 0) {
-      return { status: "skipped", reason: "empty" };
-    }
 
-    const reason = normalizeReason(options.reason);
-    const error = options.error ? readSafeErrorMetadata(options.error) : undefined;
+    const normalizedReason = normalizeReason(reason);
+    const safeError = error ? readSafeErrorMetadata(error) : undefined;
     const evidence = options.shutdownStep
       ? {
-          ...options.evidence,
           shutdown: {
             step: readCodeString(options.shutdownStep, "shutdownStep"),
-            errors: collectShutdownErrors(options.error),
+            errors: collectShutdownErrors(error),
           },
         }
-      : options.evidence;
+      : undefined;
     const bundle: DiagnosticStabilityBundle = {
       version: DIAGNOSTIC_STABILITY_BUNDLE_VERSION,
       generatedAt: now.toISOString(),
-      reason,
+      reason: normalizedReason,
       process: {
         pid: process.pid,
         platform: process.platform,
@@ -891,13 +868,13 @@ export function writeDiagnosticStabilityBundleSync(
       host: {
         hostname: REDACTED_HOSTNAME,
       },
-      ...(error ? { error } : {}),
+      ...(safeError ? { error: safeError } : {}),
       ...(evidence ? { evidence } : {}),
       snapshot,
     };
 
     const dir = resolveDiagnosticStabilityBundleDir(options);
-    const file = buildBundlePath(dir, now, reason);
+    const file = buildBundlePath(dir, now, normalizedReason);
     replaceFileAtomicSync({
       filePath: file,
       content: `${JSON.stringify(bundle, null, 2)}\n`,
@@ -905,39 +882,15 @@ export function writeDiagnosticStabilityBundleSync(
       mode: 0o600,
       tempPrefix: ".openclaw-stability",
     });
-    pruneOldBundles(dir, options.retention ?? DEFAULT_DIAGNOSTIC_STABILITY_BUNDLE_RETENTION, file);
-    return { status: "written", path: file, bundle };
+    pruneOldBundles(dir, file);
+    return { status: "written", path: file, message: `wrote stability bundle: ${file}` };
   } catch (error) {
-    return { status: "failed", error };
-  }
-}
-
-export function writeDiagnosticStabilityBundleForFailureSync(
-  reason: string,
-  error?: unknown,
-  options: WriteDiagnosticStabilityBundleForFailureOptions = {},
-): DiagnosticStabilityBundleFailureWriteOutcome {
-  const result = writeDiagnosticStabilityBundleSync({
-    ...options,
-    reason,
-    error,
-    includeEmpty: true,
-  });
-  if (result.status === "written") {
-    return {
-      status: "written",
-      path: result.path,
-      message: `wrote stability bundle: ${result.path}`,
-    };
-  }
-  if (result.status === "failed") {
     return {
       status: "failed",
-      error: result.error,
-      message: `failed to write stability bundle: ${String(result.error)}`,
+      error,
+      message: `failed to write stability bundle: ${String(error)}`,
     };
   }
-  return result;
 }
 
 export function installDiagnosticStabilityFatalHook(
@@ -948,7 +901,7 @@ export function installDiagnosticStabilityFatalHook(
   }
   fatalHookUnsubscribe = registerFatalErrorHook(({ reason, error }) => {
     const result = writeDiagnosticStabilityBundleForFailureSync(reason, error, options);
-    return "message" in result ? result.message : undefined;
+    return result.message;
   });
 }
 

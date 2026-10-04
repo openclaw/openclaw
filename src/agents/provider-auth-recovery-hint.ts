@@ -23,7 +23,6 @@ export function buildProviderAuthRecoveryHint(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
-  includeConfigure?: boolean;
   includeEnvVar?: boolean;
 }): string {
   const aliases = resolveProviderAuthAliasMap(params);
@@ -39,14 +38,9 @@ export function buildProviderAuthRecoveryHint(params: {
   if (loginCommand) {
     parts.push(`Run \`${loginCommand}\``);
   }
-  if (params.includeConfigure !== false) {
-    parts.push(`\`${formatCliCommand("openclaw configure")}\``);
-  }
+  parts.push(`\`${formatCliCommand("openclaw configure")}\``);
   if (params.includeEnvVar) {
     parts.push("set an API key env var");
-  }
-  if (parts.length === 0) {
-    return `Run \`${formatCliCommand("openclaw configure")}\`.`;
   }
   if (parts.length === 1) {
     return `${parts[0]}.`;
