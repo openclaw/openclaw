@@ -199,6 +199,7 @@ type FollowupRuntimeMetadata = Pick<
   | "turnAdoptionLifecycle"
   | "replyOperationRunStates"
   | "queuedFollowupReplyDisposition"
+  | "runObservers"
 >;
 
 function hasCurrentTurnRuntimeMetadata(item: FollowupRun): boolean {
@@ -287,6 +288,7 @@ export function collectRuntimeMetadata(
     turnAdoptionLifecycle: items.length === 1 ? items[0]?.turnAdoptionLifecycle : undefined,
     replyOperationRunStates: items.flatMap((item) => item.replyOperationRunStates ?? []),
     queuedFollowupReplyDisposition: items.at(-1)?.queuedFollowupReplyDisposition,
+    runObservers: items.at(-1)?.runObservers,
   };
 }
 
@@ -332,6 +334,7 @@ export function createOverflowSummaryRetrySource(source: FollowupRun): FollowupR
     turnAdoptionLifecycle: source.turnAdoptionLifecycle,
     replyOperationRunStates: source.replyOperationRunStates,
     queuedFollowupReplyDisposition: source.queuedFollowupReplyDisposition,
+    runObservers: source.runObservers,
     ...(source.currentInboundEventKind === "room_event"
       ? { currentInboundEventKind: "room_event" }
       : {}),
