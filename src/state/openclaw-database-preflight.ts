@@ -1,9 +1,12 @@
 import { existsSync, realpathSync, statSync } from "node:fs";
 import nodePath from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { listAgentIds, resolveAgentDir } from "../agents/agent-scope-config.js";
+import { listAgentIds } from "../agents/agent-scope-config.js";
 import { resolveStateDir } from "../config/paths.js";
-import { resolveConfiguredAgentDatabaseCandidatePaths } from "../config/sessions/targets.js";
+import {
+  isConfiguredAgentDatabaseTarget,
+  resolveConfiguredAgentDatabaseCandidatePaths,
+} from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { openNodeSqliteDatabase, resolveImmutableSqliteFileUri } from "../infra/node-sqlite.js";
@@ -14,6 +17,7 @@ import { readSqliteWriterAppVersion as readWriterAppVersion } from "../infra/sql
 import { SqliteSchemaMismatchError } from "../infra/sqlite-schema-issues.js";
 import { prepareSqliteReadOnlyLocation } from "../infra/sqlite-snapshot-source.js";
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   AgentDatabaseAdmissionError,
   canIsolateAgentDatabase,
@@ -302,18 +306,8 @@ export async function preflightOpenClawDatabaseSchemas(
   const scheduling = startup?.scheduling(
     options.env,
     admissionConfig
-      ? [
-          ...(options.configuredAgentDatabaseCandidatePaths ??
-            resolveConfiguredAgentDatabaseCandidatePaths(admissionConfig, {
-              env: options.env,
-            })),
-          ...Array.from(admittedAgentIds, (agentId) =>
-            nodePath.join(
-              resolveAgentDir(admissionConfig, agentId, options.env),
-              "openclaw-agent.sqlite",
-            ),
-          ),
-        ]
+      ? (options.configuredAgentDatabaseCandidatePaths ??
+          resolveConfiguredAgentDatabaseCandidatePaths(admissionConfig, { env: options.env }))
       : [],
     admittedAgentIds,
   );
@@ -321,8 +315,7 @@ export async function preflightOpenClawDatabaseSchemas(
   const preparedStartup =
     options.reuseStartupSchemaPreparation &&
     !options.requireStartupMigrationReadiness &&
-    !options.verifyCurrentSchemaShape &&
-    !options.agentAdmissionConfig
+    !options.verifyCurrentSchemaShape
       ? getAgentDatabaseStartupAdmission()
       : undefined;
   const readPreparedSchemaHeader = preparedStartup?.takePreparedSchemaHeaders(options.env);
@@ -503,13 +496,25 @@ export async function preflightOpenClawDatabaseSchemas(
   for (const failure of failures) {
     result.indeterminate.push({ kind: "agent", ...failure });
   }
+  const skipped = new Set<string>();
   const inspectionTargets = candidates
-    .map(({ agentId, path, holdForDeletionRecovery }) => ({
-      agentId,
-      path,
-      holdForDeletionRecovery,
-      presence: inspectCandidatePresence(path),
-    }))
+    .filter((row) => {
+      if (
+        !admissionConfig ||
+        !(options.requireStartupMigrationReadiness || options.reuseStartupSchemaPreparation) ||
+        isConfiguredAgentDatabaseTarget(admissionConfig, row.agentId, row.path, options.env)
+      ) {
+        return true;
+      }
+      if (options.requireStartupMigrationReadiness && !skipped.has(row.path)) {
+        createSubsystemLogger("state/agent-admission").warn(
+          `Skipped ${nodePath.basename(row.path)}: unconfigured agent database; run openclaw doctor to inspect retained data.`,
+        );
+        skipped.add(row.path);
+      }
+      return false;
+    })
+    .map((row) => Object.assign({}, row, { presence: inspectCandidatePresence(row.path) }))
     .filter((row) => row.presence.status !== "absent");
   const stats = await preflightAgentDatabasesBounded(
     inspectionTargets,

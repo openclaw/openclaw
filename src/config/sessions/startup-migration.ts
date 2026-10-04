@@ -44,6 +44,7 @@ import {
   type SessionStoreRegistryRead,
 } from "./session-sqlite-target.js";
 import {
+  isConfiguredAgentDatabaseTarget,
   resolveAllAgentSessionStoreTargetsSync,
   resolveConfiguredAgentDatabaseTargets,
 } from "./targets.js";
@@ -249,6 +250,9 @@ export async function runSessionStartupMigration(params: {
     params.assertCurrent?.();
     const options = toDatabaseOptions(resolveSqliteReadScope({ ...target, env }));
     const databasePath = resolveOpenClawAgentSqlitePath(options);
+    if (!isConfiguredAgentDatabaseTarget(params.cfg, options.agentId, databasePath, env)) {
+      return;
+    }
     if (databases.has(databasePath) || !fs.existsSync(databasePath)) {
       return;
     }
