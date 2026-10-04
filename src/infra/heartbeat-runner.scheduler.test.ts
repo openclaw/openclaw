@@ -19,6 +19,7 @@ import {
   setHeartbeatsEnabled,
   setHeartbeatWakeHandler,
 } from "./heartbeat-wake.js";
+import { enqueueSystemEvent, resetSystemEventsForTest } from "./system-events.js";
 
 type RunnerOptions = Parameters<typeof startHeartbeatRunner>[0];
 type RunOnce = NonNullable<RunnerOptions["runOnce"]>;
@@ -94,6 +95,7 @@ afterEach(async () => {
   await vi.runAllTimersAsync();
   dispose();
   setHeartbeatsEnabled(true);
+  resetSystemEventsForTest();
   resetConfigRuntimeState();
   vi.useRealTimers();
   vi.restoreAllMocks();
@@ -299,6 +301,39 @@ describe("startHeartbeatRunner", () => {
     await vi.advanceTimersByTimeAsync(20_000);
     expect(runSpy).toHaveBeenCalledTimes(3);
   });
+
+  it.each([
+    { owner: "conversation", fromConversationTurn: true, commandMs: 0, runs: 20 },
+    { owner: "conversation", fromConversationTurn: true, commandMs: 40_000, runs: 14 },
+    { owner: "heartbeat", fromConversationTurn: false, commandMs: 40_000, runs: 1 },
+  ])(
+    "bounds a $owner command taking $commandMs ms started in every completion turn",
+    async ({ fromConversationTurn, commandMs, runs }) => {
+      const startCommand = () =>
+        setTimeout(() => {
+          enqueueSystemEvent("Exec completed (abcd1234, code 0) :: done", {
+            sessionKey,
+            fromConversationTurn,
+          });
+          requestHeartbeat({ ...execWake, coalesceMs: 0 });
+        }, commandMs);
+      const callTimes: number[] = [];
+      runSpy.mockImplementation(async () => {
+        callTimes.push(Date.now());
+        startCommand();
+        return { status: "ran", durationMs: 0 };
+      });
+      start();
+      startCommand();
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+
+      // Event turns keep the 30s spacing; only conversation completions skip the interval wait.
+      expect(callTimes).toHaveLength(runs);
+      for (const [index, time] of callTimes.slice(1).entries()) {
+        expect(time - callTimes[index]!).toBeGreaterThanOrEqual(Math.max(30_000, commandMs));
+      }
+    },
+  );
 
   it("retains an event that collides with a task until the spacing floor", async () => {
     start();

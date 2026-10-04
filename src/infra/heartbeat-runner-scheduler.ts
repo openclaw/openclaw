@@ -15,6 +15,10 @@ import {
   type HeartbeatConfig,
 } from "./heartbeat-config.js";
 import { recordRunStart, shouldDeferWake, type DeferDecision } from "./heartbeat-cooldown.js";
+import {
+  isConversationExecCompletion,
+  isHeartbeatDeliveryAwarenessEvent,
+} from "./heartbeat-events-filter.js";
 import { heartbeatLog as log } from "./heartbeat-log.js";
 import type { runHeartbeatOnce } from "./heartbeat-runner-run.js";
 import { isConfiguredHeartbeatAgent, isTargetedUnscheduledWake } from "./heartbeat-wake-policy.js";
@@ -29,6 +33,8 @@ import {
   setHeartbeatWakeHandler,
 } from "./heartbeat-wake.js";
 import { isSessionEventWakePollDeferred } from "./session-event-wake.js";
+import { resolveSystemEventQueueKey } from "./system-event-ownership.js";
+import { peekSystemEventEntries } from "./system-events.js";
 
 const loadHeartbeatExecution = createLazyRuntimeModule(() => import("./heartbeat-runner-run.js"));
 
@@ -95,7 +101,11 @@ export function startHeartbeatRunner(opts: {
     now: number,
     reason?: string,
     intent: HeartbeatWakeIntent = "event",
-    options: { authoritativeScheduledTick?: boolean; retainedWork?: boolean } = {},
+    options: {
+      authoritativeScheduledTick?: boolean;
+      retainedWork?: boolean;
+      conversationTurn?: boolean;
+    } = {},
   ): DeferDecision => {
     const decision = shouldDeferWake({
       intent,
@@ -104,6 +114,7 @@ export function startHeartbeatRunner(opts: {
       lastRunStartedAtMs: agent.lastRunStartedAtMs,
       recentRunStarts: agent.recentRunStarts,
       retainedWork: options.retainedWork,
+      conversationTurn: options.conversationTurn,
     });
     if (decision.defer && decision.reason === "flood") {
       if (!agent.floodLoggedSinceLastRun) {
@@ -213,9 +224,19 @@ export function startHeartbeatRunner(opts: {
         agent.intervalMs = scheduledEveryMs;
         agent.heartbeat = { ...agent.heartbeat, every: `${scheduledEveryMs}ms` };
       }
+      const pendingEvents = execEventWake
+        ? peekSystemEventEntries(
+            resolveSystemEventQueueKey(requestedSessionKey ?? "global", agentId),
+          ).filter((event) => !isHeartbeatDeliveryAwarenessEvent(event))
+        : [];
       const deferral = evaluateWakeDeferral(agent, now, reason, intent, {
         authoritativeScheduledTick,
         retainedWork,
+        conversationTurn:
+          !authoritativeScheduledTick &&
+          requestedTasks.length === 0 &&
+          pendingEvents.length > 0 &&
+          pendingEvents.every(isConversationExecCompletion),
       });
       if (deferral.defer) {
         // Retained exec work never owns cadence unless a scheduled tick joined it.
