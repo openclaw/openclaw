@@ -673,15 +673,20 @@ function preserveUntouchedIncludes(params: {
 }
 
 function hasPathValue(value: unknown, path: readonly string[]): boolean {
+  let nextValue = value;
   for (const segment of path) {
-    if (Array.isArray(value)) {
+    if (Array.isArray(nextValue)) {
       const index = parseConfigPathArrayIndex(segment);
-      if (index === undefined || index >= value.length) {
+      if (index === undefined || index >= nextValue.length) {
         return false;
       }
-      value = value[index];
-    } else if (isRecord(value) && !isBlockedObjectKey(segment) && Object.hasOwn(value, segment)) {
-      value = value[segment];
+      nextValue = nextValue[index];
+    } else if (
+      isRecord(nextValue) &&
+      !isBlockedObjectKey(segment) &&
+      Object.hasOwn(nextValue, segment)
+    ) {
+      nextValue = nextValue[segment];
     } else {
       return false;
     }
@@ -1119,7 +1124,10 @@ function readLegacyAgentList(config: unknown): unknown[] | undefined {
 function indexAgentRosterForWrite(config: unknown, legacyIdsByIndex: ReadonlyMap<number, string>) {
   const list = readLegacyAgentList(config);
   if (!list) {
-    return toAgentEntriesRecord(listAgentEntries(config as OpenClawConfig));
+    return toAgentEntriesRecord(listAgentEntries(config as OpenClawConfig)) as Record<
+      string,
+      unknown
+    >;
   }
   return Object.fromEntries(
     list.flatMap((entry, index): [string, Record<string, unknown>][] => {
@@ -1155,7 +1163,9 @@ function canonicalizeAgentRosterForExplicitWrite(params: {
   const authoredEntries = indexAgentRosterForWrite(params.rootAuthoredConfig, legacyIdsByIndex);
   const runtimeEntries = indexAgentRosterForWrite(params.runtimeConfig, legacyIdsByIndex);
   const sourceEntries = indexAgentRosterForWrite(params.sourceConfig, legacyIdsByIndex);
-  const nextEntries = toAgentEntriesRecord(listAgentEntries(params.nextConfig as OpenClawConfig));
+  const nextEntries = toAgentEntriesRecord(
+    listAgentEntries(params.nextConfig as OpenClawConfig),
+  ) as Record<string, unknown>;
   const explicitList = readLegacyAgentList(params.valueSource);
   const rosterFactOwner = coerceConfig(
     params.sourceConfigBeforeMigrations ?? params.rootAuthoredConfig,
@@ -1246,7 +1256,10 @@ function canonicalizeAgentRosterForExplicitWrite(params: {
           return [[id, config]];
         }),
       )
-    : toAgentEntriesRecord(listAgentEntries(params.valueSource as OpenClawConfig));
+    : (toAgentEntriesRecord(listAgentEntries(params.valueSource as OpenClawConfig)) as Record<
+        string,
+        unknown
+      >);
   const explicitPaths = (params.explicitSetPaths ?? []).flatMap((path) => {
     if (path[0] !== "agents") {
       return [];
