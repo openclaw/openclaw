@@ -31,6 +31,7 @@ import {
 } from "./session-cold-storage.js";
 import { createSessionTranscriptFtsInserter } from "./session-transcript-fts.js";
 import {
+  hasOrphanedTranscriptIndexRows,
   listSessionsNeedingTranscriptIndexReconcile,
   SYNC_REBUILD_MAX_BYTES,
 } from "./session-transcript-index.js";
@@ -588,7 +589,21 @@ describe("searchSessionTranscripts", () => {
 
   it("sweeps orphaned index rows even when transcript watermarks are current", async () => {
     await appendUserMessage("session-1", "agent:main:main", "anchor row");
+    await appendUserMessage("session-2", "agent:main:sibling", "anchor sibling");
     const { db, kysely } = agentKysely();
+    expect(hasOrphanedTranscriptIndexRows(db)).toBe(false);
+    // Simulate derived rows left by an out-of-band writer with foreign keys disabled.
+    db.exec(`
+      PRAGMA foreign_keys = OFF;
+      INSERT INTO session_transcript_active_events
+        (session_id, active_position, event_seq, context_eligible)
+        VALUES ('active-ghost', 0, 0, 1);
+      PRAGMA foreign_keys = ON;
+    `);
+    expect(hasOrphanedTranscriptIndexRows(db)).toBe(true);
+    await reconcileSessionTranscriptIndexes({ agentId: "main", env: env() });
+    expect(hasOrphanedTranscriptIndexRows(db)).toBe(false);
+
     runOpenClawAgentWriteTransaction(
       (database) =>
         createSessionTranscriptFtsInserter(
@@ -612,9 +627,25 @@ describe("searchSessionTranscripts", () => {
           .where("session_id", "=", "session-ghost"),
       ).rows.length;
     expect(ghostRows()).toBe(1);
+    expect(hasOrphanedTranscriptIndexRows(db)).toBe(true);
     expect(search("anchor").indexing).toBe(false);
     await reconcileSessionTranscriptIndexes({ agentId: "main", env: env() });
     expect(ghostRows()).toBe(0);
-    expect(search("anchor").hits).toHaveLength(1);
+    expect(hasOrphanedTranscriptIndexRows(db)).toBe(false);
+
+    db.exec(`
+      PRAGMA foreign_keys = OFF;
+      INSERT INTO session_transcript_index_state (session_id, indexed_seq, updated_at)
+        VALUES ('state-ghost', 0, 1);
+      PRAGMA foreign_keys = ON;
+    `);
+    expect(hasOrphanedTranscriptIndexRows(db)).toBe(true);
+    await reconcileSessionTranscriptIndexes({ agentId: "main", env: env() });
+    expect(hasOrphanedTranscriptIndexRows(db)).toBe(false);
+    expect(
+      search("anchor")
+        .hits.map((hit) => hit.sessionId)
+        .toSorted(),
+    ).toEqual(["session-1", "session-2"]);
   });
 });
