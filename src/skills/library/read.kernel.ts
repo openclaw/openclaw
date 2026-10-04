@@ -90,10 +90,7 @@ export const skillLibraryReadOperations = {
     const authority = hydrateSkillLibraryWorkerAuthority(input.authority, profileIds);
     const value = runSqliteDeferredTransactionSync(db, () => {
       if (
-        input.kind !== "profile" &&
-        input.kind !== "presentation" &&
-        input.kind !== "list" &&
-        input.kind !== "seed" &&
+        !["profile", "presentation", "list", "seed"].includes(input.kind) &&
         !tableExists(db, "skill_library_entries")
       ) {
         if (input.kind === "pins" && !input.params.length) {
@@ -125,29 +122,30 @@ export const skillLibraryReadOperations = {
         case "change":
           return change(db, authority, input.params.current, input.params.params);
         case "pins":
-          return input.params.map((pin) => {
-            const row = selectSkillLibraryRow(db, pin.skillId);
-            const entry = row && projectSkillLibraryEntry(db, row, authority, pin.revision, true);
-            if (!entry) {
-              throw new SkillLibraryError(
-                "NOT_FOUND",
-                "A pinned skill revision is unavailable. Restore the library or detach it explicitly.",
-              );
-            }
-            return {
-              ...pin,
-              slug: entry.slug,
-              description: entry.description,
-              ownerLabel: entry.ownerLabel,
-            };
-          });
+          break;
       }
+      return input.params.map((pin) => {
+        const row = selectSkillLibraryRow(db, pin.skillId);
+        const entry = row && projectSkillLibraryEntry(db, row, authority, pin.revision, true);
+        if (!entry) {
+          throw new SkillLibraryError(
+            "NOT_FOUND",
+            "A pinned skill revision is unavailable. Restore the library or detach it explicitly.",
+          );
+        }
+        return {
+          ...pin,
+          slug: entry.slug,
+          description: entry.description,
+          ownerLabel: entry.ownerLabel,
+        };
+      });
     });
     return {
       type: "skillLibrary.read",
       kind: input.kind,
       value,
       profileIds: [...profileIds],
-    } as SkillLibraryReadOutput; // SAFETY: The result came from the switch branch for input.kind.
+    } as SkillLibraryReadOutput; // SAFETY: Each input.kind selects its matching result above.
   },
 };

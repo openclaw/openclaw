@@ -18,7 +18,13 @@ export function extractErrorMessage(err: unknown): string | undefined {
   if (typeof err === "object" && "message" in err && typeof err.message === "string") {
     return err.message;
   }
-  if (typeof err !== "object" && typeof err !== "function") {
+  if (
+    typeof err === "string" ||
+    typeof err === "number" ||
+    typeof err === "boolean" ||
+    typeof err === "bigint" ||
+    typeof err === "symbol"
+  ) {
     return String(err);
   }
   if (typeof err === "object") {

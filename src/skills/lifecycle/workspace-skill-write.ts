@@ -103,7 +103,7 @@ export async function prepareWorkspaceSkillMutation(params: {
   assertInsideSkillsRoot(params.skillsRoot, params.skillDir, "skill directory");
   await fs.mkdir(params.skillsRoot, { recursive: true });
   const supportFiles = (params.supportFiles ?? []).map((file) => ({
-    ...file,
+    content: file.content,
     path: normalizeWorkspaceSkillSupportPath(file.path),
   }));
   assertWorkspaceSkillSupportPathSetIsFileOnly(supportFiles.map((file) => file.path));
