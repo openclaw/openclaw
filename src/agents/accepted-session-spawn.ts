@@ -103,6 +103,20 @@ export function markCollectedSessionSpawns(
   }
 }
 
+/** Mark collectors that an earlier attempt of this run accepted. */
+export function markCollectedSessionSpawnsForRun(
+  instance: OperationalRunInstanceRef,
+  collectedRunIds: readonly string[],
+): void {
+  const receipts = acceptedSpawnsByRun.get(instance);
+  for (const runId of collectedRunIds) {
+    const receipt = receipts?.get(runId);
+    if (receipt && !receipt.collected) {
+      receipts?.set(runId, { ...receipt, collected: true });
+    }
+  }
+}
+
 /** Return true when an accepted child still owns work this run has not collected. */
 export function hasUncollectedSessionSpawn(
   acceptedSessionSpawns?: readonly AcceptedSessionSpawn[],

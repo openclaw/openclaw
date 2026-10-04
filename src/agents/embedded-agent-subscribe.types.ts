@@ -5,6 +5,7 @@ import type { HeartbeatToolResponse } from "../auto-reply/heartbeat-tool-respons
 import type { ReasoningLevel, ThinkLevel } from "../auto-reply/thinking.js";
 import type { AssistantMessage } from "../llm/types.js";
 import type { HookRunner } from "../plugins/hooks.js";
+import type { OperationalRunInstanceRef } from "./admitted-run-context.js";
 import type { EmbeddedRunAttemptInternalParams } from "./embedded-agent-runner/run/internal-params.js";
 import type { EmbeddedRunAttemptParams } from "./embedded-agent-runner/run/types.js";
 import type { PreparedProviderFailoverOwner } from "./failover/provider-patterns.js";
@@ -56,6 +57,8 @@ export type SubscribeEmbeddedAgentSessionParams = Pick<
   | "internalEvents"
 > & {
   session: AgentSession;
+  /** Logical run that owns child receipts across this run's attempts. */
+  operationalRunInstance?: OperationalRunInstanceRef;
   hookRunner?: HookRunner;
   reasoningMode?: ReasoningLevel;
   thinkingLevel?: ThinkLevel;
