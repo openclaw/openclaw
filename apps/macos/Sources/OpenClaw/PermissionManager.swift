@@ -16,10 +16,6 @@ enum CapabilityAuthorizationStatus: Equatable, Sendable {
     case granted
     case notGranted
     case unknown
-
-    var isGranted: Bool {
-        self == .granted
-    }
 }
 
 enum PermissionManager {
