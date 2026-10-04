@@ -41,7 +41,8 @@ vi.mock("./node-worker-workspace.js", () => ({
     readonly checkAdmission = mocks.checkWorkspaceAdmission;
   },
 }));
-vi.mock("./plugin-node-host.js", () => ({
+vi.mock("./plugin-node-host.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./plugin-node-host.js")>()),
   ensureNodeHostPluginRegistry: vi.fn(async () => undefined),
   hasRegisteredNodeHostCommandActiveWork: vi.fn(() => false),
   isRegisteredNodeHostCommandDuplex: vi.fn(() => false),

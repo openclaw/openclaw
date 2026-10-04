@@ -1743,7 +1743,6 @@ src/cli/channel-options.ts	1
 src/cli/channels-cli.ts	5
 src/cli/claws-cli.gateway-readiness.ts	1
 src/cli/claws-cli.runtime.ts	2
-src/cli/command-config-resolution.ts	2
 src/cli/command-options.ts	1
 src/cli/completion-runtime.ts	2
 src/cli/config-cli-path.ts	4

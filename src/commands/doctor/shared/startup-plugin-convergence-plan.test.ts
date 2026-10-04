@@ -7,7 +7,8 @@ const hasBundledPluginStartupManifest = vi.hoisted(() => vi.fn());
 vi.mock("../../../plugins/installed-plugin-index-record-reader.js", () => ({
   loadInstalledPluginIndexInstallRecords,
 }));
-vi.mock("../../../plugins/bundled-plugin-startup-metadata.js", () => ({
+vi.mock("../../../plugins/bundled-plugin-startup-metadata.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../plugins/bundled-plugin-startup-metadata.js")>()),
   hasBundledPluginStartupManifest,
 }));
 
