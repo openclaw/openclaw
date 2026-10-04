@@ -47,6 +47,8 @@ describe("Daybreak Responses requests", () => {
         false,
         true,
         "ultrafast",
+        "ULTRAFAST",
+        () => "ULTRAFAST",
         () => false,
         () => true,
         () => "ultrafast",

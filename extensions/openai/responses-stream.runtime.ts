@@ -1,10 +1,7 @@
 import { streamSimple, type SimpleStreamOptions } from "openclaw/plugin-sdk/llm";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
-import {
-  buildProviderStreamFamilyHooks,
-  resolveOpenAIFastMode,
-} from "openclaw/plugin-sdk/provider-stream-family";
-import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-stream-family";
+import { asOptionalRecord, normalizeFastMode } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { createOpenAINativeWebSearchWrapper } from "./native-web-search.js";
 import { resolveOpenAIModelServiceTiers } from "./service-tier-policy.js";
 import { TOKEN_SHARING_AUTH_FLOW } from "./token-sharing.js";
@@ -31,7 +28,8 @@ export function wrapOpenAIResponsesStream(ctx: ProviderWrapStreamFnContext) {
           if (!serviceTiers.includes("priority")) {
             return false;
           }
-          const requested = resolveOpenAIFastMode(ctx.extraParams);
+          const raw = ctx.extraParams?.fastMode ?? ctx.extraParams?.fast_mode;
+          const requested = normalizeFastMode(typeof raw === "function" ? raw() : raw);
           return requested === "ultrafast" ? true : requested;
         },
       },

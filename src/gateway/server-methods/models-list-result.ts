@@ -528,9 +528,9 @@ export async function prepareModelsListResult(
             }
           : {},
         supportsFastMode === undefined ? {} : { supportsFastMode },
-        speedPolicy.supportsServiceTierRecovery === undefined
-          ? {}
-          : { supportsServiceTierRecovery: speedPolicy.supportsServiceTierRecovery },
+        speedPolicy.supportsServiceTierRecovery === true
+          ? { supportsServiceTierRecovery: true }
+          : {},
         serviceTiers === undefined ? {} : { serviceTiers },
         projectedAvailability === undefined ? {} : { available: projectedAvailability },
         projectedAvailability === false && evaluation.unavailableReason
