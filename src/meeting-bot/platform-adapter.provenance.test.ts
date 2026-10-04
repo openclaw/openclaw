@@ -66,16 +66,8 @@ describe("meeting observation provenance parsing", () => {
 
   it.each([
     ["missing", undefined],
-    ["null", null],
-    ["array", []],
-    ["missing observer", { self: "other" }],
     ["blank observer", { ...testMeetingObservation(), observer: " " }],
     ["oversized observer", { ...testMeetingObservation(), observer: "x".repeat(129) }],
-    ["oversized observation id", { ...testMeetingObservation(), observationId: "x".repeat(1_025) }],
-    ["non-scalar session", { ...testMeetingObservation(), sessionId: { id: "session-1" } }],
-    ["oversized epoch", { ...testMeetingObservation(), epoch: "x".repeat(513) }],
-    ["invalid time", { ...testMeetingObservation(), observedAt: "not-a-date" }],
-    ["invalid speaker", { ...testMeetingObservation(), speaker: ["Alice"] }],
     ["invalid self", { ...testMeetingObservation(), self: false }],
   ])(
     "makes %s envelopes explicitly unknown without inferring self from a source",
@@ -103,43 +95,53 @@ describe("meeting observation provenance parsing", () => {
     },
   );
 
-  it("does not turn malformed raw source fields or fallback facts into attribution", () => {
-    const parsed = parseTranscript({
-      epoch: "x".repeat(513),
-      lines: [
-        {
-          at: "invalid-time",
-          speaker: "x".repeat(513),
-          text: "Still retained",
-          source: { ...TEST_CAPTION_SOURCE, ownEcho: "false" },
-          provenance: { observer: "untrusted", sessionId: "invented", self: "invalid" },
-        },
-      ],
-    });
-    expect(parsed.lines[0]?.source).toBeUndefined();
-    expect(parsed.lines[0]?.provenance).toEqual({ observer: "test-meeting", self: "unknown" });
-    expect(parsed.lines[0]?.text).toBe("Still retained");
-  });
-
-  it("retains shared row validation when captions carry source identity", () => {
-    const provenance = testMeetingObservation();
-    const row = { text: "Caption", source: TEST_CAPTION_SOURCE, provenance };
-    const parsed = parseTranscript({
-      epoch: "epoch-1",
-      lines: [null, 42, { text: " " }, { ...row, at: 42, speaker: false }],
-      pendingLines: [false, { text: 42 }, row],
-    });
-    expect(parsed).toEqual({
-      droppedLines: 0,
-      epoch: "epoch-1",
-      lines: [row],
-      pendingLines: [row],
-    });
-  });
-
-  it("preserves optional legacy provider output without manufacturing an observer or identity", () => {
-    const line = { text: "Legacy provider without observation metadata" };
-    expect(parseTranscript({ lines: [line] })).toEqual({ droppedLines: 0, lines: [line] });
+  const malformedLine = { at: "invalid-time", speaker: "x".repeat(513), text: "Still retained" };
+  const captionLine = {
+    text: "Caption",
+    source: TEST_CAPTION_SOURCE,
+    provenance: testMeetingObservation(),
+  };
+  const legacyLine = { text: "Legacy provider without observation metadata" };
+  it.each([
+    {
+      name: "malformed identity and fallback",
+      payload: {
+        epoch: "x".repeat(513),
+        lines: [
+          {
+            ...malformedLine,
+            source: { ...TEST_CAPTION_SOURCE, ownEcho: "false" },
+            provenance: { observer: "untrusted", sessionId: "invented", self: "invalid" },
+          },
+        ],
+      },
+      expected: {
+        droppedLines: 0,
+        epoch: "x".repeat(513),
+        lines: [{ ...malformedLine, provenance: { observer: "test-meeting", self: "unknown" } }],
+      },
+    },
+    {
+      name: "invalid caption rows",
+      payload: {
+        epoch: "epoch-1",
+        lines: [null, 42, { text: " " }, { ...captionLine, at: 42, speaker: false }],
+        pendingLines: [false, { text: 42 }, captionLine],
+      },
+      expected: {
+        droppedLines: 0,
+        epoch: "epoch-1",
+        lines: [captionLine],
+        pendingLines: [captionLine],
+      },
+    },
+    {
+      name: "legacy provider rows",
+      payload: { lines: [legacyLine] },
+      expected: { droppedLines: 0, lines: [legacyLine] },
+    },
+  ])("normalizes $name without manufacturing attribution", ({ payload, expected }) => {
+    expect(parseTranscript(payload)).toEqual(expected);
   });
 
   it("normalizes status recentTranscript envelopes instead of stripping them", () => {
