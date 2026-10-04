@@ -46,6 +46,8 @@ import {
   projectCliMessagingDeliveryEvidence,
 } from "./delivery-evidence.js";
 import * as Deadline from "./execute-ask-user-deadline.js";
+import { MAX_UNFINISHED_TOOL_CALLS } from "./execute-event-retention.js";
+import { createPendingMessagingCalls } from "./execute-messaging-evidence.js";
 import {
   appendUniqueCliMessagingEvidence,
   buildMessagingToolSendEvidenceKey,
@@ -72,10 +74,7 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
   let inFlightUnclassifiedMcpRequests = 0;
   let inFlightMessagingToolCalls = 0;
   const inFlightPreparedMessagingCalls = new Set<McpLoopbackToolCallStart>();
-  const pendingMessagingCalls = new Map<
-    string,
-    { toolName: string; args: Record<string, unknown>; target?: MessagingToolSend }
-  >();
+  const pendingMessagingCalls = createPendingMessagingCalls();
   const cliLoopbackCalls: CliLoopbackCall[] = [];
   const activeCliTools = new Map<string, ActiveCliTool>();
   let cliLoopbackCorrelationOverflowed = false;
@@ -485,8 +484,32 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
       },
     });
   };
+  // The event consumer decides once, for every holder that would retain the same
+  // decoded arguments, whether they fit the run's retention budget. Releasing
+  // only one of them frees nothing, because they hold the same object.
+  const dropRetainedToolArgs = (toolCallId: string) => {
+    // The delivery-evidence copy is reduced rather than emptied: the settle path
+    // still has to know which action ran and where it was routed, and those are
+    // short scalars. What is released is the payload.
+    pendingMessagingCalls.reduce(toolCallId);
+    const activeTool = activeCliTools.get(toolCallId);
+    if (!activeTool) {
+      return;
+    }
+    activeTool.args = {};
+    // Fail closed: correlation that would have matched on the dropped arguments
+    // must not silently match on `{}` instead.
+    activeTool.loopbackAmbiguous = true;
+  };
   const handleCliToolUseStart = (event: CliToolUseStartDelta) => {
-    if (event.kind !== "server_tool_use") {
+    // Refuse-new past the cap instead of evicting, for the same reason
+    // `activeParsedTools` does: the oldest entry is the longest-running tool,
+    // and dropping it would retire a loopback correlation and an ask-user
+    // deadline that are still live. A tool refused here takes the same
+    // uncorrelated path a `server_tool_use` start already takes.
+    const trackable =
+      activeCliTools.has(event.toolCallId) || activeCliTools.size < MAX_UNFINISHED_TOOL_CALLS;
+    if (event.kind !== "server_tool_use" && trackable) {
       const activeTool: ActiveCliTool = {
         toolName: event.name,
         args: event.args,
@@ -526,20 +549,16 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
     ) {
       return;
     }
-    if (pendingMessagingCalls.size >= CLI_MESSAGING_EVIDENCE_MAX_CALLS) {
-      const oldestToolCallId = pendingMessagingCalls.keys().next().value;
-      if (oldestToolCallId !== undefined) {
-        pendingMessagingCalls.delete(oldestToolCallId);
-        // Once an unresolved send is evicted, its later result cannot be correlated.
-        // Fail closed so a failed turn cannot duplicate it.
-        didSendViaMessagingTool = true;
-      }
-    }
-    pendingMessagingCalls.set(event.toolCallId, {
+    const admitted = pendingMessagingCalls.admit(event.toolCallId, {
       toolName,
       args: event.args,
       target: extractCliMessagingTarget(context, toolName, event.args),
     });
+    if (admitted.evicted) {
+      // Once an unresolved send is evicted, its later result cannot be correlated.
+      // Fail closed so a failed turn cannot duplicate it.
+      didSendViaMessagingTool = true;
+    }
   };
   const handleCliToolResult = (event: CliToolResultDelta) => {
     const activeTool = activeCliTools.get(event.toolCallId);
@@ -548,9 +567,8 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
     }
     activeCliTools.delete(event.toolCallId);
     retireCliLoopbackCorrelation(event.toolCallId, activeTool);
-    const pending = pendingMessagingCalls.get(event.toolCallId);
+    const pending = pendingMessagingCalls.release(event.toolCallId);
     if (pending) {
-      pendingMessagingCalls.delete(event.toolCallId);
       commitMessagingToolResult({
         ...pending,
         result: event.result,
@@ -573,8 +591,16 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
   }) => {
     try {
       if (!gatewayCaptureKey && pendingMessagingCalls.size > 0) {
-        const calls = Array.from(pendingMessagingCalls.values());
-        const internalStates = await Promise.all(calls.map(isPreparedInternalSourceReply));
+        const calls = pendingMessagingCalls.values();
+        const internalStates = await Promise.all(
+          calls.map((call) =>
+            // A reduced entry cannot prove it had no explicit route, and the
+            // internal-sink answer is exactly that proof. Fail closed, the same
+            // way an evicted pending send does: count it as a visible send so a
+            // failed turn cannot deliver it a second time.
+            call.argsReduced ? Promise.resolve(false) : isPreparedInternalSourceReply(call),
+          ),
+        );
         if (internalStates.some((internal) => !internal)) {
           didSendViaMessagingTool = true;
           params.recordRunError(
@@ -661,6 +687,9 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
     onActiveLoopbackAskUserDeadlineChange: askUserDeadlines.onChange,
     handleCliToolUseStart,
     handleCliToolResult,
+    dropRetainedToolArgs,
+    /** Retained delivery-evidence sizes, for the retention gate's measurement. */
+    getRetainedMessagingSizes: pendingMessagingCalls.sizes,
     resolveCliLoopbackTerminalOutcome,
     finishDeliveryTracking,
     finalizeCapture,

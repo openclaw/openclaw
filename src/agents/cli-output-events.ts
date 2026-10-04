@@ -23,73 +23,14 @@ import {
   isGeminiStreamJsonDialect,
   supportsCliJsonlToolEvents,
 } from "./cli-output-records.js";
-
-type PendingToolUse = {
-  toolCallId: string;
-  name: string;
-  kind: CliToolUseStartDelta["kind"];
-  inputJsonParts: string[];
-  /**
-   * Complete input carried on `content_block_start`. Some CLI backends send the
-   * whole tool input there and never emit `input_json_delta` chunks, so without
-   * this the start event reports empty args and the later complete copy is
-   * dropped by the `startedIds` dedup in `emitToolStartOnce`.
-   */
-  blockInput?: Record<string, unknown>;
-};
-
-type ToolUseTracker = {
-  pendingByIndex: Map<number, PendingToolUse>;
-  nameById: Map<string, string>;
-  startedIds: Set<string>;
-  resultDeliveredIds: Set<string>;
-};
-
-export function createToolUseTracker(): ToolUseTracker {
-  return {
-    pendingByIndex: new Map(),
-    nameById: new Map(),
-    startedIds: new Set(),
-    resultDeliveredIds: new Set(),
-  };
-}
-
-function emitToolStartOnce(
-  tracker: ToolUseTracker,
-  toolCallId: string,
-  name: string,
-  kind: CliToolUseStartDelta["kind"],
-  args: Record<string, unknown>,
-  onToolUseStart?: (delta: CliToolUseStartDelta) => void,
-): void {
-  // Streaming and final assistant records may both describe the same tool call.
-  if (tracker.startedIds.has(toolCallId)) {
-    return;
-  }
-  tracker.startedIds.add(toolCallId);
-  tracker.nameById.set(toolCallId, name);
-  onToolUseStart?.({ toolCallId, name, kind, args });
-}
-
-function emitToolResultOnce(
-  tracker: ToolUseTracker,
-  toolCallId: string,
-  isError: boolean,
-  result: unknown,
-  onToolResult?: (delta: CliToolResultDelta) => void,
-): void {
-  // Tool results can arrive as assistant result blocks or echoed user tool_result blocks.
-  if (tracker.resultDeliveredIds.has(toolCallId)) {
-    return;
-  }
-  tracker.resultDeliveredIds.add(toolCallId);
-  onToolResult?.({
-    toolCallId,
-    name: tracker.nameById.get(toolCallId) ?? "",
-    isError,
-    result,
-  });
-}
+import {
+  appendPendingToolInput,
+  beginPendingToolUse,
+  emitToolResultOnce,
+  emitToolStartOnce,
+  releasePendingToolUse,
+  type ToolUseTracker,
+} from "./cli-output-tool-tracker.js";
 
 export type CliEventProjectionState = {
   assistantText: string;
@@ -281,11 +222,10 @@ export function dispatchClaudeCliStreamingToolEvent(params: {
         const toolCallId = typeof block.id === "string" ? block.id.trim() : "";
         const name = typeof block.name === "string" ? block.name.trim() : "";
         if (toolCallId && name) {
-          tracker.pendingByIndex.set(event.index, {
+          beginPendingToolUse(tracker, event.index, {
             toolCallId,
             name,
             kind: block.type,
-            inputJsonParts: [],
             ...(isRecord(block.input) ? { blockInput: block.input } : {}),
           });
         }
@@ -300,13 +240,12 @@ export function dispatchClaudeCliStreamingToolEvent(params: {
       isRecord(event.delta)
     ) {
       if (event.delta.type === "input_json_delta" && typeof event.delta.partial_json === "string") {
-        tracker.pendingByIndex.get(event.index)?.inputJsonParts.push(event.delta.partial_json);
+        appendPendingToolInput(tracker, event.index, event.delta.partial_json);
       }
       return;
     }
     if (event.type === "content_block_stop" && typeof event.index === "number") {
-      const pending = tracker.pendingByIndex.get(event.index);
-      tracker.pendingByIndex.delete(event.index);
+      const pending = releasePendingToolUse(tracker, event.index);
       if (pending) {
         // Delta presence, not key count, decides the winner: a no-argument call
         // arrives as an explicit `{}` delta, so keying on key count would let the
