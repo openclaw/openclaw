@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { tryResolveAmbientOwnerAgentId } from "../agents/agent-scope.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -39,7 +39,7 @@ function createTestCronService(storePath: string, cfg: OpenClawConfig, nowMs: nu
     nowMs: () => nowMs,
     cronEnabled: false,
     cronConfig: cfg.cron,
-    defaultAgentId: resolveDefaultAgentId(cfg),
+    defaultAgentId: tryResolveAmbientOwnerAgentId(cfg),
     log,
     enqueueSystemEvent: () => false,
     requestHeartbeat: noop,
@@ -87,6 +87,7 @@ tasks:
 
 # Keep alerts concise
 `,
+  agentId = "main",
 ) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-heartbeat-task-migration-"));
   tempDirs.push(root);
@@ -94,11 +95,16 @@ tasks:
   process.env.HOME = env.HOME;
   process.env.OPENCLAW_STATE_DIR = env.OPENCLAW_STATE_DIR;
   const cfg = {
-    agents: { defaults: { heartbeat: { every: "30m" } }, entries: { main: {} } },
+    agents: {
+      defaults: { heartbeat: { every: "30m" }, systemAgent: { agentId: "main" } },
+      entries: { main: {}, [agentId]: {} },
+    },
   } as OpenClawConfig;
   const storePath = resolveCronJobsStorePathFromConfig(cfg, env);
   const cron = createTestCronService(storePath, cfg, nowMs);
-  const spec = resolveHeartbeatMonitorPlan(cfg, []).specs[0];
+  const spec = resolveHeartbeatMonitorPlan(cfg, []).specs.find(
+    (entry) => entry.input.agentId === agentId,
+  );
   if (!spec) {
     throw new Error("expected heartbeat monitor spec");
   }
@@ -113,7 +119,7 @@ tasks:
   });
   const session = resolveHeartbeatSession(
     cfg,
-    "main",
+    agentId,
     cfg.agents?.defaults?.heartbeat,
     undefined,
     env,
@@ -121,7 +127,7 @@ tasks:
   await replaceSessionEntry(
     { storePath: session.storePath, sessionKey: session.sessionKey, env },
     {
-      sessionId: "heartbeat-main",
+      sessionId: `heartbeat-${agentId}`,
       updatedAt: nowMs,
       heartbeatTaskState: { inbox: nowMs - 30 * 60_000 },
     },
@@ -174,6 +180,46 @@ function readScratch(fixture: Fixture) {
 }
 
 describe("heartbeat scratch task cron migration", () => {
+  it("keeps migrated secondary-agent tasks editable", async () => {
+    const fixture = await createFixture(2_000_000_000_000, undefined, "research");
+    await expect(migrate(fixture)).resolves.toMatchObject({ warnings: [] });
+    const jobs = (await loadCronJobsStore(fixture.storePath)).jobs.filter(isHeartbeatTaskCronJob);
+    expect(jobs).toHaveLength(2);
+    const job = jobs.find((entry) => entry.name === "inbox")!;
+    expect(job.agentId).toBe("research");
+    const cron = createTestCronService(fixture.storePath, fixture.cfg, fixture.nowMs);
+    try {
+      await expect(
+        cron.update(job.id, {
+          payload: { kind: "systemEvent", text: "Check priority inbox items" },
+        }),
+      ).resolves.toMatchObject({
+        agentId: "research",
+        payload: { kind: "systemEvent", text: "Check priority inbox items" },
+      });
+      expect(
+        (await loadCronJobsStore(fixture.storePath)).jobs.find((entry) => entry.id === job.id),
+      ).toMatchObject({
+        declarationKey: job.declarationKey,
+        agentId: "research",
+        payload: { text: "Check priority inbox items" },
+      });
+      await expect(
+        cron.add({
+          name: "ordinary main-session job",
+          agentId: "research",
+          enabled: false,
+          schedule: { kind: "every", everyMs: 3_600_000 },
+          sessionTarget: "main",
+          wakeMode: "next-heartbeat",
+          payload: { kind: "systemEvent", text: "Check priority inbox items" },
+        }),
+      ).rejects.toThrow('sessionTarget "main" is only valid for the default agent');
+    } finally {
+      cron.stop();
+    }
+  });
+
   it("preserves persisted tasks for a disabled owner until it is re-enabled", async () => {
     const fixture = await createFixture(2_000_000_000_000);
     fixture.cfg.agents!.defaults!.heartbeat!.every = "0m";
