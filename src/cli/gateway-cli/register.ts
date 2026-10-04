@@ -407,7 +407,7 @@ export function registerGatewayCli(program: Command) {
   );
 
   addGatewayServiceCommands(gateway, {
-    statusDescription: "Show gateway service status + probe connectivity/capability",
+    statusDescription: "Show gateway service status + check connectivity/capability",
   });
   addGatewayRestartHandoffCommands(gateway);
   setCommandJsonMode(gateway, "output", ({ argv }) => isGatewayMachineOutput(argv));
@@ -720,16 +720,16 @@ export function registerGatewayCli(program: Command) {
   gateway
     .command("probe")
     .description(
-      "Show gateway reachability, auth capability, and read-probe summary (local + remote)",
+      "Show gateway reachability, auth capability, and read-check summary (local + remote)",
     )
-    .option("--url <url>", "Explicit Gateway WebSocket URL (still probes localhost)")
+    .option("--url <url>", "Explicit Gateway WebSocket URL (still checks localhost)")
     .option("--port <port>", "Local Gateway port")
     .option("--ssh <target>", "SSH target for remote gateway tunnel (user@host or user@host:port)")
     .option("--ssh-identity <path>", "SSH identity file path")
     .option("--ssh-auto", "Try to derive an SSH target from Bonjour discovery", false)
-    .option("--token <token>", "Gateway token (applies to all probes)")
-    .option("--password <password>", "Gateway password (applies to all probes)")
-    .option("--timeout <ms>", "Overall probe budget in ms", "3000")
+    .option("--token <token>", "Gateway token (applies to all checks)")
+    .option("--password <password>", "Gateway password (applies to all checks)")
+    .option("--timeout <ms>", "Overall check budget in ms", "3000")
     .option("--json", "Output JSON", false)
     .action(
       gatewayAction(async (opts, command) => {

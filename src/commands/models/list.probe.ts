@@ -144,7 +144,7 @@ function buildNoModelProbeResult(target: AuthProbeTarget): AuthProbeResult {
   return buildProbeResult(target, {
     status: "no_model",
     reasonCode: "no_model",
-    error: "No model available for probe",
+    error: "No model available for check",
   });
 }
 
@@ -505,7 +505,7 @@ export async function buildProbeTargets(params: {
                 reasonCode: model ? "unresolved_ref" : "no_model",
                 error: model
                   ? "Configured auth profile could not be resolved."
-                  : "No model available for probe",
+                  : "No model available for check",
               });
             }
           }
@@ -520,7 +520,7 @@ export async function buildProbeTargets(params: {
             reasonCode: model ? "unresolved_ref" : "no_model",
             error: model
               ? "Configured API key could not be resolved."
-              : "No model available for probe",
+              : "No model available for check",
           });
         } else {
           appendTarget({
@@ -773,7 +773,7 @@ async function probeTarget(params: {
         agentDir: isolatedAgentDir,
       });
       if (!updated) {
-        throw new Error("Could not prepare isolated auth probe profile");
+        throw new Error("Could not prepare isolated auth check profile");
       }
     }
     const { runEmbeddedAgent } = await import("../../agents/embedded-agent.js");
@@ -824,7 +824,7 @@ async function probeTarget(params: {
       throw new Error(terminalError);
     }
     if (!agentRunHasVisibleReply(runResult)) {
-      return buildResult("format", "The model did not return a visible probe response.");
+      return buildResult("format", "The model did not return a visible check response.");
     }
     return buildResult("ok");
   } catch (err) {
@@ -863,7 +863,7 @@ async function probeTarget(params: {
         throw errors[0];
       }
       if (errors.length > 1) {
-        throw new AggregateError(errors, "Auth probe resources could not all be released", {
+        throw new AggregateError(errors, "Auth check resources could not all be released", {
           cause: errors[0],
         });
       }
@@ -903,7 +903,7 @@ async function runTargetsWithConcurrency(params: {
       onProgress?.({
         completed,
         total: targets.length,
-        label: `Probing ${target.provider}${target.profileId ? ` (${target.label})` : ""}`,
+        label: `Checking ${target.provider}${target.profileId ? ` (${target.label})` : ""}`,
       });
       const result = await probeTarget({
         cfg,
@@ -1043,8 +1043,8 @@ export function sortProbeResults(results: AuthProbeResult[]): AuthProbeResult[] 
 
 export function describeProbeSummary(summary: AuthProbeSummary): string {
   if (summary.totalTargets === 0) {
-    return "No probe targets.";
+    return "No check targets.";
   }
-  return `Probed ${summary.totalTargets} target${summary.totalTargets === 1 ? "" : "s"} in ${formatMs(summary.durationMs)}`;
+  return `Checked ${summary.totalTargets} target${summary.totalTargets === 1 ? "" : "s"} in ${formatMs(summary.durationMs)}`;
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

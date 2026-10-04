@@ -51,7 +51,7 @@ describe("Nextcloud Talk monitor abort", () => {
   it.each([
     ...["/health", "/healthz", "/ready", "/readyz", "/startup", "/startupz"].map((path) => ({
       path,
-      reason: "reserved for Gateway probes",
+      reason: "reserved for Gateway checks",
     })),
     { path: "/api/channels/talk", reason: "requires Gateway authentication" },
     { path: "/%61pi/channels/talk", reason: "requires Gateway authentication" },

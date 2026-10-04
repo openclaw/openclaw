@@ -1073,7 +1073,7 @@ export async function modelsStatusCommand(
           listProbeRuntimeLoader.load(),
         ]);
         probeSummary = await withProgressTotals(
-          { label: "Probing auth profiles…", total: 1 },
+          { label: "Checking auth profiles…", total: 1 },
           async (update) => {
             return await runAuthProbes({
               cfg,
@@ -1568,7 +1568,7 @@ export async function modelsStatusCommand(
             listProbeRuntimeLoader.load(),
           ]);
         runtime.log("");
-        runtime.log(colorize(rich, theme.heading, "Auth probes"));
+        runtime.log(colorize(rich, theme.heading, "Auth checks"));
         if (probeSummary.results.length === 0) {
           runtime.log(colorize(rich, theme.muted, "- none"));
         } else {

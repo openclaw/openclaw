@@ -95,10 +95,10 @@ exports from `infra-runtime`. The retired `resolveExecModeFromPolicy`,
 `resolveExecPolicyForMode`, and `resolveExecModePolicy` exports can also migrate
 to `execPolicy.resolveExecModePolicy`, selecting the returned fields they need.
 
-Native command probes should use `runCommandWithTimeout` from
+Native command checks should use `runCommandWithTimeout` from
 `openclaw/plugin-sdk/process-runtime` with `timeoutMs`, the caller's `signal`, and
 `killProcessTree: true`. For commands whose output is always UTF-8, such as JSON status
-probes, use `runUtf8CommandWithTimeout` from the same subpath. A bounded command result
+checks, use `runUtf8CommandWithTimeout` from the same subpath. A bounded command result
 can return before canceled remote startup delivers its PID. When a command owns a
 session reservation or temporary output, await `withCommandProcessScope` from the
 same subpath around execution before releasing those resources. The scope joins
@@ -174,7 +174,7 @@ Empty quoted arguments are omitted.
 
 Existing process owners can use `signalProcessTree`. Its `onComplete` callback runs after Unix
 signaling or the bounded Windows `taskkill` attempt, not proof that every process
-exited. Keep the probe pending through cleanup, use `detached: true` only for a
+exited. Keep the check pending through cleanup, use `detached: true` only for a
 process group you created, and start Windows tree termination while its root is
 still alive.
 

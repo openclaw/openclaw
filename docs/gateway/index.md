@@ -45,7 +45,7 @@ openclaw status
 openclaw logs --follow
 ```
 
-Healthy baseline: `Runtime: running`, `Connectivity probe: ok`, and a `Capability` line that matches what you expect. Use `openclaw gateway status --require-rpc` for read-scope RPC proof, not just reachability.
+Healthy baseline: `Runtime: running`, `Connectivity check: ok`, and a `Capability` line that matches what you expect. Use `openclaw gateway status --require-rpc` for read-scope RPC proof, not just reachability.
 
   </Step>
 
@@ -55,7 +55,7 @@ Healthy baseline: `Runtime: running`, `Connectivity probe: ok`, and a `Capabilit
 openclaw channels status --probe
 ```
 
-With a reachable gateway this runs live per-account channel probes and optional audits. If the gateway is unreachable, the CLI falls back to config-only channel summaries.
+With a reachable gateway this runs live per-account channel checks and optional audits. If the gateway is unreachable, the CLI falls back to config-only channel summaries.
 
   </Step>
 </Steps>
@@ -87,7 +87,7 @@ OpenClaw's highest-leverage compatibility surface:
 
 Why this set matters:
 
-- Most Open WebUI, LobeChat, and LibreChat integrations probe `/v1/models` first.
+- Most Open WebUI, LobeChat, and LibreChat integrations check `/v1/models` first.
 - Many RAG and memory pipelines expect `/v1/embeddings`.
 - Agent-native clients increasingly prefer `/v1/responses`.
 
@@ -131,7 +131,7 @@ openclaw logs --follow
 openclaw doctor
 ```
 
-`gateway status --deep` is for extra service discovery (LaunchDaemons/systemd system units/schtasks), not a deeper RPC health probe.
+`gateway status --deep` is for extra service discovery (LaunchDaemons/systemd system units/schtasks), not a deeper RPC health check.
 
 ## Multiple gateways (same host)
 

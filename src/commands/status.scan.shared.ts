@@ -242,7 +242,7 @@ export async function resolveGatewayProbeSnapshot(params: {
         ? null
         : (readiness?.probeError ??
           (remainingTimeoutMs() === 0
-            ? "Gateway probe budget exhausted."
+            ? "Gateway check budget exhausted."
             : "Gateway is unreachable")),
     ...(readiness?.waitOutcome === "still-starting"
       ? { startupPhase: readiness.startupPhase ?? "startup" }

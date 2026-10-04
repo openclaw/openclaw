@@ -284,7 +284,7 @@ function findUnusedProbeIndexName(db: DatabaseSync, canonicalName: string): stri
       return candidate;
     }
   }
-  throw new Error(`could not allocate a probe index name for ${canonicalName}`);
+  throw new Error(`could not allocate a check index name for ${canonicalName}`);
 }
 
 function assertSqliteIdentifier(identifier: string): void {

@@ -542,7 +542,7 @@ function formatProtocolMismatchMessage(message: string | undefined, details: unk
     parts.push(`Gateway v${expected}`);
   }
   if (probeMin !== undefined) {
-    parts.push(`probe min v${probeMin}`);
+    parts.push(`connection check min v${probeMin}`);
   }
   const normalized = normalizeOptionalProtocolString(message) ?? "protocol mismatch";
   return parts.length > 0 ? `${normalized}: ${parts.join(", ")}` : normalized;

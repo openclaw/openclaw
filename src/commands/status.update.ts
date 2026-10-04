@@ -68,7 +68,7 @@ export async function getUpdateCheckResult(params: {
     update.error = {
       status: "unknown",
       timeoutMs: gitProbeTimeoutMs,
-      message: `git probe did not finish within ${gitProbeTimeoutMs / 1000} s (slow host)`,
+      message: `git check did not finish within ${gitProbeTimeoutMs / 1000} s (slow host)`,
     };
   } else if (update.git?.error) {
     update.error = { status: "failed", message: sanitizeTerminalText(update.git.error) };

@@ -291,7 +291,7 @@ describe("healthCommand", () => {
     await healthCommand({ json: false, timeoutMs: 1000, config: {} }, runtime);
 
     const output = stripAnsi(runtime.log.mock.calls.map((call) => String(call[0])).join("\n"));
-    expect(output).toContain("Gateway probe duration: 5ms");
+    expect(output).toContain("Gateway check duration: 5ms");
   });
 
   it.each([
@@ -486,7 +486,7 @@ describe("healthCommand", () => {
     await healthCommand({ json: false, timeoutMs: 1000, config: {} }, runtime);
 
     const output = stripAnsi(runtime.log.mock.calls.map((call) => String(call[0])).join("\n"));
-    expect(output).not.toContain("Gateway probe duration:");
+    expect(output).not.toContain("Gateway check duration:");
   });
 
   it("prints the delivery queue warning line when the gateway reports dead-letters", async () => {

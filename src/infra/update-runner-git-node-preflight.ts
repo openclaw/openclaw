@@ -127,7 +127,7 @@ export async function prepareGitCandidateNodeRuntime(
   });
   let systemDiagnostic: string;
   if (systemNode?.status === "probe-failed") {
-    systemDiagnostic = `System Node compatibility remains unknown because its probe failed: ${systemNode.error.message}`;
+    systemDiagnostic = `System Node compatibility remains unknown because its check failed: ${systemNode.error.message}`;
   } else if (
     systemNode?.status === "supported" &&
     nodeVersionSatisfiesEngine(systemNode.version, engine) !== false

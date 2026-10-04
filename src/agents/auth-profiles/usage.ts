@@ -251,7 +251,7 @@ async function probeWhamForCooldown(
                 cooldownMs: WHAM_DEAD_ACCOUNT_COOLDOWN_MS,
                 cooldownClassification: "wham_account_dead" as const,
               };
-        authProfileUsageLog.warn("WHAM probe classified auth profile unavailable", {
+        authProfileUsageLog.warn("WHAM check classified auth profile unavailable", {
           event: "auth_profile_wham_auth_classification",
           profileId,
           status: res.status,
@@ -265,7 +265,7 @@ async function probeWhamForCooldown(
     }
 
     const parsed = whamUsageSchema.safeParse(
-      await readProviderJsonResponse<unknown>(res, "WHAM usage probe"),
+      await readProviderJsonResponse<unknown>(res, "WHAM usage check"),
     );
     const failedProbe = { cooldownMs: WHAM_PROBE_FAILURE_COOLDOWN_MS };
     if (!parsed.success || parsed.data.spend_control?.reached) {

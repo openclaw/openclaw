@@ -510,7 +510,7 @@ records completion. Unrelated warnings and later or reintroduced obligations
 remain visible; the original update history is preserved.
 
 After post-update or finalization work fails and its child processes settle,
-OpenClaw probes the installed Gateway using the normal startup and readiness
+OpenClaw checks the installed Gateway using the normal startup and readiness
 budget. If maintenance found no Gateway service or listener, recovery records
 that readiness observation was skipped instead of waiting for a Gateway to appear.
 Package and database restoration checks still apply, and the original failure
@@ -520,18 +520,18 @@ one bounded observation because that repair has not requested Gateway startup.
 Observations also cover foreground Gateways. A failed finalization step
 can therefore report **verified serving** while retaining its original failure
 and repair guidance. The observation does not restart the Gateway or grant
-maintenance authority. Failed probes retain their specific diagnostic; a
+maintenance authority. Failed checks retain their specific diagnostic; a
 Gateway that is still starting keeps that outcome instead of being restarted.
 If command cleanup remains uncertain, the run stays open and retains its recovery
 artifacts instead of publishing completion or starting another repair.
 
 Doctor repair uses the same enabled-plugin and default-check selection as
-ordinary Doctor lint. Opt-in checks, including the managed Codex version probe,
+ordinary Doctor lint. Opt-in checks, including the managed Codex version check,
 do not run during routine finalization. Explicit candidate checks still run
 when requested with `doctor --lint --only codex/managed-app-server`.
-The version probe has a five-second deadline, terminates its process group
+The version check has a five-second deadline, terminates its process group
 where supported, and bounds output draining when a descendant retains a pipe.
-A timed-out probe cannot be accepted merely because its direct child exited
+A timed-out check cannot be accepted merely because its direct child exited
 successfully. Nonfatal Doctor warnings appear in `postUpdate.doctor.warnings`;
 finalization reports `status: "warning"` and exits successfully when no other
 step fails. Codex runtime readiness remains owned by its plugin after restart.

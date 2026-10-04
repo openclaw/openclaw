@@ -112,7 +112,7 @@ function printMetadataOnlyNotice(params: {
 }) {
   if (params.autoDowngraded) {
     params.runtime.log(
-      "OpenRouter free models still require OPENROUTER_API_KEY for live probes and inference. Listing public catalog metadata only.",
+      "OpenRouter free models still require OPENROUTER_API_KEY for live checks and inference. Listing public catalog metadata only.",
     );
   }
   params.runtime.log(
@@ -204,7 +204,7 @@ export async function modelsScanCommand(
   const requestedProbe = opts.probe ?? true;
   if (!requestedProbe && (opts.setDefault || opts.setImage)) {
     throw new Error(
-      "Cannot apply metadata-only OpenRouter scan results. Remove --no-probe or configure OPENROUTER_API_KEY and rerun with probes before changing defaults.",
+      "Cannot apply metadata-only OpenRouter scan results. Remove --no-probe or configure OPENROUTER_API_KEY and rerun with checks before changing defaults.",
     );
   }
   let probe = requestedProbe;
@@ -226,7 +226,7 @@ export async function modelsScanCommand(
     if (!storedKey) {
       if (opts.setDefault || opts.setImage) {
         throw new Error(
-          "Cannot apply metadata-only OpenRouter scan results. Configure OPENROUTER_API_KEY and rerun with probes before changing defaults.",
+          "Cannot apply metadata-only OpenRouter scan results. Configure OPENROUTER_API_KEY and rerun with checks before changing defaults.",
         );
       }
       // Without a key, keep the command useful as catalog discovery only; writes
@@ -253,7 +253,7 @@ export async function modelsScanCommand(
           if (phase !== "probe") {
             return;
           }
-          const labelBase = probe ? "Probing models" : "Scanning models";
+          const labelBase = probe ? "Checking models" : "Scanning models";
           update({
             completed,
             total,
@@ -281,7 +281,7 @@ export async function modelsScanCommand(
   const toolOk = results.filter((entry) => entry.tool.ok);
   if (toolOk.length === 0) {
     throw new Error(
-      `No tool-capable OpenRouter free models found. Try ${formatCliCommand("openclaw models scan --no-probe")} to inspect metadata-only candidates, or configure OPENROUTER_API_KEY before probing.`,
+      `No tool-capable OpenRouter free models found. Try ${formatCliCommand("openclaw models scan --no-probe")} to inspect metadata-only candidates, or configure OPENROUTER_API_KEY before checking.`,
     );
   }
 

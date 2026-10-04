@@ -569,7 +569,7 @@ describe("runDaemonInstall integration", () => {
       expect(serviceMock.install).not.toHaveBeenCalled();
       expect(await snapshotConfig()).toEqual(before);
       if (nodeVersion === "24.15.0") {
-        expect(runtimeLogs.join("\n")).toContain("unsupported version, capability probe passed");
+        expect(runtimeLogs.join("\n")).toContain("unsupported version, capability check passed");
       }
     },
   );

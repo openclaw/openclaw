@@ -64,7 +64,7 @@ export async function probeMattermost(
         }
         const bot = await readProviderJsonResponse<MattermostUser>(
           res,
-          "Mattermost probe /users/me",
+          "Mattermost check /users/me",
         );
         return {
           ok: true,

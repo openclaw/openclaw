@@ -279,7 +279,7 @@ export async function probeApnsHttp2ReachabilityViaProxy(
       let status: number | undefined;
       let responseHeaders: Record<string, string> = {};
       const timeout = setTimeout(() => {
-        fail(new Error(`APNs reachability probe timed out after ${timeoutMs}ms`));
+        fail(new Error(`APNs reachability check timed out after ${timeoutMs}ms`));
       }, timeoutMs);
       timeout.unref?.();
 
@@ -330,7 +330,7 @@ export async function probeApnsHttp2ReachabilityViaProxy(
         settled = true;
         cleanup();
         if (status === undefined || !Number.isFinite(status)) {
-          reject(new Error("APNs reachability probe ended without an HTTP/2 status"));
+          reject(new Error("APNs reachability check ended without an HTTP/2 status"));
           return;
         }
         resolve({ status, body: getApnsResponseBodyCaptureText(body), responseHeaders });

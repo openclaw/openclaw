@@ -46,13 +46,15 @@ topic. The triage ladder stays on this page; open the page that matches your que
     ```bash
     openclaw gateway status
     ```
-    Shows supervisor runtime vs RPC reachability, the probe target URL, and which config the service likely used.
+    Shows supervisor runtime vs RPC reachability, the check target URL, and which config the service likely used.
   </Step>
-  <Step title="Deep probes">
+  <a id="deep-probes" />
+
+  <Step title="Deep checks">
     ```bash
     openclaw status --deep
     ```
-    Live Gateway health probe, including channel probes when supported (requires a reachable Gateway). See [Health](/gateway/health).
+    Live Gateway health check, including channel checks when supported (requires a reachable Gateway). See [Health](/gateway/health).
   </Step>
   <Step title="Tail the latest log">
     ```bash
@@ -195,7 +197,7 @@ resolves. Each entry points at the page that now holds the answer.
 - <a id="can-i-run-multiple-bots-or-chats-at-the-same-time-slack-and-how-should-i-set-that-up" />[Can I run multiple bots or chats at the same time (Slack), and how should I set that up?](/help/faq/sessions-and-chats#can-i-run-multiple-bots-or-chats-at-the-same-time-slack-and-how-should-i-set-that-up)
 - <a id="gateway%3A-ports%2C-%22already-running%22%2C-and-remote-mode" /><a id="gateway-ports-already-running-and-remote-mode" />[Gateway: ports, "already running", and remote mode](/help/faq/gateway-ports-and-remote-mode#gateway-ports-already-running-and-remote-mode)
 - <a id="what-port-does-the-gateway-use" />[What port does the Gateway use?](/help/faq/gateway-ports-and-remote-mode#what-port-does-the-gateway-use)
-- <a id="why-does-openclaw-gateway-status-say-runtime-running-but-connectivity-probe-failed" />[Why does openclaw gateway status say "Runtime: running" but "Connectivity probe: failed"?](/help/faq/gateway-ports-and-remote-mode#why-does-openclaw-gateway-status-say-runtime-running-but-connectivity-probe-failed)
+- <a id="why-does-openclaw-gateway-status-say-runtime-running-but-connectivity-probe-failed" />[Why does openclaw gateway status say "Runtime: running" but "Connectivity check: failed"?](/help/faq/gateway-ports-and-remote-mode#why-does-openclaw-gateway-status-say-runtime-running-but-connectivity-probe-failed)
 - <a id="why-does-openclaw-gateway-status-show-config-cli-and-config-service-different" />[Why does openclaw gateway status show "Config (cli)" and "Config (service)" different?](/help/faq/gateway-ports-and-remote-mode#why-does-openclaw-gateway-status-show-config-cli-and-config-service-different)
 - <a id="what-does-another-gateway-instance-is-already-listening-mean" />[What does "another gateway instance is already listening" mean?](/help/faq/gateway-ports-and-remote-mode#what-does-another-gateway-instance-is-already-listening-mean)
 - <a id="how-do-i-run-openclaw-in-remote-mode-client-connects-to-a-gateway-elsewhere" />[How do I run OpenClaw in remote mode (client connects to a Gateway elsewhere)?](/help/faq/gateway-ports-and-remote-mode#how-do-i-run-openclaw-in-remote-mode-client-connects-to-a-gateway-elsewhere)

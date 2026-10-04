@@ -232,7 +232,7 @@ state:
   `/openclaw` inside the TUI or `openclaw setup`.
 
 Remote setup reuses device pairing for the selected Gateway, including a
-configured remote connection forwarded through loopback. Its readiness probes
+configured remote connection forwarded through loopback. Its readiness checks
 do not create new device pairings. Setup chat keeps a stable authenticated
 caller across replies, including on loopback connections.
 
@@ -414,7 +414,7 @@ openclaw onboard --non-interactive --accept-risk --skip-health \
 
 - Unless you pass `--skip-health`, onboarding waits for a reachable local gateway before exiting successfully.
 - `--install-daemon` starts the managed gateway install path first. With no daemon flag, a local gateway must already be running (for example `openclaw gateway run`).
-- Explicit `--skip-daemon` or `--no-install-daemon` performs one reachability probe without waiting for Gateway startup. If none is listening, setup reports that the gateway was not started and exits successfully; a reachable but unhealthy gateway still fails the health check.
+- Explicit `--skip-daemon` or `--no-install-daemon` performs one reachability check without waiting for Gateway startup. If none is listening, setup reports that the gateway was not started and exits successfully; a reachable but unhealthy gateway still fails the health check.
 - `--skip-health` skips the wait if you only want config/workspace/bootstrap writes in automation.
 - `--skip-bootstrap` sets `agents.defaults.skipBootstrap: true` and skips creating `AGENTS.md`, `SOUL.md`, `IDENTITY.md`, `USER.md`, and `BOOTSTRAP.md`.
 - On native Windows, `--install-daemon` tries Scheduled Tasks first and falls back to a per-user Startup-folder login item if task creation is denied.
@@ -507,7 +507,7 @@ Some web-search providers trigger provider-specific follow-up prompts during onb
 
 - Local onboarding DM scope behavior: [CLI setup reference](/start/wizard-cli-reference#outputs-and-internals).
 - Fastest first chat: `openclaw dashboard` (Control UI, no channel setup).
-- Custom provider: connect any OpenAI- or Anthropic-compatible endpoint, including hosted providers not listed. Use **Unknown** compatibility to auto-detect via a live probe.
+- Custom provider: connect any OpenAI- or Anthropic-compatible endpoint, including hosted providers not listed. Use **Unknown** compatibility to auto-detect via a live check.
 - If Hermes state is detected, onboarding offers a migration flow (see `--flow import` above).
 
 ## Common follow-up commands

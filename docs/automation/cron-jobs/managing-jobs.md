@@ -60,7 +60,7 @@ Day-to-day operation of stored jobs: copy-ready CLI examples, the management com
   <Tab title="Command output">
     ```bash
     openclaw automations create "*/15 * * * *" \
-      --name "Queue depth probe" \
+      --name "Queue depth check" \
       --command "scripts/check-queue.sh" \
       --command-cwd "/srv/app" \
       --announce \

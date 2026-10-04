@@ -197,7 +197,7 @@ manager, or machine owns the process.
 </Steps>
 
 OpenClaw reads `/health`, `/models` (falling back to `/v1/models`), and
-`/props`. Router property probes use `autoload=false`. Discovery never loads,
+`/props`. Router property checks use `autoload=false`. Discovery never loads,
 wakes, unloads, downloads, or reloads models.
 
 For discovered models, OpenClaw advertises reasoning and effort controls only

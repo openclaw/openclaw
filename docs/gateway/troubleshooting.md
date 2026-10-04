@@ -23,7 +23,7 @@ openclaw channels status --probe
 
 Healthy signals:
 
-- `openclaw gateway status` shows `Runtime: running`, `Connectivity probe: ok`, and a `Capability: ...` line.
+- `openclaw gateway status` shows `Runtime: running`, `Connectivity check: ok`, and a `Capability: ...` line.
 - `openclaw doctor` reports no blocking config/service issues.
 - `openclaw channels status --probe` shows live per-account transport status and, where supported, `works` or `audit ok`.
 
@@ -38,7 +38,7 @@ grouped by symptom area. Open the page that matches what you are seeing.
 | [Skills and model providers](/gateway/troubleshooting/skills-and-model-providers)     | A skill root is skipped, or provider calls fail with 429, 403, or silent agent-run errors.   |
 | [Agent replies and Control UI](/gateway/troubleshooting/agent-replies-and-control-ui) | A run fails with a storage error, no reply arrives, or the Control UI will not connect.      |
 | [Gateway service and process](/gateway/troubleshooting/gateway-service-and-process)   | The service will not run or stay up, macOS supervision misbehaves, or memory forces an exit. |
-| [Config validation and probes](/gateway/troubleshooting/config-validation-and-probes) | The Gateway rejected a config, or probe warnings appear in status and doctor output.         |
+| [Config validation and checks](/gateway/troubleshooting/config-validation-and-probes) | The Gateway rejected a config, or check warnings appear in status and doctor output.         |
 | [Channel delivery and tools](/gateway/troubleshooting/channel-delivery-and-tools)     | A channel connects but does not deliver, or a node or browser tool call fails.               |
 
 ## Where each section moved
@@ -60,7 +60,7 @@ the page that now holds the content.
 - <a id="use-an-eligible-credential" />[Use an eligible credential](/gateway/troubleshooting/skills-and-model-providers#use-an-eligible-credential)
 - <a id="configure-fallback-models" />[Configure fallback models](/gateway/troubleshooting/skills-and-model-providers#configure-fallback-models)
 - <a id="upstream-403-blocked-responses" />[Upstream 403 blocked responses](/gateway/troubleshooting/skills-and-model-providers#upstream-403-blocked-responses)
-- <a id="local-openai-compatible-backend-passes-direct-probes-but-agent-runs-fail" />[Local OpenAI-compatible backend passes direct probes but agent runs fail](/gateway/troubleshooting/skills-and-model-providers#local-openai-compatible-backend-passes-direct-probes-but-agent-runs-fail)
+- <a id="local-openai-compatible-backend-passes-direct-probes-but-agent-runs-fail" />[Local OpenAI-compatible backend passes direct checks but agent runs fail](/gateway/troubleshooting/skills-and-model-providers#local-openai-compatible-backend-passes-direct-probes-but-agent-runs-fail)
 - <a id="common-signatures" />[Common signatures (local backend)](/gateway/troubleshooting/skills-and-model-providers#common-signatures)
 - <a id="fix-options" />[Fix options (local backend)](/gateway/troubleshooting/skills-and-model-providers#fix-options)
 - <a id="agent-run-failed-with-a-storage-error" />[Agent run failed with a storage error](/gateway/troubleshooting/agent-replies-and-control-ui#agent-run-failed-with-a-storage-error)
@@ -81,7 +81,7 @@ the page that now holds the content.
 - <a id="inspect-and-repair" />[Inspect and repair](/gateway/troubleshooting/config-validation-and-probes#inspect-and-repair)
 - <a id="common-signatures-2" />[Common signatures (invalid config)](/gateway/troubleshooting/config-validation-and-probes#common-signatures)
 - <a id="fix-options-1" />[Fix options (invalid config)](/gateway/troubleshooting/config-validation-and-probes#fix-options)
-- <a id="gateway-probe-warnings" />[Gateway probe warnings](/gateway/troubleshooting/config-validation-and-probes#gateway-probe-warnings)
+- <a id="gateway-probe-warnings" />[Gateway check warnings](/gateway/troubleshooting/config-validation-and-probes#gateway-probe-warnings)
 - <a id="channel-connected%2C-messages-not-flowing" /><a id="channel-connected-messages-not-flowing" />[Channel connected, messages not flowing](/gateway/troubleshooting/channel-delivery-and-tools#channel-connected-messages-not-flowing)
 - <a id="cron-and-heartbeat-delivery" />[Cron and heartbeat delivery](/gateway/troubleshooting/channel-delivery-and-tools#cron-and-heartbeat-delivery)
 - <a id="common-signatures-3" />[Common signatures (cron and heartbeat)](/gateway/troubleshooting/channel-delivery-and-tools#common-signatures)
@@ -132,7 +132,7 @@ Most post-upgrade breakage is config drift or stricter defaults now being enforc
     Common signatures:
 
     - `refusing to bind gateway ... without auth` → non-loopback bind without a valid gateway auth path.
-    - `Connectivity probe: failed` while runtime is running → gateway alive but inaccessible with current auth/url.
+    - `Connectivity check: failed` while runtime is running → gateway alive but inaccessible with current auth/url.
 
   </Accordion>
   <Accordion title="3. Pairing and device identity state changed">

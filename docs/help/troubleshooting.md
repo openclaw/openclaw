@@ -29,9 +29,9 @@ Good output, one line each:
 - `openclaw status` shows configured channels, no auth errors.
 - `openclaw status --all` produces a full, shareable report.
 - `openclaw gateway probe` shows `Reachable: yes`. `Capability: ...` is the
-  auth level the probe proved; `Read probe: limited - missing scope:
+  auth level the check proved; `Read check: limited - missing scope:
 operator.read` is degraded diagnostics, not a connect failure.
-- `openclaw gateway status` shows `Runtime: running`, `Connectivity probe:
+- `openclaw gateway status` shows `Runtime: running`, `Connectivity check:
 ok`, and a plausible `Capability: ...`. Add `--require-rpc` to also require
   read-scope RPC proof.
 - `openclaw doctor` reports no blocking config/service errors.
@@ -75,7 +75,7 @@ Full profile/group table: [Tool profiles](/gateway/config-tools/tool-policy#tool
 ## Local OpenAI-compatible backend works directly but fails in OpenClaw
 
 Your local/self-hosted `/v1` backend answers direct `/v1/chat/completions`
-probes but fails on `openclaw infer model run` or normal agent turns:
+checks but fails on `openclaw infer model run` or normal agent turns:
 
 1. Error mentions `messages[].content` expecting a string: set
    `models.providers.<provider>.models[].compat.requiresStringContent: true`.
@@ -83,7 +83,7 @@ probes but fails on `openclaw infer model run` or normal agent turns:
    `models.providers.<provider>.models[].compat.supportsTools: false` and retry.
 3. Tiny direct calls work but larger OpenClaw prompts crash the backend: that
    is an upstream model/server limit, not an OpenClaw bug. Continue in
-   [Local OpenAI-compatible backend passes direct probes but agent runs fail](/gateway/troubleshooting#local-openai-compatible-backend-passes-direct-probes-but-agent-runs-fail).
+   [Local OpenAI-compatible backend passes direct checks but agent runs fail](/gateway/troubleshooting#local-openai-compatible-backend-passes-direct-probes-but-agent-runs-fail).
 
 ## Plugin install fails with missing openclaw extensions
 
@@ -214,7 +214,7 @@ Each branch is the title of an accordion below.
     Good output:
 
     - `Runtime: running`
-    - `Connectivity probe: ok`
+    - `Connectivity check: ok`
     - `Capability: read-only`, `write-capable`, or `admin-capable`
     - Channel shows transport connected and, where supported, `works` or
       `audit ok` in `channels status --probe`
@@ -242,7 +242,7 @@ Each branch is the title of an accordion below.
     Good output:
 
     - `Dashboard: http://...` shown in `openclaw gateway status`
-    - `Connectivity probe: ok`
+    - `Connectivity check: ok`
     - `Capability: read-only`, `write-capable`, or `admin-capable`
     - No auth loop in logs
 
@@ -272,7 +272,7 @@ Each branch is the title of an accordion below.
 
     - `Service: ... (loaded)`
     - `Runtime: running`
-    - `Connectivity probe: ok`
+    - `Connectivity check: ok`
     - `Capability: read-only`, `write-capable`, or `admin-capable`
 
     Log signatures:

@@ -109,7 +109,7 @@ function createCapabilities(deps: CapabilityDependencies) {
           }
           return decide({ ...(await deps.probe()), decided: true });
         } catch (error) {
-          return decide(conservative(`SQLite close probe failed: ${String(error)}`));
+          return decide(conservative(`SQLite close check failed: ${String(error)}`));
         }
       })();
       return initialization;

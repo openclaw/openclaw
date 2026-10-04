@@ -325,7 +325,7 @@ export async function verifyUpdatedGateway(
   const httpFailed = http !== undefined && !readyz;
   const diagnosticLines: [string, ...string[]] = [
     params.purpose === "recovery"
-      ? "Gateway recovery probe did not verify serving health."
+      ? "Gateway recovery check did not verify serving health."
       : "Gateway did not become healthy after restart.",
     ...(httpFailed ? ["Gateway /readyz did not return HTTP 200."] : []),
     ...(health.healthy && params.requireRunningService

@@ -73,8 +73,8 @@ async function runVersionCommand(
       result.outputLimitExceeded
         ? "Version output exceeded its capture limit"
         : result.termination === "timeout"
-          ? `Version probe timed out after ${CODEX_VERSION_TIMEOUT_MS} ms`
-          : `Version probe failed (${result.signal ?? result.code ?? result.termination})`,
+          ? `Version check timed out after ${CODEX_VERSION_TIMEOUT_MS} ms`
+          : `Version check failed (${result.signal ?? result.code ?? result.termination})`,
     );
   }
   return result;

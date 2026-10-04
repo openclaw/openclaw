@@ -662,7 +662,7 @@ describe("probeGateway", () => {
       close: {
         code: 1008,
         reason: "device identity required",
-        hint: "probe short-circuited by recent device-required rejections",
+        hint: "check short-circuited by recent device-required rejections",
       },
       health: null,
       status: null,

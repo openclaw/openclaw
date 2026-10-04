@@ -330,7 +330,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts) {
       }
       if (uncertainProbeKeys.size > 0) {
         logVerbose(
-          `discord: ACP thread-binding health probe uncertain for account ${account.accountId}: ${[...uncertainProbeKeys].join(", ")}`,
+          `discord: ACP thread-binding health check uncertain for account ${account.accountId}: ${[...uncertainProbeKeys].join(", ")}`,
         );
       }
     }

@@ -302,7 +302,7 @@ describe("runConfigureWizard", () => {
     expect(mocks.waitForGatewayReachable).not.toHaveBeenCalled();
     expect(mocks.healthCommand).not.toHaveBeenCalled();
 
-    expect(noted("Control UI")).toContain("Gateway: auth unavailable (probe skipped)");
+    expect(noted("Control UI")).toContain("Gateway: auth unavailable (check skipped)");
   });
 
   it("never retries an old password after the newly configured SecretRef fails", async () => {
@@ -327,7 +327,7 @@ describe("runConfigureWizard", () => {
     );
 
     expect(mocks.probeGatewayReachable).toHaveBeenCalledOnce();
-    expect(noted("Control UI")).toContain("Gateway: auth unavailable (probe skipped)");
+    expect(noted("Control UI")).toContain("Gateway: auth unavailable (check skipped)");
   });
 
   it("advertises LAN Control UI links while probing the local gateway", async () => {

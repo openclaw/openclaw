@@ -215,8 +215,8 @@ export function registerStatusHealthSessionsCommands(program: Command) {
     .option("--all", "Full diagnosis (read-only, pasteable)", false)
     .option("--usage", "Show model provider usage/quota snapshots", false)
     .option("--agent <id>", "Agent id for --usage auth scope")
-    .option("--deep", "Probe channels (WhatsApp Web + Telegram + Discord + Slack + Signal)", false)
-    .option("--timeout <ms>", "Probe timeout in milliseconds")
+    .option("--deep", "Check channels (WhatsApp Web + Telegram + Discord + Slack + Signal)", false)
+    .option("--timeout <ms>", "Check timeout in milliseconds")
     .option("--verbose", "Verbose logging", false)
     .option("--debug", "Alias for --verbose", false)
     .addHelpText(
@@ -229,9 +229,9 @@ export function registerStatusHealthSessionsCommands(program: Command) {
           ["openclaw status --usage", "Show model provider usage/quota snapshots."],
           [
             "openclaw status --deep",
-            "Run channel probes (WA + Telegram + Discord + Slack + Signal).",
+            "Run channel checks (WA + Telegram + Discord + Slack + Signal).",
           ],
-          ["openclaw status --deep --timeout 5000", "Tighten probe timeout."],
+          ["openclaw status --deep --timeout 5000", "Tighten check timeout."],
         ])}`,
     )
     .addHelpText("after", () => formatDocsHelp("/cli/status"))

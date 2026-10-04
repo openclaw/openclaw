@@ -555,7 +555,7 @@ subcommand set.
 
 When `vault.renderMode` is `obsidian`, the plugin writes Obsidian-friendly
 Markdown and can optionally use the official `obsidian` CLI for status
-probing, vault search, opening a page, invoking a command, and jumping to the
+checking, vault search, opening a page, invoking a command, and jumping to the
 daily note. This is optional; the wiki still works in native mode without
 Obsidian.
 

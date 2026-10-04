@@ -188,8 +188,8 @@ export function collectTelegramStatusIssues(
         accountId,
         kind: "config",
         message:
-          'Telegram groups config uses "*" with requireMention=false; membership probing is not possible without explicit group IDs.',
-        fix: "Add explicit numeric group ids under channels.telegram.groups (or per-account groups) to enable probing.",
+          'Telegram groups config uses "*" with requireMention=false; membership checking is not possible without explicit group IDs.',
+        fix: "Add explicit numeric group ids under channels.telegram.groups (or per-account groups) to enable checking.",
       });
     }
     if (audit.unresolvedGroups && audit.unresolvedGroups > 0) {
@@ -197,7 +197,7 @@ export function collectTelegramStatusIssues(
         channel: "telegram",
         accountId,
         kind: "config",
-        message: `Some configured Telegram groups are not numeric IDs (unresolvedGroups=${audit.unresolvedGroups}). Membership probe can only check numeric group IDs.`,
+        message: `Some configured Telegram groups are not numeric IDs (unresolvedGroups=${audit.unresolvedGroups}). Membership checks require numeric group IDs.`,
         fix: "Use numeric chat IDs (e.g. -100...) as keys in channels.telegram.groups for requireMention=false groups.",
       });
     }

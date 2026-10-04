@@ -268,7 +268,7 @@ async function probeModel(
           signal,
         } satisfies OpenAICompletionsOptions),
       timeoutMs,
-      `model ${kind} probe`,
+      `model ${kind} check`,
     );
 
     if (kind === "tool" && !message.content.some((block) => block.type === "toolCall")) {
@@ -297,7 +297,7 @@ export async function scanOpenRouterModels(
   const apiKey = options.apiKey?.trim() || getEnvApiKey("openrouter") || "";
   if (probe && !apiKey) {
     throw new Error(
-      "Missing OpenRouter API key. Free OpenRouter models still require OPENROUTER_API_KEY for live probes and inference; call with probe:false to list public catalog metadata.",
+      "Missing OpenRouter API key. Free OpenRouter models still require OPENROUTER_API_KEY for live checks and inference; call with probe:false to list public catalog metadata.",
     );
   }
 

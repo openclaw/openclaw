@@ -176,7 +176,7 @@ and JavaScript, keep their existing contract.
     for read-only diagnostics, including disabled or configured-but-unavailable
     accounts. Return `enabled`, `configured`, and applicable credential status
     fields without requiring secret resolution. Its result is not a resolved
-    account: operational hooks such as probes and account status builders receive
+    account: operational hooks such as checks and account status builders receive
     `config.resolveAccount` results instead.
     Diagnostics expose only status-safe fields from the inspection result.
     Include the same account enablement and configuration decisions used by the

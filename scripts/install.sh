@@ -2873,7 +2873,7 @@ bounded_probe_output() {
 
     status="$(cat "$status_file" 2>/dev/null || true)"
     if [[ -s "$timeout_file" || "$status" == "timeout" ]]; then
-        echo "Warning: timed out during installer finalization probe: ${label}" >&2
+        echo "Warning: timed out during installer finalization check: ${label}" >&2
         return 124
     fi
 

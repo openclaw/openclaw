@@ -691,7 +691,7 @@ describe("channel detail", () => {
         ["Running", "Yes"],
         ...extraFacts,
         ["Last start", "n/a"],
-        ["Last probe", "n/a"],
+        ["Last connection check", "n/a"],
       ]);
       container.querySelector<HTMLButtonElement>(".settings-row--actions button")!.click();
       expect(onRefresh).toHaveBeenCalledWith(true);

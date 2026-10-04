@@ -557,7 +557,7 @@ checkout directory's name.
 Registering the same resolved repository root again returns its existing project ID and
 display name. Passing a different `name` does not rename an existing project.
 
-`projects.list` returns recorded projects without probing Git. Operators with
+`projects.list` returns recorded projects without checking Git. Operators with
 `operator.write` can request `{"includeObserved":true}` to discover additional
 checkouts from visible sessions and managed worktrees. Concurrent discovery of
 the same checkout set shares one bounded Git pass; subsequent requests read

@@ -382,7 +382,7 @@ Use the ordinary local config, not the CI-only prebuilt config. The adapter uses
   - Live suites emit progress lines to stderr so long provider calls are visibly active even when Vitest console capture is quiet.
   - `test/vitest/vitest.live.config.ts` disables Vitest console interception so provider/gateway progress lines stream immediately during live runs.
   - Tune direct-model heartbeats with `OPENCLAW_LIVE_HEARTBEAT_MS`.
-  - Tune gateway/probe heartbeats with `OPENCLAW_LIVE_GATEWAY_HEARTBEAT_MS`.
+  - Tune gateway/check heartbeats with `OPENCLAW_LIVE_GATEWAY_HEARTBEAT_MS`.
 
 ### Advisory Bun release checks
 

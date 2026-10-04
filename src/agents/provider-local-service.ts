@@ -325,7 +325,7 @@ async function probeHealth(
   // Only the actual health request may materialize retained sentinel headers.
   const egressHeaders = unwrapHeadersInitSentinelsForProviderEgress(
     headers,
-    "to probe local model provider health",
+    "to check local model provider health",
   );
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), DEFAULT_PROBE_TIMEOUT_MS);

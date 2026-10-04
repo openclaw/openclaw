@@ -31,7 +31,7 @@ node_binary_has_safe_sqlite() {
             if (!textSafe) {
                 console.error("Node " + process.versions.node + ": node:sqlite truncates TEXT at embedded NUL (nodejs/node#61954); use 24.16+/26.1+ or a build with the fix");
             } else if (!blobSafe || !jsonSafe) {
-                console.error("Node " + process.versions.node + ": node:sqlite NUL round-trip capability probe failed; use 24.16+/26.1+ or a build with the fix");
+                console.error("Node " + process.versions.node + ": node:sqlite NUL round-trip capability check failed; use 24.16+/26.1+ or a build with the fix");
             } else if (!safe) {
                 console.error("Node " + process.versions.node + ": SQLite " + value + " is not WAL-reset-safe");
             }

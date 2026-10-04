@@ -57,7 +57,7 @@ full behavior and rationale of each numbered check, follow the links under
     - Legacy service migration and extra gateway detection.
     - Matrix channel legacy state migration (in `--fix` / `--repair` mode).
     - Gateway runtime checks (service installed but not running; cached launchd label).
-    - Channel status warnings (probed from the running gateway).
+    - Channel status warnings (checked from the running gateway).
     - Channel-specific permission checks live under `openclaw channels capabilities`; for example, Discord voice channel permissions are audited with `openclaw channels capabilities --channel discord --target channel:<channel-id>`.
     - WhatsApp responsiveness reports Gateway pressure and detected local TUI clients without attributing the pressure to those clients. Inspect [Gateway diagnostics](/gateway/diagnostics) before deciding whether to close clients; Doctor does not stop them.
     - Codex route repair for legacy `openai-codex/*` model refs in primary models, fallbacks, image/video generation models, heartbeat/subagent/compaction overrides, hooks, channel model overrides, and session route pins; `--fix` rewrites them to `openai/*`, migrates `openai-codex:*` auth profiles/order to `openai:*`, removes stale session runtime pins, and lets the repaired effective route determine whether Codex is compatible.

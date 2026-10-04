@@ -216,7 +216,7 @@ async function buildDiscordSendError(
   const probeSummary = probedPermissions.join("/");
   const missingLabel = missing.length
     ? `discord missing permissions in channel ${ctx.channelId}: ${missing.join(", ")}`
-    : `discord missing permissions in channel ${ctx.channelId}; permission probe did not identify missing ${probeSummary}`;
+    : `discord missing permissions in channel ${ctx.channelId}; permission check did not identify missing ${probeSummary}`;
   return new DiscordSendError(
     `${missingLabel} (${apiDetails}). bot might be blocked by channel/thread overrides, archived thread state, reply target visibility, or app-role position`,
     {

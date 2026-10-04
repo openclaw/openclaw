@@ -47,7 +47,7 @@ From a source checkout root, measure report collection without live API calls:
 node --expose-gc --import ./scripts/tsx.mjs extensions/team-reports/src/report-run.benchmark.test-support.ts --worker
 ```
 
-The probe uses 2,000 issues, 1,000 commits, and 1,500 messages. It reports
+The performance check uses 2,000 issues, 1,000 commits, and 1,500 messages. It reports
 main-thread heap growth and synchronous callback duration, including worker startup,
 and verifies report counts. Omit `--worker` to measure the streaming collector's
 calling isolate separately; SQLite aggregation still runs in its worker.

@@ -907,7 +907,7 @@ an explicit retry still uses the durable tombstones and retained lineage. Index
 planning and vector inspection use the same retrieval worker and captured store
 target. Indexed memory text stays with that reader; the host receives only selected
 chunk identities, source paths, and counts. Preview remains noncreating, and native
-vector inspection closes its probe and read-only connection before replying.
+vector inspection closes its check and read-only connection before replying.
 Forget's corpus discovery requests read-only metadata without unused transcript
 revisions. Durable session summaries use the existing retained history worker,
 preserving captured store selection and classification without writable bootstrap.
@@ -1058,7 +1058,7 @@ publish after the enclosing transaction commits and are discarded on rollback.
 
 Personal model-account success and failover-failure bookkeeping use typed reductions
 in the existing `authProfiles` shared-state worker. The host captures the physical
-store before provider probes or writer admission; the synchronous transaction
+store before provider checks or writer admission; the synchronous transaction
 rereads current usage and refuses changed credentials. Both host and worker use
 the same usage reducers, and provider observations retain their credential and
 block-generation checks. Transaction and commit grants recheck live host authority
@@ -1258,11 +1258,11 @@ session work, and the exact placement before draining. Those synchronous guards
 remain separate migration work; suspension policy and teardown are unchanged.
 
 Disk-space monitoring discovers placement identities in the same reader, then
-hydrates their current records through the existing placement projection. Probe
+hydrates their current records through the existing placement projection. Check
 order remains the database's session-ID order. Live row checks still prune old
-observations and reject samples from an owner replaced during a tunnel probe;
+observations and reject samples from an owner replaced during a tunnel check;
 those synchronous checks remain separate migration work. Disk-pressure thresholds,
-probe limits, and notification behavior are unchanged.
+check limits, and notification behavior are unchanged.
 
 Worker session-tool grants and operation journals use the same shared-state
 writer. The placement authority owner publishes committed tool grants and fences
@@ -1357,7 +1357,7 @@ Ordinary lifecycle upserts read their selected rows and pending-archive fact in
 one read-worker snapshot. A matching physical database with no pending archives
 skips recovery; archive-producing mutations, native scopes, and Doctor transfers
 retain publication. Later foreign archive commits are visible to the next snapshot.
-Standalone recovery probes reuse the read worker without archive or writer admission.
+Standalone recovery checks reuse the read worker without archive or writer admission.
 Maintenance finalization takes writer admission only when its worker requests native
 access, then rechecks current entries and retains admission through commit publication.
 
@@ -1413,7 +1413,7 @@ latency. Slow transaction diagnostics include commit and rollback time on both
 the main thread and workers, naming the database and operation when supplied.
 
 Watched human-turn signals and upstream observations use the shared-state writer,
-including their watcher probe and pruning. Producers await settlement and recheck
+including their watcher check and pruning. Producers await settlement and recheck
 current session authority; upstream observations compare the captured source in
 the committing transaction. Goal events and normalized child-run terminal outcomes
 share that recording command. Child completion joins recording and rechecks its
@@ -1434,7 +1434,7 @@ pages use the shared-state reader, preserving composite session identity and per
 pruned watermarks. Accepted operations retain the existing worker's FIFO and settlement
 owner. Schemas, retention, and update behavior are unchanged.
 Synchronous creation, compaction, reset, deletion, and the public SDK's ambient prompt
-probe remain separate migration work; the restart notice sweep stays in boot admission.
+check remain separate migration work; the restart notice sweep stays in boot admission.
 
 Durable session entry replacement reads its detached snapshot in the history
 worker and commits through the existing agent database executor. The transaction

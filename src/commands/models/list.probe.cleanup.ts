@@ -67,7 +67,7 @@ export async function createAuthProbeWork(signal?: AbortSignal) {
       }
       // The reported probe can return while its caller still owns this physical cleanup.
       void finish().catch((error: unknown) => {
-        log.warn(`Auth probe cleanup failed: ${redactStatusSecrets(formatErrorMessage(error))}`);
+        log.warn(`Auth check cleanup failed: ${redactStatusSecrets(formatErrorMessage(error))}`);
       });
     },
   };

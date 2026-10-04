@@ -204,7 +204,7 @@ export function refreshConnectedNodeSurfaceCaches(params: {
     cfg,
   }).catch((err: unknown) =>
     params.context.logGateway.warn(
-      `remote bin probe failed for ${nodeSession.nodeId}: ${formatErrorMessage(err)}`,
+      `remote bin check failed for ${nodeSession.nodeId}: ${formatErrorMessage(err)}`,
     ),
   );
 }

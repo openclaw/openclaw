@@ -403,7 +403,7 @@ async function runSetupWizardOnce(
     : null;
   if (remoteProbeAuth?.warning) {
     await prompter.note(
-      ["Could not resolve remote gateway SecretRef for setup probe.", remoteProbeAuth.warning].join(
+      ["Could not resolve remote gateway SecretRef for setup check.", remoteProbeAuth.warning].join(
         "\n",
       ),
       "Gateway auth",

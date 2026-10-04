@@ -246,7 +246,7 @@ Because entitlement belongs to the authenticated workspace and the target model
 rather than to any one conversation, an unauthorized target is remembered once
 for every session under that workspace and cannot be displaced by session churn.
 A separate workspace that is entitled keeps escalating normally, and the record
-releases on its own once `cooloffMs` elapses. Only one probe runs at a time for a
+releases on its own once `cooloffMs` elapses. Only one check runs at a time for a
 given workspace and target, so sibling sessions refused at the same moment do not
 each pay the reconnect ladder before the first result lands.
 

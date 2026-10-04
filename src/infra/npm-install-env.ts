@@ -136,7 +136,7 @@ function runNpmConfigProbe(params: {
     throw result.error;
   }
   if (result.status !== 0) {
-    throw new Error(`npm config probe exited with status ${result.status ?? "unknown"}`);
+    throw new Error(`npm config check exited with status ${result.status ?? "unknown"}`);
   }
   return result.stdout;
 }

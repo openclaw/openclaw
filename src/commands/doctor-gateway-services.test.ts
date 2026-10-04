@@ -252,12 +252,12 @@ describe("maybeRepairGatewayServiceConfig", () => {
     mocks.auditGatewayServiceConfig.mockResolvedValue({
       ok: true,
       issues: [],
-      runtimeNote: "Node 24.15.0: unsupported version, capability probe passed.",
+      runtimeNote: "Node 24.15.0: unsupported version, capability check passed.",
     });
 
     await runRepair({ gateway: {} });
 
-    expectNoteContaining("unsupported version, capability probe passed", "Gateway runtime");
+    expectNoteContaining("unsupported version, capability check passed", "Gateway runtime");
     expect(mocks.resolveSystemNodeInfo).not.toHaveBeenCalled();
     expect(mocks.install).not.toHaveBeenCalled();
   });
@@ -410,7 +410,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
         issues: [
           {
             code: "gateway-runtime-probe-failed",
-            message: "Gateway service Bun runtime probe failed.",
+            message: "Gateway service Bun runtime check failed.",
             detail: "/opt/bun (cwd /root): EACCES",
           },
           ...(otherDrift

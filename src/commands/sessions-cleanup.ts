@@ -159,7 +159,7 @@ function renderStoreDryRunPlan(params: {
   );
   params.runtime.log(`Would prune missing transcripts: ${params.summary.missing}`);
   params.runtime.log(`Would retire stale direct DM sessions: ${params.summary.dmScopeRetired}`);
-  params.runtime.log(`Would prune stale model-run probes: ${params.summary.modelRunPruned}`);
+  params.runtime.log(`Would prune stale model-run checks: ${params.summary.modelRunPruned}`);
   params.runtime.log(`Would archive inactive sessions: ${params.summary.archived ?? 0}`);
   params.runtime.log(`Would archive cap overflow: ${params.summary.capArchived ?? 0}`);
   params.runtime.log(`Would prune stale: ${params.summary.pruned}`);

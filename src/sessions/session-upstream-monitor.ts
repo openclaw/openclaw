@@ -423,7 +423,7 @@ async function runSessionUpstreamMonitorTick(
         }
       }
     } catch (error) {
-      log.warn(`upstream activity probe failed for ${catalogId}: ${String(error)}`);
+      log.warn(`upstream activity check failed for ${catalogId}: ${String(error)}`);
     }
   }
 }

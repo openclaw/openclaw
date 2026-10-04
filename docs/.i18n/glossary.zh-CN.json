@@ -2516,6 +2516,10 @@
     "target": "Gateway 网关服务与进程"
   },
   {
+    "source": "Config validation and checks",
+    "target": "配置验证与检查"
+  },
+  {
     "source": "Config validation and probes",
     "target": "配置校验与探针"
   },

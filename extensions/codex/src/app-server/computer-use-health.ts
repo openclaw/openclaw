@@ -103,7 +103,7 @@ async function runCodexComputerUseHealthProbe(
       });
     }
   } catch (error) {
-    embeddedAgentLog.warn("codex computer-use periodic health probe crashed", {
+    embeddedAgentLog.warn("codex computer-use periodic health check crashed", {
       mcpServerName: config.mcpServerName,
       error: error instanceof Error ? error.message : String(error),
     });

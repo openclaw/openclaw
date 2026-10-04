@@ -1319,7 +1319,7 @@ describe("doctor health contributions", () => {
 
     expect(mocks.checkGatewayHealth).not.toHaveBeenCalled();
     expect(mocks.note).toHaveBeenCalledWith(
-      expect.stringContaining("Gateway health probes skipped"),
+      expect.stringContaining("Gateway health checks skipped"),
       "Gateway",
     );
     expect(ctx.gatewayHealthSkipped).toBe(true);
@@ -1354,7 +1354,7 @@ describe("doctor health contributions", () => {
 
     expect(mocks.checkGatewayHealth).not.toHaveBeenCalled();
     expect(mocks.note).toHaveBeenCalledWith(
-      expect.stringContaining("Gateway health probes skipped"),
+      expect.stringContaining("Gateway health checks skipped"),
       "Gateway",
     );
     expect(ctx.gatewayHealthSkipped).toBe(true);

@@ -204,7 +204,7 @@ function createLoadedThreadBindingManager(
         }
         if (!channel || typeof channel !== "object") {
           logVerbose(
-            `discord thread binding sweep probe returned invalid payload for ${binding.threadId}`,
+            `discord thread binding sweep check returned invalid payload for ${binding.threadId}`,
           );
           continue;
         }
@@ -233,7 +233,7 @@ function createLoadedThreadBindingManager(
           continue;
         }
         logVerbose(
-          `discord thread binding sweep probe failed for ${binding.threadId}: ${summarizeDiscordError(err)}`,
+          `discord thread binding sweep check failed for ${binding.threadId}: ${summarizeDiscordError(err)}`,
         );
       }
     }

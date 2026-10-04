@@ -105,11 +105,11 @@ export function createPolicyDoctorChecks(): readonly HealthCheck[] {
     ],
     [
       CHECK_IDS.policyRoutingAgentMismatch,
-      "Authored routing probes resolve to their expected agents.",
+      "Authored routing checks resolve to their expected agents.",
     ],
     [
       CHECK_IDS.policyRoutingMatchKindMismatch,
-      "Authored routing probes match at their expected specificity.",
+      "Authored routing checks match at their expected specificity.",
     ],
     [
       CHECK_IDS.policyGatewayNonLoopbackBind,

@@ -107,8 +107,8 @@ from the resident window perform no native reads; overflow discovery is the expl
 
 Source backoff settles when the whole foreground fallback request completes,
 including a bounded partial result with a continuation. Successful intermediate
-pages do not clear earlier failures. A failed recovery probe advances the existing
-backoff schedule; abandoning a request releases its probe without recording a new
+pages do not clear earlier failures. A failed recovery check advances the existing
+backoff schedule; abandoning a request releases its check without recording a new
 host failure. Background hydration keeps its separate grouped attempt and can
 walk the home to completion without consuming a foreground request's budget.
 

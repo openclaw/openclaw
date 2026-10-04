@@ -93,7 +93,7 @@ stale local copy.
 
 For automatic Memory context, the same read also returns `workspaceRelativePath`
 for files within the workspace mount. Memory Core classifies that source using
-its existing rules and Gateway provenance records, without probing Gateway-local
+its existing rules and Gateway provenance records, without checking Gateway-local
 files. Other Memory plugins must declare `supportsWorkspaceMemoryReadSources`
 and consume the classifier's `readSources` input; otherwise automatic remote
 Memory context is excluded. Missing source metadata cannot select a local copy.
@@ -324,7 +324,7 @@ host finalizer's model does not overwrite the native session's selection.
 ### Verified setup runtime artifacts
 
 A local harness that can supply inference for first-run setup must attest the
-implementation that completed the probe. When
+implementation that completed the check. When
 `params.captureRuntimeArtifact` is true, return an opaque
 `result.runtimeArtifact` with a stable id and content fingerprint. Register a
 matching `runtimeArtifact.validate(...)` capability that rechecks that binding

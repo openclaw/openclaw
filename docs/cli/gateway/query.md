@@ -1,5 +1,5 @@
 ---
-summary: "Query a running Gateway: health, usage-cost, stability, diagnostics export, status, probe, call, suspend, and resume"
+summary: "Query a running Gateway: health, usage-cost, stability, diagnostics export, status, connectivity checks, call, suspend, and resume"
 read_when:
   - Checking whether a Gateway is healthy, ready, or reachable
   - Exporting Gateway diagnostics or a support bundle
@@ -51,7 +51,7 @@ openclaw gateway health --url ws://127.0.0.1:18789
 openclaw gateway health --port 18789
 ```
 
-`/healthz` is a liveness probe: it returns as soon as the server can answer HTTP. `/readyz` is stricter and stays red while startup plugin sidecars, channels, or configured hooks are still settling. Local or authenticated detailed `/readyz` responses include an `eventLoop` diagnostic block (delay, utilization, CPU-core ratio, `degraded` flag).
+`/healthz` is a liveness check: it returns as soon as the server can answer HTTP. `/readyz` is stricter and stays red while startup plugin sidecars, channels, or configured hooks are still settling. Local or authenticated detailed `/readyz` responses include an `eventLoop` diagnostic block (delay, utilization, CPU-core ratio, `degraded` flag).
 
 <a id="param-port"></a>
 
@@ -202,7 +202,7 @@ It is designed to be shared. It keeps operational details useful for debugging �
 
 ### `gateway status`
 
-Shows the Gateway service (launchd/systemd/schtasks) plus an optional connectivity/auth probe.
+Shows the Gateway service (launchd/systemd/schtasks) plus an optional connectivity/auth check.
 
 ```bash
 openclaw gateway status
@@ -214,32 +214,32 @@ openclaw gateway status --port 19001
 <a id="param-url-1"></a>
 
 <ParamField path="--url <url>" type="string">
-  Probe this explicit WebSocket URL instead of the service-derived target. Cannot combine with `--port`.
+  Check this explicit WebSocket URL instead of the service-derived target. Cannot combine with `--port`.
 </ParamField>
 <a id="param-port-1"></a>
 
 <ParamField path="--port <port>" type="number">
-  Select a local Gateway port using the invoking CLI config for auth and TLS. Accepts `gateway --port 19001 status` and `gateway status --port 19001`; an explicit status port wins. Native service details remain visible as diagnostics but do not select the probe target.
+  Select a local Gateway port using the invoking CLI config for auth and TLS. Accepts `gateway --port 19001 status` and `gateway status --port 19001`; an explicit status port wins. Native service details remain visible as diagnostics but do not select the check target.
 </ParamField>
 <a id="param-token-1"></a>
 
 <ParamField path="--token <token>" type="string">
-  Token auth for the probe.
+  Token auth for the check.
 </ParamField>
 <a id="param-password-1"></a>
 
 <ParamField path="--password <password>" type="string">
-  Password auth for the probe.
+  Password auth for the check.
 </ParamField>
 <a id="param-timeout-1"></a>
 
 <ParamField path="--timeout <ms>" type="number" default="10000">
-  Probe timeout. Without an explicit value, the RPC probe uses 10 seconds and Windows Task Scheduler state and registration probes allow 60 seconds for cold startup. The read-only registration query uses this allowance for both its total runtime and time without output. Explicit values also apply to native service probes. Each operation has its own budget; this is not an overall command deadline.
+  Check timeout. Without an explicit value, the RPC check uses 10 seconds and Windows Task Scheduler state and registration checks allow 60 seconds for cold startup. The read-only registration query uses this allowance for both its total runtime and time without output. Explicit values also apply to native service checks. Each operation has its own budget; this is not an overall command deadline.
 </ParamField>
 <a id="param-no-probe"></a>
 
 <ParamField path="--no-probe" type="boolean">
-  Skip the connectivity probe (service-only view).
+  Skip the connectivity check (service-only view).
 </ParamField>
 <a id="param-deep"></a>
 
@@ -249,7 +249,7 @@ openclaw gateway status --port 19001
 <a id="param-require-rpc"></a>
 
 <ParamField path="--require-rpc" type="boolean">
-  Upgrade the connectivity probe to a read probe and exit non-zero if it fails. Cannot combine with `--no-probe`.
+  Upgrade the connectivity check to a read check and exit non-zero if it fails. Cannot combine with `--no-probe`.
 </ParamField>
 
 <AccordionGroup>
@@ -257,18 +257,18 @@ openclaw gateway status --port 19001
     - Stays available for diagnostics even when the local CLI config is missing or invalid. Config problems are warnings with `openclaw doctor --fix` guidance; valid connection settings and the recorded service identity remain usable.
     - If service discovery cannot inspect a required file, such as a systemd environment file readable only by root, status reports the native service as unknown and continues with the caller's Gateway target and credentials. Observed service ownership refusals remain errors; status does not change file permissions or relax lifecycle checks.
     - Default output proves service state, WebSocket connect, and the auth capability visible at handshake time — not read/write/admin operations.
-    - Probes are non-mutating for first-time device auth: they reuse an existing cached device token when one exists, but never create a new CLI device identity or read-only pairing record just to check status.
-    - Resolves configured auth SecretRefs for probe auth when possible. If a required SecretRef is unresolved, `--json` reports `rpc.authWarning` when probe connectivity/auth fails; pass `--token`/`--password` explicitly or fix the secret source. Unresolved-auth warnings are suppressed once the probe succeeds.
-    - JSON output includes `gateway.version` when the running Gateway reports it; `--require-rpc` can fall back to the `status.runtimeVersion` RPC payload if the handshake probe cannot supply version metadata.
+    - Checks are non-mutating for first-time device auth: they reuse an existing cached device token when one exists, but never create a new CLI device identity or read-only pairing record just to check status.
+    - Resolves configured auth SecretRefs for check auth when possible. If a required SecretRef is unresolved, `--json` reports `rpc.authWarning` when check connectivity/auth fails; pass `--token`/`--password` explicitly or fix the secret source. Unresolved-auth warnings are suppressed once the check succeeds.
+    - JSON output includes `gateway.version` when the running Gateway reports it; `--require-rpc` can fall back to the `status.runtimeVersion` RPC payload if the handshake check cannot supply version metadata.
     - Use `--require-rpc` in scripts/automation when a listening service is not enough and you need read-scope RPC to be healthy too.
     - `--deep` scans for extra launchd/systemd/schtasks installs; when multiple gateway-like services are found, human output prints cleanup hints (usually run one gateway per machine) and reports a recent supervisor restart handoff when relevant.
     - `--deep` confirms exact npm targets before suggesting repairs for official-plugin version drift. Unpublished versions or registry failures are reported without an update command; retry deep status after registry access or the release cohort is restored. Ordinary status and readiness checks do not query npm for drift repairs.
     - `--deep` also runs config validation in plugin-aware mode (`pluginValidation: "full"`) and surfaces plugin manifest warnings (e.g. missing channel config metadata). Default `gateway status` keeps the fast read-only path that skips plugin validation.
     - On Linux, status reports the effective service currently loaded by systemd, including loaded drop-ins. If the unit or a drop-in changed on disk, `Systemd reload: pending` means you must run `systemctl --user daemon-reload` (or `sudo systemctl daemon-reload` for a system service) before those changes take effect.
     - Human output includes the resolved file log path plus CLI-vs-service config paths/validity to help diagnose profile or state-dir drift.
-    - If the Gateway reports no version, human output still shows the locally inspected service package version and path when readable. A version mismatch suggests reinstalling only when that service is the probe target; installation restrictions appear as the existing refusal message.
-    - A missing native service is informational when that service is diagnostic-only, such as a Gateway using a non-default state directory. The connectivity probe still reports the selected Gateway's result.
-    - Install and reinstall guidance follows the invoking shell's installation rules, not the stored service environment or probe target. Nix mode, external supervision, noncanonical installation identity, and Linux sudo/user-manager mismatches show the install refusal instead of an unusable command. A diagnostic-only target is not itself a refusal. Nix mode blocks installation, not starting an existing service.
+    - If the Gateway reports no version, human output still shows the locally inspected service package version and path when readable. A version mismatch suggests reinstalling only when that service is the check target; installation restrictions appear as the existing refusal message.
+    - A missing native service is informational when that service is diagnostic-only, such as a Gateway using a non-default state directory. The connectivity check still reports the selected Gateway's result.
+    - Install and reinstall guidance follows the invoking shell's installation rules, not the stored service environment or check target. Nix mode, external supervision, noncanonical installation identity, and Linux sudo/user-manager mismatches show the install refusal instead of an unusable command. A diagnostic-only target is not itself a refusal. Nix mode blocks installation, not starting an existing service.
     - Human output includes `Gateway heap:` with configured service heap controls and a separate install-time recommendation based on memory visible to the CLI. JSON output exposes the same report as `service.gatewayHeap`. Neither is a measurement of the running Gateway's V8 heap ceiling; use runtime memory diagnostics for that.
 
   </Accordion>
@@ -282,7 +282,7 @@ openclaw gateway status --port 19001
 
 ### `gateway probe`
 
-The "debug everything" command. It always probes:
+The "debug everything" command. It always checks:
 
 - your configured remote gateway (if set), and
 - localhost (loopback), **even if remote is configured**.
@@ -290,7 +290,7 @@ The "debug everything" command. It always probes:
 Passing `--url` adds that explicit target ahead of both. Human output labels targets `URL (explicit)`, `Remote (configured)` / `Remote (configured, inactive)`, and `Local loopback`.
 
 <Note>
-If multiple probe targets are reachable, all are printed. An SSH tunnel, TLS/proxy URL, and configured remote URL can point at the same gateway even with different transport ports; `multiple_gateways` is reserved for distinct or identity-ambiguous reachable gateways. Running multiple gateways is supported for isolated profiles (e.g. a rescue bot), but most installs run a single gateway.
+If multiple check targets are reachable, all are printed. An SSH tunnel, TLS/proxy URL, and configured remote URL can point at the same gateway even with different transport ports; `multiple_gateways` is reserved for distinct or identity-ambiguous reachable gateways. Running multiple gateways is supported for isolated profiles (e.g. a rescue bot), but most installs run a single gateway.
 </Note>
 
 ```bash
@@ -302,18 +302,18 @@ openclaw gateway probe --port 18789
 <a id="param-port-2"></a>
 
 <ParamField path="--port <port>" type="number">
-  Use this port for the local loopback probe target and SSH tunnel remote port. Without `--url`, this selects only the local loopback target instead of configured gateway environment URL, environment port, or remote targets.
+  Use this port for the local loopback check target and SSH tunnel remote port. Without `--url`, this selects only the local loopback target instead of configured gateway environment URL, environment port, or remote targets.
 </ParamField>
 
 <AccordionGroup>
   <Accordion title="Interpretation">
     - `Reachable: yes` means at least one target accepted a WebSocket connect.
-    - `Capability: read-only|write-capable|admin-capable|pairing-pending|connect-only` reports what the probe could prove about auth, separate from reachability.
-    - `Read probe: ok` means read-scope detail RPC calls (`health`/`status`/`system-presence`/`config.get`) also succeeded.
-    - `Read probe: limited - missing scope: operator.read` means connect succeeded but read-scope RPC is limited. Reported as **degraded** reachability, not full failure.
-    - `Read probe: failed` after `Connect: ok` means the WebSocket connected but follow-up read diagnostics timed out or failed — also **degraded**, not unreachable.
-    - Like `gateway status`, probe reuses existing cached device auth but does not create first-time device identity or pairing state.
-    - Exit code is non-zero only when no probed target is reachable.
+    - `Capability: read-only|write-capable|admin-capable|pairing-pending|connect-only` reports what the check could prove about auth, separate from reachability.
+    - `Read check: ok` means read-scope detail RPC calls (`health`/`status`/`system-presence`/`config.get`) also succeeded.
+    - `Read check: limited - missing scope: operator.read` means connect succeeded but read-scope RPC is limited. Reported as **degraded** reachability, not full failure.
+    - `Read check: failed` after `Connect: ok` means the WebSocket connected but follow-up read diagnostics timed out or failed — also **degraded**, not unreachable.
+    - Like `gateway status`, this command reuses existing cached device auth but does not create first-time device identity or pairing state.
+    - Exit code is non-zero only when no checked target is reachable.
 
   </Accordion>
   <Accordion title="JSON output">
@@ -325,7 +325,7 @@ openclaw gateway probe --port 18789
     - `primaryTargetId`: best target to treat as the active winner, in order: explicit URL, SSH tunnel, configured remote, local loopback.
     - `warnings[]`: best-effort warning records with `code`, `message`, optional `targetIds`.
     - `network`: local loopback/tailnet URL hints derived from current config and host networking.
-    - `discovery.timeoutMs` / `discovery.count`: the actual discovery budget/result count used for this probe pass.
+    - `discovery.timeoutMs` / `discovery.count`: the actual discovery budget/result count used for this check pass.
 
     Per target (`targets[].connect`): `ok` (reachability + degraded classification), `rpcOk` (full detail RPC success), `scopeLimited` (detail RPC failed on missing operator scope).
 
@@ -333,10 +333,10 @@ openclaw gateway probe --port 18789
 
   </Accordion>
   <Accordion title="Common warning codes">
-    - `ssh_tunnel_failed`: SSH tunnel setup failed; the command fell back to direct probes.
+    - `ssh_tunnel_failed`: SSH tunnel setup failed; the command fell back to direct checks.
     - `multiple_gateways`: distinct gateway identities were reachable, or OpenClaw could not prove reachable targets are the same gateway. An SSH tunnel, proxy URL, or configured remote URL to the same gateway does not trigger this.
     - `auth_secretref_unresolved`: a configured auth SecretRef could not be resolved for a failed target.
-    - `probe_scope_limited`: WebSocket connect succeeded, but the read probe was limited by missing `operator.read`.
+    - `probe_scope_limited`: WebSocket connect succeeded, but the read check was limited by missing `operator.read`.
     - `local_tls_runtime_unavailable`: local Gateway TLS is enabled but OpenClaw could not load the local certificate fingerprint.
 
   </Accordion>

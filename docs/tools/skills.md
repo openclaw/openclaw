@@ -73,7 +73,7 @@ source kind, with the skill count and up to three example names. Workspace or
 project skills overriding bundled skills, and managed-worktree skills overriding
 project checkout skills, are warnings; other collisions are informational.
 Worktree provenance uses the configured `worktreeRoot` (the state directory's
-`worktrees/` by default), without probing Git. Identical content stays silent.
+`worktrees/` by default), without checking Git. Identical content stays silent.
 Unchanged root-pair summaries are not repeated on refresh; changes to content,
 declared metadata, or collision membership update the summary. Precedence is unchanged.
 
@@ -841,10 +841,10 @@ the total number of operating-system file watches.
     skills via the `exec` tool with `host=node`.
 
     Offline nodes do **not** make remote-only skills visible. If a node stops
-    answering bin probes, OpenClaw clears its cached bin matches.
+    answering bin checks, OpenClaw clears its cached bin matches.
 
-    Connect-time bin probes wait briefly for the node's command handlers.
-    Gateway shutdown cancels this readiness wait and still joins probes that
+    Connect-time bin checks wait briefly for the node's command handlers.
+    Gateway shutdown cancels this readiness wait and still joins checks that
     have already started.
 
   </Accordion>

@@ -706,7 +706,7 @@ describe("resolveTelegramFetch", () => {
     expect(getDispatcherFromUndiciCall(7)).toBe(firstDispatcher);
     expect(getDispatcherFromUndiciCall(8)).toBe(secondDispatcher);
     expect(getDispatcherFromUndiciCall(9)).toBe(secondDispatcher);
-    expectLoggerMessageContaining(loggerDebug, "fetch fallback: re-probing primary dispatcher");
+    expectLoggerMessageContaining(loggerDebug, "fetch fallback: rechecking primary dispatcher");
   });
 
   it("keeps the armed fallback sticky when all attempts fail", async () => {
@@ -802,7 +802,7 @@ describe("resolveTelegramFetch", () => {
       loggerWarn,
       "telegram transport attempt marked temporarily unhealthy",
     );
-    expectLoggerMessageContaining(loggerDebug, "fetch fallback: re-probing primary dispatcher");
+    expectLoggerMessageContaining(loggerDebug, "fetch fallback: rechecking primary dispatcher");
   });
 
   it("does not treat fresh transport attempts as unhealthy when the process clock is invalid", async () => {

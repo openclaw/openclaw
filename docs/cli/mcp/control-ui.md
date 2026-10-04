@@ -30,7 +30,7 @@ in the pre-install catalog preview. Credential presence does not verify that a
 key or secret reference works with the service.
 
 The server name and URL must match the plugin's active MCP declaration. This
-section does not probe service health or discover OAuth for an unconfigured URL.
+section does not check service health or discover OAuth for an unconfigured URL.
 Local stdio servers, per-requester accounts, and `oauth.authProfileId` connections
 keep their existing authentication setup paths.
 
